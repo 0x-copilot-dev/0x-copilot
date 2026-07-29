@@ -16,6 +16,22 @@ was drafted afterwards, in isolation, against the README spine only. **§9 is a
 separate, later pass** that reconciled it with the other eight; read §4.5 and §7
 item 10 through §9, which supersedes them.
 
+**§10 is a third pass — the ownership pass.** §1-§9 found two gaps they could not
+close because each needed a **product call, not an edit**: cross-volume Windows
+grants (§4.4) and FS-08's consent surface (§9.4). Both calls have now been made,
+and §10 records what was decided, where it landed, and — importantly — what was
+_not_ closed by them. Findings are superseded in place, never deleted: §4.4 and
+§9.4 keep their original text with a superseding block, because the shape they
+name (_the routing was to a reader, not to a document_) is the reusable part.
+
+**§11 is a fourth pass — adversarial, and it tried to break §10 rather than
+confirm it.** A pass that announces two gaps closed is the cheapest place in a
+program spec for a false all-clear, so §11 attacked both closures. §10.2 held
+(one stale sentence). §10.1 did **not**: it closed the create path and claimed
+all paths, and two further doors to the same defect were open — read §10.1's
+"there is no mint-then-fail path left" through §11.2, which supersedes it. §11
+also found two ship-gate spikes that no register listed.
+
 **FS-01 §2/§8 is the seam's normative text in every case below.** Where a
 downstream PRD disagreed with it, the downstream PRD was changed.
 
@@ -186,7 +202,19 @@ FS-04 D9: either add `fs_dir_mark_hidden` (a POSIX no-op) or drop the hidden
 attribute and let the dot prefix carry the cost. Marked unverified; FS-04 decides
 before implementing. Not silently assumed to work.
 
-### 4.4 **Found and NOT fixed — a Windows grant on a second volume is silently ungrantable, and no PRD owns telling the user**
+### 4.4 ~~**Found and NOT fixed**~~ — **CLOSED by [FS-09 D19](PRD-FS-09-enablement-consent.md); superseded by §10.1.** A Windows grant on a second volume was silently ungrantable, and no PRD owned telling the user
+
+> **Superseded, not deleted.** The finding below is exactly as this pass wrote
+> it, because the shape it names — _the routing was to a reader, not to a
+> document_ — is the reusable part and reappears in §9.4. What has changed is
+> the disposition: the product call was made and FS-09 took it. The grant flow
+> **refuses before minting**, naming the volume, offering read-only rather than
+> imposing it, so no unusable grant is ever created and the approval sheet is
+> unreachable for one. The larger half — per-volume app-private staging — is
+> recorded as a separate future slice, with the helper invariant it would move.
+> Where it landed, and what is still open from it, is **§10.1** — and **§11.2**,
+> which found that refusing at mint time closed only one of three doors to this
+> same defect, and closed the other two.
 
 FS-02 D7's same-volume rule is correct and fails closed. Its consequence is that
 on Windows — where staging lives under `%APPDATA%` on the system volume — a
@@ -207,6 +235,14 @@ moves where staged bytes live, which is a stated helper invariant
 FS-02 D7 with an explicit "nobody owns it" note, in FS-02's open questions, and
 as FS-09 open question 4 with a recommendation.
 
+**Disposition (see §10.1).** The product call went the stricter way — **refuse**,
+not warn — and [FS-09 D19](PRD-FS-09-enablement-consent.md) owns it. FS-02 D7's
+ownership note and its open-question bullet now point at D19 and the same-volume
+rule is unchanged; FS-09 open question 4 is closed in place; the staging half
+sits in FS-09's Out of scope with the helper invariant it would move. The only
+thing still open from this finding is **SPIKE-V1** (FS-09 open question 6), which
+decides how `volumeId` is _spelled_ on Win32 — not whether the check happens.
+
 ### 4.5 **Found here, written later — FS-08 did not exist at the time of this pass**
 
 **Superseded by §9.** When this pass ran, every other row of the README's PRD
@@ -222,7 +258,9 @@ normalised a missing PRD would have been the wrong kind of tidy.
 in isolation after this pass and reconciled against the other eight in a later
 one. D1 is redeemed and its "~70% built" claim is reviewed and holds. See §9 for
 what the later pass changed, including the fact that FS-08's own first-draft
-dependency on FS-01 was wrong and that its consent surface is owned by nobody.
+dependency on FS-01 was wrong and that its consent surface was, at that point,
+owned by nobody — **that last part is closed: §10.2 records the call, and FS-09
+D20-D25 own it.**
 
 ### 4.6 Checked and genuinely covered — no verb, platform or failure mode is one-sided
 
@@ -318,15 +356,32 @@ consistency problem; all are recorded in their owning PRD.
    resolutions, FS-05 picks.
 8. **Replaced-file preimage restore** — FS-06's release blocker (§4.1), two
    admissible resolutions, FS-06 picks.
-9. **Cross-volume grants on Windows** — §4.4, currently unowned.
+9. ~~**Cross-volume grants on Windows** — §4.4, currently unowned.~~ **Closed
+   (§10.1):** owned, and the answer is _refuse at grant time_ —
+   [FS-09 D19](PRD-FS-09-enablement-consent.md). What survives from it is
+   **SPIKE-V1** (FS-09 open question 6), a spike about the Win32 spelling of
+   `volumeId`, plus the per-volume-staging slice, which is deliberately not
+   designed and is recorded as such in FS-09's Out of scope.
 10. ~~**FS-08** — §4.5, not drafted.~~ **Closed:** FS-08 is drafted and
     reconciled (§9). It brought three new open items with it, listed below.
-11. **FS-08's consent surface is owned by nobody** — §9.4. FS-09 disclaims FS-08
-    by name; six surfaces route to it. Scope decision.
+11. ~~**FS-08's consent surface is owned by nobody** — §9.4.~~ **Closed
+    (§10.2):** FS-09 dropped the FS-08 exclusion and owns the consent surfaces as
+    [D20-D25](PRD-FS-09-enablement-consent.md); FS-08 keeps the provider,
+    runtime, isolation and patch mechanics. What survives is a **shipping-order**
+    constraint, not an ownership gap: no FS-08 phase yields a user-reachable
+    capability until FS-09's execution half lands — the same shape as item 1.
 12. **Whether an agent-authored change set may commit without a
     `decisionLedgerId`** — §9.3, FS-08 open question 8, recommendation recorded.
+    **Still open, and now unambiguously FS-08's:** FS-09 declines it by name
+    (§10.2) because it is about what is recorded server-side, not about what a
+    human is asked. FS-09 binds only the copy in the meantime.
 13. **The `als` command-budget defect** — §9.2. Real today, on every provider;
     FS-08 D8(a) is the chosen fix and it edits a file FS-08 otherwise consumes.
+14. **SPIKE-L2 — can a Windows container runtime observe all ten isolation
+    controls?** Added to this list explicitly because it is the one spike in the
+    program that decides whether a whole PRD ships: verbs land on both platforms
+    or neither, so a Windows negative takes macOS execution with it (FS-08 D4).
+    See the spike register in [README.md](README.md).
 
 ---
 
@@ -531,6 +586,24 @@ Phase 6 (which now says plainly that it cannot be planned), a new "Unowned
 surfaces" table in FS-08's open questions, a DoD item that cannot be ticked until
 a document owns them, and §7 item 11 above.
 
+> **Superseded — CLOSED by [FS-09 D20-D25](PRD-FS-09-enablement-consent.md); see
+> §10.2.** The scope decision was made and it went the first way: FS-09 dropped
+> the exclusion. Execution consent is consent, and splitting it across two
+> documents would have produced two consent models. FS-09 grew an execution half
+> (D20 switch, D21 reasons, D22 image download, D23 what leaves the folder, D24
+> import review + verb pre-check, D25 revoke with a live sandbox) and took three
+> surfaces FS-08 had not routed at all. FS-08 keeps the provider, runtime,
+> isolation and patch mechanics. Every "unowned" marker listed above is updated:
+> the dependency header, D3, D7, D12's chain, D16, Phase 6, the DoD item (now
+> ticked, with a new unticked item for FS-09's execution half having shipped),
+> and that table — which is retained, renamed **"Consent surfaces — routed, and
+> where they landed"**, so the routing failure stays legible next to its fix.
+> **Two things did not close and are not pretended to have:** FS-08 open question
+> 8 (the `decisionLedgerId`) is declined by FS-09 by name and stays FS-08's, and
+> whether an _imported_ revision reaches `projectWorkspaceStage` is still
+> unverified (FS-09 open question 6 covers volume identity; **question 8** covers
+> this one) — if it does not, the wiring is FS-08's mechanism.
+
 **`baseline_overlay_ref` has no carrier.** FS-08 introduced the field on
 `SandboxPatchImportRequest` and said `coordinator.import_patch` "gains the
 matching parameter". But `import_patch(self, result: SandboxRunResult)`
@@ -554,8 +627,11 @@ prepare, it fails the **entire change set**, and it produces one undifferentiate
 failure that says nothing about which verb. Combined with FS-08 D14's
 no-partial-import rule, a single `delete` entry makes a whole import unusable on
 a build where FS-05 has not landed — after the user has already seen a reviewable
-proposal. **Fixed** in the text; the pre-approval warning it implies is one of
-the six unowned surfaces.
+proposal. **Fixed** in the text; the pre-approval warning it implies was one of
+the six unowned surfaces, and is now
+[FS-09 D24](PRD-FS-09-enablement-consent.md)'s verb pre-check — which **gates the
+approve control rather than warning beside it**, because the whole set would
+fail and a disabled-with-a-warning control would imply the user could clear it.
 
 **An imported change set commits with no ledgered decision.**
 `authorizeCommitFromUserDecision` binds a permit to `stageId` / `revision` /
@@ -568,7 +644,11 @@ whereas a sandbox patch is authored by code whose inputs include MCP-ingested
 content. So an imported mutation would be the only agent-authored mutation in the
 system reaching `commitPreparedChangeSet` without an approval row. FS-08's own
 guardrail — "do not let … a local confirmation redeem an agent proposal" — says
-so in its own words. **Not fixed**: it needs a product call. Written into FS-08
+so in its own words. **Still not fixed**: it needs a product call, and the §10
+ownership pass did not make it — FS-09 declines it by name, because it is about
+what is recorded server-side rather than what a human is asked, and binds only
+the copy in the meantime (the review may not say "approved and recorded" when no
+approval row exists). Written into FS-08
 §7 and open question 8 with two admissible resolutions and a recommendation
 ((a): the desktop mints its own decision record and binds it, because the audit
 questions this program is held to have no answer under (b)). §7 additionally now
@@ -582,6 +662,13 @@ imported overlay revision on desktop. The code's own docstring names "A4/A5
 review" ([contracts.py:330-337](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/contracts.py)),
 but nothing in this program supplies it and this pass did not confirm one exists.
 Marked in the chain diagram and listed among the unowned surfaces.
+**Half-closed by §10.2:** [FS-09 D24](PRD-FS-09-enablement-consent.md) names the
+surface — `TcWorkspaceStageSurface` via `projectWorkspaceStage`, the stage card
+that already exists, not a second one — and requires it rather than a new
+projection. What is **still unverified** is whether an _imported_ revision
+reaches that projection at all; FS-09 open question 8 names the one-file check,
+and if it does not, the wiring is FS-08's mechanism. The chain diagram now says
+that, instead of "UNOWNED".
 
 ### 9.5 Duplication removed
 
@@ -625,9 +712,443 @@ Not everything was wrong, and the parts that hold are the load-bearing ones:
 - It did not decide the consent-surface owner (§9.4), the decision-ledger
   question (§9.3/§9.4), or whether D17.1's base-file exporter belongs to FS-08 at
   all — that last one now sits on FS-03's boundary rather than FS-01's, which
-  strengthens the case for moving it.
+  strengthens the case for moving it. **§10 decided the first of those three.**
+  The other two are still open and are still recorded where they were.
 - It changed no source file. The files touched are `PRD-FS-08`, `README.md` and
   this report.
 - It did not re-open FS-01…FS-07 or FS-09. Where FS-08 disagreed with them,
   **FS-08 was changed** — including where FS-08 was the only document that had
   noticed something, in which case the finding was kept and its owner named.
+  **§10 is the pass that finally re-opened FS-09**, which is what closing §9.4
+  required.
+
+---
+
+## 10. Ownership pass — the two product calls, and what they did not close
+
+**Baseline:** unchanged (`main@b349aca2`); every code line cited below was
+re-read at it. This pass ran after §9 and exists for one reason: §4.4 and §9.4
+were both **"found and NOT fixed"** because both needed a product decision, and a
+program spec that carries two unowned surfaces indefinitely is a spec that has
+decided by default. Both were decided. This pass changed **no source file**; the
+files touched are `PRD-FS-02`, `PRD-FS-08`, `PRD-FS-09`, `README.md` and this
+report.
+
+Two shapes recur below and are worth naming, because the second is the more
+dangerous one:
+
+- **Routing to a reader, not a document** (§4.4, §9.4) — PRD A says "B owns
+  this", B has never heard of it. Detectable by grep, and both instances are now
+  fixed by making B say it.
+- **A refusal that arrives after the consent** — the actual user-visible defect
+  behind §4.4. A grant that mints, lists, and passes an approval sheet before
+  failing is worse than one that never mints, because the user has already been
+  asked to agree to something that cannot happen.
+
+### 10.1 Cross-volume grants — refused at grant time (closes §4.4)
+
+**The call: refuse before minting.** Not "warn then mint", and not "silently
+downgrade to read-only". [FS-09 D19](PRD-FS-09-enablement-consent.md) owns it,
+and the shape is:
+
+- The check runs **twice, both times before a grant row exists** — a probe in
+  `CapabilityService.requestFolderGrant` (so the refusal is a typed choice that
+  can offer read-only) and enforcement in `GrantStore.create` right after
+  `assertGrantableRoot` (the store's own comment already calls that the
+  authoritative choke point for a caller bypassing the native picker). Because
+  no row is created, `listActive` cannot show one and the per-commit approval
+  sheet is unreachable for one. ~~**There is no mint-then-fail path left.**~~
+  **Overstated — corrected in §11.2 below.**
+  These two sites close the path through which a grant is _minted_; two other
+  doors to the same artifact were open, and D19 grew §8 and §9 for them.
+- **Write modes only.** Reads never touch the commit helper, so a `read_only`
+  grant on a second **supported** volume is minted normally and works
+  completely. (On a volume the helper cannot open at all, read-only could not be
+  minted either until §11.3 — same correction.)
+- **No silent downgrade.** Read-only is _offered_ as an explicit second request,
+  never imposed — a grant whose mode is not the mode the user chose is the same
+  defect class as copy naming a verb the build cannot perform.
+- **One producer of volume identity**, `NativeWorkspaceAuthority.rootIdentity`,
+  already called by the store. `fs.statSync().dev` in main is banned as a second
+  producer with a different encoding.
+- **FS-02 D7 is unchanged.** The same-volume precondition at
+  `workspace_commit_helper.c:850` stays exactly as specified and remains the
+  enforcing check. D19 asks the same question earlier, not differently, and
+  explicitly does not relax it to make a `D:` workspace writable.
+
+**What this did NOT close, stated plainly:**
+
+1. **Per-volume app-private staging is a separate future slice** — the larger
+   half of the original finding. It moves where staged bytes live, which is a
+   stated invariant of the helper's header
+   (`workspace_commit_helper.c:19-21`, fd 4 at `:11`), and brings its own consent
+   step and its own `fs_dir_is_app_private` proof on a volume the app does not
+   own. It is recorded in FS-09's Out of scope and in FS-02 D7 item 2, and is
+   **designed by neither**. Nothing in FS-02 or FS-09 depends on it existing.
+2. **SPIKE-V1 is open** (FS-09 open question 6). On Win32 the comparison is of
+   two 16-hex `FILE_ID_INFO.VolumeSerialNumber` values (FS-02 D6). Serial
+   equality is _necessary_ for same-volume; it is not proven _sufficient_,
+   because a cloned or imaged volume can present a duplicate serial — and that
+   fails in the dangerous direction, letting a cross-volume grant through to die
+   at prepare. If the spike forces the volume-GUID path, the encoding that
+   changes is **FS-02 D6's**, because `volumeId` is persisted inside grants.
+   Until it runs, every Win32 statement says "same volume **serial**".
+
+**Where it is recorded:** FS-09 D19 (with C10, Interfaces §8, implementation
+steps, tests, DoD, guardrails); FS-02 D7's ownership note, FS-02's open-question
+bullet and Out of scope; FS-09 open question 4 closed in place; §4.4 above; §7
+item 9; the README's spike register.
+
+### 10.2 FS-08's consent surfaces — FS-09 owns them (closes §9.4)
+
+**The call: execution consent is consent.** Splitting it across two documents
+would produce two consent models, which is precisely what this program exists to
+prevent. FS-09 dropped "The sandbox provider and patch-back (FS-08)" from its Out
+of scope and grew an execution half; FS-08 keeps the mechanism.
+
+| FS-09 owns (the ask)                                                   | FS-08 keeps (the mechanism)                                 |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------- |
+| D20 — enabling execution: its own switch, not derived from the FS lane | the provider, the runtime and its drivers                   |
+| D21 — the reason rendering, and "what to install" without installing   | D16's reason strings; §2's driver registry                  |
+| D22 — the image-download ask, once, with the size, before a byte moves | D7's digest pin, expected size, driver argv                 |
+| D23 — what leaves the granted root, stated before it leaves            | the snapshot exporter and D17.1's base entries              |
+| D24 — the import review, and the unsupported-verb pre-check            | §7's prepare/authorize lane, the C1 importer, `parse_entry` |
+| D25 — revoking while a sandbox is live                                 | D9's kill, `cleanup_pending`, `liveSessionCount`            |
+
+The boundary is not a hand-off of a list: **FS-09 took three surfaces FS-08 had
+never routed** (D20, D23, D25), which is the sign the line is drawn in the right
+place. The dependency runs one way — FS-08's code depends on nothing in FS-09,
+and nothing in FS-08 becomes user-reachable without it.
+
+**What this did NOT close, stated plainly:**
+
+1. **FS-08 open question 8 — the `decisionLedgerId` — is still open**, and FS-09
+   **declines it by name** rather than absorbing it: it is a question about what
+   is recorded server-side, not about what a human is asked. FS-09 binds one
+   consequence in the meantime — the review may not tell the user the import was
+   "approved and recorded" when no approval row exists. Item 12 of §7 above.
+2. **One question was routed _back_ to FS-08.** D24 names the review surface
+   (`TcWorkspaceStageSurface` via `projectWorkspaceStage`) and forbids a second
+   projection, but whether an **imported** revision reaches that projection today
+   is unverified (FS-09 open question 8). If it does not, the wiring is FS-08's
+   mechanism.
+3. **A shipping-order constraint replaces the ownership gap.** No FS-08 phase
+   yields a user-reachable capability until FS-09's execution half lands. FS-08's
+   DoD now carries an item for it that FS-08 cannot tick alone — the same shape
+   as the Windows code-signing certificate in §7 item 1, and deliberately not
+   dressed up as done.
+4. **FS-09 D23 State 1 is pinned to a fact FS-08 will change.** The copy
+   "nothing is copied from your folder" is true only while the snapshot is
+   overlay-only, and its test **must fail when FS-08 D17.1 lands**. That failure
+   is the signal to move the copy to State 2. Whoever implements D17.1 owns
+   telling FS-09.
+5. **SPIKE-L2 still decides whether any of this ships.** Ownership was never the
+   binding constraint on FS-08; a Windows container runtime that cannot observe
+   all ten isolation controls is, and by FS-08 D4 it takes macOS execution with
+   it. §7 item 14, and the README's spike register.
+
+### 10.3 What this pass did not do
+
+- It ran no spike, upgraded no `unverified` marker, and added one spike id only
+  because FS-09 D19 needed it (**SPIKE-V1**).
+- It did not re-open FS-01, FS-03, FS-04, FS-05, FS-06 or FS-07. The only
+  documents changed are the two that carried the stale routing (FS-02, FS-08),
+  the one that took the ownership (FS-09), the README, and this report.
+- It did not decide FS-08 open question 8, FS-08 open question 9 (whether
+  D17.1's base-file exporter is FS-08's), or FS-09 open question 3 (whether the
+  enable toggle is reachable before sign-in). Those remain where they were, with
+  their recommendations.
+- It changed no source file, and it did not implement, schedule or budget any of
+  the surfaces it assigned an owner to.
+
+---
+
+## 11. Gap-closure verification (adversarial pass)
+
+**This is the section the task called "§10 — Gap-closure verification".** §10 was
+already taken by the ownership pass, and §10.1/§10.2 are cited by number from
+[README.md](README.md), [PRD-FS-02](PRD-FS-02-windows-commit-helper.md) and
+[PRD-FS-09](PRD-FS-09-enablement-consent.md), so renumbering would silently
+repoint live citations. It is §11.
+
+**Baseline:** unchanged (`main@b349aca2`); every code line cited below was re-read
+at it. **No source file was changed** and no test was run — this pass edits
+specs only. What it did was try to **break** §10's two closures rather than
+confirm them, on the assumption that a pass which announces two gaps closed is
+exactly when a false all-clear is cheapest to write.
+
+**Verdict up front, because the summary is the part that can lie:**
+
+| §10 claim                                              | verdict                                                                                        |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| FS-08's consent surfaces are owned by FS-09 (§10.2)    | **Holds.** One stale sentence found inside FS-08 and fixed; no routed surface is unanswered    |
+| Cross-volume grants are refused before minting (§10.1) | **Held for the create path only — 2 of 3 doors.** Two further paths were open; both now closed |
+| "There is no mint-then-fail path left"                 | **Was false.** Corrected in place at §10.1 and rewritten in FS-09 D19.1                        |
+| The spike register is the index of every spike         | **Was incomplete.** Two ship-gate spikes appeared in no register, no PRD list, and no DoD      |
+
+### 11.1 What was tried
+
+Five attacks, run in this order:
+
+1. **Enumerate every route through which a `Grant` can come into existence** —
+   not just the one §10.1 fixed. `grep` over `apps/` and `packages/` for
+   `new GrantStore`, `store.create`, `requestFolderGrant` and any second grant
+   store.
+2. **Follow every FS-09 reference inside FS-08** to the decision it names, and
+   check the decision answers it — including the prose paragraphs the routing
+   table does not cover.
+3. **Read the refusal's copy as a user who cannot act on it**, looking for a
+   sentence that states a limitation and stops.
+4. **Diff every "spike" mention in all nine PRDs against the README register**,
+   both directions.
+5. **Re-check D19 against FS-01's seam and FS-04's trash substrate** for a
+   contradiction the new text introduced.
+
+### 11.2 What actually broke — cross-volume was closed on the create path only
+
+**Three doors lead to the artifact §10.1 describes** ("a grant that looks
+granted, passes `listActive`, and fails only at prepare, after the user has been
+shown an approval sheet"). D19's first draft closed one and claimed all three.
+
+**Door 1 — `CapabilityService.requestFolderGrant` → `GrantStore.create`.
+Closed, and it is the only mint path.** This checked out: `create` has exactly
+one caller ([service.ts:54-58](../../../apps/desktop/main/capabilities/service.ts)),
+`requestFolderGrant` has exactly one IPC entry
+([handlers.ts:416-423](../../../apps/desktop/main/ipc/handlers.ts)), and
+`new GrantStore` appears once in the tree
+([capabilities/index.ts:72](../../../apps/desktop/main/capabilities/index.ts)).
+No second store, no seeding path, no re-grant. §10.1's two check sites do cover
+minting.
+
+**Door 2 — a grant already on disk. OPEN, and it is the same defect exactly.**
+`GrantStore` is durable and survives an upgrade. `#ensureLoaded`
+([grant-store.ts:233-248](../../../apps/desktop/main/capabilities/grant-store.ts))
+and `coerceGrant`
+([:343-397](../../../apps/desktop/main/capabilities/grant-store.ts)) rehydrate a
+row without re-deriving anything from it. A `read_write` grant on a second volume
+minted by a build **before** D19 therefore still:
+
+- passes `listActive`, which filters only `status` and `expiresAt`
+  ([:167-175](../../../apps/desktop/main/capabilities/grant-store.ts));
+- passes `#liveGrants`
+  ([workspace-authority.ts:796-815](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+  which compares no volume — `:812` requires `rootIdentity` to be **present**,
+  never that it names the right volume;
+- passes `#assertPreparedLive`, because it compares the observed identity against
+  the **recorded** one
+  ([:950-968](../../../apps/desktop/main/capabilities/workspace-authority.ts),
+  compare at `:960-965`) — it catches a root that _moved_, and a root that was
+  always on the wrong volume matches itself;
+- and dies at `command_prepare`
+  ([workspace_commit_helper.c:850](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+  after the approval sheet.
+
+This is not hypothetical or Windows-only: on macOS an external-volume grant is
+mintable on the **current** build, and the default TTL is thirty days
+([grant-store.ts:119](../../../apps/desktop/main/capabilities/grant-store.ts)),
+so the population outlives the upgrade that adds the gate. D19's own §4 bullet
+pointed at `#assertPreparedLive` as covering "a root that changes volume after
+the grant was minted" — true, and it is not the same case.
+
+**Fixed** as [FS-09 D19.8](PRD-FS-09-enablement-consent.md): the volume term
+moves into `grantUnusableReason` — the predicate FS-09 D6 was **already**
+extracting so that displayed and enforced capability cannot drift — as
+`wrong_volume`, evaluated only under `requireWritable` and ordered last.
+`#liveGrants` then never hands the grant to the write path, `writesAvailable`
+reports it honestly on the Settings page, and `listActive` is untouched so reads
+keep working. No migration, no rewritten row, no `crossVolume` field: the
+condition is a fact about **this boot's** staging volume, not about the row,
+which is also why the same predicate covers `userData` moving volumes — a case
+nothing else in the program handles.
+
+**Door 3 — a volume the helper refuses to open. OPEN, and it defeats the
+refusal itself.** `open_root` embeds the volume gate:
+`supported_root_fd` requires `f_fstypename ∈ {"apfs","hfs"}`
+([workspace_commit_helper.c:358-363](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c),
+called at
+[:365-369](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+and `command_root_identity` opens through it
+([:837-843](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+For a root on exFAT, FAT32 or an SMB/NFS share it returns `UNSUPPORTED`, which
+the client turns into a **thrown**
+`NativeWorkspaceCommitHelperError("workspace_write_unsupported")`
+([native-workspace-commit-helper.ts:668-670](../../../apps/desktop/main/capabilities/native-workspace-commit-helper.ts)).
+`GrantStore.create` awaits that resolver at
+[:138-141](../../../apps/desktop/main/capabilities/grant-store.ts) with **no
+`catch`, and before it reads `mode`**. Two consequences:
+
+- D19's refusal never runs — there is no `volumeId` to compare — so the user
+  gets a raw error out of a **grant request** instead of the typed refusal, the
+  named volume, and the read-only offer. The one case where the copy matters
+  most is the one case it never renders.
+- **`read_only` could not be minted either**, on any such volume. That makes
+  D19 §2's claim — "`read_only` grants on a second volume work completely and
+  are minted normally" — false for the second volume most users actually
+  own: a USB stick or a network drive. It was true only for a second _supported_
+  volume, which the text did not say.
+
+**Fixed** as [FS-09 D19.9](PRD-FS-09-enablement-consent.md): a third
+`GrantRefusalReason`, `unsupported_volume`, with its own copy and its own remedy
+(no other folder on that drive will work either, so "choose a different folder"
+means a different drive); and `create` catches that one call so `read_only` mints
+unbound (`rootIdentity: undefined` — already the legal shape a grant takes when
+`#resolveProfileId` fails, [:217-229](../../../apps/desktop/main/capabilities/grant-store.ts),
+and already refused for writes at
+[workspace-authority.ts:812](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+while every write mode rethrows. The `catch` is scoped to the identity call and
+explicitly never widens to a write mode — swallowing it there would mint a grant
+that displays as writable and is not, which is the defect the whole decision
+removes. The same wrap is applied to step 36's staging-volume resolution, which
+could otherwise **throw during authority construction** and turn a volume
+question into a failed boot.
+
+**Also corrected, smaller:**
+
+- D19.1 said the store check sits "immediately after `assertGrantableRoot`". It
+  cannot — it consumes the `rootIdentity` resolved at `:138-141`. The
+  implementation plan (step 35) already had it right; the decision text now
+  matches it.
+- The refusal copy said the product "can't do that across two disks". The case
+  this decision exists for is `C:` and `D:` as two **partitions of one disk**,
+  where that sentence is simply false. Changed to "two separate drives", which is
+  true for a partition, an external disk and a mounted volume alike, and is the
+  word Windows itself uses for `D:`.
+- "Grant read-only access" was an offered next step whose wiring nobody
+  specified, and the obvious wiring — the renderer hands back the picked root —
+  is banned by FS-09's own guardrail. D19.5 now states it: the action re-invokes
+  `requestFolderGrant` with `mode: "read_only"` and the picker **re-opens**; main
+  keeps no picked root between IPC calls. The cost (one re-pick) is stated, and
+  the alternative (a main-held one-use continuation) is recorded as rejected.
+
+### 11.3 What actually broke — FS-08 → FS-09 routing
+
+**§10.2 holds.** All 50 lines in FS-08 that mention FS-09 were followed to the
+decision they name, and each is answered: D16's reason strings against D21's copy
+table (all **seven** members of `SandboxReadinessReason`, FS-08 §5, have a row —
+checked member by member, none missing), D7's four binding properties against
+D22, D12's review surface against D24, §7's affordance against D24, and the
+three surfaces FS-09 took that FS-08 never routed (D20, D23, D25).
+
+**One stale sentence, and it is the one that matters.** FS-08's **Out of scope**
+still ended the unsupported-verb paragraph with "**Nobody owns that today.**"
+while FS-08's own routing table, twenty pages later, lists that exact surface as
+FS-09 D24's. A reader arriving through Out of scope — which is where an
+implementer scoping the work arrives — would have concluded the gap was still
+open. **Fixed** in place, with the two facts D24 must honour (the refusal is
+wholesale, and it happens at prepare) restated as the reason the pre-check gates
+the approve control rather than warning beside it.
+
+Nothing else was found unanswered. Notably **not** a defect: FS-09 declining
+FS-08's open question 8 (`decisionLedgerId`) is a decline with a stated reason
+and a bound consequence on the copy, which is a different thing from a gap.
+
+### 11.4 What actually broke — the spike register
+
+The register's own premise is that it answers "how many are there". It did not.
+Two spikes are **ship gates** in their owning PRD's text and appeared in **no**
+register, no numbered spike list, and no DoD:
+
+1. **FS-02 D2 property 3** — the status a `Flags = 0` rename returns when the
+   destination leaf is occupied, specifically by **a junction or a file
+   symlink**. FS-02 marks it "_unverified — spike required_" inside a prose
+   paragraph and says to run it alongside SPIKE-W3, and names the consequence: a
+   reparse-point occupant that is _followed_ rather than colliding gives the
+   final component a symlink-follow hazard, requiring an explicit
+   `FILE_ATTRIBUTE_REPARSE_POINT` refusal before the rename. That is a
+   **confinement** property, which the program's guardrails treat as
+   non-negotiable — and it had no name, so nothing tracked it.
+2. **FS-06 D5's Windows mirror** — (a) is `FileRenameInformationEx` +
+   `FILE_RENAME_POSIX_SEMANTICS` available on the pinned minimum build, (c) the
+   exact status when the target is held with an incompatible share mode, (d)
+   does `fs_carry_metadata`'s Win32 body reproduce the **effective** DACL. FS-06
+   says these "must be answered before D5 is implemented". FS-06 has **no open
+   questions section at all**, so the requirement lived only inside a blockquote.
+   (c) is the error D6's entire "Windows detects the open holder" claim rests on;
+   (d) failing means a metadata carry-over silently drops inherited ACEs, the
+   exact failure FS-06 D8 exists to prevent.
+
+**Fixed:** both are rows in the README's "PRD-local spikes with no program id"
+table, labelled **BLOCKS — ship gate**, and both now have a DoD line in the PRD
+that owns them, so the register row points at something. The register's preamble
+says plainly that these were found in its own blind spot: a spike is tracked only
+if someone gave it a name. The host-budget paragraph was corrected to book time
+for them.
+
+One consolidation observation was strengthened rather than made: FS-02 SPIKE-W2,
+FS-04 spike 5 and FS-06 D5(d) ask the **same** Win32 inherited-ACE question from
+three directions. They are still not consolidated — they are not obviously one
+experiment — but three askers is a stronger argument for running it early than
+two was.
+
+**Checked and found correctly labelled:** SPIKE-V1's "blocks a decision, **not**
+whether D19 refuses" is right, and it was worth arguing about. If serial equality
+is unsound on Win32 the gate fails **open** — the exact failure D19 exists to
+prevent — but `command_prepare`'s check still fails closed behind it, so what is
+lost is the early refusal, not the safety property. "Blocks a decision" plus the
+register's explicit "fails in the dangerous direction if ignored" callout is the
+honest pair. SPIKE-L2's **BLOCKS — the program** label is also correct and is the
+only one of its kind.
+
+### 11.5 Checked and found sound
+
+- **No contradiction with FS-01's seam.** D19 declares no seam member, adds no
+  verb to `fs_platform.h`, and names only members FS-01 §2 already defines
+  (`fs_volume_supported`, `fs_dir_is_app_private`). The one producer of volume
+  identity remains `NativeWorkspaceAuthority.rootIdentity` over
+  `command_root_identity`; nothing added a second.
+- **No contradiction with FS-04's trash substrate.** Spine D4 puts the trash at
+  `<root>/.0xcopilot/trash/`, on the **grant root's** volume, same-volume by
+  construction via `open_parent`'s `st_dev` refusal. D19 compares the root
+  against the **staging** volume, which is a different pair; the trash is not
+  what makes a cross-volume grant fail, and D19 says nothing about where it
+  lives. The Out-of-scope note that per-volume staging would re-open the spine
+  D4 / FS-04 D1-D3 argument is correct — it would make the app-private option
+  same-volume by construction too, which was half of FS-04's reasoning.
+- **FS-02 D7 is genuinely unchanged.** `workspace_commit_helper.c:850` remains
+  the enforcing check; D19 adds a gate and removes none, and both documents now
+  say so in the same words.
+- **`sensitive_root` really is the same shape.** Projecting
+  `assertGrantableRoot`'s existing throw into the refusal union gives the page
+  one renderer instead of a refusal path plus a catch path — and with
+  `unsupported_volume` added there are three reasons and still one renderer.
+
+### 11.6 What remains genuinely open — no all-clear here
+
+1. **SPIKE-V1 is unrun**, so every Win32 sentence in D19 still says "same volume
+   **serial**". Until it returns, D19's Windows half is a check whose soundness
+   is asserted, not measured. Unchanged from §10.1 item 2.
+2. **The two newly registered spikes are unrun**, and both are ship gates. The
+   register's total went up by two; nothing was answered.
+3. **Per-volume app-private staging is still designed by nobody.** §10.1 item 1
+   stands exactly as written. D19 refuses a cross-volume write grant; it does not
+   make one work, and a Windows user whose data lives on `D:` still cannot use
+   this capability for writes. That is a real product limitation, not a closed
+   gap.
+4. **D19.8 and D19.9 are specified, not implemented.** They are decisions in a
+   PRD with steps, tests and DoD items — the same status as everything else in
+   this program. Calling the cross-volume gap "closed" means the design covers
+   all three doors, not that any code exists.
+5. **The unsupported-volume copy names causes, not the contract.** It says USB
+   sticks, memory cards and network drives because those are what users
+   recognise; the actual refused set is `fs_volume_supported`'s, differs per
+   platform, and will change if that gate widens. The copy is deliberately not
+   an enumeration, and a reviewer should check it stays that way.
+6. **FS-08 open question 8, FS-08 open question 9 and FS-09 open question 3 are
+   untouched**, as are all outcomes of §10.2. This pass decided nothing new about
+   execution.
+
+### 11.7 What this pass did not do
+
+- It ran no spike, upgraded no `unverified` marker, and invented no new spike
+  id — the two spikes it registered stay un-idded because their owning PRDs do
+  not name them, and the README is explicit that the PRD's text wins.
+- It changed **no source file** and ran **no test**. Every code claim above was
+  read at `main@b349aca2`.
+- It did not re-open FS-01, FS-03, FS-04, FS-05 or FS-07. Documents changed:
+  FS-02 (D7's note, its open-question bullet, one DoD item), FS-06 (one DoD
+  item), FS-08 (one stale sentence), FS-09 (D19.8/D19.9 and their interfaces,
+  steps, tests, DoD and guardrails; C10, C11's heading, D18's table, open
+  question 4), README (the cross-volume paragraph and the spike register), and
+  this report.
+- It did not revisit §10.2's product call. The ownership boundary between FS-08
+  and FS-09 was tested and held; only its bookkeeping was wrong.

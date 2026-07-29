@@ -2,12 +2,15 @@
 
 **Status:** specified
 **Depends on:** FS-02 (hard — the verbs the consent copy enumerates must exist on
-both platforms before this ships). Soft-couples to FS-03 (supplies the
+both platforms before this ships; FS-02 D7 also supplies the same-volume rule
+D19 enforces at grant time). Soft-couples to FS-03 (supplies the
 machine-readable `unavailableReason` this PRD renders), FS-04 (supplies
 `trashStatus.admit`, the only honest pre-commit recoverability signal), FS-05 /
 FS-06 (add verbs the mode copy enumerates, and FS-06's `open_holder_detection`
 asymmetry), FS-07 (supplies the unresolved-record report and the `Recheck`
-action).
+action), FS-08 (supplies the sandbox provider, its readiness reasons, the
+digest-pinned image contract and the patch-import lane — FS-09 owns the
+**consent** surfaces over all of them, D20-D25, and FS-08 keeps the mechanism).
 
 ## Implementer brief
 
@@ -359,6 +362,139 @@ It proves the pipeline runs; it cannot prove the model told the truth.
 | FS-06 | `open_holder_detection` is `true` on Windows and `false` on macOS, and the report must not average them ([PRD-FS-06:598-609](PRD-FS-06-replace.md))                                                                                                                                                                                                     |
 | FS-07 | `WorkspaceReconciliationReport[]` minus `preparedRef`/`claimId`, the `Recheck` action and user acknowledgement ([PRD-FS-07:485](PRD-FS-07-crash-reconciliation.md), [:707-722](PRD-FS-07-crash-reconciliation.md), [:769-776](PRD-FS-07-crash-reconciliation.md)); FS-07 states FS-09 owns the presentation ([:954](PRD-FS-07-crash-reconciliation.md)) |
 
+### C10. Volume identity already exists on the grant path, and there is exactly one producer of it
+
+Added when FS-09 took ownership of the cross-volume refusal (D19).
+
+`GrantStore.create` already resolves the picked root's identity **before** it
+builds the `Grant` literal: `assertGrantableRoot` at
+[grant-store.ts:132](../../../apps/desktop/main/capabilities/grant-store.ts),
+then `await this.#rootIdentity(input.root)` at
+[:138-141](../../../apps/desktop/main/capabilities/grant-store.ts), then the
+record at [:143-156](../../../apps/desktop/main/capabilities/grant-store.ts).
+That resolver is `native.rootIdentity(root)`
+([capabilities/index.ts:72-79](../../../apps/desktop/main/capabilities/index.ts),
+[workspace-authority.ts:224](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+and `GrantRootIdentity` is `{volumeId, fileId}`
+([types.ts:37-40](../../../apps/desktop/main/capabilities/types.ts)). So the
+volume of a candidate root is already computed at grant time, by the helper, and
+then thrown away as an opaque string.
+
+Its producer is the helper's `command_root_identity`
+([workspace_commit_helper.c:837-843](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+which prints `st_dev` as `%llu` on macOS; FS-02 D6 gives the Win32 spelling —
+16 lowercase hex characters of `FILE_ID_INFO.VolumeSerialNumber`
+([PRD-FS-02:176](PRD-FS-02-windows-commit-helper.md)).
+
+The staging directory is main-computed and fixed for the process:
+`join(userDataDir, "capabilities", "workspace-v2", "staging")`
+([workspace-production-authority.ts:26](../../../apps/desktop/main/capabilities/workspace-production-authority.ts),
+[:102-103](../../../apps/desktop/main/capabilities/workspace-production-authority.ts)),
+opened once and inherited by the helper on fd 4
+([workspace_commit_helper.c:11](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+
+The refusal this PRD moves earlier already exists, at prepare:
+`command_prepare` fails `UNSUPPORTED` when
+`stage.st_dev != root.st_dev`
+([workspace_commit_helper.c:850](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+**That is the macOS behaviour today, not a Windows-only future problem** — an
+external volume on macOS fails the same way. Windows only makes it common,
+because staging is under `%APPDATA%` on the system volume while a picked folder
+is routinely on `D:` (FS-02 D7).
+
+Four further facts decide D19's shape. The last two were added by the
+adversarial pass that found D19's first draft incomplete
+([00-consistency-report.md §11](00-consistency-report.md)); each is the reason
+one of D19's sub-points exists.
+
+- **Reads do not go through the helper at all.** The read surface is the
+  broker's `/v1/fs/{stat,list,read,glob,grep}`
+  ([broker.ts:79-94](../../../apps/desktop/main/capabilities/broker.ts)), served
+  by the read-side addon and its fallback, which FS-01's Out of scope excludes
+  by name. A cross-volume grant is therefore fully functional for **reads** and
+  broken only for **writes**.
+- **A root that changes volume later is already caught, but only that.**
+  `#assertPreparedLive` re-resolves identity and compares
+  `observed.volumeId !== state.rootIdentity.volumeId`
+  ([workspace-authority.ts:960-965](../../../apps/desktop/main/capabilities/workspace-authority.ts)).
+  Read it precisely: it compares the observed identity against the **recorded**
+  one, so it catches a root that _moved_ and passes a root that was always on
+  the wrong volume. D19 is a grant-time gate, not a replacement for that
+  use-time check — and that check is not a substitute for D19 either.
+- **Nothing re-examines a grant that is already on disk.** `#ensureLoaded`
+  ([grant-store.ts:233-248](../../../apps/desktop/main/capabilities/grant-store.ts))
+  and `coerceGrant`
+  ([:343-397](../../../apps/desktop/main/capabilities/grant-store.ts)) rehydrate
+  rows without re-deriving anything, `listActive` filters only `status` and
+  `expiresAt` ([:167-175](../../../apps/desktop/main/capabilities/grant-store.ts)),
+  and `#liveGrants` compares no volume
+  ([workspace-authority.ts:796-815](../../../apps/desktop/main/capabilities/workspace-authority.ts)).
+  A grant-time gate alone therefore leaves every grant minted by an earlier
+  build exactly as it was — which on macOS today includes external-volume
+  grants. D19.8.
+- **`rootIdentity` does not merely return a volume — it can refuse.**
+  `command_root_identity` opens through `open_root`
+  ([workspace_commit_helper.c:365-369](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+  which embeds `supported_root_fd`'s `apfs`/`hfs` gate
+  ([:358-363](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+  and the client turns that refusal into a **thrown**
+  `NativeWorkspaceCommitHelperError("workspace_write_unsupported")`
+  ([native-workspace-commit-helper.ts:668-670](../../../apps/desktop/main/capabilities/native-workspace-commit-helper.ts)).
+  `GrantStore.create` awaits it at
+  [:138-141](../../../apps/desktop/main/capabilities/grant-store.ts) with no
+  `catch` and before it looks at `mode`, so on an exFAT stick or a network
+  drive there is no `volumeId` to compare, the refusal path never runs, and
+  **`read_only` cannot be minted either**. D19.9.
+
+### C11. What execution is today, and the six surfaces that had no owner
+
+Added when FS-09 took ownership of the FS-08 consent surfaces (D20-D25).
+
+- **The execution gate is a different flag in a different process.** The
+  sandbox capability is off unless `RUNTIME_ENABLE_REMOTE_SANDBOX` is truthy and
+  `RUNTIME_SANDBOX_PROVIDER` names a provider
+  ([config.py:33-34](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/config.py)),
+  both read in the **ai-backend child**. `isDesktopFilesystemEnabled` is
+  main-process-only and is not in `ENV_PASSTHROUGH_ALLOWLIST`
+  ([feature-gate.ts:23-29](../../../apps/desktop/main/capabilities/feature-gate.ts),
+  [service-env.ts:16-41](../../../apps/desktop/main/services/service-env.ts)).
+  The two gates are independent today, and D20 keeps them independent.
+- **A child's environment is fixed at spawn.** `supervisedEnv` is built once
+  ([index.ts:687-712](../../../apps/desktop/main/index.ts)) and the broker triple
+  is _derived_ from what actually started
+  ([service-env.ts:370-386](../../../apps/desktop/main/services/service-env.ts)).
+  Nothing in main can change a running child's view of a flag. This is what
+  makes D20's honesty requirement unavoidable.
+- **Nothing host-owned leaves the granted root today.**
+  `RuntimeWorkerOverlaySnapshotPlanAuthority.load_plan` selects `FILE` entries
+  from one retained C1 overlay manifest version and nothing else
+  ([sandbox_snapshot_authority.py:88-100](../../../services/ai-backend/src/runtime_worker/sandbox_snapshot_authority.py)),
+  and the module's own docstring exists so that no tool can select "a host
+  filesystem path" ([:1-8](../../../services/ai-backend/src/runtime_worker/sandbox_snapshot_authority.py)).
+  Host base files enter only when FS-08 D17.1 lands, through the broker read
+  surface. D23 has two states for exactly this reason.
+- **`SandboxSnapshot` forbids the things a consent sheet is tempted to show** —
+  no host path, grant, broker handle, root identity or credential
+  ([contracts.py:202-209](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/contracts.py)).
+- **An unshipped verb fails the whole change set at prepare, not at commit.**
+  `parse_entry` refuses `REPLACE`/`DELETE`/`MOVE` with a bare `goto fail`
+  ([workspace_commit_helper.c:801](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c))
+  and runs inside `command_prepare`, so one `delete` entry makes an entire
+  import fail with one undifferentiated error — after the user has been shown a
+  proposal (FS-08 Out of scope). D24 pre-checks it.
+- **The model cannot reach import.** FS-08 §7 adds no broker route and no
+  advertised method
+  ([broker.ts:79-94](../../../apps/desktop/main/capabilities/broker.ts),
+  `ADVERTISED_METHODS` at
+  [:97-112](../../../apps/desktop/main/capabilities/broker.ts)).
+- **Six surfaces were routed here and owned by nobody** — readiness-reason
+  rendering (FS-08 D16), "what to install" (FS-08 D3), image acquisition with
+  its size and consent (FS-08 D7), review of an imported overlay revision
+  (FS-08 D12), the import affordance (FS-08 §7 / Phase 6), and the pre-approval
+  warning that a patch's verbs cannot commit on this platform (FS-08 Out of
+  scope). [00-consistency-report.md §9.4](00-consistency-report.md) records the
+  finding; D20-D25 discharge it.
+
 ## Interfaces consumed
 
 - `isDesktopFilesystemEnabled(env)` —
@@ -531,8 +667,11 @@ export interface RendererGrant {
   /**
    * Whether THIS grant can back a host write in the CURRENT posture. False for
    * `read_only`, for a grant minted without a captured `rootIdentity`, for a
-   * dead session, and on a build where the native authority is unavailable.
-   * Never inferred from `mode` alone — `mode` is intent, this is capability.
+   * dead session, on a build where the native authority is unavailable, and —
+   * D19.8 — for a grant whose root volume is not this boot's staging volume,
+   * which is how a row persisted by a pre-D19 build stops displaying as
+   * writable. Never inferred from `mode` alone: `mode` is intent, this is
+   * capability.
    */
   readonly writesAvailable: boolean;
 }
@@ -562,6 +701,18 @@ export interface GrantUsabilityContext {
    * differ, and the difference must be a named parameter, not two functions.
    */
   readonly requireWritable?: boolean;
+  /**
+   * `volumeId` of the app-private staging directory for THIS boot, from the one
+   * producer (D19.4). Present only where the caller has it; when it is absent
+   * the volume term is not evaluated, exactly as `profileId`/`deviceId` behave.
+   *
+   * This is what closes D19.8: a write-mode grant persisted by a build that
+   * predates D19 is caught here, on the read of the row, rather than at
+   * `command_prepare` after an approval sheet. It is evaluated per boot and
+   * never stored on the grant, because it is a fact about the CURRENT staging
+   * location, not about the row.
+   */
+  readonly stagingVolumeId?: string;
 }
 
 export type GrantUnusableReason =
@@ -573,7 +724,13 @@ export type GrantUnusableReason =
   | "no_expiry"
   | "no_root_identity"
   | "no_path_prefixes"
-  | "read_only";
+  | "read_only"
+  /**
+   * Writable-only. The grant's root volume is not this boot's staging volume,
+   * so the helper would refuse it at prepare (D19.8). Last in the order, so a
+   * revoked or expired grant still reports that first.
+   */
+  | "wrong_volume";
 
 /** null when usable; otherwise the FIRST reason it is not, in the order above. */
 export function grantUnusableReason(
@@ -804,6 +961,182 @@ GRANT_REVOKED: Final = (
 
 `grant_revoked` maps to HTTP 403 in `fsErrorResponse`, the same status as
 `permission_denied`. The status is not the contract; the code is.
+
+### 8. A typed grant refusal, so the page never parses an error string (new)
+
+`apps/desktop/main/capabilities/types.ts`:
+
+```ts
+/** Why a picked folder cannot become the grant the user asked for. */
+export type GrantRefusalReason =
+  | "cross_volume_write" // D19: root and staging are on different volumes
+  /**
+   * D19.9: the helper cannot open the root's volume at all — not `apfs`/`hfs`
+   * on macOS (workspace_commit_helper.c:358-363), not NTFS-and-local on Win32
+   * (FS-02 D7). A DIFFERENT refusal from `cross_volume_write`, because the
+   * remedy differs: no folder on that drive will ever be writable, so
+   * "choose a different folder" means a different DRIVE, not a different folder.
+   */
+  | "unsupported_volume"
+  | "sensitive_root"; // the existing assertGrantableRoot refusal, typed
+
+export interface GrantRefusal {
+  readonly refused: true;
+  readonly reason: GrantRefusalReason;
+  /**
+   * Best-effort, sanitized, SINGLE-segment volume display name — `"D:"`,
+   * `"Backup Drive"`. Absent when it cannot be determined; the copy then uses
+   * its name-free form (D19.5). NEVER a path, never joined, never the granted
+   * folder's own name. Meaningful for `cross_volume_write` and
+   * `unsupported_volume`; absent for `sensitive_root`.
+   */
+  readonly volumeLabel?: string;
+  /**
+   * The mode the user asked for. `read_only` is never refused for
+   * `cross_volume_write` or `unsupported_volume` — reads do not go through the
+   * helper (C10).
+   */
+  readonly requestedMode: GrantMode;
+  /**
+   * True when the same folder could still be granted `read_only` — both volume
+   * reasons. False for `sensitive_root`, which refuses the folder outright.
+   */
+  readonly readOnlyAvailable: boolean;
+}
+```
+
+`apps/desktop/main/capabilities/schemas.ts` gains `GrantRefusalSchema`
+(`.strict()`), and the `requestFolderGrant` reply becomes the union
+`RendererGrant | GrantRefusal | null` — `null` still means the user cancelled
+the picker. This **supersedes** the `Promise<RendererGrant | null>` return in
+Interfaces §5.
+
+`"sensitive_root"` is in the union deliberately, and it is not new behaviour:
+`assertGrantableRoot` already refuses `/`, the home directory, `userData` and
+credential directories
+([grant-store.ts:132-135](../../../apps/desktop/main/capabilities/grant-store.ts),
+[path-validation.ts:390-398](../../../apps/desktop/main/capabilities/path-validation.ts)),
+and the service maps that throw into the same typed shape so the page has **one**
+renderer for "your folder was refused, here is why" rather than a refusal path
+and a catch path for the same class of event. Its parenthetical detail stays in
+main; only the typed reason crosses IPC.
+
+`apps/desktop/main/capabilities/grant-store.ts` config gains:
+
+```ts
+export interface GrantStoreConfig {
+  // …existing fields unchanged…
+  /**
+   * `volumeId` of the app-private staging directory, resolved ONCE at authority
+   * construction through the SAME producer as `rootIdentity` (C10). Absent when
+   * there is no native authority — in that posture no grant can back a write
+   * anyway (workspace-authority.ts:812), so there is nothing to refuse.
+   */
+  readonly stagingVolumeId?: string;
+}
+```
+
+### 9. Execution posture and its three channels (new)
+
+Deliberately a **sibling** of `FilesystemPosture`, not a nested field on it: a
+sandbox subsystem that cannot be interrogated must not be able to fail the
+filesystem page's `.strict()` parse. Two capabilities, two postures, one page.
+
+```ts
+export const CAPABILITY_CHANNELS = {
+  // …the six from Interfaces §4…
+  /** FS-09: read the honest execution posture. */
+  executionPosture: "capability.execution-posture",
+  /** FS-09: persist the execution enable/disable decision. */
+  setExecutionEnabled: "capability.set-execution-enabled",
+  /** FS-09: user-triggered acquisition of the digest-pinned image (D22). */
+  acquireExecutionImage: "capability.acquire-execution-image",
+} as const;
+```
+
+```ts
+/**
+ * The closed reason set FS-08 produces (PRD-FS-08 §5). FS-09 renders these and
+ * invents none: an unrecognised value renders the generic unavailable state
+ * plus the raw code as copyable support detail, never a guessed explanation.
+ */
+export type ExecutionReadinessReason =
+  | "disabled"
+  | "provider_unavailable"
+  | "isolation_unverified"
+  | "openai_hosted_container_control_gap"
+  | "local_runtime_unavailable"
+  | "local_image_absent"
+  | "local_isolation_probe_failed";
+
+export interface ExecutionImageAcquisition {
+  readonly state: "idle" | "running" | "failed" | "indeterminate";
+  /** Bytes fetched so far, when the runtime reports them. */
+  readonly receivedBytes?: number;
+  /** Total bytes, stated BEFORE the fetch starts. Absent → indeterminate UI. */
+  readonly totalBytes?: number;
+}
+
+export interface ExecutionPosture {
+  /** The persisted (or env-forced) decision. */
+  readonly enabled: boolean;
+  /** Whether the child was actually spawned with execution configured. */
+  readonly active: boolean;
+  /** `enabled !== active`. Both directions require a restart (D20). */
+  readonly restartRequired: boolean;
+  readonly managedByEnvironment: boolean;
+  /** Exactly one reason, or absent when execution is ready. Never invented. */
+  readonly readinessReason?: ExecutionReadinessReason;
+  /** `apple_container | podman | docker`, when one was configured. */
+  readonly runtimeKind?: string;
+  /** The digest-pinned reference this build requires. Never a tag (FS-08 D7). */
+  readonly imageRef?: string;
+  /** Stated before any fetch. Absent when the runtime cannot report it. */
+  readonly imageBytes?: number;
+  readonly imagePresent: boolean;
+  readonly imageAcquisition?: ExecutionImageAcquisition;
+  /**
+   * Live sandbox sessions this boot. ABSENT means the host cannot say — the
+   * revoke copy then takes its cautious branch (D25), never the reassuring one.
+   */
+  readonly liveSessionCount?: number;
+}
+```
+
+`ExecutionPostureSchema` is `.strict()` and is parsed on the way out, exactly
+like `FilesystemPostureSchema`. It carries no path, no runtime binary path, no
+container name, no token, and no `provider_session_ref`.
+
+### 10. The port and the page grow an execution half (extended)
+
+`FilesystemCapabilityPort` (Interfaces §5) gains — and `requestGrant`'s return
+type widens per §8:
+
+```ts
+export interface FilesystemCapabilityPort {
+  // …§5 unchanged, except:
+  requestGrant(input: {
+    readonly mode: GrantMode;
+    readonly duration: GrantDuration;
+    readonly pathPrefixes?: readonly string[];
+  }): Promise<RendererGrant | GrantRefusal | null>;
+
+  /** Absent implementations render the execution sections as unavailable. */
+  executionPosture?(): Promise<ExecutionPosture>;
+  /** Returns the posture AFTER the write, so the page never guesses. */
+  setExecutionEnabled?(enabled: boolean): Promise<ExecutionPosture>;
+  /**
+   * One acquisition of ONE digest. Resolves with the posture after the attempt;
+   * an unconfirmed cancel resolves `indeterminate`, never `idle` (D22).
+   */
+  acquireExecutionImage?(): Promise<ExecutionPosture>;
+}
+```
+
+The page (`FilesAndFoldersPage.tsx`) keeps its props and grows two sections —
+"Code execution" and, when `liveSessionCount` is present and non-zero, the live
+sandbox line inside the revoke confirmation. No second Settings page and no
+second nav item: one consent model, one page (D20).
 
 ## Design
 
@@ -1292,15 +1625,657 @@ renders as unavailable with a reason — not as an empty list, which would read 
 
 ### D18. Rejected alternatives, recorded so they are not re-proposed
 
-| Alternative                                          | Why not                                                                                            |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Per-account boot gate                                | Unresolvable at gate time (C2); would make the capability permanently unreachable                  |
-| Restart supervised children after sign-in            | Tears down PostgreSQL + 3 services mid-session; creates two postures per boot                      |
-| "Until I revoke it" duration                         | An unbounded grant is the one thing a consent surface cannot honestly display later                |
-| Session grant with no `expiresAt`                    | Visible to `listActive`, refused by `#liveGrants` (C5.2) — grants that look granted and never work |
-| A second enablement flag for "writes" vs "reads"     | Two gates that can disagree; capability is already reported per verb (D15)                         |
-| Auto-retiring unresolved records after N boots       | A timer would make an unread data-loss notice disappear (FS-07 D15)                                |
-| Collapsing `indeterminate` into `failed` for display | Turns a decided-unknown into a decided-no; breaks FS-07's whole premise                            |
+| Alternative                                           | Why not                                                                                                                                                                       |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-account boot gate                                 | Unresolvable at gate time (C2); would make the capability permanently unreachable                                                                                             |
+| Restart supervised children after sign-in             | Tears down PostgreSQL + 3 services mid-session; creates two postures per boot                                                                                                 |
+| "Until I revoke it" duration                          | An unbounded grant is the one thing a consent surface cannot honestly display later                                                                                           |
+| Session grant with no `expiresAt`                     | Visible to `listActive`, refused by `#liveGrants` (C5.2) — grants that look granted and never work                                                                            |
+| A second enablement flag for "writes" vs "reads"      | Two gates that can disagree; capability is already reported per verb (D15)                                                                                                    |
+| Auto-retiring unresolved records after N boots        | A timer would make an unread data-loss notice disappear (FS-07 D15)                                                                                                           |
+| Collapsing `indeterminate` into `failed` for display  | Turns a decided-unknown into a decided-no; breaks FS-07's whole premise                                                                                                       |
+| Minting the grant and letting prepare fail            | The user approves a change set that can never commit — §4.4's finding, by design                                                                                              |
+| Silently downgrading a cross-volume grant             | A grant whose mode is not the mode the user chose is a consent surface that lies                                                                                              |
+| Comparing volumes with `fs.statSync().dev`            | A second producer of the same fact; macOS `dev_t` is signed, the helper prints it unsigned                                                                                    |
+| Migrating or revoking pre-D19 cross-volume rows       | Wrong-volume is a fact about **this boot's** staging dir, not about the row: a stored flag is stale the moment either side moves, and the grant still works for reads (D19.8) |
+| Absorbing a `rootIdentity` failure for a write mode   | Mints a grant that displays as writable and is not — the exact defect D19 removes (D19.9)                                                                                     |
+| Keeping the picked root so read-only skips the picker | A renderer-held root is a renderer-supplied root; a main-held one-use continuation is real machinery for one re-pick (D19.5)                                                  |
+| One switch for filesystem and execution               | Two capabilities with different worst cases; refusing only one becomes impossible                                                                                             |
+| Installing a container runtime from the app           | Needs elevation and an installer we do not own; FS-08 D3 forbids the prompt                                                                                                   |
+| A second review surface for imported patches          | Two review surfaces are two consent models — the defect this program prevents                                                                                                 |
+| A progress percentage the runtime did not give        | A fabricated bar reports an outcome nobody observed (D22)                                                                                                                     |
+| Saying "revoked" while a sandbox still holds a copy   | Revocation cannot reach inside a running container; D25 says so instead                                                                                                       |
+
+This table stays the single home for rejected alternatives, including those
+earned by D19-D25 below. Decisions are appended after it rather than renumbered,
+because D12, D15, D17 and D18 are cited by name from FS-05, FS-07 and
+[00-consistency-report.md](00-consistency-report.md), and a renumber would
+silently repoint those citations.
+
+### D19. A grant root on another volume is refused at grant time, and read-only is offered rather than imposed
+
+The defect this closes, in one sentence: today a folder on a second volume mints
+a grant that **looks granted**, passes `listActive`, survives every posture
+check, and then fails at prepare with `workspace_write_unsupported` — after the
+user has been shown an approval sheet. That is the "grants that look granted and
+never work" row of D18 arriving by a different route, and
+[00-consistency-report.md §4.4](00-consistency-report.md) records that FS-02 D7
+routed the follow-up "to FS-04/FS-09" while neither document mentioned it. FS-09
+takes it.
+
+**1. Where the check runs — twice, and both times before a grant exists.**
+
+- **Probe, in `CapabilityService.requestFolderGrant`**, between
+  `this.#picker.pick()`
+  ([service.ts:50](../../../apps/desktop/main/capabilities/service.ts)) and
+  `this.#store.create({...})`
+  ([:54-58](../../../apps/desktop/main/capabilities/service.ts)). The service is
+  where the refusal becomes a **choice** — it returns the typed `GrantRefusal`
+  of Interfaces §8 so the page can offer read-only, which a thrown error cannot.
+- **Enforcement, in `GrantStore.create`**, after `assertGrantableRoot`
+  ([grant-store.ts:132-135](../../../apps/desktop/main/capabilities/grant-store.ts))
+  **and after `rootIdentity` resolves**
+  ([:138-141](../../../apps/desktop/main/capabilities/grant-store.ts)) — the
+  check consumes that identity, so it cannot sit before it — and **before** the
+  `Grant` literal at
+  [:143-156](../../../apps/desktop/main/capabilities/grant-store.ts). The
+  store's own comment already states why this is the right place — it is "the
+  authoritative choke point — a caller bypassing the native picker is still
+  blocked"
+  ([:126-129](../../../apps/desktop/main/capabilities/grant-store.ts)). The
+  store throws the existing `FsError("unsupported", …)`; **no new `FsErrorCode`
+  is added**, because the platform genuinely cannot do it and the closed
+  vocabulary should not widen for a case an existing member describes.
+
+Both sites run before any grant row exists, therefore before `listActive` can
+show one, therefore before an approval sheet can be reached at all — the sheet
+is per-commit (`decideWorkspaceApproval`,
+[workspaceApprovalPort.ts:56](../../../apps/desktop/renderer/workspaceApprovalPort.ts))
+and requires a grant.
+
+**The scope of that claim, stated exactly, because an earlier draft of this
+decision overstated it as "there is no mint-then-fail path left".** These two
+sites close the path through which a grant is **minted**. They do not by
+themselves close every path through which a write-mode grant can _become_
+visible-but-unusable, and an adversarial pass found two more
+([00-consistency-report.md §11](00-consistency-report.md)):
+
+- a grant **already on disk** from a build that predates this decision (§8
+  below), which arrives through `GrantStore.#ensureLoaded`, not through
+  `create`; and
+- a root whose volume cannot back a write **at all** (§9 below), where
+  `rootIdentity` itself refuses and the refusal path above never runs.
+
+Both are closed here, in this decision, by two named mechanisms. With all four
+covered the claim holds: **no write-mode grant that the platform cannot use is
+ever minted, listed as writable, or reachable from an approval sheet.**
+
+**2. It applies to write modes only.** Reads never touch the commit helper (C10),
+so a `read_only` grant on a second **supported** volume — another APFS/HFS
+volume on macOS, another NTFS-local volume on Win32 — works completely and is
+minted normally. Refusing it would delete a capability that functions. So the
+gate is `mode !== "read_only"`, and `GrantRefusal.readOnlyAvailable` is true for
+exactly this case. (A second volume the helper cannot open at all is a different
+case with a different refusal, and read-only there needed a fix of its own —
+§9.)
+
+**3. Nothing is downgraded silently.** The service does **not** mint a
+`read_only` grant on the user's behalf. It refuses, states why, and offers
+read-only as a second, explicit request the user makes. A grant whose mode is
+not the mode the user chose is the same class of defect as copy that names a
+verb the build cannot perform (D8).
+
+**4. How the comparison is made — one producer of volume ids, on both
+platforms.** The grant store already resolves `rootIdentity` through
+`native.rootIdentity(root)` before building the record (C10). FS-09 resolves the
+**staging** directory's identity through the **same** function, once, at
+authority construction, and passes it as `GrantStoreConfig.stagingVolumeId`
+(Interfaces §8). The comparison is then string equality of two `volumeId`s that
+came out of one producer.
+
+- **macOS — grounded.** `volumeId` is `st_dev` printed `%llu` by
+  `command_root_identity`
+  ([workspace_commit_helper.c:837-843](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+  This is the same number `command_prepare` compares at
+  [:850](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c);
+  FS-09 asks the question earlier, not differently.
+- **Windows — `unverified`, gated by SPIKE-V1.** FS-02 D6 specifies the Win32
+  `volumeId` as 16 lowercase hex characters of
+  `FILE_ID_INFO.VolumeSerialNumber`, obtained by
+  `GetFileInformationByHandleEx(h, FileIdInfo, …)`
+  ([PRD-FS-02:176](PRD-FS-02-windows-commit-helper.md),
+  [:420-438](PRD-FS-02-windows-commit-helper.md)). Serial equality is a
+  **necessary** condition for same-volume; it is not proven sufficient, because
+  a cloned or imaged disk can present a duplicate serial — and a duplicate fails
+  in the dangerous direction, letting a cross-volume grant through to die at
+  prepare, which is the exact failure this decision exists to prevent. SPIKE-V1
+  (Open questions) names the experiment and the documented fallback
+  (`GetFinalPathNameByHandleW(VOLUME_NAME_GUID)`, itself unverified). Until it
+  runs, every Win32 statement in this PRD says the check compares **volume
+  serials**; it does not claim serial equality proves same-volume.
+- **Never `fs.statSync(dir).dev` in main.** It is a second producer of the same
+  fact and the two encodings can disagree: macOS `dev_t` is signed while the
+  helper prints `(unsigned long long)st_dev`, so a negative device number is a
+  20-digit decimal on one side and a negative number on the other. A comparison
+  that is right on most machines and silently wrong on some is worse than no
+  comparison, because it fails open. This is D6's "one predicate, both call
+  sites" applied to a value rather than to a predicate.
+- **When there is no native authority, the check is skipped.**
+  `workspaceWritableBootstrap` false
+  ([capabilities/index.ts:68-79](../../../apps/desktop/main/capabilities/index.ts))
+  means the store gets no `rootIdentity` resolver and every grant is permanently
+  read-only to C2
+  ([workspace-authority.ts:812](../../../apps/desktop/main/capabilities/workspace-authority.ts)).
+  There is nothing to refuse, and D4's `unavailableReasons` already carries the
+  real cause. Refusing here as well would blame the volume for a signing or
+  packaging problem.
+- **This is not a substitute for the use-time identity check.**
+  `#assertPreparedLive` already re-resolves identity and compares `volumeId`
+  ([workspace-authority.ts:960-965](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+  which covers a root that changes volume after the grant was minted. D19 adds a
+  gate; it removes none.
+
+**5. The copy.** Fixed vocabulary, like D8's mode table. When a volume display
+name is available:
+
+> **Changes can't be saved on `D:`**
+>
+> 0xCopilot prepares every change beside its own app data and then moves it into
+> place in one step. It can't do that across two separate drives, so a folder on
+> `D:` can be read but not changed.
+>
+> **Grant read-only access** · **Choose a different folder** · **Cancel**
+
+When it is not:
+
+> **Changes can't be saved on that drive**
+>
+> 0xCopilot prepares every change beside its own app data and then moves it into
+> place in one step. It can't do that across two separate drives, so a folder on
+> that drive can be read but not changed.
+>
+> **Grant read-only access** · **Choose a different folder** · **Cancel**
+
+Three properties of that copy are load-bearing. It names the volume whenever it
+can, so the user can act on it rather than guess which folder was wrong. It says
+what the product does, not which call failed. And it offers two next steps plus
+a way out, so a refusal is never a dead end.
+
+**"Disk" was the first draft's word and is wrong.** The common case this
+decision exists for is `C:` and `D:` as two **partitions of one physical
+disk** — the copy must not tell that user their folder is on a second disk when
+it is not. "Drive" matches what Windows itself calls `D:`, is true for a
+partition, an external disk and a mounted volume alike, and is what a user
+reading the sentence can act on. macOS says "drive" for the same reason:
+`/Volumes/Backup` may be a second APFS volume in the same container on the same
+SSD.
+
+**What "Grant read-only access" actually does, since a next step nobody
+specified is not a next step.** It re-invokes `requestFolderGrant` with
+`mode: "read_only"`, which **re-opens the native picker** — main retains no
+picked root between IPC calls, and the renderer must not supply one, which this
+PRD's own guardrail already forbids. The user therefore re-selects the same
+folder. That cost is paid deliberately: the alternative is either a
+renderer-held path (a renderer-supplied root, refused) or a main-held
+"continuation" keyed by an opaque one-use token (real machinery, a second object
+with a lifetime, for one re-pick). The button's job is to make the second
+request obvious and pre-set its mode, not to skip the picker. The label stays as
+written — it describes the outcome, and re-picking is one click, not a dead end.
+
+The volume display name is **best-effort and decoupled from the decision**: the
+refusal is made on the id, and an absent name changes only the sentence.
+`GrantRefusal.volumeLabel` is at most **one** sanitized segment through the
+existing `sanitizeLabel`
+([folder-picker.ts:87-105](../../../apps/desktop/main/capabilities/folder-picker.ts))
+— the same precedent that already lets a folder's basename cross IPC — bounded
+and control-stripped. On Windows it is the mount root of the picker's realpath;
+`sanitizeLabel("D:\\")` already yields `"D:"`, because it maps separators to
+spaces and then trims. The volume label from
+`GetVolumeInformationByHandleW` is a nicer alternative and is unverified
+(SPIKE-V1). On macOS it is the volume name under `/Volumes/` when the root is
+beneath it, and absent otherwise. Never a joined path, never the granted
+folder's own name, never more than one segment.
+
+**6. What is recorded.**
+
+- One main-side `GrantStoreAudit.warn`
+  ([grant-store.ts:36-38](../../../apps/desktop/main/capabilities/grant-store.ts),
+  used at [:302](../../../apps/desktop/main/capabilities/grant-store.ts)) with
+  `{reason: "cross_volume_root", mode, rootVolumeId, stagingVolumeId}`. The two
+  ids are opaque identifiers, not paths, and they stay in main — they are not on
+  `GrantRefusal`, not on `RendererGrant`, not on `FilesystemPosture`, and not in
+  any `FsError` message. Neither the label nor the path is logged.
+- **Nothing is persisted.** No grant row, no "refused" row, no counter. A
+  refusal that left a record would recreate the artifact this decision exists to
+  prevent. The honest cost: there is no history to revisit later — accepted,
+  because the refusal is synchronous and the user is present.
+- **No new `FilesystemUnavailableReason`.** Cross-volume is a property of one
+  picked folder, not of the install. Putting it in `unavailableReasons` (D4)
+  would tell a user with a working `C:` grant that their capability is
+  unavailable because they once pointed the picker at `D:`.
+
+**7. Per-volume staging is a separate future slice, and this PRD does not design
+it.** The larger half of §4.4 — establishing an app-private staging directory on
+the grant's own volume so cross-volume writes become possible — moves where
+staged bytes live. That is a stated invariant of the helper's own header:
+"Staged bytes live only beneath the inherited private staging descriptor"
+([workspace_commit_helper.c:19-21](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+inherited as a single descriptor on fd 4
+([:11](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+Changing it means a second staging directory established at grant time with its
+own consent step, a second `fs_dir_is_app_private` proof on a volume the app
+does not own, and a re-answer to the spine D4 / FS-04 D1-D3 argument about where
+the trash lives. FS-09 does not specify it, reserves no names for it, and does
+not gate on it — it is recorded in Out of scope so the slice has a home, exactly
+as FS-02 D7 item 2 asks.
+
+**8. A grant already on disk is not covered by a check on the create path, so
+the predicate carries it too.** This is the hole an adversarial pass found in the
+first draft of D19, and it is the same user-visible defect arriving through a
+different door.
+
+`GrantStore` is durable and survives an upgrade. Rows are rehydrated by
+`#ensureLoaded`
+([grant-store.ts:233-248](../../../apps/desktop/main/capabilities/grant-store.ts))
+through `coerceGrant`
+([:343-397](../../../apps/desktop/main/capabilities/grant-store.ts)), which
+accepts any well-formed `rootIdentity` without asking where its volume is. A
+`read_write` grant on a second volume minted by a build **before** D19 shipped
+therefore:
+
+- passes `listActive`, which filters only on `status` and `expiresAt`
+  ([:167-175](../../../apps/desktop/main/capabilities/grant-store.ts));
+- passes `#liveGrants`, which compares no volume at all
+  ([workspace-authority.ts:796-815](../../../apps/desktop/main/capabilities/workspace-authority.ts));
+- passes `#assertPreparedLive`, because that compares the observed identity
+  against the **recorded** one
+  ([:960-965](../../../apps/desktop/main/capabilities/workspace-authority.ts)) —
+  it catches a root that _moved_, and a root that never moved matches itself;
+- and dies at `command_prepare`
+  ([workspace_commit_helper.c:850](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c))
+  after the approval sheet.
+
+That is precisely the artifact D19 exists to remove, and the default TTL is
+thirty days
+([grant-store.ts:119](../../../apps/desktop/main/capabilities/grant-store.ts)),
+so the exposure is real and outlives the upgrade. macOS is the population that
+has it today: an external-volume grant is mintable on the current build.
+
+**The fix is one term in the predicate D6 already extracts, not a migration.**
+`grantUnusableReason` gains `wrong_volume`, evaluated **only** when
+`requireWritable` is true and both `grant.rootIdentity.volumeId` and the
+context's `stagingVolumeId` are present (Interfaces §3). Three properties follow
+without any new mechanism:
+
+- `#liveGrants` stops handing the grant to the write path, so prepare is never
+  reached and the approval sheet is never shown for it;
+- `toRendererGrant`'s `writesAvailable` is computed from the **same** call (D6),
+  so the granted-folders list shows the grant as readable-only instead of
+  promising a write that cannot happen — displayed and enforced capability
+  cannot drift, which is the whole reason D6 exists;
+- `listActive` (`requireWritable: false`) is unchanged, so the grant keeps
+  working for **reads**, which it genuinely can do.
+
+**Nothing is rewritten on disk, and nothing is revoked.** A migration that
+rewrote or dropped rows would be a second writer to the authority list for a
+condition that is not a property of the row — it is a property of _this boot's_
+staging volume. Evaluating it per boot is also what makes the other direction
+correct: if `userData` ever moves to a different volume, every existing grant
+becomes non-writable on the next boot and says so, with no migration to run and
+none to undo when it moves back. A stored `crossVolume: true` flag would be
+wrong the moment either side changed.
+
+**The reason is ordered last**, after `read_only`, so a revoked or expired grant
+still reports that first (D6's documented first-reason rule). It is not surfaced
+as a `FilesystemUnavailableReason` — same argument as §6, it is per grant, not
+per install.
+
+**9. A volume the helper cannot open at all — the refusal path itself must not
+throw, and read-only must survive it.** The second hole the adversarial pass
+found, and it is upstream of every comparison above.
+
+`open_root` embeds the volume-support gate:
+`supported_root_fd` requires `f_fstypename ∈ {"apfs","hfs"}` and comments
+"Network/removable/unproven semantics fail closed"
+([workspace_commit_helper.c:358-363](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c),
+called from
+[:365-369](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+`command_root_identity` opens through it
+([:837-843](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+so for a root on exFAT, FAT32, an SMB/NFS share or any other unproven
+filesystem it returns `UNSUPPORTED`, which the client turns into a **thrown**
+`NativeWorkspaceCommitHelperError("workspace_write_unsupported")`
+([native-workspace-commit-helper.ts:668-670](../../../apps/desktop/main/capabilities/native-workspace-commit-helper.ts)).
+Win32 is the same shape for a different set: FS-02 D7 requires
+`GetVolumeInformationByHandleW` to report exactly `NTFS` and
+`FileRemoteProtocolInfo` to fail, behind the same `fs_volume_supported`.
+
+`GrantStore.create` calls that resolver at
+[:138-141](../../../apps/desktop/main/capabilities/grant-store.ts) with **no
+`catch`, and before `mode` is consulted at all**. Two consequences, both
+user-visible today:
+
+- A user who picks a folder on a USB stick or a network drive gets a raw
+  `workspace_write_unsupported` out of a **grant request** — no `GrantRefusal`,
+  no volume named, no read-only offer, and none of D19's copy, because the
+  comparison in §1 never gets a `volumeId` to compare.
+- **`read_only` is impossible on such a volume**, even though reads never touch
+  the helper. §2's claim that read-only "works completely" was true for a second
+  _supported_ volume and false for the second volume most users actually own.
+
+So D19 covers it explicitly, and it is a third refusal rather than a variant of
+the first, because the remedy differs — no other folder on that drive will work
+either:
+
+- `GrantRefusalReason` gains `"unsupported_volume"` (Interfaces §8), with
+  `readOnlyAvailable: true`.
+- `GrantStore.create` **catches** an identity-resolution failure. For
+  `read_only` it mints with `rootIdentity: undefined` — already a legal, already
+  a load-bearing shape: an unbound grant is read-capable and refused by the
+  write predicate
+  ([workspace-authority.ts:812](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+  which is exactly the same posture `#resolveProfileId` already takes for a
+  transient auth failure
+  ([grant-store.ts:217-229](../../../apps/desktop/main/capabilities/grant-store.ts)).
+  For any write mode it rethrows, and the service projects the typed refusal.
+  **The catch is scoped to that one call and never widens to a write mode** —
+  swallowing it for a write would mint a grant that displays as writable and is
+  not, which is the defect this whole decision removes.
+- This is not the silent downgrade §3 forbids: `read_only` is the mode the user
+  asked for.
+
+The copy, same fixed-vocabulary rule as §5 — named form when a volume label
+resolved, name-free otherwise:
+
+> **0xCopilot can't save changes on `BACKUP`**
+>
+> This drive's format isn't one 0xCopilot can change files on safely — USB
+> sticks and memory cards, and folders on a network drive, are the usual
+> reasons. It can still read a folder here, and a folder on this computer's main
+> drive can be changed normally.
+>
+> **Grant read-only access** · **Choose a different folder** · **Cancel**
+
+It names a cause the user can recognise without naming a filesystem the build
+may not actually be refusing — the refused set differs per platform
+(`apfs`/`hfs` on macOS, `NTFS` and local on Win32) and will change if
+`fs_volume_supported` ever widens, so the copy must not enumerate it as if it
+were the contract. It states the one thing that is always true and always
+actionable: read here, or write somewhere on the main drive.
+
+### D20. Execution is its own consent, in the same place, on its own switch
+
+The six FS-08 surfaces are consent surfaces, and consent for this product lives
+in one model. Splitting it across two documents produces two consent models,
+which is the failure this program exists to prevent. So FS-09 owns them; FS-08
+keeps the provider, the runtime, the isolation and the patch mechanics.
+
+**One page, two switches.** Not one switch, for three reasons:
+
+1. **Different worst cases.** Filesystem enablement lets the agent read named
+   folders and _propose_ changes to them. Execution enablement lets code the
+   agent wrote _run_ on this computer against a copy of workspace content. A
+   user can rationally want one and refuse the other, and a single switch makes
+   refusing one impossible.
+2. **Different gates, in different processes, already independent.**
+   `isDesktopFilesystemEnabled` is main-process-only and gates the subsystem and
+   broker (C1); `RUNTIME_ENABLE_REMOTE_SANDBOX` + `RUNTIME_SANDBOX_PROVIDER` are
+   read in the ai-backend child (C11). Collapsing them means deriving one from
+   the other — a second way to be "on", which D1's guardrail refuses.
+3. **Execution does not require a grant.** Today's snapshot is overlay-only
+   (C11), so execution is reachable with no folder granted at all. A switch that
+   implied otherwise would be wrong in both directions.
+
+**One store, one projection.** `enablement-store.ts` (Interfaces §1) gains a
+second decision with the same shape, the same explicit-environment-wins rule
+(D2), and the same fail-closed default. It is projected into `supervisedEnv` by
+the **derivation** at
+[service-env.ts:370-386](../../../apps/desktop/main/services/service-env.ts) —
+tell the child what is _true_, not what was _requested_ — and never by adding a
+name to `ENV_PASSTHROUGH_ALLOWLIST`
+([:16-41](../../../apps/desktop/main/services/service-env.ts)), which would hand
+the child the operator's raw environment instead of main's decision.
+
+**And the honesty this costs, stated rather than implied: for execution, _both_
+directions need a restart.** The filesystem switch can turn off live because
+main owns the broker and `stopBroker()` is real (D3). Execution has no such
+lever: a child's environment is fixed at spawn (C11), so main cannot withdraw a
+running child's execution configuration. The page must therefore say
+
+> Turning this off stops new sandboxes from starting after you restart
+> 0xCopilot. A sandbox running right now keeps running until you cancel that
+> run.
+
+and must **not** reuse the filesystem switch's "takes effect immediately"
+wording. The formula is the same — `restartRequired === enabled !== active` —
+but the behaviour is not: turning the filesystem capability off makes `active`
+false in the same handler, so its `restartRequired` returns to false at once,
+whereas execution's stays true until the next boot. Whether FS-08 should grow a
+live disable channel is Open question 7; until it does, the copy matches the
+mechanism.
+
+### D21. No runtime, no capability — and the page says exactly what is missing, without offering to install it
+
+FS-08 D3 is right that absence is the design working, and it names the
+consequence plainly: most installs will not have execution on day one. That
+makes the reason string the whole surface.
+
+`ExecutionPosture.readinessReason` carries **one** value from the closed set
+FS-08 §5 produces, and FS-09 renders it from a fixed table:
+
+| reason                                | what the page says                                                                                    |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `disabled`                            | "Code execution is turned off." — the only row with an in-app action, the switch                      |
+| `local_runtime_unavailable`           | "0xCopilot needs a container runtime on this computer. It can use Apple container, Podman or Docker." |
+| `local_image_absent`                  | "The execution image hasn't been downloaded yet." — links to D22 and states the size                  |
+| `local_isolation_probe_failed`        | "The sandbox didn't pass its isolation checks on this computer, so it stays off."                     |
+| `isolation_unverified`                | "The configured sandbox can't prove it is isolated, so it stays off."                                 |
+| `provider_unavailable`                | "The configured sandbox couldn't be started."                                                         |
+| `openai_hosted_container_control_gap` | unchanged from today's behaviour (FS-08 D16); FS-09 renders it, it is not a local reason              |
+
+Four rules bind that table:
+
+- **One reason, never a synthesised second.** Unlike `unavailableReasons` (D4),
+  which is additive because main evaluates several independent conditions
+  itself, readiness is a single provider-supplied verdict. The page shows what
+  `assess` returned and does not rank, merge or guess alongside it.
+- **An unrecognised value is not a bug to hide.** It renders the generic
+  "Execution is unavailable on this computer" plus the raw code as copyable
+  support detail. Guessing an explanation for a reason we do not know is exactly
+  the confabulation D10 removes from the model.
+- **Nothing here installs anything, and nothing prompts for elevation.** FS-08
+  D3 is explicit: `wsl --install` may need elevation once, the user does it
+  outside the app, and the program neither runs it nor asks. The page links to
+  documentation and stops. There is no "Install for me" affordance to add later
+  — it is a rejected alternative in D18.
+- **The runtimes named are the ones this build can actually drive** —
+  `apple_container`, `podman`, `docker` (FS-08 §2). Naming a runtime the driver
+  registry does not know is the execution-side version of D8's "never name a
+  verb the build cannot perform".
+
+### D22. Downloading the execution image is the largest consent this program asks for, so it is asked once, with the size, before a byte moves
+
+FS-08 D7 pins the image by digest, refuses tag-only references, and never pulls
+implicitly. What it routed here is the ask itself — and it is the biggest one in
+the program: hundreds of megabytes of **executable** content, fetched onto the
+user's machine on their say-so.
+
+The sheet states, before anything starts: what will be downloaded (the
+`name@sha256:…` reference, truncated with the full digest available on demand —
+it is neither a path nor a secret), **how many bytes**, where it goes (the
+container runtime's own local image store — not the granted folder, not
+`userData`), that it is executable content, and that nothing runs during the
+download.
+
+Five rules:
+
+- **Main runs it, not the child.** The runtime binary is resolved to an absolute
+  path by main (FS-08 Phase 5 item 17), and the process that fetches executable
+  content must not be the process a model can reach. FS-09 requires the action
+  to be main-owned and user-triggered; the argv is FS-08's driver.
+- **One consent, one digest.** The permission is not durable. It authorises
+  exactly one acquisition of exactly the pinned digest; a build with a different
+  digest asks again. This is C4's grant/permit distinction applied to image
+  acquisition — and a digest change is a different artifact, not a renewal.
+- **No implicit and no automatic retry.** A failed download leaves
+  `readinessReason = "local_image_absent"` and says so. Nothing re-fetches on
+  the next run, because "it worked yesterday" is precisely what FS-08 D7 avoids.
+- **Progress is observed or it is indeterminate.** `imageAcquisition` carries
+  `receivedBytes`/`totalBytes` when the runtime reports them; when it does not,
+  the UI shows an indeterminate state and the expected size. It never renders a
+  computed percentage from a total it was not given. A fabricated progress bar
+  is an unobserved outcome stated as fact, which is the same defect as
+  collapsing `indeterminate` into success (D12).
+- **Cancel is honest too.** A cancel that cannot be confirmed resolves
+  `state: "indeterminate"` with a recheck, never `"idle"`. The user is told the
+  download may still be running.
+
+The page reads acquisition state by re-reading `executionPosture()`, not through
+a new push channel: the capability channels are invoke-shaped, a missed poll
+still reads main's real state, and a second IPC mechanism for one progress bar
+is not worth owning.
+
+### D23. What leaves the granted folder is stated before it leaves — and today that set is smaller than a user would assume
+
+This surface has **two states**, and using one piece of copy for both would make
+it false in one of them.
+
+**State 1 — today, and until FS-08 D17.1 lands.** The snapshot is overlay-only:
+`load_plan` selects `FILE` entries from one retained C1 overlay manifest version
+and nothing else, and the module exists so that nothing can select a host
+filesystem path (C11). So **no byte from the user's folder reaches the sandbox
+at all**. The copy says exactly that:
+
+> The sandbox gets only the files 0xCopilot has already proposed in this run.
+> Nothing is copied from your folder.
+
+That claim is checkable and is pinned by a test. When D17.1 lands, the test
+fails — **that is its purpose**, not an inconvenience. A consent surface that
+silently keeps its old sentence after the thing it describes changes is how
+consent becomes decorative.
+
+**State 2 — once host base files are included.** A snapshot consent sheet is
+shown **once per run, before the first `run_in_sandbox`**, stating: the mount
+label(s) involved, the file count and total bytes (already bounded — 10 000
+entries, 512 MiB total, 64 MiB per entry,
+[snapshot.py:244-249](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/snapshot.py)),
+that a **copy** goes into a container with no network access (FS-08 compiles
+`deny_all` only), and that the sandbox cannot write back — anything it changes
+returns as a proposal that the user reviews (D24).
+
+**Per run, not per install and not per command.** Per install would make the
+consent unbounded, which is the objection D18 already records against an
+unbounded grant duration. Per command would be a modal on a loop. Per run is the
+same scope the run-context pin already uses (C5), so the consent and the
+authority it depends on share a lifetime.
+
+**Never in the sheet:** a host path, a `grantId`, a broker handle, a root
+identity, a credential, or a content digest. `SandboxSnapshot`'s own contract
+forbids these appearing in the snapshot
+([contracts.py:202-209](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/contracts.py));
+the consent surface must not become the leak the snapshot refuses to be.
+
+**No per-file picker.** Choosing which files leave would present a
+model-assembled list of up to 10 000 entries as if reviewing it were meaningful.
+The bounds that are real are the mount and the ceilings, and both are stated.
+
+### D24. An imported patch is reviewed as a proposal on the existing stage surface, and the review states what this platform cannot commit
+
+**The review surface is the one that already exists.** FS-08 D12's chain marks
+"review surface" **UNVERIFIED** and its docstring only names "A4/A5 review".
+FS-09 answers it: it is `TcWorkspaceStageSurface`
+([RunDestination.tsx:3566-3593](../../../packages/chat-surface/src/destinations/run/RunDestination.tsx))
+through `projectWorkspaceStage`, with D9's four required facts — destination
+(mount + virtual path, never a host path), verb, recoverability-or-nothing, and
+the pledge. An imported patch is a filesystem effect; a second surface for it
+would be a second consent model, and D9's rules (no approve control for
+`unknown`, unconditional native confirmation, absent recoverability renders
+nothing) would have to be re-derived and would drift.
+
+Whether an imported overlay revision reaches that projection today is
+**unverified** — FS-08 C6 says applying is unwired by construction and the
+review surface is unconfirmed. FS-09 states the requirement and Open question 8
+names the check; FS-09 does not assert the wiring exists.
+
+**Ordering, spelled out because FS-08's chain is easy to misread.** The revision
+is imported into C1 **first** (it is a proposal, not a write), reviewed
+**second**, and only then does `prepareSandboxPatchImport` run (FS-08 §7). No
+approve control appears before the change set can state its verbs and targets.
+
+**The verb pre-check, and why it must gate the control rather than warn beside
+it.** `parse_entry` refuses `REPLACE`/`DELETE`/`MOVE` inside `command_prepare`
+with a bare `goto fail` (C11), so on a build where FS-05 has not landed a single
+`delete` entry fails the **entire** import with one undifferentiated error — and
+FS-08 D14 forbids importing part of a patch. So the review compares the change
+set's verbs against `FilesystemPosture.verbs` (D15 — already per verb, per
+platform, per boot) and, when any verb is absent:
+
+- names the missing verbs and how many entries use them;
+- renders **no approve control at all**, because the whole set would fail — a
+  disabled-with-a-warning control would still imply that removing the warning is
+  the user's job;
+- says what is actually true: the capability arrives with FS-05/FS-06, and there
+  is nothing to do in the app.
+
+Mechanically this is one more term in the `canDecide` conjunction D9.2 already
+extends for `operation.kind !== "unknown"`. No new mechanism.
+
+**The import affordance** is one control on the reviewed proposal, never in the
+model's reach — FS-08 §7 adds no broker route and no advertised method (C11). It
+is unavailable when the verb pre-check fails, when `writesAvailable` is false,
+and when the grant backing the import is not live (D25).
+
+**What FS-09 does not decide.** Whether an imported change set commits with a
+ledgered decision row is FS-08's open question 8, and it is a question about
+what is recorded server-side. FS-09 takes only the consequence it must render:
+until that is resolved, the review must not tell the user the import was
+"approved and recorded" when no approval row exists. It says what happened —
+the user applied a reviewed proposal — and nothing more.
+
+### D25. Revoking while a sandbox is live stops what can still be stopped, and says plainly what it cannot undo
+
+Three parts, in the order they matter.
+
+**What revocation stops immediately, and already does.** D7's live intersection
+denies every further broker read carrying the run's pinned context with
+`grant_revoked`. Today that is the whole of the sandbox's exposure to the
+granted root, because the snapshot is overlay-only (C11); once FS-08 D17.1's
+base entries arrive they are resolved through the same broker read surface, so
+they stop at the same instant and by the same predicate. Nothing extra has to be
+built for the revoke to reach them — which is the argument for D17.1 resolving
+base content through the broker rather than through a second reader.
+
+**What it stops at the boundary.** A pending import bound to that grant.
+`#assertPreparedLive` re-resolves the live grant at authorize **and** at commit
+([workspace-authority.ts:950-968](../../../apps/desktop/main/capabilities/workspace-authority.ts),
+called at [:613](../../../apps/desktop/main/capabilities/workspace-authority.ts)
+and [:676](../../../apps/desktop/main/capabilities/workspace-authority.ts)), so
+an import prepared before a revoke cannot be authorized or committed after it.
+FS-09 requires `prepareSandboxPatchImport` / `authorizeSandboxPatchImport`
+(FS-08 §7) to sit on that same predicate. A second liveness check for the import
+lane would be D6's duplicated-predicate defect one layer up.
+
+**What it cannot undo, and must therefore say.** Bytes already inside a running
+container. The snapshot is a copy into a RAM-backed mount inside the sandbox
+(FS-08 §2's `workspace_tmpfs_bytes`), and no revoke reaches inside it. So the
+revoke confirmation is conditional:
+
+- **No live session** — "Access stopped. Nothing is running with this folder."
+- **A live session** — "Access stopped for anything new. A sandbox that started
+  before you revoked still has a copy of what it was given; cancel that run to
+  end it." The only lever that actually ends it is run cancellation, which FS-08
+  D9 turns into a container kill.
+
+**Absence takes the cautious branch.** The conditional needs
+`ExecutionPosture.liveSessionCount`; when the host cannot supply it, the page
+renders the **live-session** wording, not the reassuring one. This is D9.3's
+rule — an optimistic default is a false promise — applied to a second fact.
+
+**And the cancel outcome is reported honestly.** FS-08 D9 marks a session
+`cleanup_pending` and runs `SANDBOX_EXECUTION_INDETERMINATE` when a kill cannot
+be confirmed. The page then says the sandbox could not be confirmed stopped and
+offers a recheck. It never says "stopped". This is D12's rule about
+`indeterminate`, on the execution side of the same product.
 
 ## Implementation plan
 
@@ -1466,6 +2441,124 @@ renders as unavailable with a reason — not as an empty list, which would read 
     `docs/plan/artifact-editing/STATUS.md:80-82` with the evidence, and note there
     that the eval landed under FS-09 rather than in the surfaces harness, with the
     reason (that harness has no notion of a turn or a final response).
+
+### Cross-volume refusal (D19)
+
+Steps 33-37 land as one commit, after step 5 and before the Settings page (step 15) — the page cannot render a refusal that main does not produce.
+
+33. **`apps/desktop/main/capabilities/types.ts`** — add `GrantRefusalReason` and
+    `GrantRefusal` (Interfaces §8). No field on `Grant`, no field on
+    `RendererGrant`: a refusal produces no record.
+34. **`apps/desktop/main/capabilities/schemas.ts`** — `GrantRefusalSchema`
+    (`.strict()`), and widen the `requestFolderGrant` reply schema to the
+    `RendererGrant | GrantRefusal | null` union. `volumeLabel` is bounded
+    (`max(120)`), matching `sanitizeLabel`'s cap
+    ([folder-picker.ts:87-105](../../../apps/desktop/main/capabilities/folder-picker.ts)).
+35. **`apps/desktop/main/capabilities/grant-store.ts`** — accept
+    `stagingVolumeId` in config; in `create`, after `assertGrantableRoot`
+    ([:132-135](../../../apps/desktop/main/capabilities/grant-store.ts)) and
+    after `rootIdentity` resolves
+    ([:138-141](../../../apps/desktop/main/capabilities/grant-store.ts)), throw
+    `FsError("unsupported", "grant root is not on the staging volume")` when the
+    mode is not `read_only`, both volume ids are present, and they differ. The
+    message carries no path and no volume name. Emit the D19.6 audit line.
+    Nothing is written to `#grants` and `#persist()` is not called.
+
+    **Also wrap the `rootIdentity` await in a `try` (D19.9).** A refusal from
+    the helper's volume gate arrives as a throw, not as an absent value. For
+    `mode === "read_only"` the failure is absorbed and the grant is minted with
+    `rootIdentity: undefined` — already the shape an unbound grant has, already
+    refused by the write predicate
+    ([workspace-authority.ts:812](../../../apps/desktop/main/capabilities/workspace-authority.ts)),
+    and the same posture `#resolveProfileId` already takes
+    ([:217-229](../../../apps/desktop/main/capabilities/grant-store.ts)). For
+    every write mode it **rethrows**. The `catch` covers that one call and
+    nothing else; a broader `catch` around the record construction would let an
+    unrelated failure mint a grant.
+
+35b. **`apps/desktop/main/capabilities/grant-usability.ts`** — add the
+`wrong_volume` term and `stagingVolumeId` to the context (Interfaces §3),
+evaluated only when `requireWritable` is true and both ids are present, and
+ordered last. Thread the boot's `stagingVolumeId` into both call sites —
+`listActive` passes it too, so one context object is built per boot rather
+than two. This is what closes the **already-persisted** grant (D19.8); it is
+a separate commit from step 35 and lands **after** D6's behaviour-preserving
+extraction, never folded into it, because that extraction's whole guarantee is
+that it changed no decision. 36. **`apps/desktop/main/capabilities/workspace-production-authority.ts`** —
+resolve the staging directory's `volumeId` once, through the same
+`NativeWorkspaceAuthority.rootIdentity` used for grant roots
+([:102-103](../../../apps/desktop/main/capabilities/workspace-production-authority.ts)),
+and surface it on the composed workspace bundle so
+`createCapabilityService` can pass it into `GrantStore`
+([capabilities/index.ts:72-79](../../../apps/desktop/main/capabilities/index.ts)).
+Do **not** add a `statSync` here — one producer (D19.4).
+
+    That call can **refuse**, for the same reason a grant root's can (D19.9), so
+    it is wrapped: an unresolvable staging volume leaves `stagingVolumeId`
+    absent and authority construction continues. Absent already means "skip the
+    comparison" everywhere it is read, and a build whose own staging directory
+    is on a volume the helper will not open has nothing writable regardless —
+    D4's `unavailableReasons` carries that. Letting this throw would turn a
+    volume question into a failed boot.
+
+37. **`apps/desktop/main/capabilities/service.ts`** — in `requestFolderGrant`,
+    between `pick()` ([:50](../../../apps/desktop/main/capabilities/service.ts))
+    and `create()` ([:54-58](../../../apps/desktop/main/capabilities/service.ts)),
+    run the same comparison and return the typed `GrantRefusal` instead of
+    calling the store. Resolve `volumeLabel` best-effort; an unresolved label is
+    omitted, never defaulted. Also catch `assertGrantableRoot`'s existing
+    `FsError("permission_denied")` and project it as
+    `reason: "sensitive_root"`, so the page has one refusal renderer. The store
+    check (step 35) stays — it is the choke point, not a duplicate.
+
+    The probe resolves the root's identity to make the comparison, so it hits
+    the same throw step 35 now handles: **a refusal from the volume gate becomes
+    `reason: "unsupported_volume"`** for a write mode, and for `read_only` the
+    service falls through to `create()`, which mints the unbound grant. Three
+    reasons, one union, one renderer — a raw error must not reach the page for
+    any of them.
+
+### Execution consent (D20-D25)
+
+Steps 38-45 depend on FS-08 shipping the provider, the readiness reasons and the
+import lane. They land **after** it; FS-09's filesystem half does not wait.
+
+38. **`apps/desktop/main/capabilities/enablement-store.ts`** — a second decision
+    (`executionEnabled`) in the same file, with the same source precedence (D2)
+    and the same garbage-tolerant read. One store, one parser.
+39. **`apps/desktop/main/services/service-env.ts`** — project the execution
+    decision into the child env in the **derivation** block
+    ([:370-386](../../../apps/desktop/main/services/service-env.ts)), alongside
+    the workspace-broker triple, together with the nine
+    `RUNTIME_SANDBOX_LOCAL_*` names and the main-resolved absolute runtime path
+    (FS-08 §2, Phase 5 item 17). Add nothing to `ENV_PASSTHROUGH_ALLOWLIST`.
+40. **`apps/desktop/main/capabilities/channels.ts`** — add
+    `executionPosture`, `setExecutionEnabled`, `acquireExecutionImage`.
+    `preload/bridge.ts` allowlists them automatically
+    ([:9](../../../apps/desktop/preload/bridge.ts),
+    [:22](../../../apps/desktop/preload/bridge.ts)).
+41. **`apps/desktop/main/ipc/handlers.ts`** — register the three inside the
+    existing `if (capability)` block, strict-parse in and out through
+    `ExecutionPostureSchema`, and add all three to the teardown channel list
+    ([:535-541](../../../apps/desktop/main/ipc/handlers.ts)).
+42. **`apps/desktop/main/capabilities/service.ts`** — `executionPosture()`,
+    `setExecutionEnabled(enabled)` (persist, then recompute — it does **not**
+    stop anything, D20), and `acquireExecutionImage()` (main-owned, one digest,
+    no implicit retry, indeterminate on an unconfirmed cancel, D22).
+43. **`packages/chat-surface/src/settings/FilesAndFoldersPage.tsx`** — add the
+    "Code execution" section after the unresolved-changes section: the switch
+    with its restart-both-directions copy (D20), the readiness-reason table
+    (D21), the image acquisition sheet and its progress/indeterminate states
+    (D22). Same page, same port; no new nav item.
+44. **`packages/chat-surface/src/thread-canvas/workspaceStageProjection.ts`** —
+    add the verb pre-check term to `canDecide`
+    ([:354-360](../../../packages/chat-surface/src/thread-canvas/workspaceStageProjection.ts)),
+    beside D9.2's `operation.kind !== "unknown"`, plus the projected list of
+    unsupported verbs and their entry count for the copy (D24).
+45. **Revoke confirmation** — in the granted-folders list, branch the
+    confirmation on `ExecutionPosture.liveSessionCount`; absent takes the
+    live-session wording (D25). The confirmation names no container, no session
+    ref and no path.
 
 ## Test plan
 
@@ -1658,6 +2751,155 @@ renders as unavailable with a reason — not as an empty list, which would read 
   the default suite and observing zero live-model calls through an injected
   completion spy.
 
+### Cross-volume grant refusal (D19)
+
+- `requestFolderGrant({mode:"read_write", …})` with a picked root whose
+  `volumeId` differs from `stagingVolumeId` resolves a `GrantRefusal` with
+  `reason:"cross_volume_write"` and `readOnlyAvailable:true`, and
+  `GrantStore.create` was **never called** (assert on the store spy, not on the
+  return value).
+- The same input against `GrantStore.create` directly throws
+  `FsError("unsupported")`, the store file is byte-identical afterwards, and
+  `list()` is empty. Both assertions in one test — a caller that bypasses the
+  service must not be able to mint one.
+- `mode:"read_only"` with differing volume ids **succeeds** and the grant is
+  usable for reads. The regression guard for "do not refuse what works".
+- Matching volume ids mint normally for every mode — no behaviour change on the
+  common path.
+- `stagingVolumeId` absent (no native authority) skips the check entirely for
+  every mode, and `FilesystemPosture.unavailableReasons` still carries the real
+  cause. Assert `unavailableReasons` contains **no** volume-shaped member.
+- The refusal is not persisted: after a refused request the store file's mtime
+  and bytes are unchanged and `#persist` was not called.
+- The audit line contains `reason`, `mode` and the two volume ids, and contains
+  **no** absolute path, no `volumeLabel`, and no grant label. Assert on the
+  captured `warn` call, not by eyeballing a log.
+- `GrantRefusalSchema.parse` accepts the service's output and rejects an object
+  carrying `root`, `rootIdentity` or a second path-shaped field.
+- A picked root inside the home directory projects
+  `reason:"sensitive_root"` through the same union — one refusal renderer, not a
+  refusal path plus a catch path — and the parenthetical detail from
+  `assertGrantableRoot`'s message
+  ([path-validation.ts:390-398](../../../apps/desktop/main/capabilities/path-validation.ts))
+  does **not** cross IPC.
+- `volumeLabel` is at most one sanitized segment: an injected label of
+  `"a/b\\c"` projects with separators and controls stripped; an
+  unresolvable label is **absent**, not `""` and not `"unknown"`.
+- The copy renders the named form when `volumeLabel` is present and the
+  name-free form when it is absent, with both offering the read-only and
+  choose-another actions.
+- A grant minted on the staging volume that later reports a different
+  `volumeId` is still refused at use time by `#assertPreparedLive`
+  ([workspace-authority.ts:960-965](../../../apps/desktop/main/capabilities/workspace-authority.ts)) —
+  assert D19 removed no existing gate.
+- `grep -rn "statSync" apps/desktop/main/capabilities/` finds no volume
+  comparison on the grant path — asserted over the source tree, so a
+  second producer fails loudly (same discipline as the narration grep).
+
+**Already-persisted grants (D19.8).** These are the regression tests for the
+door the create-path checks do not reach, so each seeds the store file
+**directly** — going through `create` would be testing the gate that already
+passed.
+
+- A store file containing a `read_write` grant whose `rootIdentity.volumeId`
+  differs from `stagingVolumeId`: `grantUnusableReason(..., {requireWritable:
+true})` returns `"wrong_volume"`, `#liveGrants` excludes it, `toRendererGrant`
+  reports `writesAvailable: false`, and **no** prepare is attempted. Assert the
+  last one on the native spy — the point is that the approval sheet is never
+  reached, not that prepare fails.
+- The same row is still returned by `listActive` and still serves a broker read.
+  Revoking or hiding it would delete a capability that works.
+- The store file is **byte-identical** after a boot that evaluated the term: no
+  migration, no rewrite, no `crossVolume` field. Assert bytes, not behaviour.
+- The term is evaluated against the **current** boot: the same row reports
+  `writesAvailable: false` under one `stagingVolumeId` and `true` under another,
+  with nothing on disk changing between the two.
+- A grant that is both revoked and on the wrong volume reports `"revoked"` —
+  first-reason order, with `wrong_volume` last.
+- With `stagingVolumeId` absent the term is not evaluated for any grant, and
+  the pre-extraction accept/reject table (D6) still passes unchanged.
+
+**A volume the helper refuses to open (D19.9).** Drive these with a
+`rootIdentity` resolver that **throws**
+`NativeWorkspaceCommitHelperError("workspace_write_unsupported")`, which is what
+`open_root`'s `apfs`/`hfs` gate produces
+([workspace_commit_helper.c:358-369](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)).
+
+- `requestFolderGrant({mode:"read_write"})` resolves a `GrantRefusal` with
+  `reason:"unsupported_volume"` and `readOnlyAvailable:true`. It does **not**
+  reject, and no raw `workspace_write_unsupported` reaches the renderer —
+  asserted on the resolved value and by asserting the promise did not reject.
+- `requestFolderGrant({mode:"read_only"})` **succeeds**, and the minted grant
+  has `rootIdentity: undefined`, `writesAvailable: false`, and serves reads.
+  This is the assertion that keeps §2's read-only claim true; it fails against
+  today's `create`, which is the point.
+- `GrantStore.create({mode:"read_write"})` with the throwing resolver still
+  throws and persists nothing — the catch must not have widened to write modes.
+- The refusal is distinguishable from `cross_volume_write`: a resolver that
+  _succeeds_ with a differing id yields `cross_volume_write`, one that _throws_
+  yields `unsupported_volume`. One test, both directions, because collapsing
+  them would give the user the wrong remedy.
+- A throw from `#resolveProfileId` still behaves as it does today
+  ([grant-store.ts:217-229](../../../apps/desktop/main/capabilities/grant-store.ts)) —
+  asserted so the new `catch` is proven not to have absorbed it.
+
+### Execution consent (D20-D25)
+
+- `setExecutionEnabled(true)` does **not** start a sandbox, does not respawn a
+  child, and returns `restartRequired === true`;
+  `setExecutionEnabled(false)` also returns `restartRequired === true` while a
+  child is running. Asserting the symmetry is the point — the filesystem
+  switch's instant-off must not be copied here.
+- Turning the filesystem capability off does **not** clear the execution
+  decision, and vice versa. Two switches, one store, no coupling.
+- The execution decision reaches the child through the derivation block and is
+  **absent** from `ENV_PASSTHROUGH_ALLOWLIST`; a child env built with the
+  decision `false` contains no `RUNTIME_ENABLE_REMOTE_SANDBOX=true`.
+- Every member of `ExecutionReadinessReason` has committed copy, and an
+  **unknown** string renders the generic unavailable state plus the raw code —
+  asserted by feeding a value outside the union.
+- No rendered execution copy contains an install verb or an elevation prompt:
+  assert the rendered text of all seven reasons against a forbidden-substring
+  list (`install`, `sudo`, `Run as administrator`, `wsl --install`).
+- The image sheet renders `totalBytes` before any acquisition call is made
+  (assert ordering against the port spy), and `acquireExecutionImage` is not
+  called on mount, on posture refresh, or on a failed previous attempt.
+- `imageAcquisition` with `totalBytes` absent renders an indeterminate state and
+  no percentage; with both fields renders the observed fraction. Assert the
+  absent case explicitly.
+- An unconfirmed cancel resolves `state:"indeterminate"` and the UI offers a
+  recheck; it never renders "cancelled" or "idle".
+- **Snapshot claim pinning (D23).** With today's overlay-only plan authority the
+  sheet renders "Nothing is copied from your folder"; a fixture whose plan
+  contains a base entry renders the State 2 copy instead. The first assertion is
+  deliberately fragile — it must fail when FS-08 D17.1 lands.
+- The snapshot sheet contains no host path, `grantId`, broker handle, root
+  identity, credential or content digest, asserted structurally over the props
+  rather than by string search.
+- The snapshot consent is asked once per run: two `run_in_sandbox` calls in one
+  run produce one sheet; a second run produces a second sheet.
+- **Verb pre-check (D24).** A projected imported change set containing a
+  `delete` entry on a build whose `FilesystemPosture.verbs` lacks `delete`
+  yields `canDecide === false`, renders no approve control at all, and names
+  `delete` and its entry count. A change set whose verbs are all present renders
+  the normal review.
+- The imported-patch review renders through `projectWorkspaceStage` — the same
+  component and the same four D9 facts — asserted by rendering
+  `TcWorkspaceStageSurface`, not a bespoke view.
+- The import control is unavailable when `writesAvailable` is false, when the
+  verb pre-check fails, and when the backing grant is not live; each asserted
+  independently so one condition cannot mask another.
+- **Revocation with a live sandbox (D25).** `liveSessionCount: 0` renders the
+  "nothing is running" confirmation; `1` renders the still-holds-a-copy
+  confirmation; **absent** renders the still-holds-a-copy confirmation. The
+  absent case is the one that matters.
+- An import prepared before a revoke is refused at authorize **and** at commit,
+  through `#assertPreparedLive`, with nothing recorded as applied — the same
+  assertion D7's section makes for an ordinary change set, run against the
+  import lane so it cannot acquire a second predicate.
+- `ExecutionPostureSchema.parse` rejects a posture carrying a runtime binary
+  path, a container name, a `provider_session_ref` or a token.
+
 ### Suites
 
 - `cd services/ai-backend && .venv/bin/python -m pytest` green.
@@ -1725,6 +2967,62 @@ renders as unavailable with a reason — not as an empty list, which would read 
       docstring states what Layer B does and does not prove.
 - [ ] `docs/plan/artifact-editing/STATUS.md` PRD-04 D4 box ticked with evidence and a
       note that it landed here.
+- [ ] A write-mode grant whose root is not on the staging volume is refused
+      **before** any grant row exists — in `GrantStore.create` as well as in the
+      service — so no unusable grant can be minted and no approval sheet can be
+      reached for one.
+- [ ] The refusal names the volume when a name is available and uses its
+      name-free form when it is not, states what the product does rather than
+      what failed, and offers read-only plus choose-another rather than a dead
+      end.
+- [ ] `read_only` grants on another volume still mint — **including on a volume
+      the helper refuses to open**, where the grant is minted unbound
+      (`rootIdentity: undefined`) rather than failing; nothing silently
+      downgrades a write request, and no `FilesystemUnavailableReason` is added
+      for a per-folder refusal.
+- [ ] A write-mode grant **already persisted** by a build that predates D19 is
+      reported `writesAvailable: false` and is excluded by `#liveGrants`, so it
+      never reaches prepare or an approval sheet — through the D6 predicate,
+      with the store file byte-identical afterwards and no migration.
+- [ ] A root on a volume the helper cannot open produces the typed
+      `unsupported_volume` refusal with its own copy and its own remedy, never a
+      raw `workspace_write_unsupported` from a grant request.
+- [ ] Both sides of the volume comparison come from one producer
+      (`NativeWorkspaceAuthority.rootIdentity`); no `statSync`-based comparison
+      exists on the grant path, asserted over the source tree.
+- [ ] The Win32 volume-identity claim carries an explicit `unverified` marker
+      and SPIKE-V1, with the outcome that would change the design; the wording
+      says "same volume serial" until the spike runs.
+- [ ] A refused grant persists nothing; the audit line is path- and label-free.
+- [ ] Per-volume app-private staging is recorded in Out of scope as a separate
+      slice, with the helper invariant it moves — and is not designed here.
+- [ ] FS-09's Out of scope no longer disclaims FS-08; it states the
+      consent/mechanism split, and each of the six surfaces in FS-08's routing
+      table — renamed from "Unowned surfaces — recorded, not resolved" to
+      "Consent surfaces — routed, and where they landed" — has an owning decision
+      here (D20-D25).
+- [ ] Execution has its own enablement decision in the same store, projected
+      into the child environment by derivation and never by passthrough, and the
+      page says that **both** directions take effect at the next boot — the
+      filesystem switch's instant-off wording is not reused.
+- [ ] Every `SandboxReadinessReason` FS-08 produces has committed copy; an
+      unrecognised value renders the generic state plus the raw code and never a
+      guessed explanation; no execution copy contains an install verb or an
+      elevation prompt.
+- [ ] Image acquisition states the pinned digest and the byte size before any
+      fetch, is main-owned and user-triggered, authorises exactly one digest,
+      never retries implicitly, reports observed progress or an indeterminate
+      state, and resolves an unconfirmed cancel as `indeterminate`.
+- [ ] The snapshot consent surface states what actually leaves the granted root,
+      with today's overlay-only claim pinned by a test that fails when FS-08
+      D17.1 lands.
+- [ ] An imported patch is reviewed through the D9 stage surface before
+      `prepareSandboxPatchImport`, and a change set containing a verb this build
+      cannot commit renders **no** approve control and names the verbs and the
+      entry count.
+- [ ] Revoking with a live sandbox says what revocation cannot undo, an absent
+      live-session count takes the cautious wording, and an unconfirmed sandbox
+      kill renders as unconfirmed rather than stopped.
 - [ ] ai-backend, desktop, chat-surface and frontend suites green; typechecks clean.
 
 ## Out of scope
@@ -1732,7 +3030,30 @@ renders as unavailable with a reason — not as an empty list, which would read 
 - Implementing any filesystem **verb**. FS-01…FS-07 own create/mkdir/replace/delete/
   move, preimage and reconciliation. FS-09 only makes them reachable, consented,
   reviewable and honestly reported.
-- The sandbox provider and patch-back (FS-08).
+- **The sandbox mechanism (FS-08) — but not its consent.** FS-08 owns the local
+  provider, the container runtime and its drivers, the isolation probe and
+  attestation, the image contract, transfer, cancellation and teardown, the C1
+  patch importer, and the desktop `prepareSandboxPatchImport` /
+  `authorizeSandboxPatchImport` lane. **FS-09 owns every surface where a human
+  is asked to agree to any of it**: enabling execution (D20), what the user is
+  told when there is no runtime (D21), the image download ask (D22), what leaves
+  the granted root (D23), the pre-commit review of an imported patch including
+  the unsupported-verb pre-check (D24), and revocation while a sandbox is live
+  (D25). Execution consent is consent; splitting it from the rest of this page
+  would produce two consent models, which is what this program exists to
+  prevent. FS-09 does not decide FS-08's open question 8 (whether an imported
+  commit carries a `decisionLedgerId`) — that is about what is recorded
+  server-side, not about what a human is asked.
+- **Per-volume app-private staging.** D19 refuses a cross-volume write grant; it
+  does not make one work. Establishing an app-private staging directory on the
+  grant's own volume moves where staged bytes live, which is a stated invariant
+  of the helper's header
+  ([workspace_commit_helper.c:19-21](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c),
+  fd 4 at [:11](../../../apps/desktop/native/workspace-commit-helper/src/workspace_commit_helper.c)),
+  and brings its own consent step, its own `fs_dir_is_app_private` proof on a
+  volume the app does not own, and a re-answer to the spine D4 / FS-04 D1-D3
+  trash-location argument. It is its own slice, as FS-02 D7 item 2 says, and is
+  deliberately not designed here.
 - Restoring a preimage. FS-04 D6 owns the restore change set; FS-09 renders whether a
   restore will be _possible_, not the restore flow itself.
 - A per-run or per-conversation grant scope. Grants are account-and-device scoped;
@@ -1785,6 +3106,36 @@ renders as unavailable with a reason — not as an empty list, which would read 
   request access to a folder.
 - Do **not** ship the Settings surface without the eval. A consent UI whose narration
   is unpinned is the exact defect PRD-04 recorded, with more reach.
+- Do **not** mint a grant that the platform cannot use. The volume check runs
+  before the grant exists, in the store as well as in the service.
+- Do **not** treat a grant-time gate as covering grants that already exist. The
+  store is durable; a row minted by an earlier build is read, not re-derived, so
+  the usability predicate carries the volume term too.
+- Do **not** let a refusal from the helper's volume gate escape as a raw error,
+  and do **not** let it block a `read_only` grant — reads never touch the
+  helper. The `catch` around `rootIdentity` covers that one call and never a
+  write mode.
+- Do **not** relax FS-02 D7's same-volume rule to make a `D:` workspace writable.
+  D19 makes the refusal early and legible; it does not make it optional.
+- Do **not** produce a volume id anywhere but
+  `NativeWorkspaceAuthority.rootIdentity`. A second producer of the same fact is
+  D6's defect with a different value.
+- Do **not** put a volume **name** on the decision path. The refusal is made on
+  the id; the name is best-effort copy and its absence changes only the sentence.
+- Do **not** turn a per-folder refusal into an install-level unavailability
+  reason, and do **not** persist anything for a refused grant.
+- Do **not** describe execution's "off" as immediate. A child's environment is
+  fixed at spawn; only run cancellation ends a live sandbox.
+- Do **not** derive one of the two enablement decisions from the other. Two
+  capabilities, two switches, one store, one page.
+- Do **not** install, download-by-default, or prompt for elevation anywhere in
+  the execution surface. State what is missing and stop.
+- Do **not** report progress a runtime did not give us, and do **not** report a
+  sandbox as stopped when the kill was not confirmed.
+- Do **not** build a second review surface for imported patches, and do **not**
+  show an approve control for a change set whose verbs this build cannot commit.
+- Do **not** let a revoke confirmation claim more than revocation can do. Absent
+  live-session information takes the cautious branch.
 
 ## Open questions
 
@@ -1803,22 +3154,27 @@ renders as unavailable with a reason — not as an empty list, which would read 
    read-only forever (D4). Recommendation: gate the _grant_ flow on a signed-in
    profile and leave the _toggle_ always reachable, since the toggle only decides
    whether the subsystem boots. Needs a product call.
-4. **A grant root on a second volume is silently ungrantable on Windows, and no
-   PRD owns telling the user.** Added by the consistency pass. FS-02 D7 makes the
-   helper refuse a prepare whose staging directory is not on the grant root's
-   volume, and on Windows the staging directory is under `%APPDATA%` on the
-   system volume — so a folder picked on `D:` yields a grant that looks granted,
-   passes `listActive`, and fails at prepare with `workspace_write_unsupported`
-   _after_ the user has been shown an approval sheet. That is the failure mode
-   D5's "grants that look granted and never work" row of D18 rejects, arriving by
-   a different route. FS-02 routed the follow-up to "FS-04/FS-09"; neither
-   document mentions it, so it is currently unowned.
-   **Recommendation:** FS-09 owns the smaller, urgent half — compare the picked
-   root's volume against the staging volume in the grant flow and refuse, or
-   grant read-only with the reason shown, _before_ the grant is minted. The
-   larger half (per-volume app-private staging, which moves where staged bytes
-   live) is its own slice and should not be smuggled in here. Not specified in
-   this PRD as written; a product call is needed on which half ships first.
+4. **~~A grant root on a second volume is silently ungrantable, and no PRD owns
+   telling the user.~~ Closed — FS-09 owns it, and it is D19.** Raised by
+   [00-consistency-report.md §4.4](00-consistency-report.md) and recorded in
+   FS-02 D7 as unowned. The product call has been made: the grant flow **refuses
+   before minting**, naming the volume and saying what the user can do, so no
+   unusable grant is created and no approval sheet can be reached for one.
+   An adversarial pass then found that a grant-time gate alone does not finish
+   the job — a row **already on disk** from a pre-D19 build never passes it, and
+   a volume the helper cannot open makes the gate itself throw — so D19 grew
+   §8 (the term moves into D6's usability predicate) and §9 (a third typed
+   refusal, and read-only survives an identity failure).
+   [00-consistency-report.md §11](00-consistency-report.md) records both.
+   The larger half — per-volume app-private staging — is explicitly a separate
+   future slice and is recorded in Out of scope with the helper invariant it
+   moves. What remains open from this item is only SPIKE-V1 (question 6), which
+   affects how the comparison is _spelled_ on Win32, not whether it happens.
+   The downstream documents have since been updated to point here: FS-02 D7's
+   ownership note and open-question bullet, FS-02's Out of scope, the README's
+   PRD table and its cross-volume paragraph, and
+   [00-consistency-report.md §4.4](00-consistency-report.md) — which is
+   superseded in place by [§10.1](00-consistency-report.md) rather than deleted.
 5. **`grant_revoked` as a new shared error code.** It widens a closed vocabulary that
    two services mirror by hand
    ([path-validation.ts:31-40](../../../apps/desktop/main/capabilities/path-validation.ts),
@@ -1827,3 +3183,43 @@ renders as unavailable with a reason — not as an empty list, which would read 
    field — keeps the vocabulary closed at the cost of a vaguer message. Recommendation
    is the new code, because "why did that stop working" is the question this whole PRD
    exists to answer, but a reviewer may reasonably prefer the narrower change.
+6. **SPIKE-V1 — same-volume identity on Win32 (gates D19.4).**
+   _Claim, currently `unverified`:_ equality of the 16-hex
+   `FILE_ID_INFO.VolumeSerialNumber` that FS-02 D6 puts in `volumeId`
+   ([PRD-FS-02:176](PRD-FS-02-windows-commit-helper.md),
+   [:420-438](PRD-FS-02-windows-commit-helper.md)) is a sound same-volume test
+   for the grant-time gate.
+   _Experiment:_ on one Windows host, obtain `volumeId` for (a) two directories
+   on `C:`, (b) a directory on `C:` and one on `D:`, (c) a directory on a
+   VHD/USB volume restored from an image of `C:`, and (d) a mounted-folder
+   (junction-to-volume) path; record equality in each case, and record whether
+   `GetFinalPathNameByHandleW(VOLUME_NAME_GUID)` distinguishes (c).
+   _Changes the design if:_ (c) reports equal serials → the comparison moves to
+   the volume GUID path and `volumeId`'s Win32 encoding is revisited **in FS-02
+   D6**, not here, because the encoding is persisted in grants
+   ([PRD-FS-01:70](PRD-FS-01-platform-seam.md)'s F3). If (d) reports unequal
+   serials for the same physical volume, the gate is over-strict and would
+   refuse a workable folder — in which case D19 keeps refusing (fail closed) and
+   the copy gains the mounted-folder case. Until this runs, this PRD says "same
+   volume serial", never "same volume".
+   _Shares a host with:_ FS-02 SPIKE-W7 (`FILE_ID_INFO` stability); run them
+   together rather than booting Windows twice.
+7. **Whether FS-08 should grow a live execution kill channel.** D20 states
+   plainly that turning execution off takes effect at the next boot in both
+   directions, because a child's environment is fixed at spawn (C11) and D1
+   already rejected restarting the supervised children. A main-owned signal that
+   makes a running child refuse new sandbox sessions would let the copy say
+   "immediately", matching the filesystem switch. That is a mechanism, so it is
+   FS-08's to design or decline. **Recommendation:** leave it out for now — the
+   run-cancel lever already exists and is the one users reach for — but if it
+   lands, D20's copy changes with it and the honesty test moves.
+8. **Whether an imported overlay revision reaches `projectWorkspaceStage`
+   today.** D24 names the existing stage card as the review surface, which is the
+   right answer regardless. What is **unverified** is whether an imported
+   revision produces the stage projection at all: FS-08 C6 says applying is
+   unwired by construction and D12 marks the review surface UNVERIFIED. One
+   reading of `projectWorkspaceStage`'s inputs against the shape
+   `OverlaySandboxPatchImporter` appends settles it. If it does not project
+   today, the wiring is FS-08's mechanism and FS-09's requirement stands
+   unchanged — what must not happen is a second projection being written to
+   avoid finding out.

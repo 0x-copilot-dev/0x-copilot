@@ -71,16 +71,33 @@ Nothing here is built. The primitives it wires (`compareArtifactText`,
 `DiffText`, `restore`) already exist, so this is expected to be small, but it is
 not done and must not be read as done.
 
-## PRD-04 — truthful publication 🟡 PARTIAL (D1/D2 in `9fa5b836`)
+## PRD-04 — truthful publication 🟡 PARTIAL (D1/D2 in `9fa5b836`; D4 pending commit)
 
 - [x] Publish and revise results state destination explicitly —
       `stored_in="artifact_library"`, `wrote_to_filesystem=False`, both asserted.
 - [x] Narration rule present on both tool descriptions, binding the model's
       claim to the result field rather than to prose it read once.
-- [ ] Hermetic eval asserts no filesystem claim when workspace is disabled;
-      baseline committed. **Not done** — this is the part that would catch a
-      regression, so the defect is mitigated but not yet pinned.
-- [x] ai-backend **6938 passed**.
+- [x] Hermetic eval asserts no filesystem claim when workspace is disabled;
+      baseline committed. Added as a second family in the existing PRD-11 eval
+      harness: `services/ai-backend/tests/evals/publication/` (corpus, detector,
+      grounded replay narrator, `baselines/baseline_replay.json`), sharing
+      `tests/evals/report_io.py` with the surfaces family. The hermetic tests are
+      unmarked so they run in default CI; `test_evals_live.py` carries the
+      `evals` marker. **28 passed** for `tests/evals/publication`, **37 passed**
+      for the whole `tests/evals` tree, `-m evals` = 2 skipped (no model set).
+- [x] The eval demonstrably has teeth. Every fixture runs twice — once on the
+      real tool result, once with `stored_in`/`wrote_to_filesystem` stripped (the
+      pre-fix shape) — and the baseline records that stripping them reinstates
+      the "saved to your documents folder" claim. Verified by simulating a D1
+      regression in memory (wrapping both tools to drop the two keys): **7
+      failures**, including the headline no-filesystem-claim assertion and the
+      literal `documents folder` / `saved to disk` / `on your computer` / path
+      check over the final responses.
+- [ ] **D3 not implemented.** The capability-honest system phrasing PRD-04 asks
+      for does not exist — the only place carrying the rule is
+      `prompts/tools.py` (D2). The eval supplies that posture in its own system
+      prompt, so it does not currently pin a production string.
+- [x] ai-backend **6938 passed** (as of the D1/D2 commit).
 
 ## Live end-to-end verification ⬜ NOT DONE
 

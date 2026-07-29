@@ -36,10 +36,22 @@ Real dependencies:
 - **FS-07** — an imported patch is committed through the same claim/journal lane
   and inherits its reconciliation.
 
-**FS-09 is NOT a dependency, and that is a gap this PRD does not close.** FS-09's
-Out of scope says, in terms: "The sandbox provider and patch-back (FS-08)." Six
-surfaces below are routed to FS-09 and FS-09 owns none of them. Recorded in
-"Unowned surfaces" at the end of Open questions rather than papered over.
+**FS-09 — a shipping dependency, not an import one, and the gap it used to leave
+is closed.** FS-09's Out of scope used to disclaim FS-08 by name, so the six
+surfaces this PRD routes there were owned by nobody. That is decided: execution
+consent is consent, and splitting it across two documents would produce two
+consent models, so **FS-09 owns every surface where a human is asked to agree to
+any of this** — enabling execution
+([FS-09 D20](PRD-FS-09-enablement-consent.md)), what the user is told when there
+is no runtime (D21), the image-download ask (D22), what leaves the granted root
+(D23), the review of an imported patch including the unsupported-verb pre-check
+(D24), and revocation while a sandbox is live (D25). **FS-08 keeps the provider,
+the runtime and its drivers, the isolation probe and attestation, the image
+contract, transfer, cancellation and teardown, the C1 importer and the desktop
+prepare/authorize lane.** Nothing in FS-08's code depends on FS-09, and nothing
+in FS-08 becomes user-reachable without it. What FS-09 took, what it did not, and
+the one question it sent back are at "Consent surfaces — routed, and where they
+landed" at the end of Open questions.
 
 ## Implementer brief
 
@@ -872,9 +884,9 @@ The complete production surface FS-08 adds:
 4. one boot probe;
 5. one C1 patch importer — which is C1's **second** writer (C10), and pays for
    that in D12 by re-deriving what the mutation engine would have derived;
-6. one main-only desktop import lane (prepare/authorize). **The surface that
-   triggers it is unowned** — FS-09 disclaims FS-08 by name (see the dependency
-   note and Open questions);
+6. one main-only desktop import lane (prepare/authorize). The surface that
+   triggers it is **[FS-09 D24](PRD-FS-09-enablement-consent.md)**'s — one
+   control on a reviewed proposal, never in the model's reach;
 7. two composition edits: the prerequisites bundle and the provider injection;
 8. one edit on the `als` path, whose exact shape D8 leaves to the implementer
    because two of the three admissible fixes touch a file this list would
@@ -966,10 +978,16 @@ sandbox"
 ([seam.py:64-66](../../../services/ai-backend/src/agent_runtime/capabilities/sandbox/seam.py)).
 
 The honest consequence, stated rather than buried: **most installs will not have
-execution on day one.** Telling the user why, and what to install, is an unowned
-surface — the first draft assigned it to FS-09, which disclaims FS-08. Whoever
-takes it: it never installs anything itself, and **nothing in this program
-prompts for elevation**. That last clause has a caveat the first draft did not
+execution on day one.** Telling the user why, and what to install, is
+[**FS-09 D21**](PRD-FS-09-enablement-consent.md): it renders **one** reason from
+D16's closed set through a fixed copy table, and for
+`local_runtime_unavailable` it names only the runtimes this build can actually
+drive — `apple_container`, `podman`, `docker` (§2). Naming a runtime the driver
+registry does not know would be the execution-side version of FS-09 D8's "never
+name a verb the build cannot perform". FS-08's two constraints on that surface
+are carried there verbatim rather than restated here: it never installs anything
+itself, and **nothing in this program prompts for elevation**. That last clause
+has a caveat the first draft did not
 carry: SPIKE-L2 expects `wsl --install` on Windows to require elevation once. The
 program does not prompt for it and does not run it — the user does, outside the
 app, before the runtime is ever detected. If that turns out to be unacceptable
@@ -1133,11 +1151,20 @@ download hundreds of megabytes on a metered connection, and an implicit pull at
 run time makes the first execution's behaviour depend on network state, which is
 exactly the kind of "it worked yesterday" the rest of this program avoids.
 
-**Nobody owns that acquisition surface.** The first draft routed it to "FS-09's
-enablement surface"; FS-09's Out of scope disclaims FS-08 by name. Downloading
-hundreds of megabytes of _executable_ content onto the user's machine, on their
-say-so, is the largest consent surface in this PRD and it currently has no
-document. Recorded in Open questions with the other unowned surfaces.
+**[FS-09 D22](PRD-FS-09-enablement-consent.md) owns that acquisition surface**,
+and calls it the largest consent this program asks for — hundreds of megabytes of
+_executable_ content fetched onto the user's machine on their say-so. The first
+draft routed it to "FS-09's enablement surface" at a time when FS-09 disclaimed
+FS-08 by name; FS-09 has since taken it. Four properties it binds that FS-08 must
+not contradict: the fetch is **main-owned and user-triggered** (the runtime binary
+is already resolved to an absolute path by main — Phase 5 item 17 — and the
+process that fetches executable content must not be the process a model can
+reach); **one consent authorises exactly one acquisition of exactly the pinned
+digest**, so a different digest asks again rather than renewing; a failure leaves
+`local_image_absent` with **no automatic retry**, which is this decision's own
+rule rendered honestly; and progress is shown only from bytes the runtime
+actually reports, never a computed percentage. FS-08 supplies the digest, the
+expected size and the driver argv; it does not own the ask.
 
 Image contents are a code-owned requirement, not a preference: it must contain
 `python3` (C4b — `BaseSandbox.ls` shells `python3 -c`), a POSIX shell (the
@@ -1294,10 +1321,12 @@ sandbox /workspace tree
   → OverlayMutation[] + append_revision(expected_version)  workspace/ports.py:63 (exists)
        ^^ second writer into C1 — see C10; the engine's controls are re-applied
   → one C1 overlay revision ref
-  → review surface  ** UNOWNED — no PRD in this program supplies one for an
-                       imported overlay revision on desktop. The code's own
-                       docstring names "A4/A5 review" (contracts.py:330-337);
-                       that it exists is UNVERIFIED. **
+  → review surface  ** FS-09 D24 owns it and names it: TcWorkspaceStageSurface
+                       via projectWorkspaceStage — the stage card that already
+                       exists, not a second one. Whether an IMPORTED revision
+                       reaches that projection today is still UNVERIFIED
+                       (FS-09 open question 8); if it does not, the wiring is
+                       FS-08's mechanism, not a second projection. **
   → LocalWorkspaceAuthority.prepareSandboxPatchImport  NEW (§7)
   → uploadPreparedContent / sealPreparedContent        workspace-authority.ts:549,572 (exists)
   → authorizeSandboxPatchImport (one-use permit)       NEW (§7)
@@ -1439,8 +1468,12 @@ property with exactly today's string
 its observable behaviour does not change — and a test pins that.
 
 The exact set a local provider must clear before the tool exists. FS-08 produces
-these strings; **rendering them is an unowned surface** (the first draft said
-FS-09):
+these strings; **[FS-09 D21](PRD-FS-09-enablement-consent.md) renders them** —
+one row per reason below, plus the pre-existing
+`openai_hosted_container_control_gap`, and a generic "execution is unavailable on
+this computer" with the raw code as copyable support detail for a value it does
+not recognise. One reason, never a synthesised second: readiness is a single
+provider-supplied verdict, unlike FS-09 D4's additive `unavailableReasons`:
 
 | reason                         | cleared by                                                                                                                         |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -1669,18 +1702,24 @@ correct, and the model-visible tool appears only at the end of phase 5.
     derivation `service-env.ts` already uses for the broker triple. The flag
     itself stays main-process-only.
 
-### Phase 6 — Consent surface (**unowned — this phase has no document**)
+### Phase 6 — Consent surface (**FS-09's — planned there, not here**)
 
 18. The first draft read: "FS-09 renders the reasons and owns the
-    enablement/import affordances." **FS-09 does not.** Its Out of scope says
-    "The sandbox provider and patch-back (FS-08)", and it mentions no sandbox,
-    runtime, image or execution surface anywhere. FS-08 ships the reason strings,
-    the main-side import lane, and the image-requirement contract; **no document
-    in this program owns rendering them, asking for the image download, or
-    presenting the import for review.** Phase 6 cannot be planned from FS-08
-    alone. See "Unowned surfaces" in Open questions — this is a scope decision,
-    not an implementation gap, and it blocks a model-visible capability just as
-    hard as a missing provider does.
+    enablement/import affordances." At the time FS-09 disclaimed FS-08 by name,
+    so that routing pointed at nothing. **It does now**, as
+    [FS-09 D20-D25](PRD-FS-09-enablement-consent.md), with its own implementation
+    steps, tests and DoD items in that document. The split is: FS-08 ships the
+    reason strings (D16), the main-side import lane (§7), the image contract and
+    its digest and expected size (D7), the verbs and entry counts a review reads,
+    and the `liveSessionCount` a revoke confirmation needs; FS-09 builds the
+    enablement switch, the reason rendering, the download ask, the
+    what-leaves-the-folder statement, the import review and the revoke copy.
+    **No step of this phase is implemented from FS-08, and phases 1-5 do not
+    depend on it** — but no phase of FS-08 yields a user-reachable capability
+    until FS-09's execution half lands. That is a shipping-order constraint on
+    the same footing as the Windows code-signing certificate
+    ([00-consistency-report.md §7](00-consistency-report.md) item 1), not an
+    unowned gap.
 
 ## Test plan
 
@@ -1969,13 +2008,17 @@ and skipped elsewhere with an explicit skip reason:
       `specified` with the corrected dependency column, and
       `00-consistency-report.md` §4.5 / §7 item 10 / §9 record that it exists and
       what the reconciliation pass changed.
-- [ ] **A document owns the consent surface.** Either FS-09's Out of scope drops
-      "The sandbox provider and patch-back (FS-08)" and FS-09 absorbs the
-      enablement/reason/image-acquisition/import affordances, or a new PRD does.
-      Until then Phase 6 is unplannable and this box cannot be ticked — a
-      provider with no consent surface is a capability nobody can turn on, which
-      is the same shape as the Windows code-signing certificate in the
-      consistency report's §7 item 1.
+- [x] **A document owns the consent surface.** FS-09 dropped "The sandbox
+      provider and patch-back (FS-08)" from its Out of scope and absorbed the
+      enablement switch, the reason rendering, the image acquisition, the
+      snapshot statement, the import review and the revoke copy as
+      [D20-D25](PRD-FS-09-enablement-consent.md). Phase 6 is plannable — in
+      FS-09.
+- [ ] **FS-09's execution half (D20-D25) has shipped.** FS-08 cannot tick this
+      alone, and it is not a defect in FS-08: a provider that clears all seven
+      gates still yields no user-reachable capability without a consent surface.
+      Same shape as the Windows code-signing certificate in the consistency
+      report's §7 item 1 — a named external dependency, no longer an unowned gap.
 - [ ] **Open question 8 is answered**: what records the import decision, and
       whether an agent-authored change set may commit without a
       `decisionLedgerId`.
@@ -2006,7 +2049,16 @@ and skipped elsewhere with an explicit skip reason:
   must pre-check the change set's verbs against the helper's registered platform
   profile and say so **before** the user is shown an approval, which is the same
   failure mode the consistency report's §4.4 rejects for cross-volume grants.
-  Nobody owns that today.
+
+  ~~Nobody owns that today.~~ **[FS-09 D24](PRD-FS-09-enablement-consent.md)
+  owns it** — the routing table at the end of this document lists it, and this
+  sentence was left stale by the ownership pass
+  ([00-consistency-report.md §11](00-consistency-report.md) records the miss).
+  D24 makes the pre-check **gate the approve control rather than warn beside
+  it**, for the two reasons this bullet establishes: the refusal is wholesale, so
+  a disabled-with-a-warning control would imply that clearing the warning is the
+  user's job; and it happens at prepare, so there is no per-entry error to
+  render. FS-08 supplies the verbs and entry counts; it does not render them.
 
 - **Revision-aware deliverable publication.** The launch keeps
   `deliverables=()` and `_publish_result` keeps refusing artifacts (D17.2).
@@ -2177,8 +2229,15 @@ Each names the experiment, and what a negative result changes.
 
    **(a) is the recommendation**, because the audit questions this program is
    held to — who approved it, what changed, where it is logged — have no answer
-   under (b). Not decided here: it changes FS-04's `origin` lane and whatever
-   document ends up owning the consent surface.
+   under (b). Not decided here: it changes FS-04's `origin` lane. **It is not
+   FS-09's either, and FS-09 says so rather than leaving it ambiguous** — it is a
+   question about what is recorded server-side, not about what a human is asked
+   ([FS-09 Out of scope](PRD-FS-09-enablement-consent.md), [FS-09
+   D24](PRD-FS-09-enablement-consent.md)'s "What FS-09 does not decide"). The one
+   thing FS-09 binds in the meantime is the copy: the review must not claim the
+   import was "approved and recorded" while no approval row exists. So this
+   question stays here, with the recommendation, and a resolution has to be made
+   before the import lane ships.
 
 9. **Whether the base-file half of D17.1 is FS-08's to write.** Extending the
    snapshot plan authority to include base entries is a real slice of work — and
@@ -2190,25 +2249,72 @@ Each names the experiment, and what a negative result changes.
    from the provider outward, and the snapshot exporter moves. Recorded, not
    decided here.
 
-## Unowned surfaces — recorded, not resolved
+## Consent surfaces — routed, and where they landed
 
-Added by the FS-08 reconciliation pass. The first draft routed six things to
-FS-09. FS-09's Out of scope disclaims FS-08 by name and mentions no sandbox,
-container, image or execution surface anywhere in the document. **The routing was
-to a reader, not to a document** — the same failure the consistency report's §4.4
-records for cross-volume Windows grants, arriving by a different route.
+**This section used to be "Unowned surfaces — recorded, not resolved".** The
+FS-08 reconciliation pass found that the first draft routed six things to FS-09
+while FS-09's Out of scope disclaimed FS-08 by name and mentioned no sandbox,
+container, image or execution surface anywhere — _the routing was to a reader,
+not to a document_
+([00-consistency-report.md §9.4](00-consistency-report.md)). The product call has
+since been made and is recorded in
+[00-consistency-report.md §10](00-consistency-report.md): **execution consent is
+consent**, so splitting it from the rest of the consent page would produce two
+consent models, which is what this program exists to prevent. FS-09 grew to own
+it. The table is kept rather than deleted so the routing failure stays legible.
 
-| surface                                                                                              | first draft said                                                            | actually owned by |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------- |
-| Rendering the six readiness reasons (D16) so a user knows why execution is absent                    | FS-09                                                                       | **nobody**        |
-| "What to install", without ever installing it (D3)                                                   | FS-09                                                                       | **nobody**        |
-| Image acquisition: the size, the consent, the progress (D7)                                          | FS-09                                                                       | **nobody**        |
-| Presenting an imported overlay revision for review before `prepareSandboxPatchImport`                | "existing review surface" (D12) — **unverified that one exists on desktop** | **nobody**        |
-| The import affordance itself (§7, Phase 6)                                                           | FS-09                                                                       | **nobody**        |
-| Saying, before an approval sheet, that a patch's verbs cannot commit on this platform (Out of scope) | FS-09                                                                       | **nobody**        |
+| surface                                                                                              | first draft said                                                            | owner now                                                           |
+| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Rendering the readiness reasons (D16) so a user knows why execution is absent                        | FS-09                                                                       | **[FS-09 D21](PRD-FS-09-enablement-consent.md)** — fixed copy table |
+| "What to install", without ever installing it (D3)                                                   | FS-09                                                                       | **[FS-09 D21](PRD-FS-09-enablement-consent.md)** — same table       |
+| Image acquisition: the size, the consent, the progress (D7)                                          | FS-09                                                                       | **[FS-09 D22](PRD-FS-09-enablement-consent.md)**                    |
+| Presenting an imported overlay revision for review before `prepareSandboxPatchImport`                | "existing review surface" (D12) — **unverified that one exists on desktop** | **[FS-09 D24](PRD-FS-09-enablement-consent.md)** — see below        |
+| The import affordance itself (§7, Phase 6)                                                           | FS-09                                                                       | **[FS-09 D24](PRD-FS-09-enablement-consent.md)**                    |
+| Saying, before an approval sheet, that a patch's verbs cannot commit on this platform (Out of scope) | FS-09                                                                       | **[FS-09 D24](PRD-FS-09-enablement-consent.md)** — verb pre-check   |
 
-This is a scope decision, not an implementation gap, and it is load-bearing: a
-provider that passes every gate in D16 still yields no user-reachable capability
-without these. Either FS-09 drops its FS-08 exclusion and absorbs them, or a
-tenth PRD owns them. FS-08 does not decide for them, and does not pretend the
-routing worked.
+**FS-09 took three surfaces FS-08 had not thought to route**, which is the sign
+the split is a real ownership boundary rather than a hand-off of a list: **D20**
+(execution is its own switch, separate from the filesystem switch, and both
+directions need a restart), **D23** (what leaves the granted folder, stated
+before it leaves), and **D25** (revoking while a sandbox is live). D20 and D25
+consume facts FS-08 must supply — `readinessReason`, the digest and expected
+size, and `liveSessionCount` — which is the only direction the dependency runs.
+
+**The split, stated once:** FS-08 keeps the provider, the runtime and its
+drivers, the isolation probe and attestation, the image contract, transfer,
+cancellation and teardown, the C1 importer and the desktop prepare/authorize
+lane. FS-09 builds every surface where a human is asked to agree to any of it.
+Nothing in FS-08's code depends on FS-09; nothing in FS-08 becomes
+user-reachable without it (Phase 6, and the DoD item that names it).
+
+### What came back to FS-08, and what stays open
+
+Three things, none of them papered over:
+
+1. **FS-08 open question 8 is still FS-08's** — whether an imported change set
+   may commit without a `decisionLedgerId`. FS-09 declines it **explicitly and
+   for a stated reason**: it is a question about what is recorded server-side,
+   not about what a human is asked
+   ([FS-09 Out of scope](PRD-FS-09-enablement-consent.md), and D24's "What FS-09
+   does not decide"). FS-09 does bind one consequence of leaving it open: until
+   it is resolved the review must not tell the user the import was "approved and
+   recorded" when no approval row exists — it says the user applied a reviewed
+   proposal, and nothing more. That constrains the copy, not the resolution.
+2. **One mechanism question is routed _back_ to FS-08.** D24 names
+   `TcWorkspaceStageSurface` via `projectWorkspaceStage` as the review surface —
+   which answers D12's UNVERIFIED marker at the level of _which surface_ — but
+   whether an **imported** revision reaches that projection today is still
+   unverified (FS-09 open question 8; not to be confused with FS-08's open
+   question 8 above). C6 says applying is unwired by construction. If the
+   projection does not happen, the wiring is **FS-08's mechanism**, and the fix
+   is to wire it — never to write a second projection to avoid finding out.
+3. **D17.1 will invalidate a shipped FS-09 sentence, by design.** FS-09 D23
+   State 1's copy — "nothing is copied from your folder" — is true only while the
+   snapshot is overlay-only, and it is pinned by a test that **must fail when
+   D17.1's base entries land**. That failure is the signal to move the copy to
+   State 2, not a broken test. Whoever implements D17.1 owns telling FS-09.
+
+**What is still genuinely unresolved for FS-08 is not ownership.** It is
+SPIKE-L2 — whether a Windows container runtime can observe all ten controls —
+which by D4 decides whether this PRD ships on either platform. See the spike
+register in [README.md](README.md).

@@ -31,6 +31,12 @@ from agent_runtime.artifacts.errors import (
     ArtifactSealedRunError,
     ArtifactTooLargeError,
 )
+from agent_runtime.artifacts.execution_mode import (
+    ArtifactExecutionMode,
+    ArtifactExecutionModeResolver,
+    ArtifactOperation,
+    ArtifactOperationAudit,
+)
 from agent_runtime.artifacts.service import ArtifactService
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
@@ -258,6 +264,36 @@ class ArtifactServiceFakes:
                 return None
             return conversation_scope(org_id, user_id, conversation_id)
 
+    class Audit:
+        """Stand in for the runtime's HMAC hash-chained audit log.
+
+        Keeps the exact ``(event_type, record)`` pair the real
+        ``write_audit_log`` is handed, so a test reads what an auditor would
+        read instead of reaching inside the service for it.
+        """
+
+        def __init__(self) -> None:
+            self.rows: list[tuple[str, object]] = []
+
+        async def write_audit_log(self, *, event_type: str, record: object) -> None:
+            self.rows.append((event_type, record))
+
+        def entries(self) -> list[ArtifactOperationAudit]:
+            """Every captured row, recovered as the typed operation it encodes."""
+
+            return [
+                ArtifactOperationAudit.parse_audit_record(record)
+                for _, record in self.rows
+            ]
+
+    class FailingAudit(Audit):
+        """An audit log that is down, for proving the failure is not swallowed."""
+
+        MESSAGE = "audit log unavailable"
+
+        async def write_audit_log(self, *, event_type: str, record: object) -> None:
+            raise RuntimeError(self.MESSAGE)
+
     class Sources:
         def __init__(self, body: bytes, *, source_ref: str = "message://msg_1") -> None:
             self.body = body
@@ -296,6 +332,7 @@ class ArtifactServiceFakes:
         blobs=None,
         scopes=None,
         sources=None,
+        audit=None,
     ):
         return ArtifactService(
             metadata=metadata or cls.Metadata(),
@@ -303,6 +340,7 @@ class ArtifactServiceFakes:
             run_scopes=scopes or cls.Scopes(),
             sources=sources,
             now=lambda: NOW,
+            audit=audit,
         )
 
 
@@ -996,3 +1034,672 @@ class TestRevisionCausalLane(ArtifactServiceFakes):
 
         assert not isinstance(caught.value, ArtifactConflictError)
         assert caught.value.code is ArtifactErrorCode.SEALED_RUN
+
+
+class TestExecutionModeIsRecorded(ArtifactServiceFakes):
+    """PRD-03 D2 — the mode an operation ran under is a fact, not a setting.
+
+    An auto-send mode is planned that lets a user switch gating off per tool or
+    per chat. Asking the settings afterwards cannot answer "was this gated?" —
+    by then they may say something the operation never saw. So each operation
+    records the mode it actually ran under, at the moment it ran.
+
+    That mode does not exist yet, so every row below reads ``staged``. These
+    tests hold the seam to its shape while the value is still a constant, which
+    is the only time it is cheap to get wrong unnoticed.
+    """
+
+    #: Server-derived from the bound draft scope, so a retry names the same
+    #: artifact instead of minting a fresh id the digests would move with.
+    RETRIED_ID = "art_00000000-0000-4000-8000-0000000000e1"
+
+    @classmethod
+    def _create_request(cls, key: str) -> ArtifactCreateRequest:
+        return ArtifactCreateRequest(
+            run_id=SCOPE.run_id,
+            kind=ArtifactKind.DOCUMENT,
+            title="README",
+            media_type="text/markdown",
+            idempotency_key=key,
+        )
+
+    @classmethod
+    async def _create(cls, service, *, key: str = "create-mode", author=None):
+        return await service.create_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls._create_request(key),
+            provenance=ArtifactProvenance(author=author or ArtifactAuthor.MODEL),
+            content=b"v1",
+        )
+
+    @classmethod
+    def _force_mode(
+        cls, monkeypatch: pytest.MonkeyPatch, mode: ArtifactExecutionMode
+    ) -> None:
+        """Stand in for a mode the resolver cannot yet be made to return.
+
+        Reaching past the resolver is the point: it is the only way to exercise
+        what happens once auto-execute ships, while the resolver itself is
+        still honestly a constant.
+        """
+
+        monkeypatch.setattr(ArtifactExecutionModeResolver, "resolve", lambda **_: mode)
+
+    @classmethod
+    async def _digests_of_every_write(cls, metadata) -> tuple[str, ...]:
+        """Create, revise, and delete one artifact; return the keys they persist.
+
+        Seeded through the draft path so the artifact id is fixed rather than
+        freshly minted: the revise and delete digests are built from it, and a
+        new id per run would make them differ for a reason that has nothing to
+        do with the mode under test.
+        """
+
+        service = cls.service(metadata=metadata)
+        created = await service.create_draft_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls._create_request("retried-create"),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            content=b"v1",
+            artifact_id=cls.RETRIED_ID,
+        )
+        artifact_id = created.record.artifact.artifact_id
+        await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=artifact_id,
+                parent_revision=1,
+                idempotency_key="retried-revise",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            chunks=cls.chunks(b"v2"),
+        )
+        await service.soft_delete(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            artifact_id=artifact_id,
+            idempotency_key="retried-delete",
+        )
+        return tuple(
+            command.idempotency.request_digest
+            for command in (
+                metadata.create_command,
+                metadata.append_command,
+                metadata.delete_command,
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_creating_an_artifact_records_a_staged_operation(self) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit)
+
+        created = await self._create(service)
+
+        ((event_type, _),) = audit.rows
+        assert event_type == "artifact.create"
+        (entry,) = audit.entries()
+        assert entry.operation is ArtifactOperation.CREATE
+        assert entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert entry.artifact_id == created.record.artifact.artifact_id
+        assert entry.org_id == SCOPE.org_id
+        assert entry.user_id == SCOPE.user_id
+        assert entry.conversation_id == SCOPE.conversation_id
+        assert entry.run_id == SCOPE.run_id
+        assert entry.lane is ArtifactCausalLane.RUN
+        assert entry.revision == 1
+        assert entry.author is ArtifactAuthor.MODEL
+        assert entry.occurred_at == NOW
+
+    @pytest.mark.asyncio
+    async def test_publishing_records_its_own_operation_not_a_generic_write(
+        self,
+    ) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit)
+
+        await service.publish_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=self._create_request("publish-mode"),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            content=b"published",
+        )
+
+        (entry,) = audit.entries()
+        assert entry.operation is ArtifactOperation.PUBLISH
+        assert entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert audit.rows[0][0] == "artifact.publish"
+
+    @pytest.mark.asyncio
+    async def test_promotion_records_the_subagent_that_authored_it(self) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit, sources=self.Sources(b"# Hello\n"))
+
+        await service.promote_source(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactPromotionRequest(
+                run_id=SCOPE.run_id,
+                source_ref="message://msg_1",
+                kind=ArtifactKind.DOCUMENT,
+                idempotency_key="promote-mode",
+            ),
+        )
+
+        (entry,) = audit.entries()
+        assert entry.operation is ArtifactOperation.PROMOTE
+        assert entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert audit.rows[0][0] == "artifact.promote"
+
+    @pytest.mark.asyncio
+    async def test_a_revision_records_the_revision_it_appended(self) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit)
+        created = await self._create(service)
+
+        await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=created.record.artifact.artifact_id,
+                parent_revision=1,
+                idempotency_key="revise-mode",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            chunks=self.chunks(b"v2"),
+        )
+
+        create_entry, revise_entry = audit.entries()
+        assert create_entry.operation is ArtifactOperation.CREATE
+        assert revise_entry.operation is ArtifactOperation.REVISE
+        assert revise_entry.revision == 2
+        assert revise_entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert audit.rows[1][0] == "artifact.revise"
+
+    @pytest.mark.asyncio
+    async def test_a_user_edit_records_the_conversation_lane_it_ran_in(self) -> None:
+        """PRD-01's lane split has to survive into the audit row.
+
+        A user edit claims no run, so recording the artifact's creating run here
+        would name a turn that did not perform the edit.
+        """
+
+        audit = self.Audit()
+        service = self.service(audit=audit)
+        created = await self._create(service)
+
+        await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=created.record.artifact.artifact_id,
+                parent_revision=1,
+                idempotency_key="user-revise-mode",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.USER),
+            chunks=self.chunks(b"v2"),
+        )
+
+        _, revise_entry = audit.entries()
+        assert revise_entry.author is ArtifactAuthor.USER
+        assert revise_entry.lane is ArtifactCausalLane.CONVERSATION
+        assert revise_entry.run_id is None
+        assert revise_entry.execution_mode is ArtifactExecutionMode.STAGED
+
+    @pytest.mark.asyncio
+    async def test_deleting_records_the_user_who_asked_for_it(self) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit)
+        created = await self._create(service)
+
+        await service.soft_delete(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            artifact_id=created.record.artifact.artifact_id,
+            idempotency_key="delete-mode",
+        )
+
+        _, delete_entry = audit.entries()
+        assert delete_entry.operation is ArtifactOperation.DELETE
+        assert delete_entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert delete_entry.author is ArtifactAuthor.USER
+        assert delete_entry.lane is ArtifactCausalLane.CONVERSATION
+        assert delete_entry.run_id is None
+        assert delete_entry.revision is None
+        assert audit.rows[1][0] == "artifact.delete"
+
+    @pytest.mark.asyncio
+    async def test_the_recorded_mode_is_the_one_the_command_committed_with(
+        self,
+    ) -> None:
+        """The row and the write cannot disagree, because they are one value.
+
+        Re-deriving the mode when writing the row would let a future resolver
+        change between the two and audit the write as something it was not.
+        """
+
+        metadata = self.Metadata()
+        audit = self.Audit()
+        service = self.service(metadata=metadata, audit=audit)
+        created = await self._create(service)
+
+        await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=created.record.artifact.artifact_id,
+                parent_revision=1,
+                idempotency_key="revise-same-mode",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            chunks=self.chunks(b"v2"),
+        )
+
+        create_entry, revise_entry = audit.entries()
+        assert create_entry.execution_mode is metadata.create_command.execution_mode
+        assert revise_entry.execution_mode is metadata.append_command.execution_mode
+
+    @pytest.mark.asyncio
+    async def test_the_idempotency_digest_does_not_move_when_the_mode_does(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry must still replay when the toggle flipped underneath it.
+
+        Auto-execute is switchable per tool and per chat, so it can change
+        between a request and that request's own retry. If the mode reached the
+        persisted request digest, the retry would come back as an idempotency
+        conflict on a request the client never altered, and its only recovery
+        would be a fresh key — the duplicate artifact idempotency exists to
+        prevent. The mode of the one operation that ran is durable on its
+        command and in its audit row; it has no business in the key.
+        """
+
+        by_mode: dict[ArtifactExecutionMode, tuple[str, ...]] = {}
+        for mode in ArtifactExecutionMode:
+            self._force_mode(monkeypatch, mode)
+            metadata = self.Metadata()
+
+            by_mode[mode] = await self._digests_of_every_write(metadata)
+
+            # Proves the stand-in took, so the comparison below really spans
+            # two modes rather than running the same one twice.
+            assert {
+                metadata.create_command.execution_mode,
+                metadata.append_command.execution_mode,
+                metadata.delete_command.execution_mode,
+            } == {mode}
+
+        assert len(set(by_mode.values())) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_mode_is_derived_even_when_no_audit_sink_is_wired(self) -> None:
+        """The fact is produced by the operation, not by the sink observing it.
+
+        An unwired sink loses the row; it must never mean the write went out
+        without a mode attached to it.
+        """
+
+        metadata = self.Metadata()
+        service = self.service(metadata=metadata, audit=None)
+
+        await self._create(service)
+
+        assert metadata.create_command.execution_mode is ArtifactExecutionMode.STAGED
+
+    @pytest.mark.asyncio
+    async def test_an_idempotent_replay_appends_no_second_row(self) -> None:
+        """A replay performed no write, so the log must not claim one.
+
+        A second ``artifact.create`` carrying the replay's clock would read as
+        an artifact created twice — false, and exactly the kind of thing an
+        auditor counts.
+        """
+
+        class ReplayingMetadata(self.Metadata):
+            async def create_artifact(self, command):
+                await super().create_artifact(command)
+                return ArtifactMutationResult(record=command.record, replayed=True)
+
+        audit = self.Audit()
+        service = self.service(metadata=ReplayingMetadata(), audit=audit)
+
+        await self._create(service)
+
+        assert audit.rows == []
+
+    @pytest.mark.asyncio
+    async def test_a_repeated_delete_records_the_deletion_once(self) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit)
+        created = await self._create(service)
+        artifact_id = created.record.artifact.artifact_id
+
+        for _ in range(2):
+            await service.soft_delete(
+                org_id=SCOPE.org_id,
+                user_id=SCOPE.user_id,
+                artifact_id=artifact_id,
+                idempotency_key="delete-twice",
+            )
+
+        deletes = [
+            entry
+            for entry in audit.entries()
+            if entry.operation is ArtifactOperation.DELETE
+        ]
+        assert len(deletes) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_failing_audit_log_is_not_swallowed(self) -> None:
+        """Nothing redelivers this row, so quietly dropping it loses the fact.
+
+        The whole point of the seam is that the record cannot go missing without
+        anyone noticing; a caught-and-logged failure is exactly that.
+        """
+
+        audit = self.FailingAudit()
+        service = self.service(audit=audit)
+
+        with pytest.raises(RuntimeError) as caught:
+            await self._create(service)
+
+        assert str(caught.value) == self.FailingAudit.MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_a_caller_cannot_choose_the_mode_it_is_audited_under(self) -> None:
+        """Every request contract refuses the field outright.
+
+        The model reaches these operations through the same request contracts an
+        app does, so refusing the field here is what stops either of them
+        nominating the mode their own operation is recorded under.
+        """
+
+        base = {
+            "run_id": SCOPE.run_id,
+            "kind": "document",
+            "title": "note",
+            "media_type": "text/markdown",
+            "idempotency_key": "forge-1",
+        }
+        for payload, contract in (
+            (base, ArtifactCreateRequest),
+            ({**base, "source_ref": "message://msg_1"}, ArtifactPromotionRequest),
+            (
+                {
+                    "artifact_id": "art_00000000-0000-4000-8000-000000000001",
+                    "parent_revision": 1,
+                    "idempotency_key": "forge-2",
+                },
+                ArtifactRevisionRequest,
+            ),
+        ):
+            contract.model_validate(payload)
+            with pytest.raises(ValidationError) as caught:
+                contract.model_validate({**payload, "execution_mode": "auto"})
+            assert "execution_mode" in str(caught.value)
+
+
+class ArtifactWriteEntryPoints(ArtifactServiceFakes):
+    """Every public write on the service, paired with the operation it records.
+
+    ``_create_in_scope`` funnels six of these today, so they cannot drift apart
+    by accident. But "they happen to share a private helper" is not the promise
+    the seam makes — the promise is that no write reaches the store without
+    stating the mode it ran under. The table below asserts that pairing per
+    entry point, so a write that stops recording, or one that records the wrong
+    operation, fails here rather than being found later by an auditor holding a
+    log with a hole in it.
+    """
+
+    #: Server-derived from the bound draft scope, the way the internal
+    #: ``/drafts`` adapter derives one. Never an HTTP or model argument.
+    SEED_ID = "art_00000000-0000-4000-8000-0000000000d1"
+    BODY = b"# Hello\n"
+
+    #: Public methods that only read, and so record nothing: an execution mode
+    #: answers "was this write gated?", which a read never performed.
+    READS = frozenset(
+        {
+            "get_metadata",
+            "get_metadata_for_org",
+            "get_revision_metadata",
+            "list_for_run",
+            "stream_revision",
+        }
+    )
+    #: Public methods that are neither a read nor a write: composition wiring
+    #: and one pure digest helper.
+    NON_OPERATIONS = frozenset({"bind_ledger_publisher", "digest_bytes"})
+
+    #: One entry per public write: the service method, and the operation that
+    #: write has to be audited as. Invoked through ``invoke_<method>`` below so
+    #: this stays a table of facts rather than a table of closures.
+    WRITES = (
+        ("create_from_stream", ArtifactOperation.CREATE),
+        ("create_from_bytes", ArtifactOperation.CREATE),
+        ("publish_from_bytes", ArtifactOperation.PUBLISH),
+        ("publish_from_stream", ArtifactOperation.PUBLISH),
+        ("publish_from_source", ArtifactOperation.PUBLISH),
+        ("create_draft_from_bytes", ArtifactOperation.PUBLISH),
+        ("append_revision_from_stream", ArtifactOperation.REVISE),
+        ("promote_source", ArtifactOperation.PROMOTE),
+        ("soft_delete", ArtifactOperation.DELETE),
+    )
+
+    @classmethod
+    def create_request(cls, key: str) -> ArtifactCreateRequest:
+        return ArtifactCreateRequest(
+            run_id=SCOPE.run_id,
+            kind=ArtifactKind.DOCUMENT,
+            title="README",
+            media_type="text/markdown",
+            idempotency_key=key,
+        )
+
+    @classmethod
+    def model_provenance(cls) -> ArtifactProvenance:
+        return ArtifactProvenance(author=ArtifactAuthor.MODEL)
+
+    @classmethod
+    async def seed(cls, service: ArtifactService) -> str:
+        """Create the artifact the revise and delete entry points act on."""
+
+        created = await service.create_draft_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("seed"),
+            provenance=cls.model_provenance(),
+            content=b"v1",
+            artifact_id=cls.SEED_ID,
+        )
+        return created.record.artifact.artifact_id
+
+    # Each invoker takes the seeded artifact id so every entry point is driven
+    # through one uniform signature; the ones that create ignore it.
+
+    @classmethod
+    async def invoke_create_from_stream(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.create_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("create-stream"),
+            provenance=cls.model_provenance(),
+            chunks=cls.chunks(cls.BODY),
+        )
+
+    @classmethod
+    async def invoke_create_from_bytes(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.create_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("create-bytes"),
+            provenance=cls.model_provenance(),
+            content=cls.BODY,
+        )
+
+    @classmethod
+    async def invoke_publish_from_bytes(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.publish_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("publish-bytes"),
+            provenance=cls.model_provenance(),
+            content=cls.BODY,
+        )
+
+    @classmethod
+    async def invoke_publish_from_stream(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.publish_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("publish-stream"),
+            provenance=cls.model_provenance(),
+            chunks=cls.chunks(cls.BODY),
+        )
+
+    @classmethod
+    async def invoke_publish_from_source(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.publish_from_source(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("publish-source"),
+            provenance=cls.model_provenance(),
+            source_ref="message://msg_1",
+        )
+
+    @classmethod
+    async def invoke_create_draft_from_bytes(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.create_draft_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=cls.create_request("draft-bytes"),
+            provenance=cls.model_provenance(),
+            content=cls.BODY,
+            artifact_id=cls.SEED_ID,
+        )
+
+    @classmethod
+    async def invoke_append_revision_from_stream(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=artifact_id,
+                parent_revision=1,
+                idempotency_key="revise-entry",
+            ),
+            provenance=cls.model_provenance(),
+            chunks=cls.chunks(b"v2"),
+        )
+
+    @classmethod
+    async def invoke_promote_source(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.promote_source(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactPromotionRequest(
+                run_id=SCOPE.run_id,
+                source_ref="message://msg_1",
+                kind=ArtifactKind.DOCUMENT,
+                idempotency_key="promote-entry",
+            ),
+        )
+
+    @classmethod
+    async def invoke_soft_delete(
+        cls, service: ArtifactService, artifact_id: str
+    ) -> None:
+        await service.soft_delete(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            artifact_id=artifact_id,
+            idempotency_key="delete-entry",
+        )
+
+
+class TestEveryWriteRecordsItsMode(ArtifactWriteEntryPoints):
+    """PRD-03 D2 — the seam has to cover the whole write surface, not a sample.
+
+    An auto-execute mode arriving on a write nobody checked would be exactly
+    the silent loss this was built early to prevent, so coverage is asserted
+    against the service's public surface rather than against a list someone
+    remembered to extend.
+    """
+
+    @pytest.mark.parametrize(("method", "operation"), ArtifactWriteEntryPoints.WRITES)
+    @pytest.mark.asyncio
+    async def test_a_public_write_records_one_staged_operation(
+        self, method: str, operation: ArtifactOperation
+    ) -> None:
+        audit = self.Audit()
+        service = self.service(audit=audit, sources=self.Sources(self.BODY))
+        artifact_id = await self.seed(service)
+        # The seed is a write too, and it already recorded. Dropping its row
+        # keeps the assertion below about the entry point under test.
+        audit.rows.clear()
+
+        await getattr(self, f"invoke_{method}")(service, artifact_id)
+
+        (entry,) = audit.entries()
+        assert entry.operation is operation
+        assert entry.execution_mode is ArtifactExecutionMode.STAGED
+        assert entry.event_type == f"artifact.{operation.value}"
+        assert entry.org_id == SCOPE.org_id
+        assert entry.user_id == SCOPE.user_id
+
+    def test_the_table_accounts_for_every_public_method_on_the_service(self) -> None:
+        """A write added later cannot quietly skip the table.
+
+        Reflective on purpose: a hand-maintained list of writes would go stale
+        exactly when it mattered, which is the failure this test exists to make
+        impossible. Adding a public method now forces classifying it as a write
+        that records, a read, or neither.
+        """
+
+        public = {
+            name
+            for name, value in vars(ArtifactService).items()
+            if not name.startswith("_") and not isinstance(value, type)
+        }
+        writes = {method for method, _ in self.WRITES}
+
+        assert writes | self.READS | self.NON_OPERATIONS == public
+        assert not writes & self.READS
+
+    @pytest.mark.parametrize("operation", tuple(ArtifactOperation))
+    def test_every_operation_commits_under_a_distinct_durable_route(
+        self, operation: ArtifactOperation
+    ) -> None:
+        """The route is half of the persisted idempotency key.
+
+        An operation missing from the map raises only when that write first
+        runs for real, and two operations sharing a route would let one
+        client's key collide across them.
+        """
+
+        routes = [
+            ArtifactService.Routes.for_operation(member) for member in ArtifactOperation
+        ]
+
+        assert ArtifactService.Routes.for_operation(operation) in routes
+        assert len(set(routes)) == len(ArtifactOperation)

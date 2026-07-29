@@ -474,24 +474,58 @@ established at grant time, with its own consent step) changes where staged bytes
 live, which is a stated invariant of the helper
 (`workspace_commit_helper.c:19-20`) and deserves its own decision.
 
-**Ownership, corrected by the consistency pass: nobody owns it.** An earlier
-version of this paragraph routed the follow-up "to FS-04/FS-09". Neither PRD
-mentions cross-volume grants anywhere — FS-04's Out of scope does not list it and
-FS-09's Open questions do not either — so the routing was to a reader, not to a
-document. Two things are consequently unspecified and must be, before a Windows
-user is offered a folder picker:
+**Ownership, resolved: the grant-time half is [FS-09 D19](PRD-FS-09-enablement-consent.md).**
+An earlier version of this paragraph routed the follow-up "to FS-04/FS-09" when
+neither document mentioned cross-volume grants anywhere — the routing was to a
+reader, not to a document, which is what
+[00-consistency-report.md §4.4](00-consistency-report.md) recorded. That is now
+answered, and the two halves landed in different places:
 
-1. **The refusal must be visible at grant time, not at prepare time.** Today the
-   first signal is `workspace_write_unsupported` on a change set the user has
-   already been asked to approve. FS-09's grant flow is the only place that can
-   say "this folder is on `D:`; file changes are unavailable there" _before_ the
-   grant exists, and FS-09 does not currently specify it. This is the smaller
-   and more urgent half.
-2. **Per-volume staging** — whether the app should establish an app-private
-   staging directory on the grant's own volume — is a real design change with a
-   consent step and a new location for staged bytes. It belongs in its own slice.
+1. **The refusal is visible at grant time, not at prepare time — FS-09 D19.**
+   The product call is _refuse before minting_, not warn-then-mint: a grant
+   whose `mode` is not `read_only` and whose root volume differs from the
+   staging volume is refused in `CapabilityService.requestFolderGrant` (so the
+   refusal is a typed choice that can offer read-only) **and** enforced in
+   `GrantStore.create` immediately after `assertGrantableRoot` (so a caller
+   bypassing the native picker is blocked at the same choke point G2 already
+   uses). Both sites run before any grant row exists, so a **newly minted**
+   grant can never be an unusable one. Read-only grants on a second **supported**
+   volume keep working and are still minted — reads never reach this helper.
+   **Nothing in D7 changes:** the same-volume
+   precondition at `workspace_commit_helper.c:850` stays exactly as specified
+   and remains the enforcing check; FS-09 asks the same question earlier, not
+   differently, and does not weaken this rule to make a `D:` workspace writable.
 
-FS-02 does neither; it records both so the gap has a name.
+   Two doors the mint-time gate does not reach were found by a later
+   adversarial pass and are closed in the same decision, so this note does not
+   read as more finished than it is: a grant **already persisted** by a build
+   that predates D19 is rehydrated, not re-derived, and is caught instead by
+   FS-09 D19.8's term in the grant-usability predicate; and a root on a volume
+   the helper refuses to open makes `rootIdentity` **throw** before any
+   comparison, which FS-09 D19.9 turns into a third typed refusal.
+   [00-consistency-report.md §11](00-consistency-report.md) records both. The
+   Win32 half of the second one is D7's own gate — `GetVolumeInformationByHandleW`
+   reporting exactly `NTFS`, and `FileRemoteProtocolInfo` failing — so a folder
+   on a ReFS volume or an SMB share reaches the user as a refusal with a stated
+   remedy rather than as `workspace_write_unsupported` at prepare.
+
+2. **Per-volume staging is still its own slice — and now it has a home.** FS-09
+   does not design it, reserves no names for it and does not gate on it; it is
+   recorded in [FS-09's Out of scope](PRD-FS-09-enablement-consent.md) together
+   with the helper invariant it would move (the "staged bytes live only beneath
+   the inherited private staging descriptor" comment cited above). Nothing in
+   FS-02 or FS-09 depends on that slice existing.
+
+**What FS-02 still owns here.** FS-09 D19 compares two `volumeId` strings, and
+on Win32 that string is **D6's** 16-hex `FILE_ID_INFO.VolumeSerialNumber`.
+Whether serial equality is a sound same-volume test is `unverified` — it is
+FS-09's **SPIKE-V1** (FS-09 open question 6), and a duplicate serial on a cloned
+or imaged volume would fail in the dangerous direction, letting a cross-volume
+grant through to die at prepare. If that spike forces the comparison onto
+`GetFinalPathNameByHandleW(VOLUME_NAME_GUID)`, the encoding that changes is
+**D6's, in this document**, because `volumeId` is persisted inside grants — not
+FS-09's rendering of it. SPIKE-V1 shares a Windows host with SPIKE-W7; run them
+together.
 
 ### D8. Durability: what Windows can prove, and what it cannot
 
@@ -1057,11 +1091,15 @@ the constant is per platform.
   engineering one.
 - **Does electron-builder sign `extraResources` on Windows?** Determines whether
   step 9 is needed. One packaging experiment answers it.
-- **Cross-volume workspaces — currently unowned.** The same-volume rule (D7)
-  makes a `D:` workspace read-only, and no PRD in this set specifies either the
-  grant-time warning or per-volume staging. See D7's ownership note. The
-  grant-time half should be assigned to FS-09 explicitly; the staging half needs
-  its own slice.
+- ~~**Cross-volume workspaces — currently unowned.**~~ **Closed — owned.** The
+  same-volume rule (D7) still makes a `D:` workspace read-only, but the
+  grant-time half is now [FS-09 D19](PRD-FS-09-enablement-consent.md): the grant
+  is **refused before it is minted**, naming the volume, offering read-only
+  rather than imposing it. Per-volume staging is a separate future slice and is
+  recorded in FS-09's Out of scope. See D7's ownership note. What is still open
+  from this item is only **SPIKE-V1** (FS-09 open question 6) — whether Win32
+  `volumeId` serial equality is a sound same-volume test — which decides how D6
+  spells `volumeId`, not whether the grant-time check happens.
 - **Minimum Windows version.** `FileRenameInfoEx` and `NtQueryDirectoryFileEx`
   have Windows 10 1709/1703 floors. The app's real floor is whatever Electron 43
   (`apps/desktop/package.json:48`) supports; confirm and pin it, and specify the
@@ -1079,6 +1117,16 @@ the constant is per platform.
 - [ ] SPIKE-W5, W6 and W7 have run; D6's `FS_IDENTITY_BINDING_BYTES = 24`, the
       `fs_dir_for_each` iterator and `fs_volume_free_bytes` each match what was
       measured, or the divergence is recorded here.
+- [ ] **D2 property 3's occupant experiment has run** — the exact status a
+      `Flags = 0` rename returns when the leaf is occupied by a file, a
+      directory, and **a junction or a file symlink**. If a reparse-point
+      occupant is _followed_ rather than colliding, the leaf carries an explicit
+      `FILE_ATTRIBUTE_REPARSE_POINT` refusal **before** the rename, and test-plan
+      assertion 8 pins it. This is a confinement property, not a wording one, and
+      it had no id and no DoD line until the adversarial pass added them
+      ([00-consistency-report.md §11](00-consistency-report.md)); it is in the
+      README's register under "PRD-local spikes with no program id". Run it on
+      SPIKE-W3's host.
 - [ ] `fs_platform_win32.c` defines **every** declaration in `fs_platform.h` and
       `fs_crypto_bcrypt.c` every declaration in `fs_crypto.h`;
       `tools/check-seam.mjs` passes for the win32 objects.
@@ -1130,8 +1178,11 @@ the constant is per platform.
   from an explicit main-owned composition, **not** from the production authority.
 - Post-crash reconciliation changes implied by D8 (FS-07).
 - User-facing enablement, consent, and capability-honest reporting (FS-09),
-  including telling a Windows user _why_ writes are unavailable.
-- Cross-volume staging.
+  including telling a Windows user _why_ writes are unavailable — and including
+  the grant-time refusal of a cross-volume write grant (FS-09 D19), which is
+  FS-09's, not FS-02's, even though D7 is the rule it enforces.
+- Cross-volume staging — a per-volume app-private staging directory. A separate
+  future slice; recorded in FS-09's Out of scope, designed by neither PRD.
 - ARM64 Windows. `release-desktop.yml:54-57` builds x64 only.
 - Any change to the wire protocol version, the request/operation/outcome enums,
   or the macOS root-identity string format.

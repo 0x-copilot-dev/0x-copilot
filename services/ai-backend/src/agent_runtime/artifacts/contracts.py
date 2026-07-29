@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from agent_runtime.artifacts.execution_mode import ArtifactExecutionMode
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.surfaces_v2.entities import Artifact, ArtifactRevision
 from agent_runtime.surfaces_v2.ledger_ids import (
@@ -393,6 +394,11 @@ class ArtifactCreateCommand(RuntimeContract):
     record: ArtifactStoredRecord
     idempotency: ArtifactIdempotencyBinding
     ledger_events: tuple[ArtifactLedgerEvent, ...]
+    #: The gating mode this operation ran under, derived server-side. Required
+    #: and without a default on purpose: once auto-execute ships, a command
+    #: built without stating its mode must fail to construct rather than
+    #: default to ``staged`` and record an ungated write as a gated one.
+    execution_mode: ArtifactExecutionMode
 
     @model_validator(mode="after")
     def _is_revision_one(self) -> ArtifactCreateCommand:
@@ -419,6 +425,8 @@ class ArtifactAppendCommand(RuntimeContract):
     #: to append it to. Durability is unaffected — the immutable revision itself
     #: carries author, timestamp, size, and digest.
     ledger_event: ArtifactLedgerEvent | None = None
+    #: See :class:`ArtifactCreateCommand` — required, server-derived, no default.
+    execution_mode: ArtifactExecutionMode
 
     @field_validator("artifact_id")
     @classmethod
@@ -455,6 +463,8 @@ class ArtifactSoftDeleteCommand(RuntimeContract):
     artifact_id: str
     deleted_at: datetime
     idempotency: ArtifactIdempotencyBinding
+    #: See :class:`ArtifactCreateCommand` — required, server-derived, no default.
+    execution_mode: ArtifactExecutionMode
 
     @field_validator("artifact_id")
     @classmethod

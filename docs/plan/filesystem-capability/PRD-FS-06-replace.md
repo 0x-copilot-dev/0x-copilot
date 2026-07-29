@@ -1129,6 +1129,16 @@ the case macOS cannot produce.
       `VOL_CAP_INT_RENAME_SWAP`, while `create`/`mkdir` on that root still work.
 - [ ] `read_write_no_delete` grants reject `replace` with
       `workspace_capability_denied`.
+- [ ] **D5's Windows mirror spike has run, before D5 was implemented** — (a)
+      `FileRenameInformationEx` + `FILE_RENAME_POSIX_SEMANTICS` available on the
+      pinned minimum build, (c) the exact status when the target is held with an
+      incompatible share mode, (d) `fs_carry_metadata`'s Win32 body reproducing
+      the **effective** DACL rather than only the explicit one. (b) is FS-05 D9
+      spike 1 and is not re-run. D5's blockquote already required this; it had no
+      register row and no DoD line until the adversarial pass added them
+      ([00-consistency-report.md §11](00-consistency-report.md)). (c) is the
+      error D6's "Windows detects the open holder" claim rests on, and (d)
+      silently dropping inherited ACEs is the exact failure D8 exists to prevent.
 - [ ] `replace` works on **Windows** through the same seam, with share-mode
       detection producing `FAILED` + zero effect when another process holds the
       file. Neither platform ships without the other.
