@@ -52,12 +52,23 @@ class TestContextOccupancyMigration(MigrationStatementsMixin):
     ) -> None:
         # The composite run key carries tenancy AND the account-merge re-key,
         # exactly as runtime_usage_attribution_edges does for its parent.
-        assert "FOREIGN KEY (org_id, run_id)" in _FORWARD
-        assert "REFERENCES agent_runs (org_id, id)" in _FORWARD
-        assert "FOREIGN KEY (conversation_id)" in _FORWARD
-        assert "REFERENCES agent_conversations (id)" in _FORWARD
-        assert _FORWARD.count("ON DELETE CASCADE") == 2
-        assert "ON UPDATE CASCADE" in _FORWARD
+        statements = self.statements(_FORWARD)
+        assert "FOREIGN KEY (org_id, run_id)" in statements
+        assert "REFERENCES agent_runs (org_id, id)" in statements
+        assert "FOREIGN KEY (conversation_id)" in statements
+        assert "REFERENCES agent_conversations (id)" in statements
+        # Both parents, so a row can never outlive the run or the conversation
+        # it describes.
+        assert statements.count("ON DELETE CASCADE") == 2
+        assert "ON UPDATE CASCADE" in statements
+
+    def test_the_conversation_cascade_can_use_an_index(self) -> None:
+        # A cascading delete without a usable index sequentially scans a table
+        # that grows by one row per model call.
+        assert (
+            "CREATE INDEX idx_runtime_context_occupancy_conversation\n"
+            f"    ON {_TABLE} (conversation_id, org_id, created_at DESC);" in _FORWARD
+        )
 
     def test_the_row_is_immutable_and_tenant_isolated(self) -> None:
         assert f"ALTER TABLE {_TABLE} ENABLE ROW LEVEL SECURITY" in _FORWARD

@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from agent_runtime.execution.deep_agent_builder import WEB_SUBAGENT_CHECKPOINT_SUFFIX
 from agent_runtime.execution.tool_surface import (
@@ -202,6 +203,70 @@ class PinnedDeepAgentsInventoryMixin:
             lifecycle=ContextLifecycle.RESIDENT,
             third_party=True,
         )
+
+
+class TestThirdPartyPromptConstantContract(PinnedDeepAgentsInventoryMixin):
+    """The discovered-constant contract, including its invalid parses."""
+
+    def constant(self, module: str, attribute: str) -> ThirdPartyPromptConstant:
+        """Build a constant with a self-consistent byte / token pair."""
+
+        return ThirdPartyPromptConstant(
+            module=module,
+            attribute=attribute,
+            byte_count=400,
+            estimated_tokens=100,
+        )
+
+    def test_qualified_name_joins_module_and_attribute(self) -> None:
+        constant = self.constant("deepagents.middleware.memory", "MEMORY_SYSTEM_PROMPT")
+
+        assert constant.qualified_name == (
+            "deepagents.middleware.memory:MEMORY_SYSTEM_PROMPT"
+        )
+
+    def test_attribute_carrying_a_colon_is_rejected(self) -> None:
+        # A colon in the attribute would make ``owner:name`` ambiguous to split,
+        # which is the property the whole label scheme rests on.
+        with pytest.raises(ValidationError):
+            self.constant("deepagents.middleware.memory", "MEMORY:PROMPT")
+
+    def test_tool_description_attribute_selects_the_tools_segment(self) -> None:
+        constant = self.constant(
+            "deepagents.middleware.subagents", "TASK_TOOL_DESCRIPTION"
+        )
+
+        assert constant.segment_class is ContextSegmentClass.TOOLS
+
+    def test_non_tool_attribute_selects_the_system_segment(self) -> None:
+        constant = self.constant(
+            "deepagents.middleware.subagents", "TASK_SYSTEM_PROMPT"
+        )
+
+        assert constant.segment_class is ContextSegmentClass.SYSTEM
+
+    def test_origin_is_third_party_resident_and_cacheable(self) -> None:
+        declared = self.constant(
+            "deepagents.middleware.memory", "MEMORY_SYSTEM_PROMPT"
+        ).to_origin()
+
+        assert declared.label == "deepagents.middleware.memory:memory_system_prompt"
+        assert declared.third_party is True
+        assert declared.lifecycle is ContextLifecycle.RESIDENT
+        assert declared.cache_eligibility is PromptCacheEligibility.STABLE_PREFIX
+
+    def test_module_that_is_not_a_dotted_identifier_cannot_declare(self) -> None:
+        # Discovery stays permissive so a reorganisation cannot make the sweep
+        # raise; the strict owner shape is enforced here, and ``registry()``
+        # catches it and skips the row.
+        constant = self.constant("deepagents/middleware", "MEMORY_SYSTEM_PROMPT")
+
+        with pytest.raises(ValidationError):
+            constant.to_origin()
+
+    def test_non_positive_byte_threshold_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="min_constant_bytes"):
+            self.adapter(min_constant_bytes=0)
 
 
 class TestPinnedDeepAgentsInventory(PinnedDeepAgentsInventoryMixin):
