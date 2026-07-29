@@ -126,6 +126,26 @@ class FixtureTrajectoryObservation(RuntimeContract):
     #: untouched defaults. A fixture discovery observation states this so the
     #: fixture path and the real-event path agree on what a zero means.
     discovery_counts_observed: bool = False
+    parallel_record_kind: str | None = Field(default=None, max_length=80)
+    parallel_segment_modes: tuple[str, ...] = Field(default=(), max_length=100)
+    parallel_parallel_segment_reasons: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+    )
+    parallel_serial_segment_reasons: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+    )
+    parallel_kill_switch_reason: str | None = Field(default=None, max_length=80)
+    parallel_child_phase: str | None = Field(default=None, max_length=80)
+    parallel_child_disposition: str | None = Field(default=None, max_length=80)
+    parallel_planned_operations: int = Field(default=0, ge=0)
+    parallel_overlapping_operations: int = Field(default=0, ge=0)
+    parallel_maximum_segment_width: int = Field(default=0, ge=0)
+    #: Same contract as ``discovery_counts_observed``: a fixture plan states
+    #: that its three widths are authored measurements, so a width ceiling
+    #: scores identically over a fixture and over a real batch-journal event.
+    parallel_counts_observed: bool = False
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -306,6 +326,19 @@ class FixtureOnlyCaseExecutor:
             discovery_result_tokens=observation.discovery_result_tokens,
             discovery_model_turns=observation.discovery_model_turns,
             discovery_counts_observed=observation.discovery_counts_observed,
+            parallel_record_kind=observation.parallel_record_kind,
+            parallel_segment_modes=observation.parallel_segment_modes,
+            parallel_parallel_segment_reasons=(
+                observation.parallel_parallel_segment_reasons
+            ),
+            parallel_serial_segment_reasons=observation.parallel_serial_segment_reasons,
+            parallel_kill_switch_reason=observation.parallel_kill_switch_reason,
+            parallel_child_phase=observation.parallel_child_phase,
+            parallel_child_disposition=observation.parallel_child_disposition,
+            parallel_planned_operations=observation.parallel_planned_operations,
+            parallel_overlapping_operations=observation.parallel_overlapping_operations,
+            parallel_maximum_segment_width=observation.parallel_maximum_segment_width,
+            parallel_counts_observed=observation.parallel_counts_observed,
             payload_digest=observation.payload_digest,
         )
 

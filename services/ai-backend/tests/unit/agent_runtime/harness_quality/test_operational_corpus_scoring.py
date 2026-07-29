@@ -113,6 +113,12 @@ def test_operational_corpus_covers_every_required_family_and_scenario() -> None:
         "capability_discovery_selection_recall",
         "capability_discovery_unauthorized_probe",
         "capability_discovery_end_to_end",
+        "parallel_independent_reads_overlap",
+        "parallel_unknown_capability_serialized",
+        "parallel_write_after_planned_reads",
+        "parallel_approval_gated_unplannable",
+        "parallel_sibling_failure_isolated",
+        "parallel_cancel_restart_no_invention",
     )
     entries = operational_corpus()
     assert tuple(entry.family for entry in entries) == OPERATIONAL_TASK_FAMILIES
@@ -162,9 +168,10 @@ def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
         "prompt_cache_trajectory",
         "model_invocation_trajectory",
         "capability_discovery_trajectory",
+        "parallel_execution_trajectory",
     )
     assert all(result.hard_gate for result in first[:3])
-    assert all(result.hard_gate is False for result in first[-4:])
+    assert all(result.hard_gate is False for result in first[-5:])
 
 
 def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:

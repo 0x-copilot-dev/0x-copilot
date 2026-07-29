@@ -187,6 +187,17 @@ class GoldenTrace(RuntimeContract):
             # discovery measurement drops out exactly as its zeroed counts do
             # and the pinned Step 0 trace digests stay stable.
             "discovery_counts_observed",
+            "parallel_record_kind",
+            "parallel_segment_modes",
+            "parallel_parallel_segment_reasons",
+            "parallel_serial_segment_reasons",
+            "parallel_kill_switch_reason",
+            "parallel_child_phase",
+            "parallel_child_disposition",
+            "parallel_planned_operations",
+            "parallel_overlapping_operations",
+            "parallel_maximum_segment_width",
+            "parallel_counts_observed",
         }
         return {
             key: GoldenTrace._without_empty_task_policy_projection(item)
