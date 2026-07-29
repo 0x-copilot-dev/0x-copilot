@@ -51,6 +51,9 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityInvokeToolResult,
     CapabilityParameterHint,
     CapabilityRefBinding,
+    CapabilitySchemaArtifactRef,
+    CapabilitySchemaAvailability,
+    CapabilitySchemaBounds,
     CapabilitySearchRequest,
     CapabilitySearchToolResult,
     ExpandedCapability,
@@ -63,12 +66,15 @@ from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRank
 from agent_runtime.capabilities.discovery.revision_authority import (
     CapabilityRefRevalidation,
 )
+from agent_runtime.capabilities.discovery.schema_artifacts import (
+    RunScopedSchemaArtifactPublisher,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
-_INTENT_TAG_LIMIT = 16
-_PARAMETER_LIMIT = 32
-_TAG_MAX_CHARS = 64
-_PARAMETER_VALUE_MAX_CHARS = 96
+_INTENT_TAG_LIMIT = CapabilitySchemaBounds.MAX_INTENT_TAGS
+_PARAMETER_LIMIT = CapabilitySchemaBounds.MAX_PARAMETERS
+_TAG_MAX_CHARS = CapabilitySchemaBounds.MAX_TAG_CHARS
+_PARAMETER_VALUE_MAX_CHARS = CapabilitySchemaBounds.MAX_PARAMETER_CHARS
 
 _INVALID_REQUEST_MESSAGE = "The capability discovery request is invalid."
 _INACTIVE_CATALOG_MESSAGE = (
@@ -403,9 +409,24 @@ class CapabilitySearchTool:
 
 @dataclass(frozen=True)
 class CapabilityDescribeTool:
-    """Return bounded schema-free metadata for one search result."""
+    """Return a bounded description, deferring an over-bound schema to an artifact.
+
+    Describe answers with parameter hints whenever the capability's whole schema
+    fits :class:`CapabilitySchemaBounds`, which is the ordinary case.  When it
+    does not, the schema is *not* trimmed to fit: a prefix of a schema is
+    indistinguishable, to the model, from the whole of one, and arguments
+    authored against it would be authored against a contract the capability does
+    not have.  Instead the schema is published whole through
+    ``schema_artifacts`` and the description carries a protected reference to it.
+
+    ``schema_artifacts`` is optional in the same way every other seam here is.
+    A run that wires no publisher answers ``unavailable`` for an over-bound
+    schema rather than falling back to a truncated one — fewer answers, never a
+    wrong one.  The in-bound path is byte-identical either way.
+    """
 
     access: CapabilityCatalogAccess
+    schema_artifacts: RunScopedSchemaArtifactPublisher | None = None
     name: str = CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value
     description: str = (
         "Describe one opaque capability reference returned by "
@@ -450,10 +471,42 @@ class CapabilityDescribeTool:
                 CapabilityDescribeResult(
                     catalog_id=catalog.revision.catalog_id,
                     catalog_revision=catalog.revision.revision,
-                    capability=_bounded_description(entry),
+                    capability=_bounded_description(
+                        entry,
+                        artifact=self._schema_artifact_for(catalog, entry),
+                    ),
                 )
             )
         )
+
+    def _schema_artifact_for(
+        self,
+        catalog: CapabilityCatalog,
+        entry: CapabilityIndexEntry,
+    ) -> CapabilitySchemaArtifactRef | None:
+        """Publish an over-bound schema, or return ``None`` and defer to nothing.
+
+        Publication is attempted only for a schema that genuinely does not fit,
+        so the common path performs no store work at all.  Every failure — no
+        publisher, an unbindable ref, a store that refused — narrows to ``None``,
+        which the description renders as ``unavailable`` rather than as a
+        partial schema.
+        """
+
+        publisher = self.schema_artifacts
+        if publisher is None or CapabilitySchemaBounds.schema_fits_inline(
+            parameter_names=entry.parameter_names,
+            parameter_types=entry.parameter_types,
+        ):
+            return None
+        try:
+            binding = self.access.bind_ref(catalog, entry.capability_ref)
+            return publisher.publish(entry=entry, binding=binding)
+        except Exception:
+            # Binding and publication both reach injected collaborators. Their
+            # internal detail never reaches model output.
+            _LOGGER.warning("capability_schema_artifact_unavailable", exc_info=True)
+            return None
 
     async def ainvoke(
         self,
@@ -663,27 +716,46 @@ class CapabilityInvokeTool:
             return None
 
 
-def _bounded_description(entry: CapabilityIndexEntry) -> CapabilityDescription:
+def _bounded_description(
+    entry: CapabilityIndexEntry,
+    *,
+    artifact: CapabilitySchemaArtifactRef | None = None,
+) -> CapabilityDescription:
+    """Project one entry into a description that never carries a partial schema.
+
+    Intent tags are still trimmed to the bound, because a tag is a search cue
+    and losing one costs a hint.  Parameters are not: they are the invocation
+    contract, so the projection either carries all of them or none of them, and
+    ``schema_availability`` says which happened.
+    """
+
     tags = tuple(tag[:_TAG_MAX_CHARS] for tag in entry.intent_tags[:_INTENT_TAG_LIMIT])
-    parameter_hints = tuple(
-        CapabilityParameterHint(
-            name=name[:_PARAMETER_VALUE_MAX_CHARS],
-            type_hint=(
-                entry.parameter_types[index][:_PARAMETER_VALUE_MAX_CHARS]
-                if index < len(entry.parameter_types)
-                else None
-            ),
-        )
-        for index, name in enumerate(entry.parameter_names[:_PARAMETER_LIMIT])
+    fits_inline = CapabilitySchemaBounds.schema_fits_inline(
+        parameter_names=entry.parameter_names,
+        parameter_types=entry.parameter_types,
     )
-    metadata_truncated = (
-        len(entry.intent_tags) > _INTENT_TAG_LIMIT
-        or len(entry.parameter_names) > _PARAMETER_LIMIT
-        or any(len(tag) > _TAG_MAX_CHARS for tag in entry.intent_tags)
-        or any(
-            len(value) > _PARAMETER_VALUE_MAX_CHARS
-            for value in (*entry.parameter_names, *entry.parameter_types)
+    if fits_inline:
+        availability = CapabilitySchemaAvailability.INLINE
+        parameter_hints = tuple(
+            CapabilityParameterHint(
+                name=name,
+                type_hint=(
+                    entry.parameter_types[index]
+                    if index < len(entry.parameter_types)
+                    else None
+                ),
+            )
+            for index, name in enumerate(entry.parameter_names)
         )
+    else:
+        availability = (
+            CapabilitySchemaAvailability.UNAVAILABLE
+            if artifact is None
+            else CapabilitySchemaAvailability.ARTIFACT
+        )
+        parameter_hints = ()
+    metadata_truncated = len(entry.intent_tags) > _INTENT_TAG_LIMIT or any(
+        len(tag) > _TAG_MAX_CHARS for tag in entry.intent_tags
     )
     return CapabilityDescription(
         capability_ref=entry.capability_ref,
@@ -698,6 +770,10 @@ def _bounded_description(entry: CapabilityIndexEntry) -> CapabilityDescription:
         connector_label=entry.connector_label,
         descriptor_revision=entry.descriptor_revision,
         metadata_truncated=metadata_truncated,
+        schema_availability=availability,
+        schema_artifact=artifact
+        if availability is (CapabilitySchemaAvailability.ARTIFACT)
+        else None,
     )
 
 

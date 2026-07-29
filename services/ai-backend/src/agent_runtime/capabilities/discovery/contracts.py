@@ -57,6 +57,7 @@ class CapabilityReferenceFormat:
     CATALOG_PREFIX: ClassVar[str] = "cat"
     CAPABILITY_PREFIX: ClassVar[str] = "cap"
     REVISION_PREFIX: ClassVar[str] = "rev"
+    SCHEMA_ARTIFACT_PREFIX: ClassVar[str] = "sch"
     HEX_CHARS: ClassVar[int] = 32
     PREFIX_CHARS: ClassVar[int] = 3
     TOKEN_LENGTH: ClassVar[int] = PREFIX_CHARS + 1 + HEX_CHARS
@@ -77,6 +78,54 @@ _CAPABILITY_REF_PATTERN = CapabilityReferenceFormat.pattern(
 _CATALOG_REVISION_PATTERN = CapabilityReferenceFormat.pattern(
     CapabilityReferenceFormat.REVISION_PREFIX
 )
+_SCHEMA_ARTIFACT_REF_PATTERN = CapabilityReferenceFormat.pattern(
+    CapabilityReferenceFormat.SCHEMA_ARTIFACT_PREFIX
+)
+
+
+class CapabilitySchemaBounds:
+    """The one hard ceiling a description may inline a capability schema within.
+
+    These numbers are the *structural* bound, not a formatting preference: the
+    ``max_length`` constraints on :class:`CapabilityDescription` are read from
+    here, so a description that exceeds them is unrepresentable rather than
+    merely discouraged.  Stating them once is what keeps the projection that
+    decides "does this fit" and the contract that must hold the answer from
+    drifting into two different bounds.
+
+    ``MAX_PARAMETERS`` and ``MAX_PARAMETER_CHARS`` bound the *schema*: exceeding
+    either is what sends a capability down the protected-artifact branch.  The
+    tag bounds are deliberately separate, because intent tags are search cues
+    rather than an invocation contract — trimming them loses a hint, while
+    trimming parameters would hand the model a schema that is not the real one.
+    """
+
+    MAX_PARAMETERS: ClassVar[int] = 32
+    MAX_PARAMETER_CHARS: ClassVar[int] = 96
+    MAX_INTENT_TAGS: ClassVar[int] = 16
+    MAX_TAG_CHARS: ClassVar[int] = 64
+
+    @classmethod
+    def schema_fits_inline(
+        cls,
+        *,
+        parameter_names: Iterable[str],
+        parameter_types: Iterable[str],
+    ) -> bool:
+        """Return whether this capability's parameters may be inlined whole.
+
+        A schema fits only when *every* parameter survives untouched.  There is
+        deliberately no "close enough" branch: a partially inlined schema is the
+        exact failure mode the artifact branch exists to prevent.
+        """
+
+        names = tuple(parameter_names)
+        if len(names) > cls.MAX_PARAMETERS:
+            return False
+        return all(
+            len(value) <= cls.MAX_PARAMETER_CHARS
+            for value in (*names, *tuple(parameter_types))
+        )
 
 
 class CapabilitySearchBounds:
@@ -247,6 +296,25 @@ class CapabilityReferenceMinter(Protocol):
     def mint(self, *, catalog_id: str, identity: str) -> str: ...
 
 
+@runtime_checkable
+class CapabilitySchemaArtifactMinter(Protocol):
+    """Mint the opaque reference for one protected schema artifact.
+
+    Stated separately from :class:`CapabilityReferenceMinter` because the two
+    derivations are keyed to different things — a capability ref to a catalog
+    identity, a schema-artifact ref to the *binding* a capability ref was issued
+    under — and a component that only publishes schemas should not be handed the
+    ability to mint capability references.
+    """
+
+    def mint_schema_artifact(
+        self,
+        *,
+        binding_digest: str,
+        content_digest: str,
+    ) -> str: ...
+
+
 class HmacCapabilityReferenceMinter:
     """Derive every opaque F3 reference from one secret reference key.
 
@@ -297,6 +365,21 @@ class HmacCapabilityReferenceMinter:
         return self._mint(
             CapabilityReferenceFormat.CAPABILITY_PREFIX,
             f"{catalog_id}:{identity}",
+        )
+
+    def mint_schema_artifact(self, *, binding_digest: str, content_digest: str) -> str:
+        """Return the opaque ``sch_`` reference for one protected schema artifact.
+
+        The identity folds in the *binding* digest rather than the capability
+        ref, so the reference is a function of the run, subject, and catalog
+        generation the ref was minted under — not merely of which capability it
+        describes.  Two runs therefore mint two different references for the
+        same schema, and neither is guessable without the reference key.
+        """
+
+        return self._mint(
+            CapabilityReferenceFormat.SCHEMA_ARTIFACT_PREFIX,
+            f"schema_artifact:{binding_digest}:{content_digest}",
         )
 
     def keyed_hexdigest(self, payload: bytes) -> str:
@@ -1180,12 +1263,133 @@ class CapabilityDescribeRequest(RuntimeContract):
 class CapabilityParameterHint(RuntimeContract):
     """Schema-free name/type hint; never a JSON schema or invocation contract."""
 
-    name: str = Field(min_length=1, max_length=96)
-    type_hint: str | None = Field(default=None, min_length=1, max_length=96)
+    name: str = Field(
+        min_length=1,
+        max_length=CapabilitySchemaBounds.MAX_PARAMETER_CHARS,
+    )
+    type_hint: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=CapabilitySchemaBounds.MAX_PARAMETER_CHARS,
+    )
+
+
+class CapabilitySchemaAvailability(StrEnum):
+    """How one description represents the capability's input schema.
+
+    The vocabulary is closed and has no "partial" member on purpose.  A schema
+    is either inlined whole, deferred whole to a protected artifact, or absent —
+    a truncated schema is not a state this contract can express, because a model
+    that authored arguments against one would be authoring them against a schema
+    the capability does not have.
+    """
+
+    INLINE = "inline"
+    ARTIFACT = "artifact"
+    UNAVAILABLE = "unavailable"
+
+
+class CapabilitySchemaDocument(RuntimeContract):
+    """The complete, untruncated parameter projection describe would not inline.
+
+    This is the *content* a protected schema artifact holds.  It is deliberately
+    the whole projection the catalog entry carries: publishing anything less
+    would recreate, inside the artifact, the truncation the artifact exists to
+    avoid.  :meth:`for_entry` is the only construction path, and it asserts that
+    every parameter the entry holds survived into the document.
+    """
+
+    class Messages:
+        """Safe public messages for schema-document invariants."""
+
+        TRUNCATED_DOCUMENT: ClassVar[str] = (
+            "a published schema document must carry every parameter"
+        )
+
+    schema_version: Literal[1] = 1
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    stable_name: str = Field(min_length=1, max_length=256)
+    descriptor_revision: str | None = Field(default=None, max_length=256)
+    parameter_names: tuple[str, ...] = Field(default_factory=tuple, max_length=128)
+    parameter_types: tuple[str, ...] = Field(default_factory=tuple, max_length=128)
+    intent_tags: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
+
+    @classmethod
+    def for_entry(cls, entry: "CapabilityIndexEntry") -> Self:
+        """Project one catalog entry's whole parameter metadata into a document."""
+
+        document = cls(
+            capability_ref=entry.capability_ref,
+            stable_name=entry.stable_name,
+            descriptor_revision=entry.descriptor_revision,
+            parameter_names=entry.parameter_names,
+            parameter_types=entry.parameter_types,
+            intent_tags=entry.intent_tags,
+        )
+        if document.parameter_names != entry.parameter_names or (
+            document.parameter_types != entry.parameter_types
+        ):
+            raise ValueError(cls.Messages.TRUNCATED_DOCUMENT)
+        return document
+
+    def canonical_content(self) -> str:
+        """Return the byte-stable serialization the content digest is taken over."""
+
+        return json.dumps(
+            self.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    @property
+    def content_digest(self) -> str:
+        """Return the unkeyed identity of this document's exact bytes."""
+
+        return hashlib.sha256(self.canonical_content().encode("utf-8")).hexdigest()
+
+    @property
+    def parameter_count(self) -> int:
+        """Return how many parameters the real schema declares."""
+
+        return len(self.parameter_names)
+
+
+class CapabilitySchemaArtifactRef(RuntimeContract):
+    """The model-visible half of a protected schema artifact.
+
+    It carries an opaque reference and a count, and deliberately nothing else.
+    The storage locator is *not* here: releasing it is what the run-scoped
+    resolver does after the shared revision primitive confirms the reference is
+    still current, so a reference the model repeats back cannot be read by any
+    other run, subject, or catalog generation.
+    """
+
+    artifact_ref: str = Field(pattern=_SCHEMA_ARTIFACT_REF_PATTERN)
+    parameter_count: NonNegativeInt = 0
 
 
 class CapabilityDescription(RuntimeContract):
-    """Bounded compact metadata for one member of the active catalog."""
+    """Bounded compact metadata for one member of the active catalog.
+
+    The schema fields make the F3.4 rule structural.  ``parameters`` may only be
+    non-empty when the schema was inlined *whole*, and its ``max_length`` is the
+    same bound the projection tests against — so a description carrying a
+    partial parameter list is unrepresentable rather than merely unintended.
+    """
+
+    class Messages:
+        """Safe public messages for description schema-representation rules."""
+
+        ARTIFACT_REQUIRES_REF: ClassVar[str] = (
+            "a deferred schema must carry its protected artifact reference"
+        )
+        REF_NOT_PERMITTED: ClassVar[str] = (
+            "only a deferred schema may carry an artifact reference"
+        )
+        PARAMETERS_NOT_PERMITTED: ClassVar[str] = (
+            "only an inlined schema may carry parameter hints"
+        )
 
     capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
     stable_name: str = Field(min_length=1, max_length=256)
@@ -1193,18 +1397,41 @@ class CapabilityDescription(RuntimeContract):
     concise_description: str = Field(min_length=1, max_length=512)
     source: CapabilitySource
     intent_tags: tuple[
-        Annotated[str, Field(min_length=1, max_length=64)],
+        Annotated[
+            str,
+            Field(min_length=1, max_length=CapabilitySchemaBounds.MAX_TAG_CHARS),
+        ],
         ...,
-    ] = Field(default_factory=tuple, max_length=16)
+    ] = Field(default_factory=tuple, max_length=CapabilitySchemaBounds.MAX_INTENT_TAGS)
     parameters: tuple[CapabilityParameterHint, ...] = Field(
         default_factory=tuple,
-        max_length=32,
+        max_length=CapabilitySchemaBounds.MAX_PARAMETERS,
     )
     effect_class: CatalogEffectClass
     approval_cue: ApprovalCue
     connector_label: str = Field(min_length=1, max_length=256)
     descriptor_revision: str | None = Field(default=None, max_length=256)
     metadata_truncated: bool = False
+    schema_availability: CapabilitySchemaAvailability = (
+        CapabilitySchemaAvailability.INLINE
+    )
+    schema_artifact: CapabilitySchemaArtifactRef | None = None
+
+    @model_validator(mode="after")
+    def _schema_representation_is_closed(self) -> Self:
+        if self.schema_availability is CapabilitySchemaAvailability.ARTIFACT:
+            if self.schema_artifact is None:
+                raise ValueError(self.Messages.ARTIFACT_REQUIRES_REF)
+        elif self.schema_artifact is not None:
+            raise ValueError(self.Messages.REF_NOT_PERMITTED)
+        if (
+            self.schema_availability is not CapabilitySchemaAvailability.INLINE
+            and self.parameters
+        ):
+            # A deferred or unavailable schema that still carried hints would be
+            # a partial schema wearing a complete schema's shape.
+            raise ValueError(self.Messages.PARAMETERS_NOT_PERMITTED)
+        return self
 
 
 class CapabilityDescribeResult(RuntimeContract):
