@@ -14,7 +14,12 @@ import {
   SurfaceHeader,
   SurfaceLinkRow,
 } from "../_shared/primitives";
-import { formatValue, isNumericFormat, resolvePath } from "../_shared/path";
+import {
+  formatValue,
+  isNumericFormat,
+  magnitudeShares,
+  resolvePath,
+} from "../_shared/path";
 import {
   changesFromDiff,
   dataFromState,
@@ -77,6 +82,19 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   const visibleRows = items.slice(0, ROW_RENDER_CAP);
   const truncated = items.length > ROW_RENDER_CAP;
 
+  // Magnitude per numeric column, computed once over the rows actually painted.
+  // Scoped to the visible slice on purpose: the bars must be a true comparison
+  // of what is on screen, and scaling them to an unseen row beyond the render
+  // cap would make every visible bar shorter for a reason the user cannot see.
+  const sharesByColumn = new Map<number, readonly (number | null)[]>();
+  visibleColumns.forEach((column, index) => {
+    if (!isNumericFormat(column.format)) return;
+    sharesByColumn.set(
+      index,
+      magnitudeShares(visibleRows.map((row) => resolvePath(row, column.path))),
+    );
+  });
+
   return (
     <>
       <SurfaceHeader
@@ -97,6 +115,13 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                   <th
                     key={`${column.path}:${index}`}
                     scope="col"
+                    // Numeric headers lean toward the source hue so the measured
+                    // columns are findable without a rule or a fill.
+                    className={
+                      isNumericFormat(column.format)
+                        ? "sf-col--numeric"
+                        : undefined
+                    }
                     style={thStyle(column)}
                     data-testid={`table-header-${columnWindow.startColumn + index}`}
                   >
@@ -107,19 +132,50 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
             </thead>
             <tbody>
               {visibleRows.map((row, rowIndex) => (
-                <tr key={rowIndex} data-testid={`table-row-${rowIndex}`}>
-                  {visibleColumns.map((column, colIndex) => (
-                    <td
-                      key={`${column.path}:${colIndex}`}
-                      style={tdStyle(column)}
-                      data-testid={`table-cell-${rowIndex}-${columnWindow.startColumn + colIndex}`}
-                    >
-                      {formatValue(
-                        resolvePath(row, column.path),
-                        column.format,
-                      )}
-                    </td>
-                  ))}
+                <tr
+                  key={rowIndex}
+                  className="sf-row"
+                  data-testid={`table-row-${rowIndex}`}
+                >
+                  {visibleColumns.map((column, colIndex) => {
+                    const share = sharesByColumn.get(colIndex)?.[rowIndex];
+                    const bar =
+                      typeof share === "number" && share > 0 ? share : null;
+                    return (
+                      <td
+                        key={`${column.path}:${colIndex}`}
+                        className={
+                          bar === null ? undefined : "sf-cell--numeric"
+                        }
+                        style={tdStyle(column)}
+                        data-testid={`table-cell-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                      >
+                        {bar === null ? null : (
+                          // Painted BEHIND the value, never over it, and hidden
+                          // from assistive tech: the bar restates the number
+                          // visually, so announcing it would just repeat the
+                          // cell. `left` is what shrinks it, keeping every bar
+                          // anchored to the right edge where the digits end.
+                          <span
+                            aria-hidden="true"
+                            className="sf-value-bar"
+                            data-testid={`table-value-bar-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                            style={{ left: `${(1 - bar) * 100}%` }}
+                          />
+                        )}
+                        <span
+                          className={
+                            bar === null ? undefined : "sf-value-bar__value"
+                          }
+                        >
+                          {formatValue(
+                            resolvePath(row, column.path),
+                            column.format,
+                          )}
+                        </span>
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -229,7 +285,14 @@ function thStyle(column: SurfaceColumn): CSSProperties {
   return {
     textAlign: column.align === "end" ? "right" : "left",
     padding: "8px 12px",
-    color: PALETTE.textLo,
+    // Read through a variable rather than naming the colour directly. An inline
+    // declaration beats any non-`!important` stylesheet rule regardless of
+    // specificity, so a literal here made `.sf-col--numeric` inert: the class
+    // was present, the sheet was loaded, and the numeric header still painted
+    // flat grey. Indirection is what lets the class win — it sets the variable
+    // instead of fighting the declaration. The fallback keeps every non-numeric
+    // header, and any host that has not loaded the sheet, exactly as before.
+    color: `var(--sf-col-color, ${PALETTE.textLo})`,
     fontSize: 11,
     letterSpacing: 0.4,
     textTransform: "uppercase",

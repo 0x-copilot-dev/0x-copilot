@@ -32,9 +32,17 @@ from agent_runtime.capabilities.task_policy import (
     RequestFingerprint,
     TaskFamily,
     TaskPolicyProfile,
+    ToolOperationOutcome,
     ToolPolicyRejected,
     ToolUseController,
+    ToolUseDisposition,
+    ToolUseFeedback,
 )
+from agent_runtime.control_plane.context import (
+    TaskPolicyCapabilityProgress,
+    TaskPolicyProgressProjection,
+)
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.context.memory import TokenBudgetPolicy
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
@@ -98,6 +106,52 @@ class _ResultTool(BaseTool):
     async def _arun(self, *args: object, **kwargs: object) -> str:
         self.call_count += 1
         return self.result
+
+
+class _ModelTurnStoppingController:
+    def before_operation(self, _intent):
+        return ToolUseFeedback(
+            disposition=ToolUseDisposition.CONTINUE,
+            reason_code="admitted",
+        )
+
+    def after_operation(self, _outcome):
+        return ToolUseFeedback(
+            disposition=ToolUseDisposition.CONTINUE,
+            reason_code="completed",
+        )
+
+    def before_model_turn(self, **_kwargs):
+        return ToolUseFeedback(
+            disposition=ToolUseDisposition.STOP,
+            reason_code="profile_model_turn_limit",
+        )
+
+
+class _AsyncDurableController:
+    def __init__(
+        self,
+        observations: list[str],
+        outcomes: list[ToolOperationOutcome] | None = None,
+    ) -> None:
+        self._observations = observations
+        self._outcomes = outcomes
+
+    async def before_operation(self, _intent):
+        self._observations.append("intent_persisted")
+        return ToolUseFeedback(
+            disposition=ToolUseDisposition.CONTINUE,
+            reason_code="admitted",
+        )
+
+    async def after_operation(self, outcome: ToolOperationOutcome):
+        self._observations.append("outcome_persisted")
+        if self._outcomes is not None:
+            self._outcomes.append(outcome)
+        return ToolUseFeedback(
+            disposition=ToolUseDisposition.CONTINUE,
+            reason_code="completed",
+        )
 
 
 def _budget(
@@ -219,6 +273,155 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
 
         assert len(inner.calls) == 1
         assert ledger.charged_calls("echo") == 1
+
+    async def test_task_policy_shadow_observes_duplicate_without_blocking(
+        self,
+    ) -> None:
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        profile = TaskPolicyProfile(
+            profile_id="research",
+            revision="v1",
+            task_family=TaskFamily.PUBLIC_RESEARCH,
+            enforce_exact_duplicates=True,
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-task-policy-shadow"),
+            task_policy_controller=ToolUseController(profile=profile),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+            task_policy_mode=FeatureMode.SHADOW,
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            assert await wrapped._arun("same request") == "echo-ok"
+            assert await wrapped._arun("same request") == "echo-ok"
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert len(inner.calls) == 2
+
+    async def test_resume_overlay_preserves_prior_capability_budget_spend(
+        self,
+    ) -> None:
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        progress = TaskPolicyProgressProjection(
+            profile_id="research",
+            profile_revision="v1",
+            task_family=TaskFamily.PUBLIC_RESEARCH.value,
+            tool_calls_used=2,
+            capabilities=(
+                TaskPolicyCapabilityProgress(
+                    capability_id="echo",
+                    tool_calls_used=2,
+                ),
+            ),
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=2)]
+            ),
+            ledger=ToolCallLedger(run_id="run-resumed-budget"),
+            prior_task_policy_progress=progress,
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            with pytest.raises(ToolBudgetRejected):
+                await wrapped._arun("after approval")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert inner.calls == []
+
+    def test_model_turn_limit_enforces_only_in_enforce_mode(self) -> None:
+        enforce = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-model-enforce"),
+            task_policy_controller=_ModelTurnStoppingController(),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+            task_policy_mode=FeatureMode.ENFORCE,
+        )
+        with pytest.raises(BudgetExceeded, match="model-turn"):
+            enforce.admit_model_turn(model_turn=3, execution_scope="supervisor")
+
+        shadow = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-model-shadow"),
+            task_policy_controller=_ModelTurnStoppingController(),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+            task_policy_mode=FeatureMode.SHADOW,
+        )
+        shadow.admit_model_turn(model_turn=3, execution_scope="supervisor")
+
+    async def test_async_controller_persists_admission_before_dispatch(
+        self,
+    ) -> None:
+        observations: list[str] = []
+
+        class _ObservedTool(_RecordingTool):
+            async def _arun(self, *args: object, **kwargs: object) -> str:
+                observations.append("tool_dispatched")
+                return await super()._arun(*args, **kwargs)
+
+        inner = _ObservedTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-async-controller"),
+            task_policy_controller=_AsyncDurableController(observations),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            assert await wrapped._arun("request") == "echo-ok"
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert observations == [
+            "intent_persisted",
+            "tool_dispatched",
+            "outcome_persisted",
+        ]
+
+    async def test_generic_result_digest_is_advisory_not_source_identity(
+        self,
+    ) -> None:
+        outcomes: list[ToolOperationOutcome] = []
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-result-fallback"),
+            task_policy_controller=_AsyncDurableController([], outcomes),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+        )
+        wrapped = ToolBudgetGuardedTool(
+            name="echo",
+            description="echo",
+            inner=_RecordingTool(),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            await wrapped._arun("request")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        assert outcome.result_fingerprint is not None
+        assert outcome.evidence_fingerprint == outcome.result_fingerprint
+        assert outcome.source_fingerprints == ()
 
     @staticmethod
     def _capped_guard(

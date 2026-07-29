@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+
+from runtime_api.schemas import AgentRunStatus
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +35,9 @@ class _Run:
     conversation_id: str = "conv_artifacts"
     run_id: str = "run_artifacts"
     trace_id: str = "trace_artifacts"
+    # A real ``RunRecord`` always carries a status; the resolver reports whether
+    # the run has sealed so a claimed ``acting_run_id`` can be refused (PRD-02).
+    status: AgentRunStatus = AgentRunStatus.RUNNING
 
 
 @dataclass(frozen=True)

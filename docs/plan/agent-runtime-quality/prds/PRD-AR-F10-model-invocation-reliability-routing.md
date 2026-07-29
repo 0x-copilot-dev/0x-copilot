@@ -1,6 +1,6 @@
 # PRD-AR-F10 — Model invocation reliability and routing
 
-**Status:** proposed\
+**Status:** implemented\
 **Priority:** P2\
 **Owners:** Model Platform, AI Runtime, Security/Privacy, FinOps\
 **Depends on:** [E1 accountability](../../generative-surfaces-v2-1/prds/PRD-E1-accountability-lifecycle.md) and

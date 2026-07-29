@@ -12,6 +12,7 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelAttemptDecisionReason,
     ModelAttemptOutcome,
     ModelCredentialMode,
+    ModelDeploymentCatalog,
     ModelDeploymentDescriptor,
     ModelDeploymentHealth,
     ModelDispatchState,
@@ -23,6 +24,7 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelRecoveryScope,
     ModelRouteExclusion,
     ModelRouteExclusionReason,
+    ModelRouteEntry,
     ModelRoutePlan,
     ModelStreamState,
     ProviderFailureObservation,
@@ -36,16 +38,56 @@ class ModelRoutePolicy:
         self,
         requirements: ModelInvocationRequirements,
         descriptors: Iterable[ModelDeploymentDescriptor],
+        *,
+        policy_revision: str = "model-route-policy.v2",
     ) -> ModelRoutePlan:
-        descriptor_list = tuple(descriptors)
+        descriptor_list = tuple(
+            sorted(descriptors, key=lambda item: item.deployment_id)
+        )
         descriptor_ids = tuple(item.deployment_id for item in descriptor_list)
         if len(descriptor_ids) != len(set(descriptor_ids)):
             raise ValueError("deployment_id values must be unique")
+        return self._plan_ordered(
+            requirements,
+            descriptor_list,
+            policy_revision=policy_revision,
+        )
 
+    def plan_catalog(
+        self,
+        requirements: ModelInvocationRequirements,
+        catalog: ModelDeploymentCatalog,
+        *,
+        policy_revision: str = "model-route-policy.v2",
+    ) -> ModelRoutePlan:
+        """Plan in one ``O(D)`` pass over an already canonical catalog.
+
+        ``ModelDeploymentCatalog`` validates deployment-ID ordering and
+        uniqueness once at the authority boundary. Route planning therefore
+        avoids another descriptor sort while retaining the legacy ``plan``
+        entry point for unordered callers.
+        """
+
+        return self._plan_ordered(
+            requirements,
+            catalog.descriptors,
+            policy_revision=policy_revision,
+        )
+
+    def _plan_ordered(
+        self,
+        requirements: ModelInvocationRequirements,
+        descriptor_list: tuple[ModelDeploymentDescriptor, ...],
+        *,
+        policy_revision: str,
+    ) -> ModelRoutePlan:
         availability = {
             item.provider: item.modes for item in requirements.credential_availability
         }
-        eligible: dict[tuple[int, int, int], list[ModelDeploymentDescriptor]] = {}
+        eligible: dict[
+            tuple[int, int, int],
+            list[tuple[ModelDeploymentDescriptor, ModelCredentialMode]],
+        ] = {}
         exclusions: list[ModelRouteExclusion] = []
         for descriptor in descriptor_list:
             available_modes = availability.get(descriptor.provider, frozenset())
@@ -62,30 +104,33 @@ class ModelRoutePolicy:
                     )
                 )
                 continue
+            selected_credential_mode = self._select_credential_mode(
+                requirements,
+                descriptor.credential_modes & available_modes,
+            )
             route_key = self._route_key(
                 requirements,
                 descriptor,
-                available_modes=available_modes,
+                selected_credential_mode=selected_credential_mode,
             )
-            eligible.setdefault(route_key, []).append(descriptor)
+            eligible.setdefault(route_key, []).append(
+                (descriptor, selected_credential_mode)
+            )
 
-        # Deployment catalogs can be assembled from independent sources.  Never
-        # let source enumeration order decide a fallback or alter the persisted
-        # route plan: rank first, then use the opaque deployment ID only as a
-        # stable tie-breaker.
+        # ``descriptor_list`` is canonical deployment-ID order. The finite
+        # route-key set is constant-sized, so bucket concatenation remains O(D)
+        # and deployment IDs are already a stable tie-breaker inside each key.
         ordered_eligible = [
-            descriptor
+            candidate
             for route_key in sorted(eligible)
-            for descriptor in sorted(
-                eligible[route_key], key=lambda item: item.deployment_id
-            )
+            for candidate in eligible[route_key]
         ]
         if (
             requirements.fallback_policy is ModelFallbackPolicy.NONE
             and ordered_eligible
         ):
             kept = ordered_eligible[:1]
-            for descriptor in ordered_eligible[1:]:
+            for descriptor, _credential_mode in ordered_eligible[1:]:
                 exclusions.append(
                     ModelRouteExclusion(
                         deployment_id=descriptor.deployment_id,
@@ -94,13 +139,18 @@ class ModelRoutePolicy:
                 )
             ordered_eligible = kept
 
-        return ModelRoutePlan(
-            deployment_ids=tuple(
-                descriptor.deployment_id for descriptor in ordered_eligible
+        return ModelRoutePlan.create(
+            routes=tuple(
+                ModelRouteEntry.from_descriptor(
+                    descriptor,
+                    credential_mode=credential_mode,
+                )
+                for descriptor, credential_mode in ordered_eligible
             ),
-            exclusions=tuple(sorted(exclusions, key=lambda item: item.deployment_id)),
+            exclusions=tuple(exclusions),
             fallback_policy=requirements.fallback_policy,
             budget=requirements.budget,
+            policy_revision=policy_revision,
         )
 
     @classmethod
@@ -146,10 +196,7 @@ class ModelRoutePolicy:
             reasons.append(ModelRouteExclusionReason.CAPABILITY_MISMATCH)
         if descriptor.max_input_tokens < requirements.minimum_context_tokens:
             reasons.append(ModelRouteExclusionReason.CONTEXT_TOO_SMALL)
-        if (
-            requirements.region is not None
-            and requirements.region not in descriptor.regions
-        ):
+        if requirements.region is not None and requirements.region != descriptor.region:
             reasons.append(ModelRouteExclusionReason.REGION_MISMATCH)
 
         available_modes = descriptor.credential_modes & available_modes
@@ -176,7 +223,7 @@ class ModelRoutePolicy:
         requirements: ModelInvocationRequirements,
         descriptor: ModelDeploymentDescriptor,
         *,
-        available_modes: frozenset[ModelCredentialMode],
+        selected_credential_mode: ModelCredentialMode,
     ) -> tuple[int, int, int]:
         if descriptor.deployment_id == requirements.primary_deployment_id:
             tier = 0
@@ -190,11 +237,35 @@ class ModelRoutePolicy:
         credential_rank = (
             0
             if requirements.byok_policy is ByokPolicy.PREFERRED
-            and ModelCredentialMode.BYOK in available_modes
+            and selected_credential_mode is ModelCredentialMode.BYOK
             else 1
         )
         health_rank = 0 if descriptor.health is ModelDeploymentHealth.AVAILABLE else 1
         return (tier, credential_rank, health_rank)
+
+    @staticmethod
+    def _select_credential_mode(
+        requirements: ModelInvocationRequirements,
+        available_modes: frozenset[ModelCredentialMode],
+    ) -> ModelCredentialMode:
+        if (
+            requirements.byok_policy
+            in {
+                ByokPolicy.REQUIRED,
+                ByokPolicy.PREFERRED,
+                ByokPolicy.ALLOWED,
+            }
+            and ModelCredentialMode.BYOK in available_modes
+        ):
+            return ModelCredentialMode.BYOK
+        for mode in (
+            ModelCredentialMode.DEPLOYMENT,
+            ModelCredentialMode.KEYLESS,
+        ):
+            if mode in available_modes:
+                return mode
+        # Eligibility rejects an empty set and BYOK-only under DISALLOWED.
+        raise ValueError("no credential mode survived route eligibility")
 
 
 class ProviderFailureClassifier:
@@ -300,6 +371,34 @@ class ModelAttemptAdmissionPolicy:
         if len(request.route_plan.deployment_ids) == 1:
             return self._deny(ModelAttemptDecisionReason.SAME_DEPLOYMENT_LIMIT_REACHED)
         return self._deny(ModelAttemptDecisionReason.ROUTE_SET_EXHAUSTED)
+
+    def decide_cache_fallback(
+        self,
+        request: ModelAttemptAdmissionRequest,
+    ) -> ModelAttemptDecision:
+        """Admit one same-route undecorated retry from an external typed signal."""
+
+        denial = self._preflight_denial(request)
+        if denial is not None:
+            return self._deny(denial)
+        if not request.prior_attempts:
+            return self._deny(ModelAttemptDecisionReason.PRIOR_ATTEMPT_NOT_FAILED)
+        last_attempt = request.prior_attempts[-1]
+        if last_attempt.stream_state is ModelStreamState.VISIBLE_OUTPUT:
+            return self._deny(ModelAttemptDecisionReason.VISIBLE_OUTPUT_ALREADY_EMITTED)
+        if last_attempt.failure_class is not ModelFailureClass.REQUEST_INVALID:
+            return self._deny(ModelAttemptDecisionReason.FAILURE_NOT_RETRYABLE)
+        same_route_count = sum(
+            attempt.deployment_id == last_attempt.deployment_id
+            for attempt in request.prior_attempts
+        )
+        if same_route_count >= request.route_plan.budget.max_same_deployment_attempts:
+            return self._deny(ModelAttemptDecisionReason.SAME_DEPLOYMENT_LIMIT_REACHED)
+        return self._admit(
+            deployment_id=last_attempt.deployment_id,
+            ordinal=len(request.prior_attempts) + 1,
+            reason=ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY,
+        )
 
     @classmethod
     def _preflight_denial(

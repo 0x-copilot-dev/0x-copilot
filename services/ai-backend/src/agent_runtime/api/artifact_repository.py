@@ -23,7 +23,9 @@ from agent_runtime.artifacts import (
     ArtifactService,
     ArtifactSourceDescriptor,
 )
+from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.artifacts.contracts import validate_artifact_source_ref
+from agent_runtime.surfaces_v2.ledger_models import ArtifactCausalLane
 
 INDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"message", "operation", "payload"})
 # Kept as an exported compatibility value for callers that rendered the former
@@ -279,10 +281,47 @@ class RuntimeArtifactSourceLookup:
 
 
 class RuntimeArtifactRunScopeResolver:
-    """Resolve a run only when both tenant and owner match."""
+    """Resolve a causal subject only when both tenant and owner match."""
 
     def __init__(self, persistence: PersistencePort) -> None:
         self._persistence = persistence
+
+    async def resolve_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ) -> ArtifactScope | None:
+        """Resolve CONVERSATION-lane scope for a user-authored mutation.
+
+        Ownership is proved by the same tenant-and-owner filtered lookup the
+        conversation surface uses; a conversation outside the caller's scope
+        returns ``None`` and becomes the same not-found every other artifact
+        scope failure produces, so this cannot confirm another tenant's data.
+
+        The returned scope names no run: a user edit is not caused by any run,
+        so there is no ledger for a terminal event to seal.
+        """
+
+        conversation = await self._persistence.get_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        if conversation is None:
+            return None
+        return ArtifactScope(
+            org_id=conversation.org_id,
+            user_id=conversation.user_id,
+            conversation_id=conversation.conversation_id,
+            run_id=None,
+            # A conversation carries no trace of its own, and this lane emits no
+            # traced event (PRD-01 D3), so the conversation id is the honest
+            # stable correlation value rather than a fabricated span.
+            trace_id=conversation.conversation_id,
+            lane=ArtifactCausalLane.CONVERSATION,
+        )
 
     async def resolve_run(
         self,
@@ -300,6 +339,8 @@ class RuntimeArtifactRunScopeResolver:
             conversation_id=run.conversation_id,
             run_id=run.run_id,
             trace_id=run.trace_id,
+            run_is_terminal=run.status
+            in ConversationQueryService.TERMINAL_RUN_STATUSES,
         )
 
 

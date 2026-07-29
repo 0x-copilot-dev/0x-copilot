@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from agent_runtime.api.prompt_observation_store import (
+    EventJournalPromptObservationStore,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
@@ -37,6 +40,10 @@ class TestFileBackendFactoryGating:
         assert ports.subagent_store is not None
         assert ports.source_store is not None
         assert ports.conversation_tool_ordinal_store is not None
+        assert isinstance(
+            ports.prompt_observation_store,
+            EventJournalPromptObservationStore,
+        )
         assert isinstance(ports.artifact_metadata_store, FileArtifactMetadataStore)
         assert isinstance(ports.artifact_blob_store, FileArtifactBlobStore)
 

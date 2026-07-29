@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort
@@ -12,6 +12,7 @@ from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
     RunTerminationCoordinator,
+    TerminalRunObserverPort,
     TerminationReason,
 )
 from agent_runtime.api.presentation import ToolDisplayLookupContext
@@ -45,23 +46,41 @@ from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     ArtifactContentPartPublisher,
     PublishArtifactTool,
 )
+from agent_runtime.capabilities.tools.builtin.revise_artifact import (
+    ReviseArtifactTool,
+)
 from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyResolver,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
-from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
+from agent_runtime.capabilities.tool_budget_middleware import (
+    ToolBudgetMiddleware,
+    WorkspaceToolBudgetOverride,
+)
+from agent_runtime.budgets import BudgetCharger
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    TaskPolicyRuntimeBinding,
+)
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    RuntimeBatchAdmissionContext,
     RuntimeDependencies,
     RuntimeErrorCode,
     StreamEventSource,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
+from agent_runtime.prompts.observation import (
+    PromptAssemblyObserver,
+    PromptObservationStorePort,
+)
 from agent_runtime.execution.factory import (
     RuntimeHarness,
     acreate_agent_runtime,
@@ -79,6 +98,11 @@ from agent_runtime.persistence.ports import (
 from agent_runtime.persistence.records import (
     BatchOutcomeStatus,
     BatchTransitionOutcome,
+    ToolBudgetRecord,
+)
+from agent_runtime.observability.usage_recorder import (
+    NullUsageRecorder,
+    UsageRecorder,
 )
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
@@ -91,10 +115,30 @@ from runtime_api.schemas import (
     RunRecord,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.batch_concurrency_composition import (
+    BatchConcurrencyComposer,
+    LiveBatchAdmissionRegistry,
+    activate_batch_admission,
+)
+from runtime_worker.capability_discovery_composition import (
+    build_capability_discovery_composer,
+)
+from runtime_worker.dependencies import (
+    DefaultRuntimeDependenciesFactory,
+    compose_capability_discovery,
+)
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+)
+from runtime_worker.model_invocation_composition import (
+    ModelInvocationEffectTracker,
+    ModelInvocationWorkerComposer,
+)
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -161,18 +205,58 @@ class RuntimeApprovalHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
         mcp_discovery_cache: object | None = None,
+        mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
+        run_control_decision_store: object | None = None,
+        model_invocation_store: ModelInvocationStorePort | None = None,
+        model_invocation_composer: ModelInvocationWorkerComposer | None = None,
+        usage_recorder: UsageRecorder | None = None,
+        model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
+        batch_concurrency_composer: BatchConcurrencyComposer | None = None,
+        live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        # F6 batch concurrency. ``None`` is both the default and what an
+        # unconfigured deployment gets: a resumed run then installs no
+        # admission and stays exactly as serial as it was before F6 existed.
+        self._batch_concurrency_composer = batch_concurrency_composer
+        # Publishes this run's live admission so the *cancel* claim — a
+        # different claim, in a different coroutine — can reach the
+        # coordinator that is actually holding the work.
+        self._live_batch_admissions = live_batch_admissions
+        self._model_invocation_composer = (
+            model_invocation_composer
+            or ModelInvocationWorkerComposer(
+                settings=self.settings,
+                persistence=self.persistence,
+                event_store=self.event_store,
+                journal=model_invocation_store,
+            )
+        )
+        self.usage_recorder: UsageRecorder = usage_recorder or NullUsageRecorder()
+        self._model_invocation_terminal = (
+            model_invocation_terminal
+            or ModelInvocationTerminalIntegration(
+                journal=model_invocation_store,
+                usage_recorder=self.usage_recorder,
+                persistence=self.persistence,
+            )
+        )
+        self._budget_charger = BudgetCharger(self.persistence)
         self._e2_rollout_admission = E2RolloutAdmission(
             resolution=self.settings.execution.rollout,
             cohorts=self.settings.execution.rollout_cohorts,
             kill_switches=self.settings.execution.rollout_kill_switches,
         )
         self.artifact_service = artifact_service
+        self._run_control_builder = run_control_builder
+        self._prompt_observation_store = prompt_observation_store
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
         # harness re-fetches them in memory only — same seam as the run handler.
@@ -181,13 +265,28 @@ class RuntimeApprovalHandler:
             if user_policies_resolver is not None
             else None
         )
+        # Single source of truth for the desktop file-store gate shared with the
+        # run handler. On non-file backends every method returns ``None`` so the
+        # resume path stays byte-identical to before (offloader ``None`` → inline).
+        # Built before the dependency factory because the F3 schema-artifact
+        # writer is read off it.
+        self._file_store_wiring = FileStoreWorkerWiring(self.event_store)
         # Same pattern as ``RuntimeRunHandler``: caller-supplied factory wins
         # (tests inject their own); otherwise the default factory threads the
-        # process-wide MCP discovery cache through ``RuntimeDependencies``.
+        # process-wide MCP discovery cache through ``RuntimeDependencies``, and
+        # the same F3 composer the run path uses, so a resumed run's bridge is
+        # wired identically to the one its first turn had.
         self.dependencies_factory = dependencies_factory or (
             DefaultRuntimeDependenciesFactory(
                 self.settings,
                 mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+                capability_discovery=build_capability_discovery_composer(
+                    decision_store=run_control_decision_store,
+                    schema_artifact_writer=(
+                        self._file_store_wiring.schema_artifact_writer()
+                    ),
+                    descriptor_revision_resolver=mcp_revision_resolver,
+                ),
             )
         )
         self.agent_factory = agent_factory
@@ -199,11 +298,8 @@ class RuntimeApprovalHandler:
         )
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
+            terminal_observer=terminal_run_observer,
         )
-        # Single source of truth for the desktop file-store gate shared with the
-        # run handler. On non-file backends every method returns ``None`` so the
-        # resume path stays byte-identical to before (offloader ``None`` → inline).
-        self._file_store_wiring = FileStoreWorkerWiring(self.event_store)
         # Mirror the run handler: on the desktop file store, oversized tool
         # output produced *after* an approval is offloaded to the object store
         # instead of persisted inline in ``events.jsonl``. ``None`` everywhere
@@ -337,6 +433,28 @@ class RuntimeApprovalHandler:
         # refuses the resume outright — the run would die holding a decision the
         # user already made.
         interrupt_id = self._native_interrupt_id_for(metadata, outcome=outcome)
+        run_control_snapshot = (
+            await self._run_control_builder.ensure_snapshot(
+                run=run,
+                trace_id=run.trace_id,
+            )
+            if self._run_control_builder is not None
+            else None
+        )
+        prepared_run_control = (
+            await self._run_control_builder.prepare_binding(
+                run=run,
+                snapshot=run_control_snapshot,
+            )
+            if self._run_control_builder is not None
+            and run_control_snapshot is not None
+            else None
+        )
+        # Rehydrate exactly once before the F10 binding and resumed graph are
+        # constructed.  The binding captures only this ephemeral copy.
+        resume_context = run.runtime_context
+        if self._provider_keys_hydrator is not None:
+            resume_context = await self._provider_keys_hydrator.hydrate(resume_context)
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -369,25 +487,37 @@ class RuntimeApprovalHandler:
         workspace_backend = await self._workspace_backend_for_resume(running)
         operation_context_token: object | None = None
         shadow_comparison_token: object | None = None
+        model_invocation_effect_tracker: ModelInvocationEffectTracker | None = None
         # A resumed graph is a fresh tool-execution context. Bind the desktop
         # model-admission boundary again even when the org has no tool-budget
         # rows. Empty middleware carries admission without changing policy.
         tool_result_admission = self._file_store_wiring.tool_result_admission()
-        tool_admission_guard = (
-            ToolBudgetGuard(
-                middleware=ToolBudgetMiddleware(()),
-                ledger=self.stream_event_mapper.message_processor.ledger_for_run(
-                    running.run_id
-                ),
-                run=running,
-                event_producer=self.event_producer,
-                tool_result_admission=tool_result_admission,
-            )
-            if tool_result_admission is not None
-            else None
+        tool_admission_guard = await self._build_tool_budget_guard_for_resume(
+            running,
+            task_policy_binding=(
+                prepared_run_control.task_policy
+                if prepared_run_control is not None
+                else None
+            ),
+            tool_result_admission=tool_result_admission,
         )
         dependencies = self._dependencies_for_resume(
-            running, workspace_backend=workspace_backend
+            running,
+            workspace_backend=workspace_backend,
+            control_binding=(
+                prepared_run_control.control
+                if prepared_run_control is not None
+                else None
+            ),
+        )
+        # The resumed run composes F3 exactly as its first turn did: the
+        # authorized card snapshot is awaited off this run's own registry and
+        # the catalog is re-projected under the same reference key. Skipping it
+        # here is what bug R1 was — one path wiring a seam the other did not.
+        dependencies = await compose_capability_discovery(
+            self.dependencies_factory,
+            dependencies,
+            running.runtime_context,
         )
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
@@ -399,7 +529,61 @@ class RuntimeApprovalHandler:
             if tool_admission_guard is not None
             else None
         )
+        run_control_token: object | None = None
+        batch_admission_token: object | None = None
+        live_admission_token: object | None = None
+        metrics = AssistantRunMetrics.from_run(running)
         try:
+            if prepared_run_control is not None:
+                run_control_token = RunControlContext.bind_for_run(
+                    prepared_run_control.control,
+                    task_policy=prepared_run_control.task_policy,
+                )
+                composed_model_invocation = (
+                    await self._model_invocation_composer.compose(
+                        run=running,
+                        context=resume_context,
+                        control=prepared_run_control.control,
+                    )
+                )
+                if composed_model_invocation is not None:
+                    RunControlContext.install_model_invocation_runtime(
+                        composed_model_invocation.binding
+                    )
+                # A resumed run is a run: its remaining turns emit tool calls
+                # through the same middleware, so it needs the same admission.
+                # Composing it here rather than inheriting it is deliberate —
+                # the coordinator is per run *and* per process, and the process
+                # that resumes a run is not necessarily the one that started it.
+                batch_admission = self._compose_batch_admission(
+                    run=running,
+                    control=prepared_run_control.control,
+                )
+                if batch_admission is not None:
+                    serial_admission = RunControlContext.serial_admission()
+                    if serial_admission is not None:
+                        serial_admission.install_parallel_admission(batch_admission)
+                    batch_admission_token = RuntimeBatchAdmissionContext.install(
+                        batch_admission
+                    )
+                    # W4: the same two obligations the run path has. A resume
+                    # is the *other* moment a process starts executing a run
+                    # it may not have started, so it needs the journal's answer
+                    # just as much — and it must be cancellable while it runs.
+                    live_admission_token = await activate_batch_admission(
+                        composer=self._batch_concurrency_composer,
+                        registry=self._live_batch_admissions,
+                        admission=batch_admission,
+                        org_id=running.org_id,
+                        run_id=running.run_id,
+                        subject_fingerprint=(
+                            prepared_run_control.control.snapshot.subject_fingerprint
+                        ),
+                    )
+                if composed_model_invocation is not None:
+                    model_invocation_effect_tracker = (
+                        composed_model_invocation.effect_tracker
+                    )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -411,13 +595,16 @@ class RuntimeApprovalHandler:
                     payload: Mapping[str, object],
                     summary: str | None,
                 ) -> None:
+                    event_type = RuntimeApiEventType(event_type_value)
                     await self.event_producer.append_api_event(
                         run=running,
                         source=StreamEventSource.SYSTEM,
-                        event_type=RuntimeApiEventType(event_type_value),
+                        event_type=event_type,
                         summary=summary,
                         payload=dict(payload),
                     )
+                    if model_invocation_effect_tracker is not None:
+                        model_invocation_effect_tracker.mark_event(event_type)
 
                 operation_context_token = OperationContext.bind_for_run(
                     identity=VerifiedOperationIdentity(
@@ -440,11 +627,6 @@ class RuntimeApprovalHandler:
                     mode=self.settings.execution.operation_gateway_mode,
                     canonical_arguments_durable=False,
                 )
-            resume_context = running.runtime_context
-            if self._provider_keys_hydrator is not None:
-                resume_context = await self._provider_keys_hydrator.hydrate(
-                    resume_context
-                )
             harness_or_coro = self.agent_factory(
                 context=resume_context,
                 dependencies=dependencies,
@@ -454,7 +636,6 @@ class RuntimeApprovalHandler:
                 if inspect.isawaitable(harness_or_coro)
                 else harness_or_coro
             )
-            metrics = AssistantRunMetrics.from_run(running)
             result = await self._stream_resume(
                 run=running,
                 harness=harness,
@@ -472,7 +653,18 @@ class RuntimeApprovalHandler:
                 )
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
-            await self._complete_run_with_result(running, final_text, metrics)
+            completed = await self._complete_run_with_result(
+                running, final_text, metrics
+            )
+            await self._record_terminal_usage_safely(
+                run=completed,
+                metrics=metrics,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
+            )
             await self._observe_e2_shadow_projections(
                 running.model_copy(update={"status": AgentRunStatus.COMPLETED})
             )
@@ -490,9 +682,24 @@ class RuntimeApprovalHandler:
                 summary="Run failed",
                 cause=exc,
             )
+            await self._record_terminal_usage_safely(
+                run=failed,
+                metrics=metrics,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
+            )
             await self._observe_e2_shadow_projections(failed)
             raise
         finally:
+            if self._live_batch_admissions is not None:
+                self._live_batch_admissions.release(live_admission_token)
+            if batch_admission_token is not None:
+                RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
+            if run_control_token is not None:
+                RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
                 ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
@@ -563,6 +770,76 @@ class RuntimeApprovalHandler:
             parent_task_id=parent_task_id,
         )
 
+    async def _build_tool_budget_guard_for_resume(
+        self,
+        run: RunRecord,
+        *,
+        task_policy_binding: TaskPolicyRuntimeBinding | None,
+        tool_result_admission: object | None,
+    ) -> ToolBudgetGuard | None:
+        """Rebind capability budgets over durable F4 spend on approval resume."""
+
+        if (
+            task_policy_binding is None
+            or task_policy_binding.mode is not FeatureMode.ENFORCE
+        ):
+            if tool_result_admission is None and task_policy_binding is None:
+                return None
+            return ToolBudgetGuard(
+                middleware=ToolBudgetMiddleware(()),
+                ledger=self.stream_event_mapper.message_processor.ledger_for_run(
+                    run.run_id
+                ),
+                run=run,
+                event_producer=self.event_producer,
+                task_policy_binding=task_policy_binding,
+                tool_result_admission=tool_result_admission,  # type: ignore[arg-type]
+            )
+        loader = getattr(self.persistence, "list_tool_budgets_for_org", None)
+        budgets: Sequence[ToolBudgetRecord] = ()
+        if loader is not None:
+            try:
+                budgets = await loader(org_id=run.org_id)
+            except Exception:
+                _LOGGER.warning("tool_budget_resume_load_failed", exc_info=True)
+                budgets = ()
+            else:
+                budgets = WorkspaceToolBudgetOverride.apply(
+                    budgets,
+                    max_calls_per_run=await self._workspace_tool_call_cap(run),
+                )
+        if (
+            not budgets
+            and tool_result_admission is None
+            and task_policy_binding is None
+        ):
+            return None
+        return ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(budgets),
+            ledger=self.stream_event_mapper.message_processor.ledger_for_run(
+                run.run_id
+            ),
+            run=run,
+            event_producer=self.event_producer,
+            task_policy_binding=task_policy_binding,
+            tool_result_admission=tool_result_admission,  # type: ignore[arg-type]
+        )
+
+    async def _workspace_tool_call_cap(self, run: RunRecord) -> int | None:
+        loader = getattr(self.persistence, "get_workspace_defaults", None)
+        if loader is None:
+            return None
+        try:
+            record = await loader(org_id=run.org_id)
+        except Exception:
+            _LOGGER.warning("workspace_tool_call_cap_resume_load_failed", exc_info=True)
+            return None
+        if record is None:
+            return None
+        overrides = getattr(record, "behavior_overrides", None)
+        value = getattr(overrides, "tool_calls_per_run", None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
     async def _build_allocator_for_resume(
         self,
         run: RunRecord,
@@ -624,11 +901,33 @@ class RuntimeApprovalHandler:
 
         return await WorkspaceBackendWorkerWiring().workspace_backend()
 
+    def _compose_batch_admission(
+        self,
+        *,
+        run: object,
+        control: object,
+    ) -> object | None:
+        """Return this run's F6 admission, or ``None`` to stay strictly serial.
+
+        The same three-way agreement the run handler requires: an operator
+        configured F6, the run's control snapshot resolved F6 to ``enforce``,
+        and the operator declared at least one capability's concurrency policy.
+        """
+
+        if self._batch_concurrency_composer is None:
+            return None
+        return self._batch_concurrency_composer.compose(
+            org_id=run.org_id,  # type: ignore[attr-defined]
+            trace_id=run.trace_id,  # type: ignore[attr-defined]
+            control=control,  # type: ignore[arg-type]
+        )
+
     def _dependencies_for_resume(
         self,
         run: RunRecord,
         *,
         workspace_backend: object | None = None,
+        control_binding: RunControlBinding | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` for a resumed run with per-run backends.
 
@@ -657,6 +956,14 @@ class RuntimeApprovalHandler:
         else:
             dependencies = self.dependencies_factory(run.runtime_context)
         update: dict[str, object] = {}
+        if self._prompt_observation_store is not None and control_binding is not None:
+            update["prompt_assembly_observer"] = PromptAssemblyObserver(
+                store=self._prompt_observation_store,
+                binding=control_binding,
+                org_id=run.org_id,
+                subject_fingerprint=control_binding.snapshot.subject_fingerprint,
+                trace_id=run.trace_id,
+            )
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
         subagent_backend = self._file_store_wiring.subagent_artifacts_backend(
@@ -676,6 +983,9 @@ class RuntimeApprovalHandler:
         publish_artifact_tool = self._publish_artifact_tool(run)
         if publish_artifact_tool is not None:
             update["publish_artifact_tool"] = publish_artifact_tool
+        revise_artifact_tool = self._revise_artifact_tool(run)
+        if revise_artifact_tool is not None:
+            update["revise_artifact_tool"] = revise_artifact_tool
         return dependencies.model_copy(update=update)
 
     def _artifact_publication_enabled(self, run: RunRecord) -> bool:
@@ -770,6 +1080,14 @@ class RuntimeApprovalHandler:
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
         )
 
+    def _revise_artifact_tool(self, run: RunRecord) -> ReviseArtifactTool | None:
+        # Same gate as publication — see the run handler for why they are paired.
+        if not self._artifact_publication_enabled(run):
+            return None
+        return ReviseArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
     async def _process_model_artifact_content(
         self, result: object, *, run: RunRecord
     ) -> None:
@@ -803,8 +1121,13 @@ class RuntimeApprovalHandler:
         interrupt_id: str | None = None,
     ) -> object:
         """Stream a resumed LangGraph run and return the composed final result."""
+        stream = (
+            self.runtime_resumer(harness, resume, interrupt_id=interrupt_id)
+            if interrupt_id is not None
+            else self.runtime_resumer(harness, resume)
+        )
         result = await StreamingExecutor.run(
-            stream=self.runtime_resumer(harness, resume, interrupt_id=interrupt_id),
+            stream=stream,
             run=run,
             metrics=metrics,
             event_store=self.event_store,
@@ -824,7 +1147,7 @@ class RuntimeApprovalHandler:
         run: RunRecord,
         final_text: str | None,
         metrics: AssistantRunMetrics,
-    ) -> None:
+    ) -> RunRecord:
         """Persist the final assistant message (if any), emit ``FINAL_RESPONSE``, and mark the run completed."""
         metrics_payload = metrics.to_payload(completed_at=datetime.now(timezone.utc))
         if final_text is not None:
@@ -871,6 +1194,70 @@ class RuntimeApprovalHandler:
             extra_payload=AssistantRunMetrics.with_payload({}, metrics_payload),
             extra_metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
+        return completed
+
+    async def _record_terminal_usage(
+        self,
+        *,
+        run: RunRecord,
+        metrics: AssistantRunMetrics,
+        subject_fingerprint: str | None,
+    ) -> None:
+        """Reconcile the resumed segment after its outer terminal event."""
+
+        completed_at = run.completed_at or datetime.now(timezone.utc)
+        await self._model_invocation_terminal.finalize(
+            run=run,
+            metrics=metrics,
+            subject_fingerprint=subject_fingerprint,
+            completed_at=completed_at,
+        )
+        observed_cost = await self._model_invocation_terminal.record_run_usage(
+            run=run,
+            metrics=metrics,
+            completed_at=completed_at,
+            status=run.status.value,
+        )
+        try:
+            await self._budget_charger.charge_run(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                run_id=run.run_id,
+                observed_micro_usd=observed_cost,
+                observed_tokens=metrics.to_usage_record(
+                    run,
+                    completed_at=completed_at,
+                    status=run.status.value,
+                ).total_tokens,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "approval_resume_budget_charge_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
+
+    async def _record_terminal_usage_safely(
+        self,
+        *,
+        run: RunRecord,
+        metrics: AssistantRunMetrics,
+        subject_fingerprint: str | None,
+    ) -> None:
+        """Never rewrite a durable user-visible terminal outcome on projection loss."""
+
+        try:
+            await self._record_terminal_usage(
+                run=run,
+                metrics=metrics,
+                subject_fingerprint=subject_fingerprint,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "approval_resume_terminal_projection_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
 
     @classmethod
     def _native_interrupt_id_for(

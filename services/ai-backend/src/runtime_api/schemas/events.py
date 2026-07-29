@@ -24,6 +24,13 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.capabilities.concurrency.batch_journal import BatchJournalRecord
+from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
+from agent_runtime.execution.model_invocation.journal import ModelInvocationRecord
+from agent_runtime.prompts.observation import (
+    PromptAssembledRecord,
+    PromptCacheObservedRecord,
+)
 
 # Lazy import: ``McpDispatcherUnwrap`` lives under ``agent_runtime.capabilities.mcp``,
 # whose package ``__init__`` eagerly imports the MCP middleware. That middleware
@@ -117,6 +124,183 @@ class _OperationFields:
     LATENCY_MS = "latency_ms"
     FAILURE_CODE = "failure_code"
     RETRYABLE = "retryable"
+
+
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_QUALITY_REF_MAX = 512
+# Ceilings for the decision row's numeric extension. Each is the product bound
+# with headroom, so a runaway producer is rejected at validation rather than
+# persisting an unbounded integer: F3 search answers at most 10 candidates, a
+# bridge answer is capped at 16 KiB inline, and one decision is one model turn.
+_QUALITY_COUNT_MAX = 64
+_QUALITY_TOKEN_MAX = 1_000_000
+_QUALITY_TURN_MAX = 1_000
+_QualityFeature = Literal[
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+]
+_QualityMode = Literal["off", "shadow", "enforce"]
+
+
+class QualityControlBoundPayload(RuntimeContract):
+    """Closed, content-free canonical snapshot row carried by one run event."""
+
+    schema_version: Literal[1, 2] = 1
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    snapshot_digest: str = Field(pattern=_SHA256_PATTERN)
+    subject_fingerprint: str = Field(pattern=_SHA256_PATTERN)
+    deployment_profile: str = Field(min_length=1, max_length=80)
+    harness_variant_ref: str = Field(min_length=1, max_length=256)
+    task_policy_selection_ref: str = Field(min_length=1, max_length=256)
+    prompt_policy_revision: str = Field(min_length=1, max_length=256)
+    capability_policy_revision: str = Field(min_length=1, max_length=256)
+    context_policy_revision: str = Field(min_length=1, max_length=256)
+    tool_controller_policy_revision: str = Field(min_length=1, max_length=256)
+    concurrency_policy_revision: str = Field(min_length=1, max_length=256)
+    dataflow_policy_revision: str = Field(min_length=1, max_length=256)
+    mcp_freshness_policy_revision: str = Field(min_length=1, max_length=256)
+    delegation_policy_revision: str = Field(min_length=1, max_length=256)
+    model_route_policy_revision: str = Field(min_length=1, max_length=256)
+    workspace_edit_policy_revision: str = Field(min_length=1, max_length=256)
+    answer_verification_policy_revision: str = Field(
+        min_length=1,
+        max_length=256,
+    )
+    feature_mode_f1: _QualityMode
+    feature_mode_f2: _QualityMode
+    feature_mode_f3: _QualityMode
+    feature_mode_f4: _QualityMode
+    feature_mode_f5: _QualityMode
+    feature_mode_f6: _QualityMode
+    feature_mode_f7: _QualityMode
+    feature_mode_f8: _QualityMode
+    feature_mode_f9: _QualityMode
+    feature_mode_f10: _QualityMode
+    feature_mode_f11: _QualityMode
+    feature_mode_f12: _QualityMode
+    model_same_deployment_retry_mode: _QualityMode = "off"
+    model_alternate_route_mode: _QualityMode = "off"
+    model_equivalent_route_mode: _QualityMode = "off"
+    model_circuit_influence_mode: _QualityMode = "off"
+    model_qualification_authority_ref: str | None = Field(
+        default=None,
+        max_length=256,
+    )
+    model_qualification_authority_revision: str | None = Field(
+        default=None,
+        max_length=256,
+    )
+    budget_envelope_ref: str = Field(min_length=1, max_length=_QUALITY_REF_MAX)
+    assignment_revision: str = Field(min_length=1, max_length=256)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _aware_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value
+
+
+class QualityDecisionPayload(RuntimeContract):
+    """Closed, content-free canonical decision row carried by one run event.
+
+    The four ``*_count`` / ``*_rank`` / ``*_tokens`` / ``*_turns`` members are
+    the decision row's **bounded numeric extension**.  PRD 9.3 already lists
+    "counts" among the things a run event may carry, and a rank is a count of
+    positions, so these belong to the existing permission rather than widening
+    it.  Four things keep them inside it:
+
+    * **Explicitly named and separately range-constrained**, rather than one
+      ``dict[str, float]``.  A generic numeric map would make the payload's
+      key set a function of whatever a producer felt like measuring, which is
+      precisely the unbounded vocabulary a closed event family exists to
+      prevent, and it would have no place to state a per-quantity ceiling.
+    * **Bounded above as well as below.**  Each ceiling is the real
+      product bound (see each field), so a runaway producer fails validation
+      instead of writing an arbitrarily large integer into a durable row.
+    * **Body-free.**  A rank is a number; the *thing* ranked never travels
+      with it.  There is no field here a query, capability name, description,
+      argument, or result could enter through, which is a structural
+      guarantee rather than a reviewed-each-call-site one.
+    * **Optional, defaulting to ``None``.**  ``None`` means *not observed*,
+      which is deliberately distinct from an observed ``0`` — a ceiling of
+      zero must be able to tell "nothing came back" from "nothing was
+      measured".  Older ``quality.decision.v1`` rows written before this
+      extension carry none of these keys and still validate unchanged.
+    """
+
+    schema_version: Literal[1] = 1
+    decision_id: str = Field(min_length=1, max_length=160)
+    decision_digest: str = Field(pattern=_SHA256_PATTERN)
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    phase: str = Field(min_length=1, max_length=80)
+    feature: _QualityFeature
+    policy_revision: str = Field(min_length=1, max_length=256)
+    input_digest: str = Field(pattern=_SHA256_PATTERN)
+    outcome_code: str = Field(min_length=1, max_length=120)
+    record_ref: str | None = Field(default=None, max_length=_QUALITY_REF_MAX)
+    parent_decision_refs: tuple[str, ...] = Field(default=(), max_length=64)
+    #: How many candidates this decision's search answered with. Ceiling is
+    #: F3's own ``search returns at most 10 candidates`` with headroom.
+    candidate_count: int | None = Field(default=None, ge=0, le=_QUALITY_COUNT_MAX)
+    #: The 1-based position the selected reference held in the search that
+    #: offered it; ``0`` means the selection came back from no search at all,
+    #: which is the miss selection recall exists to catch. Same ceiling as the
+    #: candidate list it indexes into.
+    selection_rank: int | None = Field(default=None, ge=0, le=_QUALITY_COUNT_MAX)
+    #: Model-visible tokens this decision's answer cost.
+    result_tokens: int | None = Field(default=None, ge=0, le=_QUALITY_TOKEN_MAX)
+    #: Model turns this decision consumed.
+    model_turns: int | None = Field(default=None, ge=0, le=_QUALITY_TURN_MAX)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _aware_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value
+
+
+class TaskPolicyJournalPayload(RuntimeContract):
+    """Strict content-free F4 record carried by the canonical run journal."""
+
+    record: TaskPolicyJournalRecord
+
+
+class PromptAssembledPayload(RuntimeContract):
+    """Strict body-free F2 assembly record carried by the run journal."""
+
+    record: PromptAssembledRecord
+
+
+class PromptCacheObservedPayload(RuntimeContract):
+    """Strict provider-reported F2 cache fact carried by the run journal."""
+
+    record: PromptCacheObservedRecord
+
+
+class ModelInvocationJournalPayload(RuntimeContract):
+    """Strict F10.3 invocation lineage carried by the canonical run journal."""
+
+    record: ModelInvocationRecord = Field(discriminator="record_kind")
+
+
+class OperationBatchJournalPayload(RuntimeContract):
+    """Strict body-free F6 batch plan carried by the canonical run journal."""
+
+    record: BatchJournalRecord
 
 
 class RuntimeEventPresentationProjector:
@@ -252,6 +436,31 @@ class RuntimeEventPresentationProjector:
                 event_type=event_type,
                 payload=payload,
             )
+        if event_type is RuntimeApiEventType.QUALITY_CONTROL_BOUND:
+            return cls._quality_control_payload(payload)
+        if event_type is RuntimeApiEventType.QUALITY_DECISION:
+            return cls._quality_decision_payload(payload)
+        if event_type is RuntimeApiEventType.TOOL_POLICY_JOURNAL:
+            return cls._tool_policy_journal_payload(payload)
+        if event_type is RuntimeApiEventType.PROMPT_ASSEMBLED:
+            return cls._prompt_assembled_payload(payload)
+        if event_type is RuntimeApiEventType.PROMPT_CACHE_OBSERVED:
+            return cls._prompt_cache_observed_payload(payload)
+        if event_type in {
+            RuntimeApiEventType.MODEL_INVOCATION_PLANNED,
+            RuntimeApiEventType.MODEL_INVOCATION_ROUTE,
+            RuntimeApiEventType.MODEL_INVOCATION_EXCLUSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_ADMISSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_STATE,
+            RuntimeApiEventType.MODEL_ATTEMPT_USAGE,
+            RuntimeApiEventType.MODEL_ATTEMPT_FAILED,
+            RuntimeApiEventType.MODEL_INVOCATION_RECOVERY,
+            RuntimeApiEventType.MODEL_INVOCATION_COMPLETED,
+            RuntimeApiEventType.MODEL_INVOCATION_FAILED,
+        }:
+            return cls._model_invocation_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_BATCH_JOURNAL:
+            return cls._operation_batch_journal_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -398,6 +607,20 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.EFFECT_INDETERMINATE,
             RuntimeApiEventType.EFFECT_RECONCILED,
             RuntimeApiEventType.EFFECT_ROW_DECISIONS_RECORDED,
+            RuntimeApiEventType.TOOL_POLICY_JOURNAL,
+            RuntimeApiEventType.PROMPT_ASSEMBLED,
+            RuntimeApiEventType.PROMPT_CACHE_OBSERVED,
+            RuntimeApiEventType.MODEL_INVOCATION_PLANNED,
+            RuntimeApiEventType.MODEL_INVOCATION_ROUTE,
+            RuntimeApiEventType.MODEL_INVOCATION_EXCLUSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_ADMISSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_STATE,
+            RuntimeApiEventType.MODEL_ATTEMPT_USAGE,
+            RuntimeApiEventType.MODEL_ATTEMPT_FAILED,
+            RuntimeApiEventType.MODEL_INVOCATION_RECOVERY,
+            RuntimeApiEventType.MODEL_INVOCATION_COMPLETED,
+            RuntimeApiEventType.MODEL_INVOCATION_FAILED,
+            RuntimeApiEventType.OPERATION_BATCH_JOURNAL,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1631,6 +1854,97 @@ class RuntimeEventPresentationProjector:
             )
             return {}
         return validated.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    @classmethod
+    def _quality_control_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate the complete, flat, reference-only snapshot journal row."""
+
+        try:
+            validated = QualityControlBoundPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed quality.control_bound.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _quality_decision_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate the complete, flat, reference-only decision journal row."""
+
+        try:
+            validated = QualityDecisionPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed quality.decision.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _tool_policy_journal_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one strict discriminated F4 record and reject extra data."""
+
+        try:
+            validated = TaskPolicyJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed tool_policy.journal.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _prompt_assembled_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one body-free assembly record and reject extra data."""
+
+        try:
+            validated = PromptAssembledPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed prompt.assembled.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _prompt_cache_observed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one provider-authoritative cache record."""
+
+        try:
+            validated = PromptCacheObservedPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed prompt.cache.observed.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _model_invocation_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one body/secret-free F10.3 invocation record."""
+
+        try:
+            validated = ModelInvocationJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed model invocation journal payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _operation_batch_journal_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one strict body-free F6 batch record and reject extra data."""
+
+        try:
+            validated = OperationBatchJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed operation_batch.journal.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
 
     @classmethod
     def _copy_payload_version(

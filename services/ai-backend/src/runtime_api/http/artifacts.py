@@ -43,6 +43,7 @@ from agent_runtime.artifacts import (
     ArtifactProvenance,
     ArtifactRangeError,
     ArtifactRevisionRequest,
+    ArtifactSealedRunError,
     ArtifactService,
     ArtifactStorageError,
     ArtifactTooLargeError,
@@ -103,6 +104,10 @@ class ArtifactRoutes:
         ArtifactInvalidCursorError: status.HTTP_422_UNPROCESSABLE_CONTENT,
         ArtifactConflictError: status.HTTP_409_CONFLICT,
         ArtifactIdempotencyConflictError: status.HTTP_409_CONFLICT,
+        # Also 409, but a distinct cause: nothing is stale and re-reading will
+        # not help. The body's ``code`` is what lets a client tell them apart
+        # instead of reporting every 409 as a lost update.
+        ArtifactSealedRunError: status.HTTP_409_CONFLICT,
         ArtifactTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
         ArtifactDigestMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
         ArtifactRangeError: status.HTTP_416_RANGE_NOT_SATISFIABLE,
@@ -326,6 +331,7 @@ class ArtifactRoutes:
                         parent_revision=metadata.parent_revision,
                         expected_digest=metadata.expected_digest,
                         idempotency_key=idempotency_key,
+                        acting_run_id=metadata.acting_run_id,
                     ),
                     provenance=ArtifactProvenance(
                         author=ArtifactAuthor.USER,
@@ -511,11 +517,19 @@ class ArtifactRoutes:
 
     @classmethod
     def _http(cls, exc: ArtifactError) -> HTTPException:
+        """Convert a typed artifact failure, preserving *why* it failed.
+
+        The status alone is lossy: three unrelated causes share 409, and a
+        client that can only see the status has to guess. It guessed "a newer
+        revision exists" for a sealed run, which was counterfactual. The stable
+        ``code`` travels with the message so callers can report the real reason.
+        """
+
         return HTTPException(
             status_code=cls._ERROR_STATUS.get(
                 type(exc), status.HTTP_500_INTERNAL_SERVER_ERROR
             ),
-            detail=exc.safe_message,
+            detail={"code": exc.code.value, "message": exc.safe_message},
         )
 
 

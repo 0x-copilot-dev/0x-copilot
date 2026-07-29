@@ -182,6 +182,9 @@ export class IpcTransport implements ArtifactCapableTransport {
           ? { expectedDigest: request.expectedDigest }
           : {}),
         ...(request.etag !== undefined ? { etag: request.etag } : {}),
+        ...(request.actingRunId !== undefined
+          ? { actingRunId: request.actingRunId }
+          : {}),
         content: request.content,
         contentType: request.contentType,
         filename: request.filename,

@@ -131,6 +131,8 @@ class _EnvFields:
     # (unlimited / keep forever); only the single_user_desktop profile sets them.
     FILE_STORE_MAX_BYTES = "RUNTIME_FILE_STORE_MAX_BYTES"
     FILE_STORE_RETENTION_DAYS = "RUNTIME_FILE_STORE_RETENTION_DAYS"
+    EVALUATION_STORE_ROOT = "RUNTIME_EVALUATION_STORE_ROOT"
+    EVALUATION_STORE_MAX_BYTES = "RUNTIME_EVALUATION_STORE_MAX_BYTES"
     # Explicit durable shared-volume root for artifact blobs when metadata uses
     # Postgres. There is deliberately no Postgres bytea fallback.
     ARTIFACT_BLOB_ROOT = "RUNTIME_ARTIFACT_BLOB_ROOT"
@@ -138,6 +140,19 @@ class _EnvFields:
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
     SKILLS_CACHE_TTL_SECONDS = "SKILLS_CACHE_TTL_SECONDS"
+    EVALUATION_PROJECTION_ENABLED = "RUNTIME_EVALUATION_PROJECTION_ENABLED"
+    EVALUATION_USER_CONSENTED = "RUNTIME_EVALUATION_USER_CONSENTED"
+    EVALUATION_ALLOW_DEVELOPMENT_RUNS = "RUNTIME_EVALUATION_ALLOW_DEVELOPMENT_RUNS"
+    EVALUATION_PROFILE_ID = "RUNTIME_EVALUATION_PROFILE_ID"
+    EVALUATION_PROJECT_ID = "RUNTIME_EVALUATION_PROJECT_ID"
+    EVALUATION_POLICY_REVISION = "RUNTIME_EVALUATION_POLICY_REVISION"
+    EVALUATION_REDACTION_REVISION = "RUNTIME_EVALUATION_REDACTION_REVISION"
+    EVALUATION_MAX_EVENTS_PER_RUN = "RUNTIME_EVALUATION_MAX_EVENTS_PER_RUN"
+    EVALUATION_MAX_PROJECTION_ATTEMPTS = "RUNTIME_EVALUATION_MAX_PROJECTION_ATTEMPTS"
+    EVALUATION_PROJECTION_LEASE_SECONDS = "RUNTIME_EVALUATION_PROJECTION_LEASE_SECONDS"
+    EVALUATION_PROJECTION_CLAIM_BATCH = "RUNTIME_EVALUATION_PROJECTION_CLAIM_BATCH"
+    HARNESS_RELEASE_CONFIG_PATH = "RUNTIME_HARNESS_RELEASE_CONFIG_PATH"
+    LOCAL_RELEASE_CONTROL_ENABLED = "RUNTIME_LOCAL_RELEASE_CONTROL_ENABLED"
     OPENAI_API_KEY = "OPENAI_API_KEY"
     ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
     GOOGLE_API_KEY = "GOOGLE_API_KEY"
@@ -278,6 +293,12 @@ class RuntimeStoreSettings(RuntimeContract):
     # keeps history forever. Conversations whose last activity predates the
     # window are physically reaped by the cleanup sweeper (startup + on demand).
     file_store_retention_days: int = Field(default=0, ge=0)
+    # Explicit shared/local root for the evaluation ledger when the primary
+    # runtime store is not the desktop file store.
+    evaluation_store_root: str | None = None
+    # Independent ceiling for an evaluation root mounted beside Postgres.
+    # Desktop's file backend shares its existing object store and quota instead.
+    evaluation_store_max_bytes: int = Field(default=536_870_912, gt=0)
     # Required for the Postgres backend. API and worker processes must mount
     # this same durable root; factory construction fails closed when absent.
     artifact_blob_root: str | None = None
@@ -295,6 +316,34 @@ class RuntimeSkillSettings(RuntimeContract):
 
     backend_registry_url: str | None = None
     cache_ttl_seconds: int = Field(default=60, ge=0, le=3600)
+
+
+class RuntimeEvaluationSettings(RuntimeContract):
+    """Desktop-first local evaluation policy resolved once at startup."""
+
+    projection_enabled: bool = False
+    user_consented: bool = False
+    allow_development_runs: bool = False
+    profile_id: str = Field(
+        default="desktop-local-profile", min_length=1, max_length=160
+    )
+    project_id: str | None = Field(default=None, min_length=1, max_length=160)
+    policy_revision: str = Field(
+        default="evaluation-projection-policy-v1",
+        min_length=1,
+        max_length=160,
+    )
+    redaction_revision: str = Field(
+        default="evaluation-redaction-v1",
+        min_length=1,
+        max_length=160,
+    )
+    max_events_per_run: int = Field(default=10_000, ge=1, le=100_000)
+    max_projection_attempts: int = Field(default=3, ge=1, le=10)
+    projection_lease_seconds: int = Field(default=60, ge=1, le=3_600)
+    projection_claim_batch: int = Field(default=20, ge=1, le=100)
+    release_config_path: str | None = None
+    local_release_control_enabled: bool = False
 
 
 class RuntimeSettings(BaseSettings):
@@ -315,10 +364,28 @@ class RuntimeSettings(BaseSettings):
     store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
     mcp: RuntimeMcpSettings = Field(default_factory=RuntimeMcpSettings)
     skills: RuntimeSkillSettings = Field(default_factory=RuntimeSkillSettings)
+    evaluation: RuntimeEvaluationSettings = Field(
+        default_factory=RuntimeEvaluationSettings
+    )
     openai: ProviderSettings = Field(default_factory=ProviderSettings)
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
     openrouter: ProviderSettings = Field(default_factory=ProviderSettings)
+
+    @model_validator(mode="after")
+    def _local_release_control_is_never_production(
+        self,
+    ) -> "RuntimeSettings":
+        if self.evaluation.local_release_control_enabled:
+            if self.environment is RuntimeEnvironment.PRODUCTION:
+                raise ValueError(
+                    "local release control cannot be enabled in production"
+                )
+            if self.evaluation.release_config_path is None:
+                raise ValueError(
+                    "local release control requires a release configuration path"
+                )
+        return self
 
     @classmethod
     def load(
@@ -582,6 +649,10 @@ class RuntimeSettings(BaseSettings):
                 file_store_root=_o(v, E.FILE_STORE_ROOT),
                 file_store_max_bytes=int(_s(v, E.FILE_STORE_MAX_BYTES, "0")),
                 file_store_retention_days=int(_s(v, E.FILE_STORE_RETENTION_DAYS, "0")),
+                evaluation_store_root=_o(v, E.EVALUATION_STORE_ROOT),
+                evaluation_store_max_bytes=int(
+                    _s(v, E.EVALUATION_STORE_MAX_BYTES, "536870912")
+                ),
                 artifact_blob_root=_o(v, E.ARTIFACT_BLOB_ROOT),
             ),
             mcp=RuntimeMcpSettings(
@@ -595,6 +666,59 @@ class RuntimeSettings(BaseSettings):
             skills=RuntimeSkillSettings(
                 backend_registry_url=_o(v, E.SKILLS_BACKEND_REGISTRY_URL),
                 cache_ttl_seconds=int(_s(v, E.SKILLS_CACHE_TTL_SECONDS, "60")),
+            ),
+            evaluation=RuntimeEvaluationSettings(
+                projection_enabled=_s(
+                    v,
+                    E.EVALUATION_PROJECTION_ENABLED,
+                    "false",
+                ).lower()
+                in _truthy,
+                user_consented=_s(
+                    v,
+                    E.EVALUATION_USER_CONSENTED,
+                    "false",
+                ).lower()
+                in _truthy,
+                allow_development_runs=_s(
+                    v,
+                    E.EVALUATION_ALLOW_DEVELOPMENT_RUNS,
+                    "false",
+                ).lower()
+                in _truthy,
+                profile_id=_s(
+                    v,
+                    E.EVALUATION_PROFILE_ID,
+                    "desktop-local-profile",
+                ),
+                project_id=_o(v, E.EVALUATION_PROJECT_ID),
+                policy_revision=_s(
+                    v,
+                    E.EVALUATION_POLICY_REVISION,
+                    "evaluation-projection-policy-v1",
+                ),
+                redaction_revision=_s(
+                    v,
+                    E.EVALUATION_REDACTION_REVISION,
+                    "evaluation-redaction-v1",
+                ),
+                max_events_per_run=int(_s(v, E.EVALUATION_MAX_EVENTS_PER_RUN, "10000")),
+                max_projection_attempts=int(
+                    _s(v, E.EVALUATION_MAX_PROJECTION_ATTEMPTS, "3")
+                ),
+                projection_lease_seconds=int(
+                    _s(v, E.EVALUATION_PROJECTION_LEASE_SECONDS, "60")
+                ),
+                projection_claim_batch=int(
+                    _s(v, E.EVALUATION_PROJECTION_CLAIM_BATCH, "20")
+                ),
+                release_config_path=_o(v, E.HARNESS_RELEASE_CONFIG_PATH),
+                local_release_control_enabled=_s(
+                    v,
+                    E.LOCAL_RELEASE_CONTROL_ENABLED,
+                    "false",
+                ).lower()
+                in _truthy,
             ),
             openai=ProviderSettings(api_key=_o(v, E.OPENAI_API_KEY)),
             anthropic=ProviderSettings(api_key=_o(v, E.ANTHROPIC_API_KEY)),

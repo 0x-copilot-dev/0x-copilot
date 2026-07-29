@@ -63,6 +63,16 @@ def test_runtime_settings_loads_template_env_and_process_overrides(
     assert "api_key" not in settings.model_dump()["openai"]
 
 
+def test_evaluation_store_has_a_bounded_default_and_explicit_override() -> None:
+    defaulted = RuntimeSettings.load(environ={})
+    overridden = RuntimeSettings.load(
+        environ={"RUNTIME_EVALUATION_STORE_MAX_BYTES": "1048576"}
+    )
+
+    assert defaulted.store.evaluation_store_max_bytes == 536_870_912
+    assert overridden.store.evaluation_store_max_bytes == 1_048_576
+
+
 def test_runtime_settings_loads_default_reasoning_config() -> None:
     settings = RuntimeSettings.load(
         environ={
@@ -235,3 +245,77 @@ def test_model_resolver_env_key_still_satisfies_without_user_key() -> None:
     )
 
     assert resolved.provider == "anthropic"
+
+
+def test_evaluation_projection_settings_are_dark_and_unconsented_by_default() -> None:
+    settings = RuntimeSettings.load(environ={})
+
+    assert settings.evaluation.projection_enabled is False
+    assert settings.evaluation.user_consented is False
+    assert settings.evaluation.allow_development_runs is False
+    assert settings.evaluation.profile_id == "desktop-local-profile"
+
+
+def test_evaluation_projection_settings_are_typed_from_startup_environment() -> None:
+    settings = RuntimeSettings.load(
+        environ={
+            "RUNTIME_EVALUATION_PROJECTION_ENABLED": "true",
+            "RUNTIME_EVALUATION_USER_CONSENTED": "true",
+            "RUNTIME_EVALUATION_ALLOW_DEVELOPMENT_RUNS": "true",
+            "RUNTIME_EVALUATION_PROFILE_ID": "profile_local_1",
+            "RUNTIME_EVALUATION_PROJECT_ID": "project_alpha",
+            "RUNTIME_EVALUATION_POLICY_REVISION": "projection-policy-v2",
+            "RUNTIME_EVALUATION_REDACTION_REVISION": "redaction-v3",
+            "RUNTIME_EVALUATION_MAX_EVENTS_PER_RUN": "500",
+            "RUNTIME_EVALUATION_MAX_PROJECTION_ATTEMPTS": "2",
+            "RUNTIME_EVALUATION_PROJECTION_LEASE_SECONDS": "30",
+            "RUNTIME_EVALUATION_PROJECTION_CLAIM_BATCH": "5",
+        }
+    )
+
+    assert settings.evaluation.projection_enabled is True
+    assert settings.evaluation.user_consented is True
+    assert settings.evaluation.allow_development_runs is True
+    assert settings.evaluation.profile_id == "profile_local_1"
+    assert settings.evaluation.project_id == "project_alpha"
+    assert settings.evaluation.policy_revision == "projection-policy-v2"
+    assert settings.evaluation.redaction_revision == "redaction-v3"
+    assert settings.evaluation.max_events_per_run == 500
+    assert settings.evaluation.max_projection_attempts == 2
+    assert settings.evaluation.projection_lease_seconds == 30
+    assert settings.evaluation.projection_claim_batch == 5
+
+
+def test_local_release_control_is_explicit_configured_and_never_production() -> None:
+    enabled = RuntimeSettings.load(
+        environ={
+            "RUNTIME_ENVIRONMENT": "development",
+            "RUNTIME_HARNESS_RELEASE_CONFIG_PATH": "/tmp/release-config.json",
+            "RUNTIME_LOCAL_RELEASE_CONTROL_ENABLED": "true",
+        }
+    )
+    assert enabled.evaluation.local_release_control_enabled is True
+    assert enabled.evaluation.release_config_path == "/tmp/release-config.json"
+
+    with pytest.raises(
+        ValueError,
+        match="cannot be enabled in production",
+    ):
+        RuntimeSettings.load(
+            environ={
+                "RUNTIME_ENVIRONMENT": "production",
+                "RUNTIME_HARNESS_RELEASE_CONFIG_PATH": "/tmp/release-config.json",
+                "RUNTIME_LOCAL_RELEASE_CONTROL_ENABLED": "true",
+            }
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="requires a release configuration path",
+    ):
+        RuntimeSettings.load(
+            environ={
+                "RUNTIME_ENVIRONMENT": "development",
+                "RUNTIME_LOCAL_RELEASE_CONTROL_ENABLED": "true",
+            }
+        )

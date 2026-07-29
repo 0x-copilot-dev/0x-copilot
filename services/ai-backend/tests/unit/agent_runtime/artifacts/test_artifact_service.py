@@ -23,14 +23,18 @@ from agent_runtime.artifacts.contracts import (
 )
 from agent_runtime.artifacts.errors import (
     ArtifactBlobUnavailableError,
+    ArtifactConflictError,
     ArtifactDigestMismatchError,
+    ArtifactErrorCode,
     ArtifactNotFoundError,
     ArtifactRangeError,
+    ArtifactSealedRunError,
     ArtifactTooLargeError,
 )
 from agent_runtime.artifacts.service import ArtifactService
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
+    ArtifactCausalLane,
     ArtifactKind,
     LedgerEventType,
 )
@@ -43,6 +47,20 @@ SCOPE = ArtifactScope(
     run_id="run_1",
     trace_id="trace_1",
 )
+
+
+def conversation_scope(
+    org_id: str, user_id: str, conversation_id: str
+) -> ArtifactScope:
+    """The CONVERSATION-lane scope a user-authored revision resolves to."""
+
+    return ArtifactScope(
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        trace_id=conversation_id,
+        lane=ArtifactCausalLane.CONVERSATION,
+    )
 
 
 class ArtifactServiceFakes:
@@ -199,6 +217,46 @@ class ArtifactServiceFakes:
             ):
                 return None
             return self.scope
+
+        async def resolve_conversation(self, *, org_id, user_id, conversation_id):
+            if (
+                self.scope is None
+                or self.scope.org_id != org_id
+                or self.scope.user_id != user_id
+                or self.scope.conversation_id != conversation_id
+            ):
+                return None
+            return conversation_scope(org_id, user_id, conversation_id)
+
+    class MultiRunScopes:
+        """Resolve several runs, so a revision can act in a run it did not create.
+
+        The single-scope ``Scopes`` fake cannot express PRD-02's Flow B at all:
+        it only ever knows one run, which is exactly the assumption the defect
+        was hiding behind.
+        """
+
+        def __init__(self, scopes: dict[str, ArtifactScope]) -> None:
+            self.scopes = scopes
+            self.resolved: list[str] = []
+
+        async def resolve_run(self, *, org_id, user_id, run_id):
+            self.resolved.append(run_id)
+            scope = self.scopes.get(run_id)
+            if scope is None or scope.org_id != org_id or scope.user_id != user_id:
+                return None
+            return scope
+
+        async def resolve_conversation(self, *, org_id, user_id, conversation_id):
+            known = any(
+                scope.conversation_id == conversation_id
+                and scope.org_id == org_id
+                and scope.user_id == user_id
+                for scope in self.scopes.values()
+            )
+            if not known:
+                return None
+            return conversation_scope(org_id, user_id, conversation_id)
 
     class Sources:
         def __init__(self, body: bytes, *, source_ref: str = "message://msg_1") -> None:
@@ -416,6 +474,9 @@ class TestArtifactService(ArtifactServiceFakes):
             content=b"v1",
         )
 
+        # Agent-authored, so this stays in the RUN lane where a ledger event is
+        # the point. The user-authored lane emits none by design and is covered
+        # by ``TestRevisionCausalLane``.
         revised = await service.append_revision_from_stream(
             org_id=SCOPE.org_id,
             user_id=SCOPE.user_id,
@@ -424,7 +485,7 @@ class TestArtifactService(ArtifactServiceFakes):
                 parent_revision=1,
                 idempotency_key="rev-1",
             ),
-            provenance=ArtifactProvenance(author=ArtifactAuthor.USER),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
             chunks=self.chunks(b"v2"),
         )
 
@@ -650,3 +711,288 @@ class TestArtifactService(ArtifactServiceFakes):
         with pytest.raises(ArtifactBlobUnavailableError) as captured:
             _ = [chunk async for chunk in stream]
         assert "private adapter detail" not in captured.value.safe_message
+
+
+class TestRevisionCausalLane(ArtifactServiceFakes):
+    """PRD-01 — authorship decides which causal subject a revision belongs to.
+
+    A run's terminal event promises "everything this run caused is already in
+    the ledger". A user editing a cell minutes after the turn ended was not
+    caused by that run, so attributing the revision there would make the seal
+    lie — and every run on screen is normally sealed by the time anyone edits,
+    which is why the previous model refused ordinary saves outright.
+
+    Agent work keeps the run lane and its seal. User work takes the conversation
+    lane, which has no terminal state to violate.
+    """
+
+    CREATING_RUN = "run_1"
+    ACTING_RUN = "run_2"
+
+    @classmethod
+    def _acting_scope(cls, *, terminal: bool = False) -> ArtifactScope:
+        return ArtifactScope(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            conversation_id=SCOPE.conversation_id,
+            run_id=cls.ACTING_RUN,
+            trace_id="trace_2",
+            run_is_terminal=terminal,
+        )
+
+    @classmethod
+    async def _created(cls, service):
+        return await service.create_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactCreateRequest(
+                run_id=cls.CREATING_RUN,
+                kind=ArtifactKind.DOCUMENT,
+                title="README",
+                media_type="text/markdown",
+                idempotency_key="create-acting",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            content=b"v1",
+        )
+
+    async def _revise(
+        self,
+        service,
+        artifact_id: str,
+        *,
+        acting_run_id=None,
+        author=ArtifactAuthor.USER,
+        key="rev",
+    ):
+        return await service.append_revision_from_stream(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=artifact_id,
+                parent_revision=1,
+                idempotency_key=key,
+                acting_run_id=acting_run_id,
+            ),
+            provenance=ArtifactProvenance(author=author),
+            chunks=self.chunks(b"v2"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_user_edit_succeeds_although_every_run_has_sealed(self) -> None:
+        """The live defect: saving a cell edit after the turn ended returned 409.
+
+        Both runs are terminal here, exactly as they are in the app by the time a
+        user can see a table and change it.
+        """
+
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes(
+            {
+                self.CREATING_RUN: SCOPE.model_copy(update={"run_is_terminal": True}),
+                self.ACTING_RUN: self._acting_scope(terminal=True),
+            }
+        )
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        revised = await self._revise(service, created.record.artifact.artifact_id)
+
+        assert revised.record.artifact.current_revision == 2
+
+    @pytest.mark.asyncio
+    async def test_a_user_edit_claims_no_run_and_emits_no_run_event(self) -> None:
+        """The lane exists so a sealed ledger is never asked to accept an event."""
+
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes({self.CREATING_RUN: SCOPE})
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        await self._revise(service, created.record.artifact.artifact_id)
+
+        command = metadata.append_command
+        assert command.scope.lane is ArtifactCausalLane.CONVERSATION
+        assert command.scope.run_id is None
+        assert command.scope.conversation_id == SCOPE.conversation_id
+        assert command.ledger_event is None
+
+    @pytest.mark.asyncio
+    async def test_a_user_edit_ignores_a_supplied_acting_run(self) -> None:
+        """``acting_run_id`` names a subject the conversation lane does not use.
+
+        Supplying one must not drag the revision back into a run ledger, which is
+        precisely how the defect was reintroduced.
+        """
+
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes(
+            {
+                self.CREATING_RUN: SCOPE,
+                self.ACTING_RUN: self._acting_scope(terminal=True),
+            }
+        )
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        revised = await self._revise(
+            service,
+            created.record.artifact.artifact_id,
+            acting_run_id=self.ACTING_RUN,
+        )
+
+        assert revised.record.artifact.current_revision == 2
+        assert metadata.append_command.scope.lane is ArtifactCausalLane.CONVERSATION
+        assert metadata.append_command.scope.run_id is None
+
+    @pytest.mark.asyncio
+    async def test_the_lane_follows_authorship_not_the_request(self) -> None:
+        """A caller cannot route an agent write into the unsealed lane.
+
+        Identical request fields; only the server-held author differs.
+        """
+
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes({self.CREATING_RUN: SCOPE})
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        await self._revise(
+            service,
+            created.record.artifact.artifact_id,
+            author=ArtifactAuthor.MODEL,
+        )
+
+        assert metadata.append_command.scope.lane is ArtifactCausalLane.RUN
+        assert metadata.append_command.scope.run_id == self.CREATING_RUN
+
+    @pytest.mark.asyncio
+    async def test_an_agent_revision_is_attributed_to_the_acting_run(self) -> None:
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes(
+            {self.CREATING_RUN: SCOPE, self.ACTING_RUN: self._acting_scope()}
+        )
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        await self._revise(
+            service,
+            created.record.artifact.artifact_id,
+            acting_run_id=self.ACTING_RUN,
+            author=ArtifactAuthor.MODEL,
+        )
+
+        # The ledger event lands in the OPEN run, so the seal accepts it and a
+        # live client actually receives the revision.
+        assert metadata.append_command.scope.run_id == self.ACTING_RUN
+        assert metadata.append_command.ledger_event.scope.run_id == self.ACTING_RUN
+
+    @pytest.mark.asyncio
+    async def test_the_artifact_keeps_its_creating_run_as_provenance(self) -> None:
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes(
+            {self.CREATING_RUN: SCOPE, self.ACTING_RUN: self._acting_scope()}
+        )
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        revised = await self._revise(
+            service,
+            created.record.artifact.artifact_id,
+            acting_run_id=self.ACTING_RUN,
+            author=ArtifactAuthor.MODEL,
+        )
+
+        # Where it was produced is a durable fact; where it was edited is not the
+        # same question, and must not overwrite it.
+        assert revised.record.artifact.run_id == self.CREATING_RUN
+
+    @pytest.mark.asyncio
+    async def test_unset_acting_run_still_uses_the_creating_run(self) -> None:
+        """Agent-authored revisions act inside the creating run — unchanged."""
+
+        metadata = self.Metadata()
+        scopes = self.MultiRunScopes({self.CREATING_RUN: SCOPE})
+        service = self.service(metadata=metadata, scopes=scopes)
+        created = await self._created(service)
+
+        await self._revise(
+            service,
+            created.record.artifact.artifact_id,
+            acting_run_id=None,
+            author=ArtifactAuthor.MODEL,
+        )
+
+        assert metadata.append_command.scope.run_id == self.CREATING_RUN
+
+    @pytest.mark.asyncio
+    async def test_a_run_the_caller_does_not_own_is_refused(self) -> None:
+        """``acting_run_id`` is a claim, and claims are verified, not trusted."""
+
+        scopes = self.MultiRunScopes({self.CREATING_RUN: SCOPE})
+        service = self.service(scopes=scopes)
+        created = await self._created(service)
+
+        with pytest.raises(ArtifactNotFoundError):
+            await self._revise(
+                service,
+                created.record.artifact.artifact_id,
+                acting_run_id="run_belonging_to_someone_else",
+                author=ArtifactAuthor.MODEL,
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_sealed_acting_run_is_refused_before_any_write(self) -> None:
+        """An agent claiming a terminal run still cannot write to its ledger."""
+
+        metadata = self.Metadata()
+        blobs = self.Blobs()
+        scopes = self.MultiRunScopes(
+            {
+                self.CREATING_RUN: SCOPE,
+                self.ACTING_RUN: self._acting_scope(terminal=True),
+            }
+        )
+        service = self.service(metadata=metadata, blobs=blobs, scopes=scopes)
+        created = await self._created(service)
+        writes_before = blobs.put_calls
+
+        with pytest.raises(ArtifactSealedRunError):
+            await self._revise(
+                service,
+                created.record.artifact.artifact_id,
+                acting_run_id=self.ACTING_RUN,
+                author=ArtifactAuthor.MODEL,
+            )
+
+        # Refused before the body was streamed — no orphaned blob, no revision.
+        assert blobs.put_calls == writes_before
+        assert metadata.append_command is None
+
+    @pytest.mark.asyncio
+    async def test_a_sealed_run_is_not_reported_as_a_stale_revision(self) -> None:
+        """The UI said "a newer revision exists" when none did.
+
+        The two causes share HTTP 409, so the distinct type is what lets a client
+        tell "you are out of date" from "that run has finished".
+        """
+
+        scopes = self.MultiRunScopes(
+            {
+                self.CREATING_RUN: SCOPE,
+                self.ACTING_RUN: self._acting_scope(terminal=True),
+            }
+        )
+        service = self.service(scopes=scopes)
+        created = await self._created(service)
+
+        with pytest.raises(ArtifactSealedRunError) as caught:
+            await self._revise(
+                service,
+                created.record.artifact.artifact_id,
+                acting_run_id=self.ACTING_RUN,
+                author=ArtifactAuthor.MODEL,
+            )
+
+        assert not isinstance(caught.value, ArtifactConflictError)
+        assert caught.value.code is ArtifactErrorCode.SEALED_RUN

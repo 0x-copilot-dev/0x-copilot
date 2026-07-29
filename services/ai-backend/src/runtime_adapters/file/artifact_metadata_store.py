@@ -192,12 +192,19 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                         blob_key=command.revision.blob_key,
                         created_at=parse_datetime(command.revision.revision.created_at),
                     ),
-                    outbox=[
-                        artifact_event_outbox_row(
-                            command.ledger_event,
-                            artifact_id=command.artifact_id,
-                        )
-                    ],
+                    # A conversation-lane append carries no ledger event, so it
+                    # enqueues no outbox row: the only drain appends to a run
+                    # event store, and this mutation belongs to no run.
+                    outbox=(
+                        []
+                        if command.ledger_event is None
+                        else [
+                            artifact_event_outbox_row(
+                                command.ledger_event,
+                                artifact_id=command.artifact_id,
+                            )
+                        ]
+                    ),
                 )
                 JsonlIo.append_line(self._path, row)
                 return result

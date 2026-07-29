@@ -223,6 +223,41 @@ class ArtifactPublicationSource:
             raise ValueError("artifact publication provenance must be logical")
 
 
+@dataclass(frozen=True)
+class ArtifactRevisionSource:
+    """One agent-authored revision of an artifact that already exists.
+
+    Distinct from :class:`ArtifactPublicationSource` because the target is an
+    existing durable object, so the contract must carry the compare-and-append
+    fields. ``parent_revision`` is required: a model working from stale content
+    must lose the CAS rather than silently clobber a revision the user wrote.
+
+    Deliberately carries no kind/title/media type — those are immutable
+    properties of the artifact and are read from the stored record, so revising
+    cannot change what an artifact is.
+    """
+
+    artifact_id: str
+    parent_revision: int
+    content: bytes | None = field(default=None, repr=False)
+    content_ref: str | None = None
+    source_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.content is None) == (self.content_ref is None):
+            raise ValueError("artifact revision source requires exactly one transport")
+        if self.parent_revision < 1:
+            raise ValueError("artifact revision source requires a positive parent")
+        if self.content_ref is not None and (
+            self.content_ref.startswith("/") or ":\\" in self.content_ref
+        ):
+            raise ValueError("artifact revision source reference must be logical")
+        if self.source_ref is not None and (
+            self.source_ref.startswith("/") or ":\\" in self.source_ref
+        ):
+            raise ValueError("artifact revision provenance must be logical")
+
+
 class OperationAdapter(Protocol):
     """Provider-specific operation port with no effect-apply capability."""
 

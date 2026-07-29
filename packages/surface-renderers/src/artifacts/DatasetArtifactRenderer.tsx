@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
+import { magnitudeShares, numericValue } from "../_shared/path";
 import type { ArtifactRenderState } from "./model";
 import { previewNotice } from "./model";
 
@@ -437,8 +438,41 @@ function DatasetPreview(props: {
   );
 }
 
+/**
+ * Per-column magnitude for the read-only dataset grid.
+ *
+ * A published CSV carries no `SurfaceSpec`, so there is no `format` hint to say
+ * which columns are numeric — it has to come from the data. A column qualifies
+ * only when EVERY value present reads as a number; one unparseable entry and the
+ * whole column is left alone, which is the same fail-closed rule
+ * `magnitudeShares` applies (and the reason it is reused here rather than
+ * reimplemented: the dataset artifact and `table://` must resolve one table
+ * language, and two copies of this logic is exactly how they would drift).
+ *
+ * Scaled over the FULL column, not the mounted window. The grid virtualizes to
+ * 100 rows, and scaling per window would make a row's bar change length as the
+ * user scrolls — a magnitude that depends on scroll position is not a magnitude.
+ */
+function useColumnMagnitudes(
+  model: DatasetModel,
+): ReadonlyMap<number, readonly (number | null)[]> {
+  return useMemo(() => {
+    const byColumn = new Map<number, readonly (number | null)[]>();
+    model.headers.forEach((_header, column) => {
+      const values = model.rows.map((row) => row[column] ?? "");
+      const populated = values.filter((value) => value.trim() !== "");
+      if (populated.length === 0) return;
+      if (!populated.every((value) => numericValue(value) !== null)) return;
+      const shares = magnitudeShares(values);
+      if (shares.some((share) => share !== null)) byColumn.set(column, shares);
+    });
+    return byColumn;
+  }, [model]);
+}
+
 function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
   const view = useDatasetView(props.model, EMPTY_DATASET_PATCH);
+  const magnitudes = useColumnMagnitudes(props.model);
   return (
     <>
       <DatasetViewControls model={props.model} view={view} />
@@ -463,7 +497,11 @@ function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
             <tr role="row">
               {props.model.headers.map((value, index) => (
                 <th
-                  className="ui-dataset-table__header"
+                  className={
+                    magnitudes.has(index)
+                      ? "ui-dataset-table__header sf-col--numeric"
+                      : "ui-dataset-table__header"
+                  }
                   key={index}
                   role="columnheader"
                   scope="col"
@@ -475,16 +513,39 @@ function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
           </thead>
           <tbody>
             {view.windowedRowIndexes.map((rowIndex) => (
-              <tr key={rowIndex} role="row">
-                {props.model.headers.map((_, columnIndex) => (
-                  <td
-                    className="ui-dataset-table__cell"
-                    key={columnIndex}
-                    role="gridcell"
-                  >
-                    {view.valueAt(rowIndex, columnIndex)}
-                  </td>
-                ))}
+              <tr className="sf-row" key={rowIndex} role="row">
+                {props.model.headers.map((_, columnIndex) => {
+                  const share = magnitudes.get(columnIndex)?.[rowIndex];
+                  const bar =
+                    typeof share === "number" && share > 0 ? share : null;
+                  return (
+                    <td
+                      className={
+                        bar === null
+                          ? "ui-dataset-table__cell"
+                          : "ui-dataset-table__cell sf-cell--numeric"
+                      }
+                      key={columnIndex}
+                      role="gridcell"
+                    >
+                      {bar === null ? null : (
+                        <span
+                          aria-hidden="true"
+                          className="sf-value-bar"
+                          data-testid={`dataset-value-bar-${rowIndex}-${columnIndex}`}
+                          style={{ left: `${(1 - bar) * 100}%` }}
+                        />
+                      )}
+                      <span
+                        className={
+                          bar === null ? undefined : "sf-value-bar__value"
+                        }
+                      >
+                        {view.valueAt(rowIndex, columnIndex)}
+                      </span>
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -514,6 +575,7 @@ function DatasetPatchEditor(props: {
   }, [props.artifactKey]);
 
   const view = useDatasetView(props.model, patch);
+  const magnitudes = useColumnMagnitudes(props.model);
 
   const update = (row: number, column: number, value: string): void => {
     const key = cellKey(row, column);
@@ -595,7 +657,11 @@ function DatasetPatchEditor(props: {
             <tr role="row">
               {props.model.headers.map((header, column) => (
                 <th
-                  className="ui-dataset-table__header"
+                  className={
+                    magnitudes.has(column)
+                      ? "ui-dataset-table__header sf-col--numeric"
+                      : "ui-dataset-table__header"
+                  }
                   key={column}
                   role="columnheader"
                   scope="col"
@@ -618,15 +684,34 @@ function DatasetPatchEditor(props: {
             {view.windowedRowIndexes.map((rowIndex) => {
               const row = props.model.rows[rowIndex]!;
               return (
-                <tr key={rowIndex} role="row">
+                <tr className="sf-row" key={rowIndex} role="row">
                   {props.model.headers.map((header, column) => {
                     const rowNumber = rowIndex + 2;
+                    const share = magnitudes.get(column)?.[rowIndex];
+                    const bar =
+                      typeof share === "number" && share > 0 ? share : null;
                     return (
                       <td
-                        className="ui-dataset-table__cell"
+                        className={
+                          bar === null
+                            ? "ui-dataset-table__cell"
+                            : "ui-dataset-table__cell sf-cell--numeric"
+                        }
                         key={column}
                         role="gridcell"
                       >
+                        {bar === null ? null : (
+                          // Behind the editable input, which is already
+                          // transparent — so the magnitude reads through the
+                          // cell the user types into, rather than forcing a
+                          // read-only view to see it.
+                          <span
+                            aria-hidden="true"
+                            className="sf-value-bar"
+                            data-testid={`dataset-value-bar-${rowIndex}-${column}`}
+                            style={{ left: `${(1 - bar) * 100}%` }}
+                          />
+                        )}
                         <input
                           aria-label={`${header || `Column ${column + 1}`}, row ${rowNumber}`}
                           className="ui-dataset-cell-input"

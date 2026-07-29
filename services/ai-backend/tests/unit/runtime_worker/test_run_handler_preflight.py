@@ -19,6 +19,8 @@ from collections.abc import Mapping, Sequence
 
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.deployment.profile import DeploymentProfileLoader
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import RuntimeDependencies
 from agent_runtime.execution.factory import RuntimeHarness
@@ -40,6 +42,11 @@ from runtime_api.schemas import (
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+    StableUserProfileHmac,
+)
 
 _USER_INPUT = "PREFLIGHT_PROBE: a short user question for token counting."
 
@@ -217,6 +224,49 @@ class TestPreflightNoBudgetSkipsTokenization:
         # Lazy gate: with no active budgets the estimate is never resolved, so
         # the counter is never called (no message read, no tokenization).
         assert counter.calls == []
+
+
+class TestRunControlWorkerBoundary:
+    async def test_snapshot_event_and_context_precede_model_dispatch(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        settings = _settings()
+        run_id = await _seed_run(store, settings)
+        builder = RunControlPlaneBuilder(
+            store=EventJournalRunControlStore(store),
+            deployment_profile=DeploymentProfileLoader.load({}).name,
+            subject_hmac=StableUserProfileHmac(b"r" * 32),
+        )
+
+        def _asserting_agent_factory(
+            *, context, dependencies: RuntimeDependencies
+        ) -> RuntimeHarness:
+            binding = RunControlContext.require_current()
+            assert binding.snapshot.run_id == run_id
+            event_types = [event.event_type for event in store.events_by_run[run_id]]
+            assert RuntimeApiEventType.QUALITY_CONTROL_BOUND in event_types
+            assert RuntimeApiEventType.MODEL_CALL_STARTED not in event_types
+            return _agent_factory(context=context, dependencies=dependencies)
+
+        async def _asserting_invoker(_harness, _messages):
+            assert RunControlContext.require_current().snapshot.run_id == run_id
+            return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+        handler = RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=_asserting_agent_factory,
+            runtime_invoker=_asserting_invoker,
+            run_control_builder=builder,
+        )
+
+        await _worker(store, settings, handler).run_until_idle()
+
+        event_types = [event.event_type for event in store.events_by_run[run_id]]
+        assert event_types.count(RuntimeApiEventType.QUALITY_CONTROL_BOUND) == 1
+        assert event_types.index(
+            RuntimeApiEventType.QUALITY_CONTROL_BOUND
+        ) < event_types.index(RuntimeApiEventType.MODEL_CALL_STARTED)
+        assert RunControlContext.current() is None
 
 
 class TestPreflightFallbackChain:

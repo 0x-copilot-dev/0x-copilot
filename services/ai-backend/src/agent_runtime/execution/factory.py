@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Any, Final
 
 from langchain_core.tools import StructuredTool
@@ -12,6 +13,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    CapabilityBridgeComposition,
     RuntimeDependencies,
     RuntimeErrorCode,
 )
@@ -45,6 +47,12 @@ from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
+from agent_runtime.capabilities.middleware import (
+    ModelInvocationMiddleware,
+    RuntimeControlMiddleware,
+    wrap_tools_with_display,
+)
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -56,6 +64,9 @@ from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
 )
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     PublishArtifactInput,
+)
+from agent_runtime.capabilities.tools.builtin.revise_artifact import (
+    ReviseArtifactInput,
 )
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
@@ -69,24 +80,37 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyEnforcer,
     ToolUsePolicyResolver,
 )
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+    TaskPolicyRuntimeBinding,
+)
+from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
+    CAPABILITY_DISCOVERY_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
+from agent_runtime.prompts.observation import PromptAssemblyObserver
 from agent_runtime.prompts import (
-    PromptAssembler,
+    DEFAULT_PROMPT_FRAGMENT_PROVIDERS,
+    PromptAssemblyContext,
+    PromptAssemblyInputs,
     PromptAssemblyPlan,
     PromptCacheEligibility,
-    PromptFragment,
     PromptFragmentScope,
-    PromptFragmentTier,
-    ProviderPromptDecorator,
+    FactoryPromptFragmentProvider,
+    LockedTaskProfile,
+    PromptRuntimeBinding,
+    ProviderCacheComposition,
+    PromptSensitivity,
+    PromptSourceMaterial,
+    PromptTrustLabel,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
-from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 
 # Replace deepagents' built-in `task` tool builder with ours so each
 # subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
@@ -95,6 +119,8 @@ from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 # heuristic that returned None whenever ≥2 subagents were unlinked
 # concurrently (parallel research fleets).
 install_atlas_task_tool()
+
+_LOGGER = logging.getLogger(__name__)
 
 AgentBuilder = Callable[[DeepAgentBuildRequest], object]
 
@@ -120,6 +146,7 @@ class RuntimeHarness:
     skill_directories: tuple[str, ...]
     skill_cards: tuple[object, ...] = ()
     prompt_assembly_plan: PromptAssemblyPlan | None = None
+    prompt_runtime_binding: PromptRuntimeBinding | None = None
 
 
 async def acreate_agent_runtime(
@@ -244,7 +271,7 @@ async def _assemble_harness(
 
     try:
         model_tools = _model_visible_tools(
-            tools=tools,
+            tools=tuple(_canonical_graph_tool(tool) for tool in tools),
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -253,14 +280,17 @@ async def _assemble_harness(
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
+            revise_artifact_tool=runtime_dependencies.revise_artifact_tool,
+            capability_activation=runtime_dependencies.capability_activation,
+            capability_catalog=runtime_dependencies.capability_catalog,
+            capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
         )
-        # Registry decoration alone cannot cover tools injected below the
-        # registry boundary (MCP, skills, prior results, and desktop tools).
-        # Apply the idempotent wrapper to the complete surface before policy
-        # decoration: a policy-blocked call must not consume budget, while every
-        # policy-admitted BaseTool still crosses the same hard gate.
-        model_tools = guard_model_tools(list(model_tools))
+        # Display-schema decoration precedes policy wrapping so a rejected
+        # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
+        # builder repeats this idempotently for direct callers; preserving the
+        # blocked wrapper lets RuntimeControlMiddleware reject before budget.
+        model_tools = tuple(wrap_tools_with_display(model_tools))
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
         # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
         # the SAME human-approval interrupt for ask/require, blocked with a safe
@@ -281,11 +311,22 @@ async def _assemble_harness(
             ),
         )
         model_tools = enforced_tools.tools
+        control_binding = RunControlContext.current()
+        task_policy_binding = RunControlContext.task_policy()
         prompt_assembly_plan = _prompt_assembly_plan(
             instructions=instructions,
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
+            tool_schema_revision=_model_tool_schema_revision(model_tools),
+            # Read off the *final* composed surface, after display decoration
+            # and tool-policy enforcement, so the prompt can only ever describe
+            # tools the model was actually given.
+            capability_bridge_tools=_capability_bridge_tool_names(
+                model_tools,
+                activation=runtime_dependencies.capability_activation,
+                catalog=runtime_dependencies.capability_catalog,
+            ),
             workspace_active=bool(
                 workspace_backend is not None
                 and getattr(workspace_backend, "advertise_workspace", True)
@@ -295,12 +336,55 @@ async def _assemble_harness(
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         )
-        prompt_decoration = ProviderPromptDecorator().decorate(
-            provider=runtime_context.model_profile.provider,
-            plan=prompt_assembly_plan,
+        # This remains the graph-construction input and temporary legacy/golden
+        # diagnostic. The effective request is rebuilt for every supervisor and
+        # local-child provider call by RuntimeControlMiddleware.
+        model_instructions = prompt_assembly_plan.rendered_prompt
+        prompt_observer = runtime_dependencies.prompt_assembly_observer
+        if prompt_observer is not None and not isinstance(
+            prompt_observer, PromptAssemblyObserver
+        ):
+            raise RuntimeError(
+                "prompt_assembly_observer must be a PromptAssemblyObserver"
+            )
+        prompt_cache_composition = (
+            ProviderCacheComposition.from_signed_mode(
+                control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY)
+            )
+            if control_binding is not None
+            else None
         )
-        model_instructions = prompt_decoration.system_prompt
+        prompt_runtime_binding = (
+            PromptRuntimeBinding(
+                mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
+                provider=runtime_context.model_profile.provider,
+                model_family=runtime_context.model_profile.model_name,
+                harness_revision=prompt_assembly_plan.harness_revision,
+                fragment_provider=FactoryPromptFragmentProvider(
+                    legacy_plan=prompt_assembly_plan,
+                    run_scope_fingerprint=_prompt_scope_fingerprint(
+                        runtime_context=runtime_context,
+                        scope=PromptFragmentScope.RUN,
+                    ),
+                ),
+                cache_registry=prompt_cache_composition.cache_registry,
+                cache_owner=prompt_cache_composition.cache_owner,
+                framework_cache_installed=(
+                    prompt_cache_composition.framework_prompt_cache_enabled
+                ),
+                observation_publisher=prompt_observer,
+                cache_rejection_adapters=(
+                    prompt_cache_composition.cache_rejection_adapters
+                ),
+            )
+            if control_binding is not None
+            else None
+        )
+        if prompt_runtime_binding is not None:
+            RunControlContext.install_prompt_runtime(prompt_runtime_binding)
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
@@ -354,6 +438,14 @@ async def _assemble_harness(
                 permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
+                middleware=(
+                    RuntimeControlMiddleware(),
+                    ModelInvocationMiddleware(),
+                ),
+                universal_middleware_factories=(
+                    RuntimeControlMiddleware,
+                    ModelInvocationMiddleware,
+                ),
             )
         )
     except AgentRuntimeError:
@@ -377,6 +469,7 @@ async def _assemble_harness(
         skill_directories=skill_directories,
         skill_cards=skill_cards,
         prompt_assembly_plan=prompt_assembly_plan,
+        prompt_runtime_binding=prompt_runtime_binding,
     )
 
 
@@ -391,6 +484,10 @@ def _model_visible_tools(
     sandbox_execute_tool: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
+    revise_artifact_tool: object | None = None,
+    capability_activation: object | None = None,
+    capability_catalog: object | None = None,
+    capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = [
@@ -405,18 +502,23 @@ def _model_visible_tools(
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
         include_mcp_discovery=True,
     )
-    # The cache is constructed at lifespan startup (API) or worker dependency
-    # wiring (worker) and threaded through via ``RuntimeDependencies``. We
-    # accept ``object | None`` here so test fakes can pass ``None`` without
-    # importing the cache type, but the loader and auth tool require the
-    # concrete ``McpDiscoveryCache`` to opt in.
-    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+    # The loader consumes the explicit cache port, allowing the revision-aware
+    # decorator to compose here without a concrete-cache ``isinstance`` gate.
+    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCachePort
 
-    typed_discovery_cache: McpDiscoveryCache | None = (
+    typed_discovery_cache: McpDiscoveryCachePort | None = (
         mcp_discovery_cache
-        if isinstance(mcp_discovery_cache, McpDiscoveryCache)
+        if isinstance(mcp_discovery_cache, McpDiscoveryCachePort)
         else None
     )
+    # Bound below when the registry exposes the MCP seam, and read again by the
+    # F3 bridge composition. The bridge borrows *these* instances rather than
+    # building its own: the loader is what its bounded second tier opens servers
+    # through, and this dispatcher is the single route by which an inner
+    # operation reaches the Operation Gateway. A second construction here would
+    # be a second dispatch route in everything but name.
+    loader: McpLoader | None = None
+    mcp_dispatcher: CallMcpTool | None = None
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
@@ -429,20 +531,16 @@ def _model_visible_tools(
                 LoadMcpServerInput,
             )
         )
-        model_tools.append(
-            _structured_tool(
-                CallMcpTool(
-                    registry=mcp_registry,  # type: ignore[arg-type]
-                    loader=loader,
-                    runtime_context=runtime_context,
-                    gate=_tool_access_gate(
-                        auth_session_creator=auth_session_creator,
-                        runtime_context=runtime_context,
-                    ),
-                ),
-                McpToolCallRequest,
-            )
+        mcp_dispatcher = CallMcpTool(
+            registry=mcp_registry,  # type: ignore[arg-type]
+            loader=loader,
+            runtime_context=runtime_context,
+            gate=_tool_access_gate(
+                auth_session_creator=auth_session_creator,
+                runtime_context=runtime_context,
+            ),
         )
+        model_tools.append(_structured_tool(mcp_dispatcher, McpToolCallRequest))
     if auth_session_creator is not None:
         model_tools.append(
             _structured_tool(
@@ -482,6 +580,27 @@ def _model_visible_tools(
             SuggestMcpConnectorInput,
         )
     )
+    # F3 — bounded capability-discovery bridge tools. Which tools (if any) a run
+    # may expose is decided solely by ``CapabilityBridgeRegistrar``; the factory
+    # only wraps what it returns, so there is no second activation vocabulary
+    # and no second tool-composition path. Appended here, before the gated
+    # Wave-1 block, so bridge tools receive the SAME display, tool-policy,
+    # approval, and budget middleware as every other model-visible tool — they
+    # are not privileged. Empty in ``direct``/``server``/``shadow`` and for a
+    # catalog that cannot mint a revalidatable ref, which is the current
+    # production posture: the composed surface is then byte-identical to the
+    # pre-F3 disclosure path.
+    model_tools.extend(
+        _capability_bridge_tools(
+            activation=capability_activation,
+            catalog=capability_catalog,
+            bridge=capability_bridge,
+            loader=loader,
+            dispatcher=mcp_dispatcher,
+            local_tool_names=local_tool_names,
+            runtime_context=runtime_context,
+        )
+    )
     # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
     # (constructed per run by the worker) or ``None`` when its flag+desktop gate
     # is off. Appended last so they receive the SAME tool-policy / approval /
@@ -511,7 +630,249 @@ def _model_visible_tools(
         model_tools.append(
             _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
+    # Paired with publication so the model can change an artifact instead of
+    # minting a near-duplicate. Composed by the same worker seam, so a run that
+    # can publish can also revise.
+    if revise_artifact_tool is not None:
+        model_tools.append(_structured_tool(revise_artifact_tool, ReviseArtifactInput))
     return tuple(model_tools)
+
+
+def _capability_bridge_tools(
+    *,
+    activation: object | None,
+    catalog: object | None,
+    bridge: object | None = None,
+    loader: McpLoader | None = None,
+    dispatcher: CallMcpTool | None = None,
+    local_tool_names: frozenset[str] = frozenset(),
+    runtime_context: AgentRuntimeContext,
+) -> tuple[object, ...]:
+    """Return the F3 bridge tools this run may expose, or nothing at all.
+
+    Registration is a *narrowing* decision that this factory delegates whole:
+    :meth:`CapabilityBridgeRegistrar.registrations_for` owns the posture gate,
+    the unbindable-catalog gate, and the invoke-seam gate, and it yields plain
+    domain adapters plus their bounded schemas.  The factory only wraps them
+    with the same ``_structured_tool`` helper every other model tool uses, so
+    tool composition keeps exactly one owner and the discovery package keeps
+    importing no model-framework type.
+
+    What this function adds beyond delegation is the *join* the registrar cannot
+    perform for itself.  A bridge that can act needs one run-scoped disclosure
+    ledger written by search and read by the executor, and it needs the loader
+    and the MCP dispatcher — which exist only here, one per run, and are handed
+    over rather than rebuilt.  :meth:`CapabilityBridgeSeam.compose` owns the
+    ledger, and the executor is constructed from ``seam.disclosure`` itself, so
+    "the registrar and the executor share one ledger" is a property of how this
+    code is written rather than a rule someone has to remember.
+
+    Every unresolved input narrows and leaves the run further back on the
+    pre-F3 path, never further forward:
+
+    * an absent activation or catalog — the production default while F3 is
+      dark — registers nothing and does not even import the discovery package,
+      so the dark path's composed surface and import graph are unchanged;
+    * a value that is not the expected typed contract registers nothing rather
+      than guessing at a posture;
+    * an absent bridge composition, minter, or loader registers the catalog-only
+      search and describe pair, exactly as before this seam existed; and
+    * a registrar failure degrades to the same empty surface, because a dark
+      feature must never widen a tool surface *or* fail an otherwise healthy
+      run.  The failure is logged, never surfaced to the model.
+    """
+
+    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
+        return ()
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityActivationDecision,
+        CapabilityBridgeRegistrar,
+        CapabilityCatalog,
+    )
+
+    if not isinstance(activation, CapabilityActivationDecision) or not isinstance(
+        catalog, CapabilityCatalog
+    ):
+        _LOGGER.warning(
+            "Capability discovery inputs are not the expected contracts; "
+            "keeping the pre-F3 disclosure path."
+        )
+        return ()
+    composition = _capability_bridge_composition(bridge)
+    try:
+        seam = _capability_bridge_seam(
+            catalog=catalog,
+            loader=loader,
+            composition=composition,
+        )
+        registrations = CapabilityBridgeRegistrar.registrations_for(
+            activation=activation,
+            catalog=catalog,
+            runtime_context=runtime_context,
+            seam=seam,
+            executor=_capability_executor(
+                seam=seam,
+                loader=loader,
+                dispatcher=dispatcher,
+            ),
+            revalidation=None if composition is None else composition.revalidation,
+            schema_artifacts=(
+                None if composition is None else composition.schema_artifacts
+            ),
+            observer=None if composition is None else composition.observer,
+            local_tool_names=local_tool_names,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "Capability bridge registration failed; "
+            "keeping the pre-F3 disclosure path.",
+            exc_info=True,
+        )
+        return ()
+    return tuple(
+        _structured_tool(registration.adapter, registration.args_schema)
+        for registration in registrations
+    )
+
+
+def _capability_bridge_composition(
+    bridge: object | None,
+) -> CapabilityBridgeComposition | None:
+    """Narrow the injected bridge inputs, or discard them entirely.
+
+    A wrongly typed value is treated exactly like an absent one.  Reading
+    attributes off whatever arrived would let a partially-shaped object mount
+    half a seam, and half a seam is the state where search discloses references
+    that nothing can dispatch.
+    """
+
+    if bridge is None:
+        return None
+    if isinstance(bridge, CapabilityBridgeComposition):
+        return bridge
+    _LOGGER.warning(
+        "Capability bridge composition is not the expected contract; "
+        "keeping the catalog-only bridge."
+    )
+    return None
+
+
+def _capability_bridge_seam(
+    *,
+    catalog: object,
+    loader: McpLoader | None,
+    composition: CapabilityBridgeComposition | None,
+) -> object | None:
+    """Compose this run's second tier and the ledger it discloses into.
+
+    Both inputs are required and neither is invented here.  The minter is the
+    composition root's — keyed identically to the builder that projected
+    ``catalog``, which is what makes an expanded reference indistinguishable
+    from a catalog member — and the loader is the run's own, so tier two opens
+    servers through the same bounded descriptor read ``load_mcp_server`` uses.
+    Missing either one composes no seam, and the registrar then mounts the
+    catalog-only search it mounted before.
+    """
+
+    if composition is None or composition.minter is None or loader is None:
+        return None
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityBridgeSeam,
+    )
+
+    return CapabilityBridgeSeam.compose(
+        catalog=catalog,  # type: ignore[arg-type]
+        loader=loader,
+        minter=composition.minter,
+        limits=composition.expansion_limits,
+        observer=composition.expansion_observer,
+    )
+
+
+def _capability_executor(
+    *,
+    seam: object | None,
+    loader: McpLoader | None,
+    dispatcher: CallMcpTool | None,
+) -> object | None:
+    """Build the one non-model route a disclosed capability may be dispatched by.
+
+    ``bindings`` is ``seam.disclosure`` — the *same object* the registrar hands
+    the catalog access, never a second ledger built from the same catalog.  A
+    foreign ledger is refused downstream, but relying on that refusal would mean
+    the safe construction is merely the one that happens to pass; taking it off
+    the seam makes it the only one available.
+
+    ``dispatcher`` is this run's own ``CallMcpTool``.  The executor type-checks
+    it, so a substitute callable cannot quietly become a parallel route to the
+    Operation Gateway, and there is nothing to substitute here anyway.
+    """
+
+    if seam is None or loader is None or dispatcher is None:
+        return None
+    from agent_runtime.capabilities.discovery.executor import (  # noqa: PLC0415
+        GatewayCapabilityExecutor,
+    )
+
+    return GatewayCapabilityExecutor(
+        bindings=seam.disclosure,  # type: ignore[attr-defined]
+        loader=loader,
+        dispatcher=dispatcher,
+    )
+
+
+def _capability_discovery_is_supplied(
+    *,
+    activation: object | None,
+    catalog: object | None,
+) -> bool:
+    """Return whether F3 supplied both inputs a bridge registration needs.
+
+    This is the one precondition every F3 seam in this module shares, so it is
+    written once.  It is deliberately only a *precondition*: satisfying it means
+    a bridge registration is possible, never that one happened.
+    """
+
+    return activation is not None and catalog is not None
+
+
+def _capability_bridge_tool_names(
+    model_tools: Sequence[object],
+    *,
+    activation: object | None,
+    catalog: object | None,
+) -> frozenset[str]:
+    """Return the bridge tools actually present in the model-visible surface.
+
+    Deferred suppression reads this and nothing else.  Deriving it from the
+    *composed surface* rather than from the activation posture that produced it
+    is what makes the safety property structural: a run whose bridge did not
+    register — for any of W1's reasons, or any future one — has no bridge tool
+    in its surface, so there is nothing here that could authorize suppressing
+    the disclosure path it fell back to.  The unsuppressed pre-F3 prompt and the
+    empty bridge set are reached by the same branch.
+
+    The narrowing precondition is checked first purely so a dark run never
+    imports the discovery package to look for names that cannot be there; it can
+    only ever report *fewer* bridge tools, never more.
+    """
+
+    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
+        return frozenset()
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityBridgeToolName,
+    )
+
+    composed = {str(getattr(tool, "name", "")) for tool in model_tools}
+    return frozenset(composed & CapabilityBridgeToolName.reserved_names())
+
+
+def _canonical_graph_tool(tool: object) -> object:
+    """Remove the legacy budget adapter at the canonical graph boundary."""
+
+    while isinstance(tool, ToolBudgetGuardedTool):
+        tool = tool.inner
+    return tool
 
 
 def _prompt_assembly_plan(
@@ -520,11 +881,15 @@ def _prompt_assembly_plan(
     runtime_context: AgentRuntimeContext,
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
+    tool_schema_revision: str,
+    capability_bridge_tools: frozenset[str] = frozenset(),
     workspace_active: bool,
     workspace_writable: bool,
     workspace_effect_staging: bool,
     code_mode_active: bool,
     sandbox_execute_active: bool,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
 ) -> PromptAssemblyPlan:
     """Build the F2 prompt plan without changing established rendered order.
 
@@ -532,157 +897,370 @@ def _prompt_assembly_plan(
     adapter gives each block a typed revision, scope, and cache eligibility
     before rendering them in their historical order.  The plan itself is safe
     to project only through :meth:`PromptAssemblyPlan.diagnostic`.
+
+    ``capability_bridge_tools`` names the F3 bridge tools the model was actually
+    given.  When it is empty — every posture but a successfully registered
+    ``deferred`` — this builds the pre-F3 plan byte for byte.
     """
 
+    application_block = _standalone_prompt_block(
+        _instructions_with_application_context(instructions="")
+    )
+    discovery_block = _standalone_prompt_block(
+        _instructions_with_capability_discovery(
+            instructions="",
+            capability_bridge_tools=capability_bridge_tools,
+        )
+    )
+    mcp_block = _standalone_prompt_block(
+        _instructions_with_mcp_cards(
+            instructions="",
+            mcp_servers=mcp_servers,
+            capability_bridge_tools=capability_bridge_tools,
+        )
+    )
+    skill_block = _standalone_prompt_block(
+        _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
+    )
+    suggested_block = _standalone_prompt_block(
+        _instructions_with_suggested_connectors(
+            instructions="", suggestions=runtime_context.suggested_connectors
+        )
+    )
+    workspace_block = _standalone_prompt_block(
+        _instructions_with_workspace(
+            instructions="",
+            workspace_active=workspace_active,
+            workspace_writable=workspace_writable,
+            workspace_effect_staging=workspace_effect_staging,
+        )
+    )
+    capability_block = _standalone_prompt_block(
+        _instructions_with_capability_tools(
+            instructions="",
+            code_mode_active=code_mode_active,
+            sandbox_execute_active=sandbox_execute_active,
+        )
+    )
+    profile_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.PROFILE,
+    )
+    run_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.RUN,
+    )
     base_cacheable = instructions == DEFAULT_INSTRUCTIONS
-    application_block = _instructions_with_application_context(instructions="")
-    mcp_block = _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
-    skill_block = _instructions_with_skill_cards(
-        instructions="", skill_cards=skill_cards
+    base_scope = (
+        PromptFragmentScope.INSTALLATION if base_cacheable else PromptFragmentScope.RUN
     )
-    suggested_block = _instructions_with_suggested_connectors(
-        instructions="", suggestions=runtime_context.suggested_connectors
-    )
-    workspace_block = _instructions_with_workspace(
-        instructions="",
-        workspace_active=workspace_active,
-        workspace_writable=workspace_writable,
-        workspace_effect_staging=workspace_effect_staging,
-    )
-    capability_block = _instructions_with_capability_tools(
-        instructions="",
-        code_mode_active=code_mode_active,
-        sandbox_execute_active=sandbox_execute_active,
-    )
-    fragments = [
-        PromptFragment(
-            fragment_id="00_base_runtime",
-            revision="runtime-base-v1",
-            tier=PromptFragmentTier.SYSTEM_POLICY,
-            scope=PromptFragmentScope.INSTALLATION,
+    inputs = PromptAssemblyInputs(
+        context=_prompt_assembly_context(
+            runtime_context=runtime_context,
+            tool_schema_revision=tool_schema_revision,
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
+        ),
+        base_runtime_safety=PromptSourceMaterial(
+            source_owner="agent_runtime.prompts.runtime",
+            source_revision="runtime-base-v1",
+            source_scope=base_scope,
+            scope=base_scope,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=instructions,
             cache_eligibility=(
                 PromptCacheEligibility.STABLE_PREFIX
                 if base_cacheable
                 else PromptCacheEligibility.NEVER
             ),
+            scope_fingerprint=None if base_cacheable else run_fingerprint,
         ),
-        PromptFragment(
-            fragment_id="10_application_context_boundary",
-            revision="application-context-v1",
-            tier=PromptFragmentTier.STABLE,
+        application_boundary=PromptSourceMaterial(
+            source_owner="agent_runtime.execution.factory",
+            source_revision="application-context-v1",
+            source_scope=PromptFragmentScope.INSTALLATION,
             scope=PromptFragmentScope.INSTALLATION,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=application_block,
-            cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
+            cache_eligibility=(
+                PromptCacheEligibility.STABLE_PREFIX
+                if base_cacheable
+                else PromptCacheEligibility.NEVER
+            ),
         ),
-    ]
-    fragments.extend(
-        fragment
-        for fragment in (
-            _contextual_prompt_fragment(
-                fragment_id="20_mcp_cards",
-                revision="mcp-cards-v1",
-                content=mcp_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="30_skill_cards",
-                revision="skill-cards-v1",
-                content=skill_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="40_suggested_connectors",
-                revision="suggested-connectors-v1",
-                content=suggested_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="50_workspace_guidance",
-                revision="workspace-guidance-v1",
-                content=workspace_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="60_capability_guidance",
-                revision="capability-guidance-v1",
-                content=capability_block,
-                runtime_context=runtime_context,
-            ),
-        )
-        if fragment is not None
-    )
-    return PromptAssembler().assemble(fragments)
-
-
-def _contextual_prompt_fragment(
-    *,
-    fragment_id: str,
-    revision: str,
-    content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
-    if not content.strip():
-        return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.CONTEXTUAL,
-        scope=PromptFragmentScope.PROFILE,
-        content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
+        # The static protocol block that replaces the card enumeration under a
+        # registered bridge. Unlike the cards it stands in for, it contains no
+        # subject data and does not vary by connector, so it is classified as
+        # installation-scoped immutable policy and — exactly like the
+        # application boundary above, and for the same contiguity reason — joins
+        # the cacheable stable prefix only when the base instructions do.
+        capability_discovery_protocol=(
+            PromptSourceMaterial(
+                source_owner="agent_runtime.capabilities.discovery",
+                source_revision="capability-discovery-protocol-v1",
+                source_scope=PromptFragmentScope.INSTALLATION,
+                scope=PromptFragmentScope.INSTALLATION,
+                sensitivity=PromptSensitivity.INTERNAL,
+                trust=PromptTrustLabel.IMMUTABLE_POLICY,
+                content=discovery_block,
+                cache_eligibility=(
+                    PromptCacheEligibility.STABLE_PREFIX
+                    if base_cacheable
+                    else PromptCacheEligibility.NEVER
+                ),
+            )
+            if discovery_block.strip()
+            else None
+        ),
+        mcp_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp",
+            revision="mcp-cards-v1",
+            content=mcp_block,
             scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        skill_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.skills",
+            revision="skill-cards-v1",
+            content=skill_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        suggested_connectors=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp.catalog",
+            revision="suggested-connectors-v1",
+            content=suggested_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        workspace_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities.desktop",
+            revision="workspace-guidance-v1",
+            content=workspace_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
+        ),
+        capability_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities",
+            revision="capability-guidance-v1",
+            content=capability_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
+        ),
+    )
+    return DEFAULT_PROMPT_FRAGMENT_PROVIDERS.assemble(inputs)
+
+
+def _prompt_assembly_context(
+    *,
+    runtime_context: AgentRuntimeContext,
+    tool_schema_revision: str,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> PromptAssemblyContext:
+    """Bind prompt authority only from verified run-owned typed records.
+
+    The worker binds ``RunControlBinding`` after verifying the persisted run
+    and immutable snapshot. The optional F4 binding was replayed from the same
+    run journal. Model/user text and request metadata are intentionally absent.
+    A missing control binding is the legacy/direct-factory path; its metadata
+    remains available for diagnostics, while F2 cannot be installed or
+    enforced without the verified binding.
+    """
+
+    snapshot = control_binding.snapshot if control_binding is not None else None
+    return PromptAssemblyContext(
+        provider=runtime_context.model_profile.provider,
+        model_family=runtime_context.model_profile.model_name,
+        harness_revision=(
+            snapshot.harness_variant_ref
+            if snapshot is not None
+            else "deep-agents-runtime-v1"
+        ),
+        capability_bridge_revision=(
+            snapshot.policy_revisions.capability
+            if snapshot is not None
+            else "runtime-capability-bridge-v1"
+        ),
+        tool_schema_revision=tool_schema_revision,
+        policy_revision=(
+            snapshot.policy_revisions.prompt
+            if snapshot is not None
+            else _prompt_policy_revision(runtime_context)
+        ),
+        authorization_revision=_prompt_authorization_revision(
+            runtime_context,
+            subject_fingerprint=(
+                snapshot.subject_fingerprint if snapshot is not None else None
+            ),
+        ),
+        locked_task_profile=_locked_task_profile(
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         ),
     )
 
 
-def _run_prompt_fragment(
+def _locked_task_profile(
     *,
-    fragment_id: str,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> LockedTaskProfile | None:
+    """Project the verified, immutable F4 selection into F2 cache authority."""
+
+    if task_policy_binding is None:
+        return None
+    if control_binding is None:
+        raise RuntimeError("F4 task policy cannot be bound without run control")
+
+    snapshot = control_binding.snapshot
+    selection = task_policy_binding.selection
+    profile = task_policy_binding.profile
+    if selection.run_id != snapshot.run_id:
+        raise RuntimeError("F4 task profile does not match the prompt run")
+    if selection.profile_id != profile.profile_id:
+        raise RuntimeError("F4 task profile identity does not match its selection")
+    if selection.profile_revision != profile.revision:
+        raise RuntimeError("F4 task profile revision does not match its selection")
+    if selection.task_family != profile.task_family:
+        raise RuntimeError("F4 task family does not match its selected profile")
+    if selection.profile_revision != snapshot.policy_revisions.tool_controller:
+        raise RuntimeError("F4 task profile revision does not match run control")
+
+    return LockedTaskProfile(
+        task_family=selection.task_family.value,
+        profile_revision=selection.profile_revision,
+        lock_revision=selection.selection_digest,
+    )
+
+
+def _standalone_prompt_block(rendered: str) -> str:
+    """Remove only the separator introduced by a legacy empty-base helper."""
+
+    return rendered.removeprefix("\n\n")
+
+
+def _prompt_source_material(
+    *,
+    owner: str,
     revision: str,
     content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
+    scope: PromptFragmentScope,
+    scope_fingerprint: str,
+    sensitivity: PromptSensitivity,
+    trust: PromptTrustLabel,
+) -> PromptSourceMaterial | None:
     if not content.strip():
         return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.VOLATILE,
-        scope=PromptFragmentScope.RUN,
+    return PromptSourceMaterial(
+        source_owner=owner,
+        source_revision=revision,
+        source_scope=scope,
+        scope=scope,
+        sensitivity=sensitivity,
+        trust=trust,
+        cache_eligibility=PromptCacheEligibility.NEVER,
+        scope_fingerprint=scope_fingerprint,
         content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
-            scope=PromptFragmentScope.RUN,
-        ),
     )
 
 
 def _prompt_scope_fingerprint(
     *,
     runtime_context: AgentRuntimeContext,
-    content: str,
     scope: PromptFragmentScope,
 ) -> str:
     """Hash all scope-changing inputs without retaining their raw values."""
 
+    identity_fields = {
+        "org_id",
+        "user_id",
+        "roles",
+        "permission_scopes",
+        "connector_scopes",
+        "paused_connectors",
+        "connector_access_modes",
+    }
+    if scope is PromptFragmentScope.RUN:
+        identity_fields.update({"request_id", "run_id", "trace_id"})
     return canonical_json_sha256(
         {
             "scope": scope.value,
-            "content": content,
             "subject": runtime_context.model_dump(
+                mode="json",
+                include=identity_fields,
+            ),
+        }
+    )
+
+
+def _prompt_authorization_revision(
+    runtime_context: AgentRuntimeContext,
+    *,
+    subject_fingerprint: str | None = None,
+) -> str:
+    return canonical_json_sha256(
+        {
+            "subject_fingerprint": subject_fingerprint,
+            "authorization": runtime_context.model_dump(
                 mode="json",
                 include={
                     "org_id",
                     "user_id",
+                    "roles",
                     "permission_scopes",
                     "connector_scopes",
-                    "trace_id",
+                    "paused_connectors",
+                    "connector_access_modes",
                 },
             ),
+        }
+    )
+
+
+def _prompt_policy_revision(runtime_context: AgentRuntimeContext) -> str:
+    return canonical_json_sha256(
+        {
+            "prompt_policy": "legacy-runtime-prompt-policy-v1",
+            "user_policy": runtime_context.user_policies_json,
+            "workspace_behavior": runtime_context.workspace_behavior_overrides,
+        }
+    )
+
+
+def _model_tool_schema_revision(model_tools: Sequence[object]) -> str:
+    """Digest exactly the body-free tool schema fields visible to the model."""
+
+    schemas: list[dict[str, object]] = []
+    for tool in model_tools:
+        args_schema = getattr(tool, "args_schema", None)
+        schema: object = None
+        model_json_schema = getattr(args_schema, "model_json_schema", None)
+        if callable(model_json_schema):
+            schema = model_json_schema()
+        schemas.append(
+            {
+                "name": str(getattr(tool, "name", "")),
+                "description": str(getattr(tool, "description", "")),
+                "args_schema": schema,
+            }
+        )
+    return canonical_json_sha256(
+        {
+            "schema_revision": "model-visible-tools-v1",
+            "tools": sorted(schemas, key=lambda item: str(item["name"])),
         }
     )
 
@@ -794,9 +1372,26 @@ def _tool_access_gate(
 
 
 def _instructions_with_mcp_cards(
-    *, instructions: str, mcp_servers: Sequence[object]
+    *,
+    instructions: str,
+    mcp_servers: Sequence[object],
+    capability_bridge_tools: frozenset[str] = frozenset(),
 ) -> str:
-    """Append the MCP server card block (or the no-servers block) to the base instructions."""
+    """Append the MCP server card block (or the no-servers block) to the base instructions.
+
+    The block is suppressed only when a bridge tool is genuinely present in the
+    composed model surface.  Suppression is the one thing in F3 that reduces
+    prompt size: this is an unbounded enumeration, one line per authorized
+    server, rendered on every turn and growing linearly with connector count,
+    and search-and-describe is a strictly constant-size replacement for it.
+
+    The default is deliberately the *unsuppressed* block, so a caller that has
+    not proven a bridge registered keeps the pre-F3 disclosure it is entitled
+    to rather than silently losing its only route to MCP.
+    """
+
+    if capability_bridge_tools:
+        return instructions
     if not mcp_servers:
         return "\n\n".join(
             (
@@ -828,6 +1423,28 @@ def _instructions_with_application_context(*, instructions: str) -> str:
     """Append the invariant that quoted application context is untrusted data."""
 
     return "\n\n".join((instructions, _APPLICATION_CONTEXT_INSTRUCTIONS))
+
+
+def _instructions_with_capability_discovery(
+    *,
+    instructions: str,
+    capability_bridge_tools: frozenset[str],
+) -> str:
+    """Append the discovery protocol block when a bridge tool actually registered.
+
+    Gated on the same set that suppresses the card block, so the two are exactly
+    mutually exclusive: the model is never left without *some* account of how to
+    reach MCP, and never given both.
+
+    The block deliberately re-enumerates nothing.  It is one fixed paragraph
+    whose length does not depend on how many servers are authorized — which is
+    the whole point, since re-listing the servers under a different heading
+    would rebuild the block this lane exists to remove.
+    """
+
+    if not capability_bridge_tools:
+        return instructions
+    return "\n\n".join((instructions, CAPABILITY_DISCOVERY_INSTRUCTIONS))
 
 
 async def _skill_cards(

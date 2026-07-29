@@ -255,6 +255,14 @@ class RuntimeApiEventType(StrEnum):
     # the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     GATE_OPENED = LedgerEventType.GATE_OPENED.value
     GATE_RESOLVED = LedgerEventType.GATE_RESOLVED.value
+    # The v2.1 gate pair, emitted by the capability gateway when an operation is
+    # blocked pending a grant (``workspace/effects.py::_blocked``). They were
+    # absent here while the emitters converted by value, so every emission raised
+    # ``ValueError`` inside the gateway rather than opening a gate — the drift the
+    # comment above says cannot happen. ``test_ledger_emit_parity`` now enforces
+    # it. The client's ``projectCanvasLifecycle`` consumes both to reach ``parked``.
+    GATE_OPENED_V2 = LedgerEventType.GATE_OPENED_V2.value
+    GATE_RESOLVED_V2 = LedgerEventType.GATE_RESOLVED_V2.value
     # Generative Surfaces v2 (PRD-D1, SDR §5). The single-artifact staged-write
     # ledger triad, emitted behind ``SURFACES_V2`` by the ``WriteStager``:
     # ``write.staged`` (a draft-send proposal becomes a staged surface),
@@ -311,6 +319,36 @@ class RuntimeApiEventType(StrEnum):
     EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
     EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
     EFFECT_ROW_DECISIONS_RECORDED = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
+    # Agent-runtime quality control plane. These are content-free INTERNAL
+    # journal rows: the immutable snapshot and append-only decision lineage
+    # contain only refs, revisions, modes, digests, limits, and timestamps.
+    QUALITY_CONTROL_BOUND = "quality.control_bound.v1"
+    QUALITY_DECISION = "quality.decision.v1"
+    # F4 task-aware controller. One strict discriminated, body-free record per
+    # event; the canonical run stream remains the sole mutable journal.
+    TOOL_POLICY_JOURNAL = "tool_policy.journal.v1"
+    # F2 prompt observability. Both rows are INTERNAL/REDACTED and strictly
+    # exclude prompt bodies and provider response content.
+    PROMPT_ASSEMBLED = "prompt.assembled.v1"
+    PROMPT_CACHE_OBSERVED = "prompt.cache.observed.v1"
+    # F10.3 model invocation lineage. Each event carries one strict,
+    # body/credential/exception-free discriminated record.
+    MODEL_INVOCATION_PLANNED = "model.invocation.planned.v1"
+    MODEL_INVOCATION_ROUTE = "model.invocation.route.v1"
+    MODEL_INVOCATION_EXCLUSION = "model.invocation.exclusion.v1"
+    MODEL_ATTEMPT_ADMISSION = "model.attempt.admission.v1"
+    MODEL_ATTEMPT_STATE = "model.attempt.state.v1"
+    MODEL_ATTEMPT_USAGE = "model.attempt.usage.v1"
+    MODEL_ATTEMPT_FAILED = "model.attempt.failed.v1"
+    MODEL_INVOCATION_RECOVERY = "model.invocation.recovery.v1"
+    MODEL_INVOCATION_COMPLETED = "model.invocation.completed.v1"
+    MODEL_INVOCATION_FAILED = "model.invocation.failed.v1"
+    # F6.2 capability-concurrency batch plans. One strict, body-free record per
+    # event: identities, closed vocabularies, keyed resource-scope digests,
+    # allowances, and reason codes. The plan is durable on this stream BEFORE
+    # any child of the batch is dispatched, so a restart recovers the ordering
+    # by replay rather than by re-deriving it.
+    OPERATION_BATCH_JOURNAL = "operation_batch.journal.v1"
 
     @classmethod
     def from_stream_event_type(

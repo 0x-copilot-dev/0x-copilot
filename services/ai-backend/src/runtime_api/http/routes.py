@@ -38,6 +38,7 @@ from runtime_api.schemas import (
     CancelRunResponse,
     ConversationBucket,
     ConversationConnectorScopesResponse,
+    ConversationCanvasResponse,
     ConversationContextResponse,
     ConversationCountsResponse,
     ConversationListResponse,
@@ -252,6 +253,36 @@ class RuntimeApiRoutes:
         """Return the conversation's runs newest-first for the multi-run selector."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).list_runs_for_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
+        )
+
+    @classmethod
+    async def get_conversation_canvas(
+        cls,
+        request: Request,
+        conversation_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        limit: int = Query(50, ge=1, le=100),
+    ) -> ConversationCanvasResponse:
+        """Return the conversation's openable canvas subjects, newest first.
+
+        Canvas identity is conversation-scoped (PRD-02); operation state stays
+        run-scoped. Ownership is proved inside the service by the same gate every
+        other conversation route uses, so a conversation outside the caller's
+        scope 404s rather than confirming it exists.
+        """
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        service = request.app.state.conversation_canvas_service
+        if service is None:
+            # No artifact metadata store composed — an empty canvas is the honest
+            # answer, and keeps the route's shape stable for clients.
+            return ConversationCanvasResponse(conversation_id=conversation_id)
+        return await service.list_subjects(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -952,6 +983,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=RunListResponse,
             name=Keys.RouteName.GET_CONVERSATION_RUNS,
+        )
+        router.add_api_route(
+            "/conversations/{conversation_id}/canvas",
+            RuntimeApiRoutes.get_conversation_canvas,
+            methods=["GET"],
+            response_model=ConversationCanvasResponse,
+            name=Keys.RouteName.GET_CONVERSATION_CANVAS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}/context",

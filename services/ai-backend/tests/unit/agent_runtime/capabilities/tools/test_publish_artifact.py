@@ -17,7 +17,11 @@ from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     PublishArtifactTool,
 )
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactIdCodec
-from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor, Producer
+from agent_runtime.surfaces_v2.ledger_models import (
+    ArtifactAuthor,
+    Producer,
+    SurfaceAccent,
+)
 from tests.unit.agent_runtime.capabilities.operations.helpers import (
     BoundContextMixin,
 )
@@ -81,6 +85,11 @@ class TestPublishArtifactTool(BoundContextMixin):
             "kind": "code",
             "title": "hello.py",
             "presentation": "none",
+            # Destination stated in the result, not left to inference. A result
+            # silent on this is what let the model claim a published CSV was
+            # "saved to your documents folder".
+            "stored_in": "artifact_library",
+            "wrote_to_filesystem": False,
         }
         assert duplicate == first
         assert len(service.byte_calls) == 1
@@ -225,3 +234,81 @@ class TestArtifactContentPartPublisher(BoundContextMixin):
 
         assert artifact_ids == ()
         assert service.byte_calls == service.source_calls == []
+
+
+class TestPublishArtifactAccent(BoundContextMixin):
+    """The model chooses a surface's identity hue by NAME, never by value."""
+
+    @staticmethod
+    def _tool() -> PublishArtifactTool:
+        return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    @staticmethod
+    def _raw(**overrides: object) -> dict[str, object]:
+        return {
+            "kind": "dataset",
+            "title": "forecast",
+            "media_type": "text/csv",
+            "content": "month,bookings\n2026-05,128400\n",
+            **overrides,
+        }
+
+    async def _publish(
+        self, raw: dict[str, object]
+    ) -> tuple[dict[str, object], RecordingArtifactService]:
+        service = RecordingArtifactService()
+        token = self.bind(artifact_service=service, mode=OperationGatewayMode.OFF)
+        try:
+            return await self._tool().ainvoke(raw), service
+        finally:
+            OperationContext.unbind(token)
+
+    @pytest.mark.asyncio
+    async def test_a_chosen_accent_reaches_the_stored_artifact(self) -> None:
+        result, service = await self._publish(self._raw(accent="ember"))
+
+        assert result["status"] == "created"
+        assert service.byte_calls[0]["request"].accent is SurfaceAccent.EMBER
+
+    @pytest.mark.asyncio
+    async def test_an_unset_accent_stays_unset_rather_than_defaulting(self) -> None:
+        """Absence must mean "no preference", so the client can derive from kind.
+
+        Defaulting here would record a decision the author never made, and a
+        later change to the derivation rule could not tell the two apart.
+        """
+        _, service = await self._publish(self._raw())
+
+        assert service.byte_calls[0]["request"].accent is None
+
+    @pytest.mark.asyncio
+    async def test_none_is_a_real_choice_distinct_from_unset(self) -> None:
+        _, service = await self._publish(self._raw(accent="none"))
+
+        assert service.byte_calls[0]["request"].accent is SurfaceAccent.NONE
+
+    @pytest.mark.parametrize(
+        "accent",
+        [
+            "#ff00ff",
+            "red",
+            "var(--color-accent)",
+            "oklch(0.76 0.1 158)",
+            "jade; background: url(evil)",
+            "JADE",
+            "",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_colour_is_refused_and_nothing_is_published(
+        self, accent: str
+    ) -> None:
+        """The closed vocabulary is the boundary that keeps colour out of model
+        output. A rejected accent must fail the whole call rather than publish
+        with the value dropped, so the failure is visible instead of silent."""
+        result, service = await self._publish(self._raw(accent=accent))
+
+        assert result["status"] == "failed"
+        assert service.byte_calls == []

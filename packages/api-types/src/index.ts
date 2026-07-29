@@ -3,6 +3,7 @@ import {
   LEDGER_EVENT_TYPES as WORK_LEDGER_EVENT_TYPES,
   ARTIFACT_EVENT_TYPES as WORK_LEDGER_ARTIFACT_EVENT_TYPES,
   EFFECT_EVENT_TYPES as WORK_LEDGER_EFFECT_EVENT_TYPES,
+  GATE_V2_EVENT_TYPES as WORK_LEDGER_GATE_V2_EVENT_TYPES,
   OPERATION_EVENT_TYPES as WORK_LEDGER_OPERATION_EVENT_TYPES,
 } from "./ledger";
 
@@ -584,6 +585,7 @@ const RUNTIME_LEDGER_V21_EVENT_TYPES = [
   ...WORK_LEDGER_OPERATION_EVENT_TYPES,
   ...WORK_LEDGER_ARTIFACT_EVENT_TYPES,
   ...WORK_LEDGER_EFFECT_EVENT_TYPES,
+  ...WORK_LEDGER_GATE_V2_EVENT_TYPES,
 ] as const;
 type RuntimeLedgerV21EventType =
   (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];
@@ -650,6 +652,22 @@ export type RuntimeApiEventType =
   | "receipt.emitted"
   | ArtifactRuntimeEventType
   | RuntimeLedgerV21EventType
+  | "quality.control_bound.v1"
+  | "quality.decision.v1"
+  | "tool_policy.journal.v1"
+  | "prompt.assembled.v1"
+  | "prompt.cache.observed.v1"
+  | "model.invocation.planned.v1"
+  | "model.invocation.route.v1"
+  | "model.invocation.exclusion.v1"
+  | "model.attempt.admission.v1"
+  | "model.attempt.state.v1"
+  | "model.attempt.usage.v1"
+  | "model.attempt.failed.v1"
+  | "model.invocation.recovery.v1"
+  | "model.invocation.completed.v1"
+  | "model.invocation.failed.v1"
+  | "operation_batch.journal.v1"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -727,6 +745,22 @@ export const RUNTIME_API_EVENT_TYPES = [
   // slice above. Keeping a single spread makes the backend contract parser
   // resolve the transport tuple without following imports across files.
   ...RUNTIME_LEDGER_V21_EVENT_TYPES,
+  "quality.control_bound.v1",
+  "quality.decision.v1",
+  "tool_policy.journal.v1",
+  "prompt.assembled.v1",
+  "prompt.cache.observed.v1",
+  "model.invocation.planned.v1",
+  "model.invocation.route.v1",
+  "model.invocation.exclusion.v1",
+  "model.attempt.admission.v1",
+  "model.attempt.state.v1",
+  "model.attempt.usage.v1",
+  "model.attempt.failed.v1",
+  "model.invocation.recovery.v1",
+  "model.invocation.completed.v1",
+  "model.invocation.failed.v1",
+  "operation_batch.journal.v1",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2353,6 +2387,888 @@ export interface RuntimeTextPayload {
   [key: string]: unknown;
 }
 
+export type AgentQualityFeature =
+  | "f1"
+  | "f2"
+  | "f3"
+  | "f4"
+  | "f5"
+  | "f6"
+  | "f7"
+  | "f8"
+  | "f9"
+  | "f10"
+  | "f11"
+  | "f12";
+
+export type QualityFeatureMode = "off" | "shadow" | "enforce";
+
+/** Internal, closed, flat, content-free run-control journal payloads. */
+export interface QualityControlBoundPayload {
+  schema_version: 1 | 2;
+  snapshot_id: string;
+  snapshot_digest: string;
+  subject_fingerprint: string;
+  deployment_profile: string;
+  harness_variant_ref: string;
+  task_policy_selection_ref: string;
+  prompt_policy_revision: string;
+  capability_policy_revision: string;
+  context_policy_revision: string;
+  tool_controller_policy_revision: string;
+  concurrency_policy_revision: string;
+  dataflow_policy_revision: string;
+  mcp_freshness_policy_revision: string;
+  delegation_policy_revision: string;
+  model_route_policy_revision: string;
+  workspace_edit_policy_revision: string;
+  answer_verification_policy_revision: string;
+  feature_mode_f1: QualityFeatureMode;
+  feature_mode_f2: QualityFeatureMode;
+  feature_mode_f3: QualityFeatureMode;
+  feature_mode_f4: QualityFeatureMode;
+  feature_mode_f5: QualityFeatureMode;
+  feature_mode_f6: QualityFeatureMode;
+  feature_mode_f7: QualityFeatureMode;
+  feature_mode_f8: QualityFeatureMode;
+  feature_mode_f9: QualityFeatureMode;
+  feature_mode_f10: QualityFeatureMode;
+  feature_mode_f11: QualityFeatureMode;
+  feature_mode_f12: QualityFeatureMode;
+  model_same_deployment_retry_mode?: QualityFeatureMode;
+  model_alternate_route_mode?: QualityFeatureMode;
+  model_equivalent_route_mode?: QualityFeatureMode;
+  model_circuit_influence_mode?: QualityFeatureMode;
+  model_qualification_authority_ref?: string | null;
+  model_qualification_authority_revision?: string | null;
+  budget_envelope_ref: string;
+  assignment_revision: string;
+  created_at: string;
+}
+
+export interface QualityDecisionPayload {
+  schema_version: 1;
+  decision_id: string;
+  decision_digest: string;
+  snapshot_id: string;
+  phase: string;
+  feature: AgentQualityFeature;
+  policy_revision: string;
+  input_digest: string;
+  outcome_code: string;
+  record_ref: string | null;
+  parent_decision_refs: readonly string[];
+  /**
+   * The decision row's bounded numeric extension. Named, separately
+   * range-constrained counts rather than a numeric map, so the payload's key
+   * set stays closed and each quantity can state its own ceiling.
+   *
+   * `null` means *not observed*, which is deliberately distinct from an
+   * observed `0`: a ceiling of zero has to tell "nothing came back" apart from
+   * "nothing was measured". Rows written before this extension omit all four.
+   *
+   * A rank is a number — the thing ranked never travels with it.
+   */
+  /** Candidates this decision's search answered with. 0..64. */
+  candidate_count: number | null;
+  /**
+   * 1-based position the selected reference held in the search that offered
+   * it; `0` means it came back from no search at all. 0..64.
+   */
+  selection_rank: number | null;
+  /** Model-visible tokens this decision's answer cost. 0..1000000. */
+  result_tokens: number | null;
+  /** Model turns this decision consumed. 0..1000. */
+  model_turns: number | null;
+  created_at: string;
+}
+
+export type TaskPolicyJournalRecordKind =
+  | "profile_selected"
+  | "plan_bound"
+  | "intent_recorded"
+  | "admission_recorded"
+  | "outcome_recorded"
+  | "feedback_recorded"
+  | "budget_recorded"
+  | "progress_recorded"
+  | "model_turn_recorded";
+
+export type TaskPolicyTaskFamily =
+  | "public_research"
+  | "connected_record_lookup"
+  | "library_grounding"
+  | "workspace_analysis"
+  | "transformation"
+  | "artifact_drafting"
+  | "effect_proposal"
+  | "code_diagnosis"
+  | "delegated_analysis"
+  | "unknown";
+
+export type TaskPolicyReasonCode =
+  | "admitted"
+  | "shadow_admitted"
+  | "within_budget"
+  | "planning_required"
+  | "plan_missing"
+  | "exact_duplicate"
+  | "profile_tool_call_limit"
+  | "semantic_query_overlap"
+  | "same_sources_no_new_evidence"
+  | "same_error_without_changed_input"
+  | "retryable_error"
+  | "operation_failed_retryable"
+  | "budget_low"
+  | "budget_exhausted"
+  | "deadline_exhausted"
+  | "objective_satisfied"
+  | "policy_requires_user_input"
+  | "policy_blocked"
+  | "authorization_blocked"
+  | "new_evidence"
+  | "operation_succeeded"
+  | "operation_completed"
+  | "operation_failed"
+  | "operation_indeterminate"
+  | "operation_replayed"
+  | "unknown";
+
+export interface TaskPolicyJournalRecordBase {
+  schema_version: 1;
+  record_kind: TaskPolicyJournalRecordKind;
+  record_id: string;
+  record_digest: string;
+  run_id: string;
+  snapshot_id: string;
+  created_at: string;
+}
+
+export interface TaskPolicyProfileSelectedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "profile_selected";
+  selection_ref: string;
+  selection_digest: string;
+  profile_id: string;
+  profile_revision: string;
+  task_family: TaskPolicyTaskFamily;
+  planning_requirement: "none" | "optional" | "required";
+  selection_reason:
+    | "effect_intent"
+    | "delegation_intent"
+    | "server_selected_family"
+    | "capability_hint"
+    | "conservative_default";
+}
+
+export interface TaskPolicyPlanBoundRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "plan_bound";
+  selection_ref: string;
+  selection_digest: string;
+  plan_id: string;
+  plan_ref: string;
+  plan_digest: string;
+  created_by: "model" | "deterministic";
+  status: "pending" | "active" | "completed" | "blocked" | "cancelled";
+  step_count: number;
+  success_evidence_requirement_count: number;
+}
+
+export interface TaskPolicyIntentRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "intent_recorded";
+  selection_ref: string;
+  selection_digest: string;
+  tool_call_id: string;
+  operation_id: string;
+  capability_id: string;
+  request_fingerprint: string;
+  plan_id: string | null;
+  plan_digest: string | null;
+  plan_step_id: string | null;
+  expected_evidence_kind: string | null;
+  semantic_fingerprint: string | null;
+  objective_fingerprint: string | null;
+}
+
+export interface TaskPolicyAdmissionRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "admission_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  intent_record_id: string;
+  intent_digest: string;
+  disposition: "admitted" | "blocked" | "shadow_admitted";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  duplicate_of_operation_id: string | null;
+  model_turn_ordinal: number;
+  tool_call_ordinal: number;
+}
+
+export interface TaskPolicyOutcomeRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "outcome_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  intent_record_id: string;
+  intent_digest: string;
+  request_fingerprint: string;
+  status: "succeeded" | "failed" | "indeterminate";
+  result_fingerprint: string | null;
+  error_fingerprint: string | null;
+  failure_class: string | null;
+  retryable: boolean;
+  new_evidence_count: number;
+  observed_source_count: number;
+  source_fingerprints: readonly string[];
+  evidence_fingerprint: string | null;
+  cost_microusd: number;
+  latency_ms: number;
+}
+
+export interface TaskPolicyFeedbackRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "feedback_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  admission_record_id: string;
+  outcome_record_id: string | null;
+  disposition: "continue" | "stop" | "replan" | "ask_user" | "blocked";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  duplicate_of_operation_id: string | null;
+  new_evidence_count: number;
+  total_evidence_count: number;
+  budget_record_id: string | null;
+  budget_digest: string | null;
+}
+
+export type TaskPolicyBudgetDimension =
+  | "model_turns"
+  | "tool_calls"
+  | "cost"
+  | "active_tool_time"
+  | "deadline";
+
+export interface TaskPolicyBudgetRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "budget_recorded";
+  budget_envelope_ref: string;
+  effective_budget_digest: string;
+  model_turns_used: number;
+  tool_calls_used: number;
+  cost_microusd_used: number;
+  active_tool_time_ms_used: number;
+  model_turn_limit: number | null;
+  tool_call_limit: number | null;
+  cost_microusd_limit: number | null;
+  active_tool_time_ms_limit: number | null;
+  deadline_at: string | null;
+  exhausted_dimensions: readonly TaskPolicyBudgetDimension[];
+  hard_stop: boolean;
+}
+
+export interface TaskPolicyProgressRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "progress_recorded";
+  plan_id: string;
+  plan_digest: string;
+  plan_status: "pending" | "active" | "completed" | "blocked" | "cancelled";
+  step_count: number;
+  completed_step_count: number;
+  blocked_step_count: number;
+  active_step_id: string | null;
+  evidence_count: number;
+  checkpoint_ordinal: number;
+  waiting_for_approval: boolean;
+}
+
+export interface TaskPolicyModelTurnRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "model_turn_recorded";
+  turn_id: string;
+  model_turn_ordinal: number;
+  execution_scope_fingerprint: string;
+  disposition: "admitted" | "blocked" | "shadow_admitted";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  cost_microusd: number;
+}
+
+export type TaskPolicyJournalRecord =
+  | TaskPolicyProfileSelectedRecord
+  | TaskPolicyPlanBoundRecord
+  | TaskPolicyIntentRecordedRecord
+  | TaskPolicyAdmissionRecordedRecord
+  | TaskPolicyOutcomeRecordedRecord
+  | TaskPolicyFeedbackRecordedRecord
+  | TaskPolicyBudgetRecordedRecord
+  | TaskPolicyProgressRecordedRecord
+  | TaskPolicyModelTurnRecordedRecord;
+
+/** Internal F4 journal payload. All detail is content-free and digest-bound. */
+export interface TaskPolicyJournalPayload {
+  record: TaskPolicyJournalRecord;
+}
+
+/** F6 capability-concurrency vocabulary. Every member is ordered narrowest
+ * first on the backend, where declaration order *is* the authority rank. */
+export type ConcurrencyFeatureMode = QualityFeatureMode;
+export type ConcurrencyMode =
+  | "serial"
+  | "same_subject_serial"
+  | "parallel_safe";
+export type ConcurrencySideEffectKind =
+  | "unknown"
+  | "irreversible_write"
+  | "reversible_write"
+  | "read"
+  | "none";
+export type ConcurrencyIdempotencyKind = "none" | "keyed" | "natural";
+export type ConcurrencyScope =
+  | "unknown"
+  | "global"
+  | "profile"
+  | "installation"
+  | "user"
+  | "connector"
+  | "capability";
+export type ConcurrencyOrderingRequirement =
+  | "input_order"
+  | "completion_order"
+  | "none";
+export type ConcurrencyProviderSessionConstraint =
+  | "unknown"
+  | "installation_serial"
+  | "session_serial"
+  | "session_parallel_safe";
+export type ConcurrencyPolicySource =
+  | "conservative_default"
+  | "trusted_provider"
+  | "user_approved_override"
+  | "product_catalog";
+export type ConcurrencyResourceKeyDimension =
+  | "connector"
+  | "installation"
+  | "session"
+  | "account"
+  | "subject"
+  | "container"
+  | "object"
+  | "region";
+export type BatchSegmentMode = "serial" | "parallel";
+export type BatchSegmentReason =
+  | "independent_reads"
+  | "batch_serial_default"
+  | "conservative_policy_default"
+  | "policy_requires_serial"
+  | "policy_parallelism_disabled"
+  | "unknown_side_effect"
+  | "effectful_operation"
+  | "unknown_dependencies"
+  | "explicit_dependencies"
+  | "unknown_resources"
+  | "same_subject_requires_resource"
+  | "resource_conflict"
+  | "authorization_epoch_barrier"
+  | "insufficient_parallel_members";
+export type BatchFailurePolicy = "fail_fast" | "collect_all" | "stop_new";
+export type ConcurrencyKillSwitchReason =
+  | "snapshot_governs"
+  | "snapshot_already_serial"
+  | "global_kill_switch"
+  | "connector_kill_switch"
+  | "capability_kill_switch"
+  | "unknown_target"
+  | "unparseable_switch_config"
+  | "switch_source_unavailable";
+export type ConcurrencyKillSwitchScope = "global" | "connector" | "capability";
+export type BatchJournalRecordKind = "plan_bound" | "child_transition";
+
+/** Authority to overlap capability work. Both bounds must be satisfied at
+ * once, so width alone never authorizes overlap. */
+export interface ConcurrencyAllowance {
+  mode: ConcurrencyFeatureMode;
+  max_parallelism: number;
+}
+
+/** Closed template that renders one keyed, digested resource scope key. It
+ * stores dimension *names* only — rendered values leave the backend solely as
+ * an `hmac-sha256:<64 hex>` digest. */
+export interface ConcurrencyResourceKeyTemplate {
+  dimensions: readonly ConcurrencyResourceKeyDimension[];
+}
+
+/** Resolved concurrency policy for one operation. Every default is its
+ * vocabulary's conservative floor, so an undeclared capability cannot
+ * authorize parallel execution. */
+export interface ConcurrencyPolicy {
+  mode: ConcurrencyMode;
+  side_effect: ConcurrencySideEffectKind;
+  idempotency: ConcurrencyIdempotencyKind;
+  resource_key_template: ConcurrencyResourceKeyTemplate | null;
+  max_parallelism: number | null;
+  rate_limit_scope: ConcurrencyScope;
+  ordering_requirement: ConcurrencyOrderingRequirement;
+  provider_session_constraint: ConcurrencyProviderSessionConstraint;
+  policy_source: ConcurrencyPolicySource;
+}
+
+/** Planning facts for one already-authorized operation. `dependency_ids` and
+ * `resource_fingerprints` are `null` for *unknown*, never for empty; empty
+ * lists are an explicit attestation. Fingerprints are keyed HMAC digests. */
+export interface BatchOperation {
+  operation_id: string;
+  authorization_epoch: string;
+  dependency_ids: readonly string[] | null;
+  resource_fingerprints: readonly string[] | null;
+}
+
+export interface PlannedOperation {
+  operation: BatchOperation;
+  capability_ref: string;
+  policy: ConcurrencyPolicy;
+  policy_digest: string;
+}
+
+/** One deterministic serial or parallel section of a plan. */
+export interface BatchSegment {
+  segment_index: number;
+  mode: BatchSegmentMode;
+  operation_ids: readonly string[];
+  reason: BatchSegmentReason;
+  allowance: ConcurrencyAllowance;
+}
+
+export interface BatchJournalRecordBase {
+  schema_version: 1;
+  record_kind: BatchJournalRecordKind;
+  record_id: string;
+  record_digest: string;
+  run_id: string;
+  snapshot_id: string;
+  created_at: string;
+}
+
+/** The ordering decision for one tool-call group, durable BEFORE any child of
+ * the batch is dispatched. It carries both the decision (`segments`) and the
+ * inputs it was decided from, so a replay re-derives the identical plan
+ * instead of trusting the stored segmentation. */
+export interface BatchPlanBoundRecord extends BatchJournalRecordBase {
+  record_kind: "plan_bound";
+  batch_id: string;
+  parent_operation_id: string | null;
+  turn_ordinal: number;
+  concurrency_policy_revision: string;
+  snapshot_allowance: ConcurrencyAllowance;
+  effective_allowance: ConcurrencyAllowance;
+  kill_switch_reason: ConcurrencyKillSwitchReason;
+  kill_switch_scope: ConcurrencyKillSwitchScope | null;
+  failure_policy: BatchFailurePolicy;
+  deadline_at: string | null;
+  operations: readonly PlannedOperation[];
+  segments: readonly BatchSegment[];
+  plan_digest: string;
+}
+
+/** Durable phase of one batch child, recorded so restart can tell "never
+ * started" from "started and the outcome was lost". Absence of a settled
+ * transition is never read as success or as rollback. */
+export type BatchChildTransitionPhase = "dispatch_intent" | "settled";
+
+/** How a batch child ended, when it is known at all. */
+export type BatchChildTransitionDisposition =
+  | "succeeded"
+  | "failed"
+  | "indeterminate";
+
+export interface BatchChildTransitionRecord extends BatchJournalRecordBase {
+  record_kind: "child_transition";
+  batch_id: string;
+  operation_id: string;
+  phase: BatchChildTransitionPhase;
+  /** Present only when `phase` is `settled`. */
+  disposition: BatchChildTransitionDisposition | null;
+}
+
+export type BatchJournalRecord =
+  | BatchPlanBoundRecord
+  | BatchChildTransitionRecord;
+
+/** Internal F6 journal payload. All detail is content-free and digest-bound. */
+export interface OperationBatchJournalPayload {
+  record: BatchJournalRecord;
+}
+
+export type PromptCacheOwner = "none" | "framework" | "product";
+export type PromptAssemblyOutcome =
+  | "enforced"
+  | "shadow"
+  | "legacy_comparison"
+  | "feature_off";
+export type PromptAssemblyReasonCode =
+  | "typed_plan_enforced"
+  | "shadow_plan_assembled"
+  | "legacy_renderer_compared"
+  | "prompt_assembly_disabled";
+export type PromptCacheOutcome =
+  | "read"
+  | "write"
+  | "read_write"
+  | "miss"
+  | "unsupported";
+export type PromptCacheReasonCode =
+  | "provider_reported_read"
+  | "provider_reported_write"
+  | "provider_reported_read_write"
+  | "provider_reported_miss"
+  | "provider_metadata_not_reported"
+  | "adapter_unsupported"
+  | "decoration_disabled";
+
+export interface PromptFragmentTokenTotals {
+  system_policy: number;
+  stable: number;
+  contextual: number;
+  volatile: number;
+  current_turn: number;
+}
+
+export interface PromptObservationRecordBase {
+  schema_version: 1;
+  record_id: string;
+  run_id: string;
+  snapshot_id: string;
+  snapshot_digest: string;
+  model_call_id: string;
+  created_at: string;
+  record_digest: string;
+}
+
+export interface PromptAssembledRecord extends PromptObservationRecordBase {
+  record_kind: "assembled";
+  plan_id: string;
+  plan_revision: string;
+  plan_digest: string;
+  provider: string;
+  model_family: string;
+  complete_system_digest: string;
+  stable_prefix_digest: string | null;
+  fragment_count: number;
+  stable_prefix_fragment_count: number;
+  system_bytes: number;
+  estimated_input_tokens: number;
+  fragment_tokens: PromptFragmentTokenTotals;
+  cache_owner: PromptCacheOwner;
+  outcome: PromptAssemblyOutcome;
+  reason_code: PromptAssemblyReasonCode;
+}
+
+export interface PromptCacheObservedRecord extends PromptObservationRecordBase {
+  record_kind: "cache_observed";
+  assembly_record_id: string;
+  assembly_record_digest: string;
+  plan_id: string;
+  plan_digest: string;
+  provider: string;
+  model_family: string;
+  cache_owner: PromptCacheOwner;
+  outcome: PromptCacheOutcome;
+  reason_code: PromptCacheReasonCode;
+  provider_reported: boolean;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+export interface PromptAssembledPayload {
+  record: PromptAssembledRecord;
+}
+
+export interface PromptCacheObservedPayload {
+  record: PromptCacheObservedRecord;
+}
+
+export type ModelInvocationPurpose =
+  | "main"
+  | "tool_planning"
+  | "tool_interpretation"
+  | "subagent_work"
+  | "context_compression"
+  | "todo_extraction"
+  | "library_retrieval"
+  | "library_indexing"
+  | "palette_ranking"
+  | "memory_retrieval"
+  | "memory_indexing"
+  | "memory_extraction"
+  | "view_shaping"
+  | "shape_request";
+export type ModelFallbackPolicy =
+  | "none"
+  | "same_model"
+  | "qualified_equivalent";
+export type ModelCredentialMode = "deployment" | "byok" | "keyless";
+export type ModelRouteExclusionReason =
+  | "disabled"
+  | "health_unavailable"
+  | "open_circuit"
+  | "provider_mismatch"
+  | "model_mismatch"
+  | "fallback_not_permitted"
+  | "equivalence_not_qualified"
+  | "capability_mismatch"
+  | "context_too_small"
+  | "region_mismatch"
+  | "credential_unavailable"
+  | "byok_required"
+  | "byok_disallowed"
+  | "privacy_incompatible";
+export type ModelAttemptDecisionKind = "admit" | "deny";
+export type ModelAttemptDecisionReason =
+  | "first_attempt"
+  | "safe_same_deployment_retry"
+  | "safe_alternate_route"
+  | "whole_run_replay_forbidden"
+  | "external_effect_observed"
+  | "no_eligible_route"
+  | "attempt_limit_reached"
+  | "same_deployment_limit_reached"
+  | "route_set_exhausted"
+  | "deadline_expired"
+  | "projected_cost_unknown"
+  | "cost_budget_exceeded"
+  | "projected_token_usage_unknown"
+  | "input_token_budget_exceeded"
+  | "output_token_budget_exceeded"
+  | "visible_output_already_emitted"
+  | "ambiguous_provider_state"
+  | "failure_not_retryable"
+  | "context_replan_required"
+  | "prior_attempt_not_failed"
+  | "prior_route_mismatch";
+export type ModelDispatchState =
+  | "before_dispatch"
+  | "not_accepted"
+  | "accepted"
+  | "unknown";
+export type ModelStreamState =
+  | "not_started"
+  | "started_no_visible_output"
+  | "visible_output";
+export type ModelFailureClass =
+  | "pre_dispatch_transient"
+  | "provider_overloaded"
+  | "request_invalid"
+  | "auth_invalid"
+  | "region_unavailable"
+  | "policy_incompatible"
+  | "context_exceeded"
+  | "stream_interrupted_before_content"
+  | "stream_interrupted_after_content"
+  | "ambiguous_provider_state"
+  | "cancelled"
+  | "deadline_exceeded";
+export type ModelAttemptLifecycleState =
+  | "admitted"
+  | "dispatching"
+  | "accepted"
+  | "stream_started"
+  | "visible_output"
+  | "tool_call_content"
+  | "completed"
+  | "cancelled"
+  | "ambiguous";
+export type ModelRecoveryKind =
+  | "same_deployment_retry"
+  | "alternate_route"
+  | "crash_reconciliation";
+export type ModelRecoveryOutcome =
+  | "admitted"
+  | "denied"
+  | "reconciled_completed"
+  | "reconciled_failed"
+  | "ambiguous";
+export type ModelInvocationFailureReason =
+  | "no_eligible_route"
+  | "admission_denied"
+  | "attempt_failed"
+  | "ambiguous_recovery"
+  | "cancelled"
+  | "deadline_exceeded"
+  | "budget_exhausted";
+
+export interface ModelInvocationRecordBase {
+  schema_version: 1;
+  record_id: string;
+  run_id: string;
+  snapshot_id: string;
+  snapshot_digest: string;
+  model_call_id: string;
+  invocation_id: string;
+  created_at: string;
+  record_digest: string;
+}
+
+export interface ModelInvocationPlannedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_planned";
+  execution_scope: string;
+  model_turn: number;
+  purpose: ModelInvocationPurpose;
+  request_digest: string;
+  requirements_digest: string;
+  requirements_revision: string;
+  descriptor_set_revision: string;
+  route_plan_id: string;
+  route_digest: string;
+  route_policy_revision: string;
+  fallback_policy: ModelFallbackPolicy;
+  max_attempts: number;
+  max_same_deployment_attempts: number;
+  max_cost_microusd: number | null;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  deadline_at: string | null;
+  eligible_route_count: number;
+  exclusion_count: number;
+  status: "planned";
+}
+
+export interface ModelRouteEligibleRecord extends ModelInvocationRecordBase {
+  record_kind: "route_eligible";
+  route_plan_id: string;
+  route_digest: string;
+  route_ordinal: number;
+  deployment_id: string;
+  deployment_revision: string;
+  descriptor_revision: string;
+  endpoint_ref: string;
+  endpoint_revision: string;
+  provider: string;
+  model_name: string;
+  region: string;
+  credential_mode: ModelCredentialMode;
+  price_revision: string;
+  qualification_revision: string;
+  max_input_tokens: number;
+  max_output_tokens: number;
+}
+
+export interface ModelRouteExcludedRecord extends ModelInvocationRecordBase {
+  record_kind: "route_excluded";
+  route_plan_id: string;
+  route_digest: string;
+  deployment_id: string;
+  reasons: readonly ModelRouteExclusionReason[];
+}
+
+export interface ModelAttemptAdmissionRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_admission";
+  admission_ordinal: number;
+  decision: ModelAttemptDecisionKind;
+  reason: ModelAttemptDecisionReason;
+  attempt_id: string | null;
+  attempt_ordinal: number | null;
+  deployment_id: string | null;
+  prior_attempt_count: number;
+  external_effect_observed: boolean;
+  projected_cost_microusd: number | null;
+  projected_input_tokens: number | null;
+  projected_output_tokens: number | null;
+}
+
+export interface ModelAttemptStateRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_state";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  state: ModelAttemptLifecycleState;
+  dispatch_state: ModelDispatchState;
+  stream_state: ModelStreamState;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+  provider_request_digest: string | null;
+  elapsed_ms: number;
+}
+
+export interface ModelAttemptUsageRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_usage";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  usage_record_id: string | null;
+  provider_reported: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_input_tokens: number;
+  reasoning_tokens: number;
+  audio_input_tokens: number;
+  audio_output_tokens: number;
+  cost_microusd: number;
+  duration_ms: number;
+  finalized: true;
+}
+
+export interface ModelAttemptFailedRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_failed";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  failure_class: ModelFailureClass;
+  dispatch_state: ModelDispatchState;
+  stream_state: ModelStreamState;
+  provider_failure_observed: boolean;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+  usage_may_be_incomplete: boolean;
+}
+
+export interface ModelInvocationRecoveryRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_recovery";
+  recovery_ordinal: number;
+  source_attempt_id: string;
+  kind: ModelRecoveryKind;
+  outcome: ModelRecoveryOutcome;
+  decision_reason: ModelAttemptDecisionReason | null;
+  target_attempt_id: string | null;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+}
+
+export interface ModelInvocationCompletedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_completed";
+  terminal_attempt_id: string;
+  attempt_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_microusd: number;
+  total_duration_ms: number;
+  status: "completed";
+}
+
+export interface ModelInvocationFailedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_failed";
+  terminal_attempt_id: string | null;
+  attempt_count: number;
+  reason: ModelInvocationFailureReason;
+  failure_class: ModelFailureClass | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_microusd: number;
+  total_duration_ms: number;
+  status: "failed";
+}
+
+export type ModelInvocationRecord =
+  | ModelInvocationPlannedRecord
+  | ModelRouteEligibleRecord
+  | ModelRouteExcludedRecord
+  | ModelAttemptAdmissionRecord
+  | ModelAttemptStateRecord
+  | ModelAttemptUsageRecord
+  | ModelAttemptFailedRecord
+  | ModelInvocationRecoveryRecord
+  | ModelInvocationCompletedRecord
+  | ModelInvocationFailedRecord;
+
+export interface ModelInvocationJournalPayload {
+  record: ModelInvocationRecord;
+}
+
 // Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
 // ordinal) and is the token the assistant text embeds inline as
 // `[c<id>]`. The frontend's markdown plugin resolves these tokens by
@@ -2733,6 +3649,25 @@ export interface RuntimeEventPayloadByType
    * {kind: receipt}`) at run termination. Carries only `surface_id` + `fold_ref`
    * (the receipt is re-derivable by folding the ledger, never a stored blob). */
   "receipt.emitted": ReceiptEmittedPayload;
+  "quality.control_bound.v1": QualityControlBoundPayload;
+  "quality.decision.v1": QualityDecisionPayload;
+  "tool_policy.journal.v1": TaskPolicyJournalPayload;
+  "prompt.assembled.v1": PromptAssembledPayload;
+  "prompt.cache.observed.v1": PromptCacheObservedPayload;
+  "model.invocation.planned.v1": ModelInvocationJournalPayload;
+  "model.invocation.route.v1": ModelInvocationJournalPayload;
+  "model.invocation.exclusion.v1": ModelInvocationJournalPayload;
+  "model.attempt.admission.v1": ModelInvocationJournalPayload;
+  "model.attempt.state.v1": ModelInvocationJournalPayload;
+  "model.attempt.usage.v1": ModelInvocationJournalPayload;
+  "model.attempt.failed.v1": ModelInvocationJournalPayload;
+  "model.invocation.recovery.v1": ModelInvocationJournalPayload;
+  "model.invocation.completed.v1": ModelInvocationJournalPayload;
+  "model.invocation.failed.v1": ModelInvocationJournalPayload;
+  /** F6.2 — the ordering decision for one tool-call group, durable before any
+   * child is dispatched. INTERNAL/REDACTED: identities, closed vocabularies,
+   * keyed resource-scope digests, allowances, and reason codes only. */
+  "operation_batch.journal.v1": OperationBatchJournalPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

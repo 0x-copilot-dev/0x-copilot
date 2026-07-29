@@ -337,7 +337,10 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
 
         assert response.status_code == 404
         assert response.json() == {
-            "detail": "Artifact source is not available for this scope."
+            "detail": {
+                "code": "artifact_invalid_source",
+                "message": "Artifact source is not available for this scope.",
+            }
         }
         assert service.calls == []
 
@@ -364,7 +367,12 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
             headers=self.headers(),
         )
         assert response.status_code == 404
-        assert response.json() == {"detail": "Artifact was not found for this scope."}
+        assert response.json() == {
+            "detail": {
+                "code": "artifact_not_found",
+                "message": "Artifact was not found for this scope.",
+            }
+        }
 
     def test_malformed_artifact_cursor_is_safe_422(self) -> None:
         service = FakeArtifactService()
@@ -374,7 +382,12 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
             headers=self.headers(),
         )
         assert response.status_code == 422
-        assert response.json() == {"detail": "Artifact cursor is invalid."}
+        assert response.json() == {
+            "detail": {
+                "code": "artifact_invalid_cursor",
+                "message": "Artifact cursor is invalid.",
+            }
+        }
 
 
 class TestArtifactMultipartRoutes(ArtifactRouteMixin):
@@ -513,7 +526,12 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
             files={"content": ("demo.ts", b"secret bytes", "text/typescript")},
         )
         assert response.status_code == 404
-        assert response.json() == {"detail": "Artifact was not found for this scope."}
+        assert response.json() == {
+            "detail": {
+                "code": "artifact_not_found",
+                "message": "Artifact was not found for this scope.",
+            }
+        }
 
     @pytest.mark.parametrize("declared_length", [None, "8"])
     def test_revision_receipt_uses_authorized_artifact_kind_cap(
@@ -758,7 +776,12 @@ class TestArtifactRouteWiring(ArtifactRouteMixin):
         assert (
             foreign.json()
             == missing.json()
-            == {"detail": "Artifact was not found for this scope."}
+            == {
+                "detail": {
+                    "code": "artifact_not_found",
+                    "message": "Artifact was not found for this scope.",
+                }
+            }
         )
 
     @pytest.mark.parametrize(

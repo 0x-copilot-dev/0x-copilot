@@ -8,6 +8,11 @@ upstream's builder signature drifts.
 """
 
 import inspect
+import json
+import subprocess
+import sys
+from collections.abc import Callable
+from typing import Any
 
 from deepagents.middleware import subagents as upstream
 
@@ -18,23 +23,44 @@ from agent_runtime.delegation.subagents.atlas_task_tool import (
 
 
 class TestAtlasTaskToolSignature:
-    def test_accepts_every_upstream_builder_parameter(self) -> None:
-        ours = inspect.signature(build_atlas_task_tool).parameters
-        theirs = inspect.signature(upstream._build_task_tool).parameters
-        missing = [
-            name
-            for name, param in theirs.items()
-            if name not in ours
-            and param.kind
-            in (
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                inspect.Parameter.KEYWORD_ONLY,
-            )
-        ]
-        assert not missing, (
-            "build_atlas_task_tool is missing upstream _build_task_tool "
-            f"parameters {missing}; the mirror must be re-synced with the "
-            "installed deepagents version (see atlas_task_tool.py docstring)."
+    def test_private_upstream_seams_and_atlas_mirror_are_pinned(self) -> None:
+        """Read pristine private signatures outside the process-global patch.
+
+        Pytest imports the runtime factory during collection, and the factory
+        replaces ``deepagents.middleware.subagents._build_task_tool`` at module
+        load. Comparing the in-process symbol to our mirror can therefore
+        compare the mirror to itself and miss upstream drift. A clean isolated
+        interpreter keeps this unavoidable private contract honest.
+        """
+
+        expected_build_task_tool = (
+            ("subagents", "POSITIONAL_OR_KEYWORD", "<required>"),
+            ("task_description", "POSITIONAL_OR_KEYWORD", "None"),
+            ("private_state_keys", "KEYWORD_ONLY", "frozenset()"),
+            ("state_schema", "KEYWORD_ONLY", "None"),
+        )
+        expected_create_sub_agent = (
+            ("spec", "POSITIONAL_OR_KEYWORD", "<required>"),
+            ("state_schema", "KEYWORD_ONLY", "None"),
+            ("response_format", "KEYWORD_ONLY", "None"),
+        )
+        pristine = _pristine_upstream_contracts()
+
+        assert pristine["_build_task_tool"] == expected_build_task_tool, (
+            "Private deepagents._build_task_tool drifted. Re-sync the isolated "
+            "Atlas mirror in atlas_task_tool.py before upgrading deepagents. "
+            f"expected={expected_build_task_tool!r}, "
+            f"actual={pristine['_build_task_tool']!r}"
+        )
+        assert pristine["create_sub_agent"] == expected_create_sub_agent, (
+            "Private deepagents.create_sub_agent drifted. The Atlas mirror "
+            "calls this compiler directly and must be reviewed before upgrade. "
+            f"expected={expected_create_sub_agent!r}, "
+            f"actual={pristine['create_sub_agent']!r}"
+        )
+        assert _parameter_contract(build_atlas_task_tool) == expected_build_task_tool, (
+            "build_atlas_task_tool no longer mirrors the pinned pristine "
+            "_build_task_tool call shape."
         )
 
     def test_middleware_constructs_with_patched_builder(self) -> None:
@@ -71,3 +97,59 @@ class _NoopRunnable:
 
     async def ainvoke(self, *_args: object, **_kwargs: object) -> dict[str, object]:
         return {"messages": []}
+
+
+def _parameter_contract(
+    callable_: Callable[..., Any],
+) -> tuple[tuple[str, str, str], ...]:
+    return tuple(
+        (
+            parameter.name,
+            parameter.kind.name,
+            (
+                "<required>"
+                if parameter.default is inspect.Parameter.empty
+                else repr(parameter.default)
+            ),
+        )
+        for parameter in inspect.signature(callable_).parameters.values()
+    )
+
+
+def _pristine_upstream_contracts() -> dict[str, tuple[tuple[str, str, str], ...]]:
+    script = """
+import inspect
+import json
+from deepagents.middleware import subagents
+
+def contract(callable_):
+    return [
+        [
+            parameter.name,
+            parameter.kind.name,
+            (
+                "<required>"
+                if parameter.default is inspect.Parameter.empty
+                else repr(parameter.default)
+            ),
+        ]
+        for parameter in inspect.signature(callable_).parameters.values()
+    ]
+
+print(json.dumps({
+    "_build_task_tool": contract(subagents._build_task_tool),
+    "create_sub_agent": contract(subagents.create_sub_agent),
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    payload = json.loads(completed.stdout)
+    return {
+        name: tuple(tuple(item) for item in parameters)
+        for name, parameters in payload.items()
+    }

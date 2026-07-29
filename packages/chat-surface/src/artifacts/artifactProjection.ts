@@ -46,16 +46,30 @@ export function projectArtifactTabs(
     if (id === "" || revision === null) continue;
     const prior = entries.get(id);
     const kind =
-      eventType === ARTIFACT_CREATED ? artifactKind(payload.kind) : prior?.kind;
+      (eventType === ARTIFACT_CREATED
+        ? artifactKind(payload.kind)
+        : undefined) ??
+      prior?.kind ??
+      // A revision whose `artifact.created` fell outside this event window
+      // would otherwise be dropped and never become a tab. Now that a user can
+      // revise an artifact from an earlier turn, that window miss is reachable,
+      // so fall back to the payload's own kind before giving up.
+      artifactKind(payload.kind);
     if (kind === undefined) continue;
     const sequence =
       typeof event.sequence_no === "number" ? event.sequence_no : 0;
+    // Prefer the artifact's own name when the event carries one. Ledger
+    // payloads do not today, so this normally falls through to the synthesized
+    // label; the authoritative title reaches the Run cockpit's tabs from the
+    // conversation-canvas record instead. Kept as a preference rather than
+    // hardcoding the synthesis, so an event that gains a title is used.
+    const name = string(payload.title) || `${kind} artifact`;
     entries.set(id, {
       artifactId: id,
       kind,
       revision,
       uri: artifactUri(kind, id, revision),
-      title: `${kind} artifact · r${revision}`,
+      title: `${name} · r${revision}`,
       lastSeq: sequence,
     });
   }

@@ -34,6 +34,7 @@ from agent_runtime.artifacts.errors import (
     ArtifactInvalidSourceError,
     ArtifactNotFoundError,
     ArtifactRangeError,
+    ArtifactSealedRunError,
 )
 from agent_runtime.artifacts.ports import (
     ArtifactBlobStorePort,
@@ -54,6 +55,7 @@ from agent_runtime.surfaces_v2.ledger_ids import (
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
+    ArtifactCausalLane,
     ArtifactCreatedPayload,
     ArtifactKind,
     ArtifactPresentationDecidedPayload,
@@ -322,10 +324,12 @@ class ArtifactService:
             user_id=user_id,
             artifact_id=request.artifact_id,
         )
-        scope = await self._require_run_scope(
+        scope = await self._require_revision_scope(
             org_id=org_id,
             user_id=user_id,
-            run_id=current.artifact.run_id,
+            request=request,
+            provenance=provenance,
+            current=current,
         )
         limit = self._limits.for_kind(current.artifact.kind)
         written = await self._blobs.put_stream(
@@ -384,14 +388,18 @@ class ArtifactService:
                 key=request.idempotency_key,
                 request_digest=request_digest,
             ),
-            ledger_event=self._event(
-                scope=scope,
-                event_type=LedgerEventType.ARTIFACT_REVISED,
-                artifact_id=request.artifact_id,
-                revision=next_revision,
-                ordinal=0,
-                payload=payload.model_dump(mode="json", by_alias=True),
-                created_at=now,
+            ledger_event=(
+                self._event(
+                    scope=scope,
+                    event_type=LedgerEventType.ARTIFACT_REVISED,
+                    artifact_id=request.artifact_id,
+                    revision=next_revision,
+                    ordinal=0,
+                    payload=payload.model_dump(mode="json", by_alias=True),
+                    created_at=now,
+                )
+                if scope.lane is ArtifactCausalLane.RUN
+                else None
             ),
         )
         return await self._metadata.append_revision(command)
@@ -661,6 +669,7 @@ class ArtifactService:
             media_type=request.media_type,
             current_revision=1,
             created_by=provenance.author,
+            accent=request.accent,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
             deleted_at=None,
@@ -823,6 +832,58 @@ class ArtifactService:
         )
         if scope is None:
             raise ArtifactNotFoundError()
+        return scope
+
+    async def _require_revision_scope(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: ArtifactRevisionRequest,
+        provenance: ArtifactProvenance,
+        current: ArtifactStoredRecord,
+    ) -> ArtifactScope:
+        """Resolve the causal subject for one revision, derived from authorship.
+
+        Authorship and causality are independent axes. ``author`` says who wrote
+        the bytes; the lane says what activity the write belongs to, and only the
+        latter decides whether a run's terminal event is entitled to seal it.
+
+        The lane is derived here from server-held provenance and never from the
+        request, so a caller cannot route an agent-authored write into the
+        unsealed conversation lane.
+        """
+
+        if provenance.author is ArtifactAuthor.USER:
+            # A user edit is caused by the conversation, not by any run. The
+            # subject comes from the artifact's own record rather than the
+            # request, so there is no forgeable input for a fact the server
+            # already holds. ``resolve_conversation`` re-proves ownership.
+            scope = await self._run_scopes.resolve_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=current.artifact.conversation_id,
+            )
+            if scope is None:
+                raise ArtifactNotFoundError()
+            return scope
+
+        # Agent-authored: the revision is causal in the run the agent is acting
+        # in, not necessarily the run that created the artifact. Resolving
+        # re-proves the caller owns the claimed run, so a forged
+        # ``acting_run_id`` cannot redirect a ledger event into someone else's
+        # run. Unset falls back to the creating run, where the two coincide.
+        scope = await self._require_run_scope(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=request.acting_run_id or current.artifact.run_id,
+        )
+        if request.acting_run_id is not None and scope.run_is_terminal:
+            # A claimed run whose ledger is already sealed cannot carry the
+            # causal ``artifact.revised`` this mutation produces, so the claim is
+            # refused before the blob is written. Distinct from a stale-parent
+            # conflict: nothing here is out of date and re-reading will not help.
+            raise ArtifactSealedRunError()
         return scope
 
     async def _require_artifact(

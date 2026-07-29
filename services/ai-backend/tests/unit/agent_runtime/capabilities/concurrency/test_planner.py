@@ -59,7 +59,7 @@ def _plan(
         OperationBatch(
             batch_id="batch_1",
             operations=operations,
-            max_parallelism=max_parallelism,
+            allowance=max_parallelism,
         ),
         policies,
     )

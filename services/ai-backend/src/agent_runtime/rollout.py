@@ -21,31 +21,11 @@ from typing import ClassVar
 
 from pydantic import Field, field_validator
 
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import RuntimeContract
 
 
-class RolloutMode(StrEnum):
-    """Closed authority posture for one independently deployable capability."""
-
-    OFF = "off"
-    SHADOW = "shadow"
-    ENFORCE = "enforce"
-
-    @property
-    def rank(self) -> int:
-        """Return the monotonic authority rank used by the legacy bridge."""
-
-        return {
-            RolloutMode.OFF: 0,
-            RolloutMode.SHADOW: 1,
-            RolloutMode.ENFORCE: 2,
-        }[self]
-
-    @classmethod
-    def most_authoritative(cls, *modes: "RolloutMode") -> "RolloutMode":
-        """Return the highest-authority mode without accepting open strings."""
-
-        return max(modes, key=lambda mode: mode.rank)
+RolloutMode = FeatureMode
 
 
 class RolloutCapability(StrEnum):

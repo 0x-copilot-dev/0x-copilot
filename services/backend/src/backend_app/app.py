@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from copilot_service_contracts.scopes import (
@@ -36,6 +36,8 @@ from backend_app.contracts import (
     InternalMcpClientSession,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
+    InternalMcpSessionReleaseRequest,
+    InternalMcpSessionReleaseResponse,
     InstallMcpServerRequest,
     InternalMcpServerListResponse,
     InternalSkillBundle,
@@ -44,6 +46,8 @@ from backend_app.contracts import (
     McpAuthStartRequest,
     McpAuthStartResponse,
     McpCatalogResponse,
+    McpDescriptorRevision,
+    McpDescriptorRevisionFeed,
     McpServerListResponse,
     McpServerRecord,
     McpServerResponse,
@@ -54,6 +58,7 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
+from backend_app.mcp_revisions import RevisionCursorExpired
 from backend_app.identity import (
     AuthProviderDomainStore,
     BootstrapAdminService,
@@ -303,6 +308,7 @@ from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     ConnectorAccessDenied,
     DeployAuditService,
+    InternalMcpLeaseFailureError,
     McpRegistryService,
     SkillRegistryService,
     ToolCatalogService,
@@ -428,9 +434,41 @@ async def _lifespan(application: FastAPI):
     connector_bus = getattr(application.state, "connector_activity_bus", None)
     if connector_bus is not None:
         connector_bus.bind_loop(asyncio.get_running_loop())
+    mcp_service = getattr(application.state, "mcp_service", None)
+    maintenance_task: asyncio.Task[None] | None = None
+    shutdown_timeout = 5.0
+    if mcp_service is not None:
+        try:
+            interval = float(
+                os.environ.get("MCP_SESSION_POOL_MAINTENANCE_SECONDS", "30")
+            )
+            shutdown_timeout = float(
+                os.environ.get("MCP_SESSION_POOL_SHUTDOWN_SECONDS", "5")
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "MCP session-pool lifecycle values must be numeric"
+            ) from exc
+        if not 1.0 <= interval <= 300.0 or not 0.0 <= shutdown_timeout <= 30.0:
+            raise RuntimeError("MCP session-pool lifecycle values are out of bounds")
+
+        async def maintain_pool() -> None:
+            while True:
+                await asyncio.sleep(interval)
+                await asyncio.to_thread(mcp_service.maintain_session_pool)
+
+        maintenance_task = asyncio.create_task(maintain_pool())
+        application.state.mcp_session_pool_maintenance_task = maintenance_task
     try:
         yield
     finally:
+        if maintenance_task is not None:
+            maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await maintenance_task
+            await asyncio.to_thread(
+                mcp_service.shutdown_session_pool, timeout_seconds=shutdown_timeout
+            )
         if connector_bus is not None:
             connector_bus.unbind_loop()
         if sweeper is not None:
@@ -1211,6 +1249,58 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
 
+    @app.get(
+        "/internal/v1/mcp/servers/{server_id}/revision",
+        response_model=McpDescriptorRevision,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_mcp_revision(
+        request: Request,
+        server_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> McpDescriptorRevision:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        revision = _AppServices.mcp(app).get_descriptor_revision(
+            org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
+        )
+        if revision is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "MCP descriptor revision not found"
+            )
+        return revision
+
+    @app.get(
+        "/internal/v1/mcp/descriptor-revisions",
+        response_model=McpDescriptorRevisionFeed,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_mcp_revision_feed(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+        after_cursor: str | None = Query(None, min_length=1),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> McpDescriptorRevisionFeed:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            return _AppServices.mcp(app).feed_descriptor_revisions(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except RevisionCursorExpired as exc:
+            # At-least-once consumers must recover by doing exact checks. A
+            # generic response also prevents cursor/profile probing.
+            raise HTTPException(
+                status.HTTP_410_GONE, "revision feed cursor expired"
+            ) from exc
+
     # PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may surface
     # as progressive-discovery suggestions. The ai-backend calls this at
     # run-create and stuffs the response into
@@ -1328,6 +1418,12 @@ def create_app(
                 user_id=identity.user_id,
                 server_id=server_id,
             )
+        except ConnectorAccessDenied as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
@@ -1360,14 +1456,40 @@ def create_app(
             # ``connector_access_read_only``); the ai-backend surfaces it as a
             # recoverable ``PERMISSION_DENIED`` tool failure, not a run kill.
             raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
         except ValueError as exc:
-            detail = str(exc)
-            status_code = (
-                status.HTTP_401_UNAUTHORIZED
-                if "authenticated" in detail or "OAuth token" in detail
-                else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @app.post(
+        "/internal/v1/mcp/servers/{server_id}/client-session/release",
+        response_model=InternalMcpSessionReleaseResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_release_client_session(
+        request: Request,
+        server_id: str,
+        payload: InternalMcpSessionReleaseRequest,
+    ) -> InternalMcpSessionReleaseResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=payload.org_id, user_id=payload.user_id
+        )
+        try:
+            return _AppServices.mcp(app).release_internal_client_session(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                server_id=server_id,
+                lease_token=payload.lease,
+                cancel=payload.cancel,
             )
-            raise HTTPException(status_code, detail) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/test-token",

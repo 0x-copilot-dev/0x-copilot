@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-tool-result-admission")
 
+from langchain.agents.middleware.types import ToolCallRequest
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 
 from agent_runtime.api.constants import Keys
-from agent_runtime.capabilities.tool_budget_guard import (
-    ToolBudgetGuard,
-    ToolBudgetGuardedTool,
+from agent_runtime.capabilities.middleware.runtime_tool_control import (
+    RuntimeToolControlMiddleware,
 )
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_adapters.file import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -92,26 +94,39 @@ async def test_file_runtime_admits_without_budget_rows_and_projects_once(
 
     adapter.admit = counted_admit  # type: ignore[method-assign]
     raw = ("large tool output\n" * 5_000) + _RAW_TAIL
-    inner = _LargeResultTool(result=raw)
-    wrapped = ToolBudgetGuardedTool(
-        name=inner.name,
-        description=inner.description,
-        inner=inner,
+    tool = _LargeResultTool(result=raw)
+    request = ToolCallRequest(
+        tool_call={
+            "name": tool.name,
+            "args": {},
+            "id": "large-result-call",
+            "type": "tool_call",
+        },
+        tool=tool,
+        state={},
+        runtime=cast(Any, object()),
     )
+
+    async def execute(inner_request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content=await tool._arun(),
+            tool_call_id=inner_request.tool_call["id"],
+        )
 
     token = ToolBudgetGuard.bind_for_run(guard)
     try:
-        model_content = await wrapped._arun()
+        result = await RuntimeToolControlMiddleware().awrap_tool_call(request, execute)
     finally:
         ToolBudgetGuard.unbind(token)
 
+    model_content = result.content
     assert isinstance(model_content, str)
     assert len(model_content) <= 4_096
     assert _RAW_TAIL not in model_content
 
     projected = offloader.apply(
         {
-            Keys.Field.TOOL_NAME: inner.name,
+            Keys.Field.TOOL_NAME: tool.name,
             Keys.Field.OUTPUT: {Keys.Field.CONTENT: model_content},
         },
         trace_id=run.trace_id or run.run_id,

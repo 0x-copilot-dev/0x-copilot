@@ -15,6 +15,7 @@ from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.connector_policy_client import (
     build_connector_write_policy_client,
 )
+from agent_runtime.api.conversation_canvas_service import ConversationCanvasService
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.events import RuntimeEventProducer
@@ -62,6 +63,8 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
+from agent_runtime.harness_quality.diagnostics import EvaluationDiagnosticsService
+from agent_runtime.harness_quality.evaluation_contracts import EvaluationScope
 from agent_runtime.observability.http_logging import (
     LoggingConfigurator,
     RequestContextMiddleware,
@@ -84,6 +87,7 @@ from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.desktop_workspace_attestation import (
     DesktopWorkspaceAttestationRouter,
 )
+from runtime_api.http.evaluation_diagnostics import LocalEvaluationDiagnosticsRouter
 from runtime_api.http.legacy_migration_routes import LegacyMigrationApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
@@ -94,6 +98,7 @@ from runtime_api.http.legal_hold_routes import LegalHoldRouter
 from runtime_api.http.agent_usage import AgentUsageApiRouter
 from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
 from runtime_api.http.local_models_routes import LocalModelsApiRouter
+from runtime_api.http.local_release_control import LocalReleaseControlRouter
 from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
@@ -109,6 +114,10 @@ from runtime_api.sse.event_bus import (
 )
 from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
+from runtime_worker.run_control_release_composition import (
+    build_local_release_control_service,
+    build_run_control_plane_builder,
+)
 
 
 # Structured logger for run-executor topology decisions. A "no run executor"
@@ -174,13 +183,6 @@ class RuntimeApiAppFactory:
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await cls.open_async_store(app)
-            # Build the MCP discovery cache singleton for this process so
-            # the runtime API and any in-process worker share one cache.
-            # In production the worker is a separate process and builds
-            # its own — see ``runtime_worker.dependencies``. Must be
-            # constructed BEFORE the in-process worker starts so worker
-            # runs see the same cache as request-served runs.
-            cls.build_mcp_discovery_cache(app)
             # P2 — start the cross-process LISTEN/NOTIFY bus task if the
             # Postgres backend is configured. Must run after the store is
             # open (the bus borrows the same DATABASE_URL) and before the
@@ -238,6 +240,24 @@ class RuntimeApiAppFactory:
         # (env) and injected-ports (test) paths — route handlers read
         # feature flags (e.g. enable_local_models) from here.
         app.state.runtime_settings = _settings
+        app.state.local_release_control_service = build_local_release_control_service(
+            settings=_settings,
+            repository=_ports.evaluation_repository,
+        )
+        app.state.local_evaluation_diagnostics_service = (
+            EvaluationDiagnosticsService(
+                repository=_ports.evaluation_repository,
+                scope=EvaluationScope(
+                    profile_id=_settings.evaluation.profile_id,
+                    project_id=_settings.evaluation.project_id,
+                ),
+            )
+            if (
+                app.state.local_release_control_service is not None
+                and _ports.evaluation_repository is not None
+            )
+            else None
+        )
         # C2's signed bootstrap is verified before the in-process worker
         # evaluates E2 readiness. A later Electron-main renewal arrives via
         # the facade route below; absence/malformed input remains fail-closed.
@@ -275,6 +295,20 @@ class RuntimeApiAppFactory:
         app.state.approval_coordinator = _approval
         app.state.conversation_coordinator = _conv
         app.state.conversation_query_service = _cqs
+        # PRD-02 — canvas identity is conversation-scoped while operation state
+        # stays run-scoped. Composed here (not in the artifact block below) because
+        # it is a read-only projection over stores that always exist; when the
+        # artifact metadata store is absent it simply returns no subjects rather
+        # than making the route conditional.
+        app.state.conversation_canvas_service = (
+            ConversationCanvasService(
+                artifacts=_ports.artifact_metadata_store,
+                events=_ports.event_store,
+                conversation_scope=_cqs.require_conversation_scope,
+            )
+            if getattr(_ports, "artifact_metadata_store", None) is not None
+            else None
+        )
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
         # A2 — explicit composition seam for the canonical Artifact Repository.
@@ -448,6 +482,9 @@ class RuntimeApiAppFactory:
         # RUNTIME_ENABLE_LOCAL_MODELS; every route but /status 404s when off.
         app.include_router(LocalModelsApiRouter.create_router())
         app.include_router(DesktopWorkspaceAttestationRouter.create_router())
+        if app.state.local_release_control_service is not None:
+            app.include_router(LocalReleaseControlRouter.create_router())
+            app.include_router(LocalEvaluationDiagnosticsRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )
@@ -1289,49 +1326,19 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def build_mcp_discovery_cache(cls, app: FastAPI) -> None:
-        """Construct the per-process MCP discovery cache and stash it on app state.
+        """Construct the worker MCP assembly only for an in-process owner."""
 
-        Reads:
-          - ``RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`` (default 900)
-          - ``RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`` (default 1000)
-
-        The cache is then consumed by the runtime factory through
-        ``RuntimeDependencies.mcp_discovery_cache`` — the in-process
-        worker (when enabled) reaches the cache via the same path. A
-        separate worker process builds its own cache; that trade-off is
-        explicit in the cache docstring.
-        """
-
-        import os
-
-        from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
-
-        def _positive_float(env_name: str, default: float) -> float:
-            raw = os.environ.get(env_name, "").strip()
-            if not raw:
-                return default
-            try:
-                parsed = float(raw)
-            except ValueError:
-                return default
-            return parsed if parsed > 0 else default
-
-        def _positive_int(env_name: str, default: int) -> int:
-            raw = os.environ.get(env_name, "").strip()
-            if not raw:
-                return default
-            try:
-                parsed = int(raw)
-            except ValueError:
-                return default
-            return parsed if parsed > 0 else default
-
-        ttl_seconds = _positive_float("RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS", 900.0)
-        max_entries = _positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000)
-        app.state.mcp_discovery_cache = McpDiscoveryCache(
-            ttl_seconds=ttl_seconds,
-            max_entries=max_entries,
+        from runtime_worker.mcp_revision_composition import (
+            McpRevisionControlPlaneBuilder,
         )
+
+        assembly = McpRevisionControlPlaneBuilder.build(
+            getattr(app.state, "runtime_settings", None)
+        )
+        # State holds these only because this API process is also the worker.
+        # API-only topology returns before this builder is invoked.
+        app.state.mcp_revision_control_plane = assembly
+        app.state.mcp_discovery_cache = assembly.discovery_cache
 
     @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:
@@ -1498,7 +1505,15 @@ class RuntimeApiAppFactory:
         if ports is None:
             _log_decision(started=False, reason="no_ports")
             return
+        if getattr(app.state, "mcp_discovery_cache", None) is None:
+            cls.build_mcp_discovery_cache(app)
         event_bus = getattr(app.state, "runtime_event_bus", None)
+        run_control_builder = await build_run_control_plane_builder(
+            settings=settings,
+            repository=getattr(ports, "evaluation_repository", None),
+            store=ports.run_control_snapshot_store,
+            event_store=ports.event_store,
+        )
         worker = RuntimeWorker(
             persistence=ports.persistence,
             event_store=ports.event_store,
@@ -1512,6 +1527,19 @@ class RuntimeApiAppFactory:
             ),
             citation_store=getattr(ports, "citation_store", None),
             mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
+            mcp_revision_poller=getattr(
+                getattr(app.state, "mcp_revision_control_plane", None),
+                "poller",
+                None,
+            ),
+            # Without the resolver the F3 catalog generation folds zero
+            # descriptor revisions, so a capability ref can never be reported
+            # stale mid-run — BUG-12, on the in-process dev worker path.
+            mcp_revision_resolver=getattr(
+                getattr(app.state, "mcp_revision_control_plane", None),
+                "resolver",
+                None,
+            ),
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None
             ),
@@ -1520,6 +1548,11 @@ class RuntimeApiAppFactory:
             artifact_reference_store=getattr(
                 ports, "artifact_reference_provider", None
             ),
+            evaluation_repository=getattr(ports, "evaluation_repository", None),
+            run_control_builder=run_control_builder,
+            run_control_snapshot_store=ports.run_control_snapshot_store,
+            prompt_observation_store=ports.prompt_observation_store,
+            model_invocation_store=ports.model_invocation_store,
             workspace_attestation_registry=getattr(
                 app.state, "desktop_workspace_attestation_registry", None
             ),

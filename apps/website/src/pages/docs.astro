@@ -1,159 +1,188 @@
 ---
 import Base from "../layouts/Base.astro";
 import Nav from "../components/Nav.astro";
+import "../styles/docs.css";
 
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
-const X = "https://x.com/Copilot0x";
-const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
+
+const chapters = [
+  {
+    no: "01",
+    group: "Start here",
+    title: "Install 0xCopilot",
+    body: "Stage the local runtime, open the desktop app, and run the built-in health check.",
+    href: "./install.html",
+    status: "READ NOW",
+  },
+  {
+    no: "02",
+    group: "Start here",
+    title: "Your first run",
+    body: "Give the agent an outcome, watch the event stream, and understand permission gates.",
+    status: "COMING SOON",
+  },
+  {
+    no: "03",
+    group: "Use the system",
+    title: "Tools + connectors",
+    body: "Connect the systems where your work already lives and control what each one may do.",
+    status: "COMING SOON",
+  },
+  {
+    no: "04",
+    group: "Use the system",
+    title: "Skills + memory",
+    body: "Teach repeatable procedures and decide what context should survive across runs.",
+    status: "COMING SOON",
+  },
+  {
+    no: "05",
+    group: "Control",
+    title: "Approvals + audit",
+    body: "Set permission boundaries, inspect typed events, reconnect to a run, and replay its history.",
+    status: "COMING SOON",
+  },
+  {
+    no: "06",
+    group: "Build + operate",
+    title: "Source + self-hosting",
+    body: "Read the architecture, build each service independently, or run the complete stack yourself.",
+    href: REPO,
+    external: true,
+    status: "VIEW SOURCE",
+  },
+];
 ---
 
 <Base
-  title="Install — 0xCopilot"
-  description="Install 0xCopilot from your terminal: one command, no DMG, no installer, no admin rights. macOS and Windows."
+  title="Documentation — 0xCopilot"
+  description="The operating manual for installing, using, connecting, and self-hosting 0xCopilot."
+  bodyClass="docs-site"
+  themeColor="#f2eddf"
+  fontHref="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap"
 >
-  <Nav />
+  <Nav variant="nav-docs" />
 
-  <header class="hero">
-    <div class="hero-bg"></div>
-    <div class="wrap">
-      <span class="pill"><span class="dot"></span> Terminal install · no DMG · no admin</span>
-      <h1>Run 0xCopilot from <em>your terminal.</em></h1>
-      <p class="sub">
-        Install the <code>copilot</code> CLI with npm or Bun. The first time you
-        run it, it stages a self-contained local runtime and opens the app.
-        Works on <b>macOS and Windows.</b>
-      </p>
-      <pre class="cmd"><span class="c"># Node 20+ or Bun</span>
-<span class="p">$</span> <b>npm install -g @0x-copilot/cli</b>
-<span class="c"># …or: bun add -g @0x-copilot/cli</span>
-
-<span class="p">$</span> <b>copilot</b></pre>
-      <p class="note">
-        Also available as <code>0xcopilot</code> if <code>copilot</code>
-        collides with something already on your <code>PATH</code>.
-      </p>
-    </div>
-  </header>
-
-  <section class="sec" style="border-top:none;padding-top:8px">
-    <div class="wrap">
-      <p class="kick">First run</p>
-      <h2>What the first run does.</h2>
-      <p class="lede">
-        Staging downloads a pinned, checksum-verified Python and PostgreSQL and
-        installs the app's services on your machine — a few hundred MB, once,
-        cached afterward. On macOS it ad-hoc code-signs everything so it runs on
-        Apple Silicon without an Apple Developer certificate. Every run after
-        that opens instantly.
-      </p>
-      <p class="note">
-        <b>No "unidentified developer" or SmartScreen warning.</b> The runtime
-        is fetched by your package manager, not a browser — so macOS Gatekeeper
-        and Windows SmartScreen never flag it, the same reason Homebrew and{" "}
-        <code>uv</code> install cleanly.
-      </p>
-    </div>
-  </section>
-
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Commands</p>
-      <h2>Everything you'll need.</h2>
-      <div class="faq cmds">
-        <div class="qa"><div class="q">copilot</div><div class="a">Stage if needed, then open the app.</div></div>
-        <div class="qa"><div class="q">copilot install</div><div class="a">Download + stage the runtime without launching.</div></div>
-        <div class="qa"><div class="q">copilot doctor</div><div class="a">Check the install and report anything wrong.</div></div>
-        <div class="qa"><div class="q">copilot uninstall</div><div class="a">Remove the staged runtime, cache, and local app data.</div></div>
-        <div class="qa"><div class="q">npm rm -g @0x-copilot/cli</div><div class="a">Remove the command itself.</div></div>
-      </div>
-    </div>
-  </section>
-
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Sign in</p>
-      <h2>Connect a wallet — or Google.</h2>
-      <p class="lede">
-        0xCopilot runs fully local. Sign in with an Ethereum wallet
-        (Sign-In-With-Ethereum) or Google; your keys and data stay on your
-        machine. Nothing about the desktop app touches a server you don't run.
-      </p>
-    </div>
-  </section>
-
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Platforms</p>
-      <h2>macOS &amp; Windows.</h2>
-      <div class="faq">
-        <div class="qa"><div class="q">macOS</div><div class="a">Apple Silicon and Intel.</div></div>
-        <div class="qa"><div class="q">Windows</div><div class="a">x64.</div></div>
-        <div class="qa"><div class="q">Linux</div><div class="a">Not distributed this way yet — build from <a href={REPO} rel="noopener">source</a>.</div></div>
-      </div>
-    </div>
-  </section>
-
-  <footer>
-    <div class="wrap">
-      <div class="frow">
-        <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
-        <div class="flinks">
-          <a href="./">Home</a>
-          <a href="./token.html">Token</a>
-          <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
-          <a href={REPO} rel="noopener">GitHub ↗</a>
-          <a href={DISCORD} rel="noopener">Discord ↗</a>
-          <a href={X} rel="noopener">@Copilot0x ↗</a>
+  <main>
+    <header class="docs-hero">
+      <div class="docs-grid" aria-hidden="true"></div>
+      <div class="docs-wrap">
+        <div class="docs-meta">
+          <span>0xCOPILOT / FIELD MANUAL</span>
+          <span>DOCS INDEX / REV 0.1</span>
+          <span><i></i> FIRST CHAPTER LIVE</span>
+        </div>
+        <div class="docs-hero-layout">
+          <div>
+            <p class="docs-kicker">DOCUMENT THE SYSTEM, NOT THE SLOGAN</p>
+            <h1>The operating<br /><em>manual.</em></h1>
+          </div>
+          <div class="docs-intro">
+            <p>
+              A practical guide to installing 0xCopilot, giving it real work,
+              connecting tools, setting boundaries, and running the stack
+              yourself.
+            </p>
+            <div class="docs-actions">
+              <a class="docs-button docs-button-solid" href="./install.html"
+                >Install the app <span>↘</span></a
+              >
+              <a
+                class="docs-button"
+                href={REPO}
+                target="_blank"
+                rel="noopener noreferrer">GitHub <span>↗</span></a
+              >
+            </div>
+          </div>
         </div>
       </div>
-      <div class="foot-b">
-        <span>© 2026 0xCopilot · Ask · Steer · Ship</span>
-        <span class="ass">Fully local · BYOK · your keys, your data.</span>
+    </header>
+
+    <section class="docs-index">
+      <div class="docs-wrap">
+        <div class="docs-section-label">
+          <span>(A)</span>
+          <span>DOCUMENTATION INDEX</span>
+          <span>01 LIVE / 05 IN PROGRESS</span>
+        </div>
+
+        <div class="chapter-grid">
+          {
+            chapters.map((chapter) =>
+              chapter.href ? (
+                <a
+                  class="chapter chapter-live"
+                  href={chapter.href}
+                  target={chapter.external ? "_blank" : undefined}
+                  rel={chapter.external ? "noopener noreferrer" : undefined}
+                >
+                  <span class="chapter-no">{chapter.no}</span>
+                  <span class="chapter-group">{chapter.group}</span>
+                  <h2>{chapter.title}</h2>
+                  <p>{chapter.body}</p>
+                  <span class="chapter-status">{chapter.status} ↗</span>
+                </a>
+              ) : (
+                <article class="chapter">
+                  <span class="chapter-no">{chapter.no}</span>
+                  <span class="chapter-group">{chapter.group}</span>
+                  <h2>{chapter.title}</h2>
+                  <p>{chapter.body}</p>
+                  <span class="chapter-status">{chapter.status}</span>
+                </article>
+              ),
+            )
+          }
+        </div>
       </div>
+    </section>
+
+    <section class="docs-principle">
+      <div class="docs-wrap principle-grid">
+        <div class="principle-mark">※</div>
+        <div>
+          <p>HOW THESE DOCS WILL WORK</p>
+          <h2>
+            Short paths for getting started.<br />
+            <em>Deep references when the work gets real.</em>
+          </h2>
+        </div>
+        <p class="principle-copy">
+          The structure follows the useful part of a mature agent manual:
+          installation first, then daily use, integrations, control, and finally
+          the developer reference. No marketing copy disguised as instructions.
+        </p>
+      </div>
+    </section>
+
+    <section class="docs-community">
+      <div class="docs-wrap community-grid">
+        <div>
+          <span>CAN'T FIND IT YET?</span>
+          <h2>Ask in the open.</h2>
+        </div>
+        <p>
+          The manual is being written alongside the product. Until a chapter is
+          live, use GitHub for source-level questions and Discord for help from
+          the community.
+        </p>
+        <div class="community-actions">
+          <a href={DISCORD} target="_blank" rel="noopener noreferrer"
+            >Discord ↗</a
+          >
+          <a href={REPO} target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="docs-footer">
+    <div class="docs-wrap">
+      <strong>0xCopilot</strong>
+      <span>LOCAL-FIRST / OPEN SOURCE / BYOK</span>
+      <span>DOCS REV 0.1 / 2026</span>
     </div>
   </footer>
 </Base>
-
-<style>
-  /* Terminal block — palette-matched to the dark theme. */
-  .cmd {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 16px 18px;
-    margin: 24px 0 0;
-    font-family: var(--mono);
-    font-size: 14px;
-    line-height: 1.75;
-    color: var(--tx);
-    overflow-x: auto;
-    white-space: pre;
-  }
-  .cmd .p {
-    color: var(--sky);
-    user-select: none;
-  }
-  .cmd .c {
-    color: var(--mut2);
-  }
-  .cmd b {
-    color: var(--jade);
-    font-weight: 500;
-  }
-
-  /* Inline code + the command column of the commands list read as terminal. */
-  code {
-    font-family: var(--mono);
-    font-size: 0.88em;
-    color: var(--sky-hi);
-    background: var(--panel2);
-    padding: 0.12em 0.4em;
-    border-radius: 6px;
-  }
-  .cmds .qa .q {
-    font-family: var(--mono);
-    font-size: 15px;
-    color: var(--jade);
-  }
-</style>

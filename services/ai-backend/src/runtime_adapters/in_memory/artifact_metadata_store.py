@@ -190,9 +190,18 @@ class InMemoryArtifactMetadataStore:
                 }
             )
             result = ArtifactMutationResult(record=record)
-            outbox_row = artifact_event_outbox_row(
-                command.ledger_event,
-                artifact_id=command.artifact_id,
+            # A conversation-lane append carries no ledger event, so it enqueues
+            # no outbox row: the only drain appends to a run event store, and
+            # this mutation belongs to no run.
+            outbox_rows = (
+                []
+                if command.ledger_event is None
+                else [
+                    artifact_event_outbox_row(
+                        command.ledger_event,
+                        artifact_id=command.artifact_id,
+                    )
+                ]
             )
             edge = artifact_revision_reference_edge(
                 org_id=command.scope.org_id,
@@ -202,11 +211,11 @@ class InMemoryArtifactMetadataStore:
                 blob_key=command.revision.blob_key,
                 created_at=parse_datetime(command.revision.revision.created_at),
             )
-            self._validate_outbox([outbox_row])
+            self._validate_outbox(outbox_rows)
             self._validate_reference_edge(edge)
             self.coordinator.restore_locked(command.revision.blob_key)
             self._require_active_locked(command.revision.blob_key)
-            self._insert_outbox([outbox_row])
+            self._insert_outbox(outbox_rows)
             self._records[key] = record
             self._revisions[
                 (
@@ -279,6 +288,20 @@ class InMemoryArtifactMetadataStore:
         with self._lock:
             return self._revisions.get((org_id, artifact_id, revision))
 
+    @staticmethod
+    def _in_scope(record: ArtifactStoredRecord, query: ArtifactListQuery) -> bool:
+        """Match the one subject scope the query declared.
+
+        ``ArtifactListQuery`` guarantees exactly one of ``run_id`` /
+        ``conversation_id`` is set, so this never degrades to an unscoped match:
+        an unset ``run_id`` means the caller asked by conversation, not that any
+        run will do.
+        """
+
+        if query.run_id is not None:
+            return record.artifact.run_id == query.run_id
+        return record.artifact.conversation_id == query.conversation_id
+
     async def list_artifacts(self, query: ArtifactListQuery) -> ArtifactListPage:
         with self._lock:
             records = [
@@ -286,7 +309,7 @@ class InMemoryArtifactMetadataStore:
                 for (org_id, _), record in self._records.items()
                 if org_id == query.org_id
                 and record.artifact.user_id == query.user_id
-                and record.artifact.run_id == query.run_id
+                and self._in_scope(record, query)
                 and (query.kind is None or record.artifact.kind == query.kind)
                 and (query.include_deleted or record.artifact.deleted_at is None)
             ]

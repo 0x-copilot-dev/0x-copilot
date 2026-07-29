@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 import logging
+import os
 from typing import Protocol
 from uuid import uuid4
 
@@ -22,6 +23,25 @@ from agent_runtime.api.ports import (
     PersistencePort,
     RuntimeQueuePort,
 )
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.model_invocation_store import EventJournalModelInvocationStore
+from agent_runtime.api.prompt_observation_store import (
+    EventJournalPromptObservationStore,
+)
+from agent_runtime.api.run_termination import TerminalRunObserverPort
+from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
+from agent_runtime.control_plane.ports import (
+    RunControlDecisionStorePort,
+    RunControlSnapshotStorePort,
+)
+from agent_runtime.prompts.observation import PromptObservationStorePort
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
+from agent_runtime.execution.model_invocation.circuit_health import (
+    ProcessLocalProviderCircuitHealth,
+)
+from agent_runtime.execution.model_invocation.circuit_snapshot_lifecycle import (
+    DesktopProviderCircuitSnapshotLifecycle,
+)
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
@@ -35,9 +55,12 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.effects.claims import EffectClaimStore
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
+from agent_runtime.observability.usage_recorder import PostgresUsageRecorder
+from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.deployment.profile import DeploymentProfileLoader
 from agent_runtime.rollout import (
     RolloutStartupReadiness,
     RolloutStartupValidator,
@@ -51,6 +74,10 @@ from runtime_api.schemas import (
     RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
+)
+from runtime_worker.batch_concurrency_composition import (
+    LiveBatchAdmissionRegistry,
+    build_batch_concurrency_composer,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
@@ -69,6 +96,7 @@ from runtime_worker.staged_write_effect_dispatch import (
     RuntimeStagedWriteEffectDispatcherFactory,
 )
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.mcp_revision_poller import McpRevisionPollerLifecyclePort
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -79,6 +107,16 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
+from runtime_worker.model_invocation_circuit import ProviderCircuitHealthRegistry
+from runtime_worker.model_invocation_composition import ModelInvocationWorkerComposer
+from runtime_worker.run_control import (
+    RunControlPlaneBuilder,
+    StableUserProfileHmac,
+)
+from runtime_worker.run_control_release_composition import (
+    install_default_task_policy_runtime,
+)
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 
 
@@ -119,6 +157,13 @@ class EffectReconcileHandlerPort(Protocol):
         """Consume one validated effect-reconciliation command."""
 
 
+class BackgroundJobRunnerPort(Protocol):
+    """One bounded background unit sharing the worker process lifecycle."""
+
+    async def run_once(self) -> bool:
+        """Run at most one durable job and report whether work was claimed."""
+
+
 class RuntimeWorker:
     """Claim and process queued runtime commands with bounded concurrency."""
 
@@ -147,6 +192,7 @@ class RuntimeWorker:
         ) = None,
         citation_store: "CitationStorePort | None" = None,
         mcp_discovery_cache: object | None = None,
+        mcp_revision_resolver: object | None = None,
         user_policies_resolver: object | None = None,
         artifact_service: object | None = None,
         artifact_blob_store: object | None = None,
@@ -157,6 +203,15 @@ class RuntimeWorker:
         | None = None,
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
+        run_control_snapshot_store: RunControlSnapshotStorePort | None = None,
+        run_control_decision_store: object | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
+        model_invocation_store: ModelInvocationStorePort | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
+        evaluation_projection_runner: BackgroundJobRunnerPort | None = None,
+        evaluation_repository: EvaluationRepositoryPort | None = None,
+        mcp_revision_poller: McpRevisionPollerLifecyclePort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -207,9 +262,127 @@ class RuntimeWorker:
         # default run / approval handler dependencies factories so every
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
+        # The same assembly's revision authority. It is what lets one run's F3
+        # catalog generation key on the F8 descriptor revisions, so a reference
+        # minted before a server moved fails closed at use time.
+        self.mcp_revision_resolver = mcp_revision_resolver
+        # The assembly is constructed at the worker root, but its one feed
+        # task is not started until ``run_forever`` owns a fully-built worker.
+        self._mcp_revision_poller = mcp_revision_poller
         self.artifact_service = artifact_service
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
+        worker_environment = dict(os.environ)
+        if capability_env is not None:
+            worker_environment.update(capability_env)
+        if run_control_snapshot_store is None and run_control_builder is None:
+            run_control_snapshot_store = EventJournalRunControlStore(self.event_store)
+        if prompt_observation_store is None and run_control_snapshot_store is not None:
+            prompt_observation_store = EventJournalPromptObservationStore(
+                events=self.event_store,
+                snapshots=run_control_snapshot_store,
+            )
+        if model_invocation_store is None and run_control_snapshot_store is not None:
+            model_invocation_store = EventJournalModelInvocationStore(
+                events=self.event_store,
+                snapshots=run_control_snapshot_store,
+            )
+        if run_control_builder is None:
+            assert run_control_snapshot_store is not None
+            run_control_builder = install_default_task_policy_runtime(
+                builder=RunControlPlaneBuilder(
+                    store=run_control_snapshot_store,
+                    deployment_profile=DeploymentProfileLoader.load(
+                        worker_environment
+                    ).name,
+                    subject_hmac=StableUserProfileHmac.from_environment(
+                        worker_environment
+                    ),
+                ),
+                store=run_control_snapshot_store,
+                event_store=self.event_store,
+                environment=worker_environment,
+            )
+        # The decision journal the F3 discovery recorder appends to. The
+        # canonical ``EventJournalRunControlStore`` satisfies both control-plane
+        # ports, so a deployment that wired only the snapshot store already has
+        # the decision half — reusing that object keeps snapshots and decisions
+        # on one journal rather than opening a second writer over the same
+        # events. The port is ``runtime_checkable``, so this narrows on the
+        # append/list contract, never on a concrete adapter.
+        if run_control_decision_store is None and isinstance(
+            run_control_snapshot_store, RunControlDecisionStorePort
+        ):
+            run_control_decision_store = run_control_snapshot_store
+        self.run_control_builder = run_control_builder
+        self.run_control_decision_store = run_control_decision_store
+        self.prompt_observation_store = prompt_observation_store
+        self.model_invocation_store = model_invocation_store
+        self._provider_circuit_health = ProcessLocalProviderCircuitHealth()
+        self._provider_circuit_snapshot = (
+            DesktopProviderCircuitSnapshotLifecycle.from_environment(worker_environment)
+        )
+        if self._provider_circuit_snapshot is not None:
+            self._provider_circuit_snapshot.restore(self._provider_circuit_health)
+        circuit_registry = ProviderCircuitHealthRegistry(self._provider_circuit_health)
+        # One F6 composer per worker, handed to both composition roots. It is
+        # ``None`` unless an operator configured F6, and the gate that decides
+        # that is read before any F6 module is imported — so an unconfigured
+        # worker loads exactly the modules it loaded before F6 existed.
+        batch_concurrency_composer = build_batch_concurrency_composer(
+            events=self.event_store,
+            snapshots=run_control_snapshot_store,
+            environ=worker_environment,
+        )
+        self.batch_concurrency_composer = batch_concurrency_composer
+        # The join between the two claims cancellation is split across: the run
+        # claim owns the live coordinator, the cancel claim learns the run is
+        # over. Built only when F6 is, so an unconfigured worker gains neither
+        # the object nor the bookkeeping.
+        live_batch_admissions = (
+            LiveBatchAdmissionRegistry()
+            if batch_concurrency_composer is not None
+            else None
+        )
+        self.live_batch_admissions = live_batch_admissions
+        model_invocation_composer = ModelInvocationWorkerComposer(
+            settings=self.settings,
+            persistence=self.persistence,
+            event_store=self.event_store,
+            journal=self.model_invocation_store,
+            circuit_health=circuit_registry,
+        )
+        # One worker-owned reconciliation coordinator and recorder serves all
+        # terminal command families.  A run may suspend in the normal handler
+        # and reach its outer terminal fact from approval-resume or cancellation;
+        # recreating this seam per handler would lose the per-run projector cursor.
+        usage_recorder = PostgresUsageRecorder(
+            persistence=self.persistence,
+            pricing_catalog=ModelPricingCatalog.from_litellm(),
+        )
+        model_invocation_terminal = ModelInvocationTerminalIntegration(
+            journal=self.model_invocation_store,
+            usage_recorder=usage_recorder,
+            persistence=self.persistence,
+        )
+        if (
+            terminal_run_observer is None
+            and evaluation_projection_runner is None
+            and evaluation_repository is not None
+        ):
+            from runtime_worker.evaluation_projection_composition import (
+                build_evaluation_projection,
+            )
+
+            projection = build_evaluation_projection(
+                settings=self.settings,
+                repository=evaluation_repository,
+                event_store=self.event_store,
+                worker_id=self.worker_id,
+            )
+            if projection is not None:
+                terminal_run_observer = projection.observer
+                evaluation_projection_runner = projection.runner
         if workspace_host_sessions is None and (
             callable(getattr(artifact_blob_store, "put_stream", None))
             and callable(getattr(artifact_reference_store, "acquire", None))
@@ -253,6 +426,7 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             # PRD-D3 — lets the per-run bulk-staging tool enqueue an allow-always
             # auto-apply through the same durable queue the API uses.
@@ -264,6 +438,16 @@ class RuntimeWorker:
             workspace_overlay_store=self.workspace_overlay_store,
             sandbox_provider_overrides=sandbox_provider_overrides,
             capability_env=capability_env,
+            run_control_builder=self.run_control_builder,
+            prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
+            model_invocation_store=self.model_invocation_store,
+            model_invocation_composer=model_invocation_composer,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
+            terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         # Give artifact publication its live path. Without this the artifact's
         # ledger events only reach the run through the outbox, which is drained
@@ -291,6 +475,12 @@ class RuntimeWorker:
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
             event_store=self.event_store,
+            terminal_run_observer=terminal_run_observer,
+            run_control_builder=self.run_control_builder,
+            model_invocation_store=self.model_invocation_store,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
+            live_batch_admissions=live_batch_admissions,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -300,8 +490,19 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
+            run_control_builder=self.run_control_builder,
+            prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
+            model_invocation_store=self.model_invocation_store,
+            model_invocation_composer=model_invocation_composer,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
+            terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         self.artifact_event_handler = (
             artifact_event_handler
@@ -408,6 +609,7 @@ class RuntimeWorker:
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
         self._sandbox_recovery_reaper = self._build_sandbox_recovery_reaper()
+        self._evaluation_projection_runner = evaluation_projection_runner
 
     def _validate_e2_rollout_startup(
         self,
@@ -576,9 +778,10 @@ class RuntimeWorker:
         """Claim and process one command, returning whether work was found."""
 
         await self._reap_sandbox_cleanup()
+        projected = await self._run_evaluation_projection_once()
         claim = await self._claim_next()
         if claim is None:
-            return False
+            return projected
         async with self._semaphore:
             await self._handle_claim(claim)
         return True
@@ -589,13 +792,29 @@ class RuntimeWorker:
         processed = 0
         while True:
             await self._reap_sandbox_cleanup()
+            projected = await self._run_evaluation_projection_once()
             claims = await self._claim_batch()
             if not claims:
-                return processed
+                if not projected:
+                    return processed
+                continue
             await asyncio.gather(
                 *(self._handle_claim_with_limit(claim) for claim in claims)
             )
             processed += len(claims)
+
+    async def _run_evaluation_projection_once(self) -> bool:
+        runner = self._evaluation_projection_runner
+        if runner is None:
+            return False
+        try:
+            return await runner.run_once()
+        except Exception:  # noqa: BLE001 - command execution must remain available
+            self.logger.warning(
+                "evaluation projection pass failed",
+                exc_info=True,
+            )
+            return False
 
     def _build_sandbox_recovery_reaper(self) -> object | None:
         """Construct only the strict file-native D3 reaper, otherwise omit it."""
@@ -645,10 +864,18 @@ class RuntimeWorker:
     async def run_forever(self, *, poll_interval_seconds: float = 1.0) -> None:
         """Continuously process queue claims."""
 
-        while True:
-            did_work = await self.run_once()
-            if not did_work:
-                await asyncio.sleep(poll_interval_seconds)
+        try:
+            if self._mcp_revision_poller is not None:
+                await self._mcp_revision_poller.start()
+            while True:
+                did_work = await self.run_once()
+                if not did_work:
+                    await asyncio.sleep(poll_interval_seconds)
+        finally:
+            if self._mcp_revision_poller is not None:
+                await self._mcp_revision_poller.stop()
+            if self._provider_circuit_snapshot is not None:
+                self._provider_circuit_snapshot.flush(self._provider_circuit_health)
 
     async def _handle_claim(self, claim: RuntimeWorkerClaim) -> None:
         """Dispatch the claim and mark it complete, retry, or dead-letter on error."""

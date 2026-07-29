@@ -185,6 +185,24 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("builtin", "load_prior_tool_result", "execution.factory._model_visible_tools"),
         ("builtin", "ask_a_question", "execution.factory._model_visible_tools"),
         ("builtin", "suggest_mcp_connector", "execution.factory._model_visible_tools"),
+        # F3 capability-discovery bridge tools. They are registered by the same
+        # factory function as their neighbours, through
+        # ``CapabilityBridgeRegistrar``, and only in the ``deferred`` posture.
+        # They are inventoried unconditionally because this list records fixed
+        # registration *seams*, not whichever seams a given run's feature flags
+        # happened to open — exactly like ``run_in_sandbox``, which is also
+        # absent from a run that supplies no sandbox tool.
+        (
+            "builtin",
+            "search_capabilities",
+            "execution.factory._model_visible_tools",
+        ),
+        (
+            "builtin",
+            "describe_capability",
+            "execution.factory._model_visible_tools",
+        ),
+        ("builtin", "invoke_capability", "execution.factory._model_visible_tools"),
         ("builtin", "run_code_mode", "execution.factory._model_visible_tools"),
         ("builtin", "run_in_sandbox", "execution.factory._model_visible_tools"),
         ("builtin", "stage_rowset_write", "execution.factory._model_visible_tools"),
@@ -200,6 +218,7 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("workspace", "edit", "capabilities.desktop.workspace_backend"),
         ("model", "artifact_content_part", "runtime_worker.handlers.run"),
         ("artifact", "publish", "agent_runtime.artifacts.service"),
+        ("artifact", "revise", "agent_runtime.artifacts.service"),
         ("draft", "publish", "capabilities.backends.draft_backend"),
         (
             "desktop_browser",

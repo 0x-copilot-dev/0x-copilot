@@ -44,6 +44,11 @@ describe("ledger → transport reachability", () => {
     ["artifact", ARTIFACT_EVENT_TYPES],
     ["operation", OPERATION_EVENT_TYPES],
     ["effect", EFFECT_EVENT_TYPES],
+    // The v2 gate pair joined this list in PRD-01. It was previously pinned as
+    // deliberately unreachable, which was an accurate description of a defect
+    // rather than a decision: the backend emitted GATE_OPENED_V2 from the
+    // workspace grant-block path the whole time, and the emission raised.
+    ["v2 gate", GATE_V2_EVENT_TYPES],
   ])("every %s event the fold consumes is transportable", (_family, types) => {
     const unreachable = types.filter((t) => !isRuntimeApiEventType(t));
     expect(unreachable).toEqual([]);
@@ -54,19 +59,18 @@ describe("ledger → transport reachability", () => {
       ...ARTIFACT_EVENT_TYPES,
       ...OPERATION_EVENT_TYPES,
       ...EFFECT_EVENT_TYPES,
+      ...GATE_V2_EVENT_TYPES,
     ].filter((t) => !isRuntimeEventEnvelope(envelopeFor(t)));
     expect(rejected).toEqual([]);
   });
 
-  it("documents that the v2 gate pair is NOT transportable", () => {
-    // Deliberate, and pinned so it cannot change silently in either direction.
-    // These two exist in the ledger vocabulary but are absent from the backend's
-    // RuntimeApiEventType enum, so the runtime never emits them over this
-    // transport — which in turn means `projectCanvasLifecycle`'s GATE_OPENED_V2
-    // / GATE_RESOLVED_V2 branch cannot currently fire. If the backend starts
-    // emitting them, this test fails and the fold's `parked` handling becomes
-    // live; that is a decision to make deliberately, not to discover in a user's
-    // canvas.
-    expect(GATE_V2_EVENT_TYPES.filter(isRuntimeApiEventType)).toEqual([]);
+  it("makes projectCanvasLifecycle's parked branch reachable", () => {
+    // The fold drives `parked` from GATE_OPENED_V2 / GATE_RESOLVED_V2. While
+    // those were undeliverable that branch was dead code that still compiled and
+    // still passed its own unit tests against hand-built fixtures — the exact
+    // shape of failure this file exists to prevent.
+    for (const eventType of GATE_V2_EVENT_TYPES) {
+      expect(isRuntimeEventEnvelope(envelopeFor(eventType))).toBe(true);
+    }
   });
 });

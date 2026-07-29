@@ -8,18 +8,27 @@ from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.harness_quality import (
     DeterministicEvaluationRunner,
     EvaluationCase,
+    EvaluationResult,
     EvaluationStatus,
     FixtureMiss,
     FixtureResponse,
     FixtureToolExecutor,
     HarnessVariant,
-    InMemoryEvaluationRepository,
+    PromotionAssessment,
     PromotionGate,
     PromotionStatus,
+    PromotionThresholds,
     ProjectionPolicy,
     RuntimeTrajectoryProjector,
     ScorerResult,
     TrajectoryProjector,
+)
+from agent_runtime.harness_quality.evaluation_contracts import (
+    EvaluationRevisionSet,
+    EvaluationScope,
+)
+from runtime_adapters.in_memory.evaluation_repository import (
+    InMemoryEvaluationRepository,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_api.schemas import (
@@ -41,9 +50,21 @@ def _case() -> EvaluationCase:
     )
 
 
-def _variant() -> HarnessVariant:
+def _revisions() -> EvaluationRevisionSet:
+    return EvaluationRevisionSet(
+        code_revision="code-r1",
+        model_revision="model-r1",
+        prompt_revision="prompt-r1",
+        tool_revision="tool-r1",
+        policy_revision="policy-r1",
+        fixture_revision="fixture-r1",
+        scorer_revision="scorer-r1",
+    )
+
+
+def _variant(variant_id: str = "control") -> HarnessVariant:
     return HarnessVariant(
-        variant_id="control",
+        variant_id=variant_id,
         revision="r1",
         prompt_plan_revision="prompt_r1",
         capability_policy_revision="capability_r1",
@@ -65,6 +86,30 @@ def _event(sequence_no: int, payload: dict[str, object]) -> RuntimeEventEnvelope
     )
 
 
+def _journal_event(
+    sequence_no: int,
+    payload: dict[str, object],
+    *,
+    event_type: RuntimeApiEventType,
+) -> RuntimeEventEnvelope:
+    """One control-plane journal event, shaped the way the runtime emits it.
+
+    The feature owning a record is identified by the event type, so a
+    projection test has to carry the real one rather than a generic tool call.
+    """
+
+    return RuntimeEventEnvelope(
+        run_id="run_1",
+        conversation_id="conversation_1",
+        source=StreamEventSource.RUNTIME,
+        event_type=event_type,
+        trace_id="trace_1",
+        sequence_no=sequence_no,
+        activity_kind=RuntimeActivityKind.EVENT,
+        payload=payload,
+    )
+
+
 def test_projector_retains_only_observable_identifiers_and_digest() -> None:
     payload = {
         "tool_name": "drive.search",
@@ -82,6 +127,153 @@ def test_projector_retains_only_observable_identifiers_and_digest() -> None:
     assert manifest.ordered_steps[0].payload_digest == canonical_json_sha256(payload)
     assert "private raw customer query" not in manifest.model_dump_json()
     assert "must-not-project" not in manifest.model_dump_json()
+
+
+def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "admission_recorded",
+            "disposition": "blocked",
+            "reason_codes": ["exact_duplicate"],
+            "exhausted_dimensions": ["tool_calls"],
+            "plan_body": "private task plan must never be projected",
+            "arguments": {"query": "private customer query"},
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(
+            _journal_event(
+                1,
+                payload,
+                event_type=RuntimeApiEventType.TOOL_POLICY_JOURNAL,
+            ),
+        ),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.policy_record_kind == "admission_recorded"
+    assert step.policy_disposition == "blocked"
+    assert step.policy_reason_codes == ("exact_duplicate",)
+    assert step.policy_exhausted_dimensions == ("tool_calls",)
+    assert "private task plan" not in manifest.model_dump_json()
+    assert "private customer query" not in manifest.model_dump_json()
+
+
+def test_projector_reads_task_policy_columns_only_from_the_f4_journal() -> None:
+    """An F6 batch plan must not populate the F4 controller columns.
+
+    ``plan_bound`` is a record kind both features use, and several F4 corpus
+    families assert ``required_record_kinds: ["plan_bound"]``. Ungated, an F6
+    batch plan satisfies that assertion on a run where the F4 controller never
+    bound a plan, so the family would be graded against a feature that never
+    ran.
+    """
+
+    payload = {
+        "record": {
+            "record_kind": "plan_bound",
+            "disposition": "succeeded",
+            "reason_codes": ["batch_admitted"],
+            "exhausted_dimensions": ["operations"],
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(
+            _journal_event(
+                1,
+                payload,
+                event_type=RuntimeApiEventType.OPERATION_BATCH_JOURNAL,
+            ),
+        ),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.policy_record_kind is None
+    assert step.policy_disposition is None
+    assert step.policy_reason_codes == ()
+    assert step.policy_exhausted_dimensions == ()
+
+
+def test_projector_retains_only_body_free_prompt_cache_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "cache_observed",
+            "outcome": "read",
+            "cache_owner": "product",
+            "reason_code": "provider_reported_read",
+            "provider_reported": True,
+            "input_tokens": 1000,
+            "cached_input_tokens": 800,
+            "cache_creation_input_tokens": 0,
+            "rendered_prompt": "private system prompt",
+            "response_body": "private provider response",
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(_event(1, payload),),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.prompt_record_kind == "cache_observed"
+    assert step.prompt_cache_outcome == "read"
+    assert step.prompt_cache_owner == "product"
+    assert step.prompt_reason_code == "provider_reported_read"
+    assert step.prompt_provider_reported is True
+    assert step.prompt_input_tokens == 1000
+    assert step.prompt_cached_input_tokens == 800
+    assert "private system prompt" not in manifest.model_dump_json()
+    assert "private provider response" not in manifest.model_dump_json()
+
+
+def test_projector_retains_only_closed_model_invocation_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "attempt_usage",
+            "attempt_ordinal": 2,
+            "provider_reported": True,
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "cost_microusd": 700,
+            "prompt": "private system prompt",
+            "api_key": "sk-private",
+            "exception_message": "customer-specific provider failure",
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(_event(1, payload),),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.invocation_record_kind == "attempt_usage"
+    assert step.invocation_attempt_ordinal == 2
+    assert step.invocation_provider_reported_usage is True
+    assert step.invocation_input_tokens == 1000
+    assert step.invocation_output_tokens == 100
+    assert step.invocation_cost_microusd == 700
+    serialized = manifest.model_dump_json()
+    assert "private system prompt" not in serialized
+    assert "sk-private" not in serialized
+    assert "customer-specific" not in serialized
+
+
+def test_projector_rejects_a_gap_in_the_canonical_event_timeline() -> None:
+    with pytest.raises(ValueError, match=r"expected 2, got 3"):
+        TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+            run_id="run_1",
+            variant_id="control",
+            events=(
+                _event(1, {"tool_name": "drive.search"}),
+                _event(3, {"tool_name": "drive.open"}),
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -151,14 +343,38 @@ async def test_hard_gate_failure_blocks_promotion() -> None:
     repository = InMemoryEvaluationRepository()
     result = await DeterministicEvaluationRunner(
         repository=repository,
+        scope=EvaluationScope(profile_id="hermetic-test"),
         executor=executor,
         scorers=(_PassingScorer(), _FailingScorer()),
+        revisions=_revisions(),
         clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
-    ).run(case=_case(), variant=_variant(), fixtures=FixtureToolExecutor(()))
+    ).run(
+        case=_case(),
+        variant=_variant("candidate"),
+        fixtures=FixtureToolExecutor(()),
+    )
 
     assert result.status is EvaluationStatus.FAILED
     assert result.hard_gate_failures == ("unauthorized_effect",)
-    decision = PromotionGate().decide(
+    gate = PromotionGate()
+    assessment = gate.evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(result,),
+        control_results=(
+            _result(
+                case_id=result.case_id,
+                variant_id="control",
+                status=EvaluationStatus.SUCCEEDED,
+            ),
+        ),
+        case_task_families={result.case_id: "connector_selection"},
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+    decision = gate.decide(
         decision_id="decision_1",
         candidate_variant_id="candidate",
         control_variant_id="control",
@@ -167,9 +383,11 @@ async def test_hard_gate_failure_blocks_promotion() -> None:
         report_ref="artifact_report_1",
         actor="user_1",
         rationale="Synthetic safety suite.",
-        candidate_results=(result,),
+        assessment=assessment,
     )
+    assert "candidate_hard_gate_failure" in assessment.reason_codes
     assert decision.status is PromotionStatus.REJECTED
+    assert decision.assessment_digest == assessment.assessment_digest
 
 
 @pytest.mark.asyncio
@@ -183,8 +401,10 @@ async def test_fixture_miss_is_inconclusive_not_a_candidate_pass() -> None:
 
     result = await DeterministicEvaluationRunner(
         repository=InMemoryEvaluationRepository(),
+        scope=EvaluationScope(profile_id="hermetic-test"),
         executor=executor,
         scorers=(),
+        revisions=_revisions(),
     ).run(case=_case(), variant=_variant(), fixtures=FixtureToolExecutor(()))
 
     assert result.status is EvaluationStatus.INCONCLUSIVE
@@ -230,3 +450,196 @@ async def test_runtime_projection_is_opt_in_and_reads_existing_event_store() -> 
     assert projected is not None
     assert projected.run_id == "run_1"
     assert store.calls == 1
+
+
+def _result(
+    *,
+    case_id: str,
+    variant_id: str,
+    status: EvaluationStatus = EvaluationStatus.SUCCEEDED,
+    hard_gate_failures: tuple[str, ...] = (),
+    total_cost: float = 1,
+    end_to_end_ms: int = 100,
+) -> EvaluationResult:
+    values: dict[str, object] = {
+        "evaluation_run_id": f"eval_{variant_id}_{case_id}",
+        "suite_run_id": "suite-run-r1",
+        "case_id": case_id,
+        "case_revision": "case-r1",
+        "variant_id": variant_id,
+        "variant_revision": "variant-r1",
+        "scorer_set_id": "scorer-set-r1",
+        "revisions": _revisions(),
+        "status": status,
+        "scorer_results": (),
+        "hard_gate_failures": hard_gate_failures,
+        "total_cost": total_cost,
+        "model_turns": 1,
+        "tool_calls": 1,
+        "end_to_end_ms": end_to_end_ms,
+        "first_useful_answer_ms": end_to_end_ms,
+    }
+    return EvaluationResult(
+        **values,
+        result_digest=EvaluationResult.digest_for(**values),
+    )
+
+
+def test_promotion_assessment_requires_exact_paired_cases() -> None:
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(_result(case_id="case_1", variant_id="candidate"),),
+        control_results=(_result(case_id="case_2", variant_id="control"),),
+        case_task_families={
+            "case_1": "connector_selection",
+            "case_2": "connector_selection",
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+
+    assert not assessment.passed
+    assert assessment.paired_case_count == 0
+    assert "unpaired_case_set" in assessment.reason_codes
+    assert "minimum_paired_cases_not_met" in assessment.reason_codes
+
+
+def test_promotion_assessment_rejects_mismatched_case_revisions() -> None:
+    candidate = _result(case_id="case_1", variant_id="candidate").model_copy(
+        update={"case_revision": "case-r2"}
+    )
+    control = _result(case_id="case_1", variant_id="control")
+
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(candidate,),
+        control_results=(control,),
+        case_task_families={"case_1": "connector_selection"},
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+
+    assert not assessment.passed
+    assert "case_revision_mismatch" in assessment.reason_codes
+
+
+def test_promotion_assessment_passes_non_regressing_candidate() -> None:
+    candidate = tuple(
+        _result(
+            case_id=f"case_{index}",
+            variant_id="candidate",
+            total_cost=0.9,
+            end_to_end_ms=90,
+        )
+        for index in range(1, 6)
+    )
+    control = tuple(
+        _result(case_id=f"case_{index}", variant_id="control") for index in range(1, 6)
+    )
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=candidate,
+        control_results=control,
+        case_task_families={
+            f"case_{index}": "connector_selection" for index in range(1, 6)
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=5,
+            protected_task_families=frozenset({"connector_selection"}),
+        ),
+    )
+
+    assert assessment.passed
+    assert assessment.reason_codes == ()
+    assert assessment.success_rate_delta_lower_bound == 0
+    assert assessment.protected_family_lower_bounds == {"connector_selection": 0}
+    assert assessment.mean_cost_ratio == pytest.approx(0.9)
+    assert assessment.p95_latency_ratio == pytest.approx(0.9)
+
+
+def test_promotion_assessment_rejects_quality_cost_and_latency_regressions() -> None:
+    candidate = (
+        _result(
+            case_id="case_1",
+            variant_id="candidate",
+            status=EvaluationStatus.FAILED,
+            total_cost=2,
+            end_to_end_ms=300,
+        ),
+        _result(
+            case_id="case_2",
+            variant_id="candidate",
+            total_cost=2,
+            end_to_end_ms=300,
+        ),
+    )
+    control = (
+        _result(case_id="case_1", variant_id="control"),
+        _result(case_id="case_2", variant_id="control"),
+    )
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=candidate,
+        control_results=control,
+        case_task_families={
+            "case_1": "protected",
+            "case_2": "protected",
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=2,
+            protected_task_families=frozenset({"protected"}),
+        ),
+    )
+
+    assert not assessment.passed
+    assert {
+        "success_regression",
+        "protected_family_regression",
+        "mean_cost_ratio_exceeded",
+        "p95_latency_ratio_exceeded",
+    }.issubset(assessment.reason_codes)
+
+
+def test_promotion_decision_rejects_mismatched_assessment_binding() -> None:
+    values: dict[str, object] = {
+        "candidate_variant_id": "other_candidate",
+        "control_variant_id": "control",
+        "thresholds_revision": "thresholds_r1",
+        "paired_case_count": 1,
+        "candidate_success_rate": 1,
+        "control_success_rate": 1,
+        "success_rate_delta": 0,
+        "success_rate_delta_lower_bound": 0,
+        "mean_cost_ratio": 1,
+        "p95_latency_ratio": 1,
+        "protected_family_lower_bounds": {},
+        "reason_codes": (),
+        "passed": True,
+    }
+    assessment = PromotionAssessment(
+        **values,
+        assessment_digest=PromotionAssessment.digest_for(**values),
+    )
+
+    with pytest.raises(ValueError, match="candidate variant"):
+        PromotionGate().decide(
+            decision_id="decision_1",
+            candidate_variant_id="candidate",
+            control_variant_id="control",
+            suite_revisions=("r1",),
+            thresholds_revision="thresholds_r1",
+            report_ref="artifact_report_1",
+            actor="user_1",
+            rationale="Binding test.",
+            assessment=assessment,
+        )

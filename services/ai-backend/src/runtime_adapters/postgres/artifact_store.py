@@ -100,9 +100,9 @@ class PostgresArtifactMetadataStore:
                         INSERT INTO runtime_artifacts (
                             org_id, user_id, artifact_id, conversation_id, run_id,
                             kind, title, media_type, current_revision, created_by,
-                            created_at, updated_at, deleted_at
+                            accent, created_at, updated_at, deleted_at
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL
                         )
                         """,
                         (
@@ -116,6 +116,7 @@ class PostgresArtifactMetadataStore:
                             artifact.media_type,
                             artifact.current_revision,
                             artifact.created_by.value,
+                            artifact.accent.value if artifact.accent else None,
                             artifact.created_at,
                             artifact.updated_at,
                         ),
@@ -269,13 +270,17 @@ class PostgresArtifactMetadataStore:
                         ),
                     )
                     result = ArtifactMutationResult(record=record)
-                    await self._insert_outbox(
-                        conn,
-                        artifact_event_outbox_row(
-                            command.ledger_event,
-                            artifact_id=command.artifact_id,
-                        ),
-                    )
+                    # A conversation-lane append carries no ledger event, so it
+                    # enqueues no outbox row: the only drain appends to a run
+                    # event store, and this mutation belongs to no run.
+                    if command.ledger_event is not None:
+                        await self._insert_outbox(
+                            conn,
+                            artifact_event_outbox_row(
+                                command.ledger_event,
+                                artifact_id=command.artifact_id,
+                            ),
+                        )
                     await self._insert_idempotency(
                         conn,
                         command.idempotency,
@@ -369,12 +374,19 @@ class PostgresArtifactMetadataStore:
         return self._revision_from_row(row) if row is not None else None
 
     async def list_artifacts(self, query: ArtifactListQuery) -> ArtifactListPage:
+        # Exactly one subject scope, guaranteed by ``ArtifactListQuery``. Built as
+        # a parameterised clause rather than a formatted column name so the scope
+        # column is chosen by this code, never by request content.
+        scope_column = "a.run_id" if query.run_id is not None else "a.conversation_id"
+        scope_value = (
+            query.run_id if query.run_id is not None else query.conversation_id
+        )
         clauses = [
             "a.org_id = %s",
             "a.user_id = %s",
-            "a.run_id = %s",
+            f"{scope_column} = %s",
         ]
-        params: list[object] = [query.org_id, query.user_id, query.run_id]
+        params: list[object] = [query.org_id, query.user_id, scope_value]
         if query.kind is not None:
             clauses.append("a.kind = %s")
             params.append(query.kind.value)
@@ -1081,7 +1093,7 @@ class PostgresArtifactMetadataStore:
             SELECT
                 a.org_id, a.user_id, a.artifact_id, a.conversation_id, a.run_id,
                 a.kind, a.title, a.media_type, a.current_revision, a.created_by,
-                a.created_at, a.updated_at, a.deleted_at,
+                a.accent, a.created_at, a.updated_at, a.deleted_at,
                 r.parent_revision, r.content_ref, r.content_digest, r.byte_size,
                 r.author, r.source_ref, r.created_at AS revision_created_at,
                 r.blob_key, r.range_supported, r.suggested_filename
@@ -1116,6 +1128,7 @@ class PostgresArtifactMetadataStore:
                 media_type=row["media_type"],
                 current_revision=row["current_revision"],
                 created_by=row["created_by"],
+                accent=row["accent"],
                 created_at=row["created_at"].isoformat(),
                 updated_at=row["updated_at"].isoformat(),
                 deleted_at=(

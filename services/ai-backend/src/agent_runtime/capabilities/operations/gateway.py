@@ -10,6 +10,7 @@ from agent_runtime.artifacts.contracts import (
     ArtifactCreateRequest,
     ArtifactPromotionRequest,
     ArtifactProvenance,
+    ArtifactRevisionRequest,
 )
 from agent_runtime.artifacts.errors import ArtifactError
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
@@ -21,6 +22,7 @@ from agent_runtime.capabilities.operations.context import (
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
     ArtifactPublicationSource,
+    ArtifactRevisionSource,
     OperationAdapter,
     OperationClassification,
     OperationDescriptor,
@@ -398,8 +400,12 @@ class OperationGateway:
         raw_result: OperationRawResult | None,
         proposed: ProposedEffect | None,
     ) -> tuple[str, ...]:
+        revision = await OperationGateway._artifact_revision(adapter, request)
         intent = request.artifact_intent
-        if intent is None:
+        # A revision carries no artifact intent: kind, title and media type are
+        # immutable properties read from the stored record, so a revise cannot
+        # change what an artifact *is*.
+        if intent is None and revision is None:
             return ()
         context = OperationContext.require()
         service = _GatewayPresentationContext.require().artifact_service
@@ -409,6 +415,14 @@ class OperationGateway:
                 "Artifact service is unavailable.",
                 retryable=True,
             )
+        if revision is not None:
+            mutation = await OperationGateway._revise_authored_content(
+                request=request,
+                service=service,
+                revision=revision,
+            )
+            return (mutation.record.artifact.artifact_id,)
+        assert intent is not None
         publication = await OperationGateway._artifact_publication(adapter, request)
         if publication is not None:
             mutation = await OperationGateway._publish_authored_content(
@@ -462,6 +476,66 @@ class OperationGateway:
         return result
 
     @staticmethod
+    async def _artifact_revision(
+        adapter: OperationAdapter,
+        request: OperationRequest,
+    ) -> ArtifactRevisionSource | None:
+        reviser = getattr(adapter, "artifact_revision", None)
+        if not callable(reviser):
+            return None
+        result = await reviser(request)
+        if result is not None and not isinstance(result, ArtifactRevisionSource):
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                "Artifact revision adapter returned an invalid source.",
+            )
+        return result
+
+    @staticmethod
+    async def _revise_authored_content(
+        *,
+        request: OperationRequest,
+        service: object,
+        revision: ArtifactRevisionSource,
+    ) -> object:
+        """Append one agent-authored revision through the same A2 service.
+
+        This is deliberately the identical entry point the human edit path uses.
+        A separate write here would be a second mutation lane for the same
+        durable object — exactly what the operation gateway exists to prevent.
+        """
+
+        context = OperationContext.require()
+        author = (
+            ArtifactAuthor.SUBAGENT
+            if request.producer.value == "subagent"
+            else ArtifactAuthor.MODEL
+            if request.producer.value == "model"
+            else ArtifactAuthor.SYSTEM
+        )
+        return await service.append_revision_from_stream(
+            org_id=context.identity.org_id,
+            user_id=context.identity.user_id,
+            request=ArtifactRevisionRequest(
+                artifact_id=revision.artifact_id,
+                parent_revision=revision.parent_revision,
+                idempotency_key=request.operation_id,
+                # Agent-authored, so PRD-01 puts this in the RUN lane. Naming the
+                # live run keeps the ledger event in a stream that is still open.
+                acting_run_id=context.identity.run_id,
+            ),
+            provenance=ArtifactProvenance(
+                author=author,
+                source_ref=revision.source_ref,
+            ),
+            chunks=OperationGateway._single_chunk(revision.content or b""),
+        )
+
+    @staticmethod
+    async def _single_chunk(content: bytes):
+        yield content
+
+    @staticmethod
     async def _publish_authored_content(
         *,
         request: OperationRequest,
@@ -486,6 +560,7 @@ class OperationGateway:
             media_type=intent.media_type or "application/octet-stream",
             suggested_filename=intent.suggested_filename,
             presentation_preference=intent.presentation_preference,
+            accent=intent.accent,
             idempotency_key=request.operation_id,
         )
         if publication.content is not None:
