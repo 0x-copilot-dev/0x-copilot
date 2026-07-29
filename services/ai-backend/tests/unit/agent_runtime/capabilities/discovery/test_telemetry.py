@@ -52,11 +52,13 @@ from agent_runtime.capabilities.discovery.telemetry import (
     CapabilityDiscoveryOutcome,
     CapabilityDiscoveryPhase,
     CapabilityExpansionObservation,
+    CapabilitySelectionCorrelator,
     ObservedCapabilityBridgeTool,
     RunJournalDiscoveryDecisionRecorder,
     digest_request,
     estimate_answer_tokens,
 )
+from agent_runtime.control_plane.contracts import DECISION_COUNT_CEILINGS
 from agent_runtime.control_plane import (
     AgentQualityFeature,
     BudgetEnvelope,
@@ -324,6 +326,12 @@ class TestObservationCannotCarryABody(ObservedBridgeHarness):
         leaks is always the one that looked innocent. This asserts on the
         declared types instead, so a future field that could hold prose fails
         the test the moment it is added.
+
+        ``int | None`` is admitted alongside ``int`` because a measurement this
+        call did not take has to be expressible as *absent* rather than as a
+        zero somebody could mistake for an observation. The permission is
+        deliberately narrow: the only widening is "or nothing", so ``str |
+        None`` — the shape a leak would actually need — still fails.
         """
 
         for name, info in CapabilityDiscoveryObservation.model_fields.items():
@@ -335,6 +343,7 @@ class TestObservationCannotCarryABody(ObservedBridgeHarness):
             assert (annotation is not None) and (
                 (isinstance(annotation, type) and issubclass(annotation, StrEnum))
                 or annotation is int
+                or annotation == (int | None)
             ), f"{name} is neither a closed vocabulary nor a count: {annotation}"
 
     async def test_no_seeded_secret_survives_into_the_journal_or_the_records(
@@ -964,6 +973,220 @@ class TestExpansionCostIsMeasuredWhereItHappens(ObservedBridgeHarness):
         ].ainvoke({"query": _SECRET_QUERY, "limit": 10})
 
         assert "error" not in found, found
+
+
+class TestSelectionRankIsMeasuredNotAssumed(ObservedBridgeHarness):
+    """BUG-14b — the one count that spans two bridge calls.
+
+    The rest of the numeric extension is read off a single answer. The rank is
+    not: it is a fact about a reference a search offered and a *later* call
+    chose, so it only exists if the two calls share something. These are the
+    properties of that shared thing.
+    """
+
+    async def test_a_search_offers_and_reports_no_rank_of_its_own(self) -> None:
+        """Offering ten references is not selecting one.
+
+        Reporting a rank here — "my best candidate is at position 1" — would be
+        true and useless, and because trajectory recall is scored over the
+        *lowest* positive rank it would also mask a genuinely bad rank reported
+        later by the call that did the selecting.
+        """
+
+        context = self.context()
+        capture = _CapturingObserver()
+        adapters, _client, _seam, _catalog = await self.observed(context, capture)
+
+        found = await adapters[
+            CapabilityBridgeToolName.SEARCH_CAPABILITIES.value
+        ].ainvoke({"query": "linear issues", "limit": 10})
+
+        assert found["search"]["candidates"]
+        assert capture.observations[0].selection_rank is None
+
+    async def test_a_describe_reports_where_the_search_offered_the_reference(
+        self,
+    ) -> None:
+        context = self.context()
+        capture = _CapturingObserver()
+        adapters, _client, _seam, _catalog = await self.observed(context, capture)
+
+        found = await adapters[
+            CapabilityBridgeToolName.SEARCH_CAPABILITIES.value
+        ].ainvoke({"query": "linear issues", "limit": 10})
+        second = found["search"]["candidates"][1]["capability_ref"]
+        await adapters[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].ainvoke(
+            {"capability_ref": second}
+        )
+
+        assert capture.observations[1].selection_rank == 2
+
+    async def test_a_reference_no_search_offered_reports_zero_not_nothing(
+        self,
+    ) -> None:
+        """``0`` is the guessed-reference measurement the probe case grades."""
+
+        context = self.context()
+        capture = _CapturingObserver()
+        adapters, _client, _seam, _catalog = await self.observed(context, capture)
+
+        await adapters[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].ainvoke(
+            {"capability_ref": "cap_" + "0" * 32}
+        )
+
+        assert capture.observations[0].selection_rank == 0
+
+    async def test_a_request_with_no_readable_reference_reports_nothing(self) -> None:
+        """An unparseable request selected nothing; it did not select a miss."""
+
+        context = self.context()
+        capture = _CapturingObserver()
+        adapters, _client, _seam, _catalog = await self.observed(context, capture)
+
+        await adapters[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].ainvoke(
+            {"not_a_reference": 1}
+        )
+
+        assert capture.observations[0].selection_rank is None
+
+    async def test_two_runs_do_not_pool_their_offers(self) -> None:
+        """Correlation is keyed on the shared observer, so it is run-scoped.
+
+        The second run describes a reference the *first* run's search offered.
+        If the map were process-wide it would answer 1; it answers 0, because
+        that reference was never offered in the run doing the describing.
+        """
+
+        context = self.context()
+        first = _CapturingObserver()
+        first_adapters, _c1, _s1, _cat1 = await self.observed(context, first)
+        found = await first_adapters[
+            CapabilityBridgeToolName.SEARCH_CAPABILITIES.value
+        ].ainvoke({"query": "linear issues", "limit": 10})
+        ref = found["search"]["candidates"][0]["capability_ref"]
+
+        second = _CapturingObserver()
+        second_adapters, _c2, _s2, _cat2 = await self.observed(context, second)
+        await second_adapters[
+            CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value
+        ].ainvoke({"capability_ref": ref})
+
+        assert first.observations[0].selection_rank is None
+        assert second.observations[0].selection_rank == 0
+
+    async def test_the_first_search_to_offer_a_reference_owns_its_rank(self) -> None:
+        """A run cannot improve its own recall by searching again.
+
+        The second search puts the reference first. The rank stays the one it
+        held when it actually became selectable to the model.
+        """
+
+        context = self.context()
+        capture = _CapturingObserver()
+        adapters, _client, _seam, _catalog = await self.observed(context, capture)
+        search = adapters[CapabilityBridgeToolName.SEARCH_CAPABILITIES.value]
+
+        found = await search.ainvoke({"query": "linear issues", "limit": 10})
+        second = found["search"]["candidates"][1]["capability_ref"]
+        await search.ainvoke({"query": "list issues", "limit": 1})
+        await adapters[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].ainvoke(
+            {"capability_ref": second}
+        )
+
+        assert capture.observations[-1].selection_rank == 2
+
+    def test_a_rank_past_the_records_ceiling_is_clamped_not_dropped(self) -> None:
+        """Clamping fails closed; dropping and refusing both fail open.
+
+        A dropped or refused rank reads as *not observed*, and a ``maximum_``
+        bound over an unobserved quantity is either satisfied by absence or
+        refuses to grade. A clamped one is still far past any ceiling a case
+        declares, so the bound it should fail is the bound it fails.
+        """
+
+        correlator = CapabilitySelectionCorrelator()
+        ceiling = DECISION_COUNT_CEILINGS["selection_rank"]
+
+        correlator.record_offer([f"cap_{index:032x}" for index in range(ceiling + 5)])
+
+        assert correlator.rank_for(f"cap_{ceiling + 3:032x}") == ceiling
+        assert (
+            CapabilityDiscoveryObservation(
+                phase=CapabilityDiscoveryPhase.INVOKE,
+                tool=CapabilityBridgeToolName.INVOKE_CAPABILITY,
+                outcome=CapabilityDiscoveryOutcome.OK,
+                input_digest="a" * 64,
+                latency_ms=1,
+                selection_rank=ceiling,
+            ).selection_rank
+            == ceiling
+        )
+
+    def test_the_correlator_stops_growing_rather_than_leaking(self) -> None:
+        """Observation must not turn a pathological run into a memory problem."""
+
+        correlator = CapabilitySelectionCorrelator()
+
+        correlator.record_offer([f"cap_{index:032x}" for index in range(5_000)])
+
+        assert correlator.rank_for(f"cap_{4_999:032x}") == 0
+
+    async def test_a_broken_correlation_neither_fails_nor_alters_the_call(
+        self,
+    ) -> None:
+        """An answer this module cannot read is a missing rank, not a failure."""
+
+        capture = _CapturingObserver()
+        wrapped = ObservedCapabilityBridgeTool(
+            inner=_StubTool({"search": {"candidates": "not-a-list"}}),
+            observer=capture,
+            tool=CapabilityBridgeToolName.SEARCH_CAPABILITIES,
+        )
+
+        answer = await wrapped.ainvoke({"query": "q"})
+
+        assert answer == {"search": {"candidates": "not-a-list"}}
+        assert capture.observations[0].selection_rank is None
+
+
+class TestEveryEmittedCountIsInsideTheRecordsBounds(ObservedBridgeHarness):
+    """A producer the durable record would refuse writes no row at all."""
+
+    async def test_a_real_chain_writes_a_row_for_every_call(self) -> None:
+        """The end-to-end statement: nothing measured was rejected."""
+
+        store, context, recorder = await _bound_run(self)
+        adapters, _client, _seam, _catalog = await self.observed(context, recorder)
+
+        await self.drive_chain(adapters, context)
+
+        decisions = [
+            event
+            for event in await store.list_events_after(
+                org_id=_ORG,
+                run_id=context.run_id,
+                after_sequence=0,
+            )
+            if event.event_type is RuntimeApiEventType.QUALITY_DECISION
+        ]
+        assert len(decisions) == 3
+        for event in decisions:
+            for name, ceiling in DECISION_COUNT_CEILINGS.items():
+                value = event.payload[name]
+                assert value is None or 0 <= value <= ceiling, (name, value)
+
+
+@dataclass
+class _StubTool:
+    """An adapter that answers with one fixed object."""
+
+    answer: Any
+    name: str = "search_capabilities"
+    description: str = "stub"
+
+    async def ainvoke(self, raw_input: Any) -> Any:
+        del raw_input
+        return self.answer
 
 
 @dataclass
