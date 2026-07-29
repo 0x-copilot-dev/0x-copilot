@@ -173,7 +173,49 @@ class TestTheThreeCasesExistAndAreSatisfiable:
 
 
 class TestSelectionRecallDetectsAMiss:
-    """If search stops surfacing the right capability, this case must fail."""
+    """If search stops surfacing the right capability, this case must fail.
+
+    The case grades a *selection*: search offers references, and the describe
+    that names one of them reports the position it came back at. Both steps are
+    therefore required, and the mutations below break each half in turn.
+    """
+
+    async def test_a_run_that_never_selects_anything_fails_the_case(self) -> None:
+        """A search alone measures no selection, so there is no recall to grade.
+
+        This is the shape BUG-17 corrected. A one-call ceiling admitted only a
+        search, and then demanded a rank that no honest search can report, so
+        the case scored a working run as failing. Losing the describe step must
+        stay a *phase* failure rather than a recall verdict.
+        """
+
+        trajectory = await _trajectory(_RECALL)
+        without_describe = trajectory.model_copy(
+            update={
+                "ordered_steps": tuple(
+                    step
+                    for step in trajectory.ordered_steps
+                    if step.discovery_phase != _DESCRIBE
+                )
+            }
+        )
+
+        result = _score(_RECALL, without_describe)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_phase_missing"
+
+    async def test_a_selection_that_burns_extra_model_turns_fails_the_case(
+        self,
+    ) -> None:
+        """Two turns is a budget, not a formality: a third call breaks it."""
+
+        trajectory = await _trajectory(_RECALL)
+
+        result = _score(_RECALL, _mutated(trajectory, discovery_model_turns=9))
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_model_turns_exceeded"
 
     async def test_a_capability_that_never_comes_back_fails_the_case(self) -> None:
         """Rank 0 is 'the target was not in the answer' — the recall failure."""

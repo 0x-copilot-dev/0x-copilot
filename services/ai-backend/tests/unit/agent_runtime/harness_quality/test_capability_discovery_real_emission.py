@@ -13,11 +13,20 @@ to the canonical journal, projects it with the production ``TrajectoryProjector`
 and scores it with the production scorer against the **shipped corpus cases**.
 Nothing here authors an observation.
 
-Two of the three F1 discovery cases pass end to end on that real trajectory.
-The third, ``capability_discovery_selection_recall``, does not, and its exact
-residual reason is pinned below rather than papered over — it is a property of
-the case's own ceiling, not of the numbers, and the pin is what will fail when
-that ceiling is revisited.
+Two of the three F1 discovery cases passed end to end on that real trajectory
+when this module was written. The third, ``capability_discovery_selection
+_recall``, did not, and its exact residual reason was pinned below rather than
+papered over — it was a property of the case's own ceiling, not of the numbers.
+
+That ceiling has now been revisited, which is what the pin existed to force.
+BUG-17: the case declared ``minimum_recall_rank: 1`` alongside
+``maximum_model_turns: 1``, and those contradict — one bridge call is one model
+turn, so a one-turn ceiling admits exactly one call, a search, and a search
+selects nothing to rank. The case is now a two-call trajectory whose rank is
+read off the describe step, so **all three** cases pass on real emitted
+numbers. ``TestTheSelectionRecallCaseIsSatisfiedByARealRun`` below is the
+inverted pin: same subject, opposite verdict, and it says which assertion it
+replaces.
 """
 
 from __future__ import annotations
@@ -41,11 +50,13 @@ from runtime_api.schemas import RuntimeApiEventType
 
 from tests.unit.agent_runtime.capabilities.discovery.test_bridge_chain import (
     _NOW,
+    _READ_TOOL,
     _REFERENCE_KEY,
     _SELECTION_REF,
 )
 from tests.unit.agent_runtime.capabilities.discovery.test_telemetry import (
     _ORG,
+    _SECRET_QUERY,
     ObservedBridgeHarness,
     _bound_run,
 )
@@ -130,6 +141,28 @@ class RealEmissionHarness(ObservedBridgeHarness):
         """The steps the F3 scorer will look at, in run order."""
 
         return tuple(step for step in trajectory.ordered_steps if step.discovery_phase)
+
+    async def drive_selection(self, adapters, context):  # type: ignore[no-untyped-def]
+        """Search, then describe the capability the search offered.
+
+        The shortest trajectory that contains a *selection*, which is the unit
+        ``capability_discovery_selection_recall`` grades. It is
+        :meth:`drive_chain` stopped one call early: the same real catalog, the
+        same real ranker, the same real Operation Gateway, and the same target
+        capability — only the invocation is left off, because recall is
+        answered the moment a reference is picked.
+        """
+
+        operation_token, service_token = self.bind_gateway(context)
+        try:
+            found = await adapters[
+                CapabilityBridgeToolName.SEARCH_CAPABILITIES.value
+            ].ainvoke({"query": _SECRET_QUERY, "limit": 10})
+            await adapters[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].ainvoke(
+                {"capability_ref": self.ref_for(found, _READ_TOOL)}
+            )
+        finally:
+            self.release_gateway(operation_token, service_token)
 
     async def probe_run(self, adapters, context):  # type: ignore[no-untyped-def]
         """Search, describe, and invoke a name this run is not authorized for.
@@ -429,29 +462,101 @@ class TestARankerRegressionIsCaughtOnARealRun(RankerRegressionHarness):
         assert _score(_END_TO_END, trajectory).passed
 
 
-class TestTheSelectionRecallCaseRemainsFixtureShaped(RealEmissionHarness):
-    """The one case a real trajectory still cannot satisfy, and exactly why.
+class TestTheSelectionRecallCaseIsSatisfiedByARealRun(RealEmissionHarness):
+    """Inverts ``TestTheSelectionRecallCaseRemainsFixtureShaped`` (BUG-17).
 
-    ``capability_discovery_selection_recall`` declares ``minimum_recall_rank: 1``
-    together with ``maximum_model_turns: 1``. One bridge call is one model turn,
-    which the corpus itself states by giving each of its three-call scenarios a
-    ceiling of three, so the case admits exactly one call — a search. A search
-    offers references and selects none, and a rank is a fact about a selection,
-    so the two bounds are only jointly satisfiable by a producer that invents a
-    rank on the search step.
+    That class pinned ``capability_discovery_selection_recall`` as the one case
+    a real trajectory could not satisfy, and named the reason exactly:
+    ``minimum_recall_rank: 1`` together with ``maximum_model_turns: 1``. One
+    bridge call is one model turn, so a one-turn ceiling admitted exactly one
+    call — a search. A search offers references and selects none, and a rank is
+    a fact about a selection, so the two bounds were jointly satisfiable only by
+    a producer that invented a rank on the search step.
 
-    Inventing one is not a smaller compromise than leaving the case failing. A
-    search that reports "my best candidate is at position 1" makes the bound
-    ``min``-dominant across the whole trajectory, which would take
-    ``maximum_recall_rank`` off the end-to-end case entirely and let the real
-    regression proved above pass. The failure is therefore left standing and
-    pinned here by its exact reason code, so that reason code has to be revisited
-    deliberately rather than drifting.
+    That refusal to invent one was correct and is preserved: a search reporting
+    "my best candidate is at position 1" would make the bound ``min``-dominant
+    across the whole trajectory, taking ``maximum_recall_rank`` off the
+    end-to-end case entirely and letting the ranker regression proved above
+    pass. The producer is therefore unchanged. What changed is the **case**: it
+    now spans search *and* describe, reads the rank where the producer honestly
+    reports it, and carries a ceiling of two turns — the fewest that admit a
+    selection at all, so the budget is still the tightest one this property can
+    honestly declare, as the chain test below shows.
     """
 
-    async def test_a_real_recall_run_fails_on_the_turn_ceiling_not_the_rank(
+    async def test_a_real_search_and_describe_run_passes_the_selection_recall_case(
         self,
     ) -> None:
+        """The defect BUG-17 named, asserted directly: no fixture authorship.
+
+        Real catalog, real ranker, real gateway, real journal. Every number the
+        case grades was measured by the run, and the case goes green.
+        """
+
+        store, context, adapters, _client = await self.journal()
+
+        await self.drive_selection(adapters, context)
+        trajectory = await self.trajectory(store, context)
+
+        result = _score(_RECALL, trajectory)
+
+        assert result.passed, result.reason_code
+
+    async def test_the_passing_run_measured_every_bound_the_case_declares(
+        self,
+    ) -> None:
+        """Green because the numbers were observed, not because they were absent.
+
+        Read together with the scorer's ``counts_unobserved`` refusal, this is
+        what stops the test above from being satisfiable by a producer that
+        emits nothing: the rank is positive and inside the window, it sits on
+        the describe step, and the search reports no rank at all.
+        """
+
+        store, context, adapters, _client = await self.journal()
+
+        await self.drive_selection(adapters, context)
+        trajectory = await self.trajectory(store, context)
+
+        steps = self.discovery_steps(trajectory)
+        assert [step.discovery_phase for step in steps] == [
+            "capability_search",
+            "capability_describe",
+        ]
+        assert all(step.discovery_counts_observed for step in steps)
+        # The search offered candidates and ranked nothing; the describe made
+        # the selection and reported the position it came back at.
+        assert steps[0].discovery_candidate_count >= 1
+        assert steps[0].discovery_recall_rank == 0
+        assert steps[1].discovery_recall_rank >= 1
+
+        expected = {
+            assertion.scorer_id: assertion
+            for assertion in _case(_RECALL).expected_assertions
+        }["capability_discovery_trajectory"].expected
+        assert isinstance(expected, dict)
+        assert expected["minimum_recall_rank"] <= steps[1].discovery_recall_rank
+        assert steps[1].discovery_recall_rank <= expected["maximum_recall_rank"]
+        assert (
+            sum(step.discovery_model_turns for step in steps)
+            <= expected["maximum_model_turns"]
+        )
+        assert (
+            sum(step.discovery_result_tokens for step in steps)
+            <= expected["maximum_result_tokens"]
+        )
+
+    async def test_a_full_chain_still_exceeds_the_recall_budget(
+        self,
+    ) -> None:
+        """Updates ``test_a_real_recall_run_fails_on_the_turn_ceiling_not_the_rank``.
+
+        The ceiling moved from one turn to two, not to "whatever the run costs".
+        A third bridge call still breaks it, so the case remains a budget and
+        not a rubber stamp — and the rejection is still about cost rather than
+        recall, because the rank a real chain measures is inside the window.
+        """
+
         store, context, adapters, _client = await self.journal()
 
         await self.drive_chain(adapters, context)
@@ -462,10 +567,9 @@ class TestTheSelectionRecallCaseRemainsFixtureShaped(RealEmissionHarness):
         assert not result.passed
         # Not ``recall_missing`` and not ``counts_unobserved``: the rank was
         # measured and it is inside the case's window. What rejects this run is
-        # one of the two single-call budgets the case declares — three bridge
-        # calls cost three turns and roughly four hundred tokens against
-        # ceilings of one and four hundred — and which of the two trips first is
-        # not the point being pinned.
+        # one of the two budgets — three bridge calls cost three turns and
+        # roughly four hundred tokens against ceilings of two and four hundred —
+        # and which of the two trips first is not the point being pinned.
         assert result.reason_code in {
             "capability_discovery_result_tokens_exceeded",
             "capability_discovery_model_turns_exceeded",
@@ -483,13 +587,17 @@ class TestTheSelectionRecallCaseRemainsFixtureShaped(RealEmissionHarness):
         assert expected["minimum_recall_rank"] <= best_rank
         assert best_rank <= expected["maximum_recall_rank"]
 
-    async def test_a_single_search_run_measures_everything_except_a_rank(
+    async def test_a_single_search_run_is_not_a_recall_run(
         self,
     ) -> None:
-        """The only trajectory the case's turn ceiling admits, measured.
+        """Inverts ``test_a_single_search_run_measures_everything_except_a_rank``.
 
-        Its counts are observed — so the numeric refusal is gone — and its rank
-        is absent, because one search made no selection.
+        The measurement that test made still holds — a lone search observes its
+        counts and reports no rank, because it selected nothing. What changed is
+        the verdict: the case no longer *admits* that trajectory as a complete
+        recall run, so it is rejected for the missing selection step rather than
+        scored as a recall miss. That distinction is the fix: a run that never
+        selected anything is unmeasured, not failing.
         """
 
         store, context, adapters, _client = await self.journal()
@@ -507,7 +615,7 @@ class TestTheSelectionRecallCaseRemainsFixtureShaped(RealEmissionHarness):
         result = _score(_RECALL, trajectory)
 
         assert not result.passed
-        assert result.reason_code == "capability_discovery_recall_missing"
+        assert result.reason_code == "capability_discovery_phase_missing"
 
 
 @pytest.mark.parametrize("family", [_RECALL, _PROBE, _END_TO_END])

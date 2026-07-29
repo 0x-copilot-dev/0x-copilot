@@ -169,7 +169,14 @@ def _score(family: str, trajectory: TrajectoryManifest):  # type: ignore[no-unty
 
 
 def _healthy_recall_run() -> TrajectoryManifest:
-    """A real, working selection-recall run: the target came back first."""
+    """A real, working selection-recall run: search, then select the target.
+
+    Two steps rather than one, because recall is a claim about a *selection*
+    and a search selects nothing. The search reports how many candidates it
+    offered and no rank at all; the describe that names one of them reports the
+    position that reference held. A one-step version of this run is what
+    BUG-17 was: the case asked for a rank and paid for only the offer.
+    """
 
     return _projected(
         _decision_event(
@@ -177,10 +184,17 @@ def _healthy_recall_run() -> TrajectoryManifest:
             phase=_SEARCH,
             outcome_code="ok",
             candidate_count=4,
-            selection_rank=1,
             result_tokens=180,
             model_turns=1,
-        )
+        ),
+        _decision_event(
+            sequence_no=2,
+            phase=_DESCRIBE,
+            outcome_code="ok",
+            selection_rank=1,
+            result_tokens=150,
+            model_turns=1,
+        ),
     )
 
 
@@ -190,9 +204,10 @@ def _healthy_end_to_end_run() -> TrajectoryManifest:
     The rank is reported by the **invoke** step rather than the search step,
     which is where a real run learns it: a selection rank is only knowable once
     the model has picked a reference and it can be placed against the search
-    that offered it. The recall run above reports it on the search step, so
-    between them these two fixtures prove the scorer reads the rank wherever the
-    producer honestly knows it.
+    that offered it. The recall run above reports it on its *describe* step, so
+    between them these two fixtures prove the scorer reads the rank wherever
+    along the trajectory the producer honestly knows it — and neither of them
+    asks a search to invent one.
     """
 
     return _projected(
@@ -412,7 +427,12 @@ class TestEachCaseStillBitesOnARealRun:
     """
 
     def test_a_search_that_never_returns_the_target_fails_recall(self) -> None:
-        """The miss selection recall exists to catch: rank never becomes positive."""
+        """The miss selection recall exists to catch: rank never becomes positive.
+
+        The search still answers and still offers candidates; what the run
+        selected simply was not among them, so the describe reports an observed
+        rank of zero. Zero is a measurement here, not a gap.
+        """
 
         trajectory = _projected(
             _decision_event(
@@ -420,10 +440,17 @@ class TestEachCaseStillBitesOnARealRun:
                 phase=_SEARCH,
                 outcome_code="ok",
                 candidate_count=4,
-                selection_rank=0,
                 result_tokens=180,
                 model_turns=1,
-            )
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                selection_rank=0,
+                result_tokens=150,
+                model_turns=1,
+            ),
         )
 
         result = _score(_RECALL, trajectory)
@@ -440,10 +467,17 @@ class TestEachCaseStillBitesOnARealRun:
                 phase=_SEARCH,
                 outcome_code="ok",
                 candidate_count=9,
-                selection_rank=7,
                 result_tokens=180,
                 model_turns=1,
-            )
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                selection_rank=7,
+                result_tokens=150,
+                model_turns=1,
+            ),
         )
 
         result = _score(_RECALL, trajectory)
@@ -452,7 +486,12 @@ class TestEachCaseStillBitesOnARealRun:
         assert result.reason_code == "capability_discovery_recall_rank_exceeded"
 
     def test_a_search_that_answers_expensively_fails_recall(self) -> None:
-        """The cost half of the case, measured rather than authored."""
+        """The cost half of the case, measured rather than authored.
+
+        Every other assertion the case makes passes here — the chain ran, the
+        outcomes are ``ok``, the target came back first — and the case still
+        fails, on the one step whose answer blew the budget.
+        """
 
         trajectory = _projected(
             _decision_event(
@@ -460,8 +499,40 @@ class TestEachCaseStillBitesOnARealRun:
                 phase=_SEARCH,
                 outcome_code="ok",
                 candidate_count=4,
-                selection_rank=1,
                 result_tokens=4_000,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                selection_rank=1,
+                result_tokens=150,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_RECALL, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_result_tokens_exceeded"
+
+    def test_a_search_that_never_selects_anything_fails_recall(self) -> None:
+        """The gate BUG-17 added: a lone search is not a recall run.
+
+        A search that stops without describing anything has measured no
+        selection, so there is no recall to grade. Before BUG-17 this was the
+        *only* trajectory the case's one-turn ceiling admitted, which is why it
+        could never go green on a real run.
+        """
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=4,
+                result_tokens=180,
                 model_turns=1,
             )
         )
@@ -469,7 +540,7 @@ class TestEachCaseStillBitesOnARealRun:
         result = _score(_RECALL, trajectory)
 
         assert not result.passed
-        assert result.reason_code == "capability_discovery_result_tokens_exceeded"
+        assert result.reason_code == "capability_discovery_phase_missing"
 
     def test_a_leaking_probe_fails_the_security_case_on_a_real_run(self) -> None:
         """One bridge tool answering ``ok`` to an unauthorized name is caught."""

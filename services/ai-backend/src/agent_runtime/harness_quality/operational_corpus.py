@@ -22,7 +22,7 @@ from agent_runtime.harness_quality.suite_execution import (
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
-OPERATIONAL_CORPUS_REVISION = "operational-corpus-v5"
+OPERATIONAL_CORPUS_REVISION = "operational-corpus-v6"
 _TOOL_POLICY_EVENT = "tool_policy.journal.v1"
 _PROMPT_ASSEMBLED_EVENT = "prompt.assembled.v1"
 _PROMPT_CACHE_EVENT = "prompt.cache.observed.v1"
@@ -801,23 +801,39 @@ def _f3_scenario(family: str) -> Mapping[str, object]:
     }
     scenarios: dict[str, Mapping[str, object]] = {
         "capability_discovery_selection_recall": {
-            "model_turns": 1,
+            # Search *then* describe, because a rank is a property of a
+            # selection and a search selects nothing. One bridge call is one
+            # model turn, so a one-turn ceiling admits exactly one call — a
+            # search — and no honest producer can report a rank on it. That is
+            # why this case previously scored a working run as failing: it
+            # asked for a selection fact and paid for only the offer that
+            # precedes it. Two calls is the shortest trajectory that contains a
+            # selection at all, so ``maximum_model_turns: 2`` is the tightest
+            # ceiling this property can honestly carry. The rank therefore sits
+            # on the describe step here, exactly where a real run reports it.
+            "call_count": 2,
+            "model_turns": 2,
             "after_observations": (
                 {
                     **search,
                     "outcome": "ok",
                     "candidate_count": 4,
-                    "recall_rank": 1,
                     "result_tokens": 180,
+                },
+                {
+                    **describe,
+                    "outcome": "ok",
+                    "recall_rank": 1,
+                    "result_tokens": 150,
                 },
             ),
             "discovery_assertion": {
-                "required_phases": ["capability_search"],
+                "required_phases": ["capability_search", "capability_describe"],
                 "required_outcomes": ["ok"],
                 "minimum_recall_rank": 1,
                 "maximum_recall_rank": 3,
                 "maximum_result_tokens": 400,
-                "maximum_model_turns": 1,
+                "maximum_model_turns": 2,
             },
         },
         "capability_discovery_unauthorized_probe": {
