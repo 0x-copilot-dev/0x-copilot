@@ -717,10 +717,10 @@ class CapabilityDiscoveryTrajectoryScorer:
 #: :data:`_DISCOVERY_NUMERIC_KEYS` exists for, and for the same reason.
 #:
 #: ``maximum_planned_batches``, ``minimum_dispatch_intents``,
-#: ``maximum_settled_children``, and ``minimum_tool_calls`` are deliberately
-#: *not* here. Those count observable steps, so their quantity is present
-#: whenever the trajectory is, and an unplannable case must be able to assert
-#: "no plan was bound" without a plan record to read it from.
+#: ``maximum_determinate_settlements``, and ``minimum_tool_calls`` are
+#: deliberately *not* here. Those count observable steps, so their quantity is
+#: present whenever the trajectory is, and an unplannable case must be able to
+#: assert "no plan was bound" without a plan record to read it from.
 _PARALLEL_SEGMENT_NUMERIC_KEYS = (
     "minimum_planned_operations",
     "minimum_overlapping_operations",
@@ -728,6 +728,13 @@ _PARALLEL_SEGMENT_NUMERIC_KEYS = (
     "minimum_segment_width",
     "maximum_segment_width",
 )
+
+#: The two dispositions that *claim* something about the world.
+#: ``indeterminate`` is deliberately absent: it is a settlement that asserts
+#: nothing, which is the honest record for work whose outcome nobody can
+#: establish. Counting it as an outcome would make a correctly cancelled run
+#: indistinguishable from one that invented a result.
+_DETERMINATE_DISPOSITIONS = frozenset({"succeeded", "failed"})
 
 
 class ParallelExecutionTrajectoryScorer:
@@ -757,10 +764,17 @@ class ParallelExecutionTrajectoryScorer:
     * **a sibling failure leaves a completed child intact** — the settled
       dispositions must still contain ``succeeded``.
     * **cancel and restart invent neither rollback nor success** —
-      ``require_unsettled_child`` states positively that a child was begun and
-      the journal declines to say what became of it. Any manufactured outcome,
-      whether ``succeeded`` (invented success) or ``failed`` (invented "nothing
-      happened"), removes the unsettled child and fails the case.
+      ``require_unresolved_child`` states positively that a child was begun and
+      the journal never claimed an outcome for it, and
+      ``maximum_determinate_settlements`` bounds how many outcomes were claimed
+      at all. Both are phrased over *determinate* settlements — ``succeeded``
+      and ``failed`` only — rather than over settlements, because a durable
+      ``indeterminate`` row is the honest answer rather than a violation. That
+      distinction is what lets one case grade a run whose cancel path records
+      nothing and a run whose cancel path records its uncertainty: the property
+      is that no outcome was manufactured, not which of the two shapes the
+      journal took. A manufactured ``succeeded`` (invented result) or
+      ``failed`` (invented "nothing reached the connector") fails both bounds.
 
     Every segment-derived numeric bound is refused outright when no step carried
     a plan record, because a ``maximum_`` ceiling over an unpopulated width is
@@ -851,8 +865,14 @@ class ParallelExecutionTrajectoryScorer:
         dispatch_intents = sum(
             step.parallel_child_phase == "dispatch_intent" for step in child_steps
         )
-        settled_children = sum(
-            step.parallel_child_phase == "settled" for step in child_steps
+        # Settlements that *claim an outcome*, as opposed to recording that the
+        # outcome is unknown. This is the count the cancel property is about,
+        # and it is deliberately not "settlements": a cancel that durably says
+        # ``indeterminate`` has settled a child without asserting anything about
+        # the world, which is the honest answer rather than a violation.
+        determinate_settlements = sum(
+            step.parallel_child_disposition in _DETERMINATE_DISPOSITIONS
+            for step in child_steps
         )
         counts_observed = any(step.parallel_counts_observed for step in plan_steps)
 
@@ -924,7 +944,7 @@ class ParallelExecutionTrajectoryScorer:
                 plan_steps=plan_steps,
                 counts_observed=counts_observed,
                 dispatch_intents=dispatch_intents,
-                settled_children=settled_children,
+                determinate_settlements=determinate_settlements,
             )
         return reason or "parallel_execution_trajectory_passed"
 
@@ -936,7 +956,7 @@ class ParallelExecutionTrajectoryScorer:
         plan_steps: Sequence[TrajectoryStep],
         counts_observed: bool,
         dispatch_intents: int,
-        settled_children: int,
+        determinate_settlements: int,
     ) -> str | None:
         # A plan whose widths were never measured cannot answer a width
         # question. Every ``maximum_`` bound below is satisfied by an
@@ -993,15 +1013,16 @@ class ParallelExecutionTrajectoryScorer:
             expected.get("minimum_dispatch_intents", 0)
         ):
             return "parallel_execution_dispatch_intent_minimum_not_met"
-        if "maximum_settled_children" in expected and settled_children > (
-            _non_negative_int(expected.get("maximum_settled_children"))
+        if "maximum_determinate_settlements" in expected and (
+            determinate_settlements
+            > _non_negative_int(expected.get("maximum_determinate_settlements"))
         ):
-            return "parallel_execution_settled_count_exceeded"
+            return "parallel_execution_invented_outcome_observed"
         if (
-            expected.get("require_unsettled_child", False)
-            and dispatch_intents <= settled_children
+            expected.get("require_unresolved_child", False)
+            and dispatch_intents <= determinate_settlements
         ):
-            return "parallel_execution_unsettled_child_missing"
+            return "parallel_execution_unresolved_child_missing"
         return None
 
 

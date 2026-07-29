@@ -1057,13 +1057,14 @@ def _f6_scenario(family: str) -> Mapping[str, object]:
     floor. Without that floor the case would pass on an empty trajectory, which
     is the failure mode BUG-14 found in a different assertion.
 
-    ``parallel_cancel_restart_no_invention`` is authored as a child that was
-    begun and never settled, because that is what a real cancel leaves behind.
-    The coordinator's own ``indeterminate`` disposition is deliberately *not*
-    asserted: ``cancel()`` has no production caller, so a case demanding an
-    ``indeterminate`` row would be grading unreachable code. What is asserted is
-    the property that survives either way — no outcome is manufactured for work
-    whose result nobody knows.
+    ``parallel_cancel_restart_no_invention`` grades the property rather than the
+    shape. Two cancel implementations produce two different journals: one that
+    unwinds the coroutine leaves a dispatch intent with no settle beside it, and
+    one that records its uncertainty leaves a durable ``indeterminate``. Both
+    are honest — neither claims an outcome — so the case is written over
+    *determinate* settlements and passes on either. Writing it around the
+    absence of a settle would have scored a correctly cancelled run as a failure
+    the moment cancellation became durable, which is the BUG-17 shape.
     """
 
     scenarios: dict[str, Mapping[str, object]] = {
@@ -1256,12 +1257,23 @@ def _f6_scenario(family: str) -> Mapping[str, object]:
                 # stops this case from passing on a run that did nothing.
                 "required_child_dispositions": ["succeeded"],
                 "minimum_dispatch_intents": 2,
-                "maximum_settled_children": 1,
-                # The claim, stated positively: a child was begun and the
-                # journal declines to say what became of it. Manufacturing
-                # either answer — ``succeeded`` or the ``failed`` that would
-                # imply nothing happened — removes the unsettled child.
-                "require_unsettled_child": True,
+                # The claim, stated positively and over *determinate*
+                # settlements only: two children were begun and the journal
+                # claimed an outcome for at most one. Manufacturing either
+                # answer for the second — ``succeeded`` or the ``failed`` that
+                # would imply nothing reached the connector — breaks both
+                # bounds.
+                #
+                # Phrasing it this way rather than as "one child never settled"
+                # is deliberate, and it is what keeps the case correct across
+                # both cancel implementations. A cancel path that records
+                # nothing leaves an intent with no settle; one that records its
+                # uncertainty leaves a durable ``indeterminate``. Neither
+                # invented anything, so both must pass, and a case written
+                # around the *absence* of a settle would score the second as a
+                # failure the moment cancellation became durable.
+                "maximum_determinate_settlements": 1,
+                "require_unresolved_child": True,
             },
         },
     }

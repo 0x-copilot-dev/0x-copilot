@@ -797,15 +797,42 @@ class TestCancelAndRestartDetectAnInventedOutcome:
         )
 
         assert not result.passed
-        assert result.reason_code == "parallel_execution_settled_count_exceeded"
+        assert result.reason_code == "parallel_execution_invented_outcome_observed"
         assert result.hard_gate is True
+
+    async def test_a_durable_indeterminate_verdict_passes_the_case(self) -> None:
+        """Recording uncertainty is not inventing an outcome.
+
+        Two cancel implementations leave two different journals: one that
+        unwinds the coroutine leaves an intent with no settle, and one that
+        durably says ``indeterminate``. Neither claimed anything about the
+        world, so the case must accept both — and this is the direction that is
+        easy to get wrong. A case written around "a child never settled" scores
+        the second, better implementation as a failure, which is exactly the
+        BUG-17 shape of grading a working run as broken.
+        """
+
+        trajectory = await _trajectory(_NO_INVENTION)
+
+        result = _score(
+            _NO_INVENTION,
+            _with_extra_step(
+                trajectory,
+                parallel_record_kind=_CHILD,
+                parallel_child_phase="settled",
+                parallel_child_disposition="indeterminate",
+            ),
+        )
+
+        assert result.passed
+        assert result.reason_code == "parallel_execution_trajectory_passed"
 
     async def test_a_run_that_settled_nothing_fails_the_case(self) -> None:
         """Non-vacuity: the sibling that did finish must keep its result.
 
         Without this the family would pass on a run where the batch collapsed
         entirely, which is a different failure wearing the same shape — and one
-        that would otherwise satisfy ``require_unsettled_child`` twice over.
+        that would otherwise satisfy ``require_unresolved_child`` twice over.
 
         The reason code is the *phase* rather than the disposition because this
         family authors exactly one settle: removing it removes the only
@@ -824,13 +851,15 @@ class TestCancelAndRestartDetectAnInventedOutcome:
         assert not result.passed
         assert result.reason_code == "parallel_execution_child_phase_missing"
 
-    def test_a_journal_that_accounted_for_every_child_fails_the_case(self) -> None:
-        """``require_unsettled_child`` in isolation.
+    def test_a_journal_that_claimed_an_outcome_for_every_child_fails_the_case(
+        self,
+    ) -> None:
+        """``require_unresolved_child`` in isolation.
 
         Built directly rather than mutated, because every corpus-level mutation
-        that removes the unsettled child also trips the settled ceiling. This
-        pins the positive claim on its own: a run whose every begun child
-        settled is not the run this family describes.
+        that resolves the last child also trips the determinate-settlement
+        ceiling. This pins the positive claim on its own: a run whose every
+        begun child was given an outcome is not the run this family describes.
         """
 
         steps = tuple(
@@ -889,7 +918,7 @@ class TestCancelAndRestartDetectAnInventedOutcome:
                             "expected": {
                                 "required_child_dispositions": ["succeeded"],
                                 "minimum_dispatch_intents": 2,
-                                "require_unsettled_child": True,
+                                "require_unresolved_child": True,
                             }
                         }
                     )
@@ -906,7 +935,7 @@ class TestCancelAndRestartDetectAnInventedOutcome:
         )
 
         assert not result.passed
-        assert result.reason_code == "parallel_execution_unsettled_child_missing"
+        assert result.reason_code == "parallel_execution_unresolved_child_missing"
 
 
 class TestAWidthCeilingRefusesAnUnmeasuredPlan:

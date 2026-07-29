@@ -20,26 +20,31 @@ side-effect check.
 
 What holds:
 
-* **Five of the six families are gradeable on real events.** Plan records and
-  child transitions both ride ``operation_batch.journal.v1``, and both project
-  into the F6 columns.
-* Each of those five **fails** on a real journal broken in the way the family
-  exists to catch.
+* **All six families are gradeable on real events.** Plan records and child
+  transitions both ride ``operation_batch.journal.v1``, and both project into
+  the F6 columns.
+* Each family **fails** on a real journal broken in the way it exists to catch.
 * A width ceiling over a real record that carried no segment list fails closed.
 
-What does not hold, stated plainly rather than papered over:
+One limit is worth stating plainly rather than leaving to be discovered:
 
-* ``parallel_cancel_restart_no_invention`` is **real for what it asserts and
-  fixture-only for what it might have asserted**. The unsettled-child evidence
-  it grades is exactly what a production cancel leaves behind, and that half is
-  projected from real records here. But the coordinator's own
-  ``indeterminate`` disposition is unreachable —
-  ``BatchExecutionCoordinator.cancel()`` has no production caller, and neither
-  does ``BatchRestartPlanner`` — so a case demanding an ``indeterminate`` row,
-  or a restart decision, would be grading code no run can execute. The family
-  deliberately asserts neither. See
-  ``tests/unit/agent_runtime/capabilities/concurrency/test_step10_gate.py``,
-  which pins that unreachability as a negative control.
+* ``parallel_cancel_restart_no_invention`` grades a **property**, not a journal
+  shape, and that is load-bearing. A cancel path that unwinds the coroutine
+  records nothing for the interrupted child; one that records its uncertainty
+  leaves a durable ``indeterminate``. F6 has had both. Neither claims anything
+  about the world, so the case is written over *determinate* settlements —
+  ``succeeded`` and ``failed`` only — and passes on either journal.
+  :class:`TestTheCancelCaseGradesEitherCancelImplementation` builds both from
+  real records and pins that. Had the case been written around "a child never
+  settled", it would have scored the durable implementation as a failure the
+  moment cancellation started recording — the BUG-17 shape of grading a working
+  run as broken.
+
+  What the case still cannot see is the *decision* a restart makes.
+  ``ChildRestartDisposition`` is a returned value, not a journal record, so a
+  trajectory carries the evidence a restart reads and never the verdict it
+  reached. Asserting "a started write was not replayed" would need a record F6
+  does not write.
 """
 
 from __future__ import annotations
@@ -774,7 +779,7 @@ class TestEveryFamilyFailsOnARealRunThatBroke:
         result = _score(_NO_INVENTION, broken)
 
         assert not result.passed
-        assert result.reason_code == "parallel_execution_settled_count_exceeded"
+        assert result.reason_code == "parallel_execution_invented_outcome_observed"
 
 
 class TestARealRecordWithoutSegmentsFailsClosed:
@@ -881,23 +886,56 @@ class TestARealRecordWithoutSegmentsFailsClosed:
         assert result.reason_code == "parallel_execution_serial_reason_missing"
 
 
-class TestWhatARealRunCannotAnswer:
-    """The honest limit of this surface, pinned so it cannot be forgotten.
+class TestTheCancelCaseGradesEitherCancelImplementation:
+    """The family must not depend on which shape the cancel path records.
 
-    Two F6 modules have no production caller —
-    :meth:`BatchExecutionCoordinator.cancel` and ``BatchRestartPlanner`` — which
-    is pinned as a negative control in
-    ``tests/unit/agent_runtime/capabilities/concurrency/test_step10_gate.py``.
-    A real run therefore never journals an ``indeterminate`` disposition and
-    never records a restart decision at all.
+    There are two honest journals for a cancelled batch, and F6 has had both:
 
-    ``parallel_cancel_restart_no_invention`` is written around that: it asserts
-    only the evidence a real cancel leaves behind. This test states the
-    consequence explicitly, so a later reader does not "strengthen" the family
-    into grading unreachable code.
+    * a cancel that unwinds the coroutine records nothing for the interrupted
+      child, leaving a dispatch intent with no settle beside it;
+    * a cancel that records its uncertainty leaves a durable ``indeterminate``
+      settlement.
+
+    Neither claims anything about the world, so both must pass. A case written
+    around the *absence* of a settle would grade the first as correct and the
+    second as a failure — scoring a working, strictly better implementation as
+    broken, which is the BUG-17 shape. Writing the assertion over *determinate*
+    settlements is what makes the property, rather than the shape, the thing
+    being graded. Both journals are built from real records below.
     """
 
-    def test_the_no_invention_case_does_not_demand_an_indeterminate_row(self) -> None:
+    def test_a_cancel_that_recorded_nothing_passes(self) -> None:
+        result = _score(_NO_INVENTION, _healthy_cancelled_run())
+
+        assert result.passed
+        assert result.reason_code == "parallel_execution_trajectory_passed"
+
+    def test_a_cancel_that_durably_recorded_its_uncertainty_passes(self) -> None:
+        batch_id = "batch-cancelled"
+        durable = _projected(
+            _envelope(
+                _plan_record(batch_id=batch_id, planned=_reads(2)),
+                sequence_no=1,
+            ),
+            *_child_events(
+                batch_id=batch_id,
+                intents=("op-read-0", "op-read-1"),
+                settled=(
+                    ("op-read-0", BatchChildDisposition.SUCCEEDED),
+                    ("op-read-1", BatchChildDisposition.INDETERMINATE),
+                ),
+                first_sequence_no=2,
+            ),
+        )
+
+        result = _score(_NO_INVENTION, durable)
+
+        assert result.passed
+        assert result.reason_code == "parallel_execution_trajectory_passed"
+
+    def test_the_case_never_demands_one_shape_over_the_other(self) -> None:
+        """Guard the property framing itself against a later "tightening"."""
+
         expected = next(
             item.expected
             for item in _case(_NO_INVENTION).expected_assertions
@@ -905,13 +943,15 @@ class TestWhatARealRunCannotAnswer:
         )
 
         assert "indeterminate" not in str(expected.get("required_child_dispositions"))
-        assert "required_child_dispositions" in expected
+        assert "maximum_settled_children" not in expected
+        assert expected.get("maximum_determinate_settlements") == 1
+        assert expected.get("require_unresolved_child") is True
 
     def test_the_case_still_fails_a_run_that_finished_nothing(self) -> None:
         """The family is not vacuous just because it asserts an absence.
 
         A batch whose children were all begun and none settled satisfies
-        ``require_unsettled_child`` trivially, so the settled-success
+        ``require_unresolved_child`` trivially, so the settled-success
         requirement is what keeps it honest.
         """
 
