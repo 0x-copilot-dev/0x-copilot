@@ -294,7 +294,24 @@ create a second planning queue.
       ever gated.
 - [ ] **Step 12:** Route the production local task path through F9 authority,
       admission, budget, F6 scheduling, verification, and recovery.
-- [ ] **Step 11:** Complete the F7 trusted-schema dataflow executor,
+- [ ] **Step 11: DEFERRED by its own entry gate — not built.** The gate was
+      added to this PRD precisely to catch this case, and it caught it.
+      The re-justification it demanded **cannot be produced**, for two reasons
+      that are findings rather than excuses. First, the F1 operational corpus
+      carries no measured cost data at all: every `FixtureUsage` value is an
+      arithmetic constant of `call_count`, the maximum `model_turns` anywhere is
+      3, and each of the four mechanical families the gate names reports exactly
+      one call — so the corpus **cannot show a multi-call workload being
+      compressed, because it does not model one**. Second, the instrument is
+      fixture-only by design and has no model in it. The gate's own precondition
+      is also unmet: F3, F5 and F6 are not all enabled.
+      What _is_ measurable is the cost side, and it is decisive: the model-facing
+      dataflow tool's schema exceeds the largest saving this program has
+      measured. The saving that motivated F7 has largely been taken by work that
+      already landed. **No lanes are scheduled.** Reopening requires a corpus
+      that models multi-call mechanical work and a live-model instrument.
+      Original scope, retained for reference:
+      Complete the F7 trusted-schema dataflow executor,
       checkpoints, evidence manifests, and model tool. **Gated:** this step does
       not start until a recorded value re-justification shows the model-turn
       savings that motivated F7 still hold against the currently shipped model.
