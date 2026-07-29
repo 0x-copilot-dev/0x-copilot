@@ -1411,6 +1411,13 @@ class EvidenceResolverRegistry:
             )
         handle = grant.resolution_handle(resolver)
         decision = await self._revalidate(grant, runtime_context, handle)
+        # The second half is redundant against the shipped decision contract,
+        # which already requires a revision on every ``current`` outcome.  It
+        # is kept deliberately rather than by accident: the revalidator is an
+        # injected port, so a substituted implementation is not bound by that
+        # contract's validators, and a decision that claimed to be current
+        # without naming a revision must refuse rather than admit material at
+        # no revision at all.
         if not decision.is_current or decision.current_revision is None:
             observed = handle.probe.observed
             return self._refuse(

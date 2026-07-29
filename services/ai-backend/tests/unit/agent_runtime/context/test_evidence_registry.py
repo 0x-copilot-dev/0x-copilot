@@ -45,6 +45,9 @@ from agent_runtime.context.evidence_registry import (
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.control_plane.revision_binding import (
     BoundRevision,
+    RevalidationDecision,
+    RevalidationOutcome,
+    RevalidationPolicy,
     RevalidationReason,
     RevisionAuthorityState,
     RevisionBoundRef,
@@ -147,6 +150,34 @@ class FakeEvidenceSource:
         return self.materials.get(
             locator,
             EvidenceMaterial.for_state(EvidenceMaterialState.UNKNOWN),
+        )
+
+
+class NonConformingRevalidator:
+    """A revalidator that claims currency without naming a revision.
+
+    The shipped decision contract makes this unrepresentable, but the
+    revalidator is an injected port, so a substituted implementation is not
+    bound by those validators.  ``model_construct`` is the only way to build
+    the shape a bad adapter could return, and it is what keeps the registry's
+    second currency check from being a guard nothing can ever reach.
+    """
+
+    async def revalidate_at_use(
+        self,
+        ref: RevisionBoundRef,
+        runtime_context: RevisionUseContext,
+        policy: RevalidationPolicy,
+        *,
+        resolution_handle: object | None = None,
+    ) -> RevalidationDecision:
+        return RevalidationDecision.model_construct(
+            schema_version=1,
+            feature=policy.feature,
+            outcome=RevalidationOutcome.CURRENT,
+            reason=RevalidationReason.REVISION_MATCHES,
+            ref_binding_digest=ref.computed_binding_digest,
+            current_revision=None,
         )
 
 
@@ -1264,6 +1295,23 @@ class TestEvidenceReauthorization(EvidenceRegistryBuilderMixin):
         assert second.refusal is not None
         assert second.refusal.material_state is EvidenceMaterialState.ACCESS_REVOKED
         assert restored.is_resolved is True
+
+    async def test_currency_without_a_revision_admits_nothing(self) -> None:
+        _registry, source, grants, grant = self.build()
+        substituted = EvidenceResolverRegistry(
+            [source],
+            revalidator=NonConformingRevalidator(),
+        )
+
+        result = await substituted.read_one(
+            self.request(grant.token),
+            runtime_context=self.use_context(),
+            grants=grants,
+        )
+
+        assert result.refusal is not None
+        assert result.refusal.reason is EvidenceRefusalReason.NOT_CURRENT
+        assert source.read_calls == 0
 
     async def test_a_second_registry_over_the_same_source_agrees(self) -> None:
         # Two registries sharing one source must reach the same verdict: the
