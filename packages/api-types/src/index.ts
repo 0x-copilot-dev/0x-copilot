@@ -2751,7 +2751,7 @@ export type ConcurrencyKillSwitchReason =
   | "unparseable_switch_config"
   | "switch_source_unavailable";
 export type ConcurrencyKillSwitchScope = "global" | "connector" | "capability";
-export type BatchJournalRecordKind = "plan_bound";
+export type BatchJournalRecordKind = "plan_bound" | "child_transition";
 
 /** Authority to overlap capability work. Both bounds must be satisfied at
  * once, so width alone never authorizes overlap. */
@@ -2839,7 +2839,29 @@ export interface BatchPlanBoundRecord extends BatchJournalRecordBase {
   plan_digest: string;
 }
 
-export type BatchJournalRecord = BatchPlanBoundRecord;
+/** Durable phase of one batch child, recorded so restart can tell "never
+ * started" from "started and the outcome was lost". Absence of a settled
+ * transition is never read as success or as rollback. */
+export type BatchChildTransitionPhase = "dispatch_intent" | "settled";
+
+/** How a batch child ended, when it is known at all. */
+export type BatchChildTransitionDisposition =
+  | "succeeded"
+  | "failed"
+  | "indeterminate";
+
+export interface BatchChildTransitionRecord extends BatchJournalRecordBase {
+  record_kind: "child_transition";
+  batch_id: string;
+  operation_id: string;
+  phase: BatchChildTransitionPhase;
+  /** Present only when `phase` is `settled`. */
+  disposition: BatchChildTransitionDisposition | null;
+}
+
+export type BatchJournalRecord =
+  | BatchPlanBoundRecord
+  | BatchChildTransitionRecord;
 
 /** Internal F6 journal payload. All detail is content-free and digest-bound. */
 export interface OperationBatchJournalPayload {
