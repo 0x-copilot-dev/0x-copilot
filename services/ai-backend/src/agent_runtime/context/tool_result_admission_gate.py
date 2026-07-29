@@ -89,7 +89,15 @@ class InProcessOffloadWriter:
 
     DEFAULT_MAX_ENTRIES: ClassVar[int] = 64
     DEFAULT_MAX_TOTAL_CHARS: ClassVar[int] = 8_000_000
-    REFERENCE_PREFIX: ClassVar[str] = "memory://tool-results/"
+    # An offload reference is carried in ``ContextCompressionEvent.files_written``
+    # and ``ManagedContextPayload.reference``, both of which validate against the
+    # absolute memory-path grammar (``^/[A-Za-z0-9._:/-]+$``).  A ``scheme://``
+    # reference does not match it, so emitting one made the no-store gate raise on
+    # every oversized result instead of bounding it -- the exact opposite of this
+    # class's reason to exist.  The prefix stays distinct from the durable file
+    # store's ``/large_tool_results/`` so an in-process ref is never mistaken for
+    # an object a durable reader could resolve.
+    REFERENCE_PREFIX: ClassVar[str] = "/in_process_tool_results/"
 
     def __init__(
         self,
