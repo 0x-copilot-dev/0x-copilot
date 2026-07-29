@@ -105,6 +105,7 @@ from agent_runtime.capabilities.concurrency.child_execution import (
 )
 from agent_runtime.capabilities.concurrency.contracts import (
     BatchFailurePolicy,
+    ApprovalRequirement,
     BatchOperation,
     BatchPlan,
     BatchSegment,
@@ -136,6 +137,7 @@ from agent_runtime.capabilities.concurrency.contracts import (
     SideEffectKind,
 )
 from agent_runtime.capabilities.concurrency.descriptor_policy import (
+    APPROVAL_REQUIREMENT_KEY,
     CapabilityConcurrencyDeclaration,
     ConcurrencyDescriptorParser,
     ConcurrencyNarrowing,
@@ -174,7 +176,9 @@ from agent_runtime.capabilities.concurrency.permits import RunPermitManager
 from agent_runtime.capabilities.concurrency.planner import BatchPlanner
 
 __all__ = (
+    "APPROVAL_REQUIREMENT_KEY",
     "BATCH_JOURNAL_RECORD_ADAPTER",
+    "ApprovalRequirement",
     "BatchAdmissionOutcome",
     "BatchAllowanceSupplier",
     "BatchCancellationReason",

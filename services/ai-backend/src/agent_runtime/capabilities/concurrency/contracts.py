@@ -192,6 +192,49 @@ class OrderingRequirement(NarrowableEnum):
     NONE = "none"
 
 
+class ApprovalRequirement(NarrowableEnum):
+    """Whether one capability's execution can pause for a human decision.
+
+    This dimension exists because the two authorities that decide it never met.
+    A ``PRODUCT_CATALOG`` entry declares an effect class and a concurrency mode;
+    whether a dispatch of that same capability *parks* is decided elsewhere
+    entirely — by the run's tool-use policy, by the connector's live auth state,
+    or by a filesystem permission rule — none of which the catalog author can
+    see. Nothing linked the two, so a capability declared ``READ`` and
+    ``PARALLEL_SAFE`` was admitted to a parallel segment even when every one of
+    its siblings would park on a human. That is what this vocabulary closes.
+
+    An approval is not a failure and not a resource conflict: it is a suspend.
+    Suspending N members of one admitted cohort at once opens N simultaneous
+    human decisions where the serial path opens one, and every one of those
+    parks is a durable child transition the coordinator settles as ``FAILED``,
+    because a suspend arrives at it as an exception. Neither consequence is
+    something a concurrency plan may cause silently, so overlap requires this
+    fact to be positively established.
+
+    Ordered narrowest first, like every other F6 vocabulary. ``UNKNOWN`` is the
+    floor and therefore the default: a capability nobody has said anything about
+    is one whose dispatch might park, and ``NEVER`` — the only member that
+    permits overlap — is a claim somebody has to make.
+    """
+
+    UNKNOWN = "unknown"
+    ALWAYS = "always"
+    CONDITIONAL = "conditional"
+    NEVER = "never"
+
+    @property
+    def may_park(self) -> bool:
+        """Return whether a dispatch of this capability might suspend.
+
+        True for everything except ``NEVER``, which is the load-bearing
+        asymmetry: this reads "we have not established that it cannot park",
+        not "we have established that it can".
+        """
+
+        return self is not ApprovalRequirement.NEVER
+
+
 class ProviderSessionConstraint(NarrowableEnum):
     """Serialization the provider's own session or transport state demands.
 
@@ -566,6 +609,17 @@ class ConcurrencyPolicy(RuntimeContract):
     the capability declares no bound of its own and the enclosing batch or
     permit ceiling applies. Safety is carried by the closed vocabularies, never
     by a scheduling bound.
+
+    :class:`ApprovalRequirement` is deliberately **not** a field here.
+    ``ConcurrencyPolicy`` is a published cross-language record — the batch
+    journal carries it and ``packages/api-types`` mirrors its field set
+    verbatim — so its shape is a wire contract rather than a private one. The
+    approval fact therefore lives on the *declaration* and the *resolution*,
+    which are resolver-side values, and reaches this record through
+    :meth:`narrowed_by_approval`, expressed in ``mode``: the one field that
+    already means what an approval requirement implies. The consequence stays
+    auditable — the policy reads ``serial`` and the planner's reason is
+    ``policy_requires_serial`` — without widening the wire.
     """
 
     mode: ConcurrencyMode = ConcurrencyMode.conservative()
@@ -592,6 +646,32 @@ class ConcurrencyPolicy(RuntimeContract):
         if isinstance(value, str):
             return ResourceKeyTemplate.from_template(value)
         raise ResourceKeyTemplateRejected(ConcurrencyRejectionReason.MALFORMED_TEMPLATE)
+
+    def narrowed_by_approval(self, requirement: ApprovalRequirement) -> Self:
+        """Return this policy with its concurrency posture bound by ``requirement``.
+
+        The single translation from "this capability's dispatch may pause for a
+        human" into the concurrency vocabulary, defined once so the resolver and
+        the graph seam cannot disagree about what an approval requirement costs.
+
+        It moves exactly one field — ``mode``, to the floor of its own
+        vocabulary — and deliberately leaves ``max_parallelism`` alone. This
+        module's contract is that safety is carried by the closed vocabularies
+        and never by a scheduling bound: pinning the bound to ``1`` here would
+        read as a *declared* ceiling of one and would destroy the distinction
+        between "bounded at one" and "declares no bound of its own". A serial
+        mode already forbids the overlap, and it says why.
+
+        Narrowing-only and idempotent: ``SERIAL`` is the floor, so applying this
+        twice, or after any other narrowing, is the same as applying it once,
+        and no ``requirement`` can widen a policy through it.
+        """
+
+        if not requirement.may_park or self.mode is ConcurrencyMode.SERIAL:
+            return self
+        return self.model_copy(
+            update={ConcurrencyPolicyField.MODE.value: ConcurrencyMode.SERIAL}
+        )
 
     def value_for(self, policy_field: ConcurrencyPolicyField) -> object:
         """Return the resolved value for one closed policy field."""
@@ -1279,6 +1359,7 @@ class BatchPlan(RuntimeContract):
 
 
 __all__ = (
+    "ApprovalRequirement",
     "BatchFailurePolicy",
     "BatchOperation",
     "BatchPlan",
