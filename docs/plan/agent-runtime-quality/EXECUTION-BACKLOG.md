@@ -1,14 +1,31 @@
 # Execution backlog — F1–F12 production integration
 
-Living record of what the implementation program has actually found: defects,
-gaps that block a step from activating, and places where the code we wrote may
-be heavier than the problem deserves.
+Living record of what the implementation program has found. Its purpose is to
+let architectural decisions be made **deliberately and in one place**, rather
+than as bandaids applied inside whichever lane happened to trip over the
+problem.
+
+**Nothing here is a work queue.** Items are not implemented because they are
+listed. They are implemented when a human decides the architecture, and the
+only standing exception is an item that blocks a step from activating at all —
+those are marked as blockers and say so explicitly.
+
+What belongs here:
+
+- **Defects** — real bugs, whether live, latent, or pre-existing.
+- **Optimizations** — measured opportunities, with the measurement.
+- **Architectural smells** — duplication, misplaced authority, contracts that
+  do not fit their adopters, redundancy that hides intent.
+- **Library candidates** — work we wrote that an existing dependency could
+  carry, and the honest assessment of whether swapping is worth it.
+- **Already implemented elsewhere** — capability we built that the codebase or
+  the framework already provides.
 
 This is **not** the same list as
 [`IMPLEMENTATION-BACKLOG.md`](./IMPLEMENTATION-BACKLOG.md). That file tracks the
-ARQ items — the architectural gaps each F-series feature must close. This file
-tracks what execution surfaced along the way, and it is updated by the
-integration owner as lanes land.
+ARQ items — the architectural gaps each F-series feature must close. This one
+tracks what execution surfaced along the way, and is updated by the integration
+owner as lanes land.
 
 Nothing here is a live production defect unless the status says so. The F3 and
 F6 code is dark: it is not composed into any running path yet. F8 is live, and
