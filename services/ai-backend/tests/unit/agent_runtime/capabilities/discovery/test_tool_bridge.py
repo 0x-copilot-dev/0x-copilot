@@ -90,6 +90,34 @@ def _access(
     )
 
 
+def _entry_with_parameters(
+    base: CapabilityIndexEntry,
+    *,
+    count: int,
+    name_chars: int = 20,
+) -> CapabilityIndexEntry:
+    """Return ``base`` carrying exactly ``count`` parameters of a given width."""
+
+    return CapabilityIndexEntry(
+        **base.model_dump(exclude={"parameter_names", "parameter_types"}),
+        parameter_names=tuple(
+            f"p{index:03d}".ljust(name_chars, "n") for index in range(count)
+        ),
+        parameter_types=tuple(f"t{index:03d}" for index in range(count)),
+    )
+
+
+def _with_entry(
+    catalog: CapabilityCatalog,
+    entry: CapabilityIndexEntry,
+) -> CapabilityCatalog:
+    return CapabilityCatalog(
+        scope=catalog.scope,
+        revision=catalog.revision,
+        entries=(entry,),
+    )
+
+
 class TestCapabilitySearchTool:
     def test_search_is_deterministic_and_bounded(self) -> None:
         context = _context()
@@ -199,16 +227,40 @@ class TestCapabilityDescribeTool:
         )
 
         description = result["description"]["capability"]
+        # Tags are search cues, so they are still trimmed to the bound.
         assert len(description["intent_tags"]) == 16
         assert max(map(len, description["intent_tags"])) == 64
-        assert len(description["parameters"]) == 32
-        assert max(len(item["name"]) for item in description["parameters"]) == 96
-        assert max(len(item["type_hint"]) for item in description["parameters"]) == 96
         assert description["metadata_truncated"] is True
+        # Parameters are the invocation contract. With no publisher wired there
+        # is nowhere to defer them to, so the schema is reported unavailable --
+        # never as a prefix that would look like the whole thing.
+        assert description["parameters"] == []
+        assert description["schema_availability"] == "unavailable"
+        assert "schema_artifact" not in description
         encoded = json.dumps(result, sort_keys=True)
         assert len(encoded.encode()) < 12_000
         assert "args_schema" not in encoded
         assert "return_schema" not in encoded
+
+    def test_a_schema_within_the_bound_is_still_inlined_whole(self) -> None:
+        context = _context()
+        catalog = _catalog(context)
+        entry = _entry_with_parameters(catalog.entries[0], count=32)
+        catalog = _with_entry(catalog, entry)
+
+        result = CapabilityDescribeTool(access=_access(catalog, context)).invoke(
+            entry.capability_ref
+        )
+
+        description = result["description"]["capability"]
+        assert description["schema_availability"] == "inline"
+        assert "schema_artifact" not in description
+        assert [item["name"] for item in description["parameters"]] == list(
+            entry.parameter_names
+        )
+        assert [item["type_hint"] for item in description["parameters"]] == list(
+            entry.parameter_types
+        )
 
     def test_unknown_opaque_ref_does_not_fall_back_to_name_lookup(self) -> None:
         context = _context()
