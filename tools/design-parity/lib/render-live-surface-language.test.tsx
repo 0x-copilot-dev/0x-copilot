@@ -152,6 +152,25 @@ const CAPPED_DATA = {
  *  itself, so `service` must be a real 6-key object and `assignments` a real
  *  2-element array for the rendered labels/values to line up with the mock's
  *  "{ 6 fields }" / "2 items". */
+/**
+ * The ENVELOPE the runtime emits, not a bare payload.
+ *
+ * `TableRenderer(NO_SPEC_PAYLOAD)` — the previous fixture — hands the raw tool
+ * output in as the whole state. The renderer correctly refuses to let that name
+ * its own tool (a payload is untrusted; only the runtime's envelope may say
+ * which tool ran), so the note fell back to "this tool result" and
+ * `nospec.note.tool-code` measured ABSENT against a design that names it.
+ *
+ * That was the harness under-reporting, not the product: with the envelope the
+ * runtime actually produces, the note names the tool.
+ */
+const NO_SPEC_STATE = {
+  source: { server: "pagerduty", tool: "pagerduty.incident.read" },
+  get data() {
+    return NO_SPEC_PAYLOAD;
+  },
+};
+
 const NO_SPEC_PAYLOAD = {
   incident_number: "4127",
   title: "Elevated 5xx on payouts-api",
@@ -265,11 +284,11 @@ describe("live surface-language renders", () => {
 
   it("renders board-changed (the attention mark on LW-142)", () => {
     const markup = renderToStaticMarkup(
-      BoardRenderer({
-        spec: BOARD_SPEC,
-        data: BOARD_DATA,
-        changes: BOARD_CHANGES,
-      }),
+      // The change list is a SECOND ARGUMENT, never a key on the state. Passing
+      // it inside the state is the forgery the renderer now refuses: state is
+      // merged verbatim from untrusted tool output, so a `changes` key there
+      // would let a tool light its own attention mark.
+      BoardRenderer({ spec: BOARD_SPEC, data: BOARD_DATA }, BOARD_CHANGES),
     );
     // Lane 1 / card 0 and nothing else — the mark must not spread.
     expect(markup).toContain('data-testid="board-lane-1-card-0-changed"');
@@ -286,14 +305,14 @@ describe("live surface-language renders", () => {
   });
 
   it("renders no-spec (TableRenderer's degradation target)", () => {
-    const markup = renderToStaticMarkup(TableRenderer(NO_SPEC_PAYLOAD));
+    const markup = renderToStaticMarkup(TableRenderer(NO_SPEC_STATE));
     expect(markup).toContain('data-testid="surface-generic-fields"');
     expect(markup).toContain('data-spec="absent"');
     persist("no-spec", NO_SPEC_URI, markup);
   });
 
   it("renders no-spec-board (BoardRenderer still degrades)", () => {
-    const markup = renderToStaticMarkup(BoardRenderer(NO_SPEC_PAYLOAD));
+    const markup = renderToStaticMarkup(BoardRenderer(NO_SPEC_STATE));
     expect(markup).toContain('data-testid="surface-generic-fields"');
     expect(markup).toContain('data-spec="absent"');
     persist("no-spec-board", NO_SPEC_URI, markup);
