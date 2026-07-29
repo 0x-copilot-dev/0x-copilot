@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import logging
-from typing import Final
+from typing import ClassVar, Final
 
 from pydantic import Field, NonNegativeInt
 
@@ -101,10 +101,22 @@ class ToolSchemaFootprint(RuntimeContract):
     Carries counts and identifiers only — never description text or schema
     bodies. Occupancy is exposed over an HTTP read API (§6.5), and ``tool_name``
     is the widest identifier that surface may carry.
+
+    ``MAX_LABEL_LENGTH`` is *derived*, not chosen: it is the widest label a
+    valid :class:`~agent_runtime.observability.context_origin.ContextOrigin` can
+    spell (``owner`` ≤ 200, ``:``, ``name`` ≤ 200). Any narrower bound would
+    make :meth:`ToolSchemaLedger.measure` raise on a declaration the origin
+    contract itself accepts — on the model-call path, where §6.4 says
+    measurement must never fail a run — and truncating instead would be worse
+    than raising: a clipped label no longer round-trips into ``owner`` and
+    ``name``, so two distinct owners could collapse into one row of the report.
     """
 
-    tool_name: str = Field(max_length=200)
-    label: str = Field(min_length=1, max_length=400)
+    MAX_TOOL_NAME_LENGTH: ClassVar[int] = 200
+    MAX_LABEL_LENGTH: ClassVar[int] = 401
+
+    tool_name: str = Field(max_length=MAX_TOOL_NAME_LENGTH)
+    label: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
     segment_class: ContextSegmentClass
     lifecycle: ContextLifecycle
     third_party: bool = False
@@ -310,7 +322,7 @@ class ToolSchemaLedger:
             name = str(getattr(tool, "name", ""))
         except Exception:  # noqa: BLE001 — an unreadable name is an empty name
             return ""
-        return name[:200]
+        return name[: ToolSchemaFootprint.MAX_TOOL_NAME_LENGTH]
 
 
 __all__ = (

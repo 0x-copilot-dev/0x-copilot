@@ -184,25 +184,26 @@ class MessageContextOrigins:
     )
 
     ALL: Final[tuple[ContextOrigin, ...]] = (
+        WORKSPACE_BINARY_B64,
+        CITATION_POINTER_NOTE,
+        TOOL_BUDGET_NOTE,
+        SUBAGENT_TRACE,
+        SUMMARY,
+        OFFLOAD_STUB,
         ASSISTANT_TEXT,
         ASSISTANT_THINKING,
         ASSISTANT_TOOL_CALLS,
-        CITATION_POINTER_NOTE,
-        OFFLOAD_STUB,
-        STATE_FILE,
-        SUBAGENT_TRACE,
-        SUMMARY,
-        TOOL_BUDGET_NOTE,
         TOOL_RESULT,
         USER,
-        WORKSPACE_BINARY_B64,
+        STATE_FILE,
     )
-    """Sorted inventory of the message declarations, for PRD-02's golden gate.
+    """Label-sorted inventory of the message declarations, for PRD-02's gate.
 
-    Sorted by label and pinned as a tuple for the same reason the LLM-seam gate
-    pins its call sites: a new message origin should not be able to appear
-    without someone consciously adding a line, which is the moment they accept
-    the context cost.
+    Ordered by ``label`` rather than by attribute name, so the tuple is directly
+    comparable with the sorted inventory the conformance gate produces, and
+    pinned for the same reason ``test_llm_seam_gate`` pins its call sites: a new
+    message origin should not be able to appear without someone consciously
+    adding a line, which is the moment they accept the context cost.
     """
 
 
@@ -234,6 +235,15 @@ class ClassifiedMessagePart(RuntimeContract):
     """
 
     MAX_DETAIL_LENGTH: ClassVar[int] = 200
+    MAX_LABEL_LENGTH: ClassVar[int] = 240
+    """Label bound, taken from ``ContextSegment`` rather than chosen here.
+
+    A part exists to become a segment, so the two bounds must agree: a part that
+    validated under a wider bound than the record it feeds would push the
+    failure one step downstream, into the pass that can no longer fall back to
+    an ``UNDECLARED`` row for it.
+    """
+
     UNDECLARED_LIFECYCLE: ClassVar[ContextLifecycle] = ContextLifecycle.PER_TURN
     """Structural lifecycle for bytes no declaration covered.
 
@@ -244,7 +254,7 @@ class ClassifiedMessagePart(RuntimeContract):
     ``ToolSchemaLedger`` makes with ``RESIDENT`` for an undeclared tool.
     """
 
-    label: Annotated[str, Field(min_length=1, max_length=240)]
+    label: Annotated[str, Field(min_length=1, max_length=MAX_LABEL_LENGTH)]
     segment_class: Literal[ContextSegmentClass.MESSAGES] = ContextSegmentClass.MESSAGES
     lifecycle: ContextLifecycle
     third_party: bool = False
@@ -400,15 +410,11 @@ class ContextMessageClassifier:
         ARTIFACT: Final[str] = "artifact"
         BASE64: Final[str] = "base64"
         CONTENT: Final[str] = "content"
-        DATA: Final[str] = "data"
         ENCODING: Final[str] = "encoding"
         ID: Final[str] = "id"
         NAME: Final[str] = "name"
-        REASONING: Final[str] = "reasoning"
         SOURCE: Final[str] = "source"
-        SUMMARY: Final[str] = "summary"
         TEXT: Final[str] = "text"
-        THINKING: Final[str] = "thinking"
         TOOL_CALLS: Final[str] = "tool_calls"
         TOOL_CALL_ID: Final[str] = "tool_call_id"
         TYPE: Final[str] = "type"
@@ -974,7 +980,7 @@ class ContextMessageClassifier:
         the bounded ``model_content`` string survives into the message.
         """
 
-        artifact = getattr(message, cls.Keys.ARTIFACT, None)
+        artifact = cls._attribute(message, cls.Keys.ARTIFACT)
         if isinstance(artifact, ToolResultAdmission):
             return True
         return cls._message_text(message).startswith(cls.OFFLOAD_STUB_HEADER)
@@ -995,7 +1001,7 @@ class ContextMessageClassifier:
         carries its path on the message itself.
         """
 
-        call_id = getattr(message, cls.Keys.TOOL_CALL_ID, None)
+        call_id = cls._attribute(message, cls.Keys.TOOL_CALL_ID)
         if isinstance(call_id, str) and call_id in subagent_trace_call_ids:
             return True
         path = cls._additional_kwargs(message).get(cls.Keys.READ_FILE_PATH)
@@ -1014,24 +1020,39 @@ class ContextMessageClassifier:
 
         call_ids: set[str] = set()
         for message in messages:
-            for call in cls._tool_calls(message):
-                call_id = call.get(cls.Keys.ID)
-                arguments = call.get(cls.Keys.ARGS)
-                if not isinstance(call_id, str) or not isinstance(arguments, Mapping):
-                    continue
-                if any(
-                    isinstance(value, str)
-                    and value.startswith(cls.Markers.SUBAGENT_TRACE_PATH_PREFIX)
-                    for value in arguments.values()
-                ):
-                    call_ids.add(call_id)
+            try:
+                call_ids.update(cls._subagent_trace_calls_of(message))
+            except Exception:  # noqa: BLE001 — one bad turn must not blind the index
+                _LOGGER.debug(
+                    "Could not read tool calls while indexing subagent-trace "
+                    "reads; results of that turn measure as ordinary results.",
+                    exc_info=True,
+                )
         return frozenset(call_ids)
+
+    @classmethod
+    def _subagent_trace_calls_of(cls, message: object) -> tuple[str, ...]:
+        """Return this turn's call ids whose arguments name a trace path."""
+
+        matched: list[str] = []
+        for call in cls._tool_calls(message):
+            call_id = call.get(cls.Keys.ID)
+            arguments = call.get(cls.Keys.ARGS)
+            if not isinstance(call_id, str) or not isinstance(arguments, Mapping):
+                continue
+            if any(
+                isinstance(value, str)
+                and value.startswith(cls.Markers.SUBAGENT_TRACE_PATH_PREFIX)
+                for value in arguments.values()
+            ):
+                matched.append(call_id)
+        return tuple(matched)
 
     @classmethod
     def _tool_calls(cls, message: object) -> tuple[Mapping[str, object], ...]:
         """Return the message's tool calls, tolerating any other shape."""
 
-        calls = getattr(message, cls.Keys.TOOL_CALLS, None)
+        calls = cls._attribute(message, cls.Keys.TOOL_CALLS)
         if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes)):
             return ()
         return tuple(call for call in calls if isinstance(call, Mapping))
@@ -1040,8 +1061,30 @@ class ContextMessageClassifier:
     def _additional_kwargs(cls, message: object) -> Mapping[str, object]:
         """Return the message's metadata mapping, or an empty one."""
 
-        metadata = getattr(message, cls.Keys.ADDITIONAL_KWARGS, None)
+        metadata = cls._attribute(message, cls.Keys.ADDITIONAL_KWARGS)
         return metadata if isinstance(metadata, Mapping) else {}
+
+    @classmethod
+    def _attribute(cls, message: object, name: str) -> object:
+        """Read one attribute off an untrusted message, or ``None``.
+
+        Every attribute this classifier reads goes through here. A message
+        object is a library type the runtime does not own, and a property that
+        raises on access is a real shape — ``getattr`` with a default does not
+        cover it, because the default only applies to a *missing* attribute.
+        Absent and unreadable are the same answer for measurement: ``None``.
+        """
+
+        try:
+            return getattr(message, name, None)
+        except Exception:  # noqa: BLE001 — unreadable is measured as absent
+            _LOGGER.debug(
+                "Could not read %r off a message during occupancy measurement; "
+                "treating it as absent.",
+                name,
+                exc_info=True,
+            )
+            return None
 
     # --- materialization -----------------------------------------------------
 
@@ -1054,7 +1097,7 @@ class ContextMessageClassifier:
         to the whole-message text when it is.
         """
 
-        content = getattr(message, cls.Keys.CONTENT, None)
+        content = cls._attribute(message, cls.Keys.CONTENT)
         if isinstance(content, Mapping):
             return (content,)
         if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
@@ -1069,17 +1112,29 @@ class ContextMessageClassifier:
         than in its content, and rule 5 measures them as their own part. What is
         included is content, in the form the provider receives it — which for a
         base64 block means the payload, because that payload is the occupancy.
+
+        An empty block container materializes to nothing rather than to its JSON
+        rendering: a message with no blocks occupies no context, and reporting
+        two bytes for ``[]`` would make every empty message look like it charged
+        a little rent.
         """
 
-        content = getattr(message, cls.Keys.CONTENT, None)
+        content = cls._attribute(message, cls.Keys.CONTENT)
         if isinstance(content, str):
             return content
         if content is None:
             return ""
-        blocks = cls._content_blocks(message)
-        if blocks:
-            return cls._blocks_text(blocks)
+        if cls._is_block_container(content):
+            return cls._blocks_text(cls._content_blocks(message))
         return cls._safe_json(content)
+
+    @classmethod
+    def _is_block_container(cls, content: object) -> bool:
+        """Whether ``content`` is a block list or a single block mapping."""
+
+        if isinstance(content, Mapping):
+            return True
+        return isinstance(content, Sequence) and not isinstance(content, (str, bytes))
 
     @classmethod
     def _blocks_text(cls, blocks: Sequence[object]) -> str:

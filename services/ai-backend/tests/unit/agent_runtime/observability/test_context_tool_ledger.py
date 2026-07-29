@@ -431,6 +431,25 @@ class TestToolSchemaFootprintContract:
         with pytest.raises(ValidationError):
             self.footprint(label="")
 
+    def test_accepts_the_widest_label_a_declaration_can_spell(self) -> None:
+        # The bound is derived from ``ContextOrigin``: owner ≤ 200 + ":" + name
+        # ≤ 200. If it were any narrower, a declaration the origin contract
+        # itself accepts would make ``measure`` raise on the model-call path.
+        widest = ContextOrigin(
+            owner="x" * 200,
+            name="n" * 200,
+            segment_class=ContextSegmentClass.TOOLS,
+            lifecycle=ContextLifecycle.RESIDENT,
+        ).label
+
+        assert len(self.footprint(label=widest).label) == (
+            ToolSchemaFootprint.MAX_LABEL_LENGTH
+        )
+
+    def test_rejects_a_label_wider_than_any_declaration(self) -> None:
+        with pytest.raises(ValidationError):
+            self.footprint(label="x" * (ToolSchemaFootprint.MAX_LABEL_LENGTH + 1))
+
 
 class TestHeuristicToolSchemaTokenCounter:
     """char/4, rounded up, over UTF-8 bytes — so it agrees with ``byte_count``."""
@@ -681,6 +700,22 @@ class TestMeasurementFailsOpen(ToolSurfaceMixin):
         assert footprint.tool_name == ""
         assert footprint.byte_count == 0
         assert footprint.declared is False
+
+    def test_the_widest_declarable_label_still_measures(self) -> None:
+        # Regression: ``ContextOrigin`` admits a 200-char owner and a 200-char
+        # name, so the widest label it can spell is 401 characters. A footprint
+        # bounded at 400 made ``measure`` raise on a *valid* declaration — a
+        # fail-open module failing closed on the model-call path.
+        tool = self.declared_tool(
+            FakeTool("wide_tool", "declared by a very deeply namespaced owner"),
+            owner="x" * 200,
+            name="n" * 200,
+        )
+
+        (footprint,) = ToolSchemaLedger.measure((tool,))
+
+        assert footprint.label == f"{'x' * 200}:{'n' * 200}"
+        assert footprint.declared is True
 
     def test_measurement_never_raises_on_a_hostile_surface(self) -> None:
         surface = (
