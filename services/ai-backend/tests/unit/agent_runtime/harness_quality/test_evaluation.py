@@ -86,6 +86,30 @@ def _event(sequence_no: int, payload: dict[str, object]) -> RuntimeEventEnvelope
     )
 
 
+def _journal_event(
+    sequence_no: int,
+    payload: dict[str, object],
+    *,
+    event_type: RuntimeApiEventType,
+) -> RuntimeEventEnvelope:
+    """One control-plane journal event, shaped the way the runtime emits it.
+
+    The feature owning a record is identified by the event type, so a
+    projection test has to carry the real one rather than a generic tool call.
+    """
+
+    return RuntimeEventEnvelope(
+        run_id="run_1",
+        conversation_id="conversation_1",
+        source=StreamEventSource.RUNTIME,
+        event_type=event_type,
+        trace_id="trace_1",
+        sequence_no=sequence_no,
+        activity_kind=RuntimeActivityKind.EVENT,
+        payload=payload,
+    )
+
+
 def test_projector_retains_only_observable_identifiers_and_digest() -> None:
     payload = {
         "tool_name": "drive.search",
@@ -119,7 +143,13 @@ def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
     manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
         run_id="run_1",
         variant_id="control",
-        events=(_event(1, payload),),
+        events=(
+            _journal_event(
+                1,
+                payload,
+                event_type=RuntimeApiEventType.TOOL_POLICY_JOURNAL,
+            ),
+        ),
     )
 
     step = manifest.ordered_steps[0]
@@ -129,6 +159,43 @@ def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
     assert step.policy_exhausted_dimensions == ("tool_calls",)
     assert "private task plan" not in manifest.model_dump_json()
     assert "private customer query" not in manifest.model_dump_json()
+
+
+def test_projector_reads_task_policy_columns_only_from_the_f4_journal() -> None:
+    """An F6 batch plan must not populate the F4 controller columns.
+
+    ``plan_bound`` is a record kind both features use, and several F4 corpus
+    families assert ``required_record_kinds: ["plan_bound"]``. Ungated, an F6
+    batch plan satisfies that assertion on a run where the F4 controller never
+    bound a plan, so the family would be graded against a feature that never
+    ran.
+    """
+
+    payload = {
+        "record": {
+            "record_kind": "plan_bound",
+            "disposition": "succeeded",
+            "reason_codes": ["batch_admitted"],
+            "exhausted_dimensions": ["operations"],
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(
+            _journal_event(
+                1,
+                payload,
+                event_type=RuntimeApiEventType.OPERATION_BATCH_JOURNAL,
+            ),
+        ),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.policy_record_kind is None
+    assert step.policy_disposition is None
+    assert step.policy_reason_codes == ()
+    assert step.policy_exhausted_dimensions == ()
 
 
 def test_projector_retains_only_body_free_prompt_cache_vocabulary() -> None:

@@ -27,6 +27,9 @@ import "@0x-copilot/chat-surface/src/subagents/subagents.css";
 import "@0x-copilot/chat-surface/src/approvals/approvals.css";
 // Staged message/table review surfaces — shared verbatim with the web host.
 import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";
+// Surface-language chrome: canvas tabs, card kicker dots, and the numeric/value
+// register. Carries the source-hue identity colours. Shared verbatim with web.
+import "@0x-copilot/chat-surface/src/thread-canvas/surface-language.css";
 import "./desktop.css";
 
 import {

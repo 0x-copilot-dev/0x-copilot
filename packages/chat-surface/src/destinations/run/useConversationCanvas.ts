@@ -15,11 +15,12 @@
 // CONVERSATION change — never on run change. Matching it means one pattern to
 // understand rather than two that drift.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ConversationId } from "@0x-copilot/api-types";
 
 import { useTransport } from "../../providers/TransportProvider";
+import { isSurfaceHue, type SurfaceHue } from "../../surfaces/surfaceHue";
 
 /** One openable subject, keyed identically to the client fold's subject key. */
 export interface ConversationCanvasSubject {
@@ -31,6 +32,14 @@ export interface ConversationCanvasSubject {
   readonly title: string;
   readonly revision: number | null;
   readonly rendererHint: string;
+  /**
+   * The identity hue chosen at publication, if one was. `null` means no
+   * preference — the tab derives a hue from the surface URI — which is a
+   * different fact from the explicit `"none"` choice, meaning "show no
+   * identity". Collapsing the two would make an author's deliberate decision
+   * indistinguishable from silence.
+   */
+  readonly accent: SurfaceHue | null;
   readonly createdAt: string;
 }
 
@@ -48,10 +57,19 @@ interface WireSubject {
   readonly title?: unknown;
   readonly revision?: unknown;
   readonly renderer_hint?: unknown;
+  readonly accent?: unknown;
   readonly created_at?: unknown;
 }
 
 const EMPTY: readonly ConversationCanvasSubject[] = [];
+
+/**
+ * What `parseSubject` substitutes when the wire carries no title. Named so the
+ * merge can tell "the record has a title" from "the parser filled a hole" —
+ * otherwise a titleless record would beat the fold's `"<kind> artifact"`, which
+ * at least says what the thing IS.
+ */
+const UNTITLED = "Untitled";
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
@@ -80,12 +98,16 @@ function parseSubject(raw: WireSubject): ConversationCanvasSubject | null {
     runId,
     // Titles are model-authored; the renderer escapes them, and an absent title
     // must not collapse the tab into a blank strip.
-    title: text(raw.title) ?? "Untitled",
+    title: text(raw.title) ?? UNTITLED,
     revision:
       typeof raw.revision === "number" && Number.isSafeInteger(raw.revision)
         ? raw.revision
         : null,
     rendererHint,
+    // Validated against the closed set rather than passed through: this value
+    // becomes a `data-surface-hue` attribute, so an unrecognised string is
+    // dropped to `null` and the URI-derived default applies.
+    accent: isSurfaceHue(raw.accent) ? raw.accent : null,
     createdAt: text(raw.created_at) ?? "",
   };
 }
@@ -112,17 +134,32 @@ export function useConversationCanvas(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Bumped when the live stream shows a subject the archive has never heard of.
+  //
+  // Without this the archive is fetched exactly once, when the conversation
+  // binds — which is BEFORE the run publishes anything. So for the entire run
+  // that produced an artifact, `archived` stayed empty, the live subject won
+  // wholesale, and everything only the RECORD knows was lost: the tab showed
+  // "dataset artifact · r1" instead of "forecast.csv", and a chosen accent never
+  // appeared at all. Both came back on the next reload, which is why the defect
+  // reads as "it works when I check it later".
+  const [refreshToken, setRefreshToken] = useState(0);
+  // Keys we have already refetched for. A subject can be legitimately absent
+  // from the archive forever — `publish_artifact` may decide chat-card or
+  // hidden, and only canvas-decided artifacts are returned — so retrying per
+  // render would spin. One attempt per key is enough to pick up a real one.
+  const requested = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!enabled || conversationId === "new") {
       setArchived(EMPTY);
       setRemembered(new Map());
       setLoading(false);
       setError(null);
+      requested.current = new Set();
       return undefined;
     }
     let cancelled = false;
-    setArchived(EMPTY);
-    setRemembered(new Map());
     setLoading(true);
     setError(null);
     void transport
@@ -156,9 +193,23 @@ export function useConversationCanvas(
     return () => {
       cancelled = true;
     };
-    // Keyed on the CONVERSATION. Re-fetching per run is exactly the coupling
-    // this hook exists to remove.
-  }, [conversationId, transport, enabled]);
+    // Keyed on the CONVERSATION, plus a refresh for subjects the archive has
+    // not seen. Still never keyed on the RUN — that coupling is what this hook
+    // exists to remove; a refresh is triggered by a new SUBJECT, not a new run.
+  }, [conversationId, transport, enabled, refreshToken]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const known = new Set(archived.map((subject) => subject.subjectKey));
+    let unseen = false;
+    for (const subject of liveSubjects) {
+      if (known.has(subject.subjectKey)) continue;
+      if (requested.current.has(subject.subjectKey)) continue;
+      requested.current.add(subject.subjectKey);
+      unseen = true;
+    }
+    if (unseen) setRefreshToken((token) => token + 1);
+  }, [liveSubjects, archived, enabled]);
 
   useEffect(() => {
     if (!enabled || liveSubjects.length === 0) return;
@@ -180,7 +231,38 @@ export function useConversationCanvas(
     for (const subject of archived) merged.set(subject.subjectKey, subject);
     // Live wins — a subject seen on this run's stream is fresher than the
     // archive snapshot taken when the conversation was opened.
-    for (const [key, subject] of remembered) merged.set(key, subject);
+    //
+    // But only for facts the run fold can actually observe. `accent` is not one
+    // of them: `artifact.created` carries no accent, so the fold's value is a
+    // hardcoded `null` — silence, not a choice. Replacing the whole archived
+    // subject therefore ERASED every author-chosen accent the moment the
+    // publishing run's own events were folded, which is the ordinary case:
+    // publish an artifact, look at its tab, and the colour you asked for was
+    // already gone. Whole-object replacement is safe for a field the fold
+    // populates (title degrades) and destructive for one it cannot (accent).
+    //
+    // `title` has exactly the same problem, and it is visible: the fold can only
+    // synthesize "<kind> artifact" because `artifact.created` carries no title
+    // either, so a published forecast.csv showed "dataset artifact · r1" on its
+    // tab while the surface header right beside it said "forecast.csv". PRD-02
+    // fixed the tab to read the record's title — and this merge then threw that
+    // record away before the tab ever saw it.
+    //
+    // The rule, stated once: the fold wins for what it OBSERVES (revision, run),
+    // and the record wins for what the fold can only guess at.
+    for (const [key, subject] of remembered) {
+      const stored = merged.get(key);
+      merged.set(
+        key,
+        stored === undefined
+          ? subject
+          : {
+              ...subject,
+              title: stored.title === UNTITLED ? subject.title : stored.title,
+              accent: subject.accent ?? stored.accent,
+            },
+      );
+    }
     return [...merged.values()].sort(
       (left, right) =>
         left.createdAt.localeCompare(right.createdAt) ||

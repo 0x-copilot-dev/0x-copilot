@@ -8,13 +8,18 @@ import {
   DiffFieldRow,
   EmptyBody,
   fieldGridStyle,
-  GenericFieldList,
+  NoSpecView,
   pageStyle,
-  PreparingHint,
   SurfaceHeader,
   SurfaceLinkRow,
+  toolNameFromState,
 } from "../_shared/primitives";
-import { formatValue, isNumericFormat, resolvePath } from "../_shared/path";
+import {
+  formatValue,
+  isNumericFormat,
+  magnitudeShares,
+  resolvePath,
+} from "../_shared/path";
 import {
   changesFromDiff,
   dataFromState,
@@ -34,7 +39,8 @@ export const ROW_RENDER_CAP = 200;
 /**
  * The `table://` archetype — columns from the spec, rows from `items_path`.
  * ≥50 columns window through the shared `sheet/_columns` helper; >200 rows show
- * a "showing 200 of N" cap. Spec-less state falls back to the generic list.
+ * a "showing 200 of N" cap. Spec-less state falls back to the no-spec view
+ * (PRD-02).
  */
 export function TableRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
@@ -48,7 +54,7 @@ export function TableRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Table surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(data)}
+        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
       </section>
     </article>
   );
@@ -77,6 +83,19 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   const visibleRows = items.slice(0, ROW_RENDER_CAP);
   const truncated = items.length > ROW_RENDER_CAP;
 
+  // Magnitude per numeric column, computed once over the rows actually painted.
+  // Scoped to the visible slice on purpose: the bars must be a true comparison
+  // of what is on screen, and scaling them to an unseen row beyond the render
+  // cap would make every visible bar shorter for a reason the user cannot see.
+  const sharesByColumn = new Map<number, readonly (number | null)[]>();
+  visibleColumns.forEach((column, index) => {
+    if (!isNumericFormat(column.format)) return;
+    sharesByColumn.set(
+      index,
+      magnitudeShares(visibleRows.map((row) => resolvePath(row, column.path))),
+    );
+  });
+
   return (
     <>
       <SurfaceHeader
@@ -97,6 +116,13 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                   <th
                     key={`${column.path}:${index}`}
                     scope="col"
+                    // Numeric headers lean toward the source hue so the measured
+                    // columns are findable without a rule or a fill.
+                    className={
+                      isNumericFormat(column.format)
+                        ? "sf-col--numeric"
+                        : undefined
+                    }
                     style={thStyle(column)}
                     data-testid={`table-header-${columnWindow.startColumn + index}`}
                   >
@@ -107,19 +133,50 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
             </thead>
             <tbody>
               {visibleRows.map((row, rowIndex) => (
-                <tr key={rowIndex} data-testid={`table-row-${rowIndex}`}>
-                  {visibleColumns.map((column, colIndex) => (
-                    <td
-                      key={`${column.path}:${colIndex}`}
-                      style={tdStyle(column)}
-                      data-testid={`table-cell-${rowIndex}-${columnWindow.startColumn + colIndex}`}
-                    >
-                      {formatValue(
-                        resolvePath(row, column.path),
-                        column.format,
-                      )}
-                    </td>
-                  ))}
+                <tr
+                  key={rowIndex}
+                  className="sf-row"
+                  data-testid={`table-row-${rowIndex}`}
+                >
+                  {visibleColumns.map((column, colIndex) => {
+                    const share = sharesByColumn.get(colIndex)?.[rowIndex];
+                    const bar =
+                      typeof share === "number" && share > 0 ? share : null;
+                    return (
+                      <td
+                        key={`${column.path}:${colIndex}`}
+                        className={
+                          bar === null ? undefined : "sf-cell--numeric"
+                        }
+                        style={tdStyle(column)}
+                        data-testid={`table-cell-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                      >
+                        {bar === null ? null : (
+                          // Painted BEHIND the value, never over it, and hidden
+                          // from assistive tech: the bar restates the number
+                          // visually, so announcing it would just repeat the
+                          // cell. `left` is what shrinks it, keeping every bar
+                          // anchored to the right edge where the digits end.
+                          <span
+                            aria-hidden="true"
+                            className="sf-value-bar"
+                            data-testid={`table-value-bar-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                            style={{ left: `${(1 - bar) * 100}%` }}
+                          />
+                        )}
+                        <span
+                          className={
+                            bar === null ? undefined : "sf-value-bar__value"
+                          }
+                        >
+                          {formatValue(
+                            resolvePath(row, column.path),
+                            column.format,
+                          )}
+                        </span>
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -147,17 +204,42 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   );
 }
 
-function renderFallback(data: unknown): ReactElement {
+/**
+ * Both halves of the boundary value: `state` is where a tool identity would
+ * ride, `data` is the payload the note is about.
+ *
+ * A bare array of rows has no top-level fields of its own, so the note's "the
+ * payload as the tool sent it" is served by the FIRST row — the shape the rest
+ * of them share. Everything else goes in whole.
+ *
+ * The badge is what keeps that honest. Without it a 200-row payload rendered as
+ * one row's fields would read as a tool that returned a single object, so the
+ * header states the true count in the same words the spec-driven path uses.
+ */
+function renderFallback(state: unknown, data: unknown): ReactElement {
   const rows = Array.isArray(data) ? data : [];
   return (
     <>
-      <SurfaceHeader kicker={KICKER} title="Table" />
-      <PreparingHint />
-      {rows.length > 0 ? (
-        <GenericFieldList data={rows[0]} format={(v) => formatValue(v)} />
-      ) : (
-        <GenericFieldList data={data} format={(v) => formatValue(v)} />
-      )}
+      <SurfaceHeader
+        kicker={KICKER}
+        title="Table"
+        badge={
+          rows.length > 0
+            ? `${rows.length} row${rows.length === 1 ? "" : "s"}`
+            : undefined
+        }
+      />
+      <NoSpecView
+        // The first row that actually CARRIES something, not merely the first.
+        // `rows[0]` can be a hole: `[null, {id:2}]` handed NoSpecView `null`, so
+        // the note said "The tool returned no payload." directly beneath a badge
+        // reading "2 rows" — two mutually exclusive statements in one card, and
+        // the payload's real shape never shown. Falling back to the whole value
+        // when every entry is a hole keeps the badge and the note describing the
+        // same thing.
+        data={rows.find((row) => row !== null && row !== undefined) ?? data}
+        tool={toolNameFromState(state)}
+      />
     </>
   );
 }
@@ -229,7 +311,14 @@ function thStyle(column: SurfaceColumn): CSSProperties {
   return {
     textAlign: column.align === "end" ? "right" : "left",
     padding: "8px 12px",
-    color: PALETTE.textLo,
+    // Read through a variable rather than naming the colour directly. An inline
+    // declaration beats any non-`!important` stylesheet rule regardless of
+    // specificity, so a literal here made `.sf-col--numeric` inert: the class
+    // was present, the sheet was loaded, and the numeric header still painted
+    // flat grey. Indirection is what lets the class win — it sets the variable
+    // instead of fighting the declaration. The fallback keeps every non-numeric
+    // header, and any host that has not loaded the sheet, exactly as before.
+    color: `var(--sf-col-color, ${PALETTE.textLo})`,
     fontSize: 11,
     letterSpacing: 0.4,
     textTransform: "uppercase",

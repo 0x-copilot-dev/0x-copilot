@@ -190,9 +190,18 @@ class InMemoryArtifactMetadataStore:
                 }
             )
             result = ArtifactMutationResult(record=record)
-            outbox_row = artifact_event_outbox_row(
-                command.ledger_event,
-                artifact_id=command.artifact_id,
+            # A conversation-lane append carries no ledger event, so it enqueues
+            # no outbox row: the only drain appends to a run event store, and
+            # this mutation belongs to no run.
+            outbox_rows = (
+                []
+                if command.ledger_event is None
+                else [
+                    artifact_event_outbox_row(
+                        command.ledger_event,
+                        artifact_id=command.artifact_id,
+                    )
+                ]
             )
             edge = artifact_revision_reference_edge(
                 org_id=command.scope.org_id,
@@ -202,11 +211,11 @@ class InMemoryArtifactMetadataStore:
                 blob_key=command.revision.blob_key,
                 created_at=parse_datetime(command.revision.revision.created_at),
             )
-            self._validate_outbox([outbox_row])
+            self._validate_outbox(outbox_rows)
             self._validate_reference_edge(edge)
             self.coordinator.restore_locked(command.revision.blob_key)
             self._require_active_locked(command.revision.blob_key)
-            self._insert_outbox([outbox_row])
+            self._insert_outbox(outbox_rows)
             self._records[key] = record
             self._revisions[
                 (

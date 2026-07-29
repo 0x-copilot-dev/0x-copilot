@@ -8,11 +8,11 @@ import {
   DiffFieldRow,
   EmptyBody,
   fieldGridStyle,
-  GenericFieldList,
+  NoSpecView,
   pageStyle,
-  PreparingHint,
   SurfaceHeader,
   SurfaceLinkRow,
+  toolNameFromState,
 } from "../_shared/primitives";
 import { formatValue, resolvePath } from "../_shared/path";
 import {
@@ -33,7 +33,7 @@ export const SECTION_RENDER_CAP = 200;
 /**
  * The `doc://` archetype — a title over a sections list. Each section item
  * (from `items_path`) renders its first spec field as a heading and the rest as
- * body. Spec-less state falls back to the generic list.
+ * body. Spec-less state falls back to the no-spec view (PRD-02).
  */
 export function DocRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
@@ -47,7 +47,7 @@ export function DocRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Document surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(data)}
+        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
       </section>
     </article>
   );
@@ -127,12 +127,13 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   );
 }
 
-function renderFallback(data: unknown): ReactElement {
+/** Both halves of the boundary value: `state` is where a tool identity would
+ * ride, `data` is the payload the note is about. */
+function renderFallback(state: unknown, data: unknown): ReactElement {
   return (
     <>
       <SurfaceHeader kicker={KICKER} title="Document" />
-      <PreparingHint />
-      <GenericFieldList data={data} format={(v) => formatValue(v)} />
+      <NoSpecView data={data} tool={toolNameFromState(state)} />
     </>
   );
 }

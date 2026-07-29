@@ -75,6 +75,13 @@ const BOX = new Set([
   "boxShadow",
   "backdropFilter",
   "textDecorationLine",
+  // DECLARED size constraints and offsets — not the measured `width`/`height`
+  // rows, which are container-dependent noise. A lane that declares
+  // `max-height:352px` and a sticky header that declares `top:-10px` are stating
+  // an intended geometry, and they compare cleanly across viewports.
+  "maxHeight",
+  "minHeight",
+  "top",
 ]);
 const LAYOUT = new Set([
   "display",
@@ -83,6 +90,18 @@ const LAYOUT = new Set([
   "alignItems",
   "flexGrow",
   "flexWrap",
+  // Grid track definition and scroll/positioning behaviour. These are the
+  // properties a "lanes" or "field rows" layout is actually built from: losing
+  // `position:sticky`, a `grid-auto-columns` track, or a contained overscroll
+  // changes the rendered structure exactly as much as flipping `display` does.
+  "position",
+  "gridAutoFlow",
+  "gridAutoColumns",
+  "gridTemplateColumns",
+  "overflowX",
+  "overflowY",
+  "overscrollBehaviorX",
+  "overscrollBehaviorY",
 ]);
 
 const px = (v) => {
@@ -157,6 +176,11 @@ function classify(prop, d, l) {
     };
   }
   if (prop === "fontWeight") return { severity: "medium", note: `${d} → ${l}` };
+  // A numeric register is a typographic decision of the same weight as weight
+  // itself: `tabular-nums` is what makes a column of figures line up, and losing
+  // it is visible in every row at once.
+  if (prop === "fontVariantNumeric")
+    return { severity: "medium", note: `${d} → ${l}` };
   if (prop === "lineHeight" || prop === "letterSpacing") {
     const dd = px(d),
       ll = px(l);

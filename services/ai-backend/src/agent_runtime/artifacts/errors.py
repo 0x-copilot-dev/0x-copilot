@@ -9,6 +9,7 @@ class ArtifactErrorCode(StrEnum):
     NOT_FOUND = "artifact_not_found"
     CONFLICT = "artifact_conflict"
     IDEMPOTENCY_CONFLICT = "artifact_idempotency_conflict"
+    SEALED_RUN = "artifact_sealed_run"
     TOO_LARGE = "artifact_too_large"
     DIGEST_MISMATCH = "artifact_digest_mismatch"
     INVALID_SOURCE = "artifact_invalid_source"
@@ -22,6 +23,7 @@ class _Messages:
     NOT_FOUND = "Artifact was not found for this scope."
     CONFLICT = "Artifact changed since the requested revision."
     IDEMPOTENCY_CONFLICT = "Idempotency key was already used for different content."
+    SEALED_RUN = "The run this change was attributed to has already finished."
     TOO_LARGE = "Artifact exceeds the configured size limit."
     DIGEST_MISMATCH = "Artifact content did not match the declared digest."
     INVALID_SOURCE = "Artifact source is not available for this scope."
@@ -63,6 +65,19 @@ class ArtifactIdempotencyConflictError(ArtifactError):
             ArtifactErrorCode.IDEMPOTENCY_CONFLICT,
             _Messages.IDEMPOTENCY_CONFLICT,
         )
+
+
+class ArtifactSealedRunError(ArtifactError):
+    """A RUN-lane mutation claimed a run whose ledger has already sealed.
+
+    Distinct from :class:`ArtifactConflictError` even though both surface as 409:
+    nothing is stale here and re-reading will not help, so a client must not
+    report this as "a newer revision exists". Reachable only in the RUN lane —
+    user edits take the conversation lane and claim no run.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(ArtifactErrorCode.SEALED_RUN, _Messages.SEALED_RUN)
 
 
 class ArtifactTooLargeError(ArtifactError):

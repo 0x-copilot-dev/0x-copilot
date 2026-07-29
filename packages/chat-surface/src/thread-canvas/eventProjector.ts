@@ -40,6 +40,7 @@
 import type { RuntimeEventEnvelope, SurfaceSpec } from "@0x-copilot/api-types";
 
 // TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
+import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { Approval, ApprovalState } from "./_approvals-stub";
 
 /**
@@ -79,6 +80,13 @@ export interface SurfaceTab {
   readonly archetype?: string;
   readonly title?: string;
   readonly lastSeq: number;
+  /**
+   * An author-chosen identity hue. Absent for every ledger surface today —
+   * only published artifacts carry an accent — so these tabs derive their hue
+   * from the URI scheme. Declared here so the tab-list union has one shape at
+   * the `TcTab` boundary rather than two that must be narrowed at each use.
+   */
+  readonly hue?: SurfaceHue;
 }
 
 /** Per-URI derivation metadata tracked alongside `surfaceState`. */

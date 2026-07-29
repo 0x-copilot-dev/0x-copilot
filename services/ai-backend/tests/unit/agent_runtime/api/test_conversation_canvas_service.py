@@ -22,6 +22,7 @@ import pytest
 
 from agent_runtime.api.conversation_canvas_service import ConversationCanvasService
 from agent_runtime.artifacts.contracts import ArtifactListQuery
+from agent_runtime.surfaces_v2.ledger_models import SurfaceAccent
 from runtime_api.http.errors import RuntimeApiError
 
 
@@ -34,6 +35,7 @@ class _Artifact:
         conversation_id: str = "conv-1",
         kind: str = "dataset",
         title: str = "forecast",
+        accent: SurfaceAccent | None = None,
     ) -> None:
         self.artifact_id = artifact_id
         self.run_id = run_id
@@ -41,6 +43,7 @@ class _Artifact:
         self.user_id = "user-1"
         self.title = title
         self.current_revision = 1
+        self.accent = accent
         self.created_at = datetime(2026, 7, 28, tzinfo=UTC)
         self.kind = type("K", (), {"value": kind})()
 
@@ -213,3 +216,52 @@ class TestCanvasScope(CanvasServiceMixin):
         # 403-shaped answer would confirm the conversation exists.
         assert "not found" in caught.value.envelope.safe_message.lower()
         assert queries == []
+
+
+class TestSubjectAccent:
+    """Display identity travels with the artifact, not with a run's events."""
+
+    DECIDED = "art_11111111111111111111111111111111"
+
+    async def test_a_chosen_accent_reaches_the_subject(self) -> None:
+        service, _ = TestCanvasMembership._service(
+            records=(
+                _Record(
+                    _Artifact(
+                        artifact_id=self.DECIDED,
+                        run_id="run-1",
+                        accent=SurfaceAccent.EMBER,
+                    )
+                ),
+            ),
+            events_by_run={
+                "run-1": [TestCanvasMembership._decision(self.DECIDED, "canvas")]
+            },
+        )
+
+        response = await service.list_subjects(
+            org_id="org-1", user_id="user-1", conversation_id="conv-1"
+        )
+
+        assert response.subjects[0].accent is SurfaceAccent.EMBER
+
+    async def test_no_choice_stays_none_so_the_client_can_derive(self) -> None:
+        """Unset must not become a colour here.
+
+        The client turns absence into a hue derived from the artifact's kind. If
+        this projected a default instead, every artifact would look chosen and
+        the derivation rule could never change without rewriting stored rows.
+        """
+
+        service, _ = TestCanvasMembership._service(
+            records=(_Record(_Artifact(artifact_id=self.DECIDED, run_id="run-1")),),
+            events_by_run={
+                "run-1": [TestCanvasMembership._decision(self.DECIDED, "canvas")]
+            },
+        )
+
+        response = await service.list_subjects(
+            org_id="org-1", user_id="user-1", conversation_id="conv-1"
+        )
+
+        assert response.subjects[0].accent is None

@@ -29,6 +29,12 @@
  *   --fail-on-missing exit 1 if any anchor did not match (default: warn only,
  *                     because "absent in live" is itself a HIGH finding that
  *                     compare.mjs is designed to report)
+ *
+ * anchors.json keys this driver reads:
+ *   elements    [{label, design, live}]  — the alignment map (required)
+ *   extraProps  ["position", …]          — extra computed properties to measure
+ *                                          on THIS surface, appended to the
+ *                                          extractor's curated defaults
  * =========================================================================
  */
 import {
@@ -116,6 +122,19 @@ if (elements.length === 0) {
   process.exit(2);
 }
 
+/**
+ * Per-surface widening of the measured property set.
+ *
+ * The extractor's curated defaults are deliberately narrow — they are the
+ * properties that matter on almost every surface. A surface whose spec is
+ * written in terms of properties outside that set (a sticky offset, a grid
+ * track list, `tabular-nums`) would otherwise be scored blind: every anchor
+ * matches, every row it cares about is simply absent, and the report reads as
+ * parity. Declaring `extraProps` in the anchors file APPENDS for this surface
+ * only, so no other surface's committed baseline moves.
+ */
+const extraProps = Array.isArray(anchors.extraProps) ? anchors.extraProps : [];
+
 const [vw, vh] = (flag("viewport", "1440x900") || "1440x900")
   .split("x")
   .map((n) => Number.parseInt(n, 10));
@@ -152,7 +171,7 @@ await page.waitForTimeout(delay);
 await page.addScriptTag({ content: extractorSource });
 const profile = await page.evaluate(
   (spec) => globalThis.__extractParity(spec),
-  { elements },
+  { elements, extraProps },
 );
 
 await browser.close();

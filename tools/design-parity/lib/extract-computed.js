@@ -12,7 +12,14 @@
  * `{label -> styles}` profile is compared label-for-label with the other side.
  *
  * Usage (browser):
- *   __extractParity({ props: [...], elements: [{label, selector}, ...] })
+ *   __extractParity({ props: [...], extraProps: [...], elements: [{label, selector}, ...] })
+ *
+ * `props` REPLACES the curated set; `extraProps` APPENDS to it. Append is the
+ * one a surface normally wants: a surface whose spec turns on properties the
+ * default set omits (a sticky offset, a grid track list, a numeric register)
+ * needs those measured WITHOUT dropping the shared baseline every other surface
+ * is scored against. Replacing silently narrows the diff; appending widens it.
+ *
  * Returns: { label: { matched, tag, classes, text, styles: {prop: value} } }
  * =========================================================================
  */
@@ -104,7 +111,10 @@
   }
 
   globalThis.__extractParity = function (spec) {
-    const props = (spec && spec.props) || DEFAULT_PROPS;
+    const base = (spec && spec.props) || DEFAULT_PROPS;
+    // De-duplicated so a surface naming a property the default set already
+    // carries does not report it twice.
+    const props = [...new Set([...base, ...((spec && spec.extraProps) || [])])];
     const out = {};
     for (const el of spec.elements) {
       const node = document.querySelector(el.selector);

@@ -34,6 +34,7 @@ from agent_runtime.artifacts.errors import (
     ArtifactInvalidSourceError,
     ArtifactNotFoundError,
     ArtifactRangeError,
+    ArtifactSealedRunError,
     ArtifactStorageError,
     ArtifactTooLargeError,
 )
@@ -101,6 +102,7 @@ __all__ = (
     "ArtifactRevisionRequest",
     "ArtifactRunScopeResolverPort",
     "ArtifactScope",
+    "ArtifactSealedRunError",
     "ArtifactSoftDeleteCommand",
     "ArtifactSourceDescriptor",
     "ArtifactSourceResolverPort",
