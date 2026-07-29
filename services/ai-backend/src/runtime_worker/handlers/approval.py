@@ -909,6 +909,11 @@ class RuntimeApprovalHandler:
         The same three-way agreement the run handler requires: an operator
         configured F6, the run's control snapshot resolved F6 to ``enforce``,
         and the operator declared at least one capability's concurrency policy.
+
+        And the same run-scoped approval authority, read off the same persisted
+        context. A resume is where this matters most: the run being resumed is
+        one that already parked on a human, so a resumed turn planning the very
+        capability that parked it would be the BUG-19 defect at its loudest.
         """
 
         if self._batch_concurrency_composer is None:
@@ -917,6 +922,7 @@ class RuntimeApprovalHandler:
             org_id=run.org_id,  # type: ignore[attr-defined]
             trace_id=run.trace_id,  # type: ignore[attr-defined]
             control=control,  # type: ignore[arg-type]
+            runtime_context=run.runtime_context,  # type: ignore[attr-defined]
         )
 
     def _dependencies_for_resume(
