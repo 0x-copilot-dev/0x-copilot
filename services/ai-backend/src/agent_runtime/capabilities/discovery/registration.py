@@ -70,6 +70,12 @@ from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRank
 from agent_runtime.capabilities.discovery.revision_authority import (
     CapabilityRefRevalidation,
 )
+from agent_runtime.capabilities.discovery.telemetry import (
+    CapabilityDiscoveryObserver,
+    CapabilityExpansionObserver,
+    ObservedCapabilityBridgeTool,
+    ObservedTwoTierCapabilitySearch,
+)
 from agent_runtime.capabilities.discovery.tool_bridge import (
     CapabilityCatalogAccess,
     CapabilityDescribeTool,
@@ -131,6 +137,12 @@ class CapabilityBridgeSeam:
     exactly as the catalog builder's was: expansion mints refs for the same
     catalog id, so a different key would produce references the run's own
     catalog identity does not explain.
+
+    An ``observer`` is the only optional input that changes nothing about what
+    the seam *does*.  Tier two is the one place the cost of opening real servers
+    is visible — the bridge's own answer deliberately carries no expansion audit
+    — so measuring it has to happen here or not at all.  A run that supplies
+    none composes the unmeasured second tier it composed before.
     """
 
     disclosure: RunScopedCapabilityDisclosure
@@ -145,21 +157,29 @@ class CapabilityBridgeSeam:
         minter: CapabilityReferenceMinter,
         limits: CapabilityExpansionLimits | None = None,
         ranker: DeterministicLexicalRanker | None = None,
+        observer: CapabilityExpansionObserver | None = None,
     ) -> Self:
         """Build the bounded second tier and the ledger it discloses into."""
 
         shared_ranker = ranker or DeterministicLexicalRanker()
+        expander = BoundedCapabilityExpander(
+            loader=loader,
+            minter=minter,
+            limits=limits,
+            ranker=shared_ranker,
+        )
+        expansion = (
+            TwoTierCapabilitySearch(expander=expander, ranker=shared_ranker)
+            if observer is None
+            else ObservedTwoTierCapabilitySearch(
+                expander=expander,
+                ranker=shared_ranker,
+                observer=observer,
+            )
+        )
         return cls(
             disclosure=RunScopedCapabilityDisclosure(catalog=catalog),
-            expansion=TwoTierCapabilitySearch(
-                expander=BoundedCapabilityExpander(
-                    loader=loader,
-                    minter=minter,
-                    limits=limits,
-                    ranker=shared_ranker,
-                ),
-                ranker=shared_ranker,
-            ),
+            expansion=expansion,
         )
 
 
@@ -177,6 +197,7 @@ class CapabilityBridgeRegistrar:
         ranker: DeterministicLexicalRanker | None = None,
         seam: CapabilityBridgeSeam | None = None,
         local_tool_names: frozenset[str] = frozenset(),
+        observer: CapabilityDiscoveryObserver | None = None,
         clock: Callable[[], datetime] = _utc_now,
     ) -> tuple[CapabilityBridgeToolRegistration, ...]:
         """Return the bridge tools to register, or nothing at all.
@@ -186,6 +207,13 @@ class CapabilityBridgeRegistrar:
         revalidatable reference.  A ``seam`` built for a different catalog is
         refused rather than mounted, because a ledger that vouches for another
         projection's refs is not run-scoped at all.
+
+        An ``observer`` is applied uniformly to whatever this method decided to
+        register, which is why it is threaded here rather than at each adapter's
+        own construction: measuring the bridge is then a property of *being
+        registered*, and a fourth bridge tool cannot be added unobserved.  It
+        can only widen what is measured, never what is exposed — the activation
+        and catalog narrowing above have already run.
         """
 
         if not activation.registers_bridge:
@@ -227,7 +255,20 @@ class CapabilityBridgeRegistrar:
                     args_schema=CapabilityInvokeRequest,
                 )
             )
-        return tuple(registrations)
+        if observer is None:
+            return tuple(registrations)
+        return tuple(
+            CapabilityBridgeToolRegistration(
+                name=registration.name,
+                adapter=ObservedCapabilityBridgeTool(
+                    inner=registration.adapter,
+                    observer=observer,
+                    tool=registration.name,
+                ),
+                args_schema=registration.args_schema,
+            )
+            for registration in registrations
+        )
 
 
 __all__ = (

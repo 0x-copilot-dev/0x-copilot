@@ -138,7 +138,7 @@ class GoldenTrace(RuntimeContract):
 
     @staticmethod
     def _without_empty_task_policy_projection(value: object) -> object:
-        """Keep pre-F4/F2 compact trace digests stable for absent fields."""
+        """Keep pre-F4/F2/F3 compact trace digests stable for absent fields."""
 
         if isinstance(value, list):
             return [
@@ -177,6 +177,12 @@ class GoldenTrace(RuntimeContract):
             "invocation_input_tokens",
             "invocation_output_tokens",
             "invocation_cost_microusd",
+            "discovery_phase",
+            "discovery_outcome",
+            "discovery_candidate_count",
+            "discovery_recall_rank",
+            "discovery_result_tokens",
+            "discovery_model_turns",
         }
         return {
             key: GoldenTrace._without_empty_task_policy_projection(item)

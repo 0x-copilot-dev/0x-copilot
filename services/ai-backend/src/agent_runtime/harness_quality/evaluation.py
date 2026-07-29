@@ -256,8 +256,31 @@ class TrajectoryProjector:
                 cls._invocation_int(payload, "cost_microusd")
                 or cls._invocation_int(payload, "total_cost_microusd")
             ),
+            discovery_phase=cls._discovery_text(payload, "phase"),
+            discovery_outcome=cls._discovery_text(payload, "outcome_code"),
             payload_digest=canonical_json_sha256(payload),
         )
+
+    @staticmethod
+    def _discovery_text(payload: Mapping[str, object], key: str) -> str | None:
+        """Project one closed F3 field from a ``quality.decision.v1`` payload.
+
+        The F3 decision row is flat rather than nested under ``record``, and it
+        is shared with every other feature's decisions, so the ``feature``
+        discriminator is what makes this projection F3-only: an F4 or F12
+        decision passing through here contributes nothing.
+
+        Only ``phase`` and ``outcome_code`` are projectable from a real run.
+        The discovery counts a fixture case can assert — candidates, recall
+        rank, result tokens, model turns — are published as metrics rather than
+        persisted on the decision row, because ``quality.decision.v1`` has no
+        numeric field and this lane does not extend the closed event family.
+        """
+
+        if payload.get("feature") != "f3":
+            return None
+        value = payload.get(key)
+        return value if isinstance(value, str) and value.strip() else None
 
     @staticmethod
     def _policy_text(payload: Mapping[str, object], key: str) -> str | None:
