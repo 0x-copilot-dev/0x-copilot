@@ -22,6 +22,13 @@ export {
   type SurfaceRegistryProviderProps,
 } from "./SurfaceRegistryContext";
 export type { PendingDiff, SurfaceRendererProps } from "./types";
+export {
+  isSurfaceHue,
+  resolveSurfaceHue,
+  SURFACE_HUES,
+  surfaceHueForUri,
+  type SurfaceHue,
+} from "./surfaceHue";
 
 // === PRD-10 tier-2 production worker ===
 export {

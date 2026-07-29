@@ -99,6 +99,7 @@ import { projectCitations } from "./projectCitations";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
+import type { SurfaceHue } from "../../surfaces/surfaceHue";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -886,6 +887,28 @@ const CANCELLABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   "running",
   "waiting_for_approval",
 ]);
+/**
+ * One entry in the canvas tab strip, before it becomes a `TcTab`.
+ *
+ * Three independent sources produce these — the lifecycle fold, explicit
+ * artifact re-opens, and the receipt tab — plus `projectSurfaceTabs` on the
+ * pre-v2 path. Naming the shape once keeps them a single union at the `TcTab`
+ * boundary; they previously each declared an inline literal, so adding a field
+ * meant finding every one of them and the compiler only caught it at the join.
+ */
+interface CanvasTabEntry {
+  readonly uri: string;
+  readonly title?: string;
+  readonly lastSeq: number;
+  readonly archetype?: string;
+  /**
+   * The author's chosen identity hue, when there is one. Absent is the normal
+   * case and not a gap: the tab derives its hue from the URI scheme, so every
+   * tab has an identity colour whether or not anyone picked it.
+   */
+  readonly hue?: SurfaceHue;
+}
+
 /** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
 const MAX_SURFACE_TABS = 8;
 /** Re-authorized source opens are bounded, ephemeral navigation entries. */
@@ -2228,6 +2251,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         title: subject.title,
         revision: subject.revision,
         rendererHint: subject.rendererHint ?? "",
+        // The run fold cannot know an accent: `artifact.created` does not carry
+        // one on the wire. `null` is the honest value — the tab derives a hue
+        // from the URI until the conversation record supplies the chosen one,
+        // which is the same merge the title already relies on.
+        accent: null,
         createdAt: "",
       }));
   }, [canvasLifecycle, session.runId]);
@@ -2246,21 +2274,37 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     const legacyUris = new Set<string>();
     if (displayedCanvasLifecycle === null) {
       return {
-        tabs: [] as Array<{ uri: string; title: string; lastSeq: number }>,
+        tabs: [] as Array<{
+          uri: string;
+          title: string;
+          lastSeq: number;
+          hue?: SurfaceHue;
+        }>,
         uriBySubjectKey,
         legacyUris,
         preferredUri: "",
       };
     }
-    const tabs: Array<{ uri: string; title: string; lastSeq: number }> = [];
+    const tabs: Array<{
+      uri: string;
+      title: string;
+      lastSeq: number;
+      hue?: SurfaceHue;
+    }> = [];
     const seen = new Set<string>();
     // The artifact record's own title, keyed by artifact id. One authoritative
     // source of display identity for both the current run's tabs and prior
     // turns', so a tab and its panel header cannot disagree.
     const canvasTitleById = new Map<string, string>();
+    // The accent travels with the title, from the same record and in the same
+    // pass. Both are display identity the artifact owns, so reading them from
+    // one source is what stops a tab's name and its colour from disagreeing.
+    const canvasAccentById = new Map<string, SurfaceHue>();
     for (const subject of conversationCanvas.subjects) {
-      if (subject.kind === "artifact" && subject.title)
-        canvasTitleById.set(subject.subjectId, subject.title);
+      if (subject.kind !== "artifact") continue;
+      if (subject.title) canvasTitleById.set(subject.subjectId, subject.title);
+      if (subject.accent !== null)
+        canvasAccentById.set(subject.subjectId, subject.accent);
     }
     const add = (
       uri: string,
@@ -2268,11 +2312,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       lastSeq: number,
       key: string,
       legacy = false,
+      // Omitted for every surface that has no author-chosen accent, which is
+      // most of them: the tab derives a hue from its URI scheme, so identity
+      // colour is the default rather than an opt-in.
+      hue?: SurfaceHue,
     ): boolean => {
       uriBySubjectKey.set(key, uri);
       if (seen.has(uri)) return false;
       seen.add(uri);
-      tabs.push({ uri, title, lastSeq });
+      tabs.push({ uri, title, lastSeq, ...(hue === undefined ? {} : { hue }) });
       if (legacy) legacyUris.add(uri);
       return true;
     };
@@ -2292,6 +2340,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             `${canvasTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
             subject.lastSeq,
             subject.key,
+            false,
+            canvasAccentById.get(subject.subjectId),
           );
         }
         continue;
@@ -2391,6 +2441,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Prior-run subjects sort behind everything this run emitted.
         -1,
         subject.subjectKey,
+        false,
+        subject.accent ?? undefined,
       );
     }
     const preferredUri =
@@ -2402,6 +2454,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return { tabs, uriBySubjectKey, legacyUris, preferredUri };
   }, [
     displayedCanvasLifecycle,
+    // Read inside this memo for the artifact's real title and chosen accent,
+    // and previously missing here — so the maps were captured from whatever the
+    // canvas held when the memo last ran, which is normally BEFORE the
+    // conversation fetch resolves, and were never recomputed when it landed.
+    // Live proof: the tab read "dataset artifact · r1" while the surface header
+    // beside it read "forecast.csv".
+    conversationCanvas,
     ledger,
     legacyV2Replay,
     legacyV2ReadOnlyStream,
@@ -2494,9 +2553,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // lifecycle canvas subject. Keep deliberate, re-authorized opens visible in
   // Studio in that case, while lifecycle remains canonical whenever it does
   // already carry the same artifact URI.
-  const explicitArtifactCanvasTabs = useMemo(() => {
+  const explicitArtifactCanvasTabs = useMemo<readonly CanvasTabEntry[]>(() => {
     if (!surfacesV2)
-      return [] as Array<{ uri: string; title: string; lastSeq: number }>;
+      // An explicit re-open carries no accent of its own: it derives from the
+      // URI, which is the same artifact URI the lifecycle tab would have used,
+      // so the colour matches either way.
+      return [];
     const lifecycleUris = new Set(v2CanvasTabs.tabs.map((tab) => tab.uri));
     return explicitArtifactTabs.flatMap((tab) => {
       const uri = explicitArtifactTabUri(tab);
@@ -2529,7 +2591,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // SDR §11 strictness: flag on ⇒ tabs come from B3's lifecycle fold plus
   // bounded, explicit receipt/source navigation state; flag off ⇒ the old v1
   // selector remains byte-identical. Neither source nor receipt opens itself.
-  const surfaceTabList = useMemo(() => {
+  // The strip's element shape, named once. Three sources feed it — the
+  // lifecycle fold, explicit artifact re-opens, and the receipt tab — and each
+  // used to declare its own inline literal, so adding a field meant finding
+  // every one of them. `hue` is optional because most tabs derive their colour
+  // from the URI rather than carrying an author's choice.
+  const surfaceTabList: readonly CanvasTabEntry[] = useMemo(() => {
     if (!surfacesV2) return projectSurfaceTabs(session.events);
     return [
       ...v2CanvasTabs.tabs,
@@ -2616,6 +2683,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         uri: tab.uri,
         title: tab.title ?? tab.uri,
         pinned: tab.uri === effectivePin,
+        ...(tab.hue === undefined ? {} : { hue: tab.hue }),
       })),
     [visibleSurfaceTabs, effectivePin],
   );

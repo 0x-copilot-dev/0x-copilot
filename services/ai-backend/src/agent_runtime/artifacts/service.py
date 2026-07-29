@@ -669,6 +669,7 @@ class ArtifactService:
             media_type=request.media_type,
             current_revision=1,
             created_by=provenance.author,
+            accent=request.accent,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
             deleted_at=None,

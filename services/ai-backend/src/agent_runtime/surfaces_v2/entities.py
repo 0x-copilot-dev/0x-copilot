@@ -58,6 +58,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     SafeNonNegativeInt,
     SafePositiveInt,
     Sha256Hex,
+    SurfaceAccent,
     SurfaceKind,
     SurfaceSubjectType,
     UsagePurpose,
@@ -156,6 +157,12 @@ class ArtifactIntent(RuntimeContract):
     media_type: str | None = None
     suggested_filename: str | None = None
     presentation_preference: ArtifactPresentationPreference
+    # Optional by design. Unset means "no preference", and the client derives a
+    # hue from `kind` — so every artifact has an identity colour whether or not
+    # the model expressed one, and an author who does not care is not forced to
+    # invent one. `SurfaceAccent.NONE` is the distinct, deliberate "show no
+    # identity" choice.
+    accent: SurfaceAccent | None = None
 
 
 class OperationRequest(RuntimeContract):
@@ -226,6 +233,10 @@ class Artifact(RuntimeContract):
     media_type: str
     current_revision: SafePositiveInt
     created_by: ArtifactAuthor
+    #: Display identity chosen at publication, alongside `title`. Optional, and
+    #: optional forever: existing artifacts predate the field and must keep
+    #: loading, so absence has to mean "derive from kind" rather than "invalid".
+    accent: SurfaceAccent | None = None
     created_at: str
     updated_at: str
     deleted_at: str | None = None

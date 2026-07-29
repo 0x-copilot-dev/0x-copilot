@@ -62,6 +62,23 @@ _ARTIFACT_DESTINATION_RULE = (
 )
 
 
+_ACCENT_RULE = (
+    "Choosing an accent: it says WHICH THING a surface is, so a user can tell "
+    "two open tabs apart at a glance. It is identity, not decoration and not "
+    "emphasis. Leave it unset unless you have a reason — a sensible colour is "
+    "already derived from `kind`, and no accent is better than an arbitrary "
+    "one. Set it when the default would actively mislead: publishing several "
+    "artifacts of the SAME kind in one turn, where distinct colours make them "
+    "separable; or continuing a series, where reusing the earlier artifact's "
+    "accent shows they belong together. Keep one meaning per colour within a "
+    "conversation — the same colour on two unrelated artifacts is worse than no "
+    "colour at all. Use `none` for a surface that should deliberately show no "
+    "identity. Never use accent to signal status, urgency, progress, or "
+    "success: those already have their own colours, and competing with them "
+    "makes both unreadable."
+)
+
+
 PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
     "Create ONE NEW durable code, document, dataset, or file artifact in the "
     "app's artifact library. Use this only when the user explicitly asks to "
@@ -78,7 +95,11 @@ PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
     "(a sanctioned server result reference).\n"
     "- `suggested_filename` (optional): download metadata only, never a path.\n"
     "- `presentation_preference` (optional): `auto`, `canvas`, `chat_card`, or "
-    "`none`; this is a request and can be downgraded.\n\n"
+    "`none`; this is a request and can be downgraded.\n"
+    "- `accent` (optional): the artifact's identity colour on its canvas tab "
+    "and surface card. One of `jade`, `sky`, `indigo`, `ember`, `violet`, "
+    "`plum`, `amber`, `none`. A name only — never a hex code or CSS.\n\n"
+    f"{_ACCENT_RULE}\n\n"
     f"{_ARTIFACT_DESTINATION_RULE}\n\n"
     "Return a short normal response after publishing."
 )

@@ -272,6 +272,37 @@ class ArtifactPresentationPreference(StrEnum):
     NONE = "none"
 
 
+class SurfaceAccent(StrEnum):
+    """The identity hue a surface carries, chosen by name and never by value.
+
+    This is a closed vocabulary on purpose. A surface's colour is presentation,
+    and the standing rule is that the model supplies data and intent while the
+    renderer paints — the same reason it cannot emit TSX or a URL. Accepting a
+    hex, a CSS colour, or a token name here would hand model output a direct
+    write into a stylesheet; accepting a NAME hands it a choice from a set the
+    host already fixed.
+
+    Members mirror ``SURFACE_HUES`` in ``chat-surface/src/surfaces/surfaceHue``
+    and the ``[data-surface-hue]`` blocks in design-system's ``styles.css``.
+    Adding one means adding it in all three places — deliberately, so a hue can
+    never exist on the wire without a colour to resolve to.
+
+    ``NONE`` is a real choice, not an absence: it renders a hollow ring, which
+    is how a surface says it has no identity to claim rather than borrowing one.
+    Leaving the field unset is the different thing — it means "no preference",
+    and the client derives a hue from the artifact's kind.
+    """
+
+    JADE = "jade"
+    SKY = "sky"
+    INDIGO = "indigo"
+    EMBER = "ember"
+    VIOLET = "violet"
+    PLUM = "plum"
+    AMBER = "amber"
+    NONE = "none"
+
+
 class PresentationDecision(StrEnum):
     CANVAS = "canvas"
     CHAT_CARD = "chat_card"

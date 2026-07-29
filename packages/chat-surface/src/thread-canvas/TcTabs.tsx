@@ -1,14 +1,18 @@
-import type {
-  CSSProperties,
-  KeyboardEvent,
-  MouseEvent,
-  ReactElement,
-} from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement } from "react";
+
+import { resolveSurfaceHue } from "../surfaces/surfaceHue";
 
 export interface TcTab {
   readonly uri: string;
   readonly title: string;
   readonly pinned?: boolean;
+  /**
+   * An explicit source hue, when one was chosen rather than implied. This is
+   * where a `publish_artifact` accent lands. Left unset, the hue is derived
+   * from the URI's scheme, so every existing tab gains an identity colour with
+   * no caller change — the choice is an override, never a requirement.
+   */
+  readonly hue?: string;
 }
 
 export interface TcTabsProps {
@@ -18,89 +22,23 @@ export interface TcTabsProps {
   readonly onClose: (uri: string) => void;
 }
 
-const PALETTE = {
-  lime: "var(--color-accent)",
-  cardBg: "#181a1c",
-  cardBorder: "#2a2d31",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-} as const;
-
-const stripStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "row",
-  alignItems: "stretch",
-  gap: 2,
-  overflowX: "auto",
-  overflowY: "hidden",
-  borderBottom: `1px solid ${PALETTE.cardBorder}`,
-  background: PALETTE.cardBg,
-  padding: "0 8px",
-  minHeight: 36,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  fontSize: "var(--font-size-xs)",
-};
-
-const baseTabStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "8px 10px 6px 10px",
-  borderBottom: "2px solid transparent",
-  color: PALETTE.textLo,
-  cursor: "pointer",
-  whiteSpace: "nowrap",
-  outline: "none",
-};
-
-const activeTabStyle: CSSProperties = {
-  ...baseTabStyle,
-  color: PALETTE.textHi,
-  borderBottomColor: PALETTE.lime,
-};
-
-const titleStyle: CSSProperties = {
-  display: "inline-block",
-  maxWidth: 200,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const pinnedDotStyle: CSSProperties = {
-  display: "inline-block",
-  width: 6,
-  height: 6,
-  borderRadius: "50%",
-  background: PALETTE.lime,
-  flex: "0 0 auto",
-};
-
-const closeButtonStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 16,
-  height: 16,
-  padding: 0,
-  marginLeft: 2,
-  background: "transparent",
-  border: "none",
-  borderRadius: 3,
-  color: PALETTE.textLo,
-  cursor: "pointer",
-  fontSize: "var(--font-size-xs)",
-  lineHeight: 1,
-};
-
+/**
+ * The canvas tab strip.
+ *
+ * Presentation lives in `surface-language.css`, not here. It used to be inline
+ * styles over a private hardcoded palette (`#181a1c` / `#2a2d31`), which is why
+ * the strip could not theme and every tab looked identical regardless of what
+ * it opened. Each tab now carries `data-surface-hue`, and the stylesheet reads
+ * `--surface-src` from it — the component resolves a NAME and paints nothing.
+ */
 export function TcTabs(props: TcTabsProps): ReactElement {
   const { tabs, activeUri, onActivate, onClose } = props;
 
   return (
-    <div role="tablist" data-testid="tc-tabs" style={stripStyle}>
+    <div role="tablist" data-testid="tc-tabs" className="tc-tabs">
       {tabs.map((tab) => {
         const isActive = tab.uri === activeUri;
+        const hue = resolveSurfaceHue({ uri: tab.uri, choice: tab.hue });
         const handleActivate = (): void => onActivate(tab.uri);
         const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
           if (event.key === "Enter" || event.key === " ") {
@@ -122,21 +60,20 @@ export function TcTabs(props: TcTabsProps): ReactElement {
             data-uri={tab.uri}
             data-active={isActive ? "true" : "false"}
             data-pinned={tab.pinned ? "true" : "false"}
+            data-surface-hue={hue}
+            className="tc-tab"
             onClick={handleActivate}
             onKeyDown={handleKeyDown}
-            style={isActive ? activeTabStyle : baseTabStyle}
           >
-            {tab.pinned ? (
-              <span aria-hidden="true" style={pinnedDotStyle} />
-            ) : null}
-            <span style={titleStyle}>{tab.title}</span>
+            <span aria-hidden="true" className="tc-tab__dot" />
+            <span className="tc-tab__title">{tab.title}</span>
             {tab.pinned ? null : (
               <button
                 type="button"
                 aria-label={`Close ${tab.title}`}
                 data-testid={`tc-tabs-close-${tab.uri}`}
                 onClick={handleClose}
-                style={closeButtonStyle}
+                className="tc-tab__close"
               >
                 ×
               </button>

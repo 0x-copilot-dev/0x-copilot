@@ -32,6 +32,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactKind,
     ArtifactPresentationPreference,
     LedgerEventType,
+    SurfaceAccent,
     WorkLedgerVocabulary,
 )
 
@@ -203,6 +204,14 @@ class ArtifactCreateRequest(RuntimeContract):
     presentation_preference: ArtifactPresentationPreference = (
         ArtifactPresentationPreference.AUTO
     )
+    # The identity hue, when an author chose one. Persisted with the artifact
+    # rather than only emitted on the ledger event: a tab reopened from an
+    # earlier turn reads the artifact record, not that run's event stream, so an
+    # accent that lived only on the event would vanish the moment the
+    # conversation was reloaded — the surface would change colour for no reason
+    # the user could see. Unset means "no preference", and the client derives a
+    # hue from `kind`.
+    accent: SurfaceAccent | None = None
     expected_digest: Sha256Hex | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
 

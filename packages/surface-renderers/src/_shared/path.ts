@@ -120,3 +120,87 @@ export function isSafeHttpUrl(value: unknown): value is string {
 export function isNumericFormat(format?: SurfaceFieldFormat): boolean {
   return format === "number" || format === "currency";
 }
+
+/**
+ * The finite number behind a resolved cell value, or `null`.
+ *
+ * Deliberately stricter than `Number(value)`: booleans, empty strings, and
+ * whitespace all coerce to a number in JS, and letting `""` become `0` would
+ * paint a real magnitude bar for a missing cell. A magnitude channel that lies
+ * about absent data is worse than no channel.
+ */
+export function numericValue(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * A string that carries a digit but does not parse — "1,234", "$1.2k",
+ * "21,850 USDC". That is a magnitude we FAILED to read, not an empty cell, and
+ * the difference decides whether a column may be scaled at all.
+ */
+function isUnreadableNumber(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /\d/.test(value) &&
+    numericValue(value) === null
+  );
+}
+
+/**
+ * Each row's share of the largest magnitude in a numeric column, as a 0–1
+ * fraction, for the value bars behind numeric cells.
+ *
+ * Returns all-`null` — meaning "paint no bars" — in the cases where a bar would
+ * mislead rather than inform:
+ *
+ *  - fewer than two comparable values: a lone full-width bar states a
+ *    comparison that does not exist;
+ *  - every value identical: a column of full bars is pure noise;
+ *  - a non-finite or zero maximum: nothing to be a share of.
+ *
+ * Magnitude is absolute, so a column mixing +1000 and -1000 scales both to the
+ * same length. That is honest about SIZE, which is what a bar encodes; the sign
+ * stays legible in the number itself, which is never obscured.
+ */
+export function magnitudeShares(
+  values: readonly unknown[],
+): readonly (number | null)[] {
+  const numbers = values.map(numericValue);
+  // A column containing a number we could not READ is not the same as a column
+  // containing empty cells, and treating them alike inverts the ranking: with
+  // ["1,234", "987", "2,500", "555"] only the two bare values parse, so 987 —
+  // the SMALLEST number in the column — is painted as the maximum and the two
+  // largest get no bar at all. The bars would then rank rows by parseability
+  // rather than by size, which is precisely the lie this channel must not tell.
+  //
+  // Suppressing the whole column is the honest response. Stripping separators
+  // instead is not: "1.234" is 1234 in de-DE and 1.234 in en-US, so a stripper
+  // would silently misread European-formatted output — a quieter version of the
+  // same defect. Reading such a column correctly requires the payload's locale,
+  // which lives upstream of here.
+  if (values.some(isUnreadableNumber)) {
+    return numbers.map(() => null);
+  }
+  const present = numbers.filter((value): value is number => value !== null);
+  if (present.length < 2) {
+    return numbers.map(() => null);
+  }
+  const magnitudes = present.map(Math.abs);
+  const max = Math.max(...magnitudes);
+  if (!Number.isFinite(max) || max === 0) {
+    return numbers.map(() => null);
+  }
+  if (Math.min(...magnitudes) === max) {
+    return numbers.map(() => null);
+  }
+  return numbers.map((value) =>
+    value === null ? null : Math.abs(value) / max,
+  );
+}
