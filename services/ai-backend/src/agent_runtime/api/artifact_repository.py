@@ -19,6 +19,7 @@ from agent_runtime.artifacts import (
     ArtifactBlobStorePort,
     ArtifactMetadataStorePort,
     ArtifactNotFoundError,
+    ArtifactOperationAuditPort,
     ArtifactScope,
     ArtifactService,
     ArtifactSourceDescriptor,
@@ -454,6 +455,11 @@ class ArtifactServiceComposition:
             blobs=blobs,
             run_scopes=RuntimeArtifactRunScopeResolver(persistence),
             sources=RuntimeArtifactSourceResolver(source_lookup),
+            # The runtime store's own hash-chained audit log, so an artifact
+            # operation's execution mode lands in the same signed, exportable
+            # record as approvals and conversation lifecycle events rather than
+            # in a second audit lane nobody exports.
+            audit=cast(ArtifactOperationAuditPort, persistence),
         )
 
 

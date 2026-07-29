@@ -10,9 +10,7 @@ the injected completion differs.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from agent_runtime.capabilities.surfaces.generator import (
@@ -22,6 +20,7 @@ from agent_runtime.capabilities.surfaces.generator import (
     SurfaceSpecGenerator,
 )
 
+from tests.evals.report_io import write_report
 from tests.evals.surfaces.corpus import CORPUS, EvalFixture
 from tests.evals.surfaces.scorers import aggregate, score_fixture
 
@@ -70,14 +69,7 @@ async def run_corpus(
     }
 
 
-def write_report(report: dict[str, Any], path: Path) -> None:
-    """Write the report as pretty, sorted JSON (stable across runs)."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
+# Re-exported so existing callers keep importing the writer from here; the
+# implementation lives in tests/evals/report_io.py, shared with the publication
+# family so every eval report has the same stable shape.
 __all__ = ["CompletionFor", "run_corpus", "write_report"]

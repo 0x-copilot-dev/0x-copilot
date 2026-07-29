@@ -36,10 +36,17 @@ from agent_runtime.artifacts.errors import (
     ArtifactRangeError,
     ArtifactSealedRunError,
 )
+from agent_runtime.artifacts.execution_mode import (
+    ArtifactExecutionMode,
+    ArtifactExecutionModeResolver,
+    ArtifactOperation,
+    ArtifactOperationAudit,
+)
 from agent_runtime.artifacts.ports import (
     ArtifactBlobStorePort,
     ArtifactLedgerPublisherPort,
     ArtifactMetadataStorePort,
+    ArtifactOperationAuditPort,
     ArtifactRunScopeResolverPort,
     ArtifactSourceResolverPort,
 )
@@ -82,6 +89,25 @@ class ArtifactService:
         PUBLISH = "INTERNAL:artifact.publish"
         DELETE = "DELETE:/v1/agent/artifacts/{artifact_id}"
 
+        BY_OPERATION = {
+            ArtifactOperation.CREATE: CREATE,
+            ArtifactOperation.REVISE: REVISE,
+            ArtifactOperation.PROMOTE: PROMOTE,
+            ArtifactOperation.PUBLISH: PUBLISH,
+            ArtifactOperation.DELETE: DELETE,
+        }
+
+        @classmethod
+        def for_operation(cls, operation: ArtifactOperation) -> str:
+            """Return the durable idempotency route one operation commits under.
+
+            These strings are part of the persisted idempotency key, so they
+            are paired with their operation once here rather than restated at
+            call sites where the two could drift apart.
+            """
+
+            return cls.BY_OPERATION[operation]
+
     class Defaults:
         MEDIA_TYPE = "application/octet-stream"
         PROMOTED_TITLE = "Promoted artifact"
@@ -96,6 +122,7 @@ class ArtifactService:
         limits: ArtifactLimits | None = None,
         now: Callable[[], datetime] | None = None,
         ledger_publisher: ArtifactLedgerPublisherPort | None = None,
+        audit: ArtifactOperationAuditPort | None = None,
     ) -> None:
         self._metadata = metadata
         self._blobs = blobs
@@ -107,6 +134,12 @@ class ArtifactService:
         # (tests, the artifact REST surface). Unset means the outbox drain is
         # the only delivery path — correct, just not live.
         self._ledger_publisher = ledger_publisher
+        # Optional for the same reason, and only for the readable projection:
+        # the execution mode itself is on every command whether or not a sink
+        # is wired, so an unwired sink loses the audit *row*, never the fact
+        # that the mode was derived. The composition root wires the runtime's
+        # signed audit log.
+        self._audit = audit
 
     def bind_ledger_publisher(self, publisher: ArtifactLedgerPublisherPort) -> None:
         """Attach the run-ledger publisher once the event producer exists.
@@ -140,7 +173,7 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             chunks=chunks,
-            route=self.Routes.CREATE,
+            operation=ArtifactOperation.CREATE,
             promoted_source_ref=None,
         )
 
@@ -189,7 +222,7 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             chunks=self._single_chunk(content),
-            route=self.Routes.PUBLISH,
+            operation=ArtifactOperation.PUBLISH,
             promoted_source_ref=None,
         )
 
@@ -220,7 +253,7 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             chunks=chunks,
-            route=self.Routes.PUBLISH,
+            operation=ArtifactOperation.PUBLISH,
             promoted_source_ref=None,
         )
 
@@ -268,7 +301,7 @@ class ArtifactService:
                 update={"source_ref": canonical_source_ref}
             ),
             chunks=chunks,
-            route=self.Routes.PUBLISH,
+            operation=ArtifactOperation.PUBLISH,
             promoted_source_ref=None,
         )
 
@@ -301,7 +334,7 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             chunks=self._single_chunk(content),
-            route=self.Routes.PUBLISH,
+            operation=ArtifactOperation.PUBLISH,
             promoted_source_ref=None,
             artifact_id=artifact_id,
             created_at=created_at,
@@ -330,6 +363,12 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             current=current,
+        )
+        route = self.Routes.for_operation(ArtifactOperation.REVISE)
+        execution_mode = ArtifactExecutionModeResolver.resolve(
+            operation=ArtifactOperation.REVISE,
+            author=provenance.author,
+            lane=scope.lane,
         )
         limit = self._limits.for_kind(current.artifact.kind)
         written = await self._blobs.put_stream(
@@ -367,7 +406,7 @@ class ArtifactService:
             author=provenance.author,
         )
         request_digest = self._request_digest(
-            route=self.Routes.REVISE,
+            route=route,
             values={
                 "artifact_id": request.artifact_id,
                 "parent_revision": request.parent_revision,
@@ -384,7 +423,7 @@ class ArtifactService:
             revision=stored_revision,
             idempotency=self._idempotency(
                 scope=scope,
-                route=self.Routes.REVISE,
+                route=route,
                 key=request.idempotency_key,
                 request_digest=request_digest,
             ),
@@ -401,8 +440,25 @@ class ArtifactService:
                 if scope.lane is ArtifactCausalLane.RUN
                 else None
             ),
+            execution_mode=execution_mode,
         )
-        return await self._metadata.append_revision(command)
+        mutation = await self._metadata.append_revision(command)
+        await self._record_operation(
+            operation=ArtifactOperation.REVISE,
+            execution_mode=command.execution_mode,
+            org_id=scope.org_id,
+            user_id=scope.user_id,
+            conversation_id=scope.conversation_id,
+            run_id=scope.run_id,
+            trace_id=scope.trace_id,
+            lane=scope.lane,
+            artifact_id=request.artifact_id,
+            revision=next_revision,
+            author=provenance.author,
+            occurred_at=now,
+            replayed=mutation.replayed,
+        )
+        return mutation
 
     async def get_metadata(
         self, *, org_id: str, user_id: str, artifact_id: str
@@ -582,7 +638,7 @@ class ArtifactService:
                 source_ref=descriptor.source_ref,
             ),
             chunks=chunks,
-            route=self.Routes.PROMOTE,
+            operation=ArtifactOperation.PROMOTE,
             promoted_source_ref=descriptor.source_ref,
         )
 
@@ -604,27 +660,56 @@ class ArtifactService:
         )
         if record is None:
             raise ArtifactNotFoundError()
+        route = self.Routes.for_operation(ArtifactOperation.DELETE)
+        # Deletion is reachable only from the app-facing DELETE route, so its
+        # author is the authenticated user and its subject is the conversation
+        # holding the artifact. No run caused it, and naming the creating run
+        # would attribute the act to a turn that did not perform it.
+        execution_mode = ArtifactExecutionModeResolver.resolve(
+            operation=ArtifactOperation.DELETE,
+            author=ArtifactAuthor.USER,
+            lane=ArtifactCausalLane.CONVERSATION,
+        )
+        deleted_at = self._utc_now()
         digest = self._request_digest(
-            route=self.Routes.DELETE,
+            route=route,
             values={"artifact_id": artifact_id},
         )
-        result = await self._metadata.soft_delete(
-            ArtifactSoftDeleteCommand(
+        command = ArtifactSoftDeleteCommand(
+            org_id=org_id,
+            user_id=user_id,
+            artifact_id=artifact_id,
+            deleted_at=deleted_at,
+            idempotency=ArtifactIdempotencyBinding(
                 org_id=org_id,
                 user_id=user_id,
-                artifact_id=artifact_id,
-                deleted_at=self._utc_now(),
-                idempotency=ArtifactIdempotencyBinding(
-                    org_id=org_id,
-                    user_id=user_id,
-                    route=self.Routes.DELETE,
-                    key=idempotency_key,
-                    request_digest=digest,
-                ),
-            )
+                route=route,
+                key=idempotency_key,
+                request_digest=digest,
+            ),
+            execution_mode=execution_mode,
         )
+        result = await self._metadata.soft_delete(command)
         if result is None:
             raise ArtifactNotFoundError()
+        await self._record_operation(
+            operation=ArtifactOperation.DELETE,
+            execution_mode=command.execution_mode,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=record.artifact.conversation_id,
+            run_id=None,
+            trace_id=None,
+            lane=ArtifactCausalLane.CONVERSATION,
+            artifact_id=artifact_id,
+            revision=None,
+            author=ArtifactAuthor.USER,
+            occurred_at=deleted_at,
+            # Reaching here on an already-tombstoned artifact can only be this
+            # delete's own idempotency replay: a *different* key aimed at an
+            # existing tombstone returns ``None`` above and 404s.
+            replayed=record.artifact.deleted_at is not None,
+        )
 
     async def _create_in_scope(
         self,
@@ -633,12 +718,18 @@ class ArtifactService:
         request: ArtifactCreateRequest,
         provenance: ArtifactProvenance,
         chunks: AsyncIterator[bytes],
-        route: str,
+        operation: ArtifactOperation,
         promoted_source_ref: str | None,
         artifact_id: str | None = None,
         created_at: datetime | None = None,
     ) -> ArtifactMutationResult:
         self._validate_title(request.title)
+        route = self.Routes.for_operation(operation)
+        execution_mode = ArtifactExecutionModeResolver.resolve(
+            operation=operation,
+            author=provenance.author,
+            lane=scope.lane,
+        )
         kind_limit = self._limits.for_kind(request.kind)
         written = await self._blobs.put_stream(
             expected_digest=request.expected_digest,
@@ -778,10 +869,83 @@ class ArtifactService:
                 request_digest=request_digest,
             ),
             ledger_events=tuple(events),
+            execution_mode=execution_mode,
         )
         mutation = await self._metadata.create_artifact(command)
         await self._publish_ledger_events(command.ledger_events)
+        await self._record_operation(
+            operation=operation,
+            execution_mode=command.execution_mode,
+            org_id=scope.org_id,
+            user_id=scope.user_id,
+            conversation_id=scope.conversation_id,
+            run_id=scope.run_id,
+            trace_id=scope.trace_id,
+            lane=scope.lane,
+            artifact_id=artifact_id,
+            revision=1,
+            author=provenance.author,
+            occurred_at=now,
+            replayed=mutation.replayed,
+        )
         return mutation
+
+    async def _record_operation(
+        self,
+        *,
+        operation: ArtifactOperation,
+        execution_mode: ArtifactExecutionMode,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        run_id: str | None,
+        trace_id: str | None,
+        lane: ArtifactCausalLane,
+        artifact_id: str,
+        revision: int | None,
+        author: ArtifactAuthor,
+        occurred_at: datetime,
+        replayed: bool,
+    ) -> None:
+        """Append the committed operation, and the mode it ran under, to audit.
+
+        Called only after the operation's own transaction commits, so the log
+        never claims something that did not happen. The mode is not re-derived
+        here: it is the value the command committed with, because an audit row
+        that recomputed it could disagree with the write it describes.
+
+        An idempotent replay wrote nothing, so it appends nothing. A row for it
+        would carry the replay's clock and would read as a second create of an
+        artifact created once — a false statement in the log an auditor reads.
+
+        A failing sink raises, unlike :meth:`_publish_ledger_events` below. That
+        method may swallow because two durable backstops redeliver the event;
+        this one has none, so swallowing would leave a committed write that
+        nothing can prove was gated — the exact loss this seam exists to
+        prevent. Raising is also how every other audit caller in this service
+        behaves.
+        """
+
+        if self._audit is None or replayed:
+            return
+        entry = ArtifactOperationAudit(
+            operation=operation,
+            execution_mode=execution_mode,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            lane=lane,
+            artifact_id=artifact_id,
+            revision=revision,
+            author=author,
+            occurred_at=occurred_at,
+        )
+        await self._audit.write_audit_log(
+            event_type=entry.event_type,
+            record=entry.to_audit_record(),
+        )
 
     async def _publish_ledger_events(
         self, events: tuple[ArtifactLedgerEvent, ...]
@@ -952,6 +1116,18 @@ class ArtifactService:
 
     @classmethod
     def _request_digest(cls, *, route: str, values: dict[str, object]) -> str:
+        """Fingerprint what was asked for, so a reused key means a reused ask.
+
+        The execution mode is deliberately not among the values, even though
+        every command carries it. It is a setting the user can toggle per tool
+        or per chat, so it can differ between a request and its own retry; a
+        digest that moved with it would answer an identical retry with an
+        idempotency conflict, and the client's only recovery from that is a
+        fresh key — which creates the duplicate artifact idempotency exists to
+        prevent. The mode of the one operation that ran is already durable on
+        its command and in its audit row.
+        """
+
         return canonical_json_sha256({"route": route, **values})
 
     def _utc_now(self) -> datetime:
