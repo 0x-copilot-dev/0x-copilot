@@ -20,6 +20,8 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_control_store import EventJournalRunControlStore
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.capabilities.concurrency import (
+    BatchChildDisposition,
+    BatchChildTransitionRecorder,
     BatchFailurePolicy,
     BatchJournalConflict,
     BatchJournalCorruption,
@@ -32,6 +34,7 @@ from agent_runtime.capabilities.concurrency import (
     BatchPlanner,
     BatchPlanRecorder,
     BatchPlanRequest,
+    BatchRunBinding,
     BatchSegmentMode,
     BatchSegmentReason,
     ConcurrencyAllowance,
@@ -1084,6 +1087,132 @@ class TestBatchPlanDurability(BatchJournalFixtureMixin):
         )
 
 
+class TestBatchJournalAppendCost(BatchJournalFixtureMixin):
+    """BUG-20: one run's F6 appends must not re-read the whole run each time.
+
+    The defect was not a slow query, it was the wrong *shape*: every append
+    re-read the run's entire event log — model deltas, tool events, and all —
+    to rebuild a prefix it had already seen, twice over once the control
+    snapshot's own full scan is counted.  Cost was therefore quadratic in
+    appends, and F6 writes one plan record per turn plus two child records per
+    child.
+
+    These two tests pin the shape, not a timing: they count the *envelopes the
+    store hands back*, which is the quantity the defect made grow.
+    """
+
+    _TURNS = 12
+
+    async def test_one_append_does_not_re_read_the_whole_run(
+        self,
+        seeded_store,
+    ) -> None:
+        """The marginal cost of an append must not grow with the journal."""
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        counting = _ReadCountingEventStore(store)
+        # The control store reads the same log, so it is wired through the
+        # counter too: the snapshot scan is half of what an append costs.
+        journal = EventJournalBatchPlanStore(
+            events=counting,
+            snapshots=EventJournalRunControlStore(counting),
+        )
+        snapshot = await self._snapshot(controls, run)
+        plans = BatchPlanRecorder(journal=journal, gate=self.gate())
+        children = BatchChildTransitionRecorder(
+            journal=journal,
+            binding=BatchRunBinding.of(
+                org_id=_ORG,
+                trace_id=run.trace_id,
+                snapshot=snapshot,
+            ),
+        )
+
+        costs: list[int] = []
+        for turn in range(self._TURNS):
+            before = counting.events_read
+            await self._turn(plans, children, run, snapshot, turn)
+            costs.append(counting.events_read - before)
+
+        # The first turn legitimately reads the durable prefix it is appending
+        # to.  Every later turn appends to a prefix it already holds, and this
+        # run emits nothing but F6 events, so there is nothing new to read.
+        assert costs[0] > 0
+        assert costs[1:] == [0] * (self._TURNS - 1), (
+            "an append re-read events it had already folded; "
+            f"per-turn envelope reads were {costs}"
+        )
+
+    async def test_total_reads_stay_linear_as_appends_double(
+        self,
+        seeded_store,
+    ) -> None:
+        """Doubling the appends must not quadruple the events read."""
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        counting = _ReadCountingEventStore(store)
+        # The control store reads the same log, so it is wired through the
+        # counter too: the snapshot scan is half of what an append costs.
+        journal = EventJournalBatchPlanStore(
+            events=counting,
+            snapshots=EventJournalRunControlStore(counting),
+        )
+        snapshot = await self._snapshot(controls, run)
+        plans = BatchPlanRecorder(journal=journal, gate=self.gate())
+        children = BatchChildTransitionRecorder(
+            journal=journal,
+            binding=BatchRunBinding.of(
+                org_id=_ORG,
+                trace_id=run.trace_id,
+                snapshot=snapshot,
+            ),
+        )
+
+        for turn in range(self._TURNS):
+            await self._turn(plans, children, run, snapshot, turn)
+        half = counting.events_read
+        for turn in range(self._TURNS, self._TURNS * 2):
+            await self._turn(plans, children, run, snapshot, turn)
+        full = counting.events_read
+
+        # Quadratic cost roughly quadruples here; linear cost at most doubles.
+        # The bound is on the ratio rather than an absolute count so it stays
+        # true whatever the fixture's own run-creation events happen to number.
+        assert full <= half * 2, (
+            f"doubling the appends more than doubled the events read: {half} -> {full}"
+        )
+        assert counting.reads == self._TURNS * 2 * 3 + 1, (
+            f"an append issued an unexpected number of store reads: {counting.reads}"
+        )
+
+    @classmethod
+    async def _turn(cls, plans, children, run, snapshot, turn: int) -> None:
+        """Journal one whole turn: a plan, then one child's two lifecycle facts."""
+
+        batch_id = f"batch-cost-{turn}"
+        await plans.record(
+            cls.parallel_request(run, batch_id=batch_id, turn_ordinal=turn + 1),
+            snapshot=snapshot,
+        )
+        await children.record_dispatch_intent(
+            batch_id=batch_id,
+            operation_id="op-read-a",
+        )
+        await children.record_settled(
+            batch_id=batch_id,
+            operation_id="op-read-a",
+            disposition=BatchChildDisposition.SUCCEEDED,
+        )
+
+    @staticmethod
+    async def _snapshot(controls, run) -> RunControlSnapshot:
+        return await controls.get(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+
+
 class TestBatchJournalPrivacy(BatchJournalFixtureMixin):
     """No prompt, argument, result, connector name, or host path can enter."""
 
@@ -1351,6 +1480,29 @@ class _AppendObservingStore:
 
     async def list_events_after(self, **kwargs):
         return await self._inner.list_events_after(**kwargs)
+
+
+class _ReadCountingEventStore:
+    """Counts the envelopes the journal asked the store to hand back.
+
+    Envelopes, not calls: the BUG-20 defect issued a *constant* number of reads
+    per append and made each one scan the whole run, so only the volume read
+    tells the two shapes apart.
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.reads = 0
+        self.events_read = 0
+
+    async def append_event(self, event):
+        return await self._inner.append_event(event)
+
+    async def list_events_after(self, **kwargs):
+        events = await self._inner.list_events_after(**kwargs)
+        self.reads += 1
+        self.events_read += len(events)
+        return events
 
 
 class _RaceBlindEventStore:
