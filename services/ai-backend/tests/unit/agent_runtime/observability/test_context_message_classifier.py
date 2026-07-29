@@ -1,6 +1,6 @@
 """Unit tests for message-origin classification (PRD-07, design §4.6).
 
-Four properties carry this module, and the classes below are organized by them:
+Five properties carry this module, and the classes below are organized by them:
 
 1. **The note split is exact.** The parts of one ``ToolMessage`` reassemble it
    byte-for-byte, so a peeled citation or budget note is measured rather than
@@ -17,12 +17,19 @@ Four properties carry this module, and the classes below are organized by them:
    exploding attribute, and a non-sequence request all degrade to recorded rows.
 4. **No content leaks into identifiers.** ``detail`` stays an ordinal no matter
    how large or how multi-line the message is.
+5. **A message is rendered once.** Seven rules read one message, and rendering
+   per rule would make classification a multiple of request size against §3.4's
+   p95 budget — as well as letting two reads of a library object disagree, which
+   would quietly falsify property 1.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+import json
 from typing import Any, Final
 
+from annotated_types import MaxLen
 import pytest
 from pydantic import ValidationError
 
@@ -102,6 +109,60 @@ class ExplodingToolCallsMessage:
     @property
     def tool_calls(self) -> list[dict[str, object]]:
         raise RuntimeError("tool calls are unavailable")
+
+
+class ExplodingToolCallEntry(dict[str, object]):
+    """A tool-call *entry* that passes the ``Mapping`` check and then raises.
+
+    The list of tool calls reads fine here; one element inside it misbehaves.
+    That reaches past the attribute guard into the trace-index walk, which is
+    the one loop that runs before any per-message guard is in scope.
+    """
+
+    def get(self, *args: object, **kwargs: object) -> object:
+        raise RuntimeError("tool call entry is unavailable")
+
+
+class StubMessage:
+    """A minimal message-shaped object carrying arbitrary ``content``.
+
+    LangChain's own message classes validate ``content`` into ``str`` or a block
+    list, which is exactly the validation the classifier may not assume: a
+    request reaches the model-call path through middleware and library code that
+    can put other shapes there, and §6.4 says measurement absorbs them. Building
+    those shapes needs an object the library is not policing.
+    """
+
+    def __init__(self, content: object) -> None:
+        self.content = content
+
+
+class UnrenderableContent:
+    """A content value that refuses both JSON and ``str``.
+
+    The last rung of ``_safe_json``'s ladder: not serializable, and its
+    ``__str__`` — the fallback both ``default=str`` and the outer guard reach
+    for — raises too.
+    """
+
+    def __str__(self) -> str:
+        raise RuntimeError("value has no string form")
+
+
+class UnwalkableBlocks(Sequence[object]):
+    """Content that claims to be a block list and then refuses to be walked.
+
+    Distinct from :class:`ExplodingMessage`, whose *attribute* raises and is
+    absorbed by the attribute guard. Here the attribute reads cleanly and the
+    failure happens during materialization, which is the only thing the
+    per-message fail-open guard can catch.
+    """
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, index: object) -> object:
+        raise RuntimeError("content blocks are unavailable")
 
 
 class MessageFixtureMixin:
@@ -303,6 +364,30 @@ class TestToolResultNoteSplit(MessageFixtureMixin):
         parts = self.classify(self.tool_message(content))
 
         assert self.labels(parts) == (MessageContextOrigins.TOOL_RESULT.label,)
+
+    def test_note_inside_a_serialized_dict_result_stays_with_the_result(self) -> None:
+        # The boundary the module docstring documents, pinned so it cannot move
+        # silently. ``ToolResultNote`` appends onto a *dict* result as a new
+        # top-level key rather than as a trailing string, so once the result is
+        # serialized into a ToolMessage the note sits inside the JSON body with
+        # no separator and its own characters escaped. Peeling it would mean
+        # re-deriving the producer's escaping — a pattern guess over untrusted
+        # text — so those bytes stay attributed to the result.
+        annotated = ToolResultNote.append(
+            {"rows": [1, 2]},
+            note=self.citation_note(),
+            dict_key="_citation",
+        )
+        content = json.dumps(annotated)
+
+        parts = self.classify(self.tool_message(content))
+
+        assert self.labels(parts) == (MessageContextOrigins.TOOL_RESULT.label,)
+        assert parts[0].text == content
+        assert CitationHint.NOTE_PREFIX in parts[0].text, (
+            "the note is present in the body — it is the separator that is not, "
+            "which is exactly why the split declines it"
+        )
 
 
 class TestSubagentTraceResolution(MessageFixtureMixin):
@@ -671,6 +756,43 @@ class TestUnmatchedAndMalformedShapes(MessageFixtureMixin):
         )
         assert tuple(part.detail for part in parts) == ("msg[0]", "msg[1]", "msg[2]")
 
+    def test_content_that_fails_mid_materialization_is_still_a_row(self) -> None:
+        # The per-message fail-open guard proper (§6.4). The attribute reads
+        # cleanly and the failure lands inside materialization, which is the
+        # only failure the outer guard — rather than the attribute guard —
+        # exists to absorb.
+        parts = self.classify(StubMessage(UnwalkableBlocks()))
+
+        assert self.labels(parts) == (UNDECLARED_CONTEXT_LABEL,)
+        assert parts[0].byte_count == 0
+
+    def test_malformed_tool_call_entries_are_skipped_not_trusted(self) -> None:
+        # A call with non-mapping arguments and a call with no id: neither can
+        # prove it read a trace path, so neither may lend its label to a result.
+        turn = StubMessage("")
+        turn.tool_calls = [  # type: ignore[attr-defined]
+            {"name": "read_file", "args": "not-a-mapping", "id": self.CALL_ID},
+            {"name": "read_file", "args": {"file_path": self.SUBAGENT_PATH}},
+        ]
+
+        parts = self.classify(turn, self.tool_message("body"))
+
+        assert parts[-1].label == MessageContextOrigins.TOOL_RESULT.label
+
+    def test_an_exploding_tool_call_entry_does_not_blind_the_index(self) -> None:
+        broken = StubMessage("")
+        broken.tool_calls = [ExplodingToolCallEntry()]  # type: ignore[attr-defined]
+
+        parts = self.classify(
+            broken,
+            self.read_file_call(self.SUBAGENT_PATH, call_id="call-trace"),
+            self.tool_message("# Subagent task-7", call_id="call-trace"),
+        )
+
+        assert parts[-1].label == MessageContextOrigins.SUBAGENT_TRACE.label, (
+            "one unreadable turn must not cost the whole request its trace attribution"
+        )
+
     def test_exploding_tool_calls_do_not_break_the_trace_index(self) -> None:
         parts = self.classify(
             ExplodingToolCallsMessage(),
@@ -704,6 +826,107 @@ class TestUnmatchedAndMalformedShapes(MessageFixtureMixin):
 
         assert self.labels(parts) == (MessageContextOrigins.TOOL_RESULT.label,)
         assert parts[0].byte_count > 0
+
+    def test_lone_surrogate_content_still_attributes_to_its_origin(self) -> None:
+        # ``"\ud800"`` is a legal JSON string escape, so an MCP server or a
+        # provider can hand this runtime a str holding an unpaired surrogate.
+        # A plain ``.encode("utf-8")`` raises on one, which would push an
+        # ordinary tool result into the fail-open guard and record it as a
+        # zero-byte UNDECLARED part — making the field that flags real
+        # declaration breaches (§4.4) fire on text nobody declared wrong.
+        body = f"orphan {chr(0xD800)} tail"
+
+        parts = self.classify(self.tool_message(body))
+
+        assert self.labels(parts) == (MessageContextOrigins.TOOL_RESULT.label,)
+        assert parts[0].byte_count == len(body.encode("utf-8", "surrogatepass"))
+
+
+class TestContentShapeLadder(MessageFixtureMixin):
+    """Every rung of materialization, including the ones that give up.
+
+    The classifier's contract is that *any* content shape produces a measured
+    row. These are the shapes a message can carry once middleware and library
+    code have had their turn — string blocks, scalars, unserializable objects —
+    and each must land on a number rather than on an exception.
+    """
+
+    def test_string_content_blocks_are_joined_verbatim(self) -> None:
+        parts = self.classify(self.tool_message(["alpha", "beta"]))
+
+        assert self.labels(parts) == (MessageContextOrigins.TOOL_RESULT.label,)
+        assert parts[0].text == "alphabeta"
+
+    def test_bare_base64_typed_block_is_recognised(self) -> None:
+        parts = self.classify(self.tool_message([{"type": "base64", "data": "QQ=="}]))
+
+        assert self.labels(parts) == (MessageContextOrigins.WORKSPACE_BINARY_B64.label,)
+
+    def test_non_mapping_blocks_are_rendered_rather_than_dropped(self) -> None:
+        # Built on a stub rather than a ToolMessage on purpose: LangChain
+        # coerces a scalar inside a content list to ``str``, which would hide
+        # the rung being tested. Nothing guarantees every producer on the
+        # model-call path applies that coercion first.
+        parts = self.classify(StubMessage([1, "x"]))
+
+        assert parts[0].text == "1x", (
+            "a block shape the classifier does not model still occupies context"
+        )
+
+    def test_single_mapping_content_is_one_block(self) -> None:
+        parts = self.classify(StubMessage({"type": "text", "text": "solo"}))
+
+        assert parts[0].text == "solo"
+
+    def test_scalar_content_is_rendered_as_json(self) -> None:
+        parts = self.classify(StubMessage(42))
+
+        assert parts[0].text == "42"
+
+    def test_unserializable_content_falls_back_to_its_string_form(self) -> None:
+        # Mixed-type keys defeat ``sort_keys`` — a real shape for a tool result
+        # that was deserialized loosely. The row reports the value's string
+        # form: a worse number than canonical JSON, never a failed run.
+        parts = self.classify(StubMessage({1: "a", "b": 2}))
+
+        assert parts[0].byte_count > 0
+
+    def test_content_with_no_string_form_measures_as_empty(self) -> None:
+        parts = self.classify(StubMessage(UnrenderableContent()))
+
+        assert self.labels(parts) == (UNDECLARED_CONTEXT_LABEL,)
+        assert parts[0].byte_count == 0
+
+
+class TestContentIsMaterializedOnce(MessageFixtureMixin):
+    """§3.4 — seven rules read one message; the message is rendered once.
+
+    A cost property and a correctness property in one assertion. Rendering per
+    rule would make classification a multiple of request size against a p95
+    budget of 15 ms *including* the tokenizer, and a message is a library object
+    whose ``content`` is not contractually a pure read — two renders could
+    disagree, which would break the note split's "the parts sum back to the
+    message" claim.
+    """
+
+    def test_string_content_is_read_once(self) -> None:
+        message = CountingContentMessage("a plain body")
+
+        ContextMessageClassifier.classify((message,))
+
+        assert message.reads == 1
+
+    def test_block_content_is_read_once(self) -> None:
+        message = CountingContentMessage(
+            [
+                {"type": "thinking", "thinking": "deciding"},
+                {"type": "text", "text": "answering"},
+            ]
+        )
+
+        ContextMessageClassifier.classify((message,))
+
+        assert message.reads == 1
 
 
 class TestDetailIsAnIdentifierNotContent(MessageFixtureMixin):
@@ -762,7 +985,23 @@ class TestPartTextNeverReachesALogLine(MessageFixtureMixin):
         assert "text" in SafeLogDumper.sensitive_field_names(ClassifiedMessagePart)
 
 
-class TestClassifiedMessagePartContract(MessageFixtureMixin):
+class ContractBoundsMixin:
+    """Reads a declared field bound off a contract instead of restating it."""
+
+    @staticmethod
+    def max_length_of(model: type[Any], field: str) -> int:
+        """Return the single ``max_length`` ``model.field`` declares."""
+
+        bounds = [
+            constraint.max_length
+            for constraint in model.model_fields[field].metadata
+            if isinstance(constraint, MaxLen)
+        ]
+        assert len(bounds) == 1, f"{model.__name__}.{field} declares no single bound"
+        return bounds[0]
+
+
+class TestClassifiedMessagePartContract(ContractBoundsMixin, MessageFixtureMixin):
     """The part contract cannot state a declaration it did not measure."""
 
     def test_declared_part_mirrors_its_origin(self) -> None:
@@ -835,6 +1074,20 @@ class TestClassifiedMessagePartContract(MessageFixtureMixin):
                 byte_count=0,
                 text="",
             )
+
+    def test_label_and_detail_bounds_match_the_persisted_segment(self) -> None:
+        # A part exists to become a ``ContextSegment``. The bounds are restated
+        # rather than imported so that slicing strings does not drag the token
+        # counter (and litellm behind it) into the import graph — this is the
+        # pin that keeps the two copies honest. A part that validated under a
+        # wider bound would push the failure one step downstream, into the pass
+        # that can no longer fall back to an UNDECLARED row for it.
+        assert ClassifiedMessagePart.MAX_LABEL_LENGTH == self.max_length_of(
+            ContextSegment, "label"
+        )
+        assert (
+            ClassifiedMessagePart.MAX_DETAIL_LENGTH == ContextSegment.MAX_DETAIL_LENGTH
+        )
 
 
 class TestMessageOriginInventory:
