@@ -6,19 +6,29 @@
 
 ## 1. Problem
 
-We can answer "what did this run cost" per LLM call, by purpose, by subagent, by
-connector. We cannot answer **"what is in the model's context window right now,
-and who put it there."**
+> **Correction (made during implementation).** An earlier draft of this section
+> claimed we could not answer "how full is the window". That was wrong.
+> `GET /v1/agent/conversations/{id}/context` already exists and returns
+> `ConversationContextResponse`: the model's `context_window_tokens`, the latest
+> run's input / output / cached tokens, `available_tokens`, `headroom_pct`, and a
+> `ContextBreakdown` by call, by subagent, and by compression event. Audit row U
+> below was also wrong for the same reason. The real gap is narrower than the
+> draft claimed, and is restated below.
 
-Those are different questions. Usage tracking is a scalar per call
-(`input_tokens`) attributed to a `Purpose`. Occupancy is a decomposition of that
-scalar into the segments that produced it — the system prompt fragment, the tool
-schema, the tool result, the summary — so an engineer can see that a tool
-nobody calls is charging rent on every request.
+We can already answer **how full** the window is, and how the total splits by
+call, by subagent, and by compression event. We can answer what a run cost by
+`Purpose`, subagent, and connector.
 
-Today the concrete consequence is that `publish_artifact`'s description costs
-**650 estimated tokens on every model call of every run**, and no surface in the
-system reports that number.
+What no surface can answer is **who filled it** — the decomposition of a single
+call's `input_tokens` into the segments that produced it: which system fragment,
+which tool's schema, which class of message. Every existing view bottoms out at a
+per-call scalar. Occupancy goes one level below that scalar, which is the level
+at which the number becomes actionable.
+
+The concrete consequence: `publish_artifact`'s description costs **650 estimated
+tokens on every model call of every run**, and nothing in the system reports it —
+not because the window is unmeasured, but because the measurement stops one level
+above the tool.
 
 ### 1.1 Goal
 
@@ -65,7 +75,7 @@ Every provider request is `system` + `tools[]` + `messages[]` (+
 | R   | **base64 binary file content**                                                                                                    | `capabilities/{workspace,desktop}` backends | ❌                                                                               | ~1.37× bytes, tokenizes terribly                            |
 | S   | **Anthropic thinking blocks** echoed into later calls                                                                             | `deep_agent_builder.py:699`                 | ⚠️ `reasoning_tokens` counted at emit; residency in _subsequent_ calls untracked | silent growth                                               |
 | T   | `response_format` / structured output schema                                                                                      | `model_invocation/runtime.py:1333`          | ❌                                                                               | small but real                                              |
-| U   | Context window denominator                                                                                                        | `pricing/litellm_source.py`                 | ❌ not joined per call                                                           | no "free space"                                             |
+| U   | Context window denominator                                                                                                        | `pricing/litellm_source.py`                 | ✅ already joined — `ContextWindowSummary` + `available_tokens` + `headroom_pct` | — (draft was wrong; see §1)                                 |
 
 ### 2.1 What this changes about the approach
 
@@ -469,10 +479,16 @@ report would recommend trimming the stable prefix — exactly backwards.
 
 ## 7. Read and stream API
 
-- `GET /v1/agent/runs/{run_id}/context` — per-turn series for a run, filterable
-  by `graph_scope`.
-- `GET /v1/agent/conversations/{conversation_id}/context` — latest root-scope
-  snapshot, i.e. "what is in context right now".
+Occupancy is a **sub-resource of the existing `/context` path**, not a
+replacement for it. `GET /v1/agent/conversations/{id}/context` already serves
+`ConversationContextResponse` (the window summary and headroom, §1); mounting
+occupancy at that same path would have collided with a shipped contract. The
+draft of this section proposed exactly that collision — corrected here.
+
+- `GET /v1/agent/runs/{run_id}/context/occupancy` — per-turn series for a run,
+  filterable by `graph_scope`.
+- `GET /v1/agent/conversations/{conversation_id}/context/occupancy` — latest
+  root-scope snapshot, i.e. "who is filling the window right now".
 - `context_occupancy` `RuntimeEventEnvelope` on the existing SSE stream so
   consumers update live on the established `sequence_no` contract instead of
   polling.
