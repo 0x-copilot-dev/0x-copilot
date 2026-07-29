@@ -21,6 +21,7 @@ import {
   specFromState,
   type SurfaceColumn,
   type SurfaceDiff,
+  type SurfaceFieldChange,
   type SurfaceSpec,
   type SurfaceState,
 } from "../_shared/specTypes";
@@ -31,8 +32,6 @@ const KICKER = "Board";
 export const CARD_RENDER_CAP = 200;
 
 const UNGROUPED = "Ungrouped";
-
-const NO_CHANGES: ReadonlySet<number> = new Set<number>();
 
 /** The design's `--mono` at its 9.5px rung, and the eyebrow tracking step the
  * design system folds the design's 0.11em into. Both carry a literal fallback:
@@ -53,12 +52,61 @@ const CAPS_TRACKING = "var(--tracking-eyebrow, 0.1em)";
  */
 const ACCENT_LINE = `var(--color-accent-line, ${PALETTE.lime})`;
 
+/**
+ * Three rungs the board needs that `SURFACE_PALETTE` does not name, each one
+ * step QUIETER than the palette's nearest entry.
+ *
+ * The palette resolves `border` → `--color-border-strong`, `surfaceMute` →
+ * `--color-surface-elevated`, `textLo` → `--color-text-muted`. Measured against
+ * the design those are the `--line2` / `--panel3` / `--mut` rungs, and the board
+ * is drawn one step below all three: `--line` for the lane grid and the card
+ * hairline, `--panel2` for the card ground, `--mut2` for every label on it.
+ *
+ * `--panel2` is the one worth reading twice. PRD-01's token map says
+ * `--panel2` → `--color-surface-elevated`, and that is wrong by measurement:
+ * `--color-surface-elevated` is `#1d1d23`, which is the design's `--panel3`.
+ * The card ground the design actually paints is `--panel2` = `#16161a` =
+ * `--color-surface-muted`. The rung that MEASURES right wins over the one whose
+ * name reads right.
+ *
+ * Named here rather than added to `SURFACE_PALETTE` because that file is shared
+ * by eleven renderers and this change does not own it — same reason
+ * `ACCENT_LINE` above is local. Every value is still a design-system token, so
+ * theme and accent switches reach them; none is a literal.
+ */
+const HAIRLINE = "var(--color-border)";
+const CARD_GROUND = "var(--color-surface-muted)";
+// NOT `--color-text-subtle`, which is the literal counterpart of the design's
+// `--mut2` and is what parity measures against. Matching the token NAME across
+// two different neutral ladders is not fidelity — it is a contrast regression.
+// The design draws `--mut2` on its own lighter `--panel`; on our darker ground
+// the same rung lands at 3.22:1 against `--color-surface` and 3.08:1 on the card,
+// under the 4.5:1 AA floor these 9.5px labels need. `--color-text-muted` holds
+// 6.58:1 and reads as the same quiet register to the eye.
+//
+// So four `--mut2` rows in the parity report will stay open by choice. That is
+// the honest outcome: a legible label the design did not specify beats an
+// illegible one it did.
+const LABEL_QUIET = "var(--color-text-muted)";
+
 /** A card plus its index in the ORIGINAL item list (grouping reorders cards,
  * and the change marks are keyed by that original index). */
 interface LaneCard {
   readonly item: unknown;
   readonly index: number;
 }
+
+/**
+ * The attention mark on one card. Presence in the map IS the mark; `transition`
+ * is the lane the card is moving TO, and exists only when a change names the
+ * spec's `group_by_path` — a card whose owner was edited has moved nowhere, so
+ * there is no transition to state.
+ */
+interface CardMark {
+  readonly transition: string | undefined;
+}
+
+const NO_MARKS: ReadonlyMap<number, CardMark> = new Map<number, CardMark>();
 
 /** One fact in a card's meta row. */
 interface MetaEntry {
@@ -100,8 +148,17 @@ function metaEntries(
  * The `board://` archetype — lanes grouped by `group_by_path`, cards from
  * `items_path` (title = first column, remaining columns as card fields).
  * Spec-less state falls back to the generic list.
+ *
+ * `trustedChanges` is the attention mark's ONLY input, and it is a second
+ * PARAMETER rather than a key of `state` on purpose. See the note on
+ * `cardMarks` — reading it out of `state` made the mark forgeable and honestly
+ * unreachable at the same time. The name states the caller's obligation: the
+ * type cannot enforce provenance, and nothing in the product supplies it today.
  */
-export function BoardRenderer(state: SurfaceState | unknown): ReactElement {
+export function BoardRenderer(
+  state: SurfaceState | unknown,
+  trustedChanges?: readonly SurfaceFieldChange[],
+): ReactElement {
   const spec = specFromState(state);
   const data = dataFromState(state);
   return (
@@ -114,11 +171,7 @@ export function BoardRenderer(state: SurfaceState | unknown): ReactElement {
     >
       <section style={cardStyle}>
         {spec
-          ? renderWithSpec(
-              spec,
-              data,
-              changedItemIndexes(state, spec.items_path),
-            )
+          ? renderWithSpec(spec, data, cardMarks(trustedChanges, spec))
           : renderFallback(state, data)}
       </section>
     </article>
@@ -126,48 +179,101 @@ export function BoardRenderer(state: SurfaceState | unknown): ReactElement {
 }
 
 /**
- * Which items the surface state says changed, as indexes into `items_path`.
+ * Which cards carry the attention mark, keyed by their index into `items_path`.
  *
- * The current-state view has no per-card change flag of its own, and it must
- * not grow one out of the payload: `data` is untrusted tool output and the
- * accent register means "a decision you still owe", so a tool that could set it
- * could manufacture urgency. The one trusted signal at this boundary is the
- * `SurfaceFieldChange` list, whose `field` is a dotted path into the same
- * payload — `cards.2.status` marks card 2, and a bare `cards.2` marks the whole
- * card. Everything else marks nothing: a bare `cards` (the whole list) would
- * light every lane, and a path into another branch is not about a card at all.
- * Absent beats wrong for a mark that means "look here".
+ * WHY THIS TAKES A PARAMETER AND NOT THE STATE. This function used to read the
+ * change list off the rendered `state`, and that had exactly one reachable
+ * trigger — a forged one:
  *
- * Reads defensively and never throws. With no change list riding along — the
- * shape `renderCurrent` gets today — the set is empty and every card is plain.
+ *  - `SurfaceState` is `{spec?, data}` in `@0x-copilot/api-types` and in
+ *    ai-backend's `spec_models.py`, where it is a `RuntimeContract`
+ *    (`extra="forbid"`); `SurfaceProjector.resolve()` puts the whole tool
+ *    output under `data`. No trusted producer can put a `changes` sibling in a
+ *    current-state payload, so no honest card was ever marked.
+ *  - `TcSurfaceMount` calls `pendingDiff ? renderDiff(diff) : renderCurrent(state)`,
+ *    so a real `SurfaceDiff` never reaches this render either.
+ *  - But `applySurfaceEvent` stores `{...prior, ...(envelope.state ?? payload.state
+ *    ?? payload.result)}` verbatim, and `tool_result` payloads pass no
+ *    allow-list, so EVERY key of an untrusted tool's output survives into what
+ *    `renderCurrent` is handed. A tool emitting
+ *    `state:{spec,data,changes:[{field:"cards.0"}]}` lit the accent bar on card
+ *    0 — i.e. a tool could manufacture "you owe a decision here".
+ *
+ * The mark cannot move to `BoardDiffRenderer` instead: `SurfaceDiff` is
+ * `{spec?, changes}` and carries no `data`, so the diff render has no cards to
+ * mark. Marking a card needs the items AND the change list in one call, and no
+ * caller passes both today. So the mark now waits on a trusted per-card change
+ * signal that the current-state contract does not have yet — reachable only
+ * through this parameter, which nothing in the product passes. Unreachable is
+ * the correct resting state for it; forgeable was not.
+ *
+ * The path grammar is unchanged: `cards.2.status` marks card 2, a bare
+ * `cards.2` marks the whole card, and everything else marks nothing — a bare
+ * `cards` would light every lane, and a path into another branch is not about a
+ * card at all. Absent beats wrong for a mark that means "look here".
+ *
+ * Total over its input: the parameter is typed, but a JS caller can hand it
+ * anything, so entries are narrowed the same way a payload would be.
  */
-function changedItemIndexes(
-  state: unknown,
-  itemsPath: string | undefined,
-): ReadonlySet<number> {
-  const changes = changesFromDiff(state);
-  if (changes.length === 0 || !itemsPath) {
-    return NO_CHANGES;
+function cardMarks(
+  trustedChanges: readonly SurfaceFieldChange[] | undefined,
+  spec: SurfaceSpec,
+): ReadonlyMap<number, CardMark> {
+  const itemsPath = spec.items_path;
+  if (!Array.isArray(trustedChanges) || !itemsPath) {
+    return NO_MARKS;
   }
   const prefix = `${itemsPath}.`;
-  const marked = new Set<number>();
-  for (const change of changes) {
-    if (!change.field.startsWith(prefix)) {
+  const groupPath = spec.group_by_path;
+  const marks = new Map<number, CardMark>();
+  for (const change of trustedChanges) {
+    if (change === null || typeof change !== "object") {
       continue;
     }
-    const head = change.field.slice(prefix.length).split(".")[0];
-    if (head === undefined || !/^\d+$/.test(head)) {
+    const field: unknown = (change as { field?: unknown }).field;
+    if (typeof field !== "string" || !field.startsWith(prefix)) {
       continue;
     }
-    marked.add(Number(head));
+    const rest = field.slice(prefix.length);
+    const dot = rest.indexOf(".");
+    const head = dot === -1 ? rest : rest.slice(0, dot);
+    if (!/^\d+$/.test(head)) {
+      continue;
+    }
+    const tail = dot === -1 ? "" : rest.slice(dot + 1);
+    const index = Number(head);
+    // A card can carry several changes; the transition is the one that names
+    // the lane axis, and the first such change wins so a later field edit
+    // cannot erase it.
+    const prior = marks.get(index);
+    marks.set(index, {
+      transition:
+        prior?.transition ??
+        // Truthy, not `!== undefined`, and it has to match `renderWithSpec`'s
+        // test exactly: a spec with `group_by_path: ""` groups nothing, so
+        // every card sits in "Ungrouped" and no card can move between lanes.
+        // Under `!== undefined` the empty path also matched the empty `tail` of
+        // a bare `cards.0` change, and the chip stated the whole card object as
+        // its destination — "→ {"title":"…","status":"…"}".
+        (groupPath && tail === groupPath
+          ? transitionLabel((change as { new?: unknown }).new)
+          : undefined),
+    });
   }
-  return marked;
+  return marks;
+}
+
+/** The destination lane as the chip states it, or `undefined` when the change
+ * says nothing about where the card lands. */
+function transitionLabel(value: unknown): string | undefined {
+  const label = formatValue(value);
+  return label === "" ? undefined : label;
 }
 
 function renderWithSpec(
   spec: SurfaceSpec,
   data: unknown,
-  changed: ReadonlySet<number>,
+  marks: ReadonlyMap<number, CardMark>,
 ): ReactElement {
   const title = formatValue(resolvePath(data, spec.title_path));
   const rawItems = spec.items_path
@@ -229,7 +335,9 @@ function renderWithSpec(
                 </span>
               </div>
               {cards.map(({ item, index }, cardIndex) => {
-                const isChanged = changed.has(index);
+                const mark = marks.get(index);
+                const isChanged = mark !== undefined;
+                const transition = mark?.transition;
                 const meta = metaEntries(item, fieldColumns);
                 return (
                   <div
@@ -261,7 +369,7 @@ function renderWithSpec(
                           )
                         : formatValue(resolvePath(item, spec.title_path))}
                     </div>
-                    {meta.length > 0 ? (
+                    {meta.length > 0 || transition !== undefined ? (
                       <div
                         style={cardMetaStyle}
                         data-testid={`board-lane-${laneIndex}-card-${cardIndex}-meta`}
@@ -276,6 +384,20 @@ function renderWithSpec(
                             </span>
                           </span>
                         ))}
+                        {transition === undefined ? null : (
+                          // The design's `.sfn`: the mark's colour says LOOK
+                          // HERE, this says WHERE TO. A card that moved lanes
+                          // still renders in the lane its payload puts it in —
+                          // the move has not been committed — so without this
+                          // the surface shows an accent bar and no statement of
+                          // what the pending change actually does.
+                          <span
+                            style={transitionChipStyle}
+                            data-testid={`board-lane-${laneIndex}-card-${cardIndex}-transition`}
+                          >
+                            {`→ ${transition}`}
+                          </span>
+                        )}
                       </div>
                     ) : null}
                   </div>
@@ -383,6 +505,10 @@ export function BoardDiffRenderer(diff: SurfaceDiff | unknown): ReactElement {
 export const boardAdapter: SaaSRendererAdapter<SurfaceState, SurfaceDiff> = {
   scheme: "board",
   matches: (uri: string) => uri.startsWith("board://"),
+  // One argument, deliberately. The host's `state` is untrusted tool output;
+  // forwarding it into `trustedChanges` — or writing `renderCurrent:
+  // BoardRenderer` and letting a future second host argument land there — is
+  // exactly the forgery `cardMarks` documents.
   renderCurrent: (state: SurfaceState): ReactElement => BoardRenderer(state),
   renderDiff: (diff: SurfaceDiff): ReactElement => BoardDiffRenderer(diff),
   metadata: {
@@ -405,7 +531,7 @@ const lanesStyle: CSSProperties = {
   gridAutoFlow: "column",
   gridAutoColumns: "minmax(196px, 1fr)",
   gap: "1px",
-  background: PALETTE.border,
+  background: HAIRLINE,
   minHeight: 230,
   overflowX: "auto",
   // A board scrolled to its last lane must not start scrolling the page behind
@@ -447,7 +573,7 @@ const laneHeaderStyle: CSSProperties = {
   fontSize: MONO_MICRO,
   letterSpacing: CAPS_TRACKING,
   textTransform: "uppercase",
-  color: PALETTE.textLo,
+  color: LABEL_QUIET,
   display: "flex",
   alignItems: "center",
   gap: 6,
@@ -465,7 +591,7 @@ const laneNameStyle: CSSProperties = {
 const laneCountStyle: CSSProperties = {
   marginLeft: "auto",
   flex: "none",
-  color: PALETTE.textLo,
+  color: LABEL_QUIET,
 };
 
 /**
@@ -478,9 +604,9 @@ const laneCountStyle: CSSProperties = {
  */
 function cardChromeStyle(changed: boolean): CSSProperties {
   return {
-    border: `1px solid ${changed ? ACCENT_LINE : PALETTE.border}`,
+    border: `1px solid ${changed ? ACCENT_LINE : HAIRLINE}`,
     borderRadius: 8,
-    background: PALETTE.surfaceMute,
+    background: CARD_GROUND,
     padding: "8px 9px",
     display: "flex",
     flexDirection: "column",
@@ -521,7 +647,7 @@ const cardMetaStyle: CSSProperties = {
   flexWrap: "wrap",
   fontFamily: MONO_FAMILY,
   fontSize: MONO_MICRO,
-  color: PALETTE.textLo,
+  color: LABEL_QUIET,
 };
 
 const cardMetaItemStyle: CSSProperties = {
@@ -543,8 +669,36 @@ const cardMetaValueStyle: CSSProperties = {
   overflowWrap: "anywhere",
 };
 
+/**
+ * The design's `.sfn` — the transition chip, in the ATTENTION register the
+ * marked card is already wearing. Ink at full strength because it is a
+ * statement to read, not a label; ground and hairline are the accent's soft and
+ * line rungs, so it reads as part of the mark rather than as a second state.
+ *
+ * `maxWidth`/`overflow`/`textOverflow` are not in the design and are kept: the
+ * lane track is 196px at its minimum and the chip states a value that came from
+ * the payload, so an over-long one must ellipsize inside the row instead of
+ * handing the board a horizontal scrollbar. `whiteSpace: nowrap` keeps
+ * "→ In review" one statement rather than two stacked words.
+ */
+const transitionChipStyle: CSSProperties = {
+  marginLeft: "auto",
+  color: PALETTE.textHi,
+  background: PALETTE.limeBgSoft,
+  boxShadow: `inset 0 0 0 1px ${ACCENT_LINE}`,
+  borderRadius: 4,
+  padding: "1px 5px",
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+/** The truncation line sits in the design's cap register (`.sft-cap`), whose
+ * colour is `--mut2` — the same quiet rung as every other label on this
+ * surface, and one below the palette's `textLo`. */
 const capStyle: CSSProperties = {
   fontSize: 12,
-  color: PALETTE.textLo,
+  color: LABEL_QUIET,
   letterSpacing: 0.3,
 };

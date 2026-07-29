@@ -34,11 +34,16 @@ from agent_runtime.surfaces_v2.projection import (
 class HydratedSurfaceSnapshot(SurfaceSnapshot):
     """A folded surface snapshot enriched with its resolved v1 content (B2).
 
-    ``state`` carries the v1 surface envelope's ``{spec?, data}`` — the exact
-    shape the surface renderers consume — resolved from the run's persisted
+    ``state`` carries the v1 surface envelope's ``{spec?, source?, data}`` — the
+    exact shape the surface renderers consume — resolved from the run's persisted
     events. ``None`` until a content-bearing event has landed for the surface, so
     the canvas degrades to its honest skeleton / raw fallback rather than showing
     a fabricated body.
+
+    ``state.source`` restates this snapshot's own ``connector`` / ``op`` inside
+    the state, because the client reads ONLY ``state`` as renderer input (the
+    sibling metadata fields are deliberately not turned into payload). Without
+    it a spec-less surface has no way to name the tool it could not match.
     """
 
     state: dict[str, object] | None = None

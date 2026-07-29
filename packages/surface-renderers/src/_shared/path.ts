@@ -63,8 +63,16 @@ export function formatValue(
   switch (format) {
     case "number":
     case "currency": {
-      const numeric = typeof value === "number" ? value : Number(value);
-      if (!Number.isFinite(numeric)) {
+      // The SAME test the magnitude bars use, deliberately. Splitting them made
+      // one cell contradict itself: `Number("007")` is 7, so the value rendered
+      // as "7" while `magnitudeShares` — which reads "007" as an identifier —
+      // gave it no bar. Displaying a reformatted "7" also destroys the only
+      // thing that made it recognisable as an order number.
+      //
+      // One definition of "is this a magnitude", used by what we print and by
+      // what we measure. A value that is not one renders as it arrived.
+      const numeric = numericValue(value);
+      if (numeric === null) {
         return truncate(stringify(value));
       }
       if (format === "currency") {
@@ -122,28 +130,78 @@ export function isNumericFormat(format?: SurfaceFieldFormat): boolean {
 }
 
 /**
+ * A number spelled the way a number is spelled — JSON's number grammar: an
+ * optional minus, an integer part with no leading zero, an optional fraction,
+ * an optional exponent.
+ *
+ * Linear, with no nested quantifier, so a hostile 10k-char cell costs one scan.
+ */
+const NUMBER_SPELLING =
+  /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$/;
+
+/**
  * The finite number behind a resolved cell value, or `null`.
  *
- * Deliberately stricter than `Number(value)`: booleans, empty strings, and
- * whitespace all coerce to a number in JS, and letting `""` become `0` would
- * paint a real magnitude bar for a missing cell. A magnitude channel that lies
- * about absent data is worse than no channel.
+ * Deliberately stricter than `Number(value)` in two directions.
+ *
+ * Values that only coerce by accident: booleans, empty strings and whitespace
+ * all become numbers in JS, and letting `""` become `0` would paint a real
+ * magnitude bar for a missing cell. A magnitude channel that lies about absent
+ * data is worse than no channel.
+ *
+ * Strings that are IDENTIFIERS rather than magnitudes: `Number()` reads "007"
+ * as 7, "0x1F" as 31, "0b101" as 5, and "+14155550123" as fourteen billion. An
+ * order number, a hex colour and a phone number have no size — scaling a bar to
+ * them compares quantities that do not exist, and setting them in the tabular
+ * figure register says they are meant to be read digit-column against
+ * digit-column, which is what that register means and not what they are.
+ *
+ * The line is SPELLING, not value. A string counts only when it is written the
+ * way a number is written, and JSON's grammar already draws exactly that line:
+ * it forbids a leading zero, a leading `+`, and every prefix notation, while
+ * keeping the spellings that really are magnitudes — "1000", "3.14", "-12.5",
+ * "-0" (genuinely zero) and "1e5" (genuinely scientific notation).
+ *
+ * It also excludes two lenient spellings a human might type by hand, ".5" and
+ * "12.". That is a deliberate trade, not an oversight: machine payloads do not
+ * emit them (neither `JSON.stringify` nor `Intl.NumberFormat` ever does), and
+ * the cost of a false negative here is one missing bar, where a false positive
+ * is a wrong claim about what the value IS.
  */
 export function numericValue(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;
   }
-  if (typeof value !== "string" || value.trim() === "") {
+  if (typeof value !== "string") {
     return null;
   }
-  const parsed = Number(value);
+  // Trimmed first because CSV cells carry padding (`", 42"` reaches us as
+  // `" 42"`) and that is presentation whitespace, not a different value. The
+  // grammar rejects "" and "   " on its own, so the empty cell needs no
+  // separate guard.
+  const trimmed = value.trim();
+  if (!NUMBER_SPELLING.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  // Spelling is not enough: "1e400" is a well-formed number literal that
+  // overflows to Infinity, and a bar of infinite length is not a bar.
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 /**
- * A string that carries a digit but does not parse — "1,234", "$1.2k",
- * "21,850 USDC". That is a magnitude we FAILED to read, not an empty cell, and
- * the difference decides whether a column may be scaled at all.
+ * A string that carries a digit but is not a magnitude we can read — "1,234",
+ * "$1.2k", "21,850 USDC", and equally the identifier shapes "007" or "0x1F".
+ * Either way it is not an empty cell, and the difference decides whether a
+ * column may be scaled at all.
+ *
+ * Identifiers land here rather than counting as holes on purpose. Nothing in a
+ * cell tells us whether a zero-padded string is an id or a padded quantity —
+ * "0999999" could be either — so scoring it as a hole risks leaving what is
+ * actually the column's largest value with no bar while smaller values get full
+ * ones, the same inverted ranking the separator case produces. And when the
+ * column is identifiers all the way down there is no magnitude in it to lose,
+ * so suppressing it costs nothing.
  */
 function isUnreadableNumber(value: unknown): boolean {
   return (

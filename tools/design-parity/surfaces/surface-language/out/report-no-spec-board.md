@@ -5,32 +5,31 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/surface-language/out/design-no-spec-board.json`
 - Live: `surfaces/surface-language/out/live-no-spec-board.json`
 
-**Summary:** 🔴 HIGH 20 · 🟠 MEDIUM 28 · 🟡 LOW 43 · ⚪ INFO 14
+**Summary:** 🔴 HIGH 19 · 🟠 MEDIUM 28 · 🟡 LOW 45 · ⚪ INFO 12
 
-## 🔴 HIGH (20)
+## 🔴 HIGH (19)
 
-| Element                 | Group            | Property        | Design → Live                                                                                                                                                     |
-| ----------------------- | ---------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `card`                  | Card             | backgroundColor | oklch(0.212 0.01 276) → rgb(17, 17, 20) (--panel)                                                                                                                 |
-| `card`                  | Card             | borderColor     | oklch(1 0 0 / 0.115) → rgba(255, 255, 255, 0.1) (--line2)                                                                                                         |
-| `card.header`           | Card             | backgroundColor | oklch(0.243 0.011 276) → rgba(0, 0, 0, 0) (transparent)                                                                                                           |
-| `card.header`           | Card             | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) oklch(1 0 0 / 0.115) rgb(236, 236, 241) → rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.1) rgb(236, 236, 241) |
-| `card.kicker`           | Card             | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
-| `card.kicker`           | Card             | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                                                          |
-| `card.kicker-dot`       | Card             | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
-| `card.kicker-dot`       | Card             | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                                                          |
-| `card.title`            | Card             | fontSize        | 15px → 18px (+3.0px)                                                                                                                                              |
-| `card.subtitle`         | Card             | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
-| `card.chip`             | Card             | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
-| `nospec.note`           | The honest note  | backgroundColor | oklch(0.188 0.009 276) → rgb(13, 13, 16)                                                                                                                          |
-| `nospec.note`           | The honest note  | borderColor     | rgb(212, 212, 219) rgb(212, 212, 219) oklch(1 0 0 / 0.07) rgb(212, 212, 219) → rgba(255, 255, 255, 0.1) (--line2)                                                 |
-| `nospec.note.tool-code` | The honest note  | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
-| `row.first`             | Field rows       | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) oklch(1 0 0 / 0.07) rgb(236, 236, 241) → rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.1) rgb(236, 236, 241)  |
-| `row.first.value`       | Field rows       | fontFamily      | typeface class changed (sans → mono)                                                                                                                              |
-| `row.numeric.value`     | Field rows       | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
-| `nospec.footer`         | Read-only footer | backgroundColor | oklch(0.188 0.009 276) → rgb(13, 13, 16)                                                                                                                          |
-| `nospec.footer`         | Read-only footer | borderColor     | oklch(1 0 0 / 0.115) rgb(236, 236, 241) rgb(236, 236, 241) rgb(236, 236, 241) → rgba(255, 255, 255, 0.1) (--line2)                                                |
-| `nospec.footer.copy`    | Read-only footer | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
+| Element              | Group            | Property        | Design → Live                                                                                                                                                     |
+| -------------------- | ---------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `card`               | Card             | backgroundColor | oklch(0.212 0.01 276) → rgb(17, 17, 20) (--panel)                                                                                                                 |
+| `card`               | Card             | borderColor     | oklch(1 0 0 / 0.115) → rgba(255, 255, 255, 0.1) (--line2)                                                                                                         |
+| `card.header`        | Card             | backgroundColor | oklch(0.243 0.011 276) → rgba(0, 0, 0, 0) (transparent)                                                                                                           |
+| `card.header`        | Card             | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) oklch(1 0 0 / 0.115) rgb(236, 236, 241) → rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.1) rgb(236, 236, 241) |
+| `card.kicker`        | Card             | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
+| `card.kicker`        | Card             | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                                                          |
+| `card.kicker-dot`    | Card             | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
+| `card.kicker-dot`    | Card             | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                                                          |
+| `card.title`         | Card             | fontSize        | 15px → 18px (+3.0px)                                                                                                                                              |
+| `card.subtitle`      | Card             | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
+| `card.chip`          | Card             | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
+| `nospec.note`        | The honest note  | backgroundColor | oklch(0.188 0.009 276) → rgb(13, 13, 16)                                                                                                                          |
+| `nospec.note`        | The honest note  | borderColor     | rgb(212, 212, 219) rgb(212, 212, 219) oklch(1 0 0 / 0.07) rgb(212, 212, 219) → rgba(255, 255, 255, 0.1) (--line2)                                                 |
+| `row.first`          | Field rows       | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) oklch(1 0 0 / 0.07) rgb(236, 236, 241) → rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.1) rgb(236, 236, 241)  |
+| `row.first.value`    | Field rows       | fontFamily      | typeface class changed (sans → mono)                                                                                                                              |
+| `row.numeric.value`  | Field rows       | fontFamily      | typeface class changed (mono → sans)                                                                                                                              |
+| `nospec.footer`      | Read-only footer | backgroundColor | oklch(0.188 0.009 276) → rgb(13, 13, 16)                                                                                                                          |
+| `nospec.footer`      | Read-only footer | borderColor     | oklch(1 0 0 / 0.115) rgb(236, 236, 241) rgb(236, 236, 241) rgb(236, 236, 241) → rgba(255, 255, 255, 0.1) (--line2)                                                |
+| `nospec.footer.copy` | Read-only footer | missing-in-live | present in design, ABSENT in live                                                                                                                                 |
 
 ## 🟠 MEDIUM (28)
 
@@ -65,7 +64,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `nospec.footer`     | Read-only footer | borderWidth         | 1px 0px 0px 0px → 1px                                                                                                           |
 | `nospec.footer`     | Read-only footer | borderRadius        | 0px → 10px                                                                                                                      |
 
-## 🟡 LOW (43)
+## 🟡 LOW (45)
 
 | Element                 | Group            | Property      | Design → Live                                     |
 | ----------------------- | ---------------- | ------------- | ------------------------------------------------- |
@@ -89,8 +88,10 @@ Design baseline (source of truth) vs live app, by computed style.
 | `card.title`            | Card             | overflowWrap  | normal → anywhere                                 |
 | `card.title`            | Card             | textWrap      | nowrap → wrap                                     |
 | `card.title`            | Card             | tag           | <div> → <span> (semantic/default-style change)    |
+| `nospec.note`           | The honest note  | width         | 1000px → 774px                                    |
 | `nospec.note`           | The honest note  | height        | 56.1875px → 57.1875px                             |
 | `nospec.note`           | The honest note  | borderStyle   | none none solid none → solid                      |
+| `nospec.note.tool-code` | The honest note  | overflowWrap  | normal → anywhere                                 |
 | `row.first`             | Field rows       | lineHeight    | 19.5px → normal                                   |
 | `row.first`             | Field rows       | width         | 1000px → 774px                                    |
 | `row.first`             | Field rows       | height        | 38.5px → 35px                                     |
@@ -113,11 +114,11 @@ Design baseline (source of truth) vs live app, by computed style.
 | `nospec.footer`         | Read-only footer | borderStyle   | solid none none none → solid                      |
 | `nospec.footer`         | Read-only footer | tag           | <div> → <footer> (semantic/default-style change)  |
 
-## ⚪ INFO (14)
+## ⚪ INFO (12)
 
 | Element         | Group            | Property | Design → Live                                                                                                                     |
 | --------------- | ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `card`          | Card             | text     | “Incident/no specElevated 5xx on payouts-apipagerduty · incid…” → “BoardBoardNo spec matched this tool result, so this is the p…” |
+| `card`          | Card             | text     | “Incident/no specElevated 5xx on payouts-apipagerduty · incid…” → “BoardBoardNo spec matched pagerduty.incident.read, so this i…” |
 | `card`          | Card             | width    | expected: intrinsic width follows dynamic runtime copy — 1002px → 820px                                                           |
 | `card.header`   | Card             | text     | “Incident/no specElevated 5xx on payouts-apipagerduty · incid…” → “BoardBoard”                                                    |
 | `card.header`   | Card             | width    | expected: intrinsic width follows dynamic runtime copy — 1000px → 774px                                                           |
@@ -125,8 +126,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `card.kicker`   | Card             | width    | expected: intrinsic width follows dynamic runtime copy — 866.375px → 54.2656px                                                    |
 | `card.title`    | Card             | text     | “Elevated 5xx on payouts-api” → “Board”                                                                                           |
 | `card.title`    | Card             | width    | expected: intrinsic width follows dynamic runtime copy — 866.375px → 54.2656px                                                    |
-| `nospec.note`   | The honest note  | text     | “No spec matched pagerduty.incident.read, so this is the payl…” → “No spec matched this tool result, so this is the payload as …” |
-| `nospec.note`   | The honest note  | width    | expected: intrinsic width follows dynamic runtime copy — 1000px → 774px                                                           |
 | `row.last`      | Field rows       | text     | “Html Urlhttps://…/incidents/4127” → “Html Urlhttps://example.pagerduty.com/incidents/4127”                                       |
 | `row.last`      | Field rows       | width    | expected: intrinsic width follows dynamic runtime copy — 1000px → 774px                                                           |
 | `nospec.footer` | Read-only footer | text     | “Read-only. Generic views never carry a write action. Open in…” → “Read-only. Generic views never carry a write action.”          |
