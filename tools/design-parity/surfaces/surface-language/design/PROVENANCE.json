@@ -1,0 +1,19 @@
+{
+  "surface": "surface-language",
+  "source": {
+    "tool": "DesignSync",
+    "project": {
+      "name": "Copilot",
+      "projectId": "73f810d9-7b77-4849-9087-f7f8e366c48a"
+    },
+    "page": "0xCopilot Surface Language",
+    "fetchedAt": "2026-07-29"
+  },
+  "note": "SHA-256 of the vendored copies AS COMMITTED. Prettier reformats whitespace on commit (values unchanged), so these hashes are of the repo copy, not of the DesignSync response body. Re-vendor per design-kit/REFRESH.md.",
+  "files": {
+    "surface-lang.css": "9d10c005ceada2b2147e6857892846b4576622b8b94b15f0e9a5f3d8442b453e",
+    "surface-kit.jsx": "8346570c76b32294d7d942ce557988ed5c79fab37bf85ad332af0d1e29328664",
+    "surface-specs.jsx": "7cf04ee0c331e01e3b59e3af3e8459ae66f41a883a6d1070c3902f85df99a8e4",
+    "surface-archetypes2.jsx": "71d18341163adebf6a23c8f10466647338593b573ae2b3e00a92cc20a9f22e47"
+  }
+}

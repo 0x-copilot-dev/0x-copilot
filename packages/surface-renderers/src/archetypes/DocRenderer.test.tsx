@@ -32,10 +32,12 @@ describe("docAdapter.renderCurrent", () => {
     expect(second).toHaveTextContent("Two accounts flagged for churn review.");
   });
 
-  it("renders the fallback without throwing when the spec is absent", () => {
+  it("renders the no-spec view without throwing when the spec is absent", () => {
     const state: SurfaceState = { data: { page: { title: "x" } } };
     expect(() => render(docAdapter.renderCurrent(state))).not.toThrow();
-    expect(screen.getByTestId("surface-preparing-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-no-spec-note")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-read-only-footer")).toBeInTheDocument();
+    expect(screen.queryByTestId("surface-preparing-hint")).toBeNull();
   });
 });
 

@@ -75,27 +75,36 @@ describe("recordAdapter.renderCurrent (golden: linear_get_issue)", () => {
   });
 });
 
-// AC2 — spec-less fallback.
+// AC2 — spec-less fallback (PRD-02: the no-spec view).
 describe("recordAdapter.renderCurrent (spec-less fallback)", () => {
   const dataOnly: SurfaceState = { data: LINEAR_RECORD_DATA };
 
-  it("renders the Preparing view hint and a generic field list, never blank", () => {
+  it("renders the honest note and a generic field list, never blank", () => {
     expect(() => render(recordAdapter.renderCurrent(dataOnly))).not.toThrow();
     expect(screen.getByTestId("record-renderer")).toHaveAttribute(
       "data-spec",
       "absent",
     );
-    expect(screen.getByTestId("surface-preparing-hint")).toHaveTextContent(
-      "Preparing view…",
+    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
+      "No spec matched this tool result",
     );
     expect(screen.getByTestId("surface-generic-fields")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-read-only-footer")).toBeInTheDocument();
+  });
+
+  it("never renders the in-flight 'Preparing view…' hint — nothing is in flight", () => {
+    render(recordAdapter.renderCurrent(dataOnly));
+    expect(screen.queryByTestId("surface-preparing-hint")).toBeNull();
+    expect(screen.getByTestId("record-renderer")).not.toHaveTextContent(
+      /preparing/i,
+    );
   });
 
   it("does not throw on a bare-object state with no spec key", () => {
     expect(() =>
       render(recordAdapter.renderCurrent({ issue: { title: "hi" } } as never)),
     ).not.toThrow();
-    expect(screen.getByTestId("surface-preparing-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-no-spec-note")).toBeInTheDocument();
   });
 });
 
