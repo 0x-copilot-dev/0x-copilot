@@ -3427,11 +3427,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             uri={uri}
             transport={transport}
             downloadPort={artifactDownloadPort}
-            // Flow D in one line: conversation scope grants VISIBILITY of an
-            // artifact from an earlier turn, but the authority to mutate it
-            // stays bound to the run the user is actually in. Sending the
-            // acting run is what keeps an edit causal — and therefore visible.
-            {...(session.runId !== null ? { actingRunId: session.runId } : {})}
+            // No acting run is sent. Conversation scope grants VISIBILITY of an
+            // artifact from an earlier turn; the edit itself is caused by the
+            // conversation, not by whichever run happens to be on screen. That
+            // run is normally already sealed by the time a table is visible, so
+            // naming it turned every ordinary save into a refused write.
           />
         );
       }

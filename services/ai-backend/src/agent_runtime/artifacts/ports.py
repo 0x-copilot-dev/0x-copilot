@@ -129,12 +129,22 @@ class ArtifactBlobStorePort(Protocol):
 
 @runtime_checkable
 class ArtifactRunScopeResolverPort(Protocol):
-    """Authorize a run and return its immutable tenant/conversation context."""
+    """Authorize a causal subject and return its immutable tenant context."""
 
     async def resolve_run(
         self, *, org_id: str, user_id: str, run_id: str
     ) -> ArtifactScope | None:
         """Return ``None`` for missing, foreign, or deleted run scope."""
+
+    async def resolve_conversation(
+        self, *, org_id: str, user_id: str, conversation_id: str
+    ) -> ArtifactScope | None:
+        """Return CONVERSATION-lane scope, or ``None`` if missing or foreign.
+
+        The conversation is the causal subject for user-authored mutations. It
+        has no terminal state, so the returned scope names no run and carries no
+        seal to violate.
+        """
 
 
 @runtime_checkable

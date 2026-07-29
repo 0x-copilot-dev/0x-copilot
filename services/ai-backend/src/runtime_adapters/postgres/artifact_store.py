@@ -269,13 +269,17 @@ class PostgresArtifactMetadataStore:
                         ),
                     )
                     result = ArtifactMutationResult(record=record)
-                    await self._insert_outbox(
-                        conn,
-                        artifact_event_outbox_row(
-                            command.ledger_event,
-                            artifact_id=command.artifact_id,
-                        ),
-                    )
+                    # A conversation-lane append carries no ledger event, so it
+                    # enqueues no outbox row: the only drain appends to a run
+                    # event store, and this mutation belongs to no run.
+                    if command.ledger_event is not None:
+                        await self._insert_outbox(
+                            conn,
+                            artifact_event_outbox_row(
+                                command.ledger_event,
+                                artifact_id=command.artifact_id,
+                            ),
+                        )
                     await self._insert_idempotency(
                         conn,
                         command.idempotency,

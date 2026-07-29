@@ -69,13 +69,22 @@ class ArtifactCausalLane(StrEnum):
     CONVERSATION = "conversation"  # caused by a user acting on the canvas
 ```
 
-`ArtifactRevisionRequest` gains `acting_conversation_id: str | None`, mutually
-exclusive with `acting_run_id` (model validator, not documentation).
-
 `ArtifactScope` gains `lane: ArtifactCausalLane = RUN` and relaxes `run_id` to
-`str | None` **only** when `lane is CONVERSATION`; a `RUN`-lane scope still
-requires a non-empty `run_id`, enforced by a model validator so no caller can
-construct a run-lane scope without a run.
+`str | None`. Validators make both halves unconstructable-if-wrong rather than
+merely discouraged: a `RUN`-lane scope must name a run, and a `CONVERSATION`-lane
+scope must **not** — carrying one would let a downstream reader re-derive the run
+causality the lane just denied.
+
+**No `acting_conversation_id` is added to the wire.** The first draft of this PRD
+proposed one for symmetry with `acting_run_id`; implementing it showed that to be
+wrong. The artifact record already carries its `conversation_id`, so the server
+derives the subject authoritatively. Accepting one would add a forgeable input for
+a fact already held — the opposite of the direction this change is going.
+`acting_run_id` survives unchanged for RUN-lane callers and is simply not
+consulted for user-authored revisions, which a test pins.
+
+`ArtifactAppendCommand.ledger_event` becomes optional, with a validator binding it
+to the lane: required for `RUN`, forbidden for `CONVERSATION` (see D3).
 
 ## Design
 
@@ -105,64 +114,95 @@ Net effect on the invariant: **strengthened**. Today a `USER` edit with
 with no terminal check at all — a real hole. After this change a user edit never
 targets a run ledger, so that fallback disappears.
 
-### D3. Conversation-lane events
+### D3. Conversation-lane mutations emit no run-ledger event
 
-`artifact.revised` in the CONVERSATION lane is emitted against the conversation,
-not a run. The artifact record already carries `conversation_id` (verified in the
-live store), and the canvas read path is already conversation-scoped, so the
-client observes the new revision through the surface it already polls. This is the
-**write half** of the conversation-scoping that PR #418 landed on reads.
+`RuntimeArtifactEventCommand` is documented as: _"The worker appends it to the
+existing run event store … **no second event transport exists**"_
+(`commands.py:170`). So a conversation-lane event has nowhere to go that is not a
+run ledger, and appending to a sealed run is the exact thing the guard prevents.
+
+Adding a second event transport is rejected — that "no second transport" line is a
+deliberate architectural statement, not an oversight.
+
+Therefore a CONVERSATION-lane mutation **emits no run-ledger event**, and that is
+correct rather than a gap: the run ledger records what a _run_ caused, and this was
+not caused by a run. Durability and auditability are unaffected because the record
+lives where it belongs:
+
+- the artifact repository — an immutable revision carrying `author=USER`,
+  timestamp, byte size, and content digest;
+- the audit log, which records the mutation independently of the run ledger.
+
+Nothing observable regresses, because no consumer depends on that event:
+
+- `ArtifactSurface.appendRevision` already updates from the **HTTP response**
+  (`setSelectedRevision(...)` + `data.reload()`), not from a stream event.
+- Canvas tabs already come from the conversation-canvas **endpoint**
+  (`useConversationCanvas`, `RunDestination.tsx:2238`) — a query over the artifact
+  repository, which reflects the new `current_revision` immediately.
+
+This is the write-side counterpart of the conversation-scoping PR #418 landed on
+reads: reads stopped being run-scoped, and now user writes stop being run-caused.
 
 ### D4. Typed refusal reasons
 
 `ArtifactConflictError` and `ArtifactIdempotencyConflictError` are distinct
 server-side but both collapse to a bare 409 (`artifacts.py:104`), and the client
-assumes staleness. Add a machine-readable reason code to the error body:
+assumes staleness. Every `ArtifactError` already carries a stable
+`ArtifactErrorCode`; the HTTP layer was dropping it. Send it in the body:
 
 ```
-REVISION_STALE        parent_revision/expected_digest no longer current
-IDEMPOTENCY_REPLAY    same key, different request digest
-RUN_SEALED            claimed run is terminal (RUN lane only)
+artifact_conflict              parent_revision/expected_digest no longer current
+artifact_idempotency_conflict  same key, different request digest
+artifact_sealed_run            claimed run is terminal (RUN lane only)
 ```
 
-`ArtifactSurface` surfaces the actual reason. The current UI states something
-demonstrably false; that is worse than an opaque error.
+`TransportHttpError` already exposes a `code` getter over the structured detail,
+so the client side is wiring, not new machinery. `ArtifactSurface` reports a lost
+update only when the server actually said staleness; anything else becomes a plain
+failure. Stating something demonstrably false is worse than an opaque error.
 
 ## Implementation plan
 
-1. `ledger_models.py` / `contracts.py` — `ArtifactCausalLane`; `ArtifactScope.lane`
-   with its validator; `ArtifactRevisionRequest.acting_conversation_id` with an
-   exclusivity validator.
-2. `artifact_repository.py` — `resolve_conversation(org_id, user_id, conversation_id)`
-   returning a CONVERSATION-lane `ArtifactScope`.
-3. `service.py` — derive lane from provenance; route scope resolution; narrow the
-   terminal guard to the RUN lane; emit the conversation-lane event.
-4. `runtime_api/http/artifacts.py` — accept `acting_conversation_id` in the
-   multipart metadata; typed error body.
-5. `packages/api-types` + `chat-transport` — contract + zod (`.strict()`, so the
-   field must be declared) + `WebTransport`/`IpcTransport` form fields.
-6. `ArtifactSurface.tsx` — send `actingConversationId` for user edits; stop sending
-   `actingRunId`; render the typed reason.
-7. `RunDestination.tsx:3434` — pass the conversation identity.
+1. `ledger_models.py` — `ArtifactCausalLane`.
+2. `contracts.py` — `ArtifactScope.lane` + `run_id` relaxation, both bound by a
+   validator; `ArtifactAppendCommand.ledger_event` optional, bound to the lane.
+3. `ports.py` / `artifact_repository.py` — `resolve_conversation(...)` returning a
+   CONVERSATION-lane scope, proving ownership with the same tenant-and-owner
+   filtered lookup the conversation surface uses.
+4. `errors.py` — `ArtifactSealedRunError` + `SEALED_RUN` code.
+5. `service.py` — `_require_revision_scope` derives the lane from provenance,
+   routes scope resolution, narrows the terminal guard to the RUN lane, and omits
+   the ledger event in the conversation lane.
+6. Store adapters (file / in-memory / postgres) — enqueue no outbox row when the
+   command carries no ledger event.
+7. `runtime_api/http/artifacts.py` — map `ArtifactSealedRunError` to 409; carry
+   `code` in the error body.
+8. `ArtifactSurface.tsx` — stop claiming a run; report a lost update only on
+   `artifact_conflict`.
+9. `RunDestination.tsx` — stop passing `actingRunId`.
 
 ## Test plan
 
-- User edit while the viewed run is `completed` → **201**, revision 2 appended.
+- User edit while **every** run is terminal → succeeds, revision 2 appended.
   (Direct regression test for the live repro.)
-- User edit while a run is live → still CONVERSATION lane; does not enter the run ledger.
-- Model-authored revision claiming a terminal run → still **409 `RUN_SEALED`**.
-- A client attempting `acting_conversation_id` on a model-authored path cannot
-  change the lane (lane derived from provenance, asserted directly).
-- Both `acting_run_id` and `acting_conversation_id` set → 422.
-- `RUN`-lane `ArtifactScope` with `run_id=None` is unconstructable.
-- Stale parent → `REVISION_STALE`, not `RUN_SEALED`.
-- Seal invariant: no conversation-lane event is appended to any run ledger.
+- User edit claims no run and emits no ledger event; scope is CONVERSATION lane.
+- Supplying `acting_run_id` on a user edit does not drag it back into a run.
+- Identical request, different server-held author → different lane (the lane is
+  not client-controllable).
+- Model-authored revision claiming a terminal run → `ArtifactSealedRunError`,
+  refused before any blob is written.
+- A sealed run is not reported as a stale revision — the error type and code are
+  distinct from `ArtifactConflictError`.
+- Foreign acting run → not found; claims are verified, not trusted.
+- `RUN`-lane `ArtifactScope` without a run, and `CONVERSATION`-lane with one, are
+  both unconstructable.
 
 ## Definition of done
 
 - [ ] Editing a cell and saving succeeds on a completed run — the live repro passes.
 - [ ] The "A newer revision exists" message appears only when a newer revision
-      actually exists; the seal refusal reports `RUN_SEALED`.
+      actually exists; the seal refusal reports `artifact_sealed_run`.
 - [ ] Model-authored writes to a sealed run remain refused.
 - [ ] Lane is provably not client-controllable.
 - [ ] `ai-backend` unit suite green; `chat-surface`, `chat-transport`, `api-types`

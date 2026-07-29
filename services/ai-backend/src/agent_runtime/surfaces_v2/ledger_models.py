@@ -240,6 +240,31 @@ class ArtifactAuthor(StrEnum):
     IMPORT = "import"
 
 
+class ArtifactCausalLane(StrEnum):
+    """What caused an artifact mutation, and therefore what may seal it.
+
+    Authorship and causality are independent axes. ``ArtifactAuthor`` says *who*
+    wrote a revision; this says *what activity it belongs to*, which decides
+    whether a run's terminal event is entitled to seal it.
+
+    ``RUN`` — caused by agent activity inside a live run. The run's terminal
+    event seals it, because ``RunTerminationCoordinator`` promises "everything
+    this run caused is already in the ledger".
+
+    ``CONVERSATION`` — caused by a user acting on the conversation's canvas,
+    which is not part of any run's causal story. A conversation never seals, so
+    this lane has no terminal state to violate. It deliberately produces no
+    run-ledger event; the durable record is the immutable artifact revision.
+
+    The lane is always derived server-side from authorship. It is never
+    accepted from a caller, so a client cannot route a model-authored write
+    into the unsealed lane.
+    """
+
+    RUN = "run"
+    CONVERSATION = "conversation"
+
+
 class ArtifactPresentationPreference(StrEnum):
     AUTO = "auto"
     CANVAS = "canvas"
