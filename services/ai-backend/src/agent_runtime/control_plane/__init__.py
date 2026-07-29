@@ -32,6 +32,14 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureModeSet,
     feature_mode_policy,
 )
+from agent_runtime.control_plane.parallel_admission import (
+    ParallelAdmissionBounds,
+    ParallelAdmissionGrant,
+    ParallelAdmissionMessages,
+    ParallelAdmissionPort,
+    ParallelAdmissionResolver,
+    ToolAdmissionRequest,
+)
 from agent_runtime.control_plane.model_reliability import (
     ModelReliabilityControl,
     ModelReliabilityControlSnapshot,
@@ -122,6 +130,12 @@ __all__ = [
     "RunControlBinding",
     "RunControlContext",
     "RunSerialAdmission",
+    "ParallelAdmissionBounds",
+    "ParallelAdmissionGrant",
+    "ParallelAdmissionMessages",
+    "ParallelAdmissionPort",
+    "ParallelAdmissionResolver",
+    "ToolAdmissionRequest",
     "RuntimeToolControlOutcome",
     "RuntimeToolControlTerminalRecord",
     "RuntimeToolLifecycleReducer",
