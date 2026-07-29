@@ -86,20 +86,57 @@ class BatchJournalLimits:
 
     MAX_OPERATIONS = 100
     MAX_SEGMENTS = 100
+    MAX_OPERATION_ID_LENGTH = 255
     MAX_TRANSPORT_ID_LENGTH = 160
     EVENT_ID_PREFIX = "operation_batch"
     STABLE_ID_PREFIX = "batch-plan"
+    CHILD_STABLE_ID_PREFIX = "batch-child"
 
 
 class BatchJournalRecordKind(StrEnum):
     """Closed F6 journal vocabulary.
 
-    One member today.  The union is discriminated so lane F6.3 can append a
-    child-transition member without touching the plan record's shape or its
-    stable identity.
+    The union is discriminated, so the child-transition member below was added
+    without touching the plan record's shape or its stable identity — exactly
+    the extension point F6.2 left open.
     """
 
     PLAN_BOUND = "plan_bound"
+    CHILD_TRANSITION = "child_transition"
+
+
+class BatchChildPhase(StrEnum):
+    """The two durable moments in one child's life.
+
+    There are exactly two because exactly two are load-bearing for restart.
+    ``DISPATCH_INTENT`` is appended **before** the child body is awaited and
+    ``SETTLED`` after it returns, which is what makes the *absence* of an intent
+    record a proof rather than a guess: a child whose intent append had not
+    completed cannot have been dispatched, because the dispatching coroutine was
+    still suspended on that append.
+
+    Nothing is recorded for a child that was refused — by the gate, the permit
+    table, a stopped batch, or cancellation — because a refusal means the body
+    was never awaited, which is the same evidence as no record at all.
+    """
+
+    DISPATCH_INTENT = "dispatch_intent"
+    SETTLED = "settled"
+
+
+class BatchChildDisposition(StrEnum):
+    """What a settled child's outcome is durably known to be.
+
+    ``INDETERMINATE`` is a first-class member, not an error case: a child that
+    was cancelled or drained past has an outcome nobody can determine, and the
+    journal has to be able to say so.  It is deliberately *not* the absence of a
+    record — absence already means the same thing, and the positive record is
+    what lets an operator see that the system knew it did not know.
+    """
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    INDETERMINATE = "indeterminate"
 
 
 class PlannedOperation(RuntimeContract):
@@ -344,8 +381,78 @@ class BatchPlanBoundRecord(_BatchJournalRecordBase):
         )
 
 
+class BatchChildTransitionRecord(_BatchJournalRecordBase):
+    """One durable fact about one planned child, keyed by its phase.
+
+    This record exists for a single reason: after a crash, "never started" and
+    "started and we lost the answer" are different answers with opposite safety
+    consequences, and nothing else in the run can tell them apart.  The plan
+    record proves what *was ordered*; only this proves what *was begun*.
+
+    The shape is the smallest one that carries that distinction.  There is no
+    attempt counter, no capability reference, no timing, and no result: the
+    resolved policy already lives on the plan record this transition refers to,
+    so restating it here would create a second place for the same fact to be
+    wrong.  ``operation_id`` is bounded exactly as
+    :class:`~agent_runtime.capabilities.concurrency.contracts.BatchOperation`
+    bounds it, so a transition is never leakier than the plan that named it.
+
+    ``record_id`` is a digest over the identity triple rather than a joined
+    string.  ``batch_id`` and ``operation_id`` may both contain ``:``, so
+    concatenation could let two different children collide on one identity — and
+    a collision here would silently merge two children's evidence, which is the
+    one failure this record cannot be allowed to have.
+    """
+
+    record_kind: Literal[BatchJournalRecordKind.CHILD_TRANSITION] = (
+        BatchJournalRecordKind.CHILD_TRANSITION
+    )
+    batch_id: str = Field(pattern=BatchJournalPatterns.IDENTIFIER)
+    operation_id: str = Field(
+        min_length=1,
+        max_length=BatchJournalLimits.MAX_OPERATION_ID_LENGTH,
+    )
+    phase: BatchChildPhase
+    disposition: BatchChildDisposition | None = None
+
+    @classmethod
+    def stable_record_id(
+        cls,
+        *,
+        batch_id: str,
+        operation_id: str,
+        phase: BatchChildPhase,
+    ) -> str:
+        """Return the one record ID this child-phase may ever occupy."""
+
+        identity = canonical_json_sha256(
+            {
+                "batch_id": batch_id,
+                "operation_id": operation_id,
+                "phase": phase.value,
+            }
+        )
+        return f"{BatchJournalLimits.CHILD_STABLE_ID_PREFIX}:{identity}"
+
+    @model_validator(mode="after")
+    def _identity_and_phase_agree(self) -> Self:
+        expected = self.stable_record_id(
+            batch_id=self.batch_id,
+            operation_id=self.operation_id,
+            phase=self.phase,
+        )
+        if self.record_id != expected:
+            raise ValueError("a child transition must use its stable record id")
+        settled = self.phase is BatchChildPhase.SETTLED
+        if settled and self.disposition is None:
+            raise ValueError("a settled child transition requires a disposition")
+        if not settled and self.disposition is not None:
+            raise ValueError("only a settled child transition carries a disposition")
+        return self
+
+
 BatchJournalRecord: TypeAlias = Annotated[
-    BatchPlanBoundRecord,
+    BatchPlanBoundRecord | BatchChildTransitionRecord,
     Field(discriminator="record_kind"),
 ]
 BATCH_JOURNAL_RECORD_ADAPTER = TypeAdapter(BatchJournalRecord)
@@ -410,6 +517,26 @@ class BatchJournalWrite(RuntimeContract):
     record: BatchJournalRecord
 
 
+class BatchChildTransitionWrite(RuntimeContract):
+    """Verified transport facts needed for one canonical child-transition append.
+
+    Narrower than :class:`BatchJournalWrite` on purpose: ``record`` is the
+    concrete transition type rather than the union, so a plan record cannot be
+    handed to the transition path by mistake.
+    """
+
+    org_id: str = Field(
+        min_length=1,
+        max_length=BatchJournalLimits.MAX_TRANSPORT_ID_LENGTH,
+    )
+    trace_id: str = Field(
+        min_length=1,
+        max_length=BatchJournalLimits.MAX_TRANSPORT_ID_LENGTH,
+    )
+    subject_fingerprint: str = Field(pattern=BatchJournalPatterns.DIGEST)
+    record: BatchChildTransitionRecord
+
+
 class SequencedBatchJournalRecord(RuntimeContract):
     """One F6 fact plus its canonical per-run event sequence."""
 
@@ -470,13 +597,40 @@ class DurableBatchPlan(RuntimeContract):
         return self.record.rebuild_policies().get(operation_id)
 
 
-class BatchRecoveryView(RuntimeContract):
-    """Every durable batch decision for one run, in canonical journal order.
+class DurableChildTransition(RuntimeContract):
+    """A child-lifecycle fact the journal has already accepted."""
 
-    Restart recovery reads this and nothing else.  It answers "which batches had
-    a durable plan" — exactly the set whose ordering survived the crash.
-    Deciding which children may then be resumed is lane F6.6's; this view is the
-    honest input to that decision, and it never claims a child started.
+    sequence_no: PositiveInt
+    record: BatchChildTransitionRecord
+
+    @property
+    def batch_id(self) -> str:
+        """Return the batch this child belongs to."""
+
+        return self.record.batch_id
+
+    @property
+    def operation_id(self) -> str:
+        """Return the child this fact is about."""
+
+        return self.record.operation_id
+
+    @property
+    def phase(self) -> BatchChildPhase:
+        """Return which durable moment this fact records."""
+
+        return self.record.phase
+
+
+class BatchRecoveryView(RuntimeContract):
+    """Every durable batch fact for one run, in canonical journal order.
+
+    Restart recovery reads this and nothing else.  It answers two questions and
+    refuses to answer a third: which batches had a durable plan, and which of
+    their children have durable lifecycle evidence.  It does not say what should
+    happen next — that is
+    :class:`~agent_runtime.capabilities.concurrency.batch_recovery.BatchRestartPlanner`'s
+    job — and it never infers a child's fate from the absence of a record.
     """
 
     run_id: str = Field(pattern=BatchJournalPatterns.IDENTIFIER)
@@ -493,6 +647,16 @@ class BatchRecoveryView(RuntimeContract):
             if isinstance(item.record, BatchPlanBoundRecord)
         )
 
+    @property
+    def transitions(self) -> tuple[DurableChildTransition, ...]:
+        """Return every durable child-lifecycle fact in journal order."""
+
+        return tuple(
+            DurableChildTransition(sequence_no=item.sequence_no, record=item.record)
+            for item in self.records
+            if isinstance(item.record, BatchChildTransitionRecord)
+        )
+
     def plan_for(self, batch_id: str) -> DurableBatchPlan | None:
         """Return the durable plan for one batch, if the run recorded it."""
 
@@ -501,19 +665,32 @@ class BatchRecoveryView(RuntimeContract):
             None,
         )
 
+    def transitions_for(self, batch_id: str) -> tuple[DurableChildTransition, ...]:
+        """Return one batch's durable child facts, in journal order."""
+
+        return tuple(
+            transition
+            for transition in self.transitions
+            if transition.batch_id == batch_id
+        )
+
 
 @runtime_checkable
 class BatchPlanStorePort(Protocol):
     """Append-only F6 fold over the canonical run event stream.
 
-    ``append_child_transition`` from PRD §9.1 is intentionally absent: child
-    lifecycle belongs to the execution coordinator (F6.3) and to cancellation
-    and restart semantics (F6.6).  This lane owns only the pre-dispatch half,
-    and a protocol that advertised an unimplemented method would be a lie a
-    later lane has to discover at runtime.
+    This is the complete PRD §9.1 port.  ``append_child_transition`` was left
+    unimplemented by F6.2 because nothing consumed it yet; F6.6 consumes it, so
+    it is here now — on the same store, in the same event family, with the same
+    stable-identity idempotency.  There is still exactly one ledger.
     """
 
     async def put_plan(self, write: BatchJournalWrite) -> DurableBatchPlan: ...
+
+    async def append_child_transition(
+        self,
+        write: BatchChildTransitionWrite,
+    ) -> DurableChildTransition: ...
 
     async def load_recovery_view(
         self,
@@ -681,6 +858,10 @@ class BatchPlanRecorder:
 
 __all__ = (
     "BATCH_JOURNAL_RECORD_ADAPTER",
+    "BatchChildDisposition",
+    "BatchChildPhase",
+    "BatchChildTransitionRecord",
+    "BatchChildTransitionWrite",
     "BatchJournalConflict",
     "BatchJournalCorruption",
     "BatchJournalError",
@@ -697,6 +878,7 @@ __all__ = (
     "BatchPlanStorePort",
     "BatchRecoveryView",
     "DurableBatchPlan",
+    "DurableChildTransition",
     "PlannedOperation",
     "SequencedBatchJournalRecord",
     "validate_batch_journal_record",
