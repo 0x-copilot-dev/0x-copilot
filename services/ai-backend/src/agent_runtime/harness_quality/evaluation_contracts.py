@@ -161,6 +161,12 @@ class TrajectoryStep(RuntimeContract):
     invocation_input_tokens: Annotated[int, Field(ge=0)] = 0
     invocation_output_tokens: Annotated[int, Field(ge=0)] = 0
     invocation_cost_microusd: Annotated[int, Field(ge=0)] = 0
+    discovery_phase: str | None = Field(default=None, max_length=80)
+    discovery_outcome: str | None = Field(default=None, max_length=80)
+    discovery_candidate_count: Annotated[int, Field(ge=0)] = 0
+    discovery_recall_rank: Annotated[int, Field(ge=0)] = 0
+    discovery_result_tokens: Annotated[int, Field(ge=0)] = 0
+    discovery_model_turns: Annotated[int, Field(ge=0)] = 0
     payload_digest: Sha256
 
 
@@ -1014,11 +1020,11 @@ def _digest_json_safe(values: object) -> str:
 
 
 def _without_empty_task_policy_projection(value: object) -> object:
-    """Preserve legacy F1 digests while binding populated F4/F2 projections.
+    """Preserve legacy F1 digests while binding populated F4/F2/F3 projections.
 
-    Safe controller/prompt fields were appended after F1 manifests and golden
-    traces were immutable. Omitting absent/zero fields is wire compatible with
-    those records; populated fields remain digest-bound.
+    Safe controller/prompt/discovery fields were appended after F1 manifests and
+    golden traces were immutable. Omitting absent/zero fields is wire compatible
+    with those records; populated fields remain digest-bound.
     """
 
     if isinstance(value, list):
@@ -1055,6 +1061,12 @@ def _without_empty_task_policy_projection(value: object) -> object:
         "invocation_input_tokens",
         "invocation_output_tokens",
         "invocation_cost_microusd",
+        "discovery_phase",
+        "discovery_outcome",
+        "discovery_candidate_count",
+        "discovery_recall_rank",
+        "discovery_result_tokens",
+        "discovery_model_turns",
     }
     return {
         key: _without_empty_task_policy_projection(item)

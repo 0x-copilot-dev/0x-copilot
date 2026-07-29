@@ -110,6 +110,9 @@ def test_operational_corpus_covers_every_required_family_and_scenario() -> None:
         "task_policy_approval_resume",
         "task_policy_shadow_enforce_comparison",
         "prompt_cache_prefix_reuse",
+        "capability_discovery_selection_recall",
+        "capability_discovery_unauthorized_probe",
+        "capability_discovery_end_to_end",
     )
     entries = operational_corpus()
     assert tuple(entry.family for entry in entries) == OPERATIONAL_TASK_FAMILIES
@@ -158,9 +161,10 @@ def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
         "task_policy_trajectory",
         "prompt_cache_trajectory",
         "model_invocation_trajectory",
+        "capability_discovery_trajectory",
     )
     assert all(result.hard_gate for result in first[:3])
-    assert all(result.hard_gate is False for result in first[-3:])
+    assert all(result.hard_gate is False for result in first[-4:])
 
 
 def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:
