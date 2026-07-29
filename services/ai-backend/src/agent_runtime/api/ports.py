@@ -31,6 +31,8 @@ from agent_runtime.persistence.records import (
     RetentionPolicyRecord,
     RetentionScope,
     RetentionSweepOutcome,
+    RuntimeContextGraphScope,
+    RuntimeContextOccupancyRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     UsageAttributionEdge,
@@ -122,7 +124,60 @@ class UsageAttributionEdgeStorePort(Protocol):
 
 
 @runtime_checkable
-class PersistencePort(UsageAttributionEdgeStorePort, Protocol):
+class ContextOccupancyStorePort(Protocol):
+    """Durable per-model-call context-occupancy snapshots.
+
+    Kept a separate protocol for the same reason the occupancy table is kept
+    off ``runtime_model_call_usage``: this is an observation lane, not the
+    money tracker, and nothing here may ever write a usage row or extend
+    ``Purpose`` (design §6.1).
+
+    Both methods are **read/append only**. An occupancy measurement describes a
+    request that has already been sent, so there is no correcting write — which
+    is why the append is idempotent rather than an upsert, and why no update or
+    delete method exists on this surface. Rows leave only with their parent run
+    or conversation, through the same cascade that erases events and usage; the
+    ledger introduces no retention class of its own (§5).
+    """
+
+    async def append_context_occupancy(
+        self,
+        record: RuntimeContextOccupancyRecord,
+    ) -> bool:
+        """Append one snapshot; return ``True`` only when newly persisted.
+
+        Idempotent on ``(model_call_id, attempt_ordinal)`` — the natural key of
+        one measured attempt (§6.3). A retry of the *write* returns ``False``
+        and leaves the stored row untouched, while a retry of the *model call*
+        carries a higher ``attempt_ordinal`` and is a distinct row.
+
+        Callers are on the model-call path, where measurement must never take a
+        run down (§6.4): treat every failure here as a dropped snapshot.
+        """
+
+    async def list_context_occupancy(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        graph_scope: RuntimeContextGraphScope | None = None,
+    ) -> Sequence[RuntimeContextOccupancyRecord]:
+        """Return one run's snapshots oldest-first, optionally one scope only.
+
+        Ordered by ``created_at`` so the result reads as the per-turn series the
+        run cockpit consumes. ``graph_scope=None`` returns every scope, and the
+        caller must then keep them apart: root and subagent rows describe
+        different windows and summing across them reports utilization that no
+        model ever saw (§6.2).
+        """
+
+
+@runtime_checkable
+class PersistencePort(
+    UsageAttributionEdgeStorePort,
+    ContextOccupancyStorePort,
+    Protocol,
+):
     """Conversation, message, run, approval, and audit persistence boundary."""
 
     async def create_conversation(
