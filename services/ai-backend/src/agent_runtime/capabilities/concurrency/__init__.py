@@ -89,6 +89,11 @@ from agent_runtime.capabilities.concurrency.batch_recovery import (
     ChildRestartEvidence,
     RunRestartPlan,
 )
+from agent_runtime.capabilities.concurrency.batch_run_recovery import (
+    BatchRecoveryViewPort,
+    BatchRunRecovery,
+    withheld_operation_ids,
+)
 from agent_runtime.capabilities.concurrency.child_execution import (
     BatchChildDispatch,
     BatchChildDispatchPort,
@@ -232,9 +237,11 @@ __all__ = (
     "BatchPlanStorePort",
     "BatchPlanner",
     "BatchRecoveryView",
+    "BatchRecoveryViewPort",
     "BatchRestartPlan",
     "BatchRestartPlanner",
     "BatchRunBinding",
+    "BatchRunRecovery",
     "BatchSegment",
     "BatchSegmentMode",
     "BatchSegmentReason",
@@ -307,4 +314,5 @@ __all__ = (
     "SequencedBatchJournalRecord",
     "SideEffectKind",
     "validate_batch_journal_record",
+    "withheld_operation_ids",
 )

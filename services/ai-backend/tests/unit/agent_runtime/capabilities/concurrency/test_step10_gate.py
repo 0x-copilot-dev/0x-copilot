@@ -26,8 +26,9 @@ What was missing, and what this file establishes:
   actually carries the criterion in production, and nothing asserted it.
 - **Sibling survival through the real graph**, rather than against a coordinator
   constructed in a fixture.
-- **Cancellation through the real graph**, which is the only F6.6 property the
-  wired path can currently exercise at all.
+- **Cancellation through the real graph** when it arrives as a task
+  cancellation rather than as the queued cancel command — the case in which no
+  coordinator route runs, and the turn must still invent nothing.
 - **Run-wide width when two execution scopes are live**, the open question W3
   recorded and no test answers.
 
@@ -449,12 +450,20 @@ class TestChildSuccessesSurviveSiblingFailureThroughTheGraph:
 class TestCancellationThroughTheWiredPathInventsNothing:
     """Criterion: cancel never invents rollback or success.
 
-    F6.6 proved this of ``BatchCancellationReport``. The wired path never builds
-    one — the composition root wires no cancel route — so what production
-    actually does on cancel is propagate ``CancelledError`` through the graph.
-    What this asserts is the part of the criterion the wired path *can* carry:
-    a cancelled turn produces no tool result for work that did not finish, so
-    nothing downstream can read a success that never happened.
+    This covers the case where cancellation arrives as a *task* cancellation
+    rather than as the queued cancel command — worker shutdown, a timeout, a
+    host tearing the loop down — and no coordinator route runs at all. What
+    production does then is propagate ``CancelledError`` through the graph, and
+    what this asserts is that doing so still invents nothing: a cancelled turn
+    produces no tool result for work that did not finish, so nothing downstream
+    can read a success that never happened.
+
+    The queued-command path, where W4's wiring reaches
+    ``BatchExecutionCoordinator.cancel`` and *records* the indeterminate work,
+    is proven in ``tests/unit/runtime_worker/test_batch_cancel_restart_wiring.py``
+    through :class:`RuntimeCancelHandler`. The two are complementary: this one
+    says an unrecorded cancellation still lies about nothing, that one says the
+    recorded cancellation happens where a run is actually cancelled.
     """
 
     async def test_a_cancelled_turn_yields_no_result_for_unfinished_work(
@@ -497,19 +506,29 @@ class TestCancellationThroughTheWiredPathInventsNothing:
         )
 
 
-class TestRestartAndCancelRecoveryAreNotOnTheWiredPath:
-    """The gap this gate found, pinned so it cannot close or widen silently.
+class TestRestartAndCancelRecoveryAreOnTheWiredPath:
+    """The gap this gate found, now closed — and pinned open in that direction.
 
-    F6.6 built ``BatchExecutionCoordinator.cancel`` and ``BatchRestartPlanner``
-    and mutation-checked them. Neither is reachable from any composition root:
-    nothing outside ``capabilities/concurrency/`` imports or calls them, so the
-    Step 10 work items "on cancel … mark uncertain work ``in_flight``/
+    These two tests were written as *negative* controls. F6.6 built
+    ``BatchExecutionCoordinator.cancel`` and ``BatchRestartPlanner`` and
+    mutation-checked them, and neither was reachable from any composition root,
+    so the Step 10 work items "on cancel … mark uncertain work ``in_flight``/
     ``indeterminate``" and "on restart, resume only never-started safe reads"
-    have no production route.
+    had no production route. Each test asserted that no source file outside
+    ``capabilities/concurrency/`` mentioned the machinery, and each was designed
+    to fail the moment somebody wired it.
 
-    This is a negative control in the same spirit as SMELL-02's: it fails the
-    moment somebody wires either one, which is exactly when the wired-path
-    proof of the criterion becomes both possible and required.
+    W4 wired it, so their premise is gone and they are **inverted rather than
+    deleted**: the same scan, the same file set, the opposite expectation. A
+    lane that later unwires either route fails here exactly as loudly as this
+    lane failed while it was still unwired, which is the property the original
+    controls were protecting and the reason they are still worth their keep.
+
+    The behavioural proofs live in
+    ``tests/unit/runtime_worker/test_batch_cancel_restart_wiring.py``, which
+    enters through :class:`RuntimeCancelHandler` and ``activate_batch_admission``
+    rather than through the package. These stay reachability checks: they answer
+    "is there a route", not "does the route do the right thing".
     """
 
     @staticmethod
@@ -550,30 +569,47 @@ class TestRestartAndCancelRecoveryAreNotOnTheWiredPath:
         ]
         assert wired, "the coordinator is not referenced outside the package at all"
 
-    def test_no_composition_root_references_the_restart_planner(self) -> None:
-        offenders = [
+    def test_a_composition_root_reaches_the_restart_planner(self) -> None:
+        """Inverted from ``test_no_composition_root_references_the_restart_planner``.
+
+        The worker's composer builds the recovery service and both run handlers
+        adopt its verdict, so the planner is reachable from a claimed run.
+        """
+
+        reached = [
             path
             for path, text in self._source_outside_the_package().items()
-            if "BatchRestartPlanner" in text or "batch_recovery" in text
+            if "batch_run_recovery" in text or "BatchRunRecovery" in text
         ]
 
-        assert offenders == [], (
-            "F6 restart recovery is now referenced outside the concurrency "
-            f"package ({offenders}) — the Step 10 restart criterion can and "
-            "must now be proven through the wired path"
+        assert reached, (
+            "no composition root reaches F6 restart recovery any more — the "
+            "Step 10 restart criterion has lost its production route, and the "
+            "wired-path proofs in test_batch_cancel_restart_wiring.py are now "
+            "testing something production does not do"
         )
 
-    def test_no_composition_root_calls_the_batch_cancellation_route(self) -> None:
-        offenders = [
-            path
-            for path, text in self._source_outside_the_package().items()
-            if "BatchCancellationReport" in text or "BatchCancellationReason" in text
-        ]
+    def test_a_composition_root_reaches_the_batch_cancellation_route(self) -> None:
+        """Inverted from ``test_no_composition_root_calls_the_batch_cancellation_route``.
 
-        assert offenders == [], (
-            "F6 batch cancellation is now referenced outside the concurrency "
-            f"package ({offenders}) — the Step 10 cancel criterion can and "
-            "must now be proven through the wired path"
+        Scanned by *route* rather than by contract name, because the wiring
+        deliberately does not name ``BatchCancellationReport`` outside the
+        package: the cancel handler calls ``acancel`` and lets the report stay
+        an F6-internal contract. Asserting on the type name would therefore have
+        gone on passing while the route existed, which is the failure mode an
+        inverted control has to avoid.
+        """
+
+        sources = self._source_outside_the_package()
+        reached = [path for path, text in sources.items() if ".acancel(" in text]
+
+        assert reached, (
+            "no composition root calls the F6 batch cancellation route any "
+            "more — a cancelled run no longer records indeterminate work, and "
+            "Step 10 work item 8 has lost its production route"
+        )
+        assert any("_cancel_live_batches" in text for text in sources.values()), (
+            "the cancel *handler* no longer reaches a live coordinator"
         )
 
 

@@ -163,7 +163,11 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.batch_concurrency_composition import BatchConcurrencyComposer
+from runtime_worker.batch_concurrency_composition import (
+    BatchConcurrencyComposer,
+    LiveBatchAdmissionRegistry,
+    activate_batch_admission,
+)
 from runtime_worker.capability_discovery_composition import (
     build_capability_discovery_composer,
 )
@@ -284,6 +288,7 @@ class RuntimeRunHandler:
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
         batch_concurrency_composer: BatchConcurrencyComposer | None = None,
+        live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -317,6 +322,10 @@ class RuntimeRunHandler:
         # ever installed, and every tool call takes the exclusive Step-2 permit
         # exactly as it did before F6 existed.
         self._batch_concurrency_composer = batch_concurrency_composer
+        # Publishes this run's live admission so the *cancel* claim — a
+        # different claim, in a different coroutine — can reach the
+        # coordinator that is actually holding the work.
+        self._live_batch_admissions = live_batch_admissions
         self._model_invocation_composer = (
             model_invocation_composer
             or ModelInvocationWorkerComposer(
@@ -590,6 +599,7 @@ class RuntimeRunHandler:
         workspace_backend: object | None = None
         run_control_token: object | None = None
         batch_admission_token: object | None = None
+        live_admission_token: object | None = None
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -628,6 +638,20 @@ class RuntimeRunHandler:
                         serial_admission.install_parallel_admission(batch_admission)
                     batch_admission_token = RuntimeBatchAdmissionContext.install(
                         batch_admission
+                    )
+                    # W4: a claimed run may be a *re*-claimed run. Ask the
+                    # journal what it already did before letting it do it
+                    # again, and publish the coordinator so the cancel claim
+                    # can reach it.
+                    live_admission_token = await activate_batch_admission(
+                        composer=self._batch_concurrency_composer,
+                        registry=self._live_batch_admissions,
+                        admission=batch_admission,
+                        org_id=run.org_id,
+                        run_id=run.run_id,
+                        subject_fingerprint=(
+                            prepared_run_control.control.snapshot.subject_fingerprint
+                        ),
                     )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
@@ -893,6 +917,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if self._live_batch_admissions is not None:
+                self._live_batch_admissions.release(live_admission_token)
             if batch_admission_token is not None:
                 RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
             if run_control_token is not None:

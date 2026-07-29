@@ -112,7 +112,11 @@ from runtime_api.schemas import (
     RunRecord,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.batch_concurrency_composition import BatchConcurrencyComposer
+from runtime_worker.batch_concurrency_composition import (
+    BatchConcurrencyComposer,
+    LiveBatchAdmissionRegistry,
+    activate_batch_admission,
+)
 from runtime_worker.capability_discovery_composition import (
     build_capability_discovery_composer,
 )
@@ -210,6 +214,7 @@ class RuntimeApprovalHandler:
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
         batch_concurrency_composer: BatchConcurrencyComposer | None = None,
+        live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -218,6 +223,10 @@ class RuntimeApprovalHandler:
         # unconfigured deployment gets: a resumed run then installs no
         # admission and stays exactly as serial as it was before F6 existed.
         self._batch_concurrency_composer = batch_concurrency_composer
+        # Publishes this run's live admission so the *cancel* claim — a
+        # different claim, in a different coroutine — can reach the
+        # coordinator that is actually holding the work.
+        self._live_batch_admissions = live_batch_admissions
         self._model_invocation_composer = (
             model_invocation_composer
             or ModelInvocationWorkerComposer(
@@ -519,6 +528,7 @@ class RuntimeApprovalHandler:
         )
         run_control_token: object | None = None
         batch_admission_token: object | None = None
+        live_admission_token: object | None = None
         metrics = AssistantRunMetrics.from_run(running)
         try:
             if prepared_run_control is not None:
@@ -552,6 +562,20 @@ class RuntimeApprovalHandler:
                         serial_admission.install_parallel_admission(batch_admission)
                     batch_admission_token = RuntimeBatchAdmissionContext.install(
                         batch_admission
+                    )
+                    # W4: the same two obligations the run path has. A resume
+                    # is the *other* moment a process starts executing a run
+                    # it may not have started, so it needs the journal's answer
+                    # just as much — and it must be cancellable while it runs.
+                    live_admission_token = await activate_batch_admission(
+                        composer=self._batch_concurrency_composer,
+                        registry=self._live_batch_admissions,
+                        admission=batch_admission,
+                        org_id=running.org_id,
+                        run_id=running.run_id,
+                        subject_fingerprint=(
+                            prepared_run_control.control.snapshot.subject_fingerprint
+                        ),
                     )
                 if composed_model_invocation is not None:
                     model_invocation_effect_tracker = (
@@ -667,6 +691,8 @@ class RuntimeApprovalHandler:
             await self._observe_e2_shadow_projections(failed)
             raise
         finally:
+            if self._live_batch_admissions is not None:
+                self._live_batch_admissions.release(live_admission_token)
             if batch_admission_token is not None:
                 RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
             if run_control_token is not None:
