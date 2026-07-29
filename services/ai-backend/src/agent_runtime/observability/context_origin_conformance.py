@@ -212,6 +212,23 @@ class AstNode:
 
 
 @dataclass(frozen=True, slots=True)
+class CompositionSite:
+    """Where in the tree something was written, named the way violations are.
+
+    One spelling of ``<relative path>:<lexical scope>``, so the inventory, the
+    duplicate report, and every violation message identify a place identically
+    — and so a reader who greps for a string out of a red build finds it.
+    """
+
+    relative: str
+    scope: str
+
+    @property
+    def site(self) -> str:
+        return f"{self.relative}:{self.scope}"
+
+
+@dataclass(frozen=True, slots=True)
 class DeclaredOrigin:
     """One statically discoverable declaration and the site that made it.
 
@@ -227,15 +244,21 @@ class DeclaredOrigin:
 
 
 @dataclass(frozen=True, slots=True)
-class LiteralOriginIndex:
-    """Every ``ContextOrigin(...)`` written out with literal owner and name.
+class SourceTreeSweep:
+    """The single whole-tree pass, and the two tree-wide facts it collects.
 
-    This is the declaration form used by the message-side origins (§4.6) and by
-    the runtime's own ``response_format`` and assembly-joiner declarations —
-    contributors that are not tools and not prompt sources, and that therefore
-    have no composition keyword for the other two sweeps to key on.
-    ``MessageContextOrigins.ALL`` documents itself as being pinned by this gate;
-    this is the sweep that does it.
+    Both facts are properties of the *tree*, not of one file, which is why they
+    share a walk rather than living in the two site-scoped sweeps below. This
+    class only observes; the judgement of what the facts mean belongs to the
+    sweep that owns the rule.
+
+    **Literal declarations.** Every ``ContextOrigin(...)`` written out with a
+    literal owner and name. That is the declaration form used by the
+    message-side origins (§4.6) and by the runtime's own ``response_format`` and
+    assembly-joiner declarations — contributors that are neither tools nor
+    prompt sources, and that therefore have no composition keyword for the other
+    two sweeps to key on. ``MessageContextOrigins.ALL`` documents itself as
+    being pinned by this gate; this is the pass that does it.
 
     ``by_symbol`` maps the module- or class-level constant name a declaration
     was assigned to onto its label, so a composition site written as
@@ -248,17 +271,25 @@ class LiteralOriginIndex:
     projections of declarations that live elsewhere and are pinned elsewhere;
     demanding literals of them would only push authors to inline strings the
     runtime would then have to keep in sync.
+
+    **Assembly sites.** Every ``PromptAssemblyInputs(...)`` construction,
+    wherever it is. Collecting these tree-wide is what stops the system half of
+    the gate from being evadable by moving one call into another module: a sweep
+    that only reads the factory would go quiet, and go quiet in the one way that
+    looks like success.
     """
 
     declarations: tuple[DeclaredOrigin, ...]
     by_symbol: Mapping[str, str]
+    assembly_sites: tuple[CompositionSite, ...]
 
     @classmethod
-    def sweep(cls, source_root: Path) -> LiteralOriginIndex:
-        """Collect every literal declaration under ``source_root``."""
+    def sweep(cls, source_root: Path) -> SourceTreeSweep:
+        """Walk every module once, collecting both tree-wide facts."""
 
         declarations: list[DeclaredOrigin] = []
         by_symbol: dict[str, str] = {}
+        assembly_sites: list[CompositionSite] = []
         for path in sorted(source_root.rglob("*.py")):
             relative = path.relative_to(source_root).as_posix()
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -266,7 +297,15 @@ class LiteralOriginIndex:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
-                if AstNode.callable_name(node.func) != Keys.Callable.CONTEXT_ORIGIN:
+                callable_name = AstNode.callable_name(node.func)
+                site = CompositionSite(
+                    relative=relative,
+                    scope=AstNode.lexical_scope(node, parents),
+                )
+                if callable_name == Keys.Callable.PROMPT_ASSEMBLY_INPUTS:
+                    assembly_sites.append(site)
+                    continue
+                if callable_name != Keys.Callable.CONTEXT_ORIGIN:
                     continue
                 owner = AstNode.literal_text(
                     AstNode.keyword_value(node, Keys.Keyword.OWNER)
@@ -277,15 +316,13 @@ class LiteralOriginIndex:
                 if owner is None or name is None:
                     continue
                 label = f"{owner}:{name}"
-                scope = AstNode.lexical_scope(node, parents)
-                declarations.append(
-                    DeclaredOrigin(label=label, site=f"{relative}:{scope}")
-                )
+                declarations.append(DeclaredOrigin(label=label, site=site.site))
                 for symbol in cls._assigned_symbols(node, parents):
                     by_symbol.setdefault(symbol, label)
         return cls(
             declarations=tuple(declarations),
             by_symbol=MappingProxyType(by_symbol),
+            assembly_sites=tuple(assembly_sites),
         )
 
     @staticmethod
@@ -525,6 +562,14 @@ class ContextOriginViolation:
         )
 
     @staticmethod
+    def assembly_off_site(site: str) -> str:
+        return (
+            f"{site} -> {Keys.Callable.PROMPT_ASSEMBLY_INPUTS} is composed "
+            f"outside {CONTEXT_COMPOSITION_SITE.as_posix()}; its sources are "
+            "not covered by the context-origin gate"
+        )
+
+    @staticmethod
     def keyword_expansion(site: str) -> str:
         return (
             f"{site} -> {Keys.Callable.PROMPT_ASSEMBLY_INPUTS} is composed by "
@@ -602,6 +647,14 @@ class ModelToolSurfaceSweep:
     violation against a builtin.
     """
 
+    UNNAMED_SUBJECT: Final = "<expression>"
+    """Stand-in used in a message when a contributor cannot be named at all.
+
+    Deliberately not a valid identifier: it appears only in violations, never in
+    a label, so it can never reach the golden inventory and be mistaken for a
+    contributor somebody reviewed.
+    """
+
     TOOL_WRAPPERS: Final = frozenset(
         {Keys.Callable.STRUCTURED_TOOL, Keys.Callable.SHADOW_WRAPPER}
     )
@@ -621,7 +674,7 @@ class ModelToolSurfaceSweep:
         source_root: Path,
         *,
         owners: ModelToolOwnerRegistry,
-        literals: LiteralOriginIndex,
+        origins: SourceTreeSweep,
     ) -> tuple[tuple[str, ...], tuple[DeclaredOrigin, ...]]:
         """Return tool-surface violations and the declarations it proved."""
 
@@ -648,8 +701,17 @@ class ModelToolSurfaceSweep:
         declarations: list[DeclaredOrigin] = []
         for node, contributed in cls._contributions(function):
             site = f"{relative}:{AstNode.lexical_scope(node, parents)}"
-            symbol = cls._site_symbol(contributed) or "<expression>"
             declaration = cls._declaration_for(contributed, local_declarations)
+            # Name the *declared* expression rather than the declaration
+            # wrapping it: a failure that reads "declared declares a context
+            # origin whose owner is unreadable" tells the author nothing about
+            # which of their thirteen appends is at fault. The same answer feeds
+            # the inventory label, so a contributor is named identically whether
+            # it passed or failed.
+            subject = cls._site_symbol(
+                cls._declared_expression(declaration, contributed)
+            )
+            symbol = subject or cls.UNNAMED_SUBJECT
             if declaration is None:
                 violations.append(ContextOriginViolation.undeclared_tool(site, symbol))
                 continue
@@ -657,8 +719,9 @@ class ModelToolSurfaceSweep:
                 declaration,
                 site=site,
                 symbol=symbol,
+                subject=subject,
                 owners=owners,
-                literals=literals,
+                origins=origins,
             )
             if isinstance(declared, str):
                 violations.append(declared)
@@ -786,6 +849,24 @@ class ModelToolSurfaceSweep:
             return local_declarations.get(contributed.id)
         return None
 
+    @staticmethod
+    def _declared_expression(
+        declaration: ast.Call | None,
+        contributed: ast.expr,
+    ) -> ast.expr:
+        """Return the expression a declaration is about.
+
+        For a declared contribution that is the declaration's first argument —
+        the tool, not the wrapper around it — and for an undeclared one it is
+        the contributed expression itself. Both the inventory label and the
+        violation message are derived from this single answer so a contributor
+        is named the same way whether it passed or failed.
+        """
+
+        if declaration is not None and declaration.args:
+            return declaration.args[0]
+        return contributed
+
     @classmethod
     def _declared_origin(
         cls,
@@ -793,31 +874,39 @@ class ModelToolSurfaceSweep:
         *,
         site: str,
         symbol: str,
+        subject: str | None,
         owners: ModelToolOwnerRegistry,
-        literals: LiteralOriginIndex,
+        origins: SourceTreeSweep,
     ) -> DeclaredOrigin | str | None:
         """Read a declaration's label, a violation string, or ``None``.
 
         ``None`` means the declaration is real and already inventoried
         elsewhere: a ``declare_context_origin(tool, ORIGIN)`` names an origin
-        object that :class:`LiteralOriginIndex` has already recorded at the
+        object that :class:`SourceTreeSweep` has already recorded at the
         point it was written, and recording it twice would trip the duplicate
         check with a false positive.
+
+        ``subject`` is the caller's already-computed name for the thing being
+        declared, and is ``None`` when the expression cannot be named at all;
+        ``symbol`` is the same answer made presentable for a message. Deriving
+        it once upstream is what keeps the label in the golden inventory and the
+        name in a violation from ever disagreeing.
         """
 
         if (
             AstNode.callable_name(declaration.func)
             == Keys.Callable.DECLARE_CONTEXT_ORIGIN
         ):
-            if cls._origin_argument_label(declaration, literals) is None:
+            if cls._origin_argument_label(declaration, origins) is None:
                 return ContextOriginViolation.unresolvable_origin(site, symbol)
             return None
         owner = owners.resolve(AstNode.keyword_value(declaration, Keys.Keyword.OWNER))
         if owner is None:
             return ContextOriginViolation.unreadable_tool_owner(site, symbol)
-        name = AstNode.literal_text(
-            AstNode.keyword_value(declaration, Keys.Keyword.NAME)
-        ) or cls._site_symbol(declaration.args[0] if declaration.args else None)
+        name = (
+            AstNode.literal_text(AstNode.keyword_value(declaration, Keys.Keyword.NAME))
+            or subject
+        )
         if name is None:
             return ContextOriginViolation.unnameable_tool(site)
         return DeclaredOrigin(label=f"{owner}:{name}", site=site)
@@ -825,7 +914,7 @@ class ModelToolSurfaceSweep:
     @staticmethod
     def _origin_argument_label(
         declaration: ast.Call,
-        literals: LiteralOriginIndex,
+        origins: SourceTreeSweep,
     ) -> str | None:
         """Resolve the origin handed to ``declare_context_origin``, if it can be.
 
@@ -850,7 +939,7 @@ class ModelToolSurfaceSweep:
             )
             return None if owner is None or name is None else f"{owner}:{name}"
         symbol = AstNode.callable_name(origin)
-        return None if symbol is None else literals.by_symbol.get(symbol)
+        return None if symbol is None else origins.by_symbol.get(symbol)
 
     @classmethod
     def _site_symbol(cls, node: ast.expr | None) -> str | None:
@@ -914,8 +1003,16 @@ class PromptSourceCompositionSweep:
         source_root: Path,
         *,
         registry: PromptSourceRegistry,
+        assembly_sites: Sequence[CompositionSite] = (),
     ) -> tuple[tuple[str, ...], tuple[DeclaredOrigin, ...]]:
         """Return system-source violations and the declarations it proved.
+
+        ``assembly_sites`` is every ``PromptAssemblyInputs`` construction in the
+        whole tree, and any that is not in the composition site is refused
+        before the file itself is read. Without that, moving one call into
+        another module would silently take its sources out of the gate's view —
+        the failure mode a conformance proof must not have, because it looks
+        exactly like passing.
 
         A missing composition site is reported once, by
         :meth:`ModelToolSurfaceSweep.sweep`; repeating it here would double
@@ -923,12 +1020,17 @@ class PromptSourceCompositionSweep:
         """
 
         relative = CONTEXT_COMPOSITION_SITE.as_posix()
+        off_site = tuple(
+            ContextOriginViolation.assembly_off_site(site.site)
+            for site in assembly_sites
+            if site.relative != relative
+        )
         path = source_root / CONTEXT_COMPOSITION_SITE
         if not path.is_file():
-            return ((), ())
+            return (off_site, ())
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         parents = AstNode.parents(tree)
-        violations: list[str] = []
+        violations: list[str] = list(off_site)
         declarations: list[DeclaredOrigin] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -1023,28 +1125,30 @@ class ContextOriginGate:
 
     Kept as one evaluation rather than three independent entry points because
     the sweeps genuinely depend on each other: a tool declared with
-    ``declare_context_origin`` is inventoried by the literal sweep, and a label
-    collision is only visible once all three have contributed. The module's
-    public functions are thin projections of the single result.
+    ``declare_context_origin`` is inventoried by the whole-tree pass, the
+    system-source sweep needs that pass's assembly sites to know it saw them
+    all, and a label collision is only visible once every sweep has contributed.
+    The module's public functions are thin projections of the single result.
     """
 
     @classmethod
     def evaluate(cls, source_root: Path) -> ContextOriginGateResult:
         """Sweep ``source_root`` once and return every finding."""
 
-        literals = LiteralOriginIndex.sweep(source_root)
+        origins = SourceTreeSweep.sweep(source_root)
         owners = ModelToolOwnerRegistry.load(source_root)
         registry = PromptSourceRegistry.load(source_root)
         tool_violations, tool_declarations = ModelToolSurfaceSweep.sweep(
             source_root,
             owners=owners,
-            literals=literals,
+            origins=origins,
         )
         prompt_violations, prompt_declarations = PromptSourceCompositionSweep.sweep(
             source_root,
             registry=registry,
+            assembly_sites=origins.assembly_sites,
         )
-        declarations = literals.declarations + tool_declarations + prompt_declarations
+        declarations = origins.declarations + tool_declarations + prompt_declarations
         violations = tool_violations + prompt_violations + cls.duplicates(declarations)
         return ContextOriginGateResult(
             violations=tuple(sorted(violations)),
@@ -1053,7 +1157,7 @@ class ContextOriginGate:
 
     @staticmethod
     def duplicates(declarations: Sequence[DeclaredOrigin]) -> tuple[str, ...]:
-        """Report labels claimed by more than one site.
+        """Report labels claimed by more than one declaration.
 
         This is what keeps the pinned inventory honest under deduplication. Two
         contributors sharing a label would appear as one entry, and the second
@@ -1061,6 +1165,15 @@ class ContextOriginGate:
         which is precisely the review the pin exists to force. A collision is
         also a real defect at runtime: the occupancy report would attribute both
         contributors' bytes to whichever one the reader happened to open.
+
+        The trigger is the *count of declarations*, not the count of distinct
+        sites, and that distinction is load-bearing rather than pedantic: every
+        tool declaration in the real tree is made inside the same function, so
+        de-duplicating by site would blind the check to the one collision it
+        most needs to catch — a naming rule that quietly folds several appends
+        in ``_model_visible_tools`` onto one label. The sites are still
+        de-duplicated in the *message*, where repeating one scope name adds
+        nothing.
         """
 
         sites: dict[str, list[str]] = {}
@@ -1069,7 +1182,7 @@ class ContextOriginGate:
         return tuple(
             ContextOriginViolation.duplicate_label(label, sorted(set(found)))
             for label, found in sorted(sites.items())
-            if len(set(found)) > 1
+            if len(found) > 1
         )
 
 
