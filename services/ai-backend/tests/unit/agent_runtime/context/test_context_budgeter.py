@@ -764,6 +764,31 @@ class TestEveryOmissionCarriesAReason(RejectionAssertionMixin):
             ContextOmissionReason.RETENTION_EXPIRED
         )
 
+    async def test_immutable_context_the_runtime_cannot_admit_is_omitted_not_refused(
+        self,
+    ) -> None:
+        allocation = allocate(
+            (
+                candidate(
+                    "policy-1",
+                    tokens=10,
+                    priority_class=ContextPriorityClass.SAFETY_AUTHORITY_PROTOCOL,
+                    source_lifecycle=lifecycle(
+                        access_state=EvidenceAccessState.REVOKED
+                    ),
+                ),
+            )
+        )
+        hydrator = CountingHydrator()
+
+        plan = await assemble(allocation, hydrator)
+
+        assert allocation.admissions[0].omission_reason is (
+            ContextOmissionReason.REVOKED
+        )
+        assert hydrator.fetch_count == 0
+        assert len(plan.omitted_decisions) == 1
+
     def test_material_dropped_for_room_says_budget_exhausted(self) -> None:
         allocation = allocate(
             (
