@@ -34,6 +34,7 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityExpansionResult,
     CapabilityExpansionState,
     CapabilityIndexEntry,
+    CapabilityInputSchemaIdentity,
     CapabilityInvocationReceipt,
     CapabilityInvocationStatus,
     CapabilityInvocationTarget,
@@ -58,6 +59,12 @@ from agent_runtime.capabilities.discovery.contracts import (
     RankedCapabilitySelection,
     TwoTierCapabilitySearchResult,
 )
+from agent_runtime.capabilities.discovery.dispatch import (
+    CapabilityDispatchBinding,
+    CapabilityDispatchBindingPort,
+    RunScopedCapabilityDisclosure,
+    RunScopedCapabilityDispatchBindings,
+)
 from agent_runtime.capabilities.discovery.expansion import (
     BoundedCapabilityExpander,
     ExpandedCapabilityProjector,
@@ -69,6 +76,7 @@ from agent_runtime.capabilities.discovery.ranker import (
 )
 from agent_runtime.capabilities.discovery.registration import (
     CapabilityBridgeRegistrar,
+    CapabilityBridgeSeam,
     CapabilityBridgeToolAdapter,
     CapabilityBridgeToolRegistration,
 )
@@ -100,6 +108,7 @@ __all__ = [
     "CapabilityArgumentBounds",
     "CapabilityBridgeRecursionError",
     "CapabilityBridgeRegistrar",
+    "CapabilityBridgeSeam",
     "CapabilityBridgeToolAdapter",
     "CapabilityBridgeToolName",
     "CapabilityBridgeToolRegistration",
@@ -120,6 +129,8 @@ __all__ = [
     "CapabilityDescription",
     "CapabilityDiscoveryError",
     "CapabilityDiscoveryErrorCode",
+    "CapabilityDispatchBinding",
+    "CapabilityDispatchBindingPort",
     "CapabilityExecutorPort",
     "CapabilityExpansionBounds",
     "CapabilityExpansionError",
@@ -128,6 +139,7 @@ __all__ = [
     "CapabilityExpansionResult",
     "CapabilityExpansionState",
     "CapabilityIndexEntry",
+    "CapabilityInputSchemaIdentity",
     "CapabilityInvocationReceipt",
     "CapabilityInvocationStatus",
     "CapabilityInvocationTarget",
@@ -158,6 +170,8 @@ __all__ = [
     "HmacCapabilityReferenceMinter",
     "LiveCapabilityCatalogGeneration",
     "RankedCapabilitySelection",
+    "RunScopedCapabilityDisclosure",
+    "RunScopedCapabilityDispatchBindings",
     "TwoTierCapabilitySearch",
     "TwoTierCapabilitySearchResult",
 ]
