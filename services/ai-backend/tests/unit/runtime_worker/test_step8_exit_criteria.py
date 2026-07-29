@@ -52,10 +52,19 @@ from agent_runtime.capabilities.discovery import (
     HmacCapabilityReferenceMinter,
 )
 from agent_runtime.capabilities.discovery.activation import CapabilityExpansionLimits
+from agent_runtime.capabilities.discovery.contracts import CapabilityExpansionBounds
 from agent_runtime.capabilities.mcp import DynamicMcpRegistry
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
 from agent_runtime.capabilities.mcp.gateway_context import McpOperationGatewayContext
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolver,
+)
+from agent_runtime.capabilities.mcp.revision_wire import (
+    BackendMcpRevision,
+    BackendMcpRevisionNotFound,
+    BackendMcpRevisionNotice,
+)
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.control_plane.context import RunControlContext
 from agent_runtime.control_plane.feature_modes import FeatureMode
@@ -146,8 +155,101 @@ class _MutableProvider:
         return self.clients[card.name]
 
 
+class _RevisionBackend:
+    """The MCP control plane's revision authority, as a substitutable backend.
+
+    Only the HTTP boundary is faked. The resolver above it is the production
+    :class:`McpDescriptorRevisionResolver` the worker builds, with its real
+    single-flight, TTL, generation fencing, and notice handling — so what these
+    cases exercise is the wiring into that resolver, not a re-implementation of
+    it. ``revisions`` moves exactly as a backend's answer moves when a server's
+    descriptors change.
+    """
+
+    def __init__(self, revisions: Mapping[str, str]) -> None:
+        self.revisions = dict(revisions)
+        self.exact_calls = 0
+
+    async def get_exact(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> BackendMcpRevision:
+        del org_id, user_id
+        self.exact_calls += 1
+        revision = self.revisions.get(server_id)
+        if revision is None:
+            raise BackendMcpRevisionNotFound(server_id)
+        return BackendMcpRevision.model_validate(
+            {
+                "server_id": server_id,
+                "revision": revision,
+                "subject_scope_hash": "scope-step8",
+                "profile_id": "profile-step8",
+                "config_generation": 1,
+                "auth_generation": 1,
+                "transport_generation": 1,
+                "tool_filter_generation": 1,
+                "tool_count": 1,
+                "resource_count": 0,
+                "descriptor_digest": f"digest-{revision}",
+                "observed_at": "2026-01-01T00:00:00Z",
+                "source": "backend",
+            }
+        )
+
+    def notice(self, *, server_id: str, new_revision: str) -> BackendMcpRevisionNotice:
+        """The feed notice the backend emits when that server's revision moves."""
+
+        return BackendMcpRevisionNotice.model_validate(
+            {
+                "cursor": "cursor-step8",
+                "notice_id": f"notice-{server_id}-{new_revision}",
+                "sequence_no": 1,
+                "server_id": server_id,
+                "profile_id": "profile-step8",
+                "subject_scope_hash": "scope-step8",
+                "new_revision": new_revision,
+                "reason": "descriptor_observed",
+                "occurred_at": "2026-01-01T00:01:00Z",
+            }
+        )
+
+
 class Step8Harness(BridgeWiringHarness):
     """The W2 composition root, plus the fixtures each criterion needs."""
+
+    @staticmethod
+    def revision_authority(
+        revisions: Mapping[str, str],
+    ) -> tuple[_RevisionBackend, McpDescriptorRevisionResolver]:
+        """The worker's own F8 resolver over a substitutable backend."""
+
+        backend = _RevisionBackend(revisions)
+        return backend, McpDescriptorRevisionResolver(backend)  # type: ignore[arg-type]
+
+    async def move_descriptors(
+        self,
+        *,
+        backend: _RevisionBackend,
+        resolver: McpDescriptorRevisionResolver,
+        context: AgentRuntimeContext,
+        server_id: str,
+        revision: str,
+    ) -> None:
+        """Move one server's descriptors the way the F8 feed reports it.
+
+        The backend's answer changes and the notice is applied through the
+        resolver's own ``apply_notice`` — the exact call
+        ``McpRevisionFeedCoordinator`` makes for every notice it reads. Nothing
+        here reaches past the control plane's public surface to force the
+        outcome.
+        """
+
+        backend.revisions[server_id] = revision
+        await resolver.apply_notice(
+            org_id=context.org_id,
+            user_id=context.user_id,
+            notice=backend.notice(server_id=server_id, new_revision=revision),
+        )
 
     def counting_card(self, name: str, *, server_id: str, scope: str = "docs:read"):  # type: ignore[no-untyped-def]
         return self.make_card(
@@ -296,35 +398,105 @@ class TestColdDiscoveryOpensAtMostK(Step8Harness):
         assert len(catalog.entries) == 9
         assert len(catalog.entries) > CapabilityExpansionLimits().max_servers
 
-    def test_the_expansion_limit_environment_knobs_do_not_reach_the_seam(
+    async def test_a_configured_expansion_limit_changes_how_many_servers_open(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BUG-13, inverted: the operator's ``K`` is the ``K`` production runs.
+
+        This case previously pinned the opposite. ``CapabilityExpansionLimits.from_environment``
+        reads three documented knobs and had **no production call site**: the
+        worker composition root left ``CapabilityBridgeComposition.expansion_limits``
+        unset, ``factory.py`` forwarded that ``None``, and
+        ``BoundedCapabilityExpander`` fell back to the hard defaults, so the
+        effective ``K`` was always 3 whatever an operator configured.
+
+        Now the composition root resolves the limits and threads them, and the
+        proof is the same one the default bound gets: nine authorized servers,
+        one query that matches them all, and a count of the servers whose
+        descriptors were actually listed. Five is neither the default (3) nor
+        the structural ceiling (8), so only a genuinely plumbed value can
+        produce it.
+        """
+
+        monkeypatch.setenv(CapabilityExpansionLimits.Env.MAX_SERVERS, "5")
+        context = self.context()
+        provider, registry = self.many_servers(9)
+        dependencies = await self.dependencies(context, registry=registry)
+        tools = self.tools_by_name(await self.graph_request(context, dependencies))
+
+        run_token = self.bound_run(context)
+        try:
+            found = await self.call(
+                tools[CapabilityBridgeToolName.SEARCH_CAPABILITIES.value],
+                query="issues",
+                limit=10,
+            )
+        finally:
+            RunControlContext.unbind(run_token)
+
+        assert "error" not in found, found
+        opened = [name for name, client in provider.clients.items() if client.listings]
+        assert len(opened) == 5, opened
+        assert len(opened) != CapabilityExpansionLimits().max_servers
+
+    async def test_an_out_of_range_expansion_limit_opens_the_default_not_the_ceiling(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The direction of the failure is the property, not merely that it fails.
+
+        A typo must never be able to *raise* fan-out. ``999`` is out of range,
+        and the contract's rule is that anything unreadable resolves to the
+        conservative default rather than to the structural ceiling — so what
+        reaches the seam here is 3, not 8. Measured through the wired seam
+        rather than on the contract, because the contract's own rule was already
+        proved and it was the wiring that did not exist.
+        """
+
+        monkeypatch.setenv(CapabilityExpansionLimits.Env.MAX_SERVERS, "999")
+        context = self.context()
+        provider, registry = self.many_servers(9)
+        dependencies = await self.dependencies(context, registry=registry)
+        tools = self.tools_by_name(await self.graph_request(context, dependencies))
+
+        run_token = self.bound_run(context)
+        try:
+            found = await self.call(
+                tools[CapabilityBridgeToolName.SEARCH_CAPABILITIES.value],
+                query="issues",
+                limit=10,
+            )
+        finally:
+            RunControlContext.unbind(run_token)
+
+        assert "error" not in found, found
+        opened = [name for name, client in provider.clients.items() if client.listings]
+        assert len(opened) == CapabilityExpansionLimits().max_servers, opened
+        assert len(opened) < CapabilityExpansionBounds.MAX_SERVERS
+
+    def test_exactly_one_production_call_site_resolves_the_expansion_limits(
         self,
     ) -> None:
-        """An honest canary over a gap this gate found and did not fix.
+        """One reader, so there is one effective ``K`` rather than several.
 
-        ``CapabilityExpansionLimits.from_environment`` reads three documented
-        operator knobs, and **no production call site invokes it**: the worker
-        composition root leaves ``CapabilityBridgeComposition.expansion_limits``
-        unset, ``factory.py`` forwards that ``None``, and
-        ``BoundedCapabilityExpander`` falls back to the hard defaults. So the
-        effective ``K`` is always 3 no matter what an operator configures.
-
-        That is fail-safe rather than fail-open — the default is the
-        conservative value, and a typo could never raise fan-out — but it means
-        "at most **configured** K" is currently "at most **default** K". Pinned
-        rather than left to be rediscovered: threading the knobs makes this fail,
-        which is the moment to prove a configured bound end to end.
+        The canary that used to assert *no* caller is kept pointing the other
+        way. A second call site would be a second answer to "what is K", and the
+        run would be bounded by whichever one happened to reach the seam.
+        ``CapabilityBridgeComposition`` still defaults the field to ``None`` —
+        the wiring supplies it, the contract does not presume it.
         """
 
         assert CapabilityBridgeComposition().expansion_limits is None
         from pathlib import Path  # noqa: PLC0415
 
         source_root = Path(__file__).resolve().parents[3] / "src"
-        callers = [
-            path
+        callers = sorted(
+            path.relative_to(source_root).as_posix()
             for path in source_root.rglob("*.py")
             if "CapabilityExpansionLimits.from_environment(" in path.read_text("utf-8")
-        ]
-        assert callers == [], [str(path) for path in callers]
+        )
+        assert callers == ["runtime_worker/capability_discovery_composition.py"]
 
 
 @pytest.mark.usefixtures("deferred_environment")
@@ -397,10 +569,20 @@ class TestWarmDiscoveryPerformsNoDuplicateList(Step8Harness):
 class TestRevocationBetweenDescribeAndInvokeFailsSafely(Step8Harness):
     """ "revocation/schema change between describe and invoke fails safely"."""
 
-    async def _described(self, context: AgentRuntimeContext, registry: object):  # type: ignore[no-untyped-def]
+    async def _described(  # type: ignore[no-untyped-def]
+        self,
+        context: AgentRuntimeContext,
+        registry: object,
+        *,
+        descriptor_revision_resolver: object | None = None,
+    ):
         """Search then describe, and hand back the tools plus the live ref."""
 
-        dependencies = await self.dependencies(context, registry=registry)
+        dependencies = await self.dependencies(
+            context,
+            registry=registry,
+            descriptor_revision_resolver=descriptor_revision_resolver,
+        )
         tools = self.tools_by_name(await self.graph_request(context, dependencies))
         run_token = self.bound_run(context)
         try:
@@ -531,65 +713,141 @@ class TestRevocationBetweenDescribeAndInvokeFailsSafely(Step8Harness):
 
         assert "error" not in invoked, invoked
 
-    async def test_the_composition_root_wires_no_f8_descriptor_revision_source(
-        self,
-    ) -> None:
-        """An honest canary over the *other* half of this criterion.
+    async def test_a_revision_move_alone_refuses_the_invoke(self) -> None:
+        """The F8 route, end to end, with everything else deliberately still.
 
-        Everything above fails closed through the executor's live re-resolution.
-        The F8 route — a moved descriptor revision changing the catalog
-        generation so the shared Step RB revalidator refuses the reference — is
-        **not wired**: ``build_capability_discovery_composer`` supplies no
-        ``CatalogDescriptorRevisionSourcePort``, so the generation folds zero
-        revisions and recomputes to the same value for the whole run. Every
-        other keyed input is frozen per run by contract, so in production the
-        revalidator cannot currently report a reference stale mid-run at all.
+        The connector is untouched: the same client, the same tools, the same
+        schema, the same card, the same scopes. The *only* thing that changes
+        between describe and invoke is the backend's descriptor revision for the
+        server, delivered the way the F8 feed delivers it. So the executor's
+        live re-resolution — which carries all four refusals above — has nothing
+        to object to, and the refusal can only be the Step RB revalidation
+        reporting the reference bound to a generation the authority no longer
+        derives.
 
-        That is why BUG-04 (expanded capabilities carry no descriptor revision)
-        and ARQ-007's remaining "add revision invalidation with F8" are still
-        open. Recorded as a canary because it is a live property of the wiring,
-        not a hypothetical: threading a revision source makes the second
-        assertion here fail, which is the moment to prove that route.
+        This is the criterion's other half, and until the composition root
+        folded the descriptor revisions there was no configuration of production
+        in which it could happen.
         """
-
-        composer = build_capability_discovery_composer()
-        assert composer is not None
-        assert composer._descriptor_revision_source is None
 
         context = self.context()
         provider, registry = self.one_server()
-        dependencies = await self.dependencies(context, registry=registry)
+        backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+        tools, ref = await self._described(
+            context, registry, descriptor_revision_resolver=resolver
+        )
+
+        await self.move_descriptors(
+            backend=backend,
+            resolver=resolver,
+            context=context,
+            server_id="srv_issues0",
+            revision="rev-2",
+        )
+        invoked = await self._invoke(context, tools, ref)
+
+        assert (
+            self.error_code(invoked)
+            == CapabilityDiscoveryErrorCode.CAPABILITY_STALE.value
+        )
+        # The connector really was left alone: nothing about the descriptors the
+        # model was shown changed, so this refusal is the revision binding's.
+        assert provider.clients["issues0"].tools[0].input_schema == _READ_SCHEMA
+
+    async def test_the_same_run_still_invokes_while_the_revision_holds(self) -> None:
+        """The negative control for the revision route specifically.
+
+        A wired revision source that reported a different value on every read
+        would refuse every invoke and would be indistinguishable, from the
+        outside, from a working staleness check.
+        """
+
+        context = self.context()
+        _provider, registry = self.one_server()
+        _backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+        tools, ref = await self._described(
+            context, registry, descriptor_revision_resolver=resolver
+        )
+
+        invoked = await self._invoke(context, tools, ref)
+
+        assert "error" not in invoked, invoked
+
+    async def test_the_composition_root_folds_the_f8_descriptor_revisions(
+        self,
+    ) -> None:
+        """BUG-12, inverted: the generation is keyed to a revision that can move.
+
+        This case previously pinned the opposite — ``build_capability_discovery_composer``
+        supplied no revision source, so the generation folded zero revisions and
+        recomputed to the same value for the whole run. Every other keyed input
+        is frozen per run by contract, which made the Step RB revalidation
+        unable to report anything stale in production.
+
+        The negative control is the deployment with no F8 authority wired: it
+        still folds zero, which is what keeps this lane byte-identical wherever
+        the control plane is off.
+        """
+
+        context = self.context()
+        provider, registry = self.one_server()
+        _backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+
+        dependencies = await self.dependencies(
+            context,
+            registry=registry,
+            descriptor_revision_resolver=resolver,
+        )
         catalog = dependencies.capability_catalog
         assert isinstance(catalog, CapabilityCatalog)
         generation = catalog.generation
         assert generation is not None
-        assert generation.descriptor_revision_count == 0
+        assert generation.descriptor_revision_count == 1
 
-    async def test_the_live_authority_cannot_report_a_ref_stale_mid_run(self) -> None:
-        """The consequence of the canary above, measured on the real authority.
+        unwired = await self.dependencies(context, registry=registry)
+        unwired_catalog = unwired.capability_catalog
+        assert isinstance(unwired_catalog, CapabilityCatalog)
+        assert unwired_catalog.generation is not None
+        assert unwired_catalog.generation.descriptor_revision_count == 0
 
-        The generation source recomputes from freshly re-read inputs, which is
-        exactly right — but with no descriptor-revision source wired, and with
-        the subject, connector scope, and task-policy selection all frozen for
-        the run by contract, there is nothing left that can move. The authority
-        therefore re-derives the *same* generation the catalog was projected
-        under, before and after the descriptors underneath it change.
+    async def test_the_live_authority_reports_a_ref_stale_when_descriptors_move(
+        self,
+    ) -> None:
+        """The criterion's F8 half, measured on the real authority end to end.
 
-        So the Step RB revalidation, which lane F3.2 correctly built and lane
-        F3.5 correctly wired, currently contributes nothing to this criterion in
-        production. The safety property is carried by the executor's live
-        re-resolution alone — which the four cases above prove — and this pins
-        why that matters rather than leaving it to be inferred.
+        The generation source recomputes from freshly re-read inputs, and now
+        one of those inputs can actually change: the F8 descriptor revisions,
+        read through the same resolver the MCP loader consults. So a reference
+        minted before a server's descriptors moved is bound to a generation the
+        authority no longer derives, and the shared Step RB revalidator refuses
+        it.
+
+        Nothing about the *schema* changes here — only the backend's revision
+        for the server. That isolates this route from the executor's live
+        re-resolution, which the four cases above already prove: a refusal seen
+        here can only have come from the revision binding.
         """
 
+        from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+            CapabilityCatalogRevisionAuthority,
+            CapabilityRefRevalidation,
+        )
         from agent_runtime.control_plane.revision_binding import (  # noqa: PLC0415
+            RevalidationOutcome,
             RevisionAuthorityState,
+            RevisionBindingRevalidator,
             RevisionBoundScope,
         )
 
         context = self.context()
         provider, registry = self.one_server()
-        dependencies = await self.dependencies(context, registry=registry)
+        backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+
+        dependencies = await self.dependencies(
+            context,
+            registry=registry,
+            descriptor_revision_resolver=resolver,
+        )
         catalog = dependencies.capability_catalog
         assert isinstance(catalog, CapabilityCatalog)
         binding = catalog.bind_ref(catalog.entries[0].capability_ref)
@@ -599,25 +857,146 @@ class TestRevocationBetweenDescribeAndInvokeFailsSafely(Step8Harness):
             catalog_generation=binding.issued_generation.generation_ref,
         )
 
-        composer = build_capability_discovery_composer()
+        composer = build_capability_discovery_composer(
+            descriptor_revision_resolver=resolver,
+        )
         assert composer is not None
         run_token = self.bound_run(context)
         try:
-            composed = composer.compose(context, mcp_server_cards=tuple(provider.cards))
+            composed = await composer.acompose(
+                context, mcp_server_cards=tuple(provider.cards)
+            )
             assert composed is not None
             before = await composed.generation_source.live_generation(scope=scope)
-            # The descriptors move underneath the run, exactly as they do in the
-            # schema-change case above.
-            provider.clients["issues0"] = self.counting_client(
-                "issues0", schema=_MOVED_SCHEMA
+            # The descriptors move underneath the run: the backend now reports a
+            # different revision and the feed says so.
+            await self.move_descriptors(
+                backend=backend,
+                resolver=resolver,
+                context=context,
+                server_id="srv_issues0",
+                revision="rev-2",
             )
             after = await composed.generation_source.live_generation(scope=scope)
+
+            revalidation = CapabilityRefRevalidation(
+                revalidator=RevisionBindingRevalidator(
+                    CapabilityCatalogRevisionAuthority(composed.generation_source)
+                ),
+                subject_fingerprint=composed.subject_fingerprint,
+            )
+            assert after.generation is not None
+            decision = await revalidation.decide(
+                binding=binding,
+                run_id=context.run_id,
+                live_generation=after.generation,
+            )
         finally:
             RunControlContext.unbind(run_token)
 
         assert before.state is RevisionAuthorityState.ACTIVE
         assert after.state is RevisionAuthorityState.ACTIVE
-        assert before.generation == after.generation
+        # The authority genuinely re-derived a different identity, and the
+        # shared revalidator turned that into a refusal.
+        assert before.generation != after.generation
+        assert decision.outcome is not RevalidationOutcome.CURRENT
+
+    async def test_an_unmoved_descriptor_keeps_the_same_live_generation(self) -> None:
+        """The negative control: the revision route is not refusing always.
+
+        A source that reported a fresh identity on every read would fail every
+        reference on its second use and would look exactly like a working
+        staleness check. Two reads with nothing moved must agree.
+        """
+
+        from agent_runtime.control_plane.revision_binding import (  # noqa: PLC0415
+            RevisionAuthorityState,
+            RevisionBoundScope,
+        )
+
+        context = self.context()
+        provider, registry = self.one_server()
+        _backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+
+        dependencies = await self.dependencies(
+            context,
+            registry=registry,
+            descriptor_revision_resolver=resolver,
+        )
+        catalog = dependencies.capability_catalog
+        assert isinstance(catalog, CapabilityCatalog)
+        binding = catalog.bind_ref(catalog.entries[0].capability_ref)
+        scope = RevisionBoundScope(
+            subject_fingerprint=binding.issued_generation.subject_fingerprint,
+            run_id=context.run_id,
+            catalog_generation=binding.issued_generation.generation_ref,
+        )
+
+        composer = build_capability_discovery_composer(
+            descriptor_revision_resolver=resolver,
+        )
+        assert composer is not None
+        run_token = self.bound_run(context)
+        try:
+            composed = await composer.acompose(
+                context, mcp_server_cards=tuple(provider.cards)
+            )
+            assert composed is not None
+            first = await composed.generation_source.live_generation(scope=scope)
+            second = await composed.generation_source.live_generation(scope=scope)
+        finally:
+            RunControlContext.unbind(run_token)
+
+        assert first.state is RevisionAuthorityState.ACTIVE
+        assert first.generation == second.generation
+        # And the generation the run's own catalog was stamped with is the one
+        # the authority re-derives, so a ref is usable before anything moves.
+        assert first.generation == binding.issued_generation
+
+    async def test_the_revision_read_costs_no_extra_round_trip_per_question(
+        self,
+    ) -> None:
+        """Cost, stated as a test rather than as a claim.
+
+        The live authority is asked once per ``invoke_capability``. Each question
+        re-reads the revisions, but through the resolver's own TTL cache, so the
+        backend is reached when the run's catalog is composed and then not again
+        until something invalidates the entry — which is precisely when a
+        revision moved. Ten questions must not be ten fetches.
+        """
+
+        from agent_runtime.control_plane.revision_binding import (  # noqa: PLC0415
+            RevisionBoundScope,
+        )
+
+        context = self.context()
+        provider, registry = self.one_server()
+        backend, resolver = self.revision_authority({"srv_issues0": "rev-1"})
+
+        composer = build_capability_discovery_composer(
+            descriptor_revision_resolver=resolver,
+        )
+        assert composer is not None
+        run_token = self.bound_run(context)
+        try:
+            composed = await composer.acompose(
+                context, mcp_server_cards=tuple(provider.cards)
+            )
+            assert composed is not None
+            assert composed.catalog.generation is not None
+            scope = RevisionBoundScope(
+                subject_fingerprint=composed.catalog.generation.subject_fingerprint,
+                run_id=context.run_id,
+                catalog_generation=composed.catalog.generation.generation_ref,
+            )
+            after_compose = backend.exact_calls
+            for _ in range(10):
+                await composed.generation_source.live_generation(scope=scope)
+        finally:
+            RunControlContext.unbind(run_token)
+
+        assert after_compose == 1
+        assert backend.exact_calls == after_compose
 
 
 @pytest.mark.usefixtures("deferred_environment")
