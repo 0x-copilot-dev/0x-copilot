@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -46,12 +47,38 @@ if TYPE_CHECKING:  # pragma: no cover - typing only.
     from agent_runtime.capabilities.mcp.cards import McpServerCard
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 # Built-in skills shipped with the runtime. The directory is resolved relative
 # to this file so wheel-installed deployments and local dev both work without
 # extra configuration. Each subdirectory under `skills/` must contain a
 # `SKILL.md` with YAML frontmatter (`name`, `description`, ...) per Anthropic's
 # Agent Skills spec.
 BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parent.parent.parent / "skills"
+
+
+async def compose_capability_discovery(
+    factory: object,
+    dependencies: RuntimeDependencies,
+    context: AgentRuntimeContext,
+) -> RuntimeDependencies:
+    """Fold this run's F3 composition into ``dependencies``, or change nothing.
+
+    Both worker composition roots — the initial run and the approval resume —
+    call this one function rather than each reaching into the factory, for the
+    reason bug R1 taught in :mod:`runtime_worker.file_store_wiring`: two paths
+    that must wire a seam identically will eventually wire it differently. A
+    resumed run whose bridge was composed differently from its own first turn
+    would mint references its earlier turns cannot explain.
+
+    A caller-supplied factory (every test that injects one) is not a
+    :class:`DefaultRuntimeDependenciesFactory` and is left entirely alone.
+    """
+
+    if not isinstance(factory, DefaultRuntimeDependenciesFactory):
+        return dependencies
+    return await factory.with_capability_discovery(dependencies, context)
 
 
 class WebSearchToolRegistry:
@@ -247,6 +274,69 @@ class DefaultRuntimeDependenciesFactory:
                 discovery.activation if discovery is not None else None
             ),
             capability_catalog=discovery.catalog if discovery is not None else None,
+            # The invocation seam travels with the pair it is keyed to. A
+            # dependency set that carried a bridge without a catalog, or a
+            # bridge keyed to a different catalog, is unrepresentable because
+            # all three come from the one composition or from none of it.
+            capability_bridge=discovery.bridge if discovery is not None else None,
+        )
+
+    async def with_capability_discovery(
+        self,
+        dependencies: RuntimeDependencies,
+        context: AgentRuntimeContext,
+    ) -> RuntimeDependencies:
+        """Re-compose F3 against the run's already-authorized MCP card snapshot.
+
+        This method exists because two contracts disagree and neither may bend.
+        ``RuntimeDependencies`` is built synchronously, and the authorized card
+        snapshot the catalog is projected from is only obtainable by awaiting the
+        MCP registry — which does not exist until those very dependencies are
+        built.  Awaiting *here*, against ``dependencies.mcp_registry``, resolves
+        that without a second registry: a second one would mean a second
+        provider set and a second backend fetch per run, and the cards it listed
+        would be a different snapshot from the one the run actually uses.
+
+        The permission filter is the registry's own
+        (:class:`~agent_runtime.capabilities.mcp.permissions.McpPermissionPolicy`),
+        so the catalog is projected from exactly the cards this run was already
+        authorized to see — never a wider set assembled for F3's benefit.
+
+        A deployment that has configured nothing holds no composer, returns on
+        the first line, and performs no listing at all: the extra round trip is
+        a cost of the activated posture only, so the dark path is unchanged in
+        behaviour *and* in work done.  Every failure below returns the
+        dependencies untouched, leaving the run on the pre-F3 path.
+
+        The same await is what lets the F8 descriptor revisions reach the
+        generation this catalog is stamped with.  ``acompose`` reads them from
+        the revision authority the worker already owns, keyed to the very cards
+        listed above, *before* the catalog is projected — the ordering the
+        generation contract requires.  With no revision authority wired it reads
+        nothing and composes exactly what ``compose`` composed before.
+        """
+
+        composer = self.capability_discovery
+        if composer is None:
+            return dependencies
+        try:
+            cards = await dependencies.mcp_registry.list_available_servers(context)
+        except Exception:
+            _LOGGER.warning(
+                "Authorized MCP card snapshot is unavailable; "
+                "keeping the pre-F3 disclosure path.",
+                exc_info=True,
+            )
+            return dependencies
+        discovery = await composer.acompose(context, mcp_server_cards=tuple(cards))
+        if discovery is None:
+            return dependencies
+        return dependencies.model_copy(
+            update={
+                "capability_activation": discovery.activation,
+                "capability_catalog": discovery.catalog,
+                "capability_bridge": discovery.bridge,
+            }
         )
 
     def _capability_discovery(

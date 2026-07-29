@@ -1029,14 +1029,47 @@ Scheduling convenience is never treated as safety metadata.
       only ever reduces concurrency. `INSTALLATION` is subject-qualified, which
       matches this codebase — agent installs are per-user
       (`services/backend/src/backend_app/agents/schema.sql`).
-- [ ] **F6.5 — Child gateway re-entry.** Each admitted child re-enters the
+- [x] **F6.5 — Child gateway re-entry.** (`befadf8c`; 39 focused tests.)
+      Indistinguishability is proven by running the _same work twice_ — once
+      solo, once as an admitted batch child — and asserting equality of the
+      gateway's own ledger rows, the durable read projections, the connector
+      dispatches, and the model-visible result. Only `latency_ms` is excluded,
+      because it is measured wall time. Identity derives from the parent turn
+      through the same construction a solo call uses, and fails closed three
+      ways: no verified binding refuses rather than minting a uuid, a derived id
+      that disagrees with the plan refuses, and the id the dispatcher _reports_
+      is re-checked so the journal and work ledger cannot silently diverge.
+      Each admitted child re-enters the
       Operation Gateway with its own deadline, cancellation, usage, citation,
       result, and audit identity, and a sibling failure never invalidates a
       completed child's result.
-- [ ] **F6.6 — Cancellation and restart.** On cancel, stop new admission, cancel
+- [x] **F6.6 — Cancellation and restart.** (`9fd7a7d0`; 71 focused tests, every
+      durability case parametrized over both adapters.) Child transitions are
+      journaled as an additive `child_transition` member of the existing F6
+      event — no new store, no second ledger.
+
+      **The lane rejected the cheaper option for a precise reason.** The
+      alternative was to infer start facts from the gateway's existing
+      `operation.requested`/`.completed` events — already durable, no contract
+      change. It declined because whether a child's *gateway* operation id
+      equals its *batch* operation id is a mapping lane F6.5 owns and had not
+      decided. If those ever diverge, "no gateway record ⇒ never started"
+      silently becomes true for every child, and every started write is
+      replayed — the exact catastrophe, arriving silently, from a decision in a
+      module the lane may not edit.
+
+      `indeterminate` cannot be misread as "nothing happened" because
+      `BatchCancellationReport` has **no** `rolled_back` and no `succeeded`
+      field — the claim has no field to be read from — and `.indeterminate` is
+      derived from `outcome_known`, so a state added later is unknown by
+      default. The never-replay-a-started-write rule is defended twice, so the
+      lane removed *both* defences to prove the assertion itself bites.
+      Found and fixed a real gap in passing: journal candidates were validated
+      only on read, not before append. On cancel, stop new admission, cancel
       cancellable reads, bounded-drain active children, and mark uncertain work
       `in_flight`/`indeterminate`. On restart, resume only never-started safe
       reads and never replay a started write. Never invent rollback or success.
+
 - [x] **F6.7 — Kill switches.** Add global, per-connector, and per-capability
       serial kill switches through the existing authority-narrowing kill-switch
       seam, effective on an active run without restart (`8e90fde5`; 58 focused

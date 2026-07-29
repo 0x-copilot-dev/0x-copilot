@@ -337,14 +337,26 @@ class RunScopedBatchChildWork:
     :class:`BatchChildExecutionBounds`, so nothing can grow the table — or swap
     a child's target — between the moment the plan became durable and the moment
     the child is admitted.
+
+    Two indexes over the *same* sequence, never two sources. The durable plan
+    names a child by ``operation_id``, which is what the executor resolves; the
+    graph tool seam is handed the provider's ``model_tool_call_id`` and nothing
+    else, which is what :meth:`work_for_model_tool_call` resolves. Building both
+    from one iteration is what keeps them from disagreeing about which child a
+    call is: an id that appears twice refuses the whole table rather than
+    silently letting one lookup win.
     """
 
-    __slots__ = ("_by_operation",)
+    __slots__ = ("_by_model_tool_call", "_by_operation")
 
     def __init__(self, work: Iterable[BatchChildWork]) -> None:
         registered: dict[str, BatchChildWork] = {}
+        by_model_tool_call: dict[str, BatchChildWork] = {}
         for item in work:
-            if item.operation_id in registered:
+            if (
+                item.operation_id in registered
+                or item.model_tool_call_id in by_model_tool_call
+            ):
                 raise BatchChildExecutorMisconfigured(
                     BatchChildExecutionMessages.DUPLICATE_WORK
                 )
@@ -353,7 +365,9 @@ class RunScopedBatchChildWork:
                     BatchChildExecutionMessages.WORK_EXHAUSTED
                 )
             registered[item.operation_id] = item
+            by_model_tool_call[item.model_tool_call_id] = item
         self._by_operation = registered
+        self._by_model_tool_call = by_model_tool_call
 
     def __len__(self) -> int:
         return len(self._by_operation)
@@ -362,6 +376,25 @@ class RunScopedBatchChildWork:
         """Return the registered work for ``operation_id``, or ``None``."""
 
         return self._by_operation.get(operation_id)
+
+    def work_for_model_tool_call(
+        self,
+        model_tool_call_id: str,
+    ) -> BatchChildWork | None:
+        """Return the child a provider tool-call id names, or ``None``.
+
+        The graph tool seam never sees an ``operation_id``; it sees the id the
+        provider put on the tool call. Without this lookup a planned child is
+        unreachable from the one place that can gate it, which is why the
+        absence of this index kept the whole subsystem dark.
+
+        A blank id resolves to ``None`` rather than to some arbitrary child, so
+        an unidentifiable call is structurally not a planned child.
+        """
+
+        if not model_tool_call_id:
+            return None
+        return self._by_model_tool_call.get(model_tool_call_id)
 
 
 class GatewayBatchChildExecutor:

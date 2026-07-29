@@ -1,6 +1,8 @@
 """Shared control-plane contracts for one agent-runtime execution."""
 
 from agent_runtime.control_plane.contracts import (
+    DECISION_COUNT_CEILINGS,
+    DECISION_COUNT_FIELDS,
     BudgetEnvelope,
     RunControlDecision,
     RunControlSnapshot,
@@ -31,6 +33,14 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureModeResolver,
     FeatureModeSet,
     feature_mode_policy,
+)
+from agent_runtime.control_plane.parallel_admission import (
+    ParallelAdmissionBounds,
+    ParallelAdmissionGrant,
+    ParallelAdmissionMessages,
+    ParallelAdmissionPort,
+    ParallelAdmissionResolver,
+    ToolAdmissionRequest,
 )
 from agent_runtime.control_plane.model_reliability import (
     ModelReliabilityControl,
@@ -80,6 +90,8 @@ __all__ = [
     "AGENT_QUALITY_FEATURE_POLICIES",
     "AgentQualityFeature",
     "BoundRevision",
+    "DECISION_COUNT_CEILINGS",
+    "DECISION_COUNT_FIELDS",
     "BudgetEnvelope",
     "FeatureFallback",
     "FeatureMode",
@@ -122,6 +134,12 @@ __all__ = [
     "RunControlBinding",
     "RunControlContext",
     "RunSerialAdmission",
+    "ParallelAdmissionBounds",
+    "ParallelAdmissionGrant",
+    "ParallelAdmissionMessages",
+    "ParallelAdmissionPort",
+    "ParallelAdmissionResolver",
+    "ToolAdmissionRequest",
     "RuntimeToolControlOutcome",
     "RuntimeToolControlTerminalRecord",
     "RuntimeToolLifecycleReducer",

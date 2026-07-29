@@ -36,7 +36,7 @@ from agent_runtime.harness_quality.evaluation_contracts import (
 from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
-from runtime_api.schemas import RuntimeEventEnvelope
+from runtime_api.schemas import RuntimeApiEventType, RuntimeEventEnvelope
 
 
 class FixtureMiss(LookupError):
@@ -110,6 +110,16 @@ class TrajectoryProjector:
     """
 
     _CAPABILITY_KEYS = ("capability_id", "tool_name", "tool", "operation")
+    #: The decision row's numeric extension, in payload spelling. A step counts
+    #: as *measured* when any one of them is present, so a producer that
+    #: honestly reports zero candidates is distinguishable from one that
+    #: reports nothing at all.
+    _DISCOVERY_COUNT_KEYS = (
+        "candidate_count",
+        "selection_rank",
+        "result_tokens",
+        "model_turns",
+    )
     _INVOCATION_RECORD_KINDS = frozenset(
         {
             "invocation_planned",
@@ -258,7 +268,158 @@ class TrajectoryProjector:
             ),
             discovery_phase=cls._discovery_text(payload, "phase"),
             discovery_outcome=cls._discovery_text(payload, "outcome_code"),
+            discovery_candidate_count=cls._discovery_int(payload, "candidate_count"),
+            discovery_recall_rank=cls._discovery_int(payload, "selection_rank"),
+            discovery_result_tokens=cls._discovery_int(payload, "result_tokens"),
+            discovery_model_turns=cls._discovery_int(payload, "model_turns"),
+            discovery_counts_observed=cls._discovery_counts_observed(payload),
+            parallel_record_kind=cls._parallel_text(event, payload, "record_kind"),
+            parallel_segment_modes=cls._parallel_segment_field(event, payload, "mode"),
+            parallel_parallel_segment_reasons=cls._parallel_segment_field(
+                event,
+                payload,
+                "reason",
+                mode="parallel",
+            ),
+            parallel_serial_segment_reasons=cls._parallel_segment_field(
+                event,
+                payload,
+                "reason",
+                mode="serial",
+            ),
+            parallel_kill_switch_reason=cls._parallel_text(
+                event,
+                payload,
+                "kill_switch_reason",
+            ),
+            parallel_child_phase=cls._parallel_text(event, payload, "phase"),
+            parallel_child_disposition=cls._parallel_text(
+                event,
+                payload,
+                "disposition",
+            ),
+            parallel_planned_operations=cls._parallel_width(event, payload),
+            parallel_overlapping_operations=cls._parallel_width(
+                event,
+                payload,
+                mode="parallel",
+            ),
+            parallel_maximum_segment_width=cls._parallel_widest(event, payload),
+            parallel_counts_observed=cls._parallel_segments(event, payload) is not None,
             payload_digest=canonical_json_sha256(payload),
+        )
+
+    @staticmethod
+    def _parallel_record(
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        """Return the F6 journal record carried by one batch-journal event.
+
+        Gated on the event type rather than on the record's own shape, because
+        ``plan_bound`` is a record kind F4 uses too. Reading the nested record
+        without that gate would let an F4 controller row populate F6 columns and
+        an F6 plan populate F4 ones, and a case would then be graded against a
+        feature that never ran.
+        """
+
+        if event.event_type is not RuntimeApiEventType.OPERATION_BATCH_JOURNAL:
+            return None
+        record = payload.get("record")
+        return record if isinstance(record, Mapping) else None
+
+    @classmethod
+    def _parallel_text(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> str | None:
+        record = cls._parallel_record(event, payload)
+        if record is None:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _parallel_segments(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+    ) -> tuple[Mapping[str, object], ...] | None:
+        """Return the plan's segments in order, or ``None`` when unmeasured.
+
+        ``None`` and ``()`` are deliberately different answers. A child
+        transition carries no segments and must not read as a plan that
+        overlapped nothing, because every ``maximum_`` width ceiling below is
+        satisfied by a zero. This is the distinction ``parallel_counts_observed``
+        carries forward to the scorer.
+        """
+
+        record = cls._parallel_record(event, payload)
+        if record is None:
+            return None
+        segments = record.get("segments")
+        if not isinstance(segments, Sequence) or isinstance(segments, (str, bytes)):
+            return None
+        return tuple(item for item in segments if isinstance(item, Mapping))
+
+    @staticmethod
+    def _segment_width(segment: Mapping[str, object]) -> int:
+        """Return how many operations one segment holds, never their ids."""
+
+        operations = segment.get("operation_ids")
+        if not isinstance(operations, Sequence) or isinstance(operations, (str, bytes)):
+            return 0
+        return len(operations)
+
+    @classmethod
+    def _parallel_width(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+        *,
+        mode: str | None = None,
+    ) -> int:
+        return sum(
+            cls._segment_width(segment)
+            for segment in cls._parallel_segments(event, payload) or ()
+            if mode is None or segment.get("mode") == mode
+        )
+
+    @classmethod
+    def _parallel_widest(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+    ) -> int:
+        return max(
+            (
+                cls._segment_width(segment)
+                for segment in cls._parallel_segments(event, payload) or ()
+            ),
+            default=0,
+        )
+
+    @classmethod
+    def _parallel_segment_field(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+        key: str,
+        *,
+        mode: str | None = None,
+    ) -> tuple[str, ...]:
+        """Project one closed segment field, in plan order, optionally by mode."""
+
+        segments = cls._parallel_segments(event, payload)
+        if segments is None:
+            return ()
+        return tuple(
+            value
+            for segment in segments
+            if mode is None or segment.get("mode") == mode
+            if isinstance(value := segment.get(key), str) and value.strip()
         )
 
     @staticmethod
@@ -269,18 +430,41 @@ class TrajectoryProjector:
         is shared with every other feature's decisions, so the ``feature``
         discriminator is what makes this projection F3-only: an F4 or F12
         decision passing through here contributes nothing.
-
-        Only ``phase`` and ``outcome_code`` are projectable from a real run.
-        The discovery counts a fixture case can assert — candidates, recall
-        rank, result tokens, model turns — are published as metrics rather than
-        persisted on the decision row, because ``quality.decision.v1`` has no
-        numeric field and this lane does not extend the closed event family.
         """
 
         if payload.get("feature") != "f3":
             return None
         value = payload.get(key)
         return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _discovery_int(payload: Mapping[str, object], key: str) -> int:
+        """Project one member of the decision row's numeric extension.
+
+        Gated on the same ``feature`` discriminator as the text fields, so a
+        non-F3 decision that happens to carry counts contributes none of them.
+        An absent or non-integer value projects as ``0``; whether that zero was
+        *measured* is carried separately by ``discovery_counts_observed``,
+        because a ceiling of zero must not be satisfiable by absent data.
+        """
+
+        if payload.get("feature") != "f3":
+            return 0
+        value = payload.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return 0
+        return value
+
+    @classmethod
+    def _discovery_counts_observed(cls, payload: Mapping[str, object]) -> bool:
+        """Report whether this F3 row actually carried a numeric fact."""
+
+        if payload.get("feature") != "f3":
+            return False
+        return any(
+            isinstance(payload.get(key), int) and not isinstance(payload.get(key), bool)
+            for key in cls._DISCOVERY_COUNT_KEYS
+        )
 
     @staticmethod
     def _policy_text(payload: Mapping[str, object], key: str) -> str | None:

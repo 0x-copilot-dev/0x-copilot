@@ -128,6 +128,13 @@ class _OperationFields:
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _QUALITY_REF_MAX = 512
+# Ceilings for the decision row's numeric extension. Each is the product bound
+# with headroom, so a runaway producer is rejected at validation rather than
+# persisting an unbounded integer: F3 search answers at most 10 candidates, a
+# bridge answer is capped at 16 KiB inline, and one decision is one model turn.
+_QUALITY_COUNT_MAX = 64
+_QUALITY_TOKEN_MAX = 1_000_000
+_QUALITY_TURN_MAX = 1_000
 _QualityFeature = Literal[
     "f1",
     "f2",
@@ -206,7 +213,32 @@ class QualityControlBoundPayload(RuntimeContract):
 
 
 class QualityDecisionPayload(RuntimeContract):
-    """Closed, content-free canonical decision row carried by one run event."""
+    """Closed, content-free canonical decision row carried by one run event.
+
+    The four ``*_count`` / ``*_rank`` / ``*_tokens`` / ``*_turns`` members are
+    the decision row's **bounded numeric extension**.  PRD 9.3 already lists
+    "counts" among the things a run event may carry, and a rank is a count of
+    positions, so these belong to the existing permission rather than widening
+    it.  Four things keep them inside it:
+
+    * **Explicitly named and separately range-constrained**, rather than one
+      ``dict[str, float]``.  A generic numeric map would make the payload's
+      key set a function of whatever a producer felt like measuring, which is
+      precisely the unbounded vocabulary a closed event family exists to
+      prevent, and it would have no place to state a per-quantity ceiling.
+    * **Bounded above as well as below.**  Each ceiling is the real
+      product bound (see each field), so a runaway producer fails validation
+      instead of writing an arbitrarily large integer into a durable row.
+    * **Body-free.**  A rank is a number; the *thing* ranked never travels
+      with it.  There is no field here a query, capability name, description,
+      argument, or result could enter through, which is a structural
+      guarantee rather than a reviewed-each-call-site one.
+    * **Optional, defaulting to ``None``.**  ``None`` means *not observed*,
+      which is deliberately distinct from an observed ``0`` — a ceiling of
+      zero must be able to tell "nothing came back" from "nothing was
+      measured".  Older ``quality.decision.v1`` rows written before this
+      extension carry none of these keys and still validate unchanged.
+    """
 
     schema_version: Literal[1] = 1
     decision_id: str = Field(min_length=1, max_length=160)
@@ -219,6 +251,18 @@ class QualityDecisionPayload(RuntimeContract):
     outcome_code: str = Field(min_length=1, max_length=120)
     record_ref: str | None = Field(default=None, max_length=_QUALITY_REF_MAX)
     parent_decision_refs: tuple[str, ...] = Field(default=(), max_length=64)
+    #: How many candidates this decision's search answered with. Ceiling is
+    #: F3's own ``search returns at most 10 candidates`` with headroom.
+    candidate_count: int | None = Field(default=None, ge=0, le=_QUALITY_COUNT_MAX)
+    #: The 1-based position the selected reference held in the search that
+    #: offered it; ``0`` means the selection came back from no search at all,
+    #: which is the miss selection recall exists to catch. Same ceiling as the
+    #: candidate list it indexes into.
+    selection_rank: int | None = Field(default=None, ge=0, le=_QUALITY_COUNT_MAX)
+    #: Model-visible tokens this decision's answer cost.
+    result_tokens: int | None = Field(default=None, ge=0, le=_QUALITY_TOKEN_MAX)
+    #: Model turns this decision consumed.
+    model_turns: int | None = Field(default=None, ge=0, le=_QUALITY_TURN_MAX)
     created_at: datetime
 
     @field_validator("created_at")

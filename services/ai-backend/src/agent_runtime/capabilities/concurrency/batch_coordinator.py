@@ -8,7 +8,7 @@ coordinator does not try to prevent coroutines from starting: it makes each one
 come. Concurrency control is therefore a property of where the work waits, not
 of who calls it.
 
-Four commitments make that safe:
+Five commitments make that safe:
 
 - **Nothing runs ahead of the plan.** :meth:`BatchExecutionCoordinator.run_child`
   runs a child's body only after resolving it against a
@@ -39,20 +39,30 @@ Four commitments make that safe:
   input order whatever order they finished in, while every recorded timestamp is
   read from the injected clock at the moment the child actually settled.
 
+- **Dispatch is durable before it happens.** When a child journal is wired,
+  :meth:`BatchExecutionCoordinator.run_child` records that a child is about to
+  start, waits for that record to be durable, and only then awaits the body — and
+  refuses to dispatch at all if the record cannot be written. A crash therefore
+  leaves evidence that distinguishes "never started" from "started and we lost
+  the answer", which is the distinction
+  :mod:`agent_runtime.capabilities.concurrency.batch_recovery` needs and cannot
+  reconstruct any other way.
+
+:meth:`BatchExecutionCoordinator.cancel` stops admission, interrupts cancellable
+reads, drains the rest under a bound, and rules whatever is left indeterminate.
+It never rolls anything back and never claims an outcome it did not observe;
+:mod:`agent_runtime.capabilities.concurrency.batch_cancellation` holds the
+vocabulary that keeps those claims honest.
+
 Deliberately **not** in this module: per-child Operation Gateway re-entry with
-its own audit identity (F6.5), run cancellation and restart semantics (F6.6),
-kill-switch resolution (F6.7 — consumed here only through ``live_allowance``),
-and any factory or worker wiring (root). ``BatchChildStatus.INDETERMINATE`` and
-the failure-policy stop are the two places this lane touches that boundary, and
-both only *record* an honest fact: a child whose coroutine was cancelled after
-it started may already have had an external effect, and a stopped batch admits
-nothing new. Neither cancels in-flight work, drains it, or invents a rollback.
+its own audit identity (F6.5), kill-switch resolution (F6.7 — consumed here only
+through ``live_allowance``), and any factory or worker wiring (root).
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -60,7 +70,19 @@ from typing import Final, Self, TypeAlias
 
 from pydantic import Field, model_validator
 
+from agent_runtime.capabilities.concurrency.batch_cancellation import (
+    BatchCancellationReason,
+    BatchCancellationReport,
+    CancelledChild,
+    ChildCancellationState,
+    ChildEffectCertainty,
+)
+from agent_runtime.capabilities.concurrency.batch_child_journal import (
+    BatchChildTransitionRecorder,
+)
 from agent_runtime.capabilities.concurrency.batch_journal import (
+    BatchChildDisposition,
+    BatchJournalError,
     BatchJournalPatterns,
     DurableBatchPlan,
 )
@@ -68,12 +90,14 @@ from agent_runtime.capabilities.concurrency.contracts import (
     BatchFailurePolicy,
     BatchSegment,
     ConcurrencyAllowance,
+    ConcurrencyPolicy,
     PermitAcquisitionRequest,
     PermitBounds,
     PermitLease,
     PermitOutcome,
     PermitScope,
     PermitWaitMode,
+    SideEffectKind,
 )
 from agent_runtime.capabilities.concurrency.descriptor_policy import (
     CapabilityConcurrencyDeclaration,
@@ -94,6 +118,11 @@ class BatchCoordinatorBounds:
 
     MAX_TRACKED_BATCHES: Final[int] = 32
     DEFAULT_ADMISSION_WAIT_SECONDS: Final[float] = PermitBounds.MAX_TIMEOUT_SECONDS
+    # A drain waits for children the coordinator cannot cancel. It is short by
+    # design: waiting longer does not make an uncancellable write finish, it
+    # only delays the moment the run admits it does not know. Whatever is still
+    # running when this expires is reported indeterminate, never assumed done.
+    DEFAULT_DRAIN_SECONDS: Final[float] = 5.0
 
 
 class BatchCoordinatorError(RuntimeError):
@@ -123,8 +152,17 @@ class BatchCoordinatorMessages:
 class BatchAdmissionOutcome(StrEnum):
     """Closed, deterministic result of one child's admission attempt.
 
-    Every refusal is a fact the caller can report honestly: the child's body was
-    never awaited, so no external effect is in doubt.
+    Every refusal is a fact about *this* admission: the child's body was never
+    awaited here, so this process introduced no external effect.
+
+    ``REFUSED_WITHHELD_ON_RESTART`` is the one member for which that is the
+    whole claim rather than the whole story. It is reached only when a durable
+    restart decision forbade re-running the child, and the reason such a
+    decision exists is that an *earlier* process may already have done the work.
+    Reading it as "nothing ever happened" would invert the very finding that
+    produced it, so :attr:`introduced_no_effect` refuses to say so and callers
+    that want the prior-process answer must read the journal, which is the only
+    thing that knows.
     """
 
     ADMITTED = "admitted"
@@ -136,12 +174,28 @@ class BatchAdmissionOutcome(StrEnum):
     REFUSED_PERMIT = "refused_permit"
     REFUSED_CALLER_CANCELLED = "refused_caller_cancelled"
     REFUSED_DISPOSED = "refused_disposed"
+    REFUSED_RUN_CANCELLED = "refused_run_cancelled"
+    REFUSED_UNDURABLE = "refused_undurable"
+    REFUSED_WITHHELD_ON_RESTART = "refused_withheld_on_restart"
 
     @property
     def admitted(self) -> bool:
         """Return whether this outcome let a child body run."""
 
         return self is BatchAdmissionOutcome.ADMITTED
+
+    @property
+    def introduced_no_effect(self) -> bool:
+        """Return whether *no* process can have acted on this child's behalf.
+
+        Derived by exclusion rather than listed, so a member added later is
+        effect-uncertain by default and has to argue its way into the safe set.
+        """
+
+        return self not in (
+            BatchAdmissionOutcome.ADMITTED,
+            BatchAdmissionOutcome.REFUSED_WITHHELD_ON_RESTART,
+        )
 
 
 class BatchChildStatus(StrEnum):
@@ -174,13 +228,16 @@ class BatchChildStatus(StrEnum):
 class BatchExecutionStatus(StrEnum):
     """Closed status of one batch as a whole.
 
-    There is no ``cancelled`` member. Cancellation is F6.6's, and advertising a
-    status this lane cannot produce would be a lie a later lane has to discover
-    at runtime.
+    ``CANCELLED`` outranks ``PARTIAL`` and ``FAILED`` because a cancelled batch
+    that happens to contain a failure did not *fail* — it stopped. Reporting
+    "failed" there would attribute an outcome to the work that belongs to the
+    decision to stop it. Per-child detail stays on ``outcomes``, so nothing is
+    lost by naming the batch honestly.
     """
 
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    CANCELLED = "cancelled"
     PARTIAL = "partial"
     FAILED = "failed"
 
@@ -383,14 +440,18 @@ class _ChildState:
     __slots__ = (
         "admission",
         "admitted_at",
+        "cancel_requested",
         "completed_at",
         "error",
         "holds_slot",
         "identity",
         "input_index",
         "permit_outcome",
+        "running_noted",
         "segment_index",
+        "side_effect",
         "status",
+        "task",
         "value",
     )
 
@@ -400,18 +461,36 @@ class _ChildState:
         *,
         input_index: int,
         segment_index: int,
+        side_effect: SideEffectKind,
     ) -> None:
         self.identity = identity
         self.input_index = input_index
         self.segment_index = segment_index
+        self.side_effect = side_effect
         self.status = BatchChildStatus.PENDING
         self.admission: BatchAdmissionOutcome | None = None
         self.permit_outcome: PermitOutcome | None = None
         self.admitted_at: datetime | None = None
         self.completed_at: datetime | None = None
         self.holds_slot = False
+        self.running_noted = False
+        self.cancel_requested = False
+        self.task: asyncio.Task[object] | None = None
         self.value: object | None = None
         self.error: BaseException | None = None
+
+    @property
+    def cancellable(self) -> bool:
+        """Return whether interrupting this child cannot change the world.
+
+        Only a declared read or an explicitly effect-free operation qualifies.
+        An undeclared effect class is F6.1's conservative floor and is *not*
+        cancellable here: interrupting an operation nobody classified could
+        abandon a half-finished external change, and abandoning it is not the
+        same as preventing it.
+        """
+
+        return self.side_effect in (SideEffectKind.READ, SideEffectKind.NONE)
 
     def outcome(self) -> BatchChildOutcome:
         """Return the body-free record of this child's current state."""
@@ -435,6 +514,41 @@ class _ChildState:
         )
 
 
+def _cancellation_state(
+    state: _ChildState,
+    *,
+    settled_before: bool,
+) -> ChildCancellationState:
+    """Classify one child for the cancellation report.
+
+    Status is consulted before timing on purpose: an indeterminate child that
+    happened to settle inside the drain window is still indeterminate, and
+    checking "did it settle during the drain" first would quietly promote it to
+    a completion.
+    """
+
+    if state.status is BatchChildStatus.INDETERMINATE:
+        if state.cancel_requested:
+            return ChildCancellationState.CANCELLED_IN_PLACE
+        # Already unknowable before anyone asked to cancel — the drain neither
+        # caused this nor could have resolved it, so it must not be reported as
+        # work the drain failed to finish.
+        return (
+            ChildCancellationState.INDETERMINATE_BEFORE_CANCEL
+            if settled_before
+            else ChildCancellationState.IN_FLIGHT_INDETERMINATE
+        )
+    if state.status is BatchChildStatus.REFUSED:
+        return ChildCancellationState.NOT_STARTED
+    if not state.status.settled:
+        return ChildCancellationState.IN_FLIGHT_INDETERMINATE
+    return (
+        ChildCancellationState.SETTLED_BEFORE_CANCEL
+        if settled_before
+        else ChildCancellationState.SETTLED_DURING_DRAIN
+    )
+
+
 class _SegmentWaiter:
     """One child parked on its segment gate until the plan admits it."""
 
@@ -450,6 +564,7 @@ class _BatchState:
     """Bounded execution state for one durable plan."""
 
     __slots__ = (
+        "cancelled",
         "children",
         "cursor",
         "deadline",
@@ -472,6 +587,7 @@ class _BatchState:
         self.failure_policy: BatchFailurePolicy = batch.failure_policy
         self.started_at = started_at
         self.stopped = False
+        self.cancelled = False
         self.cursor = 0
         self.running = [0] * len(self.segments)
         self.settled = [0] * len(self.segments)
@@ -485,6 +601,11 @@ class _BatchState:
         }
         for input_index, operation_id in enumerate(self.order):
             segment_index = segment_of[operation_id]
+            # The effect class comes from the durable plan, not from a caller
+            # and not from a live lookup: whether a child may be interrupted or
+            # replayed has to be decided from the same frozen policy the
+            # ordering was decided from, or the two could disagree.
+            policy = plan.policy_for(operation_id) or ConcurrencyPolicy()
             self.children[operation_id] = _ChildState(
                 BatchChildIdentity(
                     batch_id=plan.batch_id,
@@ -495,6 +616,7 @@ class _BatchState:
                 ),
                 input_index=input_index,
                 segment_index=segment_index,
+                side_effect=policy.side_effect,
             )
 
     @property
@@ -515,6 +637,15 @@ class BatchExecutionCoordinator:
     request — which pools a child acquires at. Wait mode, timeout, and requested
     width are chosen here from the plan and the batch deadline, so a factory has
     no field through which it could widen a child's concurrency.
+
+    ``child_journal`` is what makes a crash recoverable. When it is supplied,
+    every child's dispatch is made durable *before* its body is awaited, and a
+    failure to record that is a refusal rather than an unrecorded dispatch — so
+    a child that ran always left a trace. When it is omitted the coordinator
+    still executes correctly, but it leaves a run whose children a restart
+    cannot classify;
+    :class:`~agent_runtime.capabilities.concurrency.batch_recovery.BatchRestartPlanner`
+    reads that absence as "unknown", never as "nothing happened".
     """
 
     def __init__(
@@ -525,14 +656,23 @@ class BatchExecutionCoordinator:
         live_allowance: BatchAllowanceSupplier | None = None,
         clock: BatchClock | None = None,
         max_tracked_batches: int = BatchCoordinatorBounds.MAX_TRACKED_BATCHES,
+        child_journal: BatchChildTransitionRecorder | None = None,
+        drain_seconds: float = BatchCoordinatorBounds.DEFAULT_DRAIN_SECONDS,
     ) -> None:
         self._permits = permits
         self._permit_scopes = permit_scopes
         self._live_allowance = live_allowance
         self._clock = clock if clock is not None else self._utc_now
         self._max_tracked_batches = max(1, max_tracked_batches)
+        self._child_journal = child_journal
+        self._drain_seconds = max(0.0, drain_seconds)
         self._batches: dict[str, _BatchState] = {}
         self._disposed = False
+        self._cancelled = False
+        self._withheld: frozenset[str] = frozenset()
+        self._running_children = 0
+        self._quiescent = asyncio.Event()
+        self._quiescent.set()
 
     @property
     def disposed(self) -> bool:
@@ -541,10 +681,53 @@ class BatchExecutionCoordinator:
         return self._disposed
 
     @property
+    def cancelled(self) -> bool:
+        """Return whether this run has stopped admitting new children."""
+
+        return self._cancelled
+
+    @property
+    def running_children(self) -> int:
+        """Return how many child bodies are currently inside the coordinator."""
+
+        return self._running_children
+
+    @property
     def tracked_batches(self) -> int:
         """Return how many batches currently hold execution state."""
 
         return len(self._batches)
+
+    @property
+    def withheld_operations(self) -> frozenset[str]:
+        """Return every operation a durable restart decision forbade re-running."""
+
+        return self._withheld
+
+    def withhold_on_restart(self, operation_ids: Iterable[str]) -> None:
+        """Forbid re-running the named children, whatever a replayed turn asks.
+
+        This is the *execution-side* half of F6.6's never-replay-a-started-write
+        rule. The planner establishes the rule from durable facts; this makes it
+        binding on the only path a child can reach a connector, so a restarted
+        graph re-emitting an identical tool call cannot route around the finding
+        by simply asking again.
+
+        Union rather than replacement, and there is deliberately no way to
+        un-withhold. A restart decision is derived from durable evidence that
+        does not improve while the run is going, so every route that could
+        narrow this set is a route by which a withheld write becomes runnable —
+        and none of them is worth the throughput.
+
+        Refusal happens *before* the segment gate and *before* any dispatch
+        intent is journalled, which is what keeps a withheld child's evidence
+        intact: it still reads as never-started to the next restart rather than
+        being downgraded to indeterminate by the act of refusing it.
+        """
+
+        self._withheld |= frozenset(
+            operation_id for operation_id in operation_ids if operation_id
+        )
 
     def begin(self, plan: DurableBatchPlan) -> None:
         """Register one already-durable plan as executable.
@@ -609,6 +792,17 @@ class BatchExecutionCoordinator:
                 state,
                 BatchAdmissionOutcome.REFUSED_ALREADY_SETTLED,
             )
+        if operation_id in self._withheld:
+            # Settled here rather than raised so the batch's segment accounting
+            # stays whole: a withheld child that never reached a terminal state
+            # would hold its segment open and strand every sibling behind it.
+            self._settle(
+                batch,
+                state,
+                BatchChildStatus.REFUSED,
+                admission=BatchAdmissionOutcome.REFUSED_WITHHELD_ON_RESTART,
+            )
+            return state.result()
 
         gate = await self._wait_for_gate(batch, state)
         if not gate.admitted:
@@ -621,6 +815,40 @@ class BatchExecutionCoordinator:
 
         batch = self._require(batch_id)
         return tuple(batch.children[key].identity for key in batch.order)
+
+    def planned_allowance(
+        self,
+        *,
+        batch_id: str,
+        operation_id: str,
+    ) -> ConcurrencyAllowance:
+        """Return the width one planned child may overlap at, before admission.
+
+        :class:`BatchChildAdmission` also carries an ``effective_allowance``, but
+        only *after* the child has been gated and permitted — which is too late
+        for a caller that must decide the width of the seam the child will be
+        admitted *through*. That is the position the graph tool seam is in: the
+        Step-2 admission gate runs before this coordinator sees the child at all,
+        so it needs the number now.
+
+        This is the same fold :meth:`_run_admitted` uses — segment ∧ plan ∧ live
+        kill switch — deliberately reusing ``_effective_allowance`` rather than
+        restating it, so a pre-admission answer and an admission answer cannot
+        drift apart. It excludes only the permit table, which narrows again
+        inside :meth:`run_child`; both narrow, and neither can widen the other.
+
+        An unknown batch, an unknown operation, or a settled child answers
+        serial. A width this method cannot positively establish is never one a
+        caller may overlap on.
+        """
+
+        batch = self._batches.get(batch_id)
+        if batch is None:
+            return ConcurrencyAllowance.serial()
+        state = batch.children.get(operation_id)
+        if state is None or state.status is not BatchChildStatus.PENDING:
+            return ConcurrencyAllowance.serial()
+        return self._effective_allowance(batch, state.segment_index)
 
     def results(self, batch_id: str) -> tuple[BatchChildResult, ...]:
         """Return one batch's results in **input order**.
@@ -644,6 +872,58 @@ class BatchExecutionCoordinator:
             started_at=batch.started_at,
             completed_at=self._completed_at(batch),
             outcomes=outcomes,
+        )
+
+    async def cancel(
+        self,
+        *,
+        reason: BatchCancellationReason = BatchCancellationReason.RUN_CANCELLED,
+        drain_seconds: float | None = None,
+    ) -> BatchCancellationReport:
+        """Stop this run's batches and report, honestly, what that achieved.
+
+        The four steps happen in this order for reasons that are not stylistic:
+
+        1. **Admission stops first, and synchronously.** There is no ``await``
+           between entering this method and every batch being marked stopped, so
+           no child can slip through the gate while cancellation is "in
+           progress". A parked child resolves to ``REFUSED_RUN_CANCELLED``; it
+           never ran, so nothing about it is in doubt.
+        2. **Only cancellable reads are interrupted.** Interrupting a write does
+           not undo it — it abandons it at an unknown point, which is strictly
+           worse than letting it finish, because a finished write at least has a
+           knowable outcome.
+        3. **The drain is bounded.** Waiting longer never makes an uncancellable
+           operation finish; it only postpones admitting we do not know. The
+           bound is a real deadline, and :attr:`BatchCancellationReport.drained`
+           records whether it was reached rather than inferring it.
+        4. **Whatever is still running becomes indeterminate.** Not failed, not
+           cancelled, not rolled back. The run stopped watching; the work may
+           still be happening, and the report says exactly that.
+
+        No external effect is undone here, and nothing in the returned report
+        can be read as claiming one was. Cancellation is idempotent: a second
+        call re-reports the same settled state.
+        """
+
+        requested_at = self._now()
+        settled_before = self._settled_children()
+        cancelled_in_place = self._stop_admission()
+        for state in cancelled_in_place:
+            if state.task is not None and not state.task.done():
+                state.task.cancel()
+        bound = (
+            self._drain_seconds if drain_seconds is None else max(0.0, drain_seconds)
+        )
+        drained = await self._drain(bound)
+        self._mark_in_flight_indeterminate()
+        await self._record_indeterminate_children()
+        return BatchCancellationReport(
+            reason=reason,
+            requested_at=requested_at,
+            completed_at=self._now(),
+            drained=drained,
+            children=self._cancellation_children(settled_before),
         )
 
     def release(self, batch_id: str) -> None:
@@ -737,9 +1017,16 @@ class BatchExecutionCoordinator:
                     permit_outcome=lease.outcome,
                 )
                 return state.result()
+            if not await self._authorize_dispatch(batch, state, lease):
+                return state.result()
             state.status = BatchChildStatus.RUNNING
             state.admitted_at = self._now()
             state.permit_outcome = lease.outcome
+            self._note_running(state)
+            # The task is captured so cancellation can reach a child the
+            # framework started and this module merely gated. Only cancellable
+            # reads are ever cancelled through it.
+            state.task = asyncio.current_task()
             admission = BatchChildAdmission(
                 identity=state.identity,
                 outcome=BatchAdmissionOutcome.ADMITTED,
@@ -750,6 +1037,11 @@ class BatchExecutionCoordinator:
             try:
                 value = await runner(admission)
             except asyncio.CancelledError as exc:
+                # No journal append here on purpose. This coroutine is being
+                # torn down, so any await it starts is cancelled too — and the
+                # record it would write is the one whose absence already means
+                # "indeterminate". :meth:`cancel` writes it from a healthy task
+                # instead, where the write can actually finish.
                 self._settle(
                     batch,
                     state,
@@ -760,24 +1052,100 @@ class BatchExecutionCoordinator:
                 )
                 raise
             except Exception as exc:
-                self._settle(
+                if self._settle(
                     batch,
                     state,
                     BatchChildStatus.FAILED,
                     admission=BatchAdmissionOutcome.ADMITTED,
                     permit_outcome=lease.outcome,
                     error=exc,
-                )
+                ):
+                    await self._record_settled(state, BatchChildDisposition.FAILED)
             else:
-                self._settle(
+                if self._settle(
                     batch,
                     state,
                     BatchChildStatus.SUCCEEDED,
                     admission=BatchAdmissionOutcome.ADMITTED,
                     permit_outcome=lease.outcome,
                     value=value,
-                )
+                ):
+                    await self._record_settled(state, BatchChildDisposition.SUCCEEDED)
         return state.result()
+
+    async def _authorize_dispatch(
+        self,
+        batch: _BatchState,
+        state: _ChildState,
+        lease: PermitLease,
+    ) -> bool:
+        """Make one child's dispatch durable, or refuse to dispatch it.
+
+        This is the single ordering the whole recovery story rests on: the
+        intent append is awaited to completion *before* the body, so a process
+        that dies with no intent record cannot have run the body. A journal that
+        cannot record the intent therefore has to refuse the dispatch — running
+        anyway would produce exactly the child a restart wrongly believes never
+        started, which is the one mistake this lane exists to prevent.
+
+        The re-check afterwards closes the window the append itself opens: a
+        cancellation that arrives while the record is being written settles the
+        child before it starts, and the body must not run behind it.
+        """
+
+        if self._child_journal is not None:
+            try:
+                await self._child_journal.record_dispatch_intent(
+                    batch_id=state.identity.batch_id,
+                    operation_id=state.identity.operation_id,
+                )
+            except BatchJournalError:
+                self._settle(
+                    batch,
+                    state,
+                    BatchChildStatus.REFUSED,
+                    admission=BatchAdmissionOutcome.REFUSED_UNDURABLE,
+                    permit_outcome=lease.outcome,
+                )
+                return False
+        if state.status.settled:
+            return False
+        stop = self._immediate_refusal(batch)
+        if stop is not None:
+            self._settle(
+                batch,
+                state,
+                BatchChildStatus.REFUSED,
+                admission=stop,
+                permit_outcome=lease.outcome,
+            )
+            return False
+        return True
+
+    async def _record_settled(
+        self,
+        state: _ChildState,
+        disposition: BatchChildDisposition,
+    ) -> None:
+        """Record one child's outcome, best-effort and deliberately so.
+
+        Losing this append costs observability, not correctness: a child with a
+        durable intent and no durable outcome reads as indeterminate, which is
+        precisely what an unrecorded outcome is. Nothing downstream has to
+        compensate for a failure here, which is why it is swallowed rather than
+        raised into a tool result that has already been produced.
+        """
+
+        if self._child_journal is None:
+            return
+        try:
+            await self._child_journal.record_settled(
+                batch_id=state.identity.batch_id,
+                operation_id=state.identity.operation_id,
+                disposition=disposition,
+            )
+        except BatchJournalError:
+            return
 
     def _permit_request(
         self,
@@ -816,11 +1184,17 @@ class BatchExecutionCoordinator:
         permit_outcome: PermitOutcome | None = None,
         value: object | None = None,
         error: BaseException | None = None,
-    ) -> None:
-        """Record one child's terminal state and release its segment slot."""
+    ) -> bool:
+        """Record one child's terminal state and release its segment slot.
+
+        Returns whether this call is the one that settled the child. A late
+        completion for a child cancellation already ruled indeterminate returns
+        ``False``: the first durable answer stands, and a body that finished
+        after the run stopped waiting does not get to rewrite it.
+        """
 
         if state.status.settled:
-            return
+            return False
         segment_index = state.segment_index
         if state.holds_slot:
             batch.running[segment_index] -= 1
@@ -833,6 +1207,7 @@ class BatchExecutionCoordinator:
         state.error = error
         state.completed_at = self._now()
         batch.settled[segment_index] += 1
+        self._clear_running(state)
         if (
             status
             in (
@@ -843,27 +1218,53 @@ class BatchExecutionCoordinator:
         ):
             self._stop(batch)
         self._pump(batch)
+        return True
 
-    def _stop(self, batch: _BatchState) -> None:
-        """Stop admitting new children after a failure.
+    def _note_running(self, state: _ChildState) -> None:
+        """Count one child body as inside the coordinator."""
 
-        ``fail_fast`` and ``stop_new`` differ only in whether in-flight children
-        are also cancelled, and cancelling in-flight work is F6.6's. This lane
-        implements the half both policies share and leaves running children
-        alone.
+        state.running_noted = True
+        self._running_children += 1
+        self._quiescent.clear()
+
+    def _clear_running(self, state: _ChildState) -> None:
+        """Stop counting one child body, waking a drain once none are left."""
+
+        if not state.running_noted:
+            return
+        state.running_noted = False
+        self._running_children -= 1
+        if self._running_children <= 0:
+            self._running_children = 0
+            self._quiescent.set()
+
+    def _stop(
+        self,
+        batch: _BatchState,
+        *,
+        outcome: BatchAdmissionOutcome = BatchAdmissionOutcome.REFUSED_BATCH_STOPPED,
+    ) -> None:
+        """Stop admitting new children, leaving running ones alone.
+
+        Both the failure-policy stop and the cancellation stop go through here,
+        because "admit nothing further" is the same operation either way. What
+        differs is only the outcome a refused child reports, so a caller can
+        tell a sibling's failure from an operator's cancellation without
+        inspecting anything else, and whether in-flight work is then cancelled —
+        which :meth:`cancel` does afterwards and this method never does.
         """
 
         if batch.stopped:
             return
         batch.stopped = True
-        self._refuse_waiters(batch, BatchAdmissionOutcome.REFUSED_BATCH_STOPPED)
+        self._refuse_waiters(batch, outcome)
         for state in batch.children.values():
             if state.status is BatchChildStatus.PENDING:
                 self._settle(
                     batch,
                     state,
                     BatchChildStatus.REFUSED,
-                    admission=BatchAdmissionOutcome.REFUSED_BATCH_STOPPED,
+                    admission=outcome,
                 )
 
     def _pump(self, batch: _BatchState) -> None:
@@ -916,11 +1317,128 @@ class BatchExecutionCoordinator:
             if not waiter.future.done():
                 waiter.future.set_result(None)
 
+    def _stop_admission(self) -> tuple[_ChildState, ...]:
+        """Close every gate synchronously and return the reads worth cancelling.
+
+        Nothing in here awaits, which is the property that makes "stop admitting
+        new children immediately" literally true rather than approximately true.
+        """
+
+        self._cancelled = True
+        cancellable: list[_ChildState] = []
+        for batch in self._batches.values():
+            batch.cancelled = True
+            self._stop(batch, outcome=BatchAdmissionOutcome.REFUSED_RUN_CANCELLED)
+            for state in batch.children.values():
+                if state.status is not BatchChildStatus.RUNNING:
+                    continue
+                if not state.cancellable:
+                    continue
+                state.cancel_requested = True
+                cancellable.append(state)
+        return tuple(cancellable)
+
+    async def _drain(self, seconds: float) -> bool:
+        """Wait, boundedly, for every running child to settle.
+
+        A zero bound is a real answer, not a degenerate one: it means "report
+        what is true now". It also makes the bound observable without any test
+        having to spend wall-clock time proving that a deadline exists.
+        """
+
+        if self._running_children == 0:
+            return True
+        if seconds <= 0.0:
+            return False
+        try:
+            async with asyncio.timeout(seconds):
+                while self._running_children:
+                    await self._quiescent.wait()
+        except TimeoutError:
+            return False
+        return True
+
+    def _mark_in_flight_indeterminate(self) -> None:
+        """Rule every child still running after the drain indeterminate."""
+
+        for batch in self._batches.values():
+            for state in list(batch.children.values()):
+                if state.status is BatchChildStatus.RUNNING:
+                    self._settle(
+                        batch,
+                        state,
+                        BatchChildStatus.INDETERMINATE,
+                        admission=BatchAdmissionOutcome.ADMITTED,
+                    )
+
+    async def _record_indeterminate_children(self) -> None:
+        """Durably record every child whose outcome nobody can determine."""
+
+        if self._child_journal is None:
+            return
+        for batch in self._batches.values():
+            for state in batch.children.values():
+                if state.status is BatchChildStatus.INDETERMINATE:
+                    await self._record_settled(
+                        state,
+                        BatchChildDisposition.INDETERMINATE,
+                    )
+
+    def _settled_children(self) -> frozenset[tuple[str, str]]:
+        """Return every child already terminal before cancellation began."""
+
+        return frozenset(
+            (batch_id, operation_id)
+            for batch_id, batch in self._batches.items()
+            for operation_id, state in batch.children.items()
+            if state.status.settled
+        )
+
+    def _cancellation_children(
+        self,
+        settled_before: frozenset[tuple[str, str]],
+    ) -> tuple[CancelledChild, ...]:
+        """Describe every tracked child as cancellation actually left it."""
+
+        return tuple(
+            self._cancellation_child(batch_id, state, settled_before)
+            for batch_id, batch in self._batches.items()
+            for state in (batch.children[key] for key in batch.order)
+        )
+
+    @staticmethod
+    def _cancellation_child(
+        batch_id: str,
+        state: _ChildState,
+        settled_before: frozenset[tuple[str, str]],
+    ) -> CancelledChild:
+        """Describe one child, reading its state rather than its timing.
+
+        The classification is driven by ``status`` first and timing second. A
+        child that settled during the drain but settled *indeterminate* is not
+        a completion, and ordering the checks the other way round would let a
+        cancelled write be reported as one.
+        """
+
+        operation_id = state.identity.operation_id
+        return CancelledChild(
+            batch_id=batch_id,
+            operation_id=operation_id,
+            state=_cancellation_state(
+                state,
+                settled_before=(batch_id, operation_id) in settled_before,
+            ),
+            effect_certainty=ChildEffectCertainty.of(state.side_effect),
+            cancel_requested=state.cancel_requested,
+        )
+
     def _immediate_refusal(self, batch: _BatchState) -> BatchAdmissionOutcome | None:
         """Return the refusal that applies before a child may even wait."""
 
         if self._disposed:
             return BatchAdmissionOutcome.REFUSED_DISPOSED
+        if batch.cancelled:
+            return BatchAdmissionOutcome.REFUSED_RUN_CANCELLED
         if batch.stopped:
             return BatchAdmissionOutcome.REFUSED_BATCH_STOPPED
         if self._wait_seconds(batch) <= 0.0:
@@ -975,6 +1493,8 @@ class BatchExecutionCoordinator:
         statuses = [child.status for child in batch.children.values()]
         if all(status is BatchChildStatus.SUCCEEDED for status in statuses):
             return BatchExecutionStatus.COMPLETED
+        if batch.cancelled:
+            return BatchExecutionStatus.CANCELLED
         if any(status is BatchChildStatus.SUCCEEDED for status in statuses):
             return BatchExecutionStatus.PARTIAL
         return BatchExecutionStatus.FAILED

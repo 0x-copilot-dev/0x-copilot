@@ -30,7 +30,10 @@ from agent_runtime.api.prompt_observation_store import (
 )
 from agent_runtime.api.run_termination import TerminalRunObserverPort
 from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
-from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
+from agent_runtime.control_plane.ports import (
+    RunControlDecisionStorePort,
+    RunControlSnapshotStorePort,
+)
 from agent_runtime.prompts.observation import PromptObservationStorePort
 from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.execution.model_invocation.circuit_health import (
@@ -71,6 +74,10 @@ from runtime_api.schemas import (
     RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
+)
+from runtime_worker.batch_concurrency_composition import (
+    LiveBatchAdmissionRegistry,
+    build_batch_concurrency_composer,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
@@ -185,6 +192,7 @@ class RuntimeWorker:
         ) = None,
         citation_store: "CitationStorePort | None" = None,
         mcp_discovery_cache: object | None = None,
+        mcp_revision_resolver: object | None = None,
         user_policies_resolver: object | None = None,
         artifact_service: object | None = None,
         artifact_blob_store: object | None = None,
@@ -197,6 +205,7 @@ class RuntimeWorker:
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         run_control_snapshot_store: RunControlSnapshotStorePort | None = None,
+        run_control_decision_store: object | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
@@ -253,6 +262,10 @@ class RuntimeWorker:
         # default run / approval handler dependencies factories so every
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
+        # The same assembly's revision authority. It is what lets one run's F3
+        # catalog generation key on the F8 descriptor revisions, so a reference
+        # minted before a server moved fails closed at use time.
+        self.mcp_revision_resolver = mcp_revision_resolver
         # The assembly is constructed at the worker root, but its one feed
         # task is not started until ``run_forever`` owns a fully-built worker.
         self._mcp_revision_poller = mcp_revision_poller
@@ -290,7 +303,19 @@ class RuntimeWorker:
                 event_store=self.event_store,
                 environment=worker_environment,
             )
+        # The decision journal the F3 discovery recorder appends to. The
+        # canonical ``EventJournalRunControlStore`` satisfies both control-plane
+        # ports, so a deployment that wired only the snapshot store already has
+        # the decision half — reusing that object keeps snapshots and decisions
+        # on one journal rather than opening a second writer over the same
+        # events. The port is ``runtime_checkable``, so this narrows on the
+        # append/list contract, never on a concrete adapter.
+        if run_control_decision_store is None and isinstance(
+            run_control_snapshot_store, RunControlDecisionStorePort
+        ):
+            run_control_decision_store = run_control_snapshot_store
         self.run_control_builder = run_control_builder
+        self.run_control_decision_store = run_control_decision_store
         self.prompt_observation_store = prompt_observation_store
         self.model_invocation_store = model_invocation_store
         self._provider_circuit_health = ProcessLocalProviderCircuitHealth()
@@ -300,6 +325,26 @@ class RuntimeWorker:
         if self._provider_circuit_snapshot is not None:
             self._provider_circuit_snapshot.restore(self._provider_circuit_health)
         circuit_registry = ProviderCircuitHealthRegistry(self._provider_circuit_health)
+        # One F6 composer per worker, handed to both composition roots. It is
+        # ``None`` unless an operator configured F6, and the gate that decides
+        # that is read before any F6 module is imported — so an unconfigured
+        # worker loads exactly the modules it loaded before F6 existed.
+        batch_concurrency_composer = build_batch_concurrency_composer(
+            events=self.event_store,
+            snapshots=run_control_snapshot_store,
+            environ=worker_environment,
+        )
+        self.batch_concurrency_composer = batch_concurrency_composer
+        # The join between the two claims cancellation is split across: the run
+        # claim owns the live coordinator, the cancel claim learns the run is
+        # over. Built only when F6 is, so an unconfigured worker gains neither
+        # the object nor the bookkeeping.
+        live_batch_admissions = (
+            LiveBatchAdmissionRegistry()
+            if batch_concurrency_composer is not None
+            else None
+        )
+        self.live_batch_admissions = live_batch_admissions
         model_invocation_composer = ModelInvocationWorkerComposer(
             settings=self.settings,
             persistence=self.persistence,
@@ -381,6 +426,7 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             # PRD-D3 — lets the per-run bulk-staging tool enqueue an allow-always
             # auto-apply through the same durable queue the API uses.
@@ -394,11 +440,14 @@ class RuntimeWorker:
             capability_env=capability_env,
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
             model_invocation_store=self.model_invocation_store,
             model_invocation_composer=model_invocation_composer,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         # Give artifact publication its live path. Without this the artifact's
         # ledger events only reach the run through the outbox, which is drained
@@ -431,6 +480,7 @@ class RuntimeWorker:
             model_invocation_store=self.model_invocation_store,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
+            live_batch_admissions=live_batch_admissions,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -440,15 +490,19 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
             model_invocation_store=self.model_invocation_store,
             model_invocation_composer=model_invocation_composer,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         self.artifact_event_handler = (
             artifact_event_handler

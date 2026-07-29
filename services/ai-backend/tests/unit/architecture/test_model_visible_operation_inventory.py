@@ -45,7 +45,13 @@ from agent_runtime.capabilities.mcp.cards import (
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.delegation.subagents.atlas_task_tool import build_atlas_task_tool
 from agent_runtime.effects.composition import EFFECT_DESCRIPTOR_STAGE_MAPPINGS
-from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.capabilities.discovery.contracts import (
+    HmacCapabilityReferenceMinter,
+)
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    CapabilityBridgeComposition,
+)
 from agent_runtime.execution.factory import _model_visible_tools
 from agent_runtime.surfaces_v2.ledger_models import EffectClass, EffectExecutorKind
 from tests.unit.architecture.model_visible_operation_inventory import (
@@ -105,10 +111,13 @@ _PINNED_MODEL_VISIBLE_TOOL_ORDER = (
 # Note what F3.9 did *not* remove. ``load_mcp_server``, ``call_mcp_tool``, and
 # ``auth_mcp`` all survive activation: search and describe replace the card
 # block's per-server *enumeration*, not the tools that load a descriptor, call
-# one, or authenticate a server. ``invoke_capability`` — the only registrable
-# tool that would supersede ``call_mcp_tool`` — is absent because the factory
-# threads neither an executor nor a revalidation, so removing the direct tools
-# would leave a deferred run able to search and describe but never act.
+# one, or authenticate a server.
+#
+# ``invoke_capability`` is absent from *this* tuple because it composes the
+# deferred posture with no bridge composition supplied — the reachable state of
+# a run whose registry exposes no MCP seam, or whose composition root could not
+# derive a reference key. The wired posture below is the one a fully configured
+# deployment produces.
 _PINNED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER = (
     "web_search",
     "load_mcp_server",
@@ -120,6 +129,39 @@ _PINNED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER = (
     "suggest_mcp_connector",
     CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
     CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,
+    "run_code_mode",
+    "run_in_sandbox",
+    "stage_rowset_write",
+    "publish_artifact",
+)
+
+# The maximal surface F3 can produce, now that W2 threads the invocation seam.
+#
+# This tuple exists because ``invoke_capability`` moved from "registrable in
+# principle" to "registered by the factory", and discipline rule 7 says that is
+# a change to assert as a *sequence* rather than to notice as a membership diff.
+# The bridge tools stay grouped between ``suggest_mcp_connector`` and the gated
+# Wave-1 block, and invoke follows describe — the registrar appends it last
+# because it is the one tool with a precondition (an executor *and* a
+# revalidation) that the two read tools do not have.
+#
+# ``call_mcp_tool`` is still here, and deliberately. See
+# ``test_factory_deferred_suppression`` for the argument: ``load_mcp_server``
+# survives suppression and mints no opaque capability ref, so it is
+# ``call_mcp_tool`` — not ``invoke_capability`` — that its descriptors can be
+# acted on through.
+_PINNED_WIRED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER = (
+    "web_search",
+    "load_mcp_server",
+    "call_mcp_tool",
+    "auth_mcp",
+    "load_skill",
+    "load_prior_tool_result",
+    "ask_a_question",
+    "suggest_mcp_connector",
+    CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
+    CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,
+    CapabilityBridgeToolName.INVOKE_CAPABILITY.value,
     "run_code_mode",
     "run_in_sandbox",
     "stage_rowset_write",
@@ -259,17 +301,56 @@ def _deferred_factory_tools(
     )
 
 
+def _capability_bridge() -> CapabilityBridgeComposition:
+    """The run-scoped half of the invocation seam, as a composition root gives it.
+
+    The minter is keyed exactly as ``_capability_catalog``'s builder is, which is
+    the invariant the whole bridge rests on: expansion mints references for that
+    catalog's own id, so a second key would mint references the catalog identity
+    cannot explain.
+    """
+
+    return CapabilityBridgeComposition(
+        minter=HmacCapabilityReferenceMinter(reference_key=_REFERENCE_KEY),
+        revalidation=CapabilityRefRevalidation(
+            revalidator=_Revalidator(),  # type: ignore[arg-type]
+            subject_fingerprint="a" * 64,
+        ),
+    )
+
+
+def _wired_deferred_factory_tools(
+    runtime_context_admin: AgentRuntimeContext,
+) -> tuple[object, ...]:
+    """Compose the surface a fully wired ``deferred`` run hands to the model."""
+
+    return _model_visible_tools(
+        tools=(_tool("web_search"),),
+        mcp_registry=_McpRegistry(),
+        skill_registry=_SkillRegistry(),
+        prior_tool_result_loader=object(),
+        mcp_discovery_cache=None,
+        code_mode_tool=_tool("run_code_mode"),
+        sandbox_execute_tool=_tool("run_in_sandbox"),
+        stage_rowset_write_tool=_FeatureTool("stage_rowset_write"),
+        publish_artifact_tool=_FeatureTool("publish_artifact"),
+        capability_activation=_deferred_decision(),
+        capability_catalog=_capability_catalog(runtime_context_admin),
+        capability_bridge=_capability_bridge(),
+        runtime_context=runtime_context_admin,
+    )
+
+
 def _every_registrable_bridge_tool(
     runtime_context_admin: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     """Every bridge tool the registrar can expose, with all optional seams wired.
 
-    ``invoke_capability`` registers only once an executor *and* a revalidation
-    are supplied, and the factory threads neither yet, so the deferred factory
-    surface alone cannot prove the third tool is covered. The registrar is the
-    one seam that decides which bridge tools a run may expose, so asking it
-    directly — with every seam supplied — is what pins the maximal surface F3
-    activation will produce.
+    The factory now threads the invocation seam, so this is no longer the only
+    place the third tool is reachable. It is kept because it asks the *registrar*
+    directly: the registrar is the one seam that decides which bridge tools a run
+    may expose, and a fourth bridge tool would appear here before any factory
+    could compose it.
     """
 
     registrations = CapabilityBridgeRegistrar.registrations_for(
@@ -330,6 +411,27 @@ def test_deferred_model_visible_tool_sequence_matches_the_pinned_topology(
     assert _tool_order(tools) == _PINNED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER
 
 
+def test_wired_deferred_model_visible_tool_sequence_matches_the_pinned_topology(
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    """Pin the maximal posture, now that W2 threads the invocation seam.
+
+    This is the sequence a fully configured ``deferred`` deployment actually
+    binds to the model, and it is the one F3.9's suppression decision is read
+    off. Asserting it as an ordered tuple rather than a set is what makes
+    ``invoke_capability``'s arrival — and its position after describe — a
+    deliberate change rather than a diff someone notices later.
+    """
+
+    tools = _wired_deferred_factory_tools(runtime_context_admin)
+
+    assert _tool_order(tools) == _PINNED_WIRED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER
+    assert (
+        set(_tool_order(tools)) & CapabilityBridgeToolName.reserved_names()
+        == CapabilityBridgeToolName.reserved_names()
+    )
+
+
 def test_every_assembled_model_tool_has_one_catalog_descriptor(
     runtime_context_admin: AgentRuntimeContext,
 ) -> None:
@@ -344,6 +446,7 @@ def test_every_assembled_model_tool_has_one_catalog_descriptor(
     tools = (
         *_fully_enabled_factory_tools(runtime_context_admin),
         *_deferred_factory_tools(runtime_context_admin),
+        *_wired_deferred_factory_tools(runtime_context_admin),
         *_every_registrable_bridge_tool(runtime_context_admin),
         *_framework_tools(),
     )

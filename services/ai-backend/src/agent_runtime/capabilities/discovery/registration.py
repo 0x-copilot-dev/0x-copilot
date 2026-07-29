@@ -70,6 +70,9 @@ from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRank
 from agent_runtime.capabilities.discovery.revision_authority import (
     CapabilityRefRevalidation,
 )
+from agent_runtime.capabilities.discovery.schema_artifacts import (
+    RunScopedSchemaArtifactPublisher,
+)
 from agent_runtime.capabilities.discovery.telemetry import (
     CapabilityDiscoveryObserver,
     CapabilityExpansionObserver,
@@ -196,6 +199,7 @@ class CapabilityBridgeRegistrar:
         revalidation: CapabilityRefRevalidation | None = None,
         ranker: DeterministicLexicalRanker | None = None,
         seam: CapabilityBridgeSeam | None = None,
+        schema_artifacts: RunScopedSchemaArtifactPublisher | None = None,
         local_tool_names: frozenset[str] = frozenset(),
         observer: CapabilityDiscoveryObserver | None = None,
         clock: Callable[[], datetime] = _utc_now,
@@ -207,6 +211,12 @@ class CapabilityBridgeRegistrar:
         revalidatable reference.  A ``seam`` built for a different catalog is
         refused rather than mounted, because a ledger that vouches for another
         projection's refs is not run-scoped at all.
+
+        ``schema_artifacts`` is the F3.4 publisher describe defers an over-bound
+        schema to.  Like every other optional input it only ever *adds* an
+        answer: a run that supplies none reports such a schema ``unavailable``
+        rather than falling back to a truncated one, and the in-bound path — the
+        ordinary case — is byte-identical either way.
 
         An ``observer`` is applied uniformly to whatever this method decided to
         register, which is why it is threaded here rather than at each adapter's
@@ -239,7 +249,10 @@ class CapabilityBridgeRegistrar:
             ),
             CapabilityBridgeToolRegistration(
                 name=CapabilityBridgeToolName.DESCRIBE_CAPABILITY,
-                adapter=CapabilityDescribeTool(access=access),
+                adapter=CapabilityDescribeTool(
+                    access=access,
+                    schema_artifacts=schema_artifacts,
+                ),
                 args_schema=CapabilityDescribeRequest,
             ),
         ]
