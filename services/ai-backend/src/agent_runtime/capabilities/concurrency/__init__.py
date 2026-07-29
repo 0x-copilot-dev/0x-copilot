@@ -13,6 +13,24 @@ vocabulary — so importing the adapter from this ``__init__`` would close a
 cycle. Import it by module path.
 """
 
+from agent_runtime.capabilities.concurrency.batch_coordinator import (
+    BatchAdmissionOutcome,
+    BatchAllowanceSupplier,
+    BatchChildAdmission,
+    BatchChildIdentity,
+    BatchChildOutcome,
+    BatchChildResult,
+    BatchChildRunner,
+    BatchChildStatus,
+    BatchClock,
+    BatchCoordinatorBounds,
+    BatchCoordinatorError,
+    BatchCoordinatorMessages,
+    BatchExecutionCoordinator,
+    BatchExecutionReport,
+    BatchExecutionStatus,
+    BatchPermitScopeFactory,
+)
 from agent_runtime.capabilities.concurrency.batch_journal import (
     BATCH_JOURNAL_RECORD_ADAPTER,
     BatchJournalConflict,
@@ -106,6 +124,21 @@ from agent_runtime.capabilities.concurrency.planner import BatchPlanner
 
 __all__ = (
     "BATCH_JOURNAL_RECORD_ADAPTER",
+    "BatchAdmissionOutcome",
+    "BatchAllowanceSupplier",
+    "BatchChildAdmission",
+    "BatchChildIdentity",
+    "BatchChildOutcome",
+    "BatchChildResult",
+    "BatchChildRunner",
+    "BatchChildStatus",
+    "BatchClock",
+    "BatchCoordinatorBounds",
+    "BatchCoordinatorError",
+    "BatchCoordinatorMessages",
+    "BatchExecutionCoordinator",
+    "BatchExecutionReport",
+    "BatchExecutionStatus",
     "BatchFailurePolicy",
     "BatchJournalConflict",
     "BatchJournalCorruption",
@@ -122,6 +155,7 @@ __all__ = (
     "BatchPlanBoundRecord",
     "BatchPlanRecorder",
     "BatchPlanRequest",
+    "BatchPermitScopeFactory",
     "BatchPlanStorePort",
     "BatchPlanner",
     "BatchRecoveryView",
