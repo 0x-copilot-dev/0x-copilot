@@ -33,7 +33,10 @@ request from this repository:
    the composition site, and the ``fragment_id`` its registered provider in
    ``prompts/sources.py`` allocates. The gate proves both halves are present and
    statically readable, which is what makes the runtime label
-   ``owner:fragment_id`` a projection rather than a new registry.
+   ``owner:fragment_id`` a projection rather than a new registry. Assembly
+   *elsewhere* is refused rather than ignored, so the one-file scope cannot be
+   escaped by moving the call — a gate that goes quiet when its subject moves
+   is worse than no gate, because silence reads as success.
 
 **What the runtime does instead.** Nothing here runs on the model-call path and
 nothing here is mirrored by a runtime raise. Open question §10.1 was decided the
@@ -700,7 +703,10 @@ class ModelToolSurfaceSweep:
         violations: list[str] = []
         declarations: list[DeclaredOrigin] = []
         for node, contributed in cls._contributions(function):
-            site = f"{relative}:{AstNode.lexical_scope(node, parents)}"
+            site = CompositionSite(
+                relative=relative,
+                scope=AstNode.lexical_scope(node, parents),
+            ).site
             declaration = cls._declaration_for(contributed, local_declarations)
             # Name the *declared* expression rather than the declaration
             # wrapping it: a failure that reads "declared declares a context
@@ -1037,7 +1043,10 @@ class PromptSourceCompositionSweep:
                 continue
             if AstNode.callable_name(node.func) != Keys.Callable.PROMPT_ASSEMBLY_INPUTS:
                 continue
-            site = f"{relative}:{AstNode.lexical_scope(node, parents)}"
+            site = CompositionSite(
+                relative=relative,
+                scope=AstNode.lexical_scope(node, parents),
+            ).site
             if not registry.present:
                 violations.append(ContextOriginViolation.missing_prompt_registry(site))
                 continue

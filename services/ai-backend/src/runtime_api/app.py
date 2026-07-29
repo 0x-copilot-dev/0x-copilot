@@ -96,6 +96,7 @@ from runtime_api.http.retention_routes import (
 )
 from runtime_api.http.legal_hold_routes import LegalHoldRouter
 from runtime_api.http.agent_usage import AgentUsageApiRouter
+from runtime_api.http.context_occupancy import ContextOccupancyApiRouter
 from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
 from runtime_api.http.local_models_routes import LocalModelsApiRouter
 from runtime_api.http.local_release_control import LocalReleaseControlRouter
@@ -460,6 +461,10 @@ class RuntimeApiAppFactory:
         # P8-A4 — per-agent usage aggregation (read-only over the canonical
         # ``runtime_model_call_usage`` tracker; cross-audit §5.5 invariant).
         app.include_router(AgentUsageApiRouter.create_router())
+        # Context Occupancy Ledger read API (context-attribution design §7).
+        # Mounted beside the usage family and guarded the same way: occupancy
+        # decomposes the window usage only totals, so the two are read together.
+        app.include_router(ContextOccupancyApiRouter.create_router())
         app.include_router(BudgetApiRouter.create_router())
         # P3-A2 — todo extraction proposals (list/accept/reject).
         app.include_router(TodoExtractionsApiRouter.create_router())

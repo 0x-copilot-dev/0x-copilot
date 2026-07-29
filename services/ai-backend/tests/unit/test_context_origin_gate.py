@@ -639,6 +639,42 @@ class TestPromptSourceGate(PlantedSourceTreeMixin):
             tmp_path
         )
 
+    def test_assembly_moved_to_another_module_is_refused(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The one-file scope must not be escapable by moving the call.
+
+        This is the failure a conformance proof can least afford: the sweep
+        would find nothing to complain about and report success, while the
+        sources it exists to check went unread.
+        """
+
+        self.plant(
+            tmp_path,
+            surface_body=f"    model_tools = []\n{self.DECLARED_APPEND}",
+        )
+        elsewhere = tmp_path / "agent_runtime" / "prompts" / "assembly_site.py"
+        elsewhere.parent.mkdir(parents=True, exist_ok=True)
+        elsewhere.write_text(
+            "def build_inputs(runtime_context):\n"
+            "    return PromptAssemblyInputs(\n"
+            "        context=_context(runtime_context),\n"
+            "        mcp_cards=_prompt_source_material(\n"
+            f'            owner="{self.PROMPT_OWNER}",\n'
+            '            content="cards",\n'
+            "        ),\n"
+            "    )\n",
+            encoding="utf-8",
+        )
+
+        assert undeclared_context_contributors(tmp_path) == (
+            "agent_runtime/prompts/assembly_site.py:build_inputs -> "
+            "PromptAssemblyInputs is composed outside "
+            "agent_runtime/execution/factory.py; its sources are not covered by "
+            "the context-origin gate",
+        )
+
     def test_computed_source_owner_is_refused(self, tmp_path: Path) -> None:
         self.plant(
             tmp_path,
