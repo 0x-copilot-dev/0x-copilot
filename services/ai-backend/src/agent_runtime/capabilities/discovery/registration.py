@@ -19,6 +19,24 @@ Registration is a *narrowing* decision in every direction:
 
 Registering fewer tools always falls back to the pre-F3 direct/server
 disclosure path, which is unaffected by anything in this module.
+
+**The bridge seam.**  A catalog holds MCP *server* cards, so a search that only
+ranks the catalog can only answer at server granularity: nothing it returns is
+something the model can describe into parameters or invoke.  Joining the two
+halves is therefore a registration decision, and :class:`CapabilityBridgeSeam`
+is that join stated once — one bounded second-tier search, and the one
+run-scoped ledger it records into.  Because the ledger is also what the executor
+resolves dispatch coordinates through, composing the seam is what makes search,
+describe, and invoke a chain rather than three tools that individually pass.
+
+The seam is optional in exactly the way every other input here is: a run that
+supplies none registers the catalog-only search it registered before, and a run
+that supplies one registers a search that reaches capabilities.  What this
+module still refuses to know is *how* a capability is dispatched — it composes
+the ledger and takes the executor as the
+:class:`~agent_runtime.capabilities.discovery.contracts.CapabilityExecutorPort`
+protocol, never the concrete gateway executor, so tool composition and dispatch
+keep separate owners and this module imports no model-framework type.
 """
 
 from __future__ import annotations
@@ -26,10 +44,11 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, Self, runtime_checkable
 
 from agent_runtime.capabilities.discovery.activation import (
     CapabilityActivationDecision,
+    CapabilityExpansionLimits,
 )
 from agent_runtime.capabilities.discovery.contracts import (
     CapabilityBridgeToolName,
@@ -37,7 +56,15 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityDescribeRequest,
     CapabilityExecutorPort,
     CapabilityInvokeRequest,
+    CapabilityReferenceMinter,
     CapabilitySearchRequest,
+)
+from agent_runtime.capabilities.discovery.dispatch import (
+    RunScopedCapabilityDisclosure,
+)
+from agent_runtime.capabilities.discovery.expansion import (
+    BoundedCapabilityExpander,
+    TwoTierCapabilitySearch,
 )
 from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
 from agent_runtime.capabilities.discovery.revision_authority import (
@@ -49,6 +76,7 @@ from agent_runtime.capabilities.discovery.tool_bridge import (
     CapabilityInvokeTool,
     CapabilitySearchTool,
 )
+from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 
 
@@ -86,6 +114,55 @@ class CapabilityBridgeToolRegistration:
     args_schema: type[RuntimeContract]
 
 
+@dataclass(frozen=True)
+class CapabilityBridgeSeam:
+    """The one run-scoped pair a bridge that can actually act is built from.
+
+    ``expansion`` is what turns a server card into records the model can name,
+    and ``disclosure`` is the run-scoped ledger those records are recorded in.
+    They are held together because they are useless apart: an expansion whose
+    output nothing records produces refs no other tool can resolve, and a ledger
+    nothing writes to holds nothing to dispatch.  Pairing them means a call site
+    cannot wire one without the other, and — because the executor resolves its
+    dispatch coordinates through the very same ledger — cannot accidentally give
+    the executor a *different* one.
+
+    :meth:`compose` is the intended construction path.  The minter must be keyed
+    exactly as the catalog builder's was: expansion mints refs for the same
+    catalog id, so a different key would produce references the run's own
+    catalog identity does not explain.
+    """
+
+    disclosure: RunScopedCapabilityDisclosure
+    expansion: TwoTierCapabilitySearch
+
+    @classmethod
+    def compose(
+        cls,
+        *,
+        catalog: CapabilityCatalog,
+        loader: McpLoader,
+        minter: CapabilityReferenceMinter,
+        limits: CapabilityExpansionLimits | None = None,
+        ranker: DeterministicLexicalRanker | None = None,
+    ) -> Self:
+        """Build the bounded second tier and the ledger it discloses into."""
+
+        shared_ranker = ranker or DeterministicLexicalRanker()
+        return cls(
+            disclosure=RunScopedCapabilityDisclosure(catalog=catalog),
+            expansion=TwoTierCapabilitySearch(
+                expander=BoundedCapabilityExpander(
+                    loader=loader,
+                    minter=minter,
+                    limits=limits,
+                    ranker=shared_ranker,
+                ),
+                ranker=shared_ranker,
+            ),
+        )
+
+
 class CapabilityBridgeRegistrar:
     """Decide which bounded F3 bridge tools a run may expose to the model."""
 
@@ -98,13 +175,17 @@ class CapabilityBridgeRegistrar:
         executor: CapabilityExecutorPort | None = None,
         revalidation: CapabilityRefRevalidation | None = None,
         ranker: DeterministicLexicalRanker | None = None,
+        seam: CapabilityBridgeSeam | None = None,
+        local_tool_names: frozenset[str] = frozenset(),
         clock: Callable[[], datetime] = _utc_now,
     ) -> tuple[CapabilityBridgeToolRegistration, ...]:
         """Return the bridge tools to register, or nothing at all.
 
         The result is empty for ``direct``, ``server``, and ``shadow``, and for
         any catalog that carries no generation and therefore cannot mint a
-        revalidatable reference.
+        revalidatable reference.  A ``seam`` built for a different catalog is
+        refused rather than mounted, because a ledger that vouches for another
+        projection's refs is not run-scoped at all.
         """
 
         if not activation.registers_bridge:
@@ -115,6 +196,7 @@ class CapabilityBridgeRegistrar:
             catalog=catalog,
             runtime_context=runtime_context,
             clock=clock,
+            disclosure=None if seam is None else seam.disclosure,
         )
         registrations = [
             CapabilityBridgeToolRegistration(
@@ -122,6 +204,8 @@ class CapabilityBridgeRegistrar:
                 adapter=CapabilitySearchTool(
                     access=access,
                     ranker=ranker or DeterministicLexicalRanker(),
+                    expansion=None if seam is None else seam.expansion,
+                    local_tool_names=local_tool_names,
                 ),
                 args_schema=CapabilitySearchRequest,
             ),
@@ -148,6 +232,7 @@ class CapabilityBridgeRegistrar:
 
 __all__ = (
     "CapabilityBridgeRegistrar",
+    "CapabilityBridgeSeam",
     "CapabilityBridgeToolAdapter",
     "CapabilityBridgeToolRegistration",
 )

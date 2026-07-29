@@ -60,6 +60,7 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityExpansionResult,
     CapabilityExpansionState,
     CapabilityIndexEntry,
+    CapabilityInputSchemaIdentity,
     CapabilityReferenceMinter,
     CapabilitySearchFilters,
     CapabilitySearchRequest,
@@ -136,6 +137,10 @@ class ExpandedCapabilityProjector:
             owner_capability_ref=owner.capability_ref,
             server_name=owner.stable_name,
             tool_name=stable_name,
+            # The schema is still never copied — only its identity, so the
+            # executor can prove at invoke time that the descriptor has not
+            # moved since this record was disclosed.
+            schema_digest=CapabilityInputSchemaIdentity.digest(tool.input_schema),
             entry=entry,
         )
 

@@ -345,6 +345,26 @@ class CapabilitySubjectFingerprint:
         return self._minter.keyed_hexdigest(payload)
 
 
+class CapabilityInputSchemaIdentity:
+    """The one reproducible identity of a capability's input schema.
+
+    Two lanes need the same answer to "is this the schema the capability was
+    disclosed from": tier-two expansion records it at disclosure time, and the
+    executor recomputes it from the live descriptor before dispatching.  Stating
+    the derivation once here is what makes that comparison an equality check
+    rather than two implementations that could drift apart.
+
+    It is deliberately unkeyed: a schema identity must be recomputable from the
+    schema alone by anyone holding the schema, exactly like a catalog revision.
+    """
+
+    @staticmethod
+    def digest(input_schema: Mapping[str, Any]) -> str:
+        """Return the canonical SHA-256 identity of one capability input schema."""
+
+        return canonical_json_sha256(input_schema)
+
+
 class CatalogDescriptorRevision(RuntimeContract):
     """One opaque ``(source, descriptor revision)`` pair keyed into a generation.
 
@@ -965,11 +985,24 @@ class ExpandedCapability(RuntimeContract):
     ``owner_capability_ref`` is the catalog ref of the *server card* this
     capability came from. It is what makes the narrowing invariant checkable:
     a capability is admissible only while its owner is recorded as expanded.
+
+    ``schema_digest`` is the identity of the input schema this record was
+    projected from.  It is required rather than optional because a disclosed
+    capability with no recorded schema identity is undispatchable: the executor
+    compares the live descriptor's digest against the disclosed one, so a record
+    that cannot answer that comparison could only ever be refused.  Carrying it
+    here is also what lets a dispatch binding be built from the expansion result
+    alone, instead of from a parallel stream of untrusted descriptors that a
+    call site would have to keep aligned by hand.
+
+    The schema itself is still never copied — only its digest — so tier two adds
+    no full-schema prompt or catalog load.
     """
 
     owner_capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
     server_name: str = Field(min_length=1, max_length=256)
     tool_name: str = Field(min_length=1, max_length=256)
+    schema_digest: str = Field(pattern=_SHA256_HEX_PATTERN)
     entry: CapabilityIndexEntry
 
 

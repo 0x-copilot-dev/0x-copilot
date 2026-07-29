@@ -40,26 +40,34 @@ Three narrowing decisions before anything is dispatched:
 Every refusal is raised as :class:`CapabilityExecutionRefused`, which carries a
 closed code and no text, so connector, loader, and store detail cannot reach
 model-visible output through this seam.
+
+The dispatch *vocabulary* — what a binding is, and what a run disclosed — lives
+in :mod:`agent_runtime.capabilities.discovery.dispatch` and is re-exported here
+so existing call sites keep resolving.  The split is what lets registration hand
+the same run-scoped ledger to the search adapter and to this executor without
+importing the concrete dispatcher this module is built around.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import logging
 import re
-from typing import Any, ClassVar, Protocol, Self, runtime_checkable
-
-from pydantic import Field, field_validator
+from typing import Any, ClassVar
 
 from agent_runtime.capabilities.discovery.contracts import (
-    CapabilityBridgeRecursionError,
-    CapabilityBridgeToolName,
     CapabilityDiscoveryErrorCode,
     CapabilityInvocationReceipt,
     CapabilityInvocationStatus,
     CapabilityInvocationTarget,
     CapabilitySource,
+)
+from agent_runtime.capabilities.discovery.dispatch import (
+    CapabilityDispatchBinding,
+    CapabilityDispatchBindingPort,
+    RunScopedCapabilityDisclosure,
+    RunScopedCapabilityDispatchBindings,
 )
 from agent_runtime.capabilities.discovery.tool_bridge import CapabilityExecutionRefused
 from agent_runtime.capabilities.mcp.cards import (
@@ -69,13 +77,10 @@ from agent_runtime.capabilities.mcp.cards import (
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
-from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
+from agent_runtime.execution.contracts import AgentRuntimeContext
 
 _LOGGER = logging.getLogger(__name__)
 
-_CAPABILITY_REF_PATTERN = r"^cap_[0-9a-f]{32}$"
-_SHA256_HEX_PATTERN = r"^[a-f0-9]{64}$"
 _OPAQUE_TOKEN_PATTERN = re.compile(r"^[!-~]+$")
 _INVOCATION_REF_MAX_CHARS = 256
 
@@ -85,143 +90,6 @@ _STAGED_SUMMARY = (
     "no external change has been made."
 )
 _REFUSED_SUMMARY = "The capability did not run; no external change was made."
-
-
-class CapabilityDispatchBinding(RuntimeContract):
-    """Non-model dispatch coordinates plus the schema identity describe disclosed.
-
-    An opaque capability ref is meaningless to a connector.  This binding is the
-    run-scoped translation back to the ``(server, tool)`` pair the ordinary MCP
-    dispatcher understands, and it is the *only* way this module can name a
-    dispatch target — so a capability with no recorded binding is undispatchable
-    rather than guessable.
-
-    ``schema_digest`` is the digest of the input schema the capability was
-    projected from at disclosure time.  Recording it here is what turns "the
-    schema changed between describe and invoke" into a deterministic equality
-    failure instead of an inference from whether stale arguments still validate.
-
-    This is also the bridge-recursion guard's fourth structural chokepoint.  The
-    first three (catalog membership, invocation target, dispatch-by-type) are
-    F3.2's.  This one covers the new surface that F3.5 introduces: a *server
-    supplied* tool name entering a dispatch coordinate.  Like the others, the
-    reserved set is derived by iterating the closed tool-name enum, so a fourth
-    bridge tool is covered without touching this file.
-    """
-
-    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
-    server_name: str = Field(min_length=1, max_length=256)
-    tool_name: str = Field(min_length=1, max_length=256)
-    schema_digest: str = Field(pattern=_SHA256_HEX_PATTERN)
-
-    class Messages:
-        """Safe public messages for dispatch-binding validation."""
-
-        RESERVED_DISPATCH_NAME: ClassVar[str] = (
-            "a bridge tool name can never be a dispatch coordinate"
-        )
-        BLANK_NAME: ClassVar[str] = "dispatch coordinates must be non-empty"
-
-    @field_validator("server_name", "tool_name")
-    @classmethod
-    def _never_dispatches_to_a_bridge_tool(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError(cls.Messages.BLANK_NAME)
-        if CapabilityBridgeToolName.is_reserved(normalized):
-            raise CapabilityBridgeRecursionError(cls.Messages.RESERVED_DISPATCH_NAME)
-        return normalized
-
-    @staticmethod
-    def schema_digest_for(input_schema: JsonSchema) -> str:
-        """Return the reproducible identity of one capability input schema."""
-
-        return canonical_json_sha256(input_schema)
-
-    @classmethod
-    def for_tool(
-        cls,
-        *,
-        capability_ref: str,
-        server_name: str,
-        tool: McpToolDescriptor,
-    ) -> Self:
-        """Bind one disclosed capability to the descriptor it was projected from."""
-
-        return cls(
-            capability_ref=capability_ref,
-            server_name=server_name,
-            tool_name=tool.name,
-            schema_digest=cls.schema_digest_for(tool.input_schema),
-        )
-
-
-@runtime_checkable
-class CapabilityDispatchBindingPort(Protocol):
-    """Resolve one opaque capability ref to its run-scoped dispatch coordinates.
-
-    Implementations answer from what discovery actually disclosed for this run.
-    They never derive coordinates from a model-supplied value and never widen:
-    an unknown ref resolves to ``None``, which the executor treats as
-    undispatchable.
-    """
-
-    def binding_for(self, capability_ref: str) -> CapabilityDispatchBinding | None: ...
-
-
-class RunScopedCapabilityDispatchBindings:
-    """Immutable per-run binding table keyed by opaque capability ref.
-
-    Built once from what discovery disclosed and never mutated afterwards, so a
-    later turn cannot introduce a dispatch coordinate the model was not shown.
-    Duplicate refs are refused rather than last-write-wins: two bindings for one
-    ref would make the dispatch target ambiguous.
-    """
-
-    class Messages:
-        """Safe public messages for binding-table construction."""
-
-        DUPLICATE_REF: ClassVar[str] = (
-            "a capability ref may have only one dispatch binding"
-        )
-
-    __slots__ = ("_by_ref",)
-
-    def __init__(self, bindings: Iterable[CapabilityDispatchBinding] = ()) -> None:
-        by_ref: dict[str, CapabilityDispatchBinding] = {}
-        for binding in bindings:
-            if binding.capability_ref in by_ref:
-                raise ValueError(self.Messages.DUPLICATE_REF)
-            by_ref[binding.capability_ref] = binding
-        self._by_ref = by_ref
-
-    def binding_for(self, capability_ref: str) -> CapabilityDispatchBinding | None:
-        """Return the recorded coordinates for ``capability_ref``, or ``None``."""
-
-        return self._by_ref.get(capability_ref)
-
-    @classmethod
-    def from_disclosed(
-        cls,
-        disclosed: Iterable[tuple[str, str, McpToolDescriptor]],
-    ) -> Self:
-        """Build the table from ``(capability_ref, server_name, descriptor)`` rows.
-
-        This is the shape the expansion lane already holds while it projects a
-        loaded server: the ref it minted, the owning server card's stable name,
-        and the untrusted descriptor it projected.  Taking the descriptor rather
-        than a precomputed digest keeps the one schema-identity derivation in
-        this module.
-        """
-
-        return cls(
-            CapabilityDispatchBinding.for_tool(
-                capability_ref=capability_ref,
-                server_name=server_name,
-                tool=tool,
-            )
-            for capability_ref, server_name, tool in disclosed
-        )
 
 
 class CapabilityArgumentSchemaCheck:
@@ -650,8 +518,11 @@ class GatewayCapabilityExecutor:
 
 __all__ = (
     "CapabilityArgumentSchemaCheck",
+    # Re-exported from ``dispatch`` so existing ``from ...executor import X``
+    # call sites keep resolving after the dispatch vocabulary moved out.
     "CapabilityDispatchBinding",
     "CapabilityDispatchBindingPort",
     "GatewayCapabilityExecutor",
+    "RunScopedCapabilityDisclosure",
     "RunScopedCapabilityDispatchBindings",
 )

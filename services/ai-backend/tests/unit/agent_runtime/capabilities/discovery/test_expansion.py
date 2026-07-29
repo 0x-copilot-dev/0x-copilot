@@ -105,6 +105,26 @@ class _ScriptedDeadline:
         await self.fire.wait()
 
 
+class ExpandedCapabilityMixin:
+    """One hand-built tier-two record, shared by the result-contract tests."""
+
+    def _capability(self, owner_ref: str) -> ExpandedCapability:
+        return ExpandedCapability(
+            owner_capability_ref=owner_ref,
+            server_name="search_server_00",
+            tool_name="search_docs",
+            schema_digest="c" * 64,
+            entry=CapabilityIndexEntry(
+                capability_ref="cap_" + "b" * 32,
+                source=CapabilitySource.MCP_SERVER,
+                stable_name="search_docs",
+                display_name="search_docs",
+                concise_description="Search documents.",
+                connector_label="search_server_00",
+            ),
+        )
+
+
 class ExpansionMixin(DynamicMcpLoadingMixin):
     """Catalog, loader, and expander construction shared by every test class."""
 
@@ -582,22 +602,7 @@ class TestPartialFailureNarrows(ExpansionMixin):
             )
 
 
-class TestExpansionResultContract(ExpansionMixin):
-    def _capability(self, owner_ref: str) -> ExpandedCapability:
-        return ExpandedCapability(
-            owner_capability_ref=owner_ref,
-            server_name="search_server_00",
-            tool_name="search_docs",
-            entry=CapabilityIndexEntry(
-                capability_ref="cap_" + "b" * 32,
-                source=CapabilitySource.MCP_SERVER,
-                stable_name="search_docs",
-                display_name="search_docs",
-                concise_description="Search documents.",
-                connector_label="search_server_00",
-            ),
-        )
-
+class TestExpansionResultContract(ExpandedCapabilityMixin):
     def test_capability_without_an_expanded_owner_is_unrepresentable(self) -> None:
         owner_ref = "cap_" + "a" * 32
 

@@ -1,23 +1,34 @@
 """Bounded model-facing search, describe, and invoke adapters for one catalog.
 
-Search and describe are deliberately incapable of loading or invoking a
-capability.  Invoke dispatches only through a non-model executor port that
-enters the ordinary Operation Gateway, and only after the shared revision
-primitive confirms the reference is still current.  All three operate on an
-immutable catalog projected for the current run and recheck its subject and
-expiry on every call.
+Search is the only adapter that may reach a server, and it does so through the
+bounded second tier — never by loading a schema into its own answer.  Describe
+and invoke are deliberately incapable of loading anything.  Invoke dispatches
+only through a non-model executor port that enters the ordinary Operation
+Gateway, and only after the shared revision primitive confirms the reference is
+still current.  All three operate on an immutable catalog projected for the
+current run and recheck its subject and expiry on every call.
+
+A catalog holds MCP *server* cards, so tier one can never answer at capability
+granularity: every ref the model can actually act on is minted by tier-two
+expansion, and those records are deliberately not catalog members.  The three
+adapters therefore resolve against :class:`CapabilityCatalogAccess`, which spans
+both the immutable catalog and the run's own disclosure ledger.  Without that
+join a run could search, be shown a capability, and then be told it does not
+exist — which is exactly the state BUG-08 named.
 
 None of the three can ever resolve to another bridge tool.  That is structural
-rather than checked here: a bridge name cannot become a catalog member, and the
-executor port accepts only a :class:`CapabilityInvocationTarget`, which can only
-be produced from a catalog member.
+rather than checked here: a bridge name cannot become a catalog member, a
+disclosed record is a :class:`CapabilityIndexEntry` and is refused by the same
+validator, and the executor port accepts only a
+:class:`CapabilityInvocationTarget`, which can only be produced from one.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import logging
 from typing import Any, ClassVar
 
 from pydantic import ValidationError
@@ -25,6 +36,7 @@ from pydantic import ValidationError
 from agent_runtime.capabilities.discovery.contracts import (
     CapabilityBridgeToolName,
     CapabilityCatalog,
+    CapabilityCatalogIdentityError,
     CapabilityDescribeRequest,
     CapabilityDescribeResult,
     CapabilityDescribeToolResult,
@@ -38,9 +50,15 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityInvokeResult,
     CapabilityInvokeToolResult,
     CapabilityParameterHint,
+    CapabilityRefBinding,
     CapabilitySearchRequest,
     CapabilitySearchToolResult,
+    ExpandedCapability,
 )
+from agent_runtime.capabilities.discovery.dispatch import (
+    RunScopedCapabilityDisclosure,
+)
+from agent_runtime.capabilities.discovery.expansion import TwoTierCapabilitySearch
 from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
 from agent_runtime.capabilities.discovery.revision_authority import (
     CapabilityRefRevalidation,
@@ -72,6 +90,11 @@ _INVALID_ARGUMENTS_MESSAGE = (
     "Those arguments do not match the capability's current schema. "
     "Describe it again before retrying."
 )
+_SEARCH_FAILED_MESSAGE = (
+    "The capability search could not be completed. Try a narrower query."
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -128,11 +151,36 @@ _REFUSAL_MESSAGES: dict[CapabilityDiscoveryErrorCode, str] = {
 
 @dataclass(frozen=True)
 class CapabilityCatalogAccess:
-    """Injected run binding used by both model-facing discovery operations."""
+    """Injected run binding shared by all three model-facing discovery adapters.
+
+    It answers two questions and nothing else: is this catalog still this run's,
+    and is this opaque ref something this run may resolve.  The second question
+    spans two sources — the immutable catalog of authorized server cards, and
+    the ledger of what this run's own second tier disclosed — because a ref the
+    model was shown by search must be describable and dispatchable by the same
+    run.  ``disclosure`` is optional: a run that mounts no expansion resolves
+    catalog members only, exactly as before.
+    """
 
     catalog: CapabilityCatalog
     runtime_context: AgentRuntimeContext
     clock: Callable[[], datetime] = _utc_now
+    disclosure: RunScopedCapabilityDisclosure | None = None
+
+    class Messages:
+        """Safe public messages for run-binding composition."""
+
+        FOREIGN_DISCLOSURE: ClassVar[str] = (
+            "the disclosure ledger must be scoped to this run's own catalog"
+        )
+
+    def __post_init__(self) -> None:
+        # Two catalogs on one access would mean the ledger vouches for refs a
+        # different projection minted, which is precisely the run-scoping this
+        # object exists to hold. Checked rather than merely annotated, because a
+        # frozen dataclass validates nothing on its own.
+        if self.disclosure is not None and self.disclosure.catalog is not self.catalog:
+            raise ValueError(self.Messages.FOREIGN_DISCLOSURE)
 
     def active_catalog(self) -> CapabilityCatalog | None:
         """Return the catalog only after exact run-subject and expiry checks."""
@@ -144,15 +192,91 @@ class CapabilityCatalogAccess:
             return None
         return self.catalog
 
+    def entry_for(
+        self,
+        catalog: CapabilityCatalog,
+        capability_ref: str,
+    ) -> CapabilityIndexEntry | None:
+        """Return the record this run may resolve ``capability_ref`` to.
+
+        ``catalog`` is taken as an argument rather than read from the field so a
+        caller cannot reach this without having first passed
+        :meth:`active_catalog`; resolving a ref for an expired or foreign
+        catalog is not a state this method can be asked for.
+        """
+
+        member = next(
+            (
+                entry
+                for entry in catalog.entries
+                if entry.capability_ref == capability_ref
+            ),
+            None,
+        )
+        if member is not None:
+            return member
+        if self.disclosure is None:
+            return None
+        return self.disclosure.entry_for(capability_ref)
+
+    def bind_ref(
+        self,
+        catalog: CapabilityCatalog,
+        capability_ref: str,
+    ) -> CapabilityRefBinding:
+        """Bind one resolvable ref to the generation its catalog was built from.
+
+        Catalog members bind through the catalog itself; records this run's
+        expansion disclosed bind through the ledger that disclosed them.  Both
+        narrow — an unknown ref binds nowhere — and both carry the same
+        generation, so the shared revision primitive sees one kind of reference.
+        """
+
+        if any(entry.capability_ref == capability_ref for entry in catalog.entries):
+            return catalog.bind_ref(capability_ref)
+        if self.disclosure is None:
+            raise CapabilityCatalogIdentityError(
+                CapabilityCatalog.Messages.NOT_A_MEMBER
+            )
+        return self.disclosure.bind_ref(capability_ref)
+
+    def record_disclosure(self, capabilities: Iterable[ExpandedCapability]) -> None:
+        """Record what one expansion disclosed to this run, if it may hold it."""
+
+        if self.disclosure is None:
+            return
+        self.disclosure.record(capabilities)
+
 
 @dataclass(frozen=True)
 class CapabilitySearchTool:
-    """Pure search adapter suitable for later ``StructuredTool`` wrapping."""
+    """The one model-facing search adapter, with or without the second tier.
+
+    There is deliberately a single search adapter rather than a catalog-only one
+    and an expanding one.  Two would mean two names, two descriptions, and two
+    output shapes that could drift, and the model must not be able to tell which
+    one a run mounted — the answer shape is identical either way, so only the
+    *reach* of the search differs.
+
+    ``expansion`` is what gives the tool that reach.  A catalog holds MCP server
+    cards, which name where capabilities live rather than a capability, so a
+    run without it can only ever answer at server granularity.  With it, at most
+    ``K`` ranked server cards are expanded under one shared deadline through the
+    existing loader and F8 cache, and what comes back is recorded in the run's
+    disclosure ledger so the very refs this answer names stay describable and
+    dispatchable.
+
+    Mounting expansion without that ledger would re-create the defect the ledger
+    exists to close — an answer full of refs nothing else in the run can resolve
+    — so the composition is refused rather than accepted and quietly broken.
+    """
 
     access: CapabilityCatalogAccess
     ranker: DeterministicLexicalRanker = field(
         default_factory=DeterministicLexicalRanker
     )
+    expansion: TwoTierCapabilitySearch | None = None
+    local_tool_names: frozenset[str] = frozenset()
     name: str = CapabilityBridgeToolName.SEARCH_CAPABILITIES.value
     description: str = (
         "Search the active run's authorized capability catalog. Returns at most "
@@ -160,28 +284,40 @@ class CapabilitySearchTool:
         "loads a schema or invokes a capability."
     )
 
+    class Messages:
+        """Safe public messages for search-adapter composition."""
+
+        UNRECORDABLE_EXPANSION: ClassVar[str] = (
+            "an expanding search requires a disclosure ledger to record into"
+        )
+        SYNCHRONOUS_EXPANSION: ClassVar[str] = (
+            "an expanding search must be awaited through ainvoke"
+        )
+
+    def __post_init__(self) -> None:
+        if self.expansion is not None and self.access.disclosure is None:
+            raise ValueError(self.Messages.UNRECORDABLE_EXPANSION)
+
     def invoke(
         self,
         raw_input: CapabilitySearchRequest | Mapping[str, Any] | str,
     ) -> dict[str, Any]:
-        """Validate, authorize, and search without loading any descriptors."""
+        """Search the catalog alone, without loading any descriptors.
 
+        Refusing outright when expansion is mounted is deliberate: silently
+        answering from tier one would return a strictly narrower result than the
+        run promised, and a narrower answer that looks like a complete one is
+        worse than a composition error.
+        """
+
+        if self.expansion is not None:
+            raise TypeError(self.Messages.SYNCHRONOUS_EXPANSION)
         request = self._parse(raw_input)
         if request is None:
-            return _dump(
-                CapabilitySearchToolResult.fail(
-                    CapabilityDiscoveryErrorCode.INVALID_REQUEST,
-                    _INVALID_REQUEST_MESSAGE,
-                )
-            )
+            return self._invalid_request()
         catalog = self.access.active_catalog()
         if catalog is None:
-            return _dump(
-                CapabilitySearchToolResult.fail(
-                    CapabilityDiscoveryErrorCode.CATALOG_INACTIVE,
-                    _INACTIVE_CATALOG_MESSAGE,
-                )
-            )
+            return self._inactive_catalog()
         return _dump(
             CapabilitySearchToolResult.ok(self.ranker.search(catalog, request))
         )
@@ -190,9 +326,40 @@ class CapabilitySearchTool:
         self,
         raw_input: CapabilitySearchRequest | Mapping[str, Any] | str,
     ) -> dict[str, Any]:
-        """Async-compatible pure adapter entry point."""
+        """Search, expanding at most ``K`` server cards when tier two is mounted."""
 
-        return self.invoke(raw_input)
+        expansion = self.expansion
+        if expansion is None:
+            return self.invoke(raw_input)
+        request = self._parse(raw_input)
+        if request is None:
+            return self._invalid_request()
+        catalog = self.access.active_catalog()
+        if catalog is None:
+            return self._inactive_catalog()
+        try:
+            result = await expansion.search(
+                catalog=catalog,
+                context=self.access.runtime_context,
+                request=request,
+                local_tool_names=self.local_tool_names,
+            )
+        except Exception:
+            # Expansion reaches real servers through the loader. Its internal
+            # detail never reaches model output, and a failed expansion narrows
+            # to a refusal rather than to a silently catalog-only answer that
+            # would look like a complete one.
+            _LOGGER.warning("capability_search_expansion_failed", exc_info=True)
+            return _dump(
+                CapabilitySearchToolResult.fail(
+                    CapabilityDiscoveryErrorCode.EXECUTION_FAILED,
+                    _SEARCH_FAILED_MESSAGE,
+                )
+            )
+        # Recorded before the answer is returned: a ref the model is about to be
+        # shown must already be resolvable when it comes back with it.
+        self.access.record_disclosure(result.expansion.capabilities)
+        return _dump(CapabilitySearchToolResult.ok(result.search))
 
     async def __call__(
         self,
@@ -201,6 +368,24 @@ class CapabilitySearchTool:
         """Delegate to :meth:`ainvoke`."""
 
         return await self.ainvoke(raw_input)
+
+    @staticmethod
+    def _invalid_request() -> dict[str, Any]:
+        return _dump(
+            CapabilitySearchToolResult.fail(
+                CapabilityDiscoveryErrorCode.INVALID_REQUEST,
+                _INVALID_REQUEST_MESSAGE,
+            )
+        )
+
+    @staticmethod
+    def _inactive_catalog() -> dict[str, Any]:
+        return _dump(
+            CapabilitySearchToolResult.fail(
+                CapabilityDiscoveryErrorCode.CATALOG_INACTIVE,
+                _INACTIVE_CATALOG_MESSAGE,
+            )
+        )
 
     @staticmethod
     def _parse(
@@ -251,7 +436,7 @@ class CapabilityDescribeTool:
                 )
             )
 
-        entry = _find_entry(catalog, request.capability_ref)
+        entry = self.access.entry_for(catalog, request.capability_ref)
         if entry is None:
             return _dump(
                 CapabilityDescribeToolResult.fail(
@@ -345,11 +530,12 @@ class CapabilityInvokeTool:
                     _INACTIVE_CATALOG_MESSAGE,
                 )
             )
-        entry = _find_entry(catalog, request.capability_ref)
+        entry = self.access.entry_for(catalog, request.capability_ref)
         if entry is None:
             # A bridge tool reference lands here and nowhere else: bridge names
-            # can never be catalog members, so the model cannot distinguish
-            # probing for the bridge from probing for any unknown reference.
+            # can never be catalog members or disclosed records, so the model
+            # cannot distinguish probing for the bridge from probing for any
+            # unknown reference.
             return _dump(
                 CapabilityInvokeToolResult.fail(
                     CapabilityDiscoveryErrorCode.CAPABILITY_NOT_FOUND,
@@ -367,7 +553,7 @@ class CapabilityInvokeTool:
             )
         try:
             decision = await revalidation.decide(
-                binding=catalog.bind_ref(request.capability_ref),
+                binding=self.access.bind_ref(catalog, request.capability_ref),
                 run_id=self.access.runtime_context.run_id,
                 live_generation=generation,
             )
@@ -512,16 +698,6 @@ def _bounded_description(entry: CapabilityIndexEntry) -> CapabilityDescription:
         connector_label=entry.connector_label,
         descriptor_revision=entry.descriptor_revision,
         metadata_truncated=metadata_truncated,
-    )
-
-
-def _find_entry(
-    catalog: CapabilityCatalog,
-    capability_ref: str,
-) -> CapabilityIndexEntry | None:
-    return next(
-        (entry for entry in catalog.entries if entry.capability_ref == capability_ref),
-        None,
     )
 
 
