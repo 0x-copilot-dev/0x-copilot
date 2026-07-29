@@ -236,9 +236,21 @@ create a second planning queue.
       runs 16 cases across 3 instantiations. RB.3 did edit the primitive, but to
       close two contract defects both adopters independently hit, not because an
       adopter could not bind. F5, F9 and F11 bind in Waves B and C.
-- [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,
+- [x] **Step 8:** Enable F3 catalog activation, top-K expansion,
       search/describe/invoke, gateway revalidation, and fallback. Also declares
       the named promotion cohort matrix that Step 15 evaluates.
+      **Gate MET on re-run.** The gate refused once and was right each time; every
+      criterion it cited is now closed and it re-verified that the previously
+      passing ones were not weakened (zero deletions in those test classes).
+      Revocation is proven through the F8 revision route with the connector
+      deliberately untouched, so the refusal can only be the revision binding —
+      and the ref under test is a tier-two _expanded_ capability, which also
+      falsifies BUG-04's stated live consequence. Configured K is measured
+      through the seam (5 of 9 servers opened, neither the default 3 nor the
+      ceiling 8). One honest scope note: the F8 revision route contributes only
+      when the F8 control plane is enabled; with it off the four executor-side
+      refusals still hold, and every F3 promotion cohort declares `f8=enforce`,
+      so no promoted configuration runs F3 without it.
 - [ ] **Step 10:** Complete F6 persisted batches, scoped permits, serial/parallel
       scheduling, cancellation, recovery, and kill switches.
 
