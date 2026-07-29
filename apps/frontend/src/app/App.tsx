@@ -16,6 +16,10 @@ import "@0x-copilot/chat-surface/src/approvals/approvals.css";
 // Staged message/table review surfaces share one semantic visual grammar with
 // desktop; host-private CSS must not restyle their approval boundaries.
 import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";
+// Surface-language chrome: canvas tabs, card kicker dots, and the numeric/value
+// register. Carries the source-hue identity colours. Desktop imports the same
+// file — a rule that reaches only one host is the stranded-CSS bug.
+import "@0x-copilot/chat-surface/src/thread-canvas/surface-language.css";
 import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";

@@ -98,6 +98,7 @@ class ConversationCanvasService:
                 title=record.artifact.title,
                 revision=record.artifact.current_revision,
                 renderer_hint=f"artifact-{record.artifact.kind.value}",
+                accent=record.artifact.accent,
                 created_at=record.artifact.created_at,
             )
             for record in page.artifacts

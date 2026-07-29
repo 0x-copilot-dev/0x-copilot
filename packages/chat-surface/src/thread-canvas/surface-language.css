@@ -1,0 +1,274 @@
+/* The Studio surface language — chrome for generative surfaces.
+ *
+ * Companion to `review-surfaces.css` (which owns staged review grammar). This
+ * sheet owns the parts that carry a surface's IDENTITY: the canvas tab strip,
+ * the card kicker, and the value/number registers inside a table.
+ *
+ * Every colour here is a design-system token. Nothing in this file may hardcode
+ * a hex — the two hardcoded palettes this replaces (`SURFACE_PALETTE` and
+ * `TcTabs`' inline `PALETTE`, both `#101113 / #181a1c / #2a2d31`) are exactly
+ * why the Studio had no colour: neither could see a token, so neither could
+ * ever theme, and every surface rendered the same grey regardless of source.
+ *
+ * The identity hue arrives as `--surface-src`, set by `data-surface-hue` on an
+ * ancestor (see SOURCE-HUE RING in design-system/src/styles.css). Rules here
+ * read that variable; they never resolve a hue themselves.
+ *
+ * BOTH hosts must import this file — web `app/App.tsx`, desktop
+ * `renderer/bootstrap.tsx`. A rule authored here that only one host loads is
+ * the stranded-CSS bug that shipped unstyled Agents cards on desktop.
+ */
+
+/* ── canvas tab strip ─────────────────────────────────────────────────── */
+
+.tc-tabs {
+  align-items: center;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex: none;
+  gap: 2px;
+  min-height: 38px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 10px;
+}
+
+/* Mono, because a tab names a SOURCE (`table://`, a filename, an artifact
+ * title) and those are identifiers, not prose. The design sets 10.5px, which is
+ * the mono micro-ladder's top rung — never reach for a nearby sans rung here. */
+.tc-tab {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  gap: 7px;
+  height: 26px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.tc-tab:hover {
+  background: var(--color-surface-elevated);
+  color: var(--color-text-strong);
+}
+
+/* Active is a filled pill WITH a border. The fill alone is the hover state, so
+ * the border is what separates "the pointer is here" from "this is the surface
+ * you are looking at" — two states that must not read as one. */
+.tc-tab[data-active="true"] {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.tc-tab:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -1px;
+}
+
+/* The identity dot. Held at 55% while inactive so a strip of eight tabs reads
+ * as one quiet row rather than a row of lights; full strength plus a halo only
+ * for the surface actually on screen. */
+.tc-tab__dot {
+  background: var(--surface-src);
+  border-radius: 50%;
+  flex: none;
+  height: 5px;
+  opacity: 0.55;
+  width: 5px;
+}
+
+.tc-tab[data-active="true"] .tc-tab__dot {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--surface-src) 18%, transparent);
+  opacity: 1;
+}
+
+/* No spec, no identity — a hollow ring rather than a colour. A generic view is
+ * a real view, not an error, so it gets a real mark; it just refuses to
+ * impersonate a source it could not resolve. */
+.tc-tab[data-surface-hue="none"] .tc-tab__dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-subtle);
+  opacity: 0.6;
+}
+
+.tc-tab[data-active="true"][data-surface-hue="none"] .tc-tab__dot {
+  box-shadow: inset 0 0 0 1.5px var(--color-text-muted);
+  opacity: 1;
+}
+
+.tc-tab__title {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Close is quiet at rest and full strength when the tab is hovered, current, or
+ * focused — the design's strip has no close affordance at all, and a permanent
+ * bright × on every tab turns a quiet row into a row of controls.
+ *
+ * It is deliberately NOT `opacity: 0` at rest. Reveal-on-hover was the first
+ * attempt, and it could not be verified: with `:hover` provably matching and the
+ * reveal rule provably winning on specificity, the computed opacity still read
+ * 0 in a headless measurement. That is probably a harness artifact — but the
+ * failure mode if it is not is an inactive tab the user cannot close, which is
+ * worse than a slightly busier strip. A control whose existence depends on an
+ * effect I could not confirm should not be the only way to close a tab. */
+.tc-tab__close {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--font-size-mono-10-5);
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  margin-left: 2px;
+  opacity: 0.45;
+  padding: 0;
+  width: 16px;
+}
+
+.tc-tab:hover .tc-tab__close,
+.tc-tab[data-active="true"] .tc-tab__close,
+.tc-tab:focus-within .tc-tab__close {
+  opacity: 1;
+}
+
+.tc-tab__close:hover {
+  background: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.tc-tab__close:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -1px;
+}
+
+/* ── surface card kicker ──────────────────────────────────────────────── */
+
+/* The card repeats the tab's dot so a surface and its tab are visibly the same
+ * object. Same halo geometry, same token — one rule changed in one place moves
+ * both, which is the whole reason the hue is a variable and not a prop. */
+.sf-kicker__dot {
+  background: var(--surface-src);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--surface-src) 16%, transparent);
+  flex: none;
+  height: 6px;
+  width: 6px;
+}
+
+[data-surface-hue="none"] .sf-kicker__dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-subtle);
+}
+
+/* ── numeric register inside a table ──────────────────────────────────── */
+
+/* A numeric column header leans toward the source hue, so the eye can find the
+ * measured columns without a rule or a fill. 55% is the ceiling: past that the
+ * header starts competing with the accent, which owns attention. */
+/* Sets the VARIABLE the header's inline style reads, not `color` directly. The
+   renderer composes inline styles, and an inline declaration outranks any rule
+   here — so writing `color` would lose silently. */
+.sf-col--numeric {
+  --sf-col-color: color-mix(
+    in oklch,
+    var(--surface-src) 55%,
+    var(--color-text-subtle)
+  );
+}
+
+/* The value bar. This is the single largest reason the Studio reads as
+ * monochrome today: a table of numbers with no magnitude channel is a wall of
+ * digits. The bar is painted BEHIND the value (never over it), sized by the
+ * cell's share of its column maximum, and it is decoration — `aria-hidden`, no
+ * text, so a screen reader hears the number and nothing else.
+ *
+ * It intentionally does not appear on hover-only: a magnitude you must hover to
+ * see is not a magnitude channel, it is a tooltip. Hover only deepens it. */
+.sf-cell--numeric {
+  /* The cell's inline padding, which the bar insets itself against. Declared
+     here rather than assumed, so a density change moves the padding and the bar
+     together instead of the bar drifting onto the cell edge. */
+  --sf-cell-inline: 12px;
+  position: relative;
+}
+
+/* The dataset grid pads to 10px, not 12px. Same rule, its own measurement —
+   the alternative is the bar sitting 2px off the digits in exactly the surface
+   users see most often (a published CSV). */
+.ui-dataset-table__cell.sf-cell--numeric {
+  --sf-cell-inline: 10px;
+  text-align: right;
+}
+
+.ui-dataset-table__header.sf-col--numeric {
+  text-align: right;
+}
+
+/* The EDITABLE grid puts an <input> inside every cell, so the colour and the
+   stacking have to reach the input rather than the <td>. The input is already
+   transparent, which is what lets the magnitude read through the field the user
+   types into — the alternative would be showing it only in a read-only view,
+   i.e. not in the surface people actually work in. */
+.ui-dataset-table__header.sf-col--numeric .ui-dataset-cell-input--header,
+.ui-dataset-table__cell.sf-cell--numeric .ui-dataset-cell-input {
+  text-align: right;
+}
+
+.ui-dataset-table__header.sf-col--numeric .ui-dataset-cell-input--header {
+  color: var(--sf-col-color, var(--color-text-muted));
+}
+
+.ui-dataset-table__cell.sf-cell--numeric .ui-dataset-cell-input {
+  position: relative;
+  z-index: 1;
+}
+
+.sf-value-bar {
+  background: color-mix(in oklch, var(--surface-src) 15%, transparent);
+  border-radius: 3px;
+  bottom: 4px;
+  box-shadow: inset -2px 0 0
+    color-mix(in oklch, var(--surface-src) 55%, transparent);
+  pointer-events: none;
+  position: absolute;
+  /* Inset from the cell's right edge, NOT flush to it. Flush was measurably
+     wrong: a bar that touches the cell boundary reads as a selected/highlighted
+     row rather than as a magnitude, which puts it in competition with the
+     accent register it must stay subordinate to. Ending just inside the text's
+     own right margin keeps it legible as a quantity. */
+  right: calc(var(--sf-cell-inline) - 5px);
+  top: 4px;
+}
+
+.sf-row:hover .sf-value-bar {
+  background: color-mix(in oklch, var(--surface-src) 24%, transparent);
+}
+
+.sf-value-bar__value {
+  position: relative;
+  z-index: 1;
+}
+
+/* Quiet mode drops magnitude with the rest of the identity register. The bar is
+ * identity-coloured, so leaving it on while the dots went grey would strand a
+ * single coloured element with nothing to relate it to. */
+:root[data-surface-color="quiet"] .sf-value-bar {
+  display: none;
+}

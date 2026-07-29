@@ -112,7 +112,13 @@ describe("TcTabs", () => {
     expect(onActivate).not.toHaveBeenCalled();
   });
 
-  it("scrolls horizontally when tab list overflows", () => {
+  // Layout (row direction, horizontal overflow) moved to `surface-language.css`
+  // when the strip stopped carrying a private hardcoded palette. jsdom loads no
+  // stylesheets, so asserting a computed value here would assert nothing; the
+  // honest unit-level claim is that the element opts into the class that owns
+  // those rules. The rendered result is covered by the design-parity harness,
+  // which reads real computed styles in a browser.
+  it("carries the surface-language strip class", () => {
     render(
       <TcTabs
         tabs={baseTabs}
@@ -121,8 +127,88 @@ describe("TcTabs", () => {
         onClose={() => {}}
       />,
     );
-    const tablist = screen.getByTestId("tc-tabs");
-    expect(tablist.style.overflowX).toBe("auto");
-    expect(tablist.style.flexDirection).toBe("row");
+    expect(screen.getByTestId("tc-tabs")).toHaveClass("tc-tabs");
+  });
+
+  describe("source hue", () => {
+    it("derives a tab's hue from its URI scheme", () => {
+      render(
+        <TcTabs
+          tabs={[
+            { uri: "table://safe/batch", title: "Batch" },
+            { uri: "artifact-dataset://art_1@1", title: "forecast" },
+            { uri: "board://linear/cycle/14", title: "Cycle 14" },
+          ]}
+          activeUri="table://safe/batch"
+          onActivate={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      const hueOf = (title: string): string | null =>
+        screen
+          .getByText(title)
+          .closest("[role='tab']")!
+          .getAttribute("data-surface-hue");
+      expect(hueOf("Batch")).toBe("jade");
+      expect(hueOf("forecast")).toBe("sky");
+      expect(hueOf("Cycle 14")).toBe("plum");
+    });
+
+    it("shows no identity for a surface whose scheme resolves to none", () => {
+      render(
+        <TcTabs
+          tabs={[{ uri: "incident://pagerduty/4127", title: "Incident 4127" }]}
+          activeUri="incident://pagerduty/4127"
+          onActivate={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole("tab").getAttribute("data-surface-hue")).toBe(
+        "none",
+      );
+    });
+
+    // The seam a `publish_artifact` accent arrives through.
+    it("lets an explicit hue override the scheme's default", () => {
+      render(
+        <TcTabs
+          tabs={[
+            {
+              uri: "artifact-dataset://art_1@1",
+              title: "forecast",
+              hue: "ember",
+            },
+          ]}
+          activeUri="artifact-dataset://art_1@1"
+          onActivate={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole("tab").getAttribute("data-surface-hue")).toBe(
+        "ember",
+      );
+    });
+
+    // A malformed choice must not strip the artifact of the identity its kind
+    // already implies — it falls back, it does not blank out.
+    it("ignores an unrecognised hue and keeps the scheme default", () => {
+      render(
+        <TcTabs
+          tabs={[
+            {
+              uri: "artifact-dataset://art_1@1",
+              title: "forecast",
+              hue: "#ff00ff",
+            },
+          ]}
+          activeUri="artifact-dataset://art_1@1"
+          onActivate={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole("tab").getAttribute("data-surface-hue")).toBe(
+        "sky",
+      );
+    });
   });
 });

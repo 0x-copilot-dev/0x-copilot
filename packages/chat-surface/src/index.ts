@@ -236,6 +236,19 @@ export {
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === end Phase 0-A ===
 
+// === Surface language: the source-hue identity register ===
+// Hoisted so `surface-renderers` and both hosts resolve a surface's identity
+// hue through ONE mapping. The colour values stay in design-system; this is
+// name resolution only, and the model chooses from `SURFACE_HUES` by name.
+export {
+  isSurfaceHue,
+  resolveSurfaceHue,
+  SURFACE_HUES,
+  surfaceHueForUri,
+  type SurfaceHue,
+} from "./surfaces";
+// === end surface language ===
+
 // === PRD-11 registry scoping groundwork ===
 // Isolated-instance factory + React scoping. Default remains the module-global
 // registry (zero behaviour change); a provider scopes a subtree for per-tenant

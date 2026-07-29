@@ -36,6 +36,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactPresentationPreference,
     OperationOutcome,
     PresentationDecision,
+    SurfaceAccent,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,6 +107,10 @@ class PublishArtifactInput(RuntimeContract):
     presentation_preference: ArtifactPresentationPreference = (
         ArtifactPresentationPreference.AUTO
     )
+    # A name from a closed set, never a colour. Pydantic rejects anything else
+    # before the value can reach a surface, so a model that tries to send
+    # `#ff00ff` or a CSS fragment fails validation rather than styling a page.
+    accent: SurfaceAccent | None = None
 
     @model_validator(mode="after")
     def _valid_publication(self) -> PublishArtifactInput:
@@ -128,6 +133,7 @@ class PublishArtifactInput(RuntimeContract):
             media_type=self.media_type,
             suggested_filename=self.suggested_filename,
             presentation_preference=self.presentation_preference,
+            accent=self.accent,
         )
 
     def publication_source(self) -> ArtifactPublicationSource:
@@ -311,6 +317,7 @@ def _input_from_content_part(part: ArtifactContentPart) -> PublishArtifactInput:
         content_ref=part.content_ref,
         suggested_filename=part.intent.suggested_filename,
         presentation_preference=part.intent.presentation_preference,
+        accent=part.intent.accent,
     )
 
 

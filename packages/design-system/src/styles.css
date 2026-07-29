@@ -324,6 +324,100 @@
 }
 
 /* ===========================================================================
+ * SOURCE-HUE RING — the IDENTITY register for generative surfaces.
+ *
+ * READ THIS BEFORE ASSUMING IT VIOLATES ONE-ACCENT DISCIPLINE. It does not.
+ * The v2 rule ("sky is the only accent; never introduce a second accent")
+ * governs the ATTENTION register — what is asking for your decision. This ring
+ * is a different, orthogonal channel. The Studio surface language runs three:
+ *
+ *   identity  (this ring)   which source/archetype a surface came from
+ *   attention (--color-accent)  the live moment · an edited cell · the new half
+ *                               of a diff · the one primary button
+ *   outcome   (success/warning/danger)  written · held · aborted
+ *
+ * A source hue is ALWAYS subordinate and never competes for attention: dots at
+ * 55% opacity until active, value bars at 15-24%, numeric headers mixed only
+ * 55% of the way from the muted text colour. Nothing here may ever be used as
+ * a fill behind body copy, a button, or a focus ring — that is the accent's
+ * job, and taking it would collapse the two registers back into one.
+ *
+ * ONE PERCEPTUAL RING. Every hue is oklch(0.76 0.1 H): identical lightness and
+ * chroma, so HUE ALONE carries identity and no source can shout louder than
+ * another by being brighter or more saturated. Adding a source = adding a hue
+ * angle, never a new lightness. `amber` is the single deliberate exception at
+ * L 0.79, because yellow at L 0.76 reads muddy against the near-black ground.
+ *
+ * `none` is not a colour. A surface with no spec gets a HOLLOW ring — the
+ * generic view is a real view, not an error and not a source, so it is honest
+ * about having no identity to show rather than borrowing one.
+ * ======================================================================== */
+:root {
+  --surface-hue-jade: oklch(0.76 0.1 158);
+  --surface-hue-sky: oklch(0.76 0.1 232);
+  --surface-hue-indigo: oklch(0.76 0.1 258);
+  --surface-hue-ember: oklch(0.76 0.1 28);
+  --surface-hue-violet: oklch(0.76 0.1 300);
+  --surface-hue-plum: oklch(0.76 0.1 288);
+  --surface-hue-amber: oklch(0.79 0.1 78);
+  /* The fallback when nothing resolves. Consumers read --surface-src, which
+     defaults here, so an unmapped surface degrades to a neutral dot instead of
+     inheriting whichever hue happened to be set on an ancestor. */
+  --surface-hue-none: var(--color-text-subtle);
+  --surface-src: var(--surface-hue-none);
+}
+
+/* Light ground. The ring is authored for the near-black surface; on white the
+ * same L 0.76 washes out to near-invisible at dot scale, so each hue steps down
+ * in lightness while holding its hue angle. Identity survives the theme flip;
+ * only the ground changes. */
+:root[data-theme="light"] {
+  --surface-hue-jade: oklch(0.58 0.11 158);
+  --surface-hue-sky: oklch(0.58 0.11 232);
+  --surface-hue-indigo: oklch(0.58 0.11 258);
+  --surface-hue-ember: oklch(0.58 0.11 28);
+  --surface-hue-violet: oklch(0.58 0.11 300);
+  --surface-hue-plum: oklch(0.58 0.11 288);
+  --surface-hue-amber: oklch(0.62 0.11 78);
+}
+
+/* Named source classes. A consumer sets ONE attribute — data-surface-hue —
+ * and every downstream rule (dot, halo, value bar, numeric header) reads
+ * --surface-src. That keeps name → hue resolution in exactly one place, so a
+ * renderer never hardcodes a colour and the model never sends one. */
+[data-surface-hue="jade"] {
+  --surface-src: var(--surface-hue-jade);
+}
+[data-surface-hue="sky"] {
+  --surface-src: var(--surface-hue-sky);
+}
+[data-surface-hue="indigo"] {
+  --surface-src: var(--surface-hue-indigo);
+}
+[data-surface-hue="ember"] {
+  --surface-src: var(--surface-hue-ember);
+}
+[data-surface-hue="violet"] {
+  --surface-src: var(--surface-hue-violet);
+}
+[data-surface-hue="plum"] {
+  --surface-src: var(--surface-hue-plum);
+}
+[data-surface-hue="amber"] {
+  --surface-src: var(--surface-hue-amber);
+}
+[data-surface-hue="none"] {
+  --surface-src: var(--surface-hue-none);
+}
+
+/* The colour budget switch. `quiet` drops the whole identity register to
+ * neutral without touching attention or outcome — the one control that answers
+ * "this is too colourful" without anyone hand-editing a renderer. */
+:root[data-surface-color="quiet"] [data-surface-hue] {
+  --surface-src: var(--surface-hue-none);
+}
+
+/* ===========================================================================
  * ACCENT SEED TIER — hue only. Picked in Settings → Appearance.
  *
  * THE CONTRACT (the fix for the accent-collapse bug, and the thing to grep in

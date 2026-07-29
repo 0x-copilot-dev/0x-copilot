@@ -51,7 +51,10 @@ const headerTitleStyle: CSSProperties = {
 };
 
 const kickerStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
   fontSize: 11,
+  gap: 7,
   letterSpacing: 0.6,
   color: PALETTE.textLo,
   textTransform: "uppercase",
@@ -93,7 +96,15 @@ export function SurfaceHeader(props: SurfaceHeaderProps): ReactElement {
   return (
     <header style={headerRowStyle} data-testid="surface-header">
       <div style={headerTitleStyle}>
-        <span style={kickerStyle}>{kicker}</span>
+        <span style={kickerStyle}>
+          {/* The same dot the canvas tab shows, so a surface and the tab that
+              opened it are visibly one object. Both read `--surface-src` from
+              the nearest `data-surface-hue` ancestor — the card never resolves
+              a colour, which is why one hue change moves both. Decorative: the
+              kicker text already names the archetype. */}
+          <span aria-hidden="true" className="sf-kicker__dot" />
+          {kicker}
+        </span>
         <span style={titleStyle} data-testid="surface-title">
           {title || "Untitled"}
         </span>

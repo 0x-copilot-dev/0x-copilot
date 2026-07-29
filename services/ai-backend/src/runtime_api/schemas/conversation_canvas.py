@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import Field
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.surfaces_v2.ledger_models import SurfaceAccent
 
 
 class ConversationCanvasSubject(RuntimeContract):
@@ -30,6 +31,12 @@ class ConversationCanvasSubject(RuntimeContract):
     title: str = Field(max_length=512)
     revision: int | None = None
     renderer_hint: str = Field(min_length=1, max_length=128)
+    #: The identity hue chosen at publication, if one was. Travels with `title`
+    #: because it is the same kind of fact — display identity the artifact owns,
+    #: which the tab strip and the surface card must agree on. ``None`` means no
+    #: preference was expressed, and the client derives a hue from the renderer
+    #: hint; it does NOT mean "no colour", which is the explicit ``none`` value.
+    accent: SurfaceAccent | None = None
     created_at: datetime
 
 

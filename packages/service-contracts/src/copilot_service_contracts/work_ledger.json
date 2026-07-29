@@ -175,7 +175,7 @@
         "created_at",
         "updated_at"
       ],
-      "optional": ["deleted_at"]
+      "optional": ["accent", "deleted_at"]
     },
     "ArtifactRevision": {
       "required": [
@@ -191,7 +191,7 @@
     },
     "ArtifactIntent": {
       "required": ["kind", "presentation_preference"],
-      "optional": ["title", "media_type", "suggested_filename"]
+      "optional": ["title", "media_type", "suggested_filename", "accent"]
     },
     "SurfaceSubject": {
       "required": ["subject_type", "subject_id"],

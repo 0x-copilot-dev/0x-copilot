@@ -14,6 +14,7 @@ import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
+import { surfaceHueForUri } from "../surfaces/surfaceHue";
 import { GenericRecordFallback } from "../surfaces/record/GenericRecordFallback";
 import { projectAt, type SurfacePayload } from "./eventProjector";
 
@@ -371,6 +372,12 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
     <div
       data-testid="tc-surface-mount"
       data-tier={chosenLabel}
+      // The hue scope for everything the adapter renders. Set HERE, at the one
+      // place that both knows the surface URI and wraps the whole surface, so a
+      // renderer never has to be handed a colour or resolve one itself. A tier-3
+      // fallback resolves to `none` through the same path — a generic view is a
+      // real view, it just has no source identity to claim.
+      data-surface-hue={surfaceHueForUri(uri)}
       data-streaming={streamPercent !== null ? "true" : "false"}
       data-editing={isEditing ? "true" : "false"}
       style={rootStyle}

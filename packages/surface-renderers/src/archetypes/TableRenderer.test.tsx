@@ -128,3 +128,114 @@ describe("tableAdapter defensive rendering", () => {
     );
   });
 });
+
+describe("TableRenderer value bars", () => {
+  const spec: SurfaceSpec = {
+    spec_version: 1,
+    archetype: "table",
+    source: { server: "s", tool: "t" },
+    title_path: "name",
+    items_path: "rows",
+    columns: [
+      { label: "Region", path: "region", format: "text" },
+      { label: "Bookings", path: "bookings", format: "number", align: "end" },
+    ],
+  };
+  const data = {
+    name: "Forecast",
+    rows: [
+      { region: "EMEA", bookings: 100 },
+      { region: "AMER", bookings: 50 },
+      { region: "APAC", bookings: 25 },
+    ],
+  };
+
+  it("paints a bar behind each numeric cell, sized by its share", () => {
+    render(tableAdapter.renderCurrent({ spec, data }));
+    // `left` shrinks the bar from the left, so it stays anchored to the right
+    // edge where the digits end: share 1 → left 0%, share 0.25 → left 75%.
+    expect(screen.getByTestId("table-value-bar-0-1")).toHaveStyle({
+      left: "0%",
+    });
+    expect(screen.getByTestId("table-value-bar-1-1")).toHaveStyle({
+      left: "50%",
+    });
+    expect(screen.getByTestId("table-value-bar-2-1")).toHaveStyle({
+      left: "75%",
+    });
+  });
+
+  it("leaves non-numeric columns alone", () => {
+    render(tableAdapter.renderCurrent({ spec, data }));
+    expect(screen.queryByTestId("table-value-bar-0-0")).toBeNull();
+  });
+
+  // The bar restates the number visually; announcing it would just repeat the
+  // cell, and the value itself must stay the only thing read out.
+  it("hides the bar from assistive technology and keeps the value readable", () => {
+    render(tableAdapter.renderCurrent({ spec, data }));
+    expect(screen.getByTestId("table-value-bar-0-1")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(screen.getByTestId("table-cell-0-1")).toHaveTextContent("100");
+  });
+
+  it("paints no bars when every value is identical", () => {
+    render(
+      tableAdapter.renderCurrent({
+        spec,
+        data: {
+          name: "Flat",
+          rows: [
+            { region: "EMEA", bookings: 7 },
+            { region: "AMER", bookings: 7 },
+          ],
+        },
+      }),
+    );
+    expect(screen.queryByTestId("table-value-bar-0-1")).toBeNull();
+    expect(screen.getByTestId("table-cell-0-1")).toHaveTextContent("7");
+  });
+
+  it("marks numeric headers so they can carry the source hue", () => {
+    render(tableAdapter.renderCurrent({ spec, data }));
+    expect(screen.getByTestId("table-header-1")).toHaveClass("sf-col--numeric");
+    expect(screen.getByTestId("table-header-0")).not.toHaveClass(
+      "sf-col--numeric",
+    );
+  });
+});
+
+describe("TableRenderer numeric header hue (regression)", () => {
+  // The class alone proves nothing: `thStyle` emits an inline `color`, and an
+  // inline declaration outranks any stylesheet rule, so asserting only
+  // `toHaveClass` passed while the rule was completely inert. What matters is
+  // that the inline colour READS THE VARIABLE the class sets.
+  it("reads its colour through the variable the stylesheet can set", () => {
+    const spec: SurfaceSpec = {
+      spec_version: 1,
+      archetype: "table",
+      source: { server: "s", tool: "t" },
+      title_path: "name",
+      items_path: "rows",
+      columns: [
+        { label: "Region", path: "region", format: "text" },
+        { label: "Bookings", path: "bookings", format: "number", align: "end" },
+      ],
+    };
+    render(
+      tableAdapter.renderCurrent({
+        spec,
+        data: { name: "F", rows: [{ region: "EMEA", bookings: 1 }] },
+      }),
+    );
+    const numeric = screen.getByTestId("table-header-1");
+    expect(numeric).toHaveClass("sf-col--numeric");
+    expect(numeric.style.color).toContain("--sf-col-color");
+    // The fallback keeps every non-numeric header exactly as it was.
+    expect(screen.getByTestId("table-header-0").style.color).toContain(
+      "--sf-col-color",
+    );
+  });
+});
