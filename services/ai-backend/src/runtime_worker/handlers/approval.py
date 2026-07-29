@@ -46,6 +46,9 @@ from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     ArtifactContentPartPublisher,
     PublishArtifactTool,
 )
+from agent_runtime.capabilities.tools.builtin.revise_artifact import (
+    ReviseArtifactTool,
+)
 from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyResolver,
 )
@@ -878,6 +881,9 @@ class RuntimeApprovalHandler:
         publish_artifact_tool = self._publish_artifact_tool(run)
         if publish_artifact_tool is not None:
             update["publish_artifact_tool"] = publish_artifact_tool
+        revise_artifact_tool = self._revise_artifact_tool(run)
+        if revise_artifact_tool is not None:
+            update["revise_artifact_tool"] = revise_artifact_tool
         return dependencies.model_copy(update=update)
 
     def _artifact_publication_enabled(self, run: RunRecord) -> bool:
@@ -969,6 +975,14 @@ class RuntimeApprovalHandler:
         if not self._artifact_publication_enabled(run):
             return None
         return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    def _revise_artifact_tool(self, run: RunRecord) -> ReviseArtifactTool | None:
+        # Same gate as publication — see the run handler for why they are paired.
+        if not self._artifact_publication_enabled(run):
+            return None
+        return ReviseArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
         )
 

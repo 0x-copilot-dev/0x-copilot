@@ -508,6 +508,22 @@
   },
   {
     "descriptor": {
+      "capability": "artifact",
+      "op": "revise",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "artifact_and_activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-29.1",
+    "display_name": "artifact revision",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
       "capability": "builtin",
       "op": "load_tool_spec",
       "executor": "builtin",

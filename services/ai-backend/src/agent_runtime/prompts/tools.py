@@ -51,11 +51,26 @@ STAGE_ROWSET_WRITE_TOOL_DESCRIPTION = (
 )
 
 
+_ARTIFACT_DESTINATION_RULE = (
+    "Reporting where it went: state the destination from the tool result's "
+    "`stored_in` field and nothing else. `artifact_library` means the content is "
+    "in the app's artifact library, openable and downloadable from the canvas. "
+    "It is NOT a file on the user's computer. Never say it was saved to a "
+    "folder, to disk, to Documents, or to any path unless a filesystem "
+    "operation actually ran and returned that path; `wrote_to_filesystem` is "
+    "`false` here, so no such claim is true."
+)
+
+
 PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
-    "Create one durable code, document, dataset, or file artifact in the app's "
-    "artifact library. Use this only when the user explicitly asks to create, "
-    "save, or produce a durable artifact. Ordinary prose and fenced code remain "
-    "chat text and must not be published automatically.\n\n"
+    "Create ONE NEW durable code, document, dataset, or file artifact in the "
+    "app's artifact library. Use this only when the user explicitly asks to "
+    "create, save, or produce a durable artifact. Ordinary prose and fenced "
+    "code remain chat text and must not be published automatically.\n\n"
+    "To change an artifact that already exists — adding a row, fixing a value, "
+    "editing a section — use `revise_artifact` instead. Publishing again makes "
+    "a SECOND unrelated artifact and a second canvas tab, which is not what the "
+    "user asked for when they said 'add' or 'change'.\n\n"
     "Fields:\n"
     "- `kind` (required): `code`, `document`, `dataset`, or `file`.\n"
     "- `title` and `media_type` (required): safe display metadata.\n"
@@ -64,9 +79,30 @@ PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
     "- `suggested_filename` (optional): download metadata only, never a path.\n"
     "- `presentation_preference` (optional): `auto`, `canvas`, `chat_card`, or "
     "`none`; this is a request and can be downgraded.\n\n"
-    "Publication stores content in the product artifact repository; it does not "
-    "save a file to the user's local workspace. Return a short normal response "
-    "after publishing."
+    f"{_ARTIFACT_DESTINATION_RULE}\n\n"
+    "Return a short normal response after publishing."
+)
+
+
+REVISE_ARTIFACT_TOOL_DESCRIPTION = (
+    "Replace the content of an artifact that ALREADY EXISTS, creating its next "
+    "immutable revision. Use this whenever the user asks to change, add to, "
+    "correct, or update an artifact you or they previously produced — it keeps "
+    "one artifact with a version history and one canvas tab, instead of "
+    "scattering near-duplicates.\n\n"
+    "Fields:\n"
+    "- `artifact_id` (required): the id returned when the artifact was "
+    "published or last revised.\n"
+    "- `parent_revision` (required): the revision number you are editing FROM. "
+    "This is a compare-and-append: if the artifact has moved on since then — "
+    "the user may have edited a cell themselves — the call is refused rather "
+    "than overwriting their work. Read the current revision and retry from it.\n"
+    "- exactly one of `content` (the COMPLETE new content, UTF-8, at most "
+    "1 MiB) or `content_ref` (a sanctioned server result reference). Send the "
+    "whole document, not a patch or a fragment.\n\n"
+    "Kind, title, and media type cannot be changed by revising; they belong to "
+    "the artifact itself.\n\n"
+    f"{_ARTIFACT_DESTINATION_RULE}"
 )
 
 

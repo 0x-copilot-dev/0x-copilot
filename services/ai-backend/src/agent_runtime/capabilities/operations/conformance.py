@@ -218,6 +218,7 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("workspace", "edit", "capabilities.desktop.workspace_backend"),
         ("model", "artifact_content_part", "runtime_worker.handlers.run"),
         ("artifact", "publish", "agent_runtime.artifacts.service"),
+        ("artifact", "revise", "agent_runtime.artifacts.service"),
         ("draft", "publish", "capabilities.backends.draft_backend"),
         (
             "desktop_browser",
