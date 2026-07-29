@@ -527,6 +527,145 @@ class ModelInvocationTrajectoryScorer:
         )
 
 
+class CapabilityDiscoveryTrajectoryScorer:
+    """Score the closed, body-free F3 capability-discovery projection.
+
+    Three properties Step 8 must prove are all expressible over the same
+    projection, which is why there is one scorer rather than three:
+
+    * **selection recall** — ``minimum_recall_rank``/``maximum_recall_rank``
+      bound the position at which the case's target capability came back from
+      ``search_capabilities``. Rank ``0`` means it never came back at all, and
+      that is the failure recall exists to catch.
+    * **unauthorized-name probing** — ``forbidden_outcomes`` and
+      ``forbidden_phases`` state that an unauthorized name must not be
+      searchable, describable, guessable, or invocable. A probe case forbids
+      ``ok`` across every phase, so *any* successful answer fails it.
+    * **end-to-end quality** — ``required_phases`` pins that the chain actually
+      ran, and the token/turn ceilings pin that it stayed cheap.
+
+    Recall is checked over search steps specifically rather than over the whole
+    trajectory: a describe or invoke step has no rank to report, and folding
+    their zeroes into the same set would make every passing case look like a
+    recall miss.
+    """
+
+    scorer_id = "capability_discovery_trajectory"
+
+    def score(
+        self,
+        *,
+        case: EvaluationCase,
+        trajectory: TrajectoryManifest,
+    ) -> ScorerResult:
+        assertion = _assertion(case, self.scorer_id)
+        if assertion is None:
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=1.0,
+                passed=True,
+                hard_gate=False,
+                reason_code="capability_discovery_not_applicable",
+            )
+        expected = assertion.expected
+        if not isinstance(expected, Mapping):
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=0,
+                passed=False,
+                hard_gate=assertion.hard_gate,
+                reason_code="capability_discovery_assertion_invalid",
+            )
+        steps = tuple(step for step in trajectory.ordered_steps if step.discovery_phase)
+        phases = {step.discovery_phase for step in steps}
+        outcomes = {step.discovery_outcome for step in steps}
+        search_steps = tuple(
+            step for step in steps if step.discovery_phase == "capability_search"
+        )
+        ranks = tuple(step.discovery_recall_rank for step in search_steps)
+        best_rank = min((rank for rank in ranks if rank > 0), default=0)
+        result_tokens = sum(step.discovery_result_tokens for step in steps)
+        model_turns = sum(step.discovery_model_turns for step in steps)
+
+        checks = (
+            (
+                _string_set(expected.get("required_phases", ())) - phases,
+                "capability_discovery_phase_missing",
+            ),
+            (
+                _string_set(expected.get("required_outcomes", ())) - outcomes,
+                "capability_discovery_outcome_missing",
+            ),
+            (
+                _string_set(expected.get("forbidden_phases", ())) & phases,
+                "capability_discovery_forbidden_phase_observed",
+            ),
+            (
+                _string_set(expected.get("forbidden_outcomes", ())) & outcomes,
+                "capability_discovery_forbidden_outcome_observed",
+            ),
+        )
+        reason = next(
+            (reason_code for observed, reason_code in checks if observed),
+            None,
+        )
+        # Trajectory-wide ``required_outcomes`` is satisfied by *any* step, which
+        # is too weak for the probe case: one bridge tool answering ``ok`` would
+        # hide behind the two that still answered ``capability_not_found``. This
+        # binds an outcome to a phase, so each probed tool is gated on its own.
+        required_phase_outcomes = expected.get("required_phase_outcomes")
+        if reason is None and isinstance(required_phase_outcomes, Mapping):
+            mismatched = any(
+                step.discovery_outcome
+                != str(required_phase_outcomes[step.discovery_phase])
+                for step in steps
+                if step.discovery_phase in required_phase_outcomes
+            )
+            unobserved = _string_set(tuple(required_phase_outcomes)) - phases
+            if mismatched or unobserved:
+                reason = "capability_discovery_phase_outcome_mismatch"
+        minimum_rank = _non_negative_int(expected.get("minimum_recall_rank", 0))
+        if reason is None and minimum_rank and best_rank < minimum_rank:
+            # ``best_rank`` is 0 when the target never appeared, so an absent
+            # capability and a badly ranked one fail through the same gate.
+            reason = "capability_discovery_recall_missing"
+        # The two probe ceilings are read by key presence rather than by a
+        # non-zero value, because ``0`` is their most important setting: it is
+        # how an unauthorized-name case says the capability must not come back
+        # from a search at all. A truthiness check would silently disable
+        # exactly the assertion the security case rests on.
+        if reason is None and "maximum_recall_rank" in expected:
+            maximum_rank = _non_negative_int(expected.get("maximum_recall_rank"))
+            if best_rank > maximum_rank:
+                reason = "capability_discovery_recall_rank_exceeded"
+        if reason is None and "maximum_candidate_count" in expected:
+            maximum_candidates = _non_negative_int(
+                expected.get("maximum_candidate_count")
+            )
+            observed_candidates = max(
+                (step.discovery_candidate_count for step in search_steps),
+                default=0,
+            )
+            if observed_candidates > maximum_candidates:
+                reason = "capability_discovery_candidate_count_exceeded"
+        maximum_tokens = _non_negative_int(expected.get("maximum_result_tokens", 0))
+        if reason is None and maximum_tokens and result_tokens > maximum_tokens:
+            reason = "capability_discovery_result_tokens_exceeded"
+        maximum_turns = _non_negative_int(expected.get("maximum_model_turns", 0))
+        if reason is None and maximum_turns and model_turns > maximum_turns:
+            reason = "capability_discovery_model_turns_exceeded"
+        if reason is None:
+            reason = "capability_discovery_trajectory_passed"
+        passed = reason == "capability_discovery_trajectory_passed"
+        return ScorerResult(
+            scorer_id=self.scorer_id,
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            hard_gate=assertion.hard_gate,
+            reason_code=reason,
+        )
+
+
 class RedactedGradeRequest(RuntimeContract):
     """The complete, content-free payload available to an optional grader."""
 
@@ -665,6 +804,7 @@ DEFAULT_HARD_SCORERS = (
     TaskPolicyTrajectoryScorer(),
     PromptCacheTrajectoryScorer(),
     ModelInvocationTrajectoryScorer(),
+    CapabilityDiscoveryTrajectoryScorer(),
 )
 
 
@@ -743,6 +883,7 @@ def _count_mapping(value: object) -> dict[str, int]:
 
 __all__ = [
     "BoundedRedactedGrader",
+    "CapabilityDiscoveryTrajectoryScorer",
     "DEFAULT_HARD_SCORERS",
     "GraderAttribution",
     "HardConstraintScorer",

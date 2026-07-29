@@ -116,6 +116,12 @@ class FixtureTrajectoryObservation(RuntimeContract):
     invocation_input_tokens: int = Field(default=0, ge=0)
     invocation_output_tokens: int = Field(default=0, ge=0)
     invocation_cost_microusd: int = Field(default=0, ge=0)
+    discovery_phase: str | None = Field(default=None, max_length=80)
+    discovery_outcome: str | None = Field(default=None, max_length=80)
+    discovery_candidate_count: int = Field(default=0, ge=0)
+    discovery_recall_rank: int = Field(default=0, ge=0)
+    discovery_result_tokens: int = Field(default=0, ge=0)
+    discovery_model_turns: int = Field(default=0, ge=0)
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -289,6 +295,12 @@ class FixtureOnlyCaseExecutor:
             invocation_input_tokens=observation.invocation_input_tokens,
             invocation_output_tokens=observation.invocation_output_tokens,
             invocation_cost_microusd=observation.invocation_cost_microusd,
+            discovery_phase=observation.discovery_phase,
+            discovery_outcome=observation.discovery_outcome,
+            discovery_candidate_count=observation.discovery_candidate_count,
+            discovery_recall_rank=observation.discovery_recall_rank,
+            discovery_result_tokens=observation.discovery_result_tokens,
+            discovery_model_turns=observation.discovery_model_turns,
             payload_digest=observation.payload_digest,
         )
 

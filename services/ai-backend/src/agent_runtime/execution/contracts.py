@@ -645,6 +645,22 @@ class RuntimeDependencies(RuntimeContract):
     # Kept as an object here to preserve the execution-contract module's
     # dependency direction; PromptRuntimeBinding validates the concrete use.
     prompt_assembly_observer: object | None = None
+    # Optional F3 capability-discovery inputs: the resolved
+    # ``CapabilityActivationDecision`` and the authorization-projected
+    # ``CapabilityCatalog``. Both are built per run *after* verified identity,
+    # connector scope, the F4 policy selection, and the F8 descriptor revision
+    # are known; the factory hands the pair to the single
+    # ``CapabilityBridgeRegistrar`` entry point, which registers the bounded
+    # discovery bridge tools only in the ``deferred`` posture and only for a
+    # catalog that can mint a revalidatable ref. ``None`` — the production
+    # default while F3 is dark — registers nothing, so the model-visible tool
+    # surface is byte-identical to the pre-F3 disclosure path. Kept as
+    # ``object`` here (like ``prompt_assembly_observer``) to preserve this
+    # module's dependency direction: the discovery contracts import from it, so
+    # a typed field would close an import cycle. The factory validates the
+    # concrete types and narrows to no bridge tools when either is unresolved.
+    capability_activation: object | None = None
+    capability_catalog: object | None = None
 
     @field_validator(
         "tool_registry",

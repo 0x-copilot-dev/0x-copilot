@@ -297,6 +297,7 @@ architecture:
 
 - [F1–F12 production integration implementation PRD](./IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md)
 - [Implementation history and resolved/open ARQ record](./IMPLEMENTATION-BACKLOG.md)
+- [Execution backlog — defects, blockers, and proportionality findings](./EXECUTION-BACKLOG.md)
 
 The implementation PRD contains the normative checkbox queue. Work proceeds in
 order and a step is not marked complete until its code, adapters, tests,
@@ -630,6 +631,450 @@ backend-to-ai callback, or desktop daemon.
       suites, migration-manifest checks, ruff/format/compile, API and desktop
       typechecks, lifecycle tests, commit hooks, `git diff --check`, and every
       Step 7 exit criterion before checking the normative step.
+
+### In progress — Step RB one revalidation primitive
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. This step adds no authority: the primitive can
+only narrow, and every existing call-time authorization boundary stays where it
+is.
+
+- [x] **RB.1 — Primitive and conformance suite.** (`14260424`; 45 focused tests
+      — 30 primitive, 15 inherited conformance cases.) Define `RevisionBoundRef`
+      (opaque ref, issuing scope, minted-against revision, binding digest) and
+      the `revalidate_at_use(ref, runtime_context, policy)` protocol returning a
+      closed `current`/`superseded`/`revoked`/`out_of_scope`/`unavailable`
+      outcome with stable reason codes and no bodies. Revisions compare by
+      equality only. Publish one reusable conformance suite covering scope
+      isolation, cross-subject rejection, superseded replay, revocation between
+      mint and use, unavailable-authority fail-closed, and idempotent repeated
+      revalidation. Three properties are structural rather than documented:
+      `BoundRevision` raises on every ordering operator so freshness can never
+      be inferred from order; `bool()` raises on both the outcome and the
+      decision so `unavailable` cannot read as success; and structural refusals
+      (digest, feature, scope) never reach the authority at all. Adopters supply
+      only a small `RevisionAuthorityPort`; the staleness logic itself exists
+      once.
+- [x] **RB.2 — F8 adoption and parity proof.** (`ee345d5e`; 38 focused tests —
+      15 inherited conformance cases run against the production authority and
+      binder, not a double.) Bind the shipped Step 7
+      descriptor-revision check to the primitive, instantiate the conformance
+      suite for it, and prove behavioral parity with the merged Step 7 path
+      including the generation barrier. No F8 behavior may change.
+      **Parity proof: 74 pre-existing F8 tests pass unmodified**, 17 of them
+      directly over the substituted path, with zero assertions changed. The
+      subject fingerprint is a canonical-JSON SHA-256 over a fixed closed key
+      set, so the classic `"acme:sales"+"u1"` vs `"acme"+"sales:u1"` delimiter
+      collision is structurally impossible; a `kind` label adds domain
+      separation so an F8 fingerprint can never equal an F3/F5/F9/F11 one over a
+      same-shaped tuple.
+
+      **Adoption findings — Steps 9, 12, and 13 must read these before binding.**
+      The lane's most valuable output is where the shared primitive could *not*
+      express F8, because the remaining adopters will hit the same limits:
+
+      1. **No vocabulary for bounded local staleness** — no outcome means "the
+         binding is current but the material is too old to reuse". F8 keeps
+         `MAX_STALENESS_EXCEEDED` local. **F5 (Step 9) will hit this.**
+      2. **No vocabulary for "binding current, material gone"** — `VALUE_EVICTED`
+         also stays local. Same likely impact on F5.
+      3. **A pure generation barrier still requires a revision.** Fencing a live
+         load that has no trusted revision would mean fabricating one, which the
+         primitive rightly forbids, so that one barrier stays local. **F9 and
+         F11 will hit this wherever material is fenced but not revisioned.**
+      4. **`RevisionUseContext.run_id` is mandatory even for adopters that have
+         no run** — F8's descriptor cache is process-wide and subject-scoped, so
+         it passes an inert documented sentinel. `run_id` should be optional in
+         the context, matching the scope. Contract defect; see RB.3.
+      5. **`RevisionAuthorityPort.current_revision` receives only
+         `(feature, scope)`, and the subject fingerprint is one-way**, so an
+         authority that must call a backend keyed by the original identity
+         cannot recover it. Every adopter is therefore forced into a scope-keyed
+         registry populated at mint time, and inherits its lifetime management.
+         **Every remaining adopter hits this.** Contract defect; see RB.3.
+      6. `RevalidationOutcome` does not map onto an adopter's existing state
+         enum, so each needs a total reason→state projection the suite does not
+         cover. Unavoidable per-adopter work, not a defect.
+
+      Also flagged, deliberately not changed: the shipped post-I/O check is a
+      conjunction whose two halves are mutually redundant in every reachable
+      state. That was equally true before this lane; parity was preserved rather
+      than silently simplified, so root can collapse it as a deliberate change.
+
+- [x] **RB.3 — Contract fixes from two independent adoptions.** (`2d0ed56e`;
+      +27 tests; conformance is now 16 cases × 3 instantiations = 48.) Fixes the
+      two findings both adopters hit. `RevisionUseContext.run_id` is optional,
+      and relaxing it did **not** relax the check — a new structural line binds
+      required dimensions on the context side too, generalises to
+      `catalog_generation`, fires before any authority call, and can only refuse
+      more. `RevisionAuthorityPort` gained an optional opaque resolution handle,
+      which is a **parameter of the call, not a field of any contract** — absent
+      from the binding, scope, and decision, i.e. from everything that is
+      minted, digested, persisted, replayed, or logged, so the no-raw-identity
+      property is preserved byte for byte.
+
+      **This is the outcome that justified the lane:** F8's scope-keyed registry
+      is deleted outright. It turned out to be a pure round trip — the authority
+      was writing the caller's own trusted revision into a fingerprint-keyed
+      dict and reading it back one frame later — and the `forget` path existed
+      only to bound that dict. Root then removed the inert `forget` method and
+      both call sites (`9fd1a3d9`). F3 never needed to build a registry at all.
+
+      Sharp call worth keeping: F3 does **not** pass its own held
+      `live_generation` as the handle, even though it was available. An
+      authority answering from the snapshot under test would validate that
+      snapshot against itself. The handle is a resolution *key*, never an
+      answer, and a test proves a handle cannot let a superseded ref pass.
+
+### In progress — Step 8 policy-aware capability discovery
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. F3 reduces prompt and tool-schema load; it never
+widens authorization. Every inner operation re-enters the Operation Gateway.
+
+- [x] **F3.1 — Catalog and activation contracts.** (`12a6a000`; 56 focused
+      tests.) Extend the existing compact
+      catalog contracts with a generation identity keyed to verified identity,
+      connector scope, the F4 policy selection, and the F8 descriptor revision.
+      Add the closed activation policy `direct`/`server`/`deferred`/`shadow`
+      with a conservative default for unknown values, resolved through the
+      existing `FeatureModeResolver` rather than a second mode vocabulary. The
+      resolved feature mode is a hard ceiling (`off`→direct, `shadow`→shadow,
+      `enforce`→deferred) and the decision validator rejects any posture above
+      the ceiling or above the request, so widening is unrepresentable.
+      Activation is deliberately **not** keyed into the catalog generation — a
+      narrowing kill switch must not look like a different catalog and force
+      needless invalidation. `CapabilityCatalogRevision.generation` is optional
+      so the untouched builder still constructs; `bind_ref()` fails closed when
+      it is absent, which is the seam F3.2 threads a generation through.
+- [x] **F3.2 — Bounded bridge registration.** (`b41dc7d8`; 93 focused tests.)
+      Register
+      `search_capabilities`, `describe_capability`, and `invoke_capability` at
+      the runtime factory only in deferred/enabled modes, with bounded schemas
+      and a bridge-recursion guard so a bridge tool can never resolve to another
+      bridge tool. The guard is structural at three chokepoints rather than a
+      call-site check: a bridge name cannot become a catalog member on any
+      construction path, cannot yield an invocation target even from an entry
+      forged past validation, and dispatch is gated by the target _type_ rather
+      than a string comparison. The reserved set is derived by iterating the
+      closed tool-name enum, so a fourth bridge tool extends the guard
+      automatically. Probing a bridge ref returns the same `capability_not_found`
+      as any unknown ref, so it is not an existence oracle. The builder now
+      always populates the catalog generation, and the package imports no
+      LangChain or LangGraph type — asserted by an AST test — so the factory
+      keeps sole ownership of tool composition.
+
+      **Step RB paid for itself here.** `CapabilityRefBinding.is_bound_to()` is
+      deleted, grep-confirmed absent from `src/`, and a test asserts the binding
+      exposes no currency predicate at all. F3 now carries no staleness logic —
+      only a projection and a small `RevisionAuthorityPort`, with
+      `RevisionBindingRevalidator` owning every scope, ordering, tamper,
+      revocation, and unavailability decision. All 15 conformance cases run for
+      F3.
+
+      Registration returns empty in direct/server/shadow, and also for a catalog
+      with no generation — an unbindable catalog must not be offered. Every
+      emptier result falls back to the untouched pre-F3 disclosure path.
+
+- [x] **F3.3 — Search and bounded expansion.** (`cfafbe3b`; 34 focused tests.)
+      Rank authorized compact cards in
+      `O(NQ + R log K)` and expand at most the configured top-K server cards
+      through the existing `McpLoader` and F8 cache. Coalesce safe independent
+      descriptor loads, respect one total discovery deadline, and guarantee that
+      partial failure narrows rather than widens the result. The bound is proven
+      structurally, not by timing: a bounded-heap selector is asserted equal to
+      a full sort's prefix over 200 candidates with deliberate score collisions,
+      and peak retention is asserted exactly `K` after 1,000 offers. Widening is
+      unrepresentable — a result validator refuses any capability whose owner is
+      not an `EXPANDED` outcome, so a stalling or failing server can only
+      shrink the set. The deadline is injected and asserted granted **once** for
+      the whole expansion (a per-server implementation would record `K` timers),
+      and coalescing was verified with a negative control: the same scenario
+      without the cache issues two loads, with it exactly one. Invalid or
+      missing configuration resolves to the conservative default rather than the
+      ceiling, so a typo cannot raise fan-out.
+
+      Deliberate conservative choice worth ratifying: an expanded MCP tool's
+      effect class is always `UNKNOWN`. A server's own `readOnlyHint` is
+      untrusted, so server-supplied risk signals are honored only when they
+      *escalate* the approval cue — never when they would present a capability
+      as safer than an unclassified one.
+
+- [x] **F3.4 — Opaque refs and describe.** (`7dcc85c6`; 38 focused tests.)
+      **Found BUG-10 while doing it:** describe was not inlining a schema, it was
+      inlining a _truncated_ one — 32 parameters, 16 tags, `metadata_truncated` —
+      so the model would author arguments against a schema that is not the real
+      one. Parameters are now all-or-nothing: `schema_availability` is a closed
+      `inline`/`artifact`/`unavailable` enum whose validator refuses hints on any
+      non-inline answer, making a partial schema **unrepresentable**. Intent tags
+      are still trimmed on purpose — a tag is a search cue, a parameter is the
+      invocation contract. Reuses the existing `OffloadWriter`/CAS seam rather
+      than `ArtifactService`, which publishes user-visible ledger artifacts and
+      would pollute the user's artifact list with one blob per describe call.
+      Bridge tool-schema cost byte-identical at 923 tokens. **The publisher is
+      not yet threaded**, so an over-bound schema reports `unavailable` today —
+      fail-closed, and still strictly better than the truncation it replaced.
+      Mint refs scoped to
+      run/subject/catalog generation through the Step RB primitive. `describe`
+      returns a bounded schema or a protected schema-artifact ref, never an
+      unbounded inline schema.
+- [x] **F3.5 — Invoke and gateway revalidation.** (`e706301d`; 46 focused
+      tests.) `invoke` re-resolves the
+      current descriptor and auth revision, rejects superseded or out-of-scope
+      refs with the RB outcomes, validates canonical arguments against the
+      revalidated schema, and dispatches through a non-model
+      `CapabilityExecutorPort` that enters the ordinary Operation Gateway.
+      The inner operation is not _equivalent_ to a directly-registered MCP call,
+      it **is** one: dispatch goes through the same `CallMcpTool`, proven three
+      ways — an AST test asserting the executor imports no gateway internals, an
+      isinstance check on the concrete dispatcher so a protocol cannot later
+      admit a substitute, and a behavioural test against the real gateway where
+      the inner operation id equals the same run-snapshot-derived allocation a
+      direct call would get. Budget non-duplication is proven with a **negative
+      control**: the same dispatcher called directly as a guarded model tool
+      charges 1, so the bridge's inner-call zero is a property of the design
+      rather than a fixture artifact. Three seams fail closed rather than
+      pretending: `idempotency_key` (no gateway seam), tool-card capabilities
+      (no non-model dispatcher), and per-call citation binding — all recorded in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md).
+- [x] **F3.M — Reference-minter unification** (integration lane; `274e867f`;
+      5 new tests, zero assertions weakened). One `HmacCapabilityReferenceMinter`
+      owns the only `hmac.new` call site and the only key-strength gate in F3;
+      the builder and expander now provably mint the same ref for the same
+      input. Zero behavior change is proven by transcribing the three
+      pre-refactor derivations and asserting the new code reproduces them byte
+      for byte. Also collapsed five inline `cat_` patterns, five `rev_`, three
+      length pairs, and the search ceiling stated in three places.
+      `CapabilityExpansionLimits` moved next to `activation.py` because it is a
+      resolver of untrusted operator configuration, not a data contract — same
+      narrowest-on-anything-malformed rule.
+- [x] **F3.6 — Budget accounting.** Satisfied by lane F3.5 (`e706301d`), which
+      proved it against the real `ToolCallLedger` **with a negative control** —
+      `test_a_direct_connector_call_does_charge_the_dimension_it_skips` — so the
+      bridge's inner-call zero is a property of the design rather than a fixture
+      artifact. No separate lane was dispatched; building one would have been
+      redundant work. The bridge call consumes exactly one
+      model-visible F4 call; the real inner operation consumes its own
+      operation/capability budget; the same cost is never counted twice in one
+      dimension. Prove this against the existing F4 controller ledger.
+- [x] **F3.7 — Decisions, metrics, and F1 cases.** (`a350d222`; 59 focused
+      tests.) Extended `quality.decision.v1` with a closed phase rather than
+      minting a new event family, so `packages/api-types` is untouched — the
+      cross-package cost lane F6.2 had to pay is avoided here. Metric labels are
+      closed enums only, measured at ≤64 series. Body-freedom is proven by
+      driving the real bridge with a secret in both query and arguments and
+      grepping every persisted event, then mutating the implementation to carry
+      `repr(raw_input)` to confirm the guard fires. The unauthorized-probe F1
+      case binds outcome **to phase** rather than using a trajectory-wide
+      required set, because one leaking tool could otherwise hide behind the two
+      still refusing. Emit body-free
+      search/describe/invoke decisions plus token, model-turn, and latency
+      metrics through the existing closed event vocabulary. Add F1 cases for
+      selection recall, unauthorized-name probing, and end-to-end quality.
+- [x] **W1 — Factory wiring** (integration lane; `4882f173`; 19 focused tests).
+      Mount `CapabilityBridgeRegistrar` in `_model_visible_tools` in the slot
+      F3.2 specified, and thread `capability_activation`/`capability_catalog`
+      through `RuntimeDependencies`. **Feature-off parity is proven, not
+      assumed:** the composed tool surface with F3 dark is byte-identical before
+      and after — same names, same order, same body-free tool-schema digest
+      (`43aa0ea5…`), which is what F2 binds as `tool_schema_revision`, so the
+      prompt is unmoved too. Parity is asserted for `None` inputs, all three
+      inactive activation modes, a `shadow` ceiling under a requested `deferred`,
+      an ungenerated catalog, partial inputs, wrongly-typed inputs, and a
+      registrar that raises. No middleware was inserted, so the composed
+      middleware sequence is unchanged.
+
+      Discipline rule 7 turned out to be addressing a real gap: **no pinned proof
+      asserted tool ordering at all** — the three existing architecture
+      assertions used `issubset`, `frozenset`, and set equality, so a reordering
+      was invisible to CI. A normative order tuple is now pinned.
+
+      Two things root must still supply before F3 can activate, both recorded in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md): the production catalog
+      generation source and worker wiring (M-01, M-02), and operation-catalog
+      entries for the three bridge tools (BUG-07) — without them the
+      model-visible inventory proof goes red the moment anything composes the
+      deferred surface.
+
+- [x] **F3.9 — Deferred suppression** (integration lane; `60e3a577`; 28 focused
+      tests). `deferred` now suppresses the per-server MCP card block and
+      replaces it with one fixed paragraph in a new STABLE-tier prompt source,
+      `16_capability_discovery_protocol`. The deferred prompt is **flat at 853
+      tokens for any connector count** — proven byte-identical across 0, 1, 20,
+      and 60 servers — against a `direct` prompt that grows monotonically.
+      Registering it as its own source rather than reusing `20_mcp_cards` is
+      load-bearing: it carries no subject data, so it is installation-scoped
+      immutable policy and joins the **cacheable stable prefix**, which the
+      PROFILE-scoped card block never could.
+
+      **No direct tool was suppressed, and that is the correct answer.**
+      Search and describe replace the card block's *enumeration*, not any tool.
+      `load_mcp_server` stays because a described MCP-server entry exposes no
+      parameter names, so nothing callable comes out of describe.
+      `call_mcp_tool` stays because its superseder, `invoke_capability`,
+      registers only when an executor *and* a revalidation are supplied and the
+      factory threads neither. `auth_mcp` stays for the sharpest reason:
+      `CapabilityIndexEntry` has **no auth field at all**, so the bridge cannot
+      even report that a server needs authenticating — suppressing the cards
+      removes the model's only proactive `auth_state` signal, so the replacement
+      block names the reactive route explicitly.
+
+      Suppression is driven by intersecting the **final composed surface** —
+      after display decoration and tool-policy enforcement — with the reserved
+      bridge names. So "the cards are suppressed" and "a bridge tool is in the
+      model's hands" are the same fact rather than two facts that could drift.
+      Verified in both directions: disabling suppression fails 3 tests,
+      weakening the gate to posture-only fails 8.
+
+      Measured economics, including where the estimate was wrong and the much
+      larger non-F3 lever the lane surfaced, are in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md) §5.
+
+- [ ] **F3.8 — Cohort matrix and step gate.** Declare the named promotion cohort
+      matrix Step 15 evaluates. Prove: unauthorized capability names cannot be
+      searched, described, guessed, or invoked; revocation or schema change
+      between describe and invoke fails closed; cold discovery opens at most K
+      servers and warm discovery performs no duplicate list; direct/server
+      fallback stays available; feature-off parity holds. Run focused and full
+      suites, ruff/format/compile, hooks, and `git diff --check` before root
+      marks the step.
+
+### In progress — Step 10 capability concurrency executor
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. Missing or unknown metadata always means serial.
+Scheduling convenience is never treated as safety metadata.
+
+- [x] **F6.1 — Descriptor metadata and precedence.** (`54d96333`; 70 focused
+      tests.) Extend trusted product
+      descriptor metadata with concurrency policy, idempotency, resource-key
+      template, ordering, rate-limit scope, and provider/session constraints.
+      Implement the precedence chain product catalog → user-approved tightening
+      → trusted provider tightening → conservative serial/unknown, where each
+      later source may only narrow. Ratified decisions: `NarrowableEnum` makes
+      declaration order the authority rank, so precedence is derived rather than
+      hardcoded and `narrowest()` cannot widen; `UNKNOWN` ranks narrower than an
+      irreversible write, so an undeclared class forbids every overlap;
+      `resolve()` records a typed rejection and continues while
+      `resolve_strict()` raises, because an untrusted MCP server must not be
+      able to fail a run by over-claiming; a provider cannot introduce a
+      resource key the catalog never declared, and two unorderable templates
+      fall to _no key_ rather than an invented merge; `capability_ref` is
+      pattern-locked so raw connector or tool names cannot structurally enter a
+      resolution record.
+- [x] **F6.2 — Persisted batches.** (`f920f511`; 51 focused tests, each
+      parameterised over both the in-memory and file adapters so desktop parity
+      holds by construction rather than by a separate assertion.) Construct and
+      persist an ordered
+      `OperationBatch` and `BatchPlan` in `aafter_model` before any child is
+      dispatched, through the canonical run event journal with stable
+      idempotency identity, replay validation, and desktop file-store parity.
+      One new event family, `operation_batch.journal.v1`.
+
+      **Replay determinism is a validator, not a convention.** The record stores
+      its body-free inputs alongside its output and re-runs the planner on every
+      construction *and every parse*, refusing unless the result equals the
+      stored segments and plan digest. Six forgery tests **reseal** the record
+      first, isolating the reproducibility rule from the tamper seal; two more
+      skip the reseal to prove the digest covers segmentation too. Observation
+      time is excluded from the digest, so concurrent writers converge.
+
+      Idempotency is proven at both layers, including a `_RaceBlindEventStore`
+      that hides the F6 prefix from the writer's *first* read — modelling a
+      writer whose read beat the winner's append, so the duplicate is detectable
+      only at the store's stable event id. Identical decisions converge to one
+      plan; divergent ones raise and the journal still holds exactly one.
+      Mutation-verified: deleting the digest comparison in the conflict branch
+      turns the divergent-writer test red on both adapters.
+
+      Body-free evidence is demonstrated rather than asserted: a live-store test
+      seeds a run whose `user_input` is a secret and proves it, the connector
+      name, raw arguments, raw results, credentials, URLs, and host paths are
+      all absent from the serialized events. `ConcurrencyKillSwitchDecision`'s
+      narrowing validator turned out to be directly reusable as the record's own
+      no-broadening proof — the F6.R consolidation paying off immediately.
+
+- [x] **F6.3 — Batch execution coordinator.** (`034461a5`; 39 focused tests,
+      10 of 11 mutations killed by named tests.) A framework-started coroutine
+      is not prevented from starting — it blocks on a per-batch waiter keyed to
+      its segment, and the cursor advances only when every member of the current
+      segment has settled. Waits are bounded by the batch deadline, so a
+      never-arriving child becomes a typed refusal rather than a hang.
+      `run_child` is the only execution entry point by design: a bare `admit()`
+      would let a caller forget the admission check and silently widen
+      concurrency. **The lane disbelieved its own test** — its first
+      serial-bound proof passed against a coordinator with the segment gate
+      deleted, because permits enforce the same width independently; it replaced
+      that with two tests that isolate the gate. See SMELL-01 in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md): the Step-2 serial permit
+      pins effective width at 1 in production regardless of the plan.
+      Implement the run-scoped
+      `BatchExecutionCoordinator` so framework-started coroutines wait on
+      persisted segment gates instead of racing. Preserve input-order results
+      with actual completion timestamps.
+- [x] **F6.4 — Scoped permits.** (`9e9c30d7`; 45 focused tests, each assertion
+      mutation-verified.) Implement bounded
+      global/profile/user/connector/installation/capability permits with
+      digested scope keys, fair acquisition, and deterministic saturation
+      outcomes. Permits narrow the existing run-scoped serial permit from Step
+      2; they never widen it. A default-constructed manager is fully serial for
+      every scope. Saturation, deadline, queue-full, and disposed are typed
+      outcomes, never exceptions a caller could mistake for a tool failure; only
+      genuine faults raise. Queueing without a timeout is a validation error, so
+      an unbounded wait is unconstructible. Fairness is head-of-line per scope:
+      a newcomer is refused if any queued waiter owns a scope it needs, which
+      only ever reduces concurrency. `INSTALLATION` is subject-qualified, which
+      matches this codebase — agent installs are per-user
+      (`services/backend/src/backend_app/agents/schema.sql`).
+- [ ] **F6.5 — Child gateway re-entry.** Each admitted child re-enters the
+      Operation Gateway with its own deadline, cancellation, usage, citation,
+      result, and audit identity, and a sibling failure never invalidates a
+      completed child's result.
+- [ ] **F6.6 — Cancellation and restart.** On cancel, stop new admission, cancel
+      cancellable reads, bounded-drain active children, and mark uncertain work
+      `in_flight`/`indeterminate`. On restart, resume only never-started safe
+      reads and never replay a started write. Never invent rollback or success.
+- [x] **F6.7 — Kill switches.** Add global, per-connector, and per-capability
+      serial kill switches through the existing authority-narrowing kill-switch
+      seam, effective on an active run without restart (`8e90fde5`; 58 focused
+      tests). Widening is refused at three independent layers: a directive can
+      only name a target, composition is an idempotent `least_authoritative`/
+      `min` fold, and `ConcurrencyKillSwitchDecision` fails validation if the
+      effective allowance exceeds the run snapshot in mode rank or ceiling.
+      Unavailable, unparseable, and unknown-target sources all resolve to
+      serial. Not yet exported or mounted; root wires it as the outermost §8
+      layer at the Step 10 gate.
+- [x] **F6.R — Shared vocabulary reconciliation** (integration lane;
+      `d489affa`; 21 new tests, zero assertions weakened). F6.1, F6.4, and F6.7
+      were built concurrently in isolated worktrees and were barred from editing
+      each other's files, so each defined types locally. This collapses the
+      duplication before the executor lanes build on top. `ConcurrencyAllowance`
+      moved into `contracts.py` and now expresses the batch ceiling, so a kill
+      switch narrows a batch through one type instead of two. The `1..16`
+      parallelism bound had been restated in five places and is now one
+      constant. `PermitScopeKind` and `RateLimitScope` folded into one
+      `ConcurrencyScope` with `PROFILE` inserted after `GLOBAL` — no original
+      member moved relative to another, so every `narrowest()` outcome is
+      unchanged. `ConcurrencyKillSwitchScope` stays separate on purpose.
+      **Found and fixed a latent gap:** folding the enums made
+      `ConcurrencyScope.UNKNOWN` structurally reachable in the permit path,
+      where it would have raised a bare `KeyError` instead of refusing
+      conservatively. `PermitScope` and `PermitCapacity` now reject it with
+      typed errors, and `permit_pool()` maps `UNKNOWN → GLOBAL` — the broadest
+      pool, which shares one permit across the most work and so admits the least
+      concurrency. **Contract change for F6.2/F6.3:** `OperationBatch` and
+      `BatchSegment` take `allowance=` rather than `max_parallelism=`, and
+      should be passed an allowance already narrowed by the kill-switch gate
+      rather than a bare int.
+- [ ] **F6.8 — Step gate.** Prove missing/unknown metadata is serial; writes,
+      effects, approvals, and resource conflicts never overlap improperly;
+      independent curated reads improve measured p95; child successes survive
+      sibling failure; restart and cancel invent nothing. Run focused and full
+      suites, ruff/format/compile, hooks, and `git diff --check` before root
+      marks the step.
 
 ## Complete PRD index
 

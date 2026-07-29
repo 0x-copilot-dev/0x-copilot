@@ -22,10 +22,13 @@ from agent_runtime.harness_quality.suite_execution import (
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
-OPERATIONAL_CORPUS_REVISION = "operational-corpus-v4"
+OPERATIONAL_CORPUS_REVISION = "operational-corpus-v5"
 _TOOL_POLICY_EVENT = "tool_policy.journal.v1"
 _PROMPT_ASSEMBLED_EVENT = "prompt.assembled.v1"
 _PROMPT_CACHE_EVENT = "prompt.cache.observed.v1"
+# F3 discovery decisions ride the existing closed quality-decision family rather
+# than a family of their own, so this corpus needs no new event registration.
+_QUALITY_DECISION_EVENT = "quality.decision.v1"
 _MODEL_INVOCATION_EVENTS = {
     "invocation_planned": "model.invocation.planned.v1",
     "route_eligible": "model.invocation.route.v1",
@@ -56,6 +59,11 @@ _F4_TASK_FAMILIES = (
     "task_policy_shadow_enforce_comparison",
 )
 _F2_TASK_FAMILIES = ("prompt_cache_prefix_reuse",)
+_F3_TASK_FAMILIES = (
+    "capability_discovery_selection_recall",
+    "capability_discovery_unauthorized_probe",
+    "capability_discovery_end_to_end",
+)
 OPERATIONAL_TASK_FAMILIES = (
     "connector_selection",
     "mcp_auth",
@@ -77,6 +85,7 @@ OPERATIONAL_TASK_FAMILIES = (
     "evidence_revoked",
     *_F4_TASK_FAMILIES,
     *_F2_TASK_FAMILIES,
+    *_F3_TASK_FAMILIES,
 )
 
 
@@ -147,6 +156,7 @@ class OperationalFixture(RuntimeContract):
                 "task_policy": "f4-v1",
                 "prompt_cache": "f2-v1",
                 "model_invocation": "f10.3-v1",
+                "capability_discovery": "f3-v1",
             },
         )
 
@@ -160,10 +170,12 @@ def operational_corpus() -> tuple[OperationalFixture, ...]:
 def _fixture(family: str) -> OperationalFixture:
     f4 = _f4_scenario(family)
     f2 = _f2_scenario(family)
+    f3 = _f3_scenario(family)
     f10 = _f10_scenario(family)
     call_count = max(
         int(f4.get("call_count", 1)),
         int(f2.get("call_count", 1)),
+        int(f3.get("call_count", 1)),
         int(f10.get("call_count", 1)),
     )
     capability_id = f"fixture.{family}"
@@ -174,6 +186,7 @@ def _fixture(family: str) -> OperationalFixture:
             ordinal=ordinal,
             f4=f4,
             f2=f2,
+            f3=f3,
             f10=f10,
         )
         for ordinal in range(1, call_count + 1)
@@ -230,6 +243,16 @@ def _fixture(family: str) -> OperationalFixture:
                 hard_gate=bool(f10.get("hard_gate", True)),
             ),
         )
+    discovery_assertion = f3.get("discovery_assertion")
+    if isinstance(discovery_assertion, Mapping):
+        assertions = (
+            *assertions,
+            EvaluationAssertion(
+                scorer_id="capability_discovery_trajectory",
+                expected=dict(discovery_assertion),
+                hard_gate=bool(f3.get("hard_gate", True)),
+            ),
+        )
     case = EvaluationCase(
         case_id=f"case_{family}_v1",
         suite_id="suite_operational_v1",
@@ -253,6 +276,7 @@ def _fixture(family: str) -> OperationalFixture:
                 max(
                     int(f4.get("model_turns", 1)),
                     int(f2.get("model_turns", 1)),
+                    int(f3.get("model_turns", 1)),
                     int(f10.get("model_turns", 1)),
                 ),
             ),
@@ -270,6 +294,7 @@ def _call(
     ordinal: int,
     f4: Mapping[str, object],
     f2: Mapping[str, object],
+    f3: Mapping[str, object],
     f10: Mapping[str, object],
 ) -> OperationalFixtureCall:
     arguments: dict[str, object] = {
@@ -326,6 +351,12 @@ def _call(
                 stage="before",
                 f2=f2,
             ),
+            *_discovery_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="before",
+                f3=f3,
+            ),
             *_invocation_observations(
                 family=family,
                 ordinal=ordinal,
@@ -345,6 +376,12 @@ def _call(
                 ordinal=ordinal,
                 stage="after",
                 f2=f2,
+            ),
+            *_discovery_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="after",
+                f3=f3,
             ),
             *_invocation_observations(
                 family=family,
@@ -683,6 +720,184 @@ def _f2_scenario(family: str) -> Mapping[str, object]:
             "forbidden_reason_codes": ["provider_metadata_not_reported"],
         },
     }
+
+
+def _discovery_observations(
+    *,
+    family: str,
+    ordinal: int,
+    stage: str,
+    f3: Mapping[str, object],
+) -> tuple[FixtureTrajectoryObservation, ...]:
+    raw = f3.get(f"{stage}_observations", ())
+    if not isinstance(raw, tuple):
+        return ()
+    observations: list[FixtureTrajectoryObservation] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        target_ordinal = item.get("ordinal")
+        if target_ordinal is not None and target_ordinal != ordinal:
+            continue
+        payload = {
+            "scenario_id": family,
+            "ordinal": ordinal,
+            "stage": stage,
+            **dict(item),
+        }
+        observations.append(
+            FixtureTrajectoryObservation(
+                event_type=_QUALITY_DECISION_EVENT,
+                discovery_phase=_optional_text(item.get("phase")),
+                discovery_outcome=_optional_text(item.get("outcome")),
+                discovery_candidate_count=_non_negative_int(
+                    item.get("candidate_count")
+                ),
+                discovery_recall_rank=_non_negative_int(item.get("recall_rank")),
+                discovery_result_tokens=_non_negative_int(item.get("result_tokens")),
+                discovery_model_turns=_non_negative_int(item.get("model_turns")),
+                payload_digest=canonical_json_sha256(payload),
+            )
+        )
+    return tuple(observations)
+
+
+def _f3_scenario(family: str) -> Mapping[str, object]:
+    """Return the reviewed F3 discovery program for one family, if any.
+
+    Three families, one per property Step 8 must prove. They are authored as
+    bridge *decisions* rather than as connector traffic because that is what the
+    F3 lane actually emits: the model-visible surface is three bounded tools,
+    and a discovery answer is a decision about an opaque reference.
+
+    ``capability_discovery_unauthorized_probe`` is the security case and is
+    deliberately the strictest. The unauthorized name is searched, described,
+    and then guessed at by invoking it directly, and every one of those three
+    must answer ``capability_not_found`` — the same answer an unknown reference
+    gets, so the model cannot use the error to learn that the capability exists.
+    ``maximum_recall_rank: 0`` and ``maximum_candidate_count: 0`` say the search
+    half of that: the name must not merely be un-invocable, it must not come
+    back from a search at all.
+    """
+
+    search = {
+        "ordinal": 1,
+        "phase": "capability_search",
+        "model_turns": 1,
+    }
+    describe = {
+        "ordinal": 2,
+        "phase": "capability_describe",
+        "model_turns": 1,
+    }
+    invoke = {
+        "ordinal": 3,
+        "phase": "capability_invoke",
+        "model_turns": 1,
+    }
+    scenarios: dict[str, Mapping[str, object]] = {
+        "capability_discovery_selection_recall": {
+            "model_turns": 1,
+            "after_observations": (
+                {
+                    **search,
+                    "outcome": "ok",
+                    "candidate_count": 4,
+                    "recall_rank": 1,
+                    "result_tokens": 180,
+                },
+            ),
+            "discovery_assertion": {
+                "required_phases": ["capability_search"],
+                "required_outcomes": ["ok"],
+                "minimum_recall_rank": 1,
+                "maximum_recall_rank": 3,
+                "maximum_result_tokens": 400,
+                "maximum_model_turns": 1,
+            },
+        },
+        "capability_discovery_unauthorized_probe": {
+            "call_count": 3,
+            "model_turns": 3,
+            "after_observations": (
+                {
+                    **search,
+                    "outcome": "ok",
+                    "candidate_count": 0,
+                    "recall_rank": 0,
+                    "result_tokens": 40,
+                },
+                {
+                    **describe,
+                    "outcome": "capability_not_found",
+                    "result_tokens": 40,
+                },
+                {
+                    **invoke,
+                    "outcome": "capability_not_found",
+                    "result_tokens": 40,
+                },
+            ),
+            "discovery_assertion": {
+                "required_phases": [
+                    "capability_search",
+                    "capability_describe",
+                    "capability_invoke",
+                ],
+                "required_outcomes": ["capability_not_found"],
+                "required_phase_outcomes": {
+                    "capability_describe": "capability_not_found",
+                    "capability_invoke": "capability_not_found",
+                },
+                "forbidden_outcomes": [
+                    "capability_stale",
+                    "capability_unavailable",
+                    "execution_failed",
+                ],
+                "maximum_recall_rank": 0,
+                "maximum_candidate_count": 0,
+                "maximum_model_turns": 3,
+            },
+        },
+        "capability_discovery_end_to_end": {
+            "call_count": 3,
+            "model_turns": 3,
+            "after_observations": (
+                {
+                    **search,
+                    "outcome": "ok",
+                    "candidate_count": 3,
+                    "recall_rank": 1,
+                    "result_tokens": 180,
+                },
+                {**describe, "outcome": "ok", "result_tokens": 150},
+                {**invoke, "outcome": "ok", "result_tokens": 90},
+            ),
+            "discovery_assertion": {
+                "required_phases": [
+                    "capability_search",
+                    "capability_describe",
+                    "capability_invoke",
+                ],
+                "required_outcomes": ["ok"],
+                "forbidden_outcomes": [
+                    "capability_not_found",
+                    "capability_stale",
+                    "capability_unavailable",
+                    "execution_failed",
+                    "invalid_request",
+                    "catalog_inactive",
+                    "tool_raised",
+                    "unrecognized",
+                ],
+                "minimum_recall_rank": 1,
+                "maximum_recall_rank": 2,
+                "maximum_result_tokens": 600,
+                "maximum_model_turns": 3,
+            },
+        },
+    }
+    return scenarios.get(family, {})
 
 
 def _invocation_observations(

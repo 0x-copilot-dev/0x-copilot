@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent_runtime.capabilities.citation_capturing_tool import (
     CitationCapturingRegistry,
@@ -35,6 +36,14 @@ from agent_runtime.rollout_admission import (
     PersistedRunCohortFactsProvider,
 )
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
+from runtime_worker.capability_discovery_composition import (
+    CapabilityDiscoveryComposer,
+    CapabilityDiscoveryEnvironment,
+    RunCapabilityDiscovery,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only.
+    from agent_runtime.capabilities.mcp.cards import McpServerCard
 
 
 # Built-in skills shipped with the runtime. The directory is resolved relative
@@ -136,10 +145,19 @@ class DefaultRuntimeDependenciesFactory:
         settings: RuntimeSettings | None = None,
         *,
         mcp_discovery_cache: object | None = None,
+        capability_discovery: CapabilityDiscoveryComposer | None = None,
     ) -> None:
-        """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
+        """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``.
+
+        ``capability_discovery`` is the optional F3 composer. When absent, the
+        factory builds a default one only for a deployment that has configured
+        F3 activation at all, and that default has no card snapshot to project,
+        so it resolves dark. Every deployment that has configured nothing is
+        byte-identical to the pre-F3 disclosure path.
+        """
         self.settings = settings or RuntimeSettings.load()
         self.mcp_discovery_cache = mcp_discovery_cache
+        self.capability_discovery = capability_discovery
         self._rollout_admission = E2RolloutAdmission(
             resolution=self.settings.execution.rollout,
             cohorts=self.settings.execution.rollout_cohorts,
@@ -163,13 +181,22 @@ class DefaultRuntimeDependenciesFactory:
         *,
         rollout_admission: E2RolloutAdmission,
         rollout_facts: PersistedRunCohortFactsProvider,
+        mcp_server_cards: Sequence["McpServerCard"] | None = None,
     ) -> RuntimeDependencies:
-        """Build dependencies for one persisted, authenticated runtime run."""
+        """Build dependencies for one persisted, authenticated runtime run.
+
+        ``mcp_server_cards`` is the already-awaited, already permission-filtered
+        card snapshot the F3 catalog is projected from. The runtime dependency
+        factory is synchronous by contract while the MCP registry lists cards
+        asynchronously, so the caller — which has already awaited them — is the
+        only place the snapshot can come from. ``None`` leaves F3 dark.
+        """
 
         return self._build_dependencies(
             context,
             rollout_admission=rollout_admission,
             rollout_facts=rollout_facts,
+            mcp_server_cards=mcp_server_cards,
         )
 
     def _build_dependencies(
@@ -178,6 +205,7 @@ class DefaultRuntimeDependenciesFactory:
         *,
         rollout_admission: E2RolloutAdmission | None = None,
         rollout_facts: PersistedRunCohortFactsProvider | None = None,
+        mcp_server_cards: Sequence["McpServerCard"] | None = None,
     ) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
 
@@ -199,6 +227,14 @@ class DefaultRuntimeDependenciesFactory:
         # web / postgres / in-memory images it is ``None`` and every branch below
         # falls back to the prior behavior byte-identically.
         file_agent_wiring = self._file_agent_wiring()
+        # Single gate read per run for F3, mirroring the file-store gate above:
+        # ``None`` on every deployment that has configured nothing, so the
+        # factory registers no bridge tool and the model-visible surface is
+        # byte-identical to the pre-F3 disclosure path.
+        discovery = self._capability_discovery(
+            context,
+            mcp_server_cards=mcp_server_cards,
+        )
         return RuntimeDependencies(
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
@@ -207,7 +243,37 @@ class DefaultRuntimeDependenciesFactory:
             memory_backend_factory=self._memory_backend_factory(file_agent_wiring),
             subagent_catalog=self._subagent_catalog(file_agent_wiring),
             mcp_discovery_cache=self.mcp_discovery_cache,
+            capability_activation=(
+                discovery.activation if discovery is not None else None
+            ),
+            capability_catalog=discovery.catalog if discovery is not None else None,
         )
+
+    def _capability_discovery(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        mcp_server_cards: Sequence["McpServerCard"] | None = None,
+    ) -> RunCapabilityDiscovery | None:
+        """Return this run's composed F3 inputs, or ``None`` to stay dark.
+
+        The presence gate is read first and cheaply so an unconfigured
+        deployment never constructs a composer and never imports the discovery
+        package at all — the same shape the file-store gate uses, and the
+        property W1's ``_capability_bridge_tools`` documents for the dark path.
+
+        Testing *presence* rather than meaning is deliberate: it is not a second
+        activation vocabulary. Any value that is present, including a
+        misspelling, still goes through the one F3 resolver and still resolves
+        to the conservative default.
+        """
+
+        composer = self.capability_discovery
+        if composer is None:
+            if not CapabilityDiscoveryEnvironment.is_configured():
+                return None
+            composer = CapabilityDiscoveryComposer()
+        return composer.compose(context, mcp_server_cards=mcp_server_cards)
 
     @staticmethod
     def _file_agent_wiring() -> object | None:

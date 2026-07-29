@@ -34,6 +34,7 @@ class PromptSource(StrEnum):
     BASE_RUNTIME_SAFETY = "base_runtime_safety"
     APPLICATION_BOUNDARY = "application_boundary"
     OPERATION_TOOL_PROTOCOL = "operation_tool_protocol"
+    CAPABILITY_DISCOVERY_PROTOCOL = "capability_discovery_protocol"
     MCP_CARDS = "mcp_cards"
     SKILL_CARDS = "skill_cards"
     SUGGESTED_CONNECTORS = "suggested_connectors"
@@ -76,6 +77,7 @@ class PromptAssemblyInputs(RuntimeContract):
     base_runtime_safety: PromptSourceMaterial
     application_boundary: PromptSourceMaterial
     operation_tool_protocol: PromptSourceMaterial | None = None
+    capability_discovery_protocol: PromptSourceMaterial | None = None
     mcp_cards: PromptSourceMaterial | None = None
     skill_cards: PromptSourceMaterial | None = None
     suggested_connectors: PromptSourceMaterial | None = None
@@ -192,6 +194,17 @@ DEFAULT_PROMPT_FRAGMENT_PROVIDERS = PromptFragmentProviderRegistry(
         RegisteredPromptFragmentProvider(
             source=PromptSource.OPERATION_TOOL_PROTOCOL,
             fragment_id="15_operation_tool_protocol",
+            tier=PromptFragmentTier.STABLE,
+        ),
+        # Rendered where the MCP card block would be, and mutually exclusive
+        # with it: F3's ``deferred`` posture replaces a per-server enumeration
+        # with one static protocol paragraph. It is a STABLE-tier source rather
+        # than a CONTEXTUAL one because its bytes carry no subject data and do
+        # not vary by connector, which is exactly what lets it join the
+        # cacheable stable prefix that the card block can never be part of.
+        RegisteredPromptFragmentProvider(
+            source=PromptSource.CAPABILITY_DISCOVERY_PROTOCOL,
+            fragment_id="16_capability_discovery_protocol",
             tier=PromptFragmentTier.STABLE,
         ),
         RegisteredPromptFragmentProvider(
