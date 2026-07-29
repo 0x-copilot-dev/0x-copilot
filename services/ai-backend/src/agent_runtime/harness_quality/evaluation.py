@@ -186,10 +186,11 @@ class TrajectoryProjector:
             source=event.source.value,
             parent_task_id=event.parent_task_id,
             capability_id=capability_id,
-            policy_record_kind=cls._policy_text(payload, "record_kind"),
-            policy_disposition=cls._policy_text(payload, "disposition"),
-            policy_reason_codes=cls._policy_codes(payload, "reason_codes"),
+            policy_record_kind=cls._policy_text(event, payload, "record_kind"),
+            policy_disposition=cls._policy_text(event, payload, "disposition"),
+            policy_reason_codes=cls._policy_codes(event, payload, "reason_codes"),
             policy_exhausted_dimensions=cls._policy_codes(
+                event,
                 payload,
                 "exhausted_dimensions",
             ),
@@ -467,7 +468,31 @@ class TrajectoryProjector:
         )
 
     @staticmethod
-    def _policy_text(payload: Mapping[str, object], key: str) -> str | None:
+    def _policy_record(
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        """Return the F4 controller record carried by one tool-policy event.
+
+        Gated on the event type for the same reason ``_parallel_record`` is, in
+        the opposite direction: ``plan_bound`` is a record kind F6 uses too, so
+        an ungated read lets an F6 batch plan populate the F4 columns. A family
+        asserting ``required_record_kinds: ["plan_bound"]`` would then pass on a
+        run where the controller never bound a plan and only F6 did.
+        """
+
+        if event.event_type is not RuntimeApiEventType.TOOL_POLICY_JOURNAL:
+            return None
+        record = payload.get("record")
+        return record if isinstance(record, Mapping) else None
+
+    @classmethod
+    def _policy_text(
+        cls,
+        event: RuntimeEventEnvelope,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> str | None:
         """Project an F4-safe field from the record envelope, if present.
 
         The canonical runtime event stores the typed record below ``record``.
@@ -475,8 +500,8 @@ class TrajectoryProjector:
         it never copies plan text, arguments, results, or protected refs.
         """
 
-        record = payload.get("record")
-        if not isinstance(record, Mapping):
+        record = cls._policy_record(event, payload)
+        if record is None:
             return None
         value = record.get(key)
         return value if isinstance(value, str) and value.strip() else None
@@ -484,11 +509,12 @@ class TrajectoryProjector:
     @classmethod
     def _policy_codes(
         cls,
+        event: RuntimeEventEnvelope,
         payload: Mapping[str, object],
         key: str,
     ) -> tuple[str, ...]:
-        record = payload.get("record")
-        if not isinstance(record, Mapping):
+        record = cls._policy_record(event, payload)
+        if record is None:
             return ()
         value = record.get(key)
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
