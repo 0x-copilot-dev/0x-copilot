@@ -756,6 +756,10 @@ def _discovery_observations(
                 discovery_recall_rank=_non_negative_int(item.get("recall_rank")),
                 discovery_result_tokens=_non_negative_int(item.get("result_tokens")),
                 discovery_model_turns=_non_negative_int(item.get("model_turns")),
+                # Every observation built here is an authored F3 measurement,
+                # so its zeros are observed zeros. Stating it keeps the fixture
+                # path and the real-event path scoring a ceiling identically.
+                discovery_counts_observed=True,
                 payload_digest=canonical_json_sha256(payload),
             )
         )

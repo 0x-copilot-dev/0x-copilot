@@ -183,6 +183,10 @@ class GoldenTrace(RuntimeContract):
             "discovery_recall_rank",
             "discovery_result_tokens",
             "discovery_model_turns",
+            # ``False`` compares equal to ``0``, so a step that carried no
+            # discovery measurement drops out exactly as its zeroed counts do
+            # and the pinned Step 0 trace digests stay stable.
+            "discovery_counts_observed",
         }
         return {
             key: GoldenTrace._without_empty_task_policy_projection(item)

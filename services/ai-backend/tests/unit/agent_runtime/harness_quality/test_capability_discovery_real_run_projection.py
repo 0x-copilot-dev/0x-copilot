@@ -1,4 +1,4 @@
-"""F3.8 — exactly how much of the F1 discovery criterion survives a real run.
+"""F3.8 — how much of the F1 discovery criterion survives a real run.
 
 Step 8's exit list says "F1 proves selection recall and end-to-end quality".
 Lane F3.7 built the three cases and proved each of them bites against a
@@ -8,31 +8,29 @@ The question this module answers is the one that is left: when the same case is
 scored over a trajectory projected from **real runtime events**, which of its
 assertions is still doing work?
 
-The answer is: **one case of the three**, and only its non-numeric half.
-``TrajectoryProjector`` carries ``phase`` and ``outcome_code`` off a real
-``quality.decision.v1`` row and nothing else, because that event family has no
-numeric field.  Measured consequences, each asserted below:
+**This module previously answered "one case of the three, and only its
+non-numeric half".**  That answer was correct, and it was pinned here as BUG-14:
+``quality.decision.v1`` carried no numeric field, so a real projection reported
+recall rank ``0`` on every step and both ``capability_discovery_selection_recall``
+and ``capability_discovery_end_to_end`` scored a *working* system as
+``capability_discovery_recall_missing``.  The probe case's two numeric
+ceilings passed on *absent* data rather than on observed safety.
 
-* ``capability_discovery_unauthorized_probe`` — the security case — **is**
-  runnable against real events. Its whole assertion set is expressible in phase
-  and outcome, and a leak really is caught: one bridge tool answering ``ok``
-  fails it from runtime rows alone.
-* ``capability_discovery_selection_recall`` **and**
-  ``capability_discovery_end_to_end`` are **not** runnable against real events.
-  Both declare ``minimum_recall_rank: 1``; a real projection reports rank ``0``
-  on every search step, so the scorer reads a *working* system as a recall miss.
-  The failure direction is safe, but both cases are fixture-only today.
-* the probe case's two numeric ceilings (``maximum_recall_rank: 0``,
-  ``maximum_candidate_count: 0``) **pass without checking anything** on a real
-  run, because a bound of zero over an unpopulated field is satisfied by the
-  absence of data. The case is still sound — its security value sits in the
-  phase/outcome half — but nobody should read a green probe as evidence that the
-  search returned no candidates.
+The decision row now carries a bounded numeric extension — ``candidate_count``,
+``selection_rank``, ``result_tokens``, ``model_turns`` — so every one of those
+statements has flipped.  **The tests that pinned the defect are inverted below,
+not deleted**: each one now asserts the opposite of what it used to, and says
+which assertion it replaces.  What holds now:
 
-So Step 8's "F1 proves selection recall and end-to-end quality" is today met by
-*authored fixtures* rather than by measurement.  Every statement above flips the
-moment the numeric fields become projectable, which is the moment to revisit the
-verdict.
+* all three cases are runnable against real events, and a working system
+  **passes** all three;
+* each case still **fails** on a real run that is broken in the way the case
+  exists to catch, by named reason code;
+* the probe's ``maximum_recall_rank: 0`` and ``maximum_candidate_count: 0`` are
+  live rather than inert — a leaking search fails them from runtime rows alone;
+* a numeric bound over a row that carried *no* measurement fails closed, so a
+  green case reports observed safety instead of missing evidence;
+* rows written before the extension still validate and still project.
 """
 
 from __future__ import annotations
@@ -70,6 +68,11 @@ _INVOKE = "capability_invoke"
 _DECISION_EVENT = "quality.decision.v1"
 _DIGEST = "a" * 64
 
+#: Sentinel for "this decision carried no numeric measurement at all", which is
+#: what every ``quality.decision.v1`` row written before the extension looks
+#: like. Distinct from an observed zero, and scored differently.
+_UNMEASURED = object()
+
 
 def _variant() -> HarnessVariant:
     return HarnessVariant(
@@ -88,18 +91,33 @@ def _decision_event(
     phase: str,
     outcome_code: str,
     feature: str = "f3",
+    candidate_count: object = _UNMEASURED,
+    selection_rank: object = _UNMEASURED,
+    result_tokens: object = _UNMEASURED,
+    model_turns: object = _UNMEASURED,
 ) -> RuntimeEventEnvelope:
     """One ``quality.decision.v1`` envelope shaped exactly as the journal writes.
 
     The payload is built by the closed
     :class:`~runtime_api.schemas.events.QualityDecisionPayload` contract and
-    dumped the same way ``RunControlEventJournal._decision_payload`` dumps it, so
-    what is projected below is the real row rather than a hand-written mapping
-    that happens to have the right keys.  That contract is flat, body-free, and
-    carries **no numeric field at all** — which is the whole point of this
-    module.
+    dumped the same way ``EventJournalRunControlStore._decision_payload`` dumps
+    it, so what is projected below is the real row rather than a hand-written
+    mapping that happens to have the right keys.
+
+    Numerics left at ``_UNMEASURED`` are omitted from the constructor entirely,
+    which is exactly how a row written before the extension reaches a reader.
     """
 
+    numerics = {
+        key: value
+        for key, value in (
+            ("candidate_count", candidate_count),
+            ("selection_rank", selection_rank),
+            ("result_tokens", result_tokens),
+            ("model_turns", model_turns),
+        )
+        if value is not _UNMEASURED
+    }
     payload = QualityDecisionPayload(
         schema_version=1,
         decision_id=f"decision_{sequence_no}",
@@ -111,6 +129,7 @@ def _decision_event(
         input_digest=_DIGEST,
         outcome_code=outcome_code,
         created_at=datetime(2026, 7, 29, tzinfo=UTC),
+        **numerics,
     ).model_dump(mode="json")
     return RuntimeEventEnvelope(
         run_id="run_f38",
@@ -149,7 +168,84 @@ def _score(family: str, trajectory: TrajectoryManifest):  # type: ignore[no-unty
     )
 
 
-class TestARealDecisionRowProjectsPhaseAndOutcomeOnly:
+def _healthy_recall_run() -> TrajectoryManifest:
+    """A real, working selection-recall run: the target came back first."""
+
+    return _projected(
+        _decision_event(
+            sequence_no=1,
+            phase=_SEARCH,
+            outcome_code="ok",
+            candidate_count=4,
+            selection_rank=1,
+            result_tokens=180,
+            model_turns=1,
+        )
+    )
+
+
+def _healthy_end_to_end_run() -> TrajectoryManifest:
+    """A real, working search/describe/invoke chain.
+
+    The rank is reported by the **invoke** step rather than the search step,
+    which is where a real run learns it: a selection rank is only knowable once
+    the model has picked a reference and it can be placed against the search
+    that offered it. The recall run above reports it on the search step, so
+    between them these two fixtures prove the scorer reads the rank wherever the
+    producer honestly knows it.
+    """
+
+    return _projected(
+        _decision_event(
+            sequence_no=1,
+            phase=_SEARCH,
+            outcome_code="ok",
+            candidate_count=3,
+            result_tokens=180,
+            model_turns=1,
+        ),
+        _decision_event(
+            sequence_no=2,
+            phase=_DESCRIBE,
+            outcome_code="ok",
+            result_tokens=150,
+            model_turns=1,
+        ),
+        _decision_event(
+            sequence_no=3,
+            phase=_INVOKE,
+            outcome_code="ok",
+            selection_rank=1,
+            result_tokens=90,
+            model_turns=1,
+        ),
+    )
+
+
+def _healthy_probe_run() -> TrajectoryManifest:
+    """A real, safe probe: the unauthorized name is refused at every phase.
+
+    Every step carries an *observed* zero rather than no measurement, which is
+    what lets the two ceilings mean something.
+    """
+
+    return _projected(
+        *(
+            _decision_event(
+                sequence_no=ordinal,
+                phase=phase,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            )
+            for ordinal, phase in enumerate((_SEARCH, _DESCRIBE, _INVOKE), start=1)
+        )
+    )
+
+
+class TestARealDecisionRowProjectsItsNumericsNow:
     """The measurement the rest of this module's verdicts rest on."""
 
     def test_phase_and_outcome_survive_the_projection(self) -> None:
@@ -161,13 +257,39 @@ class TestARealDecisionRowProjectsPhaseAndOutcomeOnly:
         assert step.discovery_phase == _SEARCH
         assert step.discovery_outcome == "ok"
 
-    def test_no_numeric_discovery_field_survives_the_projection(self) -> None:
-        """The honest limitation, stated as an assertion rather than a comment.
+    def test_every_numeric_discovery_field_survives_the_projection(self) -> None:
+        """Inverts ``test_no_numeric_discovery_field_survives_the_projection``.
 
-        ``quality.decision.v1`` carries no candidate count, recall rank, result
-        token count, or model-turn count, so a real run projects all four as
-        their zero default. This is what makes selection recall unmeasurable
-        below, and it flips the moment the event family grows a numeric field.
+        That assertion pinned all four counts at their zero default because
+        ``quality.decision.v1`` had no numeric field. It does now, so the same
+        four are asserted here at the values the row carried.
+        """
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=4,
+                selection_rank=2,
+                result_tokens=180,
+                model_turns=1,
+            )
+        )
+
+        step = trajectory.ordered_steps[0]
+        assert step.discovery_candidate_count == 4
+        assert step.discovery_recall_rank == 2
+        assert step.discovery_result_tokens == 180
+        assert step.discovery_model_turns == 1
+        assert step.discovery_counts_observed
+
+    def test_a_row_written_before_the_extension_still_projects(self) -> None:
+        """Backward compatibility, as an assertion rather than a claim.
+
+        A row carrying none of the four keys validates, projects, and reports
+        its counts as zero — but as *unobserved* zeros, which is what stops a
+        numeric bound from passing over it.
         """
 
         trajectory = _projected(
@@ -179,6 +301,23 @@ class TestARealDecisionRowProjectsPhaseAndOutcomeOnly:
         assert step.discovery_recall_rank == 0
         assert step.discovery_result_tokens == 0
         assert step.discovery_model_turns == 0
+        assert not step.discovery_counts_observed
+
+    def test_an_observed_zero_is_distinguishable_from_no_measurement(self) -> None:
+        """The distinction the probe case's ceilings rest on."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=0,
+            )
+        )
+
+        step = trajectory.ordered_steps[0]
+        assert step.discovery_candidate_count == 0
+        assert step.discovery_counts_observed
 
     def test_another_features_decision_contributes_nothing(self) -> None:
         """The discriminator, so this is a projection of F3 and not of decisions."""
@@ -189,108 +328,51 @@ class TestARealDecisionRowProjectsPhaseAndOutcomeOnly:
                 phase="task_policy_admission",
                 outcome_code="ok",
                 feature="f4",
+                candidate_count=9,
+                selection_rank=9,
             )
         )
 
-        assert trajectory.ordered_steps[0].discovery_phase is None
+        step = trajectory.ordered_steps[0]
+        assert step.discovery_phase is None
+        assert step.discovery_candidate_count == 0
+        assert step.discovery_recall_rank == 0
+        assert not step.discovery_counts_observed
 
 
-class TestTheOutcomeHalfIsRealOnARealRun:
-    """What F1 genuinely proves once the fixtures are taken away."""
+class TestAllThreeCasesRunAgainstRealEvents:
+    """Inverts ``TestTwoOfTheThreeCasesCannotRunAgainstRealEvents``.
 
-    def test_a_healthy_real_run_still_passes_the_probe_case(self) -> None:
-        """The one discovery case that is runnable against a live cohort.
+    That class asserted that a *perfect* real run scored
+    ``capability_discovery_recall_missing`` on both the recall and end-to-end
+    cases, because their ``minimum_recall_rank: 1`` met a rank the projection
+    could never populate. It can now, so the same two cases are asserted here to
+    pass — which is the actual defect BUG-14 named.
+    """
 
-        Its whole assertion set — required phases, required per-phase outcomes,
-        forbidden outcomes — is expressible in phase and ``outcome_code``, which
-        is precisely what a real ``quality.decision.v1`` row carries.
-        """
-
-        trajectory = _projected(
-            _decision_event(
-                sequence_no=1, phase=_SEARCH, outcome_code="capability_not_found"
-            ),
-            _decision_event(
-                sequence_no=2, phase=_DESCRIBE, outcome_code="capability_not_found"
-            ),
-            _decision_event(
-                sequence_no=3, phase=_INVOKE, outcome_code="capability_not_found"
-            ),
-        )
-
-        result = _score(_PROBE, trajectory)
+    def test_a_working_real_run_passes_the_selection_recall_case(self) -> None:
+        result = _score(_RECALL, _healthy_recall_run())
 
         assert result.passed, result.reason_code
 
-    def test_a_leaking_probe_fails_the_security_case_on_a_real_run(self) -> None:
-        """The property the criterion actually exists for, measured for real.
+    def test_a_working_real_run_passes_the_end_to_end_case(self) -> None:
+        result = _score(_END_TO_END, _healthy_end_to_end_run())
 
-        One bridge tool answering ``ok`` to an unauthorized name is caught from
-        real events alone — no fixture-authored count is involved.
+        assert result.passed, result.reason_code
+
+    def test_a_working_real_run_passes_the_probe_case(self) -> None:
+        result = _score(_PROBE, _healthy_probe_run())
+
+        assert result.passed, result.reason_code
+
+    @pytest.mark.parametrize("family", [_RECALL, _END_TO_END])
+    def test_the_recall_floor_is_still_declared(self, family: str) -> None:
+        """The floor that made them unrunnable is unchanged — only met now.
+
+        Inverts ``test_the_recall_floor_is_what_makes_them_unrunnable``. The
+        assertion is deliberately identical; what changed is that it is no
+        longer the reason the cases cannot run.
         """
-
-        trajectory = _projected(
-            _decision_event(
-                sequence_no=1, phase=_SEARCH, outcome_code="capability_not_found"
-            ),
-            _decision_event(
-                sequence_no=2, phase=_DESCRIBE, outcome_code="capability_not_found"
-            ),
-            _decision_event(sequence_no=3, phase=_INVOKE, outcome_code="ok"),
-        )
-
-        result = _score(_PROBE, trajectory)
-
-        assert not result.passed
-        assert result.reason_code == "capability_discovery_phase_outcome_mismatch"
-
-    def test_a_probe_that_never_reached_a_phase_fails_on_a_real_run(self) -> None:
-        """Required phases are real too: a chain that stopped short is caught."""
-
-        trajectory = _projected(
-            _decision_event(
-                sequence_no=1, phase=_SEARCH, outcome_code="capability_not_found"
-            ),
-            _decision_event(
-                sequence_no=2, phase=_DESCRIBE, outcome_code="capability_not_found"
-            ),
-        )
-
-        result = _score(_PROBE, trajectory)
-
-        assert not result.passed
-        assert result.reason_code == "capability_discovery_phase_missing"
-
-
-class TestTwoOfTheThreeCasesCannotRunAgainstRealEvents:
-    """The criterion's weakest point, pinned rather than glossed.
-
-    Both ``capability_discovery_selection_recall`` and
-    ``capability_discovery_end_to_end`` declare ``minimum_recall_rank: 1``.  A
-    real projection reports rank ``0`` on every search step, so the scorer reads
-    a **working** system as a recall miss.  The failure direction is the safe
-    one, but the consequence is blunt: neither case can be evaluated against a
-    live cohort today.  They are fixture-only, and Step 8's "F1 proves selection
-    recall and end-to-end quality" is met by authored fixtures rather than by
-    measurement.
-    """
-
-    @pytest.mark.parametrize("family", [_RECALL, _END_TO_END])
-    def test_a_perfect_real_run_still_reports_a_recall_miss(self, family: str) -> None:
-        trajectory = _projected(
-            _decision_event(sequence_no=1, phase=_SEARCH, outcome_code="ok"),
-            _decision_event(sequence_no=2, phase=_DESCRIBE, outcome_code="ok"),
-            _decision_event(sequence_no=3, phase=_INVOKE, outcome_code="ok"),
-        )
-
-        result = _score(family, trajectory)
-
-        assert not result.passed
-        assert result.reason_code == "capability_discovery_recall_missing"
-
-    @pytest.mark.parametrize("family", [_RECALL, _END_TO_END])
-    def test_the_recall_floor_is_what_makes_them_unrunnable(self, family: str) -> None:
-        """Named precisely, so the fix is obvious when the numerics land."""
 
         assertions = {
             assertion.scorer_id: assertion
@@ -302,14 +384,10 @@ class TestTwoOfTheThreeCasesCannotRunAgainstRealEvents:
         assert expected["minimum_recall_rank"] >= 1
 
     @pytest.mark.parametrize("family", [_RECALL, _END_TO_END])
-    async def test_the_same_cases_pass_against_the_authored_corpus(
+    async def test_the_same_cases_still_pass_against_the_authored_corpus(
         self, family: str
     ) -> None:
-        """The control: the cases are satisfiable, just not from runtime events.
-
-        This is the fixture path lane F3.7 proved, run here so the failures
-        above are attributable to the projection rather than to the cases.
-        """
+        """The control: the fixture path lane F3.7 proved is not disturbed."""
 
         entry = _entry(family)
         trajectory = await FixtureOnlyCaseExecutor().execute(
@@ -326,14 +404,247 @@ class TestTwoOfTheThreeCasesCannotRunAgainstRealEvents:
         assert result.passed, result.reason_code
 
 
-class TestTheProbeCeilingsAreInertOnARealRun:
-    """A bound of zero over an unpopulated field checks nothing."""
+class TestEachCaseStillBitesOnARealRun:
+    """A case that passes against a broken implementation is worse than none.
+
+    Lane F3.7 proved this over authored fixtures. These are the same properties
+    measured from real ``quality.decision.v1`` rows, one named mutation each.
+    """
+
+    def test_a_search_that_never_returns_the_target_fails_recall(self) -> None:
+        """The miss selection recall exists to catch: rank never becomes positive."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=4,
+                selection_rank=0,
+                result_tokens=180,
+                model_turns=1,
+            )
+        )
+
+        result = _score(_RECALL, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_recall_missing"
+
+    def test_a_target_buried_below_the_ceiling_fails_recall(self) -> None:
+        """A ranker regression: the target comes back, but too far down."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=9,
+                selection_rank=7,
+                result_tokens=180,
+                model_turns=1,
+            )
+        )
+
+        result = _score(_RECALL, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_recall_rank_exceeded"
+
+    def test_a_search_that_answers_expensively_fails_recall(self) -> None:
+        """The cost half of the case, measured rather than authored."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=4,
+                selection_rank=1,
+                result_tokens=4_000,
+                model_turns=1,
+            )
+        )
+
+        result = _score(_RECALL, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_result_tokens_exceeded"
+
+    def test_a_leaking_probe_fails_the_security_case_on_a_real_run(self) -> None:
+        """One bridge tool answering ``ok`` to an unauthorized name is caught."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=3,
+                phase=_INVOKE,
+                outcome_code="ok",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_PROBE, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_phase_outcome_mismatch"
+
+    def test_a_probe_that_never_reached_a_phase_fails_on_a_real_run(self) -> None:
+        """Required phases are real too: a chain that stopped short is caught."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_PROBE, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_phase_missing"
+
+    def test_a_chain_that_loses_a_step_fails_end_to_end(self) -> None:
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=3,
+                selection_rank=1,
+                result_tokens=180,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                result_tokens=150,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_END_TO_END, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_phase_missing"
+
+    def test_a_chain_whose_recall_collapses_fails_end_to_end(self) -> None:
+        """The numeric half of end-to-end quality, on real rows."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=3,
+                result_tokens=180,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                result_tokens=150,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=3,
+                phase=_INVOKE,
+                outcome_code="ok",
+                selection_rank=0,
+                result_tokens=90,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_END_TO_END, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_recall_missing"
+
+    def test_a_chain_that_gets_expensive_fails_end_to_end(self) -> None:
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="ok",
+                candidate_count=3,
+                selection_rank=1,
+                result_tokens=900,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="ok",
+                result_tokens=150,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=3,
+                phase=_INVOKE,
+                outcome_code="ok",
+                result_tokens=90,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_END_TO_END, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_result_tokens_exceeded"
+
+
+class TestTheProbeCeilingsAreLiveOnARealRun:
+    """Inverts ``TestTheProbeCeilingsAreInertOnARealRun``.
+
+    That class asserted that ``maximum_recall_rank: 0`` and
+    ``maximum_candidate_count: 0`` were satisfied by absent data, so a green
+    probe case was no evidence that the search returned no candidates. Both
+    ceilings now read observed values, and each is shown failing on a real run
+    that violates it.
+    """
 
     @pytest.mark.parametrize(
         "bound", ["maximum_recall_rank", "maximum_candidate_count"]
     )
     def test_the_probe_numeric_ceilings_are_declared(self, bound: str) -> None:
-        """First, that the lines this module calls inert actually exist."""
+        """First, that the lines this module now calls live actually exist."""
 
         assertions = {
             assertion.scorer_id: assertion
@@ -344,33 +655,136 @@ class TestTheProbeCeilingsAreInertOnARealRun:
         assert isinstance(expected, dict)
         assert expected[bound] == 0
 
-    def test_they_are_satisfied_by_absent_data_rather_than_by_safety(self) -> None:
-        """The sharp form of the limitation.
+    def test_a_probe_whose_search_returns_the_name_fails_the_ceiling(self) -> None:
+        """The exact reading the old module warned nobody should make.
 
-        A projected search step reports ``0`` candidates and rank ``0`` whether
-        the search leaked ten unauthorized names or none. Both ceilings
-        therefore pass on any real run, so the probe case's security value comes
-        entirely from its phase/outcome half — which
-        ``test_a_leaking_probe_fails_the_security_case_on_a_real_run`` shows is
-        real. Recorded so nobody reads a green probe case as evidence that the
-        search returned no candidates.
+        A search that leaks the unauthorized name now fails the case from
+        runtime rows alone, even though every phase still answered
+        ``capability_not_found``. Under the old projection this trajectory
+        passed.
         """
 
         trajectory = _projected(
             _decision_event(
-                sequence_no=1, phase=_SEARCH, outcome_code="capability_not_found"
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="capability_not_found",
+                candidate_count=2,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
             ),
             _decision_event(
-                sequence_no=2, phase=_DESCRIBE, outcome_code="capability_not_found"
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
             ),
             _decision_event(
-                sequence_no=3, phase=_INVOKE, outcome_code="capability_not_found"
+                sequence_no=3,
+                phase=_INVOKE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
             ),
         )
 
         result = _score(_PROBE, trajectory)
 
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_candidate_count_exceeded"
+
+    def test_a_probe_whose_name_becomes_rankable_fails_the_ceiling(self) -> None:
+        """The rank half of the same guarantee."""
+
+        trajectory = _projected(
+            _decision_event(
+                sequence_no=1,
+                phase=_SEARCH,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=1,
+                result_tokens=40,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=2,
+                phase=_DESCRIBE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+            _decision_event(
+                sequence_no=3,
+                phase=_INVOKE,
+                outcome_code="capability_not_found",
+                candidate_count=0,
+                selection_rank=0,
+                result_tokens=40,
+                model_turns=1,
+            ),
+        )
+
+        result = _score(_PROBE, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_recall_rank_exceeded"
+
+
+class TestANumericBoundRefusesToGradeAbsentData:
+    """Passing because nothing was observed is not passing because nothing
+    unsafe happened.
+
+    This is the second half of the ``unauthorized_probe`` weakness the old
+    module recorded. Making the ceilings read real values is not sufficient on
+    its own: a producer that emits no numerics at all would leave every bound
+    trivially satisfied again. The scorer therefore fails closed.
+    """
+
+    @pytest.mark.parametrize(
+        ("family", "outcome_code"),
+        [
+            (_RECALL, "ok"),
+            (_PROBE, "capability_not_found"),
+            (_END_TO_END, "ok"),
+        ],
+    )
+    def test_a_case_scores_unobserved_rather_than_passing(
+        self, family: str, outcome_code: str
+    ) -> None:
+        """Each family's own healthy outcome, so only the numerics are absent.
+
+        Using the outcome the case expects is what makes this a test of the
+        numeric refusal rather than of the phase/outcome half: every non-numeric
+        assertion passes here, and the case still refuses to go green.
+        """
+
+        trajectory = _projected(
+            *(
+                _decision_event(
+                    sequence_no=ordinal,
+                    phase=phase,
+                    outcome_code=outcome_code,
+                )
+                for ordinal, phase in enumerate((_SEARCH, _DESCRIBE, _INVOKE), start=1)
+            )
+        )
+
+        result = _score(family, trajectory)
+
+        assert not result.passed
+        assert result.reason_code == "capability_discovery_counts_unobserved"
+
+    def test_one_measured_step_is_enough_to_grade_the_trajectory(self) -> None:
+        """The bound is refused only when *nothing* was measured."""
+
+        result = _score(_PROBE, _healthy_probe_run())
+
         assert result.passed, result.reason_code
-        step = trajectory.ordered_steps[0]
-        assert step.discovery_candidate_count == 0
-        assert step.discovery_recall_rank == 0
