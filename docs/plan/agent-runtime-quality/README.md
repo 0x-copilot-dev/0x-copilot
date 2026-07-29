@@ -802,7 +802,21 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       *escalate* the approval cue — never when they would present a capability
       as safer than an unclassified one.
 
-- [ ] **F3.4 — Opaque refs and describe.** Mint refs scoped to
+- [x] **F3.4 — Opaque refs and describe.** (`7dcc85c6`; 38 focused tests.)
+      **Found BUG-10 while doing it:** describe was not inlining a schema, it was
+      inlining a _truncated_ one — 32 parameters, 16 tags, `metadata_truncated` —
+      so the model would author arguments against a schema that is not the real
+      one. Parameters are now all-or-nothing: `schema_availability` is a closed
+      `inline`/`artifact`/`unavailable` enum whose validator refuses hints on any
+      non-inline answer, making a partial schema **unrepresentable**. Intent tags
+      are still trimmed on purpose — a tag is a search cue, a parameter is the
+      invocation contract. Reuses the existing `OffloadWriter`/CAS seam rather
+      than `ArtifactService`, which publishes user-visible ledger artifacts and
+      would pollute the user's artifact list with one blob per describe call.
+      Bridge tool-schema cost byte-identical at 923 tokens. **The publisher is
+      not yet threaded**, so an over-bound schema reports `unavailable` today —
+      fail-closed, and still strictly better than the truncation it replaced.
+      Mint refs scoped to
       run/subject/catalog generation through the Step RB primitive. `describe`
       returns a bounded schema or a protected schema-artifact ref, never an
       unbounded inline schema.
@@ -836,11 +850,26 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       `CapabilityExpansionLimits` moved next to `activation.py` because it is a
       resolver of untrusted operator configuration, not a data contract — same
       narrowest-on-anything-malformed rule.
-- [ ] **F3.6 — Budget accounting.** The bridge call consumes exactly one
+- [x] **F3.6 — Budget accounting.** Satisfied by lane F3.5 (`e706301d`), which
+      proved it against the real `ToolCallLedger` **with a negative control** —
+      `test_a_direct_connector_call_does_charge_the_dimension_it_skips` — so the
+      bridge's inner-call zero is a property of the design rather than a fixture
+      artifact. No separate lane was dispatched; building one would have been
+      redundant work. The bridge call consumes exactly one
       model-visible F4 call; the real inner operation consumes its own
       operation/capability budget; the same cost is never counted twice in one
       dimension. Prove this against the existing F4 controller ledger.
-- [ ] **F3.7 — Decisions, metrics, and F1 cases.** Emit body-free
+- [x] **F3.7 — Decisions, metrics, and F1 cases.** (`a350d222`; 59 focused
+      tests.) Extended `quality.decision.v1` with a closed phase rather than
+      minting a new event family, so `packages/api-types` is untouched — the
+      cross-package cost lane F6.2 had to pay is avoided here. Metric labels are
+      closed enums only, measured at ≤64 series. Body-freedom is proven by
+      driving the real bridge with a secret in both query and arguments and
+      grepping every persisted event, then mutating the implementation to carry
+      `repr(raw_input)` to confirm the guard fires. The unauthorized-probe F1
+      case binds outcome **to phase** rather than using a trajectory-wide
+      required set, because one leaking tool could otherwise hide behind the two
+      still refusing. Emit body-free
       search/describe/invoke decisions plus token, model-turn, and latency
       metrics through the existing closed event vocabulary. Add F1 cases for
       selection recall, unauthorized-name probing, and end-to-end quality.
@@ -968,7 +997,21 @@ Scheduling convenience is never treated as safety metadata.
       narrowing validator turned out to be directly reusable as the record's own
       no-broadening proof — the F6.R consolidation paying off immediately.
 
-- [ ] **F6.3 — Batch execution coordinator.** Implement the run-scoped
+- [x] **F6.3 — Batch execution coordinator.** (`034461a5`; 39 focused tests,
+      10 of 11 mutations killed by named tests.) A framework-started coroutine
+      is not prevented from starting — it blocks on a per-batch waiter keyed to
+      its segment, and the cursor advances only when every member of the current
+      segment has settled. Waits are bounded by the batch deadline, so a
+      never-arriving child becomes a typed refusal rather than a hang.
+      `run_child` is the only execution entry point by design: a bare `admit()`
+      would let a caller forget the admission check and silently widen
+      concurrency. **The lane disbelieved its own test** — its first
+      serial-bound proof passed against a coordinator with the segment gate
+      deleted, because permits enforce the same width independently; it replaced
+      that with two tests that isolate the gate. See SMELL-01 in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md): the Step-2 serial permit
+      pins effective width at 1 in production regardless of the plan.
+      Implement the run-scoped
       `BatchExecutionCoordinator` so framework-started coroutines wait on
       persisted segment gates instead of racing. Preserve input-order results
       with actual completion timestamps.
