@@ -15,7 +15,13 @@
  * front door rendered at the full 640px. Only the two overrides below are real.
  */
 
-/* `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
+/* shadow-ok: the shared sheet's `.fr` sizes the surface for a scrolling web
+ * document; the desktop window frame is one titlebar inset SHORTER than the
+ * viewport, so the shared height must be re-based here. Substrate delta, not a
+ * second copy of the shared chrome — see below and
+ * tools/check_css_selector_shadowing.py.
+ *
+ * `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
  * sizes `.fr` with `min-height: 100vh`, which is right for a web host whose
  * DOCUMENT scrolls. The desktop document never scrolls (desktop.css invariant 3)
  * and this surface sits inside `.desktop-window-frame`, whose content box is one
