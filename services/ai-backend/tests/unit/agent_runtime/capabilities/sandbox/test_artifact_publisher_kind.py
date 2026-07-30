@@ -2,9 +2,8 @@
 
 ``publish_artifact`` refuses ``kind: file`` for a media type a structured
 renderer owns.  The sandbox publishers keep ``FILE`` for those same media
-types.  Both halves are pinned here together so the divergence stays a decision
-rather than drift: a change to either one fails in this file, next to the
-reasons for the other.
+types.  That divergence is a decision, so it is asserted rather than left to be
+rediscovered from two files that happen to disagree.
 """
 
 from __future__ import annotations
@@ -168,7 +167,11 @@ class TestSandboxOutputStaysAFile(SandboxPublicationMixin):
         assert request.kind is ArtifactKind.FILE
 
 
-class TestTheToolPathRefusesTheSamePairing:
+class TestTheDivergenceFromTheToolPath:
+    """The rule the tool applies to the same media types, asserted here so the
+    two behaviours cannot silently converge.  ``TestPublishArtifactFileKindOwnership``
+    owns the tool path's own coverage; this is only the contrast."""
+
     def test_the_owned_set_is_the_reviewed_one(self) -> None:
         """Named, not only derived, for two reasons.
 
@@ -187,49 +190,20 @@ class TestTheToolPathRefusesTheSamePairing:
             "text/typescript",
         }
 
-    @pytest.mark.parametrize("media_type", _OWNED_MEDIA_TYPES)
-    def test_an_author_may_not_publish_owned_media_as_a_file(
-        self, media_type: str
-    ) -> None:
-        """The asymmetry with the sandbox is deliberate, not an oversight.
+    def test_an_author_may_not_publish_as_a_file_what_the_sandbox_does(self) -> None:
+        """The asymmetry is deliberate, not an oversight.
 
-        Here ``kind`` and ``media_type`` are two halves of one statement by one
-        author, so the policy only has to make them agree; nothing is being
-        inferred about bytes nobody read.
+        There ``kind`` and ``media_type`` are two halves of one statement by one
+        author, so the policy only has to make them agree; nothing is inferred
+        about bytes nobody read.
         """
         with pytest.raises(ValidationError):
             PublishArtifactInput(
                 kind=ArtifactKind.FILE,
                 title="report",
-                media_type=media_type,
-                content="month,bookings\n",
+                media_type="text/csv",
+                content=SandboxPublicationMixin.CONTENT.decode(),
             )
-
-    @pytest.mark.parametrize("media_type", ["application/json", "text/plain"])
-    def test_a_media_type_two_renderers_claim_may_still_be_a_file(
-        self, media_type: str
-    ) -> None:
-        """Ambiguity has no owner, so ``file`` is not the wrong answer for it.
-
-        This is also why the sandbox result envelope's ``application/json``
-        needs no defending: no single renderer owns it.
-        """
-        assert _ArtifactMediaPolicy.owning_kind(media_type) is None
-        assert (
-            PublishArtifactInput(
-                kind=ArtifactKind.FILE,
-                title="output",
-                media_type=media_type,
-                content="{}",
-            ).kind
-            is ArtifactKind.FILE
-        )
-
-    @pytest.mark.parametrize("media_type", ["text/x-python", "application/x-tar"])
-    def test_a_prefix_matched_code_type_is_not_owned(self, media_type: str) -> None:
-        """Only the exact code list owns a type.  The ``x-`` prefixes admit a
-        long tail a code editor accepts but cannot claim over a file drop."""
-        assert _ArtifactMediaPolicy.owning_kind(media_type) is None
 
 
 class TestKindIsAlsoAByteCeiling:
