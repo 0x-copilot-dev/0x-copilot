@@ -41,6 +41,7 @@ import { EmptyState } from "../../shell/EmptyState";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
 import { AccessModeSegment } from "./AccessModeSegment";
+import { RemoveConnectorDialog } from "./RemoveConnectorDialog";
 import type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 
 // ===========================================================================
@@ -111,11 +112,11 @@ export interface ConnectorsDestinationProps {
   readonly onConnectEntry?: (slug: ConnectorSlug) => void;
 
   /**
-   * Remove a connector entirely. Destructive and confirmed inline (this package
-   * has no `window.confirm`), so the row asks once before calling this. The
-   * host performs the delete — on desktop that is DELETE /v1/mcp/servers/{id},
-   * whose `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
-   * connection goes with it rather than lingering.
+   * Remove a connector entirely. Destructive, so the destination confirms
+   * first: the row's Remove opens <RemoveConnectorDialog> (this package has no
+   * `window.confirm`) and only a confirmed dialog calls this. The host
+   * performs the delete — `DELETE /v1/connectors/{id}`, which drops the row
+   * together with the MCP registration and vault token behind it.
    */
   readonly onRemove?: (id: ConnectorId) => void;
 
@@ -180,6 +181,19 @@ export function ConnectorsDestination(
     Readonly<Record<string, ConnectorAccessMode>>
   >({});
   const [accessError, setAccessError] = useState<boolean>(false);
+
+  // The connector whose Remove is awaiting confirmation. Held HERE rather than
+  // per-row so the dialog is a single mount that outlives the row it came
+  // from — a list refresh mid-confirm must not silently unmount the question.
+  const [pendingRemoval, setPendingRemoval] = useState<Connector | null>(null);
+
+  const handleConfirmRemove = useCallback(
+    (connector: Connector): void => {
+      setPendingRemoval(null);
+      onRemove?.(connector.id);
+    },
+    [onRemove],
+  );
 
   const handleAccessModeChange = useCallback(
     (id: ConnectorId, mode: ConnectorAccessMode): void => {
@@ -251,80 +265,94 @@ export function ConnectorsDestination(
       : 0;
 
   return (
-    <section
-      role="region"
-      aria-label="Tools"
-      data-component="connectors-destination"
-      style={rootStyle}
-    >
-      <div style={innerStyle}>
-        <ToolsLead onOpenApprovalSettings={onOpenApprovalSettings} />
-        <SectionHeader
-          action={headerAction}
-          data-testid="connectors-section-header"
-        >
-          Connected · {connectorCount}
-        </SectionHeader>
-        {accessError ? (
-          <div
-            role="alert"
-            data-testid="connectors-access-mode-error"
-            style={accessErrorStyle}
+    <>
+      <section
+        role="region"
+        aria-label="Tools"
+        data-component="connectors-destination"
+        style={rootStyle}
+      >
+        <div style={innerStyle}>
+          <ToolsLead onOpenApprovalSettings={onOpenApprovalSettings} />
+          <SectionHeader
+            action={headerAction}
+            data-testid="connectors-section-header"
           >
-            Couldn&apos;t update the tool&apos;s access mode. Please try again.
-          </div>
-        ) : null}
-        {renderBody({
-          items,
-          onRetry,
-          onConnect,
-          onOpenConnector,
-          onReconnect,
-          onRemove,
-          accessPort,
-          overrides,
-          onAccessModeChange: handleAccessModeChange,
-          renderIcon,
-        })}
-        {installable.length > 0 ? (
-          <>
-            <SectionHeader data-testid="connectors-available-header">
-              {TOOLS_AVAILABLE_HEADER}
-            </SectionHeader>
-            <RowList
-              items={installable}
-              keyFor={(entry) => entry.slug}
-              ariaLabel="Connectors available to add"
-              data-testid="connectors-available-list"
-              renderRow={(entry) => (
-                <Row
-                  icon={
-                    <AppIcon name={entry.slug} size="tile" tone="neutral" />
-                  }
-                  iconSize={30}
-                  subFont="mono"
-                  title={entry.display_name}
-                  sub={entry.description}
-                  meta={
-                    onConnectEntry !== undefined ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onConnectEntry(entry.slug)}
-                        data-testid={`connector-available-connect-${entry.slug}`}
-                      >
-                        Connect
-                      </Button>
-                    ) : undefined
-                  }
-                  data-testid="connector-available-row"
-                />
-              )}
-            />
-          </>
-        ) : null}
-      </div>
-    </section>
+            Connected · {connectorCount}
+          </SectionHeader>
+          {accessError ? (
+            <div
+              role="alert"
+              data-testid="connectors-access-mode-error"
+              style={accessErrorStyle}
+            >
+              Couldn&apos;t update the tool&apos;s access mode. Please try
+              again.
+            </div>
+          ) : null}
+          {renderBody({
+            items,
+            onRetry,
+            onConnect,
+            onOpenConnector,
+            onReconnect,
+            // No host handler → no Remove affordance at all, same as before.
+            ...(onRemove !== undefined
+              ? { onRequestRemove: setPendingRemoval }
+              : {}),
+            accessPort,
+            overrides,
+            onAccessModeChange: handleAccessModeChange,
+            renderIcon,
+          })}
+          {installable.length > 0 ? (
+            <>
+              <SectionHeader data-testid="connectors-available-header">
+                {TOOLS_AVAILABLE_HEADER}
+              </SectionHeader>
+              <RowList
+                items={installable}
+                keyFor={(entry) => entry.slug}
+                ariaLabel="Connectors available to add"
+                data-testid="connectors-available-list"
+                renderRow={(entry) => (
+                  <Row
+                    icon={
+                      <AppIcon name={entry.slug} size="tile" tone="neutral" />
+                    }
+                    iconSize={30}
+                    subFont="mono"
+                    title={entry.display_name}
+                    sub={entry.description}
+                    meta={
+                      onConnectEntry !== undefined ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onConnectEntry(entry.slug)}
+                          data-testid={`connector-available-connect-${entry.slug}`}
+                        >
+                          Connect
+                        </Button>
+                      ) : undefined
+                    }
+                    data-testid="connector-available-row"
+                  />
+                )}
+              />
+            </>
+          ) : null}
+        </div>
+      </section>
+      {/* Sibling of the scrolling region, not inside it — the ConnectModal
+          idiom. A fixed-position scrim nested in an `overflow: auto` column is
+          one `transform` on an ancestor away from being clipped to it. */}
+      <RemoveConnectorDialog
+        connector={pendingRemoval}
+        onCancel={() => setPendingRemoval(null)}
+        onConfirm={handleConfirmRemove}
+      />
+    </>
   );
 }
 
@@ -334,7 +362,7 @@ interface BodyArgs {
   readonly onConnect: ConnectorsDestinationProps["onConnect"];
   readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
   readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
-  readonly onRemove: ConnectorsDestinationProps["onRemove"];
+  readonly onRequestRemove?: (connector: Connector) => void;
   readonly accessPort: ConnectorsDestinationProps["accessPort"];
   readonly overrides: Readonly<Record<string, ConnectorAccessMode>>;
   readonly onAccessModeChange: (
@@ -351,7 +379,7 @@ function renderBody(args: BodyArgs): ReactElement {
     onConnect,
     onOpenConnector,
     onReconnect,
-    onRemove,
+    onRequestRemove,
     accessPort,
     overrides,
     onAccessModeChange,
@@ -404,7 +432,7 @@ function renderBody(args: BodyArgs): ReactElement {
           accessMode={overrides[c.id] ?? c.access_mode}
           onOpenConnector={onOpenConnector}
           onReconnect={onReconnect}
-          onRemove={onRemove}
+          onRequestRemove={onRequestRemove}
           onAccessModeChange={
             accessPort !== undefined
               ? (mode) => onAccessModeChange(c.id, mode)
@@ -424,7 +452,13 @@ interface ConnectorRowProps {
   readonly accessMode?: ConnectorAccessMode;
   readonly onOpenConnector?: (id: ConnectorId) => void;
   readonly onReconnect?: (id: ConnectorId) => void;
-  readonly onRemove?: (id: ConnectorId) => void;
+  /**
+   * Ask to remove — opens the destination's confirmation dialog. Carries the
+   * whole record, not the id, because the dialog names the connector and shows
+   * its identity tile; the row already has it and the destination would
+   * otherwise have to look it up again.
+   */
+  readonly onRequestRemove?: (connector: Connector) => void;
   readonly onAccessModeChange?: (mode: ConnectorAccessMode) => void;
   readonly renderIcon?: (slug: ConnectorSlug) => ReactNode;
 }
@@ -434,13 +468,10 @@ function ConnectorRow({
   accessMode,
   onOpenConnector,
   onReconnect,
-  onRemove,
+  onRequestRemove,
   onAccessModeChange,
   renderIcon,
 }: ConnectorRowProps): ReactElement {
-  // Two-step confirm, held per row. A destructive action needs a deliberate
-  // second click, and this package cannot reach `window.confirm`.
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
   // `disconnected` belongs in BOTH sets. It used to be counted as broken (so the
   // row showed a "Disconnected" pill) but excluded from `needsReconnect`, which
   // gates the only affordance that can fix it — leaving a row flagged as broken
@@ -517,40 +548,16 @@ function ConnectorRow({
               {c.status === "disconnected" ? "Connect" : "Reconnect"}
             </Button>
           ) : null}
-          {onRemove !== undefined ? (
-            confirmingRemove ? (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setConfirmingRemove(false)}
-                  data-testid="connector-remove-cancel"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setConfirmingRemove(false);
-                    onRemove(c.id);
-                  }}
-                  data-testid="connector-remove-confirm"
-                >
-                  Remove
-                </Button>
-              </>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmingRemove(true)}
-                aria-label={`Remove ${c.display_name}`}
-                data-testid="connector-remove"
-              >
-                Remove
-              </Button>
-            )
+          {onRequestRemove !== undefined ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onRequestRemove(c)}
+              aria-label={`Remove ${c.display_name}`}
+              data-testid="connector-remove"
+            >
+              Remove
+            </Button>
           ) : null}
           {accessMode !== undefined ? (
             <AccessModeSegment

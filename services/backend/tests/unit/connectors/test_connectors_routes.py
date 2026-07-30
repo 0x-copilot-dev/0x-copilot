@@ -51,6 +51,7 @@ def _client(
         ConnectorCatalogEntry(slug="slack", display_name="Slack", description="Chat."),
     ),
     consumer_projection: ConsumerProjectionPort | None = None,
+    on_removed=None,
 ) -> tuple[TestClient, InMemoryConnectorsStore]:
     store = connectors_store or InMemoryConnectorsStore()
     app = create_app(
@@ -75,7 +76,7 @@ def _client(
     ]
     from backend_app.connectors.routes import register_connector_routes
 
-    register_connector_routes(app, service=service)
+    register_connector_routes(app, service=service, on_removed=on_removed)
     return TestClient(app), store
 
 
@@ -204,6 +205,61 @@ class TestDisconnectEndpoint:
         resp = client.post(f"/v1/connectors/{record.id}/disconnect", params=_q())
         assert resp.status_code == 200
         assert resp.json()["connector"]["status"] == "disconnected"
+
+
+class TestRemoveEndpoint:
+    """``DELETE /v1/connectors/{id}`` — the destructive sibling of disconnect.
+
+    Disconnect keeps the row (reconnectable); this drops it. Removal used to
+    be client-side "delete the backing MCP server", which left the row behind
+    as a permanently-Disconnected tool no later remove could clear.
+    """
+
+    def test_owner_can_remove_and_the_row_is_gone(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+
+        resp = client.delete(f"/v1/connectors/{record.id}", params=_q())
+
+        assert resp.status_code == 204
+        assert resp.content == b""
+        listed = client.get("/v1/connectors", params=_q()).json()
+        assert [c["id"] for c in listed["connectors"]] == []
+
+    def test_removed_slug_returns_to_the_available_catalog(self) -> None:
+        client, store = _client()
+        record = _seed_record(store, slug="gmail")
+
+        client.delete(f"/v1/connectors/{record.id}", params=_q())
+
+        listed = client.get("/v1/connectors", params=_q()).json()
+        assert "gmail" in {entry["slug"] for entry in listed["available"]}
+
+    def test_non_owner_non_admin_403_and_the_row_survives(self) -> None:
+        client, store = _client()
+        record = _seed_record(store, owner_user_id="usr_sarah")
+
+        resp = client.delete(f"/v1/connectors/{record.id}", params=_q(user="usr_bob"))
+
+        assert resp.status_code == 403
+        assert (
+            store.get_connector(tenant_id="org_acme", connector_id=record.id)
+            is not None
+        )
+
+    def test_unknown_connector_404(self) -> None:
+        client, _ = _client()
+        resp = client.delete("/v1/connectors/conn_nope", params=_q())
+        assert resp.status_code == 404
+
+    def test_publishes_connector_removed_to_the_on_removed_seam(self) -> None:
+        published: list[str] = []
+        client, store = _client(on_removed=lambda rec: published.append(rec.id))
+        record = _seed_record(store)
+
+        client.delete(f"/v1/connectors/{record.id}", params=_q())
+
+        assert published == [record.id]
 
 
 class TestRefreshEndpoint:

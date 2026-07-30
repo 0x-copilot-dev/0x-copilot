@@ -691,6 +691,10 @@ export {
 } from "./destinations/tools";
 export {
   ConnectorsDestination,
+  // Mounted BY ConnectorsDestination (the row's Remove opens it); exported so
+  // a host can drive the same confirmation from another surface rather than
+  // hand-rolling a second remove dialog.
+  RemoveConnectorDialog,
   useConnectFlow,
   RevealOnce,
   ConnectorDetailView,
@@ -705,6 +709,7 @@ export {
 } from "./destinations/connectors";
 export type {
   ConnectorsDestinationProps,
+  RemoveConnectorDialogProps,
   ConnectorAccessPort,
   ConnectFlow,
   ConnectAuthorizeRequest,

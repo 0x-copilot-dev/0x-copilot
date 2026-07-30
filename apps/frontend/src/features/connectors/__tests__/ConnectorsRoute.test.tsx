@@ -35,6 +35,7 @@ const connectorsApiMocks = vi.hoisted(() => ({
   disconnectConnector: vi.fn(),
   patchConnectorScopes: vi.fn(),
   setConnectorAccessMode: vi.fn(),
+  removeConnector: vi.fn(),
   streamConnectorEvents: vi.fn(),
 }));
 vi.mock("../../../api/connectorsApi", async () => {
@@ -49,6 +50,7 @@ vi.mock("../../../api/connectorsApi", async () => {
     disconnectConnector: connectorsApiMocks.disconnectConnector,
     patchConnectorScopes: connectorsApiMocks.patchConnectorScopes,
     setConnectorAccessMode: connectorsApiMocks.setConnectorAccessMode,
+    removeConnector: connectorsApiMocks.removeConnector,
     streamConnectorEvents: connectorsApiMocks.streamConnectorEvents,
   };
 });
@@ -771,5 +773,66 @@ describe("ConnectorsRoute reconnect", () => {
     expect(window.location.assign).toHaveBeenCalledWith(
       "https://example.com/oauth",
     );
+  });
+});
+
+describe("ConnectorsRoute — remove", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("confirms first, then removes over DELETE /v1/connectors/{id}", async () => {
+    captureStreamCallbacks();
+    connectorsApiMocks.fetchConnectors.mockResolvedValue(
+      listResponse([connector({ id: "conn_1" as ConnectorId })]),
+    );
+    connectorsApiMocks.removeConnector.mockResolvedValue(undefined);
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("connector-remove"));
+    // The first click asks; it must not delete.
+    expect(connectorsApiMocks.removeConnector).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("connector-remove-confirm"));
+
+    await waitFor(() => {
+      expect(connectorsApiMocks.removeConnector).toHaveBeenCalledWith(
+        IDENTITY,
+        "conn_1",
+      );
+    });
+  });
+
+  it("surfaces a failed remove instead of pretending the row is gone", async () => {
+    captureStreamCallbacks();
+    connectorsApiMocks.fetchConnectors.mockResolvedValue(
+      listResponse([connector({ id: "conn_1" as ConnectorId })]),
+    );
+    connectorsApiMocks.removeConnector.mockRejectedValue(
+      new Error("owner_or_admin_only"),
+    );
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("connector-remove"));
+    fireEvent.click(screen.getByTestId("connector-remove-confirm"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/owner_or_admin_only/i)).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("connector-row")).toBeInTheDocument();
   });
 });
