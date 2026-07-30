@@ -6,7 +6,7 @@
 // tokens into the DOM. Artifact opening is delegated to the cockpit's one
 // owner-routed facade call, keyed solely by source_id.
 
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { Caption } from "@0x-copilot/design-system";
 import type { SourcesProjectionV2 } from "@0x-copilot/api-types";
@@ -23,6 +23,24 @@ export interface SourcesV2TabProps {
   readonly openingSourceId?: string | null;
   /** A host-controlled generic outcome line; never render server internals. */
   readonly openMessage?: string | null;
+  /**
+   * Cited documents, injected as a node (the rail passes the legacy citation
+   * `SourcesTab`).
+   *
+   * WHY A SLOT: a citation row carries a real title, URL, and snippet, and
+   * `SourceFactV2` deliberately carries none of those — it is opaque provenance
+   * ("never authorization", no refs/paths/bodies in the DOM). Widening that
+   * contract to smuggle titles through would defeat its purpose, so the two
+   * kinds of provenance are COMPOSED here instead: safe facts stay facts, and
+   * citation rows arrive already-rendered by the component that owns them.
+   * This tab therefore learns nothing about citation shapes.
+   *
+   * This exists because the v2 rail is the one actually mounted
+   * (`isSurfacesV2Enabled()` defaults true) while `projectSourcesV2` folds only
+   * ledger events — so a web search registered its sources correctly and the
+   * user still saw an empty Sources panel.
+   */
+  readonly citationsSlot?: ReactNode;
 }
 
 export function SourcesV2Tab({
@@ -30,10 +48,14 @@ export function SourcesV2Tab({
   onOpenSource,
   openingSourceId = null,
   openMessage = null,
+  citationsSlot,
 }: SourcesV2TabProps): ReactElement {
   const presentation = presentSourcesV2(sources);
 
-  if (presentation.total === 0) {
+  // Only the ledger fold can be empty while citations exist (a web search
+  // registers sources but emits no `read.executed`), so the empty state must
+  // consider BOTH — otherwise the cited-documents section is unreachable.
+  if (presentation.total === 0 && citationsSlot === undefined) {
     return (
       <div
         className="atlas-workspace-tab atlas-sources-panel atlas-sources-panel--empty"
@@ -55,6 +77,20 @@ export function SourcesV2Tab({
         Everything the agent read or fetched this run — the receipts behind each
         surface.
       </p>
+      {/* Cited documents lead: they are what the reader clicked a `[[N]]` chip
+          to reach, whereas the ledger facts below are the provenance trail. */}
+      {citationsSlot !== undefined ? (
+        <section
+          className="atlas-sources-panel__group"
+          aria-label="Cited documents"
+          data-testid="sources-v2-citations"
+        >
+          <div className="ui-mono-caps atlas-sources-panel__group-header">
+            Cited
+          </div>
+          {citationsSlot}
+        </section>
+      ) : null}
       {openMessage !== null ? (
         <Caption
           as="p"

@@ -910,3 +910,50 @@ describe("RunWorkspaceRail — focusSourcesSignal", () => {
     expect(onPanelCollapsedChange).not.toHaveBeenCalled();
   });
 });
+
+// ── the v2 Sources panel must still show cited documents ─────────────────────
+
+describe("RunWorkspaceRail — citations reach the v2 Sources panel", () => {
+  const V2_EMPTY = {
+    projection: {
+      v: 2 as const,
+      run_id: "run_1",
+      latest_sequence_no: 0,
+      facts: [],
+    },
+    onOpenSource: () => {},
+    openingSourceId: null,
+    openMessage: null,
+  };
+
+  it("injects cited documents into SourcesV2Tab when the ledger fold is empty", () => {
+    // The shipped bug: surfacesV2 defaults ON, so this branch renders, and its
+    // fold knows nothing about citations — a web search left Sources blank.
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        sourcesV2={V2_EMPTY}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("sources-v2-citations")).toBeInTheDocument();
+    expect(
+      screen.getByText("Aurora 4.0 — Approved Positioning v3"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the v2 empty state when there are no citations either", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sourcesV2={V2_EMPTY}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("sources-v2-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("sources-v2-citations")).toBeNull();
+  });
+});

@@ -4748,37 +4748,6 @@ p {
   text-overflow: ellipsis;
 }
 
-.atlas-source-row {
-  list-style: none;
-  margin: 0 0 8px;
-}
-
-.atlas-source-row--focused {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 8px;
-}
-
-.atlas-source-row__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 0;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-  color: inherit;
-  font: inherit;
-}
-
-.atlas-source-row__head:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
 /* PR 3.7 — favicon glyph variant of .ui-app-icon. The image fills the
  * existing 1.25rem (sm) / 1.5rem (lg) chip footprint so the row layout
  * is identical whether the slot resolves to a favicon or a brand glyph. */
@@ -4793,38 +4762,6 @@ p {
   height: 100%;
   object-fit: contain;
   display: block;
-}
-
-/* PR 3.7.1 — single shimmer row shown while a source-producing tool is
- * in flight. Same row footprint as .atlas-source-row so the first real
- * row replaces it without layout shift. */
-.atlas-source-row--skeleton .atlas-source-row__title--skeleton {
-  color: var(--color-text-subtle);
-  font-style: italic;
-  font-weight: var(--font-weight-regular);
-}
-
-.atlas-source-row__snippet--skeleton {
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--color-border) 30%, transparent) 0%,
-    color-mix(in srgb, var(--color-border) 60%, transparent) 50%,
-    color-mix(in srgb, var(--color-border) 30%, transparent) 100%
-  );
-  background-size: 200% 100%;
-  border-radius: 4px;
-  height: 0.6rem;
-  margin-top: 8px;
-  animation: atlas-source-shimmer 1.4s linear infinite;
-}
-
-.atlas-source-row__pulse-dot {
-  display: inline-block;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--color-accent);
-  animation: atlas-source-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes atlas-source-shimmer {
@@ -4905,17 +4842,6 @@ p {
   font-size: var(--font-size-2xs);
 }
 
-.atlas-source-row__glyph-trigger {
-  display: inline-flex;
-  outline: none;
-}
-
-.atlas-source-row__glyph-trigger:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-  border-radius: 50%;
-}
-
 /* PR 3.7.3 — connector grouping section header. Renders only when the
  * source list passes the threshold (5+); below that, rows render flat. */
 .atlas-workspace-tab__group {
@@ -4944,94 +4870,6 @@ p {
   letter-spacing: 0;
   padding: 2px 8px;
   text-transform: none;
-}
-
-.atlas-source-row__title {
-  flex: 1;
-  min-width: 0;
-  font-weight: var(--font-weight-medium);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.atlas-source-row__title a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.atlas-source-row__title a:hover {
-  text-decoration: underline;
-}
-
-.atlas-source-row__top {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.atlas-source-row__top > .atlas-source-row__head {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.atlas-source-row__actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-}
-
-.atlas-source-row__action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.5rem;
-  height: 1.5rem;
-  padding: 0;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  color: var(--color-text-subtle);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  line-height: 1;
-}
-
-.atlas-source-row__action:hover {
-  background: var(--color-surface);
-  color: var(--color-text);
-  border-color: var(--color-border-subtle, var(--color-border, transparent));
-}
-
-.atlas-source-row__action:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
-}
-
-.atlas-source-row__snippet {
-  margin: 6px 0 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-subtle);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.atlas-source-row__snippet--full {
-  display: block;
-  -webkit-line-clamp: unset;
-  overflow: visible;
-  white-space: pre-wrap;
-}
-
-.atlas-source-row__footnote {
-  margin: 6px 0 0;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-subtle);
 }
 
 .atlas-workspace-tab {

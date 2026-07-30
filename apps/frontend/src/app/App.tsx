@@ -16,6 +16,11 @@ import "@0x-copilot/chat-surface/src/approvals/approvals.css";
 // Inline citation chips (`[[N]]` superscripts). Moved OUT of this host's private
 // styles.css, which desktop never imports — chips rendered unstyled there.
 import "@0x-copilot/chat-surface/src/citations/citations.css";
+// Workspace rail: tab chrome + the citation source rows. Desktop already loaded
+// this; web kept private copies of the source-row rules in styles.css, so the
+// two hosts could drift. The rules now live here only — which means web MUST
+// import it or the Sources rail renders unstyled.
+import "@0x-copilot/chat-surface/src/workspace/workspace.css";
 // Staged message/table review surfaces share one semantic visual grammar with
 // desktop; host-private CSS must not restyle their approval boundaries.
 import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";

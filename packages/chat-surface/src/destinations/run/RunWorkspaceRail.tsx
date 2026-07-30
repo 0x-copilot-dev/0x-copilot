@@ -417,13 +417,38 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // Panel bodies — the hoisted WorkspacePane bodies, computed once and reused
   // by BOTH the Studio tabset and the Focus Run-details panel (recomposition,
   // not a fork — FR-3.11). Each owns its own empty copy.
+  // Cited documents, rendered by the component that owns citation rows and
+  // injected into whichever Sources body is active. Built here (not inside the
+  // v2 tab) because the rail is the only place holding BOTH provenance sources.
+  //
+  // `undefined` when there is nothing cited, so the v2 tab omits the section
+  // entirely rather than showing an empty "Cited" header — and so its own
+  // no-sources empty state still works.
+  const citationsSlot: ReactNode =
+    sources.size > 0 ? (
+      <SourcesTab
+        sources={sources}
+        loading={sourcesLoading}
+        error={sourcesError}
+        searching={sourcesSearching}
+        onSelect={onSelectSource}
+        onJumpToChat={onJumpToChatSource}
+        SourceRowComponent={SourceRowComponent}
+      />
+    ) : undefined;
+
   const sourcesBody: ReactNode =
     sourcesV2 !== undefined ? (
+      // The v2 fold covers ledger events (`read.executed`, `surface.created`,
+      // effects, artifacts) and has no notion of a citation, so on its own it
+      // renders an empty panel for a run whose only sources came from a citing
+      // tool like web_search. Compose the two rather than widening SourceFactV2.
       <SourcesV2Tab
         sources={sourcesV2.projection}
         onOpenSource={sourcesV2.onOpenSource}
         openingSourceId={sourcesV2.openingSourceId}
         openMessage={sourcesV2.openMessage}
+        citationsSlot={citationsSlot}
       />
     ) : ledgerSources !== null ? (
       <LedgerSourcesTab ledgerSources={ledgerSources} />

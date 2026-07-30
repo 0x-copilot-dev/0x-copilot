@@ -103,3 +103,44 @@ describe("SourcesV2Tab", () => {
     ).toBeInTheDocument();
   });
 });
+
+// ── citationsSlot: cited documents compose with ledger facts ─────────────────
+//
+// The v2 fold only knows ledger events, so a run whose sources came from a
+// citing tool (web_search) produced a correct citation registry AND an empty
+// Sources panel. These pin the composition that fixes it.
+
+describe("SourcesV2Tab — citationsSlot", () => {
+  const CITED = <p data-testid="cited-rows">cited rows</p>;
+
+  it("renders cited documents even when the ledger fold is empty", () => {
+    // THE BUG: web_search registers sources but emits no `read.executed`, so
+    // `presentSourcesV2` totals zero. The panel must not claim there is nothing.
+    render(
+      <SourcesV2Tab
+        sources={{ v: 2, run_id: "run-1", latest_sequence_no: 0, facts: [] }}
+        citationsSlot={CITED}
+      />,
+    );
+    expect(screen.queryByTestId("sources-v2-empty")).toBeNull();
+    expect(screen.getByTestId("sources-v2-citations")).toBeInTheDocument();
+    expect(screen.getByTestId("cited-rows")).toBeInTheDocument();
+  });
+
+  it("keeps the no-sources empty state when there is nothing at all", () => {
+    render(
+      <SourcesV2Tab
+        sources={{ v: 2, run_id: "run-1", latest_sequence_no: 0, facts: [] }}
+      />,
+    );
+    expect(screen.getByTestId("sources-v2-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("sources-v2-citations")).toBeNull();
+  });
+
+  it("omits the Cited section entirely when no slot is supplied", () => {
+    // No empty "Cited" header over nothing.
+    render(<SourcesV2Tab sources={sources} />);
+    expect(screen.queryByTestId("sources-v2-citations")).toBeNull();
+    expect(screen.getByTestId("sources-v2-tab")).toBeInTheDocument();
+  });
+});
