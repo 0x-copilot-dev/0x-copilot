@@ -207,7 +207,6 @@ import { muteConnectorSuggestion } from "./muteConnectorSuggestion";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
-import { RunMultiSelect } from "./RunMultiSelect";
 // PRD-04: pure selector projecting proposed surface diffs off the SAME single
 // canonical event stream (FR-3.3). Feeds the on-surface Approve/Reject controls
 // in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
@@ -4126,14 +4125,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         status={v2HeaderStatus}
       />
 
-      {/* The selector owns the multiple-run case only. It returns null for zero
-          or one run, so the idle and single-run cockpits stay chrome-free while
-          every barrel-exported selector has a real in-package mount. */}
-      <RunMultiSelect
-        runs={session.runs}
-        selectedRunId={session.runId}
-        onSelectRun={handleSelectRun}
-      />
+      {/* No multi-run selector strip. The cockpit shows ONE run — the active
+          one — in both Studio and Focus; a "3 RUNS" chip rail above the canvas
+          was chrome the user never asked for and it competed with the header
+          for the same glance. Rebinding to another run is still possible, but
+          only from a surface whose whole job is choosing a run: the Pending
+          Work card (`handleReviewPendingWorkV2`) and the Agents stage. Do not
+          reinstate a persistent selector rail here. */}
 
       {session.error !== null ? (
         <RunErrorBanner

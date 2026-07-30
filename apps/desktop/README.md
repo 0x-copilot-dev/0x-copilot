@@ -103,10 +103,12 @@ states beyond the live run layout:
   canvas, it shows an honest goal composer (`RunEmptyState`, "Give it a
   goal…"). Submitting a goal starts a run and binds it in place, so the live
   layout appears without remounting the shell.
-- **Multi-run** — more than one run in the conversation. A run selector
-  (`RunMultiSelect`, goal · status · time) lets you switch which run the
-  cockpit shows; picking one rebinds the projection/timeline/surface. A
-  conversation with zero or one run shows no selector chrome.
+- **Multi-run** — more than one run in the conversation. The cockpit binds the
+  **head** run and shows no selector chrome in either mode; the run-picker rail
+  that used to sit above the canvas was removed. Rebinding still happens, but
+  only from surfaces whose job is picking a run (the Pending Work card, the
+  Agents stage) or from the host via the `runId` prop, which rebinds the
+  session's SSE tail without remounting the canvas.
 
 The desktop mounts the cockpit against a default conversation id
 (`DESKTOP_DEFAULT_CONVERSATION_ID`); threading the _real_ active conversation

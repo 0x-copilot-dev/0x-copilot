@@ -197,8 +197,10 @@ Seams owned by the shell:
 - **Empty/idle** — `RunEmptyState` goal composer mounts when `session.runId === null`;
   submitting a goal starts a run and binds it via the `runId` seam
   (`setStartedRunId`) so empty→live swaps in place without remounting the shell.
-- **Multi-run** — `RunMultiSelect` renders nothing for ≤1 run; picking one rebinds via
-  `useRunSession.selectRun`.
+- **Multi-run** — the cockpit binds the conversation HEAD run and renders no picker
+  chrome (the `RunMultiSelect` rail was deleted; FR-3.26 withdrawn). Rebinding goes
+  through `useRunSession.selectRun` or the `runId` prop — both swap the SSE tail
+  without remounting the canvas — driven from the Pending Work card and Agents stage.
 
 On web the `run` slug mounts the working conversation surface (`ChatScreen`) rather
 than `RunDestination` directly; the desktop `DestinationOutlet` mounts
