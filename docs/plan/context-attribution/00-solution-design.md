@@ -1,6 +1,10 @@
 # Context Occupancy Ledger — Solution Design
 
-**Status:** Draft / not implemented
+**Status:** Implemented, with four corrections made during the build and one
+deliverable deliberately unfinished (the §7 SSE producer). This document has been
+edited to match what shipped — where the original plan was wrong, the correction
+is marked inline rather than quietly rewritten, so the reasoning stays reviewable.
+**[STATUS.md](STATUS.md) is the source of truth for what is and is not done.**
 **Owner:** ai-backend
 **Scope:** `services/ai-backend` only. No frontend work in this document.
 

@@ -75,15 +75,8 @@ removed line was read.
    verbatim onto a tenant-readable API. Bounded and printable-only, but it is
    third-party-controlled text on an authenticated surface.
 
-## Verified so far
+## What this bought
 
-- **Full ai-backend unit suite: 7,866 passed, 107 skipped, 0 failures** at `a8d71900`,
-  and 929 green again after merging 8 commits of main. The ledger is additive — nothing
-  existing moved.
-- **P0 holds.** `ToolSchemaLedger.revision` produces a byte-identical digest to the
-  pre-change `_model_tool_schema_revision` (verified directly, not by eye). Prompt-cache
-  identity is intact, and `_model_tool_schema_revision` now delegates so the two cannot
-  drift apart later.
 - **The deepagents blind spot is now measured.** 35 library-owned prompt/tool constants,
   **13,812 estimated tokens**, pinned as a golden fixture — a dependency bump that changes
   any of them fails CI naming the constant. Largest: `TASK_TOOL_DESCRIPTION` 1,644,
