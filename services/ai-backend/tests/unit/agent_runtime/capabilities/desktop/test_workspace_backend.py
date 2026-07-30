@@ -285,6 +285,8 @@ class TestBuildWorkspaceBackendSeam:
         assert build_workspace_backend(config) is None
 
     def test_from_env_present_builds_backend(self) -> None:
+        """The legacy unprefixed pair still works, so no caller is broken."""
+
         config = WorkspaceBackendConfig.from_env(
             env={
                 "DESKTOP_BROKER_URL": "http://127.0.0.1:9",
@@ -293,6 +295,62 @@ class TestBuildWorkspaceBackendSeam:
             mounts=[WorkspaceMount(name="proj", grant_id="grant-proj")],
         )
         assert isinstance(build_workspace_backend(config), BrokeredWorkspaceBackend)
+
+    def test_reads_the_names_the_desktop_supervisor_actually_forwards(self) -> None:
+        """The live defect: these are the ONLY broker names a real boot sets.
+
+        ``apps/desktop/main/services/service-env.ts`` exports
+        ``DESKTOP_WORKSPACE_BROKER_URL`` / ``_TOKEN`` / ``_AUDIENCE`` to the
+        supervised ai-backend, beside the browser broker's
+        ``DESKTOP_BROWSER_BROKER_*``. Nothing in the app has ever set the
+        unprefixed ``DESKTOP_BROKER_URL``. Reading that instead produced an empty
+        base url, so ``workspace_backend()`` returned ``None``, no ``/workspace/``
+        route existed, and ``ls ~/Downloads`` was answered by agent MEMORY with an
+        empty listing and a green tick — verified live against the packaged app.
+
+        The test above passed throughout, because it asserted the name the code
+        read rather than the name the product sets. This one asserts the contract
+        that actually has to hold.
+        """
+
+        config = WorkspaceBackendConfig.from_env(
+            env={
+                "DESKTOP_WORKSPACE_BROKER_URL": "http://127.0.0.1:9",
+                "DESKTOP_WORKSPACE_BROKER_TOKEN": "secret",
+            },
+            mounts=[WorkspaceMount(name="proj", grant_id="grant-proj")],
+        )
+        assert config.broker_base_url == "http://127.0.0.1:9"
+        assert config.broker_token == "secret"
+        assert isinstance(build_workspace_backend(config), BrokeredWorkspaceBackend)
+
+    def test_zero_grants_still_builds_a_backend(self) -> None:
+        """ "You have granted nothing" must be an ANSWER, not a fall-through.
+
+        With no mounts the route must still exist, so a host path reaches the
+        grant request instead of landing on the ``StateBackend`` default.
+        """
+
+        config = WorkspaceBackendConfig.from_env(
+            env={
+                "DESKTOP_WORKSPACE_BROKER_URL": "http://127.0.0.1:9",
+                "DESKTOP_WORKSPACE_BROKER_TOKEN": "secret",
+            },
+        )
+        assert config.mounts == ()
+        assert isinstance(build_workspace_backend(config), BrokeredWorkspaceBackend)
+
+    def test_the_prefixed_name_wins_when_both_are_present(self) -> None:
+        config = WorkspaceBackendConfig.from_env(
+            env={
+                "DESKTOP_WORKSPACE_BROKER_URL": "http://127.0.0.1:9",
+                "DESKTOP_WORKSPACE_BROKER_TOKEN": "current",
+                "DESKTOP_BROKER_URL": "http://127.0.0.1:1",
+                "DESKTOP_BROKER_TOKEN": "stale",
+            },
+        )
+        assert config.broker_base_url == "http://127.0.0.1:9"
+        assert config.broker_token == "current"
 
     def test_with_mounts_replaces_mount_table(self) -> None:
         base = WorkspaceBackendConfig(

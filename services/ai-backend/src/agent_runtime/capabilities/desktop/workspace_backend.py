@@ -127,10 +127,29 @@ DEFAULT_READ_MAX_BYTES: Final = 1 * 1024 * 1024
 
 
 class _Env:
-    """Environment variable names carrying broker connection config."""
+    """Environment variable names carrying broker connection config.
 
-    BROKER_URL: Final = "DESKTOP_BROKER_URL"
-    BROKER_TOKEN: Final = "DESKTOP_BROKER_TOKEN"
+    The desktop supervisor forwards the WORKSPACE-prefixed names
+    (``service-env.ts`` sets ``DESKTOP_WORKSPACE_BROKER_URL`` / ``_TOKEN`` /
+    ``_AUDIENCE`` beside the browser broker's ``DESKTOP_BROWSER_BROKER_*``), so
+    those are what a supervised ai-backend actually receives. Reading the
+    unprefixed ``DESKTOP_BROKER_URL`` / ``DESKTOP_BROKER_TOKEN`` — which nothing
+    in the app has ever set — made ``WorkspaceBackendConfig.from_env`` return an
+    empty base url, so ``workspace_backend()`` returned ``None``, no
+    ``/workspace/`` route was composed, ``guarded_default`` fell through to the
+    ``StateBackend``, and ``ls ~/Downloads`` was answered by agent memory with an
+    empty listing and a green tick. That was the live defect: every layer below
+    was correct and never reached. ``BROKER_AUDIENCE`` already used the
+    prefixed name, which is why only the pair below was wrong.
+
+    The unprefixed names stay as a FALLBACK so any caller that already exports
+    them keeps working; the prefixed name wins when both are present.
+    """
+
+    BROKER_URL: Final = "DESKTOP_WORKSPACE_BROKER_URL"
+    BROKER_TOKEN: Final = "DESKTOP_WORKSPACE_BROKER_TOKEN"
+    LEGACY_BROKER_URL: Final = "DESKTOP_BROKER_URL"
+    LEGACY_BROKER_TOKEN: Final = "DESKTOP_BROKER_TOKEN"
     BROKER_PROTOCOL: Final = "DESKTOP_BROKER_PROTOCOL"
     SERVICE_IDENTITY: Final = "DESKTOP_LOCAL_SERVICE_IDENTITY"
     BROKER_AUDIENCE: Final = "DESKTOP_WORKSPACE_BROKER_AUDIENCE"
@@ -916,11 +935,23 @@ class WorkspaceBackendConfig:
         mounts: Sequence[WorkspaceMount] = (),
         env: Mapping[str, str] | None = None,
     ) -> WorkspaceBackendConfig:
-        """Build config from ``DESKTOP_BROKER_URL`` / ``DESKTOP_BROKER_TOKEN`` (+ mounts)."""
+        """Build config from the supervisor's broker env (+ mounts).
+
+        Prefers the ``DESKTOP_WORKSPACE_BROKER_*`` names the desktop actually
+        forwards, falling back to the unprefixed pair — see :class:`_Env`.
+        """
         source = env if env is not None else os.environ
         return cls(
-            broker_base_url=source.get(_Env.BROKER_URL) or None,
-            broker_token=source.get(_Env.BROKER_TOKEN) or None,
+            broker_base_url=(
+                source.get(_Env.BROKER_URL)
+                or source.get(_Env.LEGACY_BROKER_URL)
+                or None
+            ),
+            broker_token=(
+                source.get(_Env.BROKER_TOKEN)
+                or source.get(_Env.LEGACY_BROKER_TOKEN)
+                or None
+            ),
             service_identity=source.get(_Env.SERVICE_IDENTITY) or None,
             broker_audience=source.get(_Env.BROKER_AUDIENCE) or None,
             protocol_version=source.get(_Env.BROKER_PROTOCOL) or "1",
