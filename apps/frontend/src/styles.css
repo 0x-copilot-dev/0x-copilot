@@ -1493,13 +1493,18 @@ p {
   --composer-radius: 11px;
   --composer-shell-height: auto;
   background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  /* `--color-border-strong` per the package: the .06 hairline was invisible
+   * against the rail ground. (Inert while Composer.tsx authors the border
+   * inline, but the fork should not advertise a colour it does not paint.) */
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--composer-radius);
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin: var(--space-lg) auto 0;
+  gap: 0;
+  /* `--space-sm`, not `--space-lg`: the v3 composer sits close under the
+   * transcript. */
+  margin: var(--space-sm) auto 0;
   max-width: var(--chat-content-width);
   box-sizing: border-box;
   min-height: var(--composer-shell-height);
@@ -1536,9 +1541,20 @@ p {
   padding-right: 10px;
 }
 
+/* Tracks the package SSOT. The design's `.cmp:focus-within{border-color:
+ * var(--line3)}` is a quiet darkening of the hairline, NOT an accent ring —
+ * the accent border + 2px glow this fork used to carry made the composer the
+ * loudest thing on the surface the moment it took focus, and was dropped from
+ * the package for exactly that reason.
+ *
+ * `border-color` cannot be used here: Composer.tsx authors the border as an
+ * inline SHORTHAND, which no stylesheet longhand can override. Flipping the
+ * custom property that shorthand reads is how the darkening lands without
+ * `!important`. (That is also why this fork's old `border-color` never
+ * painted — only its glow did.) */
 .aui-composer:focus-within {
-  border-color: color-mix(in srgb, var(--color-accent) 75%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  --composer-shell-border: var(--color-border-stronger);
+  box-shadow: none;
 }
 
 .aui-composer__dropzone {
@@ -1568,13 +1584,21 @@ p {
   display: none;
 }
 
+/* Tracks the package SSOT (design `.cmp-row{padding:6px 8px 8px}`). The row
+ * owns its own inset because the shell is flush (`--composer-padding: 0`), and
+ * the 5px gap is the design's, not the 8px `--space-sm` this fork drifted to.
+ *
+ * `justify-content: space-between` + `min-height: 2rem` are dropped WITH the
+ * `flex` changes below, not independently: the fork pushed the right cluster
+ * over with `space-between` + `tools{flex:1 1 auto}`, the package does it with
+ * `__right{margin-left:auto}` + `tools{flex:0 1 auto}`. Mixing the two halves
+ * collapses the row, so the four blocks here change together. */
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
-  gap: var(--space-sm);
-  justify-content: space-between;
-  min-height: 2rem;
+  gap: 5px;
   min-width: 0;
+  padding: 6px 8px 8px;
   position: relative;
 }
 
@@ -1592,9 +1616,12 @@ p {
 .aui-composer-action-wrapper__right {
   align-items: center;
   display: flex;
-  flex: 0 1 auto;
-  gap: var(--space-sm);
+  flex: 0 0 auto;
+  gap: 5px;
   justify-content: flex-end;
+  /* This is what pushes the right cluster over, replacing the row's
+   * `space-between` (see the note above). */
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -1640,9 +1667,11 @@ p {
 .aui-composer-tools {
   align-items: center;
   display: flex;
-  flex: 1 1 auto;
+  /* `0 1 auto`: the tools cluster shrinks but never GROWS to fill the row —
+   * growing is what made `space-between` necessary in the first place. */
+  flex: 0 1 auto;
   flex-wrap: nowrap;
-  gap: var(--space-sm);
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
 }
