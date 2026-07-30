@@ -85,7 +85,12 @@ jobs:
       # matched only the CLI's own suite. They cover the staging modules this job
       # then packs, so this is their natural home.
       - name: Test desktop-runtime staging modules
-        run: node --test "tools/desktop-runtime/*.test.mjs"
+        # Glob UNQUOTED so bash expands it. This job runs Node 20, where
+        # `node --test` does not expand glob patterns itself — quoting it made
+        # node look for a literal file named "*.test.mjs" and fail with
+        # "Could not find". The desktop workflow gets away with the quoted form
+        # only because it runs Node 22.
+        run: node --test tools/desktop-runtime/*.test.mjs
 
       - name: Build payload inputs
         run: |

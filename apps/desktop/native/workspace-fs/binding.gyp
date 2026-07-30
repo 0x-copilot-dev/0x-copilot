@@ -37,19 +37,42 @@
                                 # instead of reporting whether the NtCreateFile
                                 # walk works. Promote to /WX once a green
                                 # windows-latest log exists.
+                                #
+                                # NO "/std:c11" HERE. node-gyp's common.gypi
+                                # puts /std:c++20 on every MSVS target, and MSVC
+                                # rejects a C and a C++ standard on one command
+                                # line: "error D8016: '/std:c++20' and
+                                # '/std:c11' ... are incompatible". The C
+                                # standard goes through the MSBuild property
+                                # below instead, which REPLACES rather than
+                                # appends and so cannot collide. If gyp does not
+                                # recognise that property it is dropped with a
+                                # warning and MSVC compiles this .c file in its
+                                # default C mode — which still builds.
+                                #
+                                # /guard:cf is passed as a raw flag, not via the
+                                # named "ControlFlowGuard" setting: the first
+                                # windows-latest log showed gyp emitting
+                                # "unrecognized setting
+                                # VCCLCompilerTool/ControlFlowGuard while
+                                # converting to MSBuild" and DROPPING it, so the
+                                # hardening it names was never actually applied.
                                 "AdditionalOptions": [
-                                    "/std:c11",
                                     "/W4",
                                     "/sdl",
                                     "/utf-8",
+                                    "/guard:cf",
                                 ],
+                                "LanguageStandard_C": "stdc11",
                                 "BufferSecurityCheck": "true",
-                                "ControlFlowGuard": "Guard",
                             },
                             "VCLinkerTool": {
                                 "RandomizedBaseAddress": "2",
                                 "DataExecutionPrevention": "2",
                                 "ImageHasSafeExceptionHandlers": "true",
+                                # CFG needs the linker half too; a /guard:cf
+                                # compile alone does not produce a guarded image.
+                                "AdditionalOptions": ["/guard:cf"],
                             },
                         },
                     },
