@@ -309,9 +309,51 @@ class WorkspaceMountTable:
                     grant_id=grant.grant_id,
                     label=grant.label or None,
                     mode=grant.mode,
+                    # The grant's real host root, when the broker sends one.
+                    # This is what `HostFilesystemRules` turns into an `allow`
+                    # rule, so a folder the user explicitly attached stops
+                    # prompting on every read. A broker that omits it yields
+                    # None and the mount still works — the folder just keeps
+                    # asking, which is degraded rather than broken.
+                    host_root=grant.root or None,
                 )
             )
         return tuple(mounts)
+
+    @classmethod
+    def granted_roots(cls, mounts: Sequence[WorkspaceMount]) -> tuple[object, ...]:
+        """Mounts that carry a usable host root, as ``GrantedRoot`` rules input.
+
+        Silently drops a mount whose root is absent or does not classify as a
+        host path. That is deliberate: a root we cannot resolve must not become
+        an ``allow`` rule, because the rule would either match nothing (harmless
+        but useless) or — far worse — match the wrong subtree. A dropped root
+        degrades to "this folder still asks", never to "this folder is open".
+        """
+
+        from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
+            GrantedRoot,
+        )
+
+        roots: list[object] = []
+        for mount in mounts:
+            if mount.host_root is None:
+                continue
+            if not mount.classified_host_root().is_host:
+                continue
+            try:
+                roots.append(
+                    GrantedRoot(
+                        path=mount.host_root,
+                        # Only a grant that actually permits writing may site a
+                        # writable scratch dir; read-only stays read-only.
+                        writable=mount.mode != "read_only",
+                    )
+                )
+            except ValueError:
+                # Same rule as above: an unusable root is dropped, never widened.
+                continue
+        return tuple(roots)
 
     @classmethod
     def mount_name(cls, grant: BrokerGrant, *, used: frozenset[str]) -> str:
@@ -439,6 +481,19 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     def mounts(self) -> tuple[WorkspaceMount, ...]:
         """The mount table as it stands now (the grant flow can extend it)."""
         return tuple(self._mounts.values())
+
+    @property
+    def granted_roots(self) -> tuple[object, ...]:
+        """Host roots the user has granted, as ``HostFilesystemRules`` input.
+
+        Read by the runtime factory through ``getattr`` rather than an
+        ``isinstance`` check, so any workspace lane can supply it by exposing
+        this one property. That is not incidental: gating on a concrete class is
+        exactly how ``guarded_default`` silently opted out in ENFORCE mode,
+        where the workspace object is a different type entirely.
+        """
+
+        return WorkspaceMountTable.granted_roots(self.mounts)
 
     @classmethod
     def claims_path(cls, path: str | None) -> bool:

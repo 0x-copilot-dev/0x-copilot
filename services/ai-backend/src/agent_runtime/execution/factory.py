@@ -1670,12 +1670,17 @@ def _host_filesystem_permissions(
         _LOGGER.warning("host_filesystem.permission_type_unavailable")
         return ()
 
-    # Granted roots are not threaded here yet: a grant currently only skips the
-    # prompt, and the prompt is what makes the capability work at all. Reads of
-    # a granted folder are `interrupt` until that lands, so the user is asked
-    # once rather than never — annoying, never wrong.
+    # Folders the user explicitly attached become `allow` rules, so they stop
+    # prompting. Read by CAPABILITY (`granted_roots`), never by isinstance —
+    # gating on a concrete class is how the previous guard silently opted out in
+    # ENFORCE mode, where the workspace object is a different type. A lane that
+    # cannot supply roots yields (), and every folder simply keeps asking.
+    roots = getattr(workspace_backend, "granted_roots", ())
+    if not isinstance(roots, tuple):
+        _LOGGER.warning("host_filesystem.granted_roots_malformed")
+        roots = ()
     return tuple(
-        FilesystemPermission(**rule) for rule in HostFilesystemRules.build(roots=())
+        FilesystemPermission(**rule) for rule in HostFilesystemRules.build(roots=roots)
     )
 
 

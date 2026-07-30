@@ -137,3 +137,48 @@ class TestGrantedRootValidation:
     def test_a_traversal_root_is_refused(self) -> None:
         with pytest.raises(ValueError, match=r"'\.\.'"):
             GrantedRoot(path="/Users/ada/../ada/Projects")
+
+
+class TestAttachedFolderStopsAsking(RuleSetMixin):
+    """The user's question: once granted, does it still ask? It must not.
+
+    Before granted roots were threaded through, `HostFilesystemRules.build` was
+    called with `roots=()`, so the allow tier produced no rules at all and every
+    read of an attached folder fell to the catch-all interrupt. Attaching a
+    folder bought the user nothing. These pin that it now buys silence.
+    """
+
+    def test_ls_in_an_attached_folder_does_not_prompt(self) -> None:
+        roots = (GrantedRoot(path=GRANTED),)
+        assert self.verdict(GRANTED, roots=roots) == "allow"
+        assert self.verdict(f"{GRANTED}/sub/deep/file.txt", roots=roots) == "allow"
+
+    def test_a_second_attached_folder_also_stops_asking(self) -> None:
+        other = "/Users/ada/Reports"
+        roots = (GrantedRoot(path=GRANTED), GrantedRoot(path=other))
+        assert self.verdict(f"{GRANTED}/a.txt", roots=roots) == "allow"
+        assert self.verdict(f"{other}/b.txt", roots=roots) == "allow"
+        # ...and attaching two folders still does not open a third.
+        assert self.verdict(UNGRANTED, roots=roots) == "interrupt"
+
+    def test_writes_still_route_through_the_ledgered_lane(self) -> None:
+        """Attaching does NOT open a direct write path (D7 / bypass spec).
+
+        Host writes stay `deny` at the tool layer so there is exactly one write
+        lane: staged -> ledger -> commit. Bypass mode removes that lane's PAUSE,
+        never its record, so it must not be implemented by relaxing this rule.
+        """
+
+        roots = (GrantedRoot(path=GRANTED, writable=True),)
+        assert (
+            self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots) == "deny"
+        )
+        # The one exception: the agent's own scratch, which holds no user content.
+        assert (
+            self.verdict(
+                f"{GRANTED}/{SCRATCH_DIR_NAME}/notes.json",
+                operation="write",
+                roots=roots,
+            )
+            == "allow"
+        )
