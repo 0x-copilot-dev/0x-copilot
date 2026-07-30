@@ -709,7 +709,12 @@ class TestPendingInterruptCountIsAFrameworkProperty(ApprovalGraphMixin):
         finally:
             RunControlContext.unbind(token)
 
-        assert probe.arrived == list(range(_FANOUT))
+        # Every call arrived exactly once, and one at a time. *Which* order they
+        # arrived in is not asserted: with no F6 install the only gate is the
+        # Step-2 exclusive lock, whose queue is arrival order at the lock, and
+        # that is the framework's scheduling of coroutines it started together.
+        # Under load it is observably not input order and never promised to be.
+        assert sorted(probe.arrived) == list(range(_FANOUT))
         assert probe.maximum_parked == 1
         assert len(list(result.get("__interrupt__") or ())) == _FANOUT
 
@@ -733,6 +738,11 @@ class TestPendingInterruptCountIsAFrameworkProperty(ApprovalGraphMixin):
         Same arrivals, same one-at-a-time parking, same interrupt count, and no
         journal at all — because the turn is handed back to the pre-F6 path
         rather than planned into a shape F6 would then have to manage.
+
+        "Same arrivals" is the *set* of arrivals and the one-at-a-time profile,
+        which is the whole of the parity claim. Arrival sequence is the exclusive
+        lock's queue in both rows, and neither row promises input order — so
+        pinning a sequence here would pin the scheduler, not the parity.
         """
 
         probe = _ParkProbe()
@@ -743,7 +753,7 @@ class TestPendingInterruptCountIsAFrameworkProperty(ApprovalGraphMixin):
             config={"configurable": {"thread_id": "parity-gated"}},
         )
 
-        assert probe.arrived == list(range(_FANOUT))
+        assert sorted(probe.arrived) == list(range(_FANOUT))
         assert probe.maximum_parked == 1
         assert len(list(result.get("__interrupt__") or ())) == _FANOUT
         assert journal.plans == []

@@ -236,11 +236,42 @@ create a second planning queue.
       runs 16 cases across 3 instantiations. RB.3 did edit the primitive, but to
       close two contract defects both adopters independently hit, not because an
       adopter could not bind. F5, F9 and F11 bind in Waves B and C.
-- [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,
+- [x] **Step 8:** Enable F3 catalog activation, top-K expansion,
       search/describe/invoke, gateway revalidation, and fallback. Also declares
       the named promotion cohort matrix that Step 15 evaluates.
+      **Gate MET on re-run.** The gate refused once and was right each time; every
+      criterion it cited is now closed and it re-verified that the previously
+      passing ones were not weakened (zero deletions in those test classes).
+      Revocation is proven through the F8 revision route with the connector
+      deliberately untouched, so the refusal can only be the revision binding —
+      and the ref under test is a tier-two _expanded_ capability, which also
+      falsifies BUG-04's stated live consequence. Configured K is measured
+      through the seam (5 of 9 servers opened, neither the default 3 nor the
+      ceiling 8). One honest scope note: the F8 revision route contributes only
+      when the F8 control plane is enabled; with it off the four executor-side
+      refusals still hold, and every F3 promotion cohort declares `f8=enforce`,
+      so no promoted configuration runs F3 without it.
 - [ ] **Step 10:** Complete F6 persisted batches, scoped permits, serial/parallel
       scheduling, cancellation, recovery, and kill switches.
+      **Five of six exit criteria are MET; the sixth needs a product decision, so
+      the step stays unticked.** Verified by the integration owner directly after
+      the gate lane stalled twice: unknown metadata is serial and sibling failure
+      is isolated (631 concurrency tests); the approvals authority is reached on
+      the single `RunBatchAdmission` construction site, which now passes
+      `approvals=` (30 wiring tests); cancel and restart are on the wired path
+      (15 tests); `rate_limit_scope` is consumed at `rate_limits.py:157` and
+      `TRUSTED_PROVIDER` has a production source in `provider_hints.py`, closing
+      ARQ-010's two named items; and the journal append cost is pinned linear.
+
+      **The open criterion is "independent curated reads improve p95 latency."**
+      What changed is *why* it cannot close. The gate previously refused because
+      F6's own critical-path cost was unmeasured and might have swamped the win;
+      BUG-20 made that cost linear and pinned it, so the objection is now purely
+      that a latency **number** requires real connectors — which is §18.5's
+      territory, not a unit suite's. Moving the criterion there is a defensible
+      call but it is a **re-scope of an exit criterion**, and doing that
+      unilaterally is exactly what makes a checkbox untrustworthy. It waits for
+      an explicit decision.
 
 **Wave B**
 
@@ -263,7 +294,24 @@ create a second planning queue.
       ever gated.
 - [ ] **Step 12:** Route the production local task path through F9 authority,
       admission, budget, F6 scheduling, verification, and recovery.
-- [ ] **Step 11:** Complete the F7 trusted-schema dataflow executor,
+- [ ] **Step 11: DEFERRED by its own entry gate — not built.** The gate was
+      added to this PRD precisely to catch this case, and it caught it.
+      The re-justification it demanded **cannot be produced**, for two reasons
+      that are findings rather than excuses. First, the F1 operational corpus
+      carries no measured cost data at all: every `FixtureUsage` value is an
+      arithmetic constant of `call_count`, the maximum `model_turns` anywhere is
+      3, and each of the four mechanical families the gate names reports exactly
+      one call — so the corpus **cannot show a multi-call workload being
+      compressed, because it does not model one**. Second, the instrument is
+      fixture-only by design and has no model in it. The gate's own precondition
+      is also unmet: F3, F5 and F6 are not all enabled.
+      What _is_ measurable is the cost side, and it is decisive: the model-facing
+      dataflow tool's schema exceeds the largest saving this program has
+      measured. The saving that motivated F7 has largely been taken by work that
+      already landed. **No lanes are scheduled.** Reopening requires a corpus
+      that models multi-call mechanical work and a live-model instrument.
+      Original scope, retained for reference:
+      Complete the F7 trusted-schema dataflow executor,
       checkpoints, evidence manifests, and model tool. **Gated:** this step does
       not start until a recorded value re-justification shows the model-turn
       savings that motivated F7 still hold against the currently shipped model.
