@@ -425,8 +425,13 @@ class TestKillSwitchReachesTheCoordinator:
             RunControlContext.unbind(token)
 
         assert before is not None and before.max_parallelism == _WIDTH
-        # The plan is unchanged and still durable; the live width is not.
-        assert after is None
+        # The plan is unchanged and still durable; the live width is not. The
+        # narrowing is expressed as a grant of width one rather than as no grant:
+        # a planned child still has to reach the coordinator so the segment cursor
+        # can order it, and only a grant gets it there. A width of one authorizes
+        # no overlap, which is the whole of what the switch asked for.
+        assert after is not None
+        assert after.max_parallelism == 1
 
 
 class TestPlanningIsTotalAndDurableFirst:
