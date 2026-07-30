@@ -103,6 +103,35 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 _OCCUPANCY_LOGGER = logging.getLogger(__name__)
+# Wall-clock budget for appending one occupancy row, enforced in
+# ``_append_occupancy``. The append sits between the provider's answer and the
+# response handed back to the graph, so an unbounded await would let a slow or
+# contended store add latency to every model call. Two seconds is generous for a
+# single-row insert or a JSONL append+fsync and still bounds a stalled disk to a
+# blip rather than a systemic slowdown. Occupancy is observability: a breach
+# drops the measurement, never the run.
+_OCCUPANCY_PERSIST_TIMEOUT_SECONDS: Final[float] = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingOccupancyAppend:
+    """One measured snapshot plus every fact needed to append it.
+
+    Exists so the append call site reads only plain locals. Resolving a tenant or
+    a conversation id in the argument list would put an unguarded attribute read
+    on the model-call path, where an ``AttributeError`` fails the run instead of
+    dropping a measurement — the §6.4 hole that shipped and was caught by driving
+    a real run rather than by any test.
+    """
+
+    sink: "ContextOccupancySink"
+    snapshot: ContextOccupancySnapshot
+    org_id: str
+    run_id: str
+    conversation_id: str
+    model_call_id: str
+
+
 """Logger for the Context Occupancy Ledger's guards, and only for them.
 
 The F10 seam itself is deliberately silent: every fact it has is journaled as a
@@ -488,7 +517,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
     ) -> ModelResponse[Any]:
         binding = RunControlContext.model_invocation_runtime()
         if binding is None:
-            return await handler(request)
+            return await self._awrap_occupancy_only(request, handler)
         control = RunControlContext.require_current()
         identity = RuntimeModelCallIdentity.from_current(
             execution_scope=self._execution_scope(request.runtime),
@@ -1581,6 +1610,190 @@ class ModelInvocationMiddleware(AgentMiddleware):
             )
             return None
 
+    async def _awrap_occupancy_only(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        """Measure occupancy on the path where F10 is not installed.
+
+        This is the default deployment. ``FeatureModeSet.f10`` ships ``OFF``, so
+        ``ModelInvocationComposer.compose`` returns ``None`` and no F10 binding
+        exists — and the ledger has no business depending on that. What occupancy
+        actually needs is the materialized request, which is present on every
+        call, and a sink, which the run handler installs unconditionally.
+
+        Deliberately **not** a partial F10 binding. Everything else the F10 path
+        does — the journal, the authority checks, admission, alternate-route
+        retry — reads a binding it is entitled to assume is complete, so handing
+        those code paths a half-populated one to get an observability side effect
+        would trade a measurement gap for a correctness hazard. This is a
+        separate, much smaller path: measure, call the handler, append.
+
+        Two honest limits. There is no ``_ProviderLifecycleCallback`` here, so
+        the snapshot carries no ``provider_input_tokens`` and no cache figures —
+        it is estimate-only, and ``unattributed_delta`` stays 0 rather than
+        pretending to reconcile against a total nobody reported. And the route
+        facts come from the request's own model object rather than a resolved
+        deployment descriptor, so ``context_window_tokens`` is ``None`` and
+        ``free_tokens`` with it. Segment attribution — the reason the ledger
+        exists — is unaffected.
+
+        The handler is called exactly once whatever happens above it. Capture
+        sits in its own guard so a measurement failure cannot become a failed
+        model call (§6.4).
+        """
+
+        pending = self._plan_occupancy_only(request)
+
+        response = await handler(request)
+
+        # Every argument below is a plain local resolved inside the guarded
+        # planner above. That is deliberate rather than stylistic: computing an
+        # argument at the call site would put an unguarded attribute read on the
+        # model-call path, and an AttributeError there fails the run — which is
+        # exactly how the first draft of this method broke a real run before it
+        # ever reached a test.
+        if pending is not None:
+            await self._append_occupancy(
+                sink=pending.sink,
+                snapshot=pending.snapshot,
+                usage=None,
+                org_id=pending.org_id,
+                run_id=pending.run_id,
+                conversation_id=pending.conversation_id,
+                model_call_id=pending.model_call_id,
+            )
+        return response
+
+    def _plan_occupancy_only(
+        self, request: ModelRequest[Any]
+    ) -> "_PendingOccupancyAppend | None":
+        """Resolve everything the non-F10 append needs, under one guard.
+
+        Returns ``None`` when occupancy cannot or should not be recorded — no
+        recorder, no installed sink, no bound run control, or any failure while
+        measuring. The caller then simply skips the append.
+        """
+
+        if self._occupancy is None:
+            return None
+        installed = RunControlContext.context_occupancy_store()
+        if installed is None:
+            return None
+        sink, org_id = installed
+        try:
+            control = RunControlContext.current()
+            identity = RuntimeModelCallIdentity.from_current(
+                execution_scope=self._execution_scope(request.runtime),
+                model_turn=max(self._model_turn(request.state), 1),
+            )
+            if control is None or identity is None:
+                return None
+            snapshot = self._occupancy.capture(
+                request,
+                identity=identity,
+                attempt_ordinal=1,
+                graph_scope=self._graph_scope(identity.execution_scope),
+                provider=self._request_provider(request),
+                model_family=self._request_model_family(request),
+                context_window_tokens=None,
+                plan=self._occupancy_assembly_plan(),
+            )
+            return _PendingOccupancyAppend(
+                sink=sink,
+                snapshot=snapshot,
+                org_id=org_id,
+                run_id=identity.run_id,
+                conversation_id=control.snapshot.conversation_id,
+                model_call_id=identity.model_call_id,
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy capture failed outside F10; "
+                "continuing without a snapshot.",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _request_provider(request: ModelRequest[Any]) -> str:
+        """Provider slug from the request's own model, for the non-F10 path.
+
+        Mirrors ``canonical_model_request_digest``'s derivation so the two agree
+        about what provider a call belongs to.
+        """
+
+        model = request.model
+        return str(getattr(model, "_llm_type", type(model).__name__)).strip().lower()
+
+    @staticmethod
+    def _request_model_family(request: ModelRequest[Any]) -> str:
+        """Model name from the request's own model, for the non-F10 path."""
+
+        model = request.model
+        for attribute in ("model_name", "model", "deployment_name"):
+            value = getattr(model, attribute, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return type(model).__name__
+
+    async def _append_occupancy(
+        self,
+        *,
+        sink: "ContextOccupancySink | None",
+        snapshot: ContextOccupancySnapshot,
+        usage: NormalizedTokenUsage | None,
+        org_id: str,
+        run_id: str,
+        conversation_id: str,
+        model_call_id: str,
+    ) -> None:
+        """Reconcile and append one snapshot under a bounded timeout.
+
+        The timeout is the point. ``§6.4``'s fail-open guard absorbs a store that
+        *raises*; it does nothing about a store that is merely **slow**, and this
+        await sits between the provider's answer and the response returned to the
+        graph. On the file-native store — the desktop default — an append is a
+        write plus ``flush`` plus ``fsync`` under the global store lock, so a
+        contended or stalled disk would add that latency to every model call in
+        the process. An observability ledger is never worth a slow run, so a
+        breach of the budget is logged and the measurement dropped.
+
+        Not fire-and-forget: a detached task would routinely lose the last
+        snapshot of a run to worker teardown, and would need its own strong
+        reference set to avoid being garbage-collected mid-write. A short bound
+        keeps the row in the common case and caps the pathological one.
+        """
+
+        if sink is None or self._occupancy is None:
+            return
+        try:
+            await asyncio.wait_for(
+                self._occupancy.persist(
+                    self._occupancy.finalize(snapshot, usage),
+                    sink=sink,
+                    org_id=org_id,
+                    run_id=run_id,
+                    conversation_id=conversation_id,
+                ),
+                timeout=_OCCUPANCY_PERSIST_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy persistence exceeded %.1fs for model call %s; "
+                "dropping the measurement rather than delaying the run.",
+                _OCCUPANCY_PERSIST_TIMEOUT_SECONDS,
+                model_call_id,
+            )
+        except Exception:  # noqa: BLE001 — a dropped snapshot is the failure mode
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy persistence failed for model call %s; "
+                "dropping the measurement.",
+                model_call_id,
+                exc_info=True,
+            )
+
     async def _persist_occupancy(
         self,
         *,
@@ -1613,22 +1826,16 @@ class ModelInvocationMiddleware(AgentMiddleware):
             or binding.context_occupancy_store is None
         ):
             return
-        try:
-            usage, reported = observer.usage
-            await self._occupancy.persist(
-                self._occupancy.finalize(snapshot, usage if reported else None),
-                sink=binding.context_occupancy_store,
-                org_id=binding.org_id,
-                run_id=identity.run_id,
-                conversation_id=control.snapshot.conversation_id,
-            )
-        except Exception:  # noqa: BLE001 — a dropped snapshot is the failure mode
-            _OCCUPANCY_LOGGER.warning(
-                "Context occupancy persistence failed for model call %s; "
-                "dropping the measurement.",
-                identity.model_call_id,
-                exc_info=True,
-            )
+        usage, reported = observer.usage
+        await self._append_occupancy(
+            sink=binding.context_occupancy_store,
+            snapshot=snapshot,
+            usage=usage if reported else None,
+            org_id=binding.org_id,
+            run_id=identity.run_id,
+            conversation_id=control.snapshot.conversation_id,
+            model_call_id=identity.model_call_id,
+        )
 
     @staticmethod
     def _model_turn(state: object) -> int:

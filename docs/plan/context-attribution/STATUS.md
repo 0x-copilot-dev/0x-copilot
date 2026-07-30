@@ -32,10 +32,10 @@ logical; this order is what parallelises safely without two agents fighting over
 | API        | read routes + facade proxy **done**; SSE event contract ships but **has no producer**                             | **partial** — see below     |
 | Verify     | full-suite sweep + 3-lens adversarial review + mutation-verified confirmation                                     | **done** — 16 defects fixed |
 
-> **Read item 0 of "Known NOT done" first.** Everything below is true of the code,
-> and the ledger records nothing on a default deployment regardless, because its
-> capture point sits inside F10's middleware and F10 defaults to off. Found by
-> live-running the real graph after merge; no unit test could see it.
+> **Item 0 of "Known NOT done" is now FIXED** — the ledger records on a default
+> deployment. Read it anyway: it documents the two attribution gaps that the fix
+> exposed (78% of a live run's tokens still land as `UNDECLARED` on the non-F10
+> path) and the fact that provider reconciliation still requires F10.
 
 ## Final verified state
 
@@ -53,7 +53,51 @@ removed line was read.
 
 ## Known NOT done — read before building on this
 
-0. **THE LEDGER IS DARK ON A DEFAULT DEPLOYMENT.** Occupancy captures nothing
+0. ~~**THE LEDGER IS DARK ON A DEFAULT DEPLOYMENT.**~~ **FIXED.** Occupancy now
+   records with F10 at its shipped default. The sink and its tenant are installed
+   unconditionally by the run handler onto the existing model-invocation slot —
+   deliberately _not_ onto the F10 binding, and deliberately not as a partial F10
+   binding, since everything else on that path reads a binding it is entitled to
+   assume is complete. The seam's no-binding branch now takes a separate, much
+   smaller path: measure, call the handler, append.
+
+   **Mutation-verified.** `tests/unit/runtime_worker/test_occupancy_without_f10.py`
+   drives a real run through the real worker, graph and streaming executor with
+   nothing injected; reverting the un-gating fails 3 of its 5 tests. It also pins
+   the premise (`FeatureModeSet().f10 is OFF`) so the test cannot silently stop
+   proving anything if F10's default ever changes.
+
+   Persist is now bounded by a 2s timeout shared by both paths. This mattered
+   _because_ of the un-gating: fail-open absorbs a store that raises, but did
+   nothing about one that is merely slow, and the append sits between the
+   provider's answer and the response — on the file store that is an `fsync`
+   under the global lock, which un-gating would have put on every model call.
+
+   **Two attribution gaps this measured, both now visible rather than assumed.**
+   On a live default-deployment run: 10,152 estimated tokens, **7,933 (78%)
+   `UNDECLARED`** — 4,145 in `tools`, 3,788 in `system`. Our own composed tools
+   attribute correctly (`stage_rowset_write` 1,090, `ask_a_question` 667,
+   `suggest_mcp_connector` 378). The two causes are distinct:
+   - **System is undeclared because there is no F2 prompt plan on this path**, so
+     `SystemBlockAttributor` has no fragment digests to match against. With F10 on
+     the plan is present and system attribution works, so the non-F10 path is
+     strictly weaker — it is not the same measurement.
+   - **Tools are undeclared because deepagents injects its own tools at graph
+     level**, never passing through `_model_visible_tools`' declare seam (audit
+     item C). `ThirdPartyContextOrigins` matches its _system_ constants but not
+     its tool schemas.
+
+   Neither is a regression and both are typed rather than silently dropped, but
+   until they are closed the non-F10 decomposition is roughly a fifth attributed.
+
+   **Also newly documented:** the non-F10 path carries no `provider_input_tokens`
+   and no cache figures — there is no `_ProviderLifecycleCallback` outside F10 —
+   so it is estimate-only and `unattributed_delta` stays 0 rather than reporting
+   the whole estimate as drift. Provider reconciliation still requires F10.
+
+   Original diagnosis, kept for the reasoning:
+
+   Occupancy captured nothing
    unless the **F10 model-reliability** feature is on, and `FeatureModeSet.f10`
    defaults to `FeatureMode.OFF`
    (`agent_runtime/control_plane/feature_modes.py:285`). The chain:

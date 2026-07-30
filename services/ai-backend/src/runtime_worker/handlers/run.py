@@ -609,6 +609,20 @@ class RuntimeRunHandler:
                     prepared_run_control.control,
                     task_policy=prepared_run_control.task_policy,
                 )
+                # Context Occupancy Ledger sink (design §3.1/§5), installed
+                # BEFORE the F10 composition below and unconditionally. The
+                # ledger measures at the model-call seam but is not an F10
+                # feature, and hanging its sink off the F10 binding is what made
+                # it inert everywhere: ``compose`` returns ``None`` whenever
+                # ``effective_f10_mode`` is ``OFF`` — the shipped default — so
+                # the seam took its no-binding early return and recorded nothing
+                # on every model call of every run. Installing here ties the sink
+                # to the run's control lifetime and to the same unbind token,
+                # without giving an observability concern a say in whether a
+                # reliability feature is on.
+                RunControlContext.install_context_occupancy_store(
+                    self.persistence, org_id=run.org_id
+                )
                 composed_model_invocation = (
                     await self._model_invocation_composer.compose(
                         run=run,
