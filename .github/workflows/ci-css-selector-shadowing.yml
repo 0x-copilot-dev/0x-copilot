@@ -1,0 +1,78 @@
+name: ci-css-selector-shadowing
+
+# Standing gate: no host stylesheet silently shadows a shared packages/* selector.
+#
+# packages/chat-surface and packages/design-system are the single source of truth
+# for shared surface styling; both hosts import those sheets and load their own on
+# top. A class name declared in BOTH has two owners, and at equal specificity the
+# sheet that loads last wins — silently, with nothing in either file naming the
+# other. apps/desktop/renderer/firstrun.css carried a stale copy of the P0
+# placeholder chrome (.fr, .fr-top, .fr-brand, .fr-main, .fr-foot), FirstRunGate
+# imports it after bootstrap.tsx imports onboarding.css, and
+# `.fr-main { align-items: flex-start }` shrink-wrapped the onboarding column: the
+# first-run composer rendered 408px wide inside its 640px column. Nothing failed;
+# it just looked wrong. The mirror-image bug (a package sheet whose rules live
+# ONLY in a host sheet, so the other host renders unstyled) is documented all over
+# apps/desktop/renderer/bootstrap.tsx — composer.css, workspace.css,
+# approvals.css and citations.css each shipped it.
+#
+# The gate (tools/check_css_selector_shadowing.py) fails if any class-bearing
+# selector in an apps/* stylesheet is also declared in a packages/* stylesheet.
+# Escape hatch: a `/* shadow-ok: <reason> */` comment on the offending rule.
+# Pre-existing debt lives in tools/css_shadowing_baseline.txt and may only
+# shrink — a baseline entry that no longer collides is a hard error. Pure stdlib
+# — no bundler, no npm install, no network — so it runs in seconds.
+#
+# Also enforced in pre-commit (check-css-selector-shadowing). This workflow adds
+# the gate's own unit tests, which pre-commit does not run.
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "tools/check_css_selector_shadowing.py"
+      - "tools/test_check_css_selector_shadowing.py"
+      - "tools/css_shadowing_baseline.txt"
+      - ".github/workflows/ci-css-selector-shadowing.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "tools/check_css_selector_shadowing.py"
+      - "tools/test_check_css_selector_shadowing.py"
+      - "tools/css_shadowing_baseline.txt"
+      - ".github/workflows/ci-css-selector-shadowing.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-css-selector-shadowing-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  css-selector-shadowing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      # The gate's own unit tests (detection, the shadow-ok hatch, scope limits,
+      # the baseline ratchet, CSS parsing, real-tree baseline) — proves the guard
+      # works before we trust its verdict.
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Test the gate
+        run: python -m pytest tools/test_check_css_selector_shadowing.py -q
+
+      # The gate itself, over the real apps/* and packages/* stylesheets.
+      - name: Run the CSS selector shadowing gate
+        run: python tools/check_css_selector_shadowing.py

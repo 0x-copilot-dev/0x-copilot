@@ -1,0 +1,159 @@
+# Pre-existing CSS selector shadowing — the burn-down list for
+# tools/check_css_selector_shadowing.py.
+#
+# Every line is an `apps/*` selector that a `packages/*` stylesheet already owns.
+# These predate the gate; they are DEBT, not approval. There is deliberately no
+# `--update-baseline` writer: the only sanctioned way to land new shadowing is a
+# `/* shadow-ok: <reason> */` comment on the offending rule, which shows up in
+# the diff. Removing an app-side copy makes its line here stale, and a stale
+# line FAILS the gate — so this file can only ever shrink.
+#
+# Format: <repo-relative app stylesheet> :: <normalised selector>
+#
+# The whole of the block below is one defect: apps/frontend/src/styles.css
+# carries a private fork of rules that packages/chat-surface owns. Some of those
+# package sheets the web app does import (workspace.css, onboarding.css) — there
+# the two copies race on load order. composer.css it does NOT import, so the fork
+# is currently the only copy the web app sees, and the day someone adds the
+# import (matching apps/desktop/renderer/bootstrap.tsx) the fork starts silently
+# winning or losing. Fix by deleting the fork and importing the package sheet.
+
+# apps/frontend/src/styles.css  <-  packages/chat-surface/src/composer/composer.css  (121)
+apps/frontend/src/styles.css :: .atlas-composer-mic
+apps/frontend/src/styles.css :: .atlas-model-pill
+apps/frontend/src/styles.css :: .atlas-model-pill:focus-visible
+apps/frontend/src/styles.css :: .atlas-model-pill:hover:not([disabled])
+apps/frontend/src/styles.css :: .atlas-model-pill[aria-expanded="true"]
+apps/frontend/src/styles.css :: .atlas-model-pill[disabled]
+apps/frontend/src/styles.css :: .atlas-model-pill__addkey
+apps/frontend/src/styles.css :: .atlas-model-pill__addkey-back
+apps/frontend/src/styles.css :: .atlas-model-pill__addkey-back:hover
+apps/frontend/src/styles.css :: .atlas-model-pill__badge
+apps/frontend/src/styles.css :: .atlas-model-pill__custom
+apps/frontend/src/styles.css :: .atlas-model-pill__custom-add
+apps/frontend/src/styles.css :: .atlas-model-pill__custom-add[disabled]
+apps/frontend/src/styles.css :: .atlas-model-pill__custom-input
+apps/frontend/src/styles.css :: .atlas-model-pill__custom-label
+apps/frontend/src/styles.css :: .atlas-model-pill__custom-row
+apps/frontend/src/styles.css :: .atlas-model-pill__dot
+apps/frontend/src/styles.css :: .atlas-model-pill__item[disabled]
+apps/frontend/src/styles.css :: .atlas-model-pill__menu
+apps/frontend/src/styles.css :: .atlas-model-pill__name
+apps/frontend/src/styles.css :: .atlas-model-pill__root
+apps/frontend/src/styles.css :: .atlas-model-pill__sub
+apps/frontend/src/styles.css :: .aui-action
+apps/frontend/src/styles.css :: .aui-action:hover
+apps/frontend/src/styles.css :: .aui-attachment-pill
+apps/frontend/src/styles.css :: .aui-attachment-pill small
+apps/frontend/src/styles.css :: .aui-attachment-pill__remove
+apps/frontend/src/styles.css :: .aui-attachment-pill__remove:focus-visible
+apps/frontend/src/styles.css :: .aui-attachment-pill__remove:hover
+apps/frontend/src/styles.css :: .aui-composer
+apps/frontend/src/styles.css :: .aui-composer-action-wrapper
+apps/frontend/src/styles.css :: .aui-composer-action-wrapper__right
+apps/frontend/src/styles.css :: .aui-composer-add-attachment
+apps/frontend/src/styles.css :: .aui-composer-attachments
+apps/frontend/src/styles.css :: .aui-composer-attachments:empty
+apps/frontend/src/styles.css :: .aui-composer-send
+apps/frontend/src/styles.css :: .aui-composer-slash-cue
+apps/frontend/src/styles.css :: .aui-composer-slash-cue kbd
+apps/frontend/src/styles.css :: .aui-composer-tools
+apps/frontend/src/styles.css :: .aui-composer:focus-within
+apps/frontend/src/styles.css :: .aui-composer[data-focused="true"] .atlas-depth
+apps/frontend/src/styles.css :: .aui-composer[data-focused="true"] .atlas-depth__chip
+apps/frontend/src/styles.css :: .aui-composer[data-has-topbar="true"]
+apps/frontend/src/styles.css :: .aui-composer__dropzone
+apps/frontend/src/styles.css :: .aui-composer__dropzone[data-dragging="true"]
+apps/frontend/src/styles.css :: .aui-composer__input
+apps/frontend/src/styles.css :: .aui-composer__input :where(.aui-lexical-input)
+apps/frontend/src/styles.css :: .aui-composer__input :where(.aui-lexical-placeholder)
+apps/frontend/src/styles.css :: .aui-composer__input :where(p)
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="end"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="end"]:hover::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="start"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-align="start"]:hover::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-placement="bottom"]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip]
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip]::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-footer-icon-button[data-tooltip]:hover::after
+apps/frontend/src/styles.css :: .aui-ghost-button
+apps/frontend/src/styles.css :: .aui-ghost-button:hover
+apps/frontend/src/styles.css :: .aui-icon-button
+apps/frontend/src/styles.css :: .aui-icon-button:hover
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="end"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="end"]:hover::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="start"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-align="start"]:hover::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-placement="bottom"]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip]
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip]::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-icon-button[data-tooltip]:hover::after
+apps/frontend/src/styles.css :: .aui-model-selector
+apps/frontend/src/styles.css :: .aui-model-selector select
+apps/frontend/src/styles.css :: .aui-new-thread
+apps/frontend/src/styles.css :: .aui-plus-menu-root
+apps/frontend/src/styles.css :: .aui-send-button
+apps/frontend/src/styles.css :: .aui-send-button--stop
+apps/frontend/src/styles.css :: .aui-send-button:hover:not([disabled]):not(.aui-send-button--stop)
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="end"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="end"]:hover::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="start"]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-align="start"]:hover::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-placement="bottom"]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip]
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip]::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip]:focus-visible::after
+apps/frontend/src/styles.css :: .aui-send-button[data-tooltip]:hover::after
+apps/frontend/src/styles.css :: .aui-send-button[disabled]
+apps/frontend/src/styles.css :: .aui-send-button__stop-icon
+apps/frontend/src/styles.css :: .aui-skill-pill
+apps/frontend/src/styles.css :: .aui-skill-pill code
+apps/frontend/src/styles.css :: .aui-skill-pill span
+apps/frontend/src/styles.css :: .aui-skill-pill__remove
+apps/frontend/src/styles.css :: .aui-skill-pill__remove:focus-visible
+apps/frontend/src/styles.css :: .aui-skill-pill__remove:hover
+apps/frontend/src/styles.css :: .aui-thread-list-item__trigger
+apps/frontend/src/styles.css :: .fr-kf
+apps/frontend/src/styles.css :: .fr-kf__actions
+apps/frontend/src/styles.css :: .fr-kf__dot
+apps/frontend/src/styles.css :: .fr-kf__error
+apps/frontend/src/styles.css :: .fr-kf__input
+apps/frontend/src/styles.css :: .fr-kf__note
+apps/frontend/src/styles.css :: .fr-kf__opt
+apps/frontend/src/styles.css :: .fr-kf__prov
+apps/frontend/src/styles.css :: .gbtn
+apps/frontend/src/styles.css :: .gbtn--pri
+apps/frontend/src/styles.css :: .gbtn--pri:hover:not(:disabled)
+apps/frontend/src/styles.css :: .gbtn:disabled
+apps/frontend/src/styles.css :: .gbtn:hover:not(:disabled)
+
+# apps/frontend/src/styles.css  <-  packages/chat-surface/src/workspace/workspace.css  (15)
+apps/frontend/src/styles.css :: .atlas-composer-connectors
+apps/frontend/src/styles.css :: .atlas-composer-connectors:hover:not([disabled])
+apps/frontend/src/styles.css :: .atlas-composer-connectors__count
+apps/frontend/src/styles.css :: .atlas-composer-connectors__icon
+apps/frontend/src/styles.css :: .atlas-source-row
+apps/frontend/src/styles.css :: .atlas-workspace-tab
+apps/frontend/src/styles.css :: .atlas-workspace-tab--empty
+apps/frontend/src/styles.css :: .atlas-workspace-tabs
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__badge
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab--active
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab--active .atlas-workspace-tabs__badge
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab:disabled
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab:focus-visible
+apps/frontend/src/styles.css :: .atlas-workspace-tabs__tab:hover:not(:disabled)
