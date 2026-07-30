@@ -28,6 +28,8 @@ const TEXT: Record<number, string> = {
 interface Store {
   readonly authors: Record<number, ArtifactAuthor>;
   readonly sizes: Record<number, number>;
+  /** Revision content — the shared fixture, with per-test overrides applied. */
+  readonly texts: Record<number, string>;
   head: number;
 }
 
@@ -38,7 +40,7 @@ function makeRevision(store: Store, number: number): ArtifactRevision {
     ...(number > 1 ? { parent_revision: number - 1 } : {}),
     content_ref: ArtifactContentRefCodec.format(ARTIFACT_ID, number),
     content_digest: String(number % 10).repeat(64),
-    byte_size: store.sizes[number] ?? TEXT[number]?.length ?? 0,
+    byte_size: store.sizes[number] ?? store.texts[number]?.length ?? 0,
     author: store.authors[number] ?? "user",
     source_ref: "message://source",
     created_at: "2026-01-01T00:00:00Z",
@@ -97,7 +99,7 @@ function makeTransport(store: Store): {
       openExternal: false,
     }),
     getArtifactContent: vi.fn(async ({ revision: number }) => {
-      const text = TEXT[number] ?? "";
+      const text = store.texts[number] ?? "";
       return {
         body: new ReadableStream<Uint8Array>({
           start(controller) {
@@ -119,8 +121,9 @@ function makeTransport(store: Store): {
 function store(
   authors: Record<number, ArtifactAuthor>,
   sizes: Record<number, number> = {},
+  texts: Record<number, string> = {},
 ): Store {
-  return { authors, sizes, head: 1 };
+  return { authors, sizes, texts: { ...TEXT, ...texts }, head: 1 };
 }
 
 /** Mounts at r1, then lands r2 the way the host does — a new tab uri. */
@@ -348,15 +351,16 @@ describe("ArtifactSurface — agent revision review (PRD-03)", () => {
     expect(screen.queryByTestId("artifact-revision-review")).toBeNull();
   });
 
-  it("raises no review when the head skips past the revision on screen — the multi-revision gap", async () => {
-    // KNOWN GAP, pinned rather than hidden. PRD-03 D1 scopes the review to a
-    // revision "whose parent_revision is the revision currently on screen", so
-    // two agent revisions landing in one turn (r1 on screen, head jumps to r3)
-    // still swap the content silently — the very thing D1 exists to stop.
-    // Widening the rule to "any agent revision newer than the one on screen"
-    // changes the PRD's stated contract, so it is recorded here as behaviour
-    // rather than decided in a test.
-    const state = store({ 1: "user", 2: "model", 3: "model" });
+  it("raises the r1→r3 review when a turn writes two revisions and the head skips past the one on screen", async () => {
+    // The multi-revision jump. `parent_revision` (2) is not the revision on
+    // screen (1), so keying the rule on the direct child let this land
+    // silently — the defect the review exists to prevent. The base is the
+    // revision that WAS on screen, at whatever distance.
+    const state = store(
+      { 1: "user", 2: "model", 3: "model" },
+      {},
+      { 3: "title\njumped line\nshared\n" },
+    );
     const { client } = makeTransport(state);
     const view = render(
       <ArtifactSurface
@@ -378,8 +382,22 @@ describe("ArtifactSurface — agent revision review (PRD-03)", () => {
       />,
     );
 
-    await waitFor(() => expect(shownRevision()).toBe("r3"));
-    expect(screen.queryByTestId("artifact-revision-review")).toBeNull();
+    const review = await screen.findByTestId("artifact-revision-review");
+    expect(review).toHaveTextContent(
+      "The model revised this artifact: r1 → r3",
+    );
+    // Diffed against r1 — what the reader actually had — not against r2, which
+    // they never saw.
+    const details = await screen.findByLabelText("Revision change details");
+    expect(
+      details.querySelector("[data-testid='diff-delete']"),
+    ).toHaveTextContent("old");
+    expect(
+      details.querySelector("[data-testid='diff-insert']"),
+    ).toHaveTextContent("jumped");
+    expect(
+      screen.getByRole("button", { name: "Revert to r1" }),
+    ).toBeInTheDocument();
   });
 
   it("leaves the existing too_large restore path in place for an oversized parent", async () => {

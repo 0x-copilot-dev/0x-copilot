@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
+from agent_runtime.api.artifact_ledger_publisher import (
+    ArtifactOutboxProjectionDrain,
+    RuntimeArtifactLedgerPublisher,
+)
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.ledger_seal import LedgerAmendment
+from agent_runtime.artifacts.contracts import ArtifactLedgerEvent, ArtifactScope
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
@@ -146,6 +153,122 @@ def test_projector_rejects_uncontracted_payload_fields() -> None:
     )
 
     assert projected == {}
+
+
+class CrossLanePublishMixin:
+    """Build the three lanes that publish one artifact fact, sharing an event id.
+
+    Inline publication (causal, mid-run), the pre-seal outbox drain (also
+    causal) and the worker recovery lane (a ``late_causal_recovery`` amendment)
+    all append the same ``artevt_`` event, so any of them can be the redelivery.
+    """
+
+    @staticmethod
+    def _seeded_store() -> tuple[InMemoryRuntimeApiStore, RuntimeEventProducer]:
+        store = InMemoryRuntimeApiStore()
+        store.runs[RUN] = _run()
+        return store, RuntimeEventProducer(persistence=store, event_store=store)
+
+    @staticmethod
+    def _ledger_event() -> ArtifactLedgerEvent:
+        return ArtifactLedgerEvent(
+            event_id=EVENT_ID,
+            scope=ArtifactScope(
+                org_id=ORG,
+                user_id=USER,
+                run_id=RUN,
+                conversation_id=CONVERSATION,
+                trace_id=TRACE,
+            ),
+            event_type=LedgerEventType.ARTIFACT_CREATED,
+            payload=_payload(),
+            created_at=CREATED_AT,
+        )
+
+    @staticmethod
+    async def _publish_inline(
+        store: InMemoryRuntimeApiStore,
+        producer: RuntimeEventProducer,
+        event: ArtifactLedgerEvent,
+    ) -> None:
+        await RuntimeArtifactLedgerPublisher(
+            persistence=store, event_producer=producer
+        ).publish(event)
+
+    @staticmethod
+    async def _publish_via_recovery_lane(
+        store: InMemoryRuntimeApiStore,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        await RuntimeArtifactEventHandler(persistence=store, event_store=store).handle(
+            command
+        )
+
+    @staticmethod
+    async def _drain_before_seal(
+        store: InMemoryRuntimeApiStore,
+        producer: RuntimeEventProducer,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        class _PendingOutbox:
+            async def pending_artifact_events(self):
+                return (command,)
+
+        run = await store.get_run(org_id=ORG, run_id=RUN)
+        assert run is not None
+        await ArtifactOutboxProjectionDrain(
+            canonical_outbox=_PendingOutbox(), event_producer=producer
+        ).drain_for_run(run=run)
+
+
+class TestCrossLaneRedeliveryIsIdempotent(CrossLanePublishMixin):
+    """The live crash: a redelivery of an already-stored artifact event.
+
+    Observed on a real run as ``RuntimeEventIdempotencyConflict`` at
+    ``append_api_event``, retried forever on the same two ``artevt_`` command
+    ids. The event id is a digest of ``{run, artifact, revision, type,
+    ordinal}`` and so is stable, but the recovery lane stamps
+    ``ledger_amendment_reason`` into the body the inline lane had already
+    stored, and the store compared metadata for equality.
+    """
+
+    async def test_recovery_command_after_inline_publish_is_a_replay(self) -> None:
+        store, producer = self._seeded_store()
+        await self._publish_inline(store, producer, self._ledger_event())
+
+        await self._publish_via_recovery_lane(store, _command())
+
+        events = await store.list_events_after(org_id=ORG, run_id=RUN, after_sequence=0)
+        assert len(events) == 1
+        assert events[0].event_id == EVENT_ID
+        assert events[0].payload == _payload()
+        # First lane to land the fact keeps authorship of the annotation: this
+        # event *did* arrive inside the causal prefix, so claiming otherwise
+        # would falsify the ledger.
+        assert LedgerAmendment.Keys.REASON not in events[0].metadata
+
+    async def test_recovery_command_after_pre_seal_drain_is_a_replay(self) -> None:
+        store, producer = self._seeded_store()
+        await self._drain_before_seal(store, producer, _command())
+
+        await self._publish_via_recovery_lane(store, _command())
+
+        assert len(store.events_by_run[RUN]) == 1
+
+    async def test_inline_publish_after_recovery_lane_is_a_replay(self) -> None:
+        store, producer = self._seeded_store()
+        await self._publish_via_recovery_lane(store, _command())
+
+        # The mirror direction, which the drain reaches on the pre-seal path:
+        # an unannotated append meeting an annotated stored copy.
+        await self._publish_inline(store, producer, self._ledger_event())
+        await self._drain_before_seal(store, producer, _command())
+
+        events = await store.list_events_after(org_id=ORG, run_id=RUN, after_sequence=0)
+        assert len(events) == 1
+        assert events[0].metadata[LedgerAmendment.Keys.REASON] == (
+            "late_causal_recovery"
+        )
 
 
 async def test_worker_dispatches_existing_outbox_command_to_artifact_handler() -> None:

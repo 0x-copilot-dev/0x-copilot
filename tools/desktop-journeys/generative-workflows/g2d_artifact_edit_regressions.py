@@ -157,6 +157,14 @@ def main() -> int:
                 # --- BUG 2: ask for another row; revise, do not re-publish ---
                 before = _dataset_artifact_ids(session, conversation_id)
                 assert artifact.artifact_id in before
+                # Back to Chat first: `_open_artifact_from_sources` left the rail
+                # on Sources, where the composer is not mounted at all, so the
+                # fill below fails on a missing selector rather than on anything
+                # about the product.
+                session.click('[role=tab]:has-text("Chat")')
+                assert session.wait_for("[data-testid=composer-textarea]"), (
+                    "returning to the Chat tab did not mount the composer"
+                )
                 session.fill("[data-testid=composer-textarea]", ADD_ROW_PROMPT)
                 session.press("[data-testid=composer-textarea]", "Enter")
                 added_run = _wait_for_new_run(session, conversation_id, 1)

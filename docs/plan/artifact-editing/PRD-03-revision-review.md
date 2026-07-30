@@ -61,15 +61,32 @@ Already built, all of it:
 
 ### D1. Diff surfaces automatically on a model revision
 
-When a revision arrives whose author is `MODEL`/`SUBAGENT` and whose
-`parent_revision` is the revision currently on screen, the surface opens the
-r(n-1)→r(n) comparison inline rather than silently swapping content. Two actions:
+When a revision arrives whose author is `MODEL`/`SUBAGENT` and which is **newer
+than the revision currently on screen**, the surface opens the comparison inline
+rather than silently swapping content. The comparison base is **the revision that
+was on screen** — normally the landed revision's parent, but not always (below).
+Two actions:
 
 - **Keep** — dismiss; the new revision stays current.
-- **Revert** — `restore(parent_revision)`, which appends a new revision equal to
-  the parent. History is never rewritten.
+- **Revert** — `restore(baseRevision)`, which appends a new revision equal to the
+  revision that was being read. History is never rewritten.
 
-A user-authored revision does not raise the diff — the user just made it.
+Any newer agent revision qualifies, not only the direct child. A turn that writes
+r2 and r3 moves the tab r1→r3, so `parent_revision` (2) is not the revision on
+screen (1); scoping the rule to the direct child let exactly that case swap
+content silently, which is the defect this feature exists to prevent. The rule is
+therefore stated on distance-independent terms: newer than what the reader had.
+
+Three guards bound it, and none of them moved:
+
+- **Reader navigation is not an arrival.** Selecting a revision from history
+  raises nothing — the reader asked for it. First paint is likewise not an
+  arrival.
+- **The landed revision must be the head.** The comparison is always
+  base→head, so a landed revision a newer head has already superseded has no
+  honest reading and raises nothing.
+- **A user-authored revision does not raise the diff** — the user just made it.
+  That includes the revert appended by **Revert**.
 
 ### D2. Execution mode is a recorded fact
 
@@ -91,32 +108,73 @@ constant, not a stub.
 `restore` already enforces `revisionRestoreLimit` and returns `too_large` for
 oversized revisions; that path is reused unchanged, including its existing UI.
 
+### D4. A dataset revision diffs cells, not source text
+
+A word-level diff of CSV source is close to unreadable, and the artifact that
+produced the original report was a CSV, so this is the common path rather than an
+edge case. A revised dataset therefore shows **which cells moved** — changed
+cells, added rows, removed rows — each row labelled with its own line number.
+
+- It reuses the dataset renderer's existing parse (`parseLosslessDelimited` →
+  headers + rows, JSON object arrays included). No second CSV reader exists: the
+  diff reads the same grid the table below it renders from.
+- Rows align by trimming the shared leading and trailing rows — the same trim the
+  text comparison applies to lines — and the remaining window pairs positionally.
+- It **falls back to the existing word diff** when either side does not parse as a
+  grid, either side was truncated by the preview budget, or the change moved no
+  cell value (quoting, delimiters and whitespace live in the bytes, and only the
+  text diff can show them). Over the per-kind byte bound nothing is compared at
+  all, which is the pre-existing "cannot be shown as bounded UTF-8 text" path.
+
+**Where it renders, and why it is not in the review panel.** The panel lives in
+`chat-surface`; the parser lives in `surface-renderers`, and `surface-renderers →
+chat-surface` is the only legal direction between the two. Parsing a grid in the
+panel would either invert that dependency or fork the CSV reader. So the change
+travels the other way instead: `ArtifactSurface` attaches a `datasetRevisionChange`
+payload (base revision, base source, and the bounded text pair for the fallback) to
+the render state — exactly how `datasetEditor` already reaches the same renderer —
+and the dataset surface renders the cell table above its grid. The review panel
+keeps the announcement and the two actions, and says where the change is shown
+rather than putting a second, poorer reading of it on screen.
+
 ## Implementation plan
 
 1. `ArtifactSurface.tsx` — detect model-authored revision arrival; open comparison
-   against `parent_revision`; render keep/revert actions.
+   against the revision that was on screen; render keep/revert actions.
 2. Reuse `compareToCurrent` + `restore`; no new transport calls.
 3. Backend: add the mode field to the artifact operation audit record; derive
    server-side; assert `staged` in tests.
-4. Surface the diff in the dataset renderer path too, so a CSV revise shows changed
-   cells rather than only a text diff, if the existing dataset model supports it
-   without new machinery; otherwise fall back to the text diff and record the gap.
+4. Dataset path (D4): `ArtifactSurface` attaches the change to the dataset render
+   state; `DatasetRevisionDiff` (in `surface-renderers`, next to the parser) diffs
+   the two grids and renders changed cells above the table, falling back to the
+   word diff for content that is not a grid on both sides. The review panel drops
+   its text diff for that path via `changeShownInSurface`.
 
 ## Test plan
 
-- Model revision arrives → diff shown against `parent_revision`, content not
-  silently swapped.
+- Model revision arrives → diff shown against the revision that was on screen,
+  content not silently swapped.
+- Two revisions land in one turn (r1 on screen, head jumps to r3) → review raised
+  with r1 as the base, `Revert to r1`.
+- Reader navigates to a model revision themselves, or opens an artifact already
+  sitting at one → no diff prompt.
+- Landed revision already superseded by a newer head → no diff prompt.
 - **Keep** → new revision remains current, no extra revision appended.
-- **Revert** → a further revision is appended equal to the parent; history intact
+- **Revert** → a further revision is appended equal to the base; history intact
   (r1, r2, r3 all retrievable).
 - User-authored revision → no diff prompt.
 - Oversized revision → existing `too_large` path, unchanged.
+- Dataset revision → a changed cell, an added row and a removed row each read as
+  such at their own row number; not-a-grid and no-cell-value-moved fall back to
+  the word diff; the review panel shows no second diff of its own.
 - Audit: every artifact operation carries a server-derived mode; `staged` today.
 
 ## Definition of done
 
-- [ ] A model revision presents a diff with keep/revert rather than a silent swap.
+- [ ] A model revision presents a diff with keep/revert rather than a silent swap,
+      including when the head skips past the revision on screen.
 - [ ] Revert appends rather than rewrites; all revisions remain retrievable.
+- [ ] A revised dataset presents changed cells; the word diff is the fallback.
 - [ ] Execution mode is recorded and auditable on artifact operations.
 - [ ] No pre-commit gate was added to the artifact write path.
 - [ ] `chat-surface` / `surface-renderers` / `ai-backend` suites green.
