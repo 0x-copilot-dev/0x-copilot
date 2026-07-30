@@ -1,0 +1,105 @@
+/* Citation chips — the inline `[[N]]` / `[c<id>]` markers in assistant prose.
+ *
+ * Owned by the PACKAGE, not by a host. These rules used to live only in
+ * `apps/frontend/src/styles.css`, which the desktop renderer never imports, so
+ * a chip on desktop would render as an unstyled bare number. Both hosts import
+ * this file (web `app/App.tsx`, desktop `renderer/bootstrap.tsx`) — same
+ * stranded-CSS fix as composer.css / markdown.css / approvals.css.
+ *
+ * SHAPE: a true superscript, deliberately REVERSING PR 8.0.1's baseline pill.
+ * The pill (999px radius, tinted fill, accent border, 11px) put a button-sized
+ * object mid-sentence; at citation density that shreds the prose line. A
+ * citation is an aside — it should sit above the baseline, small and quiet, and
+ * be findable when you look for it rather than shouting while you read.
+ *
+ * The lift is `position: relative; top` rather than `vertical-align: super`,
+ * because `super` inflates the line box and makes cited paragraphs taller than
+ * uncited ones. Sizing is in `em` so the chip tracks whatever prose it sits in
+ * (chat 13px, surfaces, code captions) instead of pinning one px value.
+ */
+
+.citation-chip {
+  color: var(--color-accent);
+  cursor: pointer;
+  display: inline;
+  font-family: var(--font-sans);
+  font-size: 0.68em;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-semibold);
+  /* Lift without disturbing line-height (see the note above). */
+  position: relative;
+  top: -0.42em;
+  /* Separate consecutive chips (`[[1]][[2]]`) without spacing them off the
+   * word they annotate — hence asymmetric margins. */
+  margin-inline: 0.06em 0.1em;
+  text-decoration: none;
+  vertical-align: baseline;
+  transition: color 80ms;
+}
+
+/* The chip is emitted as an <a> whose only child is the ordinal; guard against
+ * a nested anchor inheriting link chrome. */
+.citation-chip a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Hover/focus is an underline rather than a fill: with no pill to tint, an
+ * underline is the affordance that reads at 0.68em without adding weight. */
+.citation-chip:hover,
+.citation-chip:focus-visible {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  outline: none;
+}
+
+.citation-chip:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Unresolved (`?`) — the model cited an ordinal with no binding. Muted and
+ * `help`-cursored so it reads as "we could not resolve this", not as a link. */
+.citation-chip--unresolved {
+  color: var(--color-text-subtle);
+  cursor: help;
+  font-weight: var(--font-weight-medium);
+}
+
+.citation-chip--unresolved:hover,
+.citation-chip--unresolved:focus-visible {
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+/* PR 3.7.3 — reverse handshake: clicking a Sources row scrolls the chat to the
+ * first message citing that source and pulses the matching chip. With the pill
+ * gone there is no box to ring, so the pulse is a background flash sized to the
+ * glyph via padding + a matching negative margin (keeps layout still). */
+.citation-chip--pulse {
+  animation: citation-pulse 1.5s ease-out;
+  border-radius: 3px;
+  margin-inline: calc(0.06em - 2px) calc(0.1em - 2px);
+  padding-inline: 2px;
+}
+
+@keyframes citation-pulse {
+  0%,
+  100% {
+    background: transparent;
+  }
+  20%,
+  60% {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .citation-chip--pulse {
+    animation: none;
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+}

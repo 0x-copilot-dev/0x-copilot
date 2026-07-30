@@ -176,7 +176,11 @@ describe("RunDestination source-open", () => {
     expect(surfaceTabs()).toHaveLength(0);
 
     fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
-    fireEvent.click(await screen.findByTestId("sources-v2-open-artifact"));
+    await screen.findAllByTestId("sources-v2-row");
+    const openable = screen
+      .getAllByTestId("sources-v2-row")
+      .find((r) => r.getAttribute("data-openable") === "true");
+    fireEvent.click(within(openable as HTMLElement).getByRole("button"));
 
     await waitFor(() => {
       expect(transport.requests).toContainEqual(

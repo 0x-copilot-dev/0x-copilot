@@ -37,8 +37,11 @@ _USD_PER_TOKEN_TO_PER_MILLION: Final[Decimal] = Decimal(1_000_000)
 class CatalogModelRecord(RuntimeContract):
     """Normalized, trusted metadata for one catalog model.
 
-    No ``release_date`` — LiteLLM does not carry one, and the catalog no longer
-    orders or curates on release date (see :class:`ModelEnablementResolver`).
+    ``release_date`` / ``family`` are populated only by sources that carry them
+    (:class:`~agent_runtime.api.models_dev_source.ModelsDevModelSource`).
+    LiteLLM's table has neither — it ships ``deprecation_date`` and nothing else
+    temporal — so records from :class:`LitellmModelSource` leave them ``None``
+    and consumers must treat a missing release date as "unknown", never "old".
     """
 
     provider: str
@@ -51,6 +54,13 @@ class CatalogModelRecord(RuntimeContract):
     supports_reasoning: bool = False
     supports_tools: bool = False
     supports_attachments: bool = False
+    # ISO ``YYYY-MM-DD``. Drives newest-first ordering in Settings -> Models and
+    # the "latest per family" step of the default-set selection.
+    release_date: str | None = None
+    # Vendor product line (``claude-opus``, ``gpt-nano``, ``gemini-flash``).
+    # This is the size axis: one representative per family, ranked by cost,
+    # yields the small/medium/big ladder. See :class:`ModelSizeTierResolver`.
+    family: str | None = None
 
 
 class ModelDisplayName:

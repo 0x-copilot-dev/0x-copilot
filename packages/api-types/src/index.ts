@@ -2065,17 +2065,32 @@ export interface ModelCatalogModel {
   supports_reasoning?: boolean;
   reasoning?: ModelReasoningHints | null;
   /**
-   * LiteLLM-sourced metadata (optional additions — entries without a LiteLLM
-   * row or supplement, e.g. the runtime default model placeholder, omit them).
-   * No `release_date`: LiteLLM does not carry one and the catalog no longer
-   * orders or curates by release date.
+   * Source-derived metadata (optional additions — entries whose source carries
+   * no supplement, e.g. the runtime default model placeholder or any record
+   * served by the offline LiteLLM fallback, omit them).
    */
   context_window?: number | null;
   max_output_tokens?: number | null;
   input_cost_per_mtok?: number | null;
   output_cost_per_mtok?: number | null;
   supports_tools?: boolean | null;
+  /**
+   * ISO `YYYY-MM-DD` release date. Settings → Models sorts newest-first on it.
+   * Absent means UNKNOWN (the offline LiteLLM fallback publishes no release
+   * date at all) and must sort last rather than as very old.
+   */
+  release_date?: string | null;
+  /** Vendor product line (`claude-opus`, `gpt-nano`) — the axis behind `tier`. */
+  family?: string | null;
+  /**
+   * Size rung within the provider's general-purpose ladder. `null`/absent for
+   * models off that ladder — specialty and max-reasoning lines.
+   */
+  tier?: ModelTier | null;
 }
+
+/** Size rung of a model within its provider's general-purpose lineup. */
+export type ModelTier = "small" | "medium" | "big";
 
 export interface ModelCatalogResponse {
   default_model_id: string;

@@ -6,12 +6,12 @@
 // tokens into the DOM. Artifact opening is delegated to the cockpit's one
 // owner-routed facade call, keyed solely by source_id.
 
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { Caption } from "@0x-copilot/design-system";
 import type { SourcesProjectionV2 } from "@0x-copilot/api-types";
 
-import { Row, RowList } from "../destinations/_shared";
+import { CompactSourceList, type CompactSourceItem } from "./CompactSourceList";
 import {
   presentSourcesV2,
   type SourceRowPresentationV2,
@@ -23,6 +23,24 @@ export interface SourcesV2TabProps {
   readonly openingSourceId?: string | null;
   /** A host-controlled generic outcome line; never render server internals. */
   readonly openMessage?: string | null;
+  /**
+   * Cited documents, injected as a node (the rail passes the legacy citation
+   * `SourcesTab`).
+   *
+   * WHY A SLOT: a citation row carries a real title, URL, and snippet, and
+   * `SourceFactV2` deliberately carries none of those — it is opaque provenance
+   * ("never authorization", no refs/paths/bodies in the DOM). Widening that
+   * contract to smuggle titles through would defeat its purpose, so the two
+   * kinds of provenance are COMPOSED here instead: safe facts stay facts, and
+   * citation rows arrive already-rendered by the component that owns them.
+   * This tab therefore learns nothing about citation shapes.
+   *
+   * This exists because the v2 rail is the one actually mounted
+   * (`isSurfacesV2Enabled()` defaults true) while `projectSourcesV2` folds only
+   * ledger events — so a web search registered its sources correctly and the
+   * user still saw an empty Sources panel.
+   */
+  readonly citationsSlot?: ReactNode;
 }
 
 export function SourcesV2Tab({
@@ -30,10 +48,14 @@ export function SourcesV2Tab({
   onOpenSource,
   openingSourceId = null,
   openMessage = null,
+  citationsSlot,
 }: SourcesV2TabProps): ReactElement {
   const presentation = presentSourcesV2(sources);
 
-  if (presentation.total === 0) {
+  // Only the ledger fold can be empty while citations exist (a web search
+  // registers sources but emits no `read.executed`), so the empty state must
+  // consider BOTH — otherwise the cited-documents section is unreachable.
+  if (presentation.total === 0 && citationsSlot === undefined) {
     return (
       <div
         className="atlas-workspace-tab atlas-sources-panel atlas-sources-panel--empty"
@@ -55,6 +77,19 @@ export function SourcesV2Tab({
         Everything the agent read or fetched this run — the receipts behind each
         surface.
       </p>
+      {/* Cited documents lead: they are what the reader clicked a `[[N]]` chip
+          to reach, whereas the ledger facts below are the provenance trail. */}
+      {citationsSlot !== undefined ? (
+        <section
+          aria-label="Cited documents"
+          data-testid="sources-v2-citations"
+        >
+          {/* No group header here: the compact card draws its own eyebrow
+              (`CITED · N`), and stacking a second "Cited" label above it read as
+              a duplicated heading. Same for the fact groups below. */}
+          {citationsSlot}
+        </section>
+      ) : null}
       {openMessage !== null ? (
         <Caption
           as="p"
@@ -68,24 +103,19 @@ export function SourcesV2Tab({
       {presentation.groups.map((group) => (
         <section
           key={group.key}
-          className="atlas-sources-panel__group"
           aria-label={`${group.label} sources`}
           data-testid="sources-v2-group"
         >
-          <div className="ui-mono-caps atlas-sources-panel__group-header">
-            {group.label} · {group.rows.length}
-          </div>
-          <RowList
-            items={group.rows}
-            keyFor={(row) => row.id}
-            ariaLabel={`${group.label} sources`}
-            data-testid="sources-v2-list"
-            renderRow={(row) => (
-              <SourcePresentationRow
-                row={row}
-                opening={openingSourceId === row.id}
-                onOpenSource={onOpenSource}
-              />
+          <CompactSourceList
+            label={group.label}
+            testId="sources-v2-list"
+            rowTestId="sources-v2-row"
+            items={group.rows.map((row) =>
+              toCompactItem({
+                row,
+                opening: openingSourceId === row.id,
+                onOpenSource,
+              }),
             )}
           />
         </section>
@@ -94,7 +124,8 @@ export function SourcesV2Tab({
   );
 }
 
-function SourcePresentationRow({
+/** Normalise one safe ledger fact into a row of the shared compact list. */
+function toCompactItem({
   row,
   opening,
   onOpenSource,
@@ -102,47 +133,20 @@ function SourcePresentationRow({
   readonly row: SourceRowPresentationV2;
   readonly opening: boolean;
   readonly onOpenSource?: (sourceId: string) => void;
-}): ReactElement {
+}): CompactSourceItem {
   const canOpen = row.openable && onOpenSource !== undefined && !opening;
-  return (
-    <Row
-      data-testid="sources-v2-row"
-      className="atlas-sources-panel__row"
-      density="compact"
-      icon={row.iconText}
-      iconSize={30}
-      iconVariant="identity"
-      title={
-        <span className="atlas-sources-panel__row-title">{row.title}</span>
-      }
-      sub={opening ? "Opening artifact…" : row.metadata}
-      subFont="mono"
-      trailing={row.openable ? <OpenSourceIcon /> : undefined}
-      onActivate={
-        canOpen && onOpenSource !== undefined
-          ? () => onOpenSource(row.id)
-          : undefined
-      }
-      ariaLabel={canOpen ? `Open ${row.title}` : undefined}
-    />
-  );
-}
-
-function OpenSourceIcon(): ReactElement {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      data-testid="sources-v2-open-artifact"
-    >
-      <path d="M14 4h6v6" />
-      <path d="M20 4l-9 9" />
-      <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
-    </svg>
-  );
+  return {
+    id: row.id,
+    ordinal: null,
+    title: row.title,
+    subtitle: opening ? "Opening artifact…" : row.metadata,
+    // A fact carries no URL by design (`SourceFactV2` is opaque provenance —
+    // "never authorization", nothing dereferenceable in the DOM), so it never
+    // renders as a link. Opening is owner-routed through `onOpenSource`, keyed
+    // solely by source_id. Do not "complete" the row by widening that contract.
+    href: null,
+    ...(canOpen && onOpenSource !== undefined
+      ? { onActivate: () => onOpenSource(row.id) }
+      : {}),
+  };
 }

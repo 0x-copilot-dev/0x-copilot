@@ -107,10 +107,11 @@ export {
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
 export { projectCitations, type CitationProjection } from "./projectCitations";
 
-// === Phase 3 (PR-3.11) run empty/multi-run ===
+// === Phase 3 (PR-3.11) run empty state ===
+// `RunMultiSelect` used to ship alongside this: the multi-run selector rail.
+// It was removed outright (not just unmounted) — the cockpit binds one run.
 export {
   RunEmptyState,
   type RunEmptyStateProps,
   type StartRunError,
 } from "./RunEmptyState";
-export { RunMultiSelect, type RunMultiSelectProps } from "./RunMultiSelect";

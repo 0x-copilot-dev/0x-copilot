@@ -42,6 +42,7 @@
 
 import {
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -73,7 +74,16 @@ import {
   type SubagentSnapshotMap,
   type WorkspaceTabsItem,
 } from "../../workspace";
-import { isRunningStatus } from "../../workspace/workspaceHelpers";
+import {
+  isRunningStatus,
+  sourcesByCitationCount,
+} from "../../workspace/workspaceHelpers";
+import {
+  CompactSourceList,
+  displayUrl,
+  safeHttpUrl,
+  type CompactSourceItem,
+} from "../../workspace/CompactSourceList";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
@@ -198,6 +208,18 @@ export interface RunWorkspaceRailProps {
   readonly focusApprovalsSignal?: number;
 
   /**
+   * The same one-directional nonce contract as `focusApprovalsSignal`, for the
+   * Sources tab. Bumped when the reader clicks an inline `[[N]]` citation chip
+   * in the transcript — a citation's whole job is to be followed, so the click
+   * reveals the source it points at instead of doing nothing. Every increase
+   * selects Sources (Studio tab / Focus Run-details panel) and, in Focus,
+   * expands the panel if the reader had collapsed it — selecting a tab inside a
+   * collapsed panel would look like the click was swallowed. The initial value
+   * is ignored, so mounting with it set never force-selects.
+   */
+  readonly focusSourcesSignal?: number;
+
+  /**
    * PR-3.10 SEAM (do not build here): inline approve/reject resolution +
    * Focus-mode `.conf-card` confirmation cards. Threaded through so PR-3.10 can
    * wire them without changing this signature; unused in PR-3.6.
@@ -257,6 +279,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     pendingV2,
     pendingWorkV21,
     focusApprovalsSignal,
+    focusSourcesSignal,
     panelCollapsed,
     onPanelCollapsedChange,
     focusPlan,
@@ -290,6 +313,39 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     }
     setActiveTab("approvals");
   }, [focusApprovalsSignal]);
+
+  // Clicking an inline `[[N]]` chip commands the Sources tab through the same
+  // nonce contract — but this one only reacts to a genuine INCREASE, compared
+  // against a ref seeded with the mount value.
+  //
+  // The `focusApprovalsSignal` effect above documents that same "initial value
+  // is ignored" rule but does not implement it: a bare `> 0` guard also fires on
+  // mount. That is harmless there only because its host always starts the
+  // counter at 0. Rather than inherit a latent bug, this effect enforces the
+  // contract, so a rail mounted with a non-zero nonce (a remount mid-session)
+  // does not silently yank the reader onto Sources.
+  //
+  // `setCollapsed` is deliberately absent from the dep array: it is a plain
+  // closure rebuilt every render, so listing it would re-run this effect
+  // constantly and fight the reader's own tab clicks.
+  const lastSourcesSignalRef = useRef(focusSourcesSignal ?? 0);
+  useEffect(() => {
+    const next = focusSourcesSignal ?? 0;
+    const previous = lastSourcesSignalRef.current;
+    lastSourcesSignalRef.current = next;
+    if (next <= previous) {
+      return;
+    }
+    setActiveTab("sources");
+    // Focus-only: a tab selection inside a collapsed Run-details panel is
+    // invisible, which reads as a dead chip.
+    if (mode !== "studio") {
+      setCollapsed(false);
+    }
+    // Deps are the nonce ALONE, deliberately — `mode` and `setCollapsed` are
+    // read but must not retrigger. (No exhaustive-deps disable: that rule is not
+    // configured in this package, and the directive itself would error.)
+  }, [focusSourcesSignal]);
 
   const isStudio = mode === "studio";
   const isFocus = !isStudio;
@@ -370,13 +426,39 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // Panel bodies — the hoisted WorkspacePane bodies, computed once and reused
   // by BOTH the Studio tabset and the Focus Run-details panel (recomposition,
   // not a fork — FR-3.11). Each owns its own empty copy.
+  // Cited documents, rendered by the component that owns citation rows and
+  // injected into whichever Sources body is active. Built here (not inside the
+  // v2 tab) because the rail is the only place holding BOTH provenance sources.
+  //
+  // `undefined` when there is nothing cited, so the v2 tab omits the section
+  // entirely rather than showing an empty "Cited" header — and so its own
+  // no-sources empty state still works.
+  //
+  // Rendered with the SAME compact card that used to sit under each web_search
+  // tool call in the transcript, not the tall `.atlas-source-row` cards: at four
+  // results those ate the whole panel. One line per source — glyph, title, URL,
+  // ordinal.
+  const citationsSlot: ReactNode =
+    sources.size > 0 ? (
+      <CompactSourceList
+        label="Cited"
+        testId="sources-v2-citations-list"
+        items={toCompactCitations(sources)}
+      />
+    ) : undefined;
+
   const sourcesBody: ReactNode =
     sourcesV2 !== undefined ? (
+      // The v2 fold covers ledger events (`read.executed`, `surface.created`,
+      // effects, artifacts) and has no notion of a citation, so on its own it
+      // renders an empty panel for a run whose only sources came from a citing
+      // tool like web_search. Compose the two rather than widening SourceFactV2.
       <SourcesV2Tab
         sources={sourcesV2.projection}
         onOpenSource={sourcesV2.onOpenSource}
         openingSourceId={sourcesV2.openingSourceId}
         openMessage={sourcesV2.openMessage}
+        citationsSlot={citationsSlot}
       />
     ) : ledgerSources !== null ? (
       <LedgerSourcesTab ledgerSources={ledgerSources} />
@@ -1033,3 +1115,24 @@ const approvalsBadgeStyle: CSSProperties = {
   color: "var(--color-accent, #5fb2ec)",
   fontWeight: 600,
 };
+
+/**
+ * Project the citation registry into rows of the shared compact source list.
+ *
+ * Ordinals come from `sourcesByCitationCount`, the same ordering the legacy
+ * Sources tab uses, so a row's `[N]` matches the `[[N]]` chip in the transcript.
+ * `safeHttpUrl` gates the link: a citation URL is model-adjacent data, so a
+ * non-http(s) value renders as plain text rather than an anchor.
+ */
+function toCompactCitations(sources: SourceEntryMap): CompactSourceItem[] {
+  return sourcesByCitationCount(sources).map((entry, index) => {
+    const href = safeHttpUrl(entry.source_url);
+    return {
+      id: entry.citation_id,
+      ordinal: index + 1,
+      title: entry.title ?? entry.source_doc_id,
+      subtitle: href === null ? entry.source_connector : displayUrl(href),
+      href,
+    };
+  });
+}

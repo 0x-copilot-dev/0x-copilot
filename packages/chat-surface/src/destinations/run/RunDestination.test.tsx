@@ -351,8 +351,6 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("run-empty-state")).not.toBeNull();
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
     expect(screen.queryByTestId("run-error-banner")).toBeNull();
-    // ≤1 run → no multi-run selector chrome.
-    expect(screen.queryByTestId("run-multi-select")).toBeNull();
     // No run → no SSE subscription opened.
     expect(transport.subs).toHaveLength(0);
   });
@@ -1156,11 +1154,12 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
 // Integration: with no run the shell mounts the empty-state goal composer
 // (FR-3.25); submitting a goal POSTs a run and binds it via the `runId` seam, so
 // the live cockpit mounts IN PLACE (the shell root node is unchanged). A
-// multiple-run conversation renders the selector; choosing a run rebinds the
-// same canvas/session rather than remounting the cockpit.
+// multiple-run conversation binds its HEAD run and shows no selector chrome —
+// the cockpit is single-run by design; rebinding happens through the `runId`
+// seam, which rebinds the session without remounting the canvas.
 
-// A conversation head whose current (live) run is run-a plus the multi-run list
-// consumed by RunMultiSelect.
+// A conversation head whose current (live) run is run-a, plus a second run —
+// the multi-run shape the cockpit must fold down to its head.
 const TWO_RUNS = {
   latest_run_id: "run-a",
   latest_run_id_any_status: "run-a",
@@ -1616,7 +1615,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("auto-binds the conversation's head run and exposes the multi-run selector", async () => {
+  it("auto-binds the conversation's head run and shows no run-selector chrome", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
@@ -1629,40 +1628,14 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
-    expect(screen.getByTestId("run-multi-select")).not.toBeNull();
-    expect(screen.getByTestId("run-select-run-a")).toHaveAttribute(
-      "data-selected",
-      "true",
-    );
+    // The cockpit is single-run in BOTH modes: a >1-run conversation folds to
+    // its head with no selector rail above the canvas. This pins the removal —
+    // reinstating a persistent run-picker strip here fails the test.
+    expect(screen.queryByTestId("run-multi-select")).toBeNull();
+    expect(screen.queryByTestId("run-select-run-b")).toBeNull();
   });
 
-  it("rebinds to the selected run without remounting the canvas", async () => {
-    const transport = new FakeTransport();
-    transport.requestHandler = async (req) =>
-      req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
-    renderRun(transport, makeStore());
-
-    await screen.findByTestId("thread-canvas");
-    await waitFor(() =>
-      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
-    );
-    const canvasBefore = screen.getByTestId("thread-canvas");
-    const runASub = transport.sessionSub;
-
-    fireEvent.click(screen.getByTestId("run-select-run-b"));
-
-    await waitFor(() =>
-      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-b/stream"),
-    );
-    expect(runASub?.closed).toBe(true);
-    expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
-    expect(screen.getByTestId("run-select-run-b")).toHaveAttribute(
-      "data-selected",
-      "true",
-    );
-  });
-
-  it("rebinds the session's SSE tail through the runId seam without remounting the canvas (FR-3.26)", async () => {
+  it("rebinds the session's SSE tail through the runId seam without remounting the canvas", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : { runs: [] };
@@ -1699,18 +1672,6 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(runASub?.closed).toBe(true);
     // …and the ThreadCanvas is the SAME node — no gratuitous cockpit remount.
     expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
-  });
-
-  it("shows no run-history strip for a single run", async () => {
-    const transport = new FakeTransport();
-    transport.requestHandler = async (req) =>
-      req.path.includes("/messages")
-        ? { messages: [] }
-        : runningRun("Only run");
-    renderRun(transport, makeStore());
-
-    await screen.findByTestId("thread-canvas");
-    expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 });
 

@@ -140,20 +140,23 @@ export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
         )}
       </div>
       <div style={controlsRowStyle}>
-        {/* Progressive disclosure: an empty timeline is permanently "Live" and
-            snap-to-now is a no-op, so the pill is dead chrome — withhold it
-            until the first bead arrives. */}
-        {!isEmpty ? (
-          <button
-            type="button"
-            data-testid="tc-mini-timeline-now"
-            aria-pressed={isLive}
-            onClick={onSnapToNow}
-            style={pillStyle(isLive)}
-          >
-            {isLive ? "Live" : "↩ Now"}
-          </button>
-        ) : null}
+        {/* The pill is permanent. It was withheld while the timeline was empty
+            (an empty strip is trivially "Live", so the control was a no-op) —
+            but that made the whole right edge of the bar blink out every time a
+            new run started with zero beads. It reads as state, not chrome: at
+            zero beads it honestly says you are at the live edge. Clicking it
+            there is a harmless no-op; `aria-disabled` tells assistive tech so
+            without the layout shift a `disabled` swap would cause. */}
+        <button
+          type="button"
+          data-testid="tc-mini-timeline-now"
+          aria-pressed={isLive}
+          aria-disabled={isEmpty}
+          onClick={onSnapToNow}
+          style={pillStyle(isLive)}
+        >
+          {isLive ? "Live" : "↩ Now"}
+        </button>
         {onExpand ? (
           <button
             type="button"

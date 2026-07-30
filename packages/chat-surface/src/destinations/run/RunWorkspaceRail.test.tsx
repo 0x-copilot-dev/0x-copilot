@@ -276,7 +276,12 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
     expect(screen.getByTestId("sources-v2-tab")).toBeInTheDocument();
     expect(screen.queryByTestId("ledger-sources-tab")).toBeNull();
-    fireEvent.click(screen.getByTestId("sources-v2-open-artifact"));
+    // Opening is the row's title button now (the trailing glyph is gone with
+    // the compact card); find it by the row that is owner-routed openable.
+    const openable = screen
+      .getAllByTestId("sources-v2-row")
+      .find((r) => r.getAttribute("data-openable") === "true");
+    fireEvent.click(within(openable as HTMLElement).getByRole("button"));
     expect(onOpenSource).toHaveBeenCalledWith("source:v2:004:artifact");
   });
 
@@ -771,5 +776,189 @@ describe("RunWorkspaceRail — scrubbed approvals gate (FR-3.15/3.16)", () => {
     );
     expect(screen.getByTestId("rail-chat-content")).toBeInTheDocument();
     expect(screen.queryByTestId("run-rail-panel-approvals")).toBeNull();
+  });
+});
+
+// ============================================================
+// Following a citation — `focusSourcesSignal`
+// ============================================================
+//
+// Clicking an inline `[[N]]` chip must reveal the source it points at. The
+// cockpit drives that through a one-directional nonce, mirroring the header
+// chip's `focusApprovalsSignal`. Before this existed the chip was inert on both
+// hosts, so these cases pin the whole point of a citation: it is followable.
+
+describe("RunWorkspaceRail — focusSourcesSignal", () => {
+  it("ignores the initial value so mounting never force-selects Sources", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        focusSourcesSignal={7}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "chat",
+    );
+  });
+
+  it("selects Sources in Studio when the nonce increases", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "sources",
+    );
+    expect(screen.getByRole("tab", { name: "Sources" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("does not fight the reader's own tab clicks after the nonce fires", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    // The reader navigates away; a re-render at the SAME nonce must not yank
+    // them back to Sources (the effect keys on the nonce, not on every render).
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "agents",
+    );
+  });
+
+  it("expands a collapsed Focus panel so the reveal is not swallowed", () => {
+    const onPanelCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={1}
+      />,
+    );
+    // Selecting a tab inside a collapsed panel would read as a dead chip.
+    expect(onPanelCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("leaves the Focus collapse state alone in Studio", () => {
+    const onPanelCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(onPanelCollapsedChange).not.toHaveBeenCalled();
+  });
+});
+
+// ── the v2 Sources panel must still show cited documents ─────────────────────
+
+describe("RunWorkspaceRail — citations reach the v2 Sources panel", () => {
+  const V2_EMPTY = {
+    projection: {
+      v: 2 as const,
+      run_id: "run_1",
+      latest_sequence_no: 0,
+      facts: [],
+    },
+    onOpenSource: () => {},
+    openingSourceId: null,
+    openMessage: null,
+  };
+
+  it("injects cited documents into SourcesV2Tab when the ledger fold is empty", () => {
+    // The shipped bug: surfacesV2 defaults ON, so this branch renders, and its
+    // fold knows nothing about citations — a web search left Sources blank.
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        sourcesV2={V2_EMPTY}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("sources-v2-citations")).toBeInTheDocument();
+    expect(
+      screen.getByText("Aurora 4.0 — Approved Positioning v3"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the v2 empty state when there are no citations either", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sourcesV2={V2_EMPTY}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("sources-v2-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("sources-v2-citations")).toBeNull();
   });
 });

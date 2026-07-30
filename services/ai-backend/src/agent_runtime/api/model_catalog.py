@@ -6,12 +6,13 @@ validation (:class:`WorkspaceCoordinator`). Both import *this* module, so a
 model that appears here shows up in both the picker and the admin-default
 allow-set without drift.
 
-Model discovery and metadata come from **LiteLLM**:
-:class:`LitellmModelSource` filters the installed package's bundled
-``model_cost`` table with generic provider/chat/tool-capability policy (see
-:mod:`agent_runtime.api.litellm_model_source`). There is no local per-model
-inventory to keep current. The settings-derived default model always remains
-the first catalog entry, so an empty source still produces a usable picker.
+Model discovery and metadata come from **models.dev**, with LiteLLM as the
+offline fallback (:class:`ModelsDevModelSource` owns that failover). There is no
+local per-model inventory to keep current. Records carry ``release_date`` and
+``family`` when models.dev is serving and omit them when the fallback is —
+consumers must treat a missing release date as "unknown", never "old". The
+settings-derived default model always remains the first catalog entry, so an
+empty source still produces a usable picker.
 
 The catalog advertises **only** providers the run path can actually execute.
 :class:`ModelConfigResolver` (the run path) accepts a fixed provider allowlist;
@@ -28,14 +29,20 @@ Callers pass the latter as ``user_key_providers`` (the provider slugs the
 per-(org, user) policies resolver reports a stored key for — the *same* resolver
 the run-create credential gate consults, so the picker's "your key" badge and
 the gate can never disagree). When ``user_key_providers`` is empty the flag
-reflects env keys only, the historical settings-only behaviour. OpenRouter stays
-always-selectable because its credential is per-user BYOK that no deployment env
-key can stand in for.
+reflects env keys only, the historical settings-only behaviour.
+
+Every provider goes through that same check — there is no always-selectable
+exemption. OpenRouter used to hold one, from when this layer could only see env
+keys and its per-user BYOK credential was therefore invisible here; once
+``user_key_providers`` arrived the exemption became the sole reason the badge
+could lie, marking every OpenRouter model "your key" for a user with no key at
+all while :class:`ModelConfigResolver` refused the run.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 
 from agent_runtime.api.litellm_model_source import (
     CatalogModelRecord,
@@ -43,6 +50,8 @@ from agent_runtime.api.litellm_model_source import (
     LitellmModelSource,
     ModelDisplayName,
 )
+from agent_runtime.api.model_tiers import ModelSizeTierResolver, ModelTier
+from agent_runtime.api.models_dev_source import ModelsDevModelSource
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import ModelCatalogItem
@@ -56,9 +65,6 @@ class ModelCatalog:
     # follow-up, so their entries never advertise reasoning controls even
     # when LiteLLM flags the underlying model as reasoning-capable.
     NATIVE_REASONING_PROVIDERS = frozenset({"openai", "anthropic", "gemini"})
-    # Providers that are always selectable because their credentials are
-    # per-user BYOK — invisible at this settings-only layer.
-    ALWAYS_SELECTABLE_PROVIDERS = frozenset({"openrouter"})
 
     _source: CatalogModelSource | None = None
     _source_lock = threading.Lock()
@@ -122,16 +128,24 @@ class ModelCatalog:
           (context window, costs, capability flags) for the same id.
         """
 
-        items = [cls._default_item(settings, user_key_providers)]
-        for record in cls._source_for().records():
+        runnable = [
             # SSOT: never advertise a model the run path cannot execute. The
             # source already applies provider policy, but the filter stays here
             # — the one place the catalog is assembled — so a fake or
             # future source that emits an out-of-allowlist provider record can
             # never leak a model the run path's ``ModelConfigResolver`` rejects.
-            if not ModelConfigResolver.supports_provider(record.provider):
-                continue
-            items.append(cls._item_from_record(record, settings, user_key_providers))
+            record
+            for record in cls._source_for().records()
+            if ModelConfigResolver.supports_provider(record.provider)
+        ]
+        tiers = cls._tier_index(runnable)
+        items = [cls._default_item(settings, user_key_providers)]
+        for record in runnable:
+            items.append(
+                cls._item_from_record(
+                    record, settings, user_key_providers, tiers.get(record.model_id)
+                )
+            )
         # Collapse by id, last-definition-wins. A dict comprehension keeps
         # each id at its first-insertion position (so the default stays
         # first) while replacing its value with the last same-id entry (so a
@@ -149,7 +163,10 @@ class ModelCatalog:
 
         with cls._source_lock:
             if cls._source is None:
-                cls._source = LitellmModelSource()
+                # models.dev primary (release dates, product families, curated
+                # display names), LiteLLM as the offline fallback. The source
+                # itself owns that failover — see ModelsDevModelSource.
+                cls._source = ModelsDevModelSource(fallback=LitellmModelSource())
             return cls._source
 
     @classmethod
@@ -174,15 +191,34 @@ class ModelCatalog:
         )
 
     @classmethod
+    def _tier_index(cls, records: Sequence[CatalogModelRecord]) -> dict[str, ModelTier]:
+        """Map model id -> size rung, for every provider's general-purpose ladder.
+
+        Computed once per build over the whole record set, because a tier is a
+        property of a model's position among its siblings, not of the row.
+        """
+
+        index: dict[str, ModelTier] = {}
+        for provider in {record.provider for record in records}:
+            ladder = ModelSizeTierResolver.ladder(records, provider=provider)
+            for record in ladder:
+                tier = ModelSizeTierResolver.tier_of(record, ladder=ladder)
+                if tier is not None:
+                    index[record.model_id] = tier
+        return index
+
+    @classmethod
     def _item_from_record(
         cls,
         record: CatalogModelRecord,
         settings: RuntimeSettings,
         user_key_providers: frozenset[str],
+        tier: ModelTier | None = None,
     ) -> ModelCatalogItem:
         """Map one source record onto the public catalog item shape."""
 
         return ModelCatalogItem(
+            tier=tier,
             id=record.model_id,
             provider=record.provider,
             model_name=record.model_id,
@@ -197,6 +233,8 @@ class ModelCatalog:
             input_cost_per_mtok=record.input_cost_per_mtok,
             output_cost_per_mtok=record.output_cost_per_mtok,
             supports_tools=record.supports_tools,
+            release_date=record.release_date,
+            family=record.family,
         )
 
     @classmethod
@@ -208,8 +246,6 @@ class ModelCatalog:
     ) -> bool:
         """Whether the provider has a usable credential — env key OR caller BYOK key."""
 
-        if provider in cls.ALWAYS_SELECTABLE_PROVIDERS:
-            return True
         # The caller's own stored BYOK key makes the provider usable even with no
         # deployment env key — the run-create gate accepts exactly this source, so
         # the badge here matches what a run would actually do.

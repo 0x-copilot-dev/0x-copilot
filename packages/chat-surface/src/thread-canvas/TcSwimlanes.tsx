@@ -406,6 +406,19 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
   const isOffNow = playhead !== "now";
   const hasBeads = sortedBeads.length > 0;
 
+  // No beads → render NOTHING. This used to be a "Listening for run events…"
+  // status line, which cost a full band of vertical space to say what the
+  // mini-timeline below already says, and said it on every run before the
+  // first event.
+  //
+  // Critically this is a render-time `null`, NOT an unmount by the parent: the
+  // SSE subscription in the effects above is what produces the first bead, so
+  // the component must stay mounted and listening while showing nothing. Every
+  // hook has already run by this point — do not lift this return any higher.
+  if (!hasBeads) {
+    return null;
+  }
+
   return (
     <div
       role="region"
@@ -414,102 +427,86 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
       data-playhead={playhead === "now" ? "now" : "scrubbed"}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      style={
-        hasBeads ? swimlaneStyles.container : swimlaneStyles.containerEmpty
-      }
+      style={swimlaneStyles.container}
     >
-      {/* Progressive disclosure: the transport toolbar is withheld until the
-          first bead arrives — a dead `<` / `Play` / `>` row over an empty
-          timeline reads as broken chrome. The SSE subscription above stays
-          live regardless, so the first event reveals the controls. */}
-      {hasBeads ? (
-        <TcSwimlanesTransportControls
-          hasBeads={hasBeads}
-          isPlaying={isPlaying}
-          isOffNow={isOffNow}
-          onStepBack={() => step(-1)}
-          onTogglePlay={togglePlay}
-          onStepForward={() => step(1)}
-          onSnapToNow={snapToNow}
-          onBranch={handleBranch}
-          onRestore={handleRestore}
-        />
-      ) : null}
+      {/* Past the beadless early-return, so the transport toolbar always has
+          real beads to act on — no dead `<` / `Play` / `>` row. */}
+      <TcSwimlanesTransportControls
+        hasBeads={hasBeads}
+        isPlaying={isPlaying}
+        isOffNow={isOffNow}
+        onStepBack={() => step(-1)}
+        onTogglePlay={togglePlay}
+        onStepForward={() => step(1)}
+        onSnapToNow={snapToNow}
+        onBranch={handleBranch}
+        onRestore={handleRestore}
+      />
 
-      {!hasBeads ? (
-        <div
-          role="status"
-          data-testid="tc-swimlanes-empty"
-          style={swimlaneStyles.emptyState}
-        >
-          Listening for run events…
-        </div>
-      ) : (
-        <div style={swimlaneStyles.lanesContainer}>
-          {lanes.map((lane) => {
-            const laneBeads = sortedBeads.filter((bead) => bead.lane === lane);
-            return (
+      <div style={swimlaneStyles.lanesContainer}>
+        {lanes.map((lane) => {
+          const laneBeads = sortedBeads.filter((bead) => bead.lane === lane);
+          return (
+            <div
+              key={lane}
+              data-testid={`tc-swimlanes-lane-${lane}`}
+              data-lane={lane}
+              style={swimlaneStyles.laneRow}
+            >
+              <div style={swimlaneStyles.laneLabel}>{lane}</div>
               <div
-                key={lane}
-                data-testid={`tc-swimlanes-lane-${lane}`}
-                data-lane={lane}
-                style={swimlaneStyles.laneRow}
+                data-testid={`tc-swimlanes-lane-track-${lane}`}
+                style={swimlaneStyles.laneTrack}
+                onClick={handleLaneClick}
+                role="presentation"
               >
-                <div style={swimlaneStyles.laneLabel}>{lane}</div>
-                <div
-                  data-testid={`tc-swimlanes-lane-track-${lane}`}
-                  style={swimlaneStyles.laneTrack}
-                  onClick={handleLaneClick}
-                  role="presentation"
-                >
-                  {laneBeads.map((bead) => {
-                    const leftPercent = ((bead.at - minAt) / span) * 100;
-                    const isPinned = pinned.has(bead.id);
-                    return (
-                      <div
-                        key={bead.id}
-                        data-testid={`tc-swimlanes-bead-${bead.id}`}
-                        data-bead-id={bead.id}
-                        data-pinned={isPinned ? "true" : "false"}
-                        style={swimlaneStyles.bead(leftPercent, isPinned)}
+                {laneBeads.map((bead) => {
+                  const leftPercent = ((bead.at - minAt) / span) * 100;
+                  const isPinned = pinned.has(bead.id);
+                  return (
+                    <div
+                      key={bead.id}
+                      data-testid={`tc-swimlanes-bead-${bead.id}`}
+                      data-bead-id={bead.id}
+                      data-pinned={isPinned ? "true" : "false"}
+                      style={swimlaneStyles.bead(leftPercent, isPinned)}
+                    >
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleBeadClick(bead);
+                        }}
+                        data-testid={`tc-swimlanes-bead-select-${bead.id}`}
+                        style={swimlaneStyles.beadButton}
+                        aria-label={`Bead ${bead.title}`}
+                        title={bead.title}
+                      />
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          togglePin(bead.id);
+                        }}
+                        data-testid={`tc-swimlanes-bead-pin-${bead.id}`}
+                        aria-pressed={isPinned}
+                        aria-label={isPinned ? "Unpin bead" : "Pin bead"}
+                        style={swimlaneStyles.pinButton(isPinned)}
                       >
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleBeadClick(bead);
-                          }}
-                          data-testid={`tc-swimlanes-bead-select-${bead.id}`}
-                          style={swimlaneStyles.beadButton}
-                          aria-label={`Bead ${bead.title}`}
-                          title={bead.title}
-                        />
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            togglePin(bead.id);
-                          }}
-                          data-testid={`tc-swimlanes-bead-pin-${bead.id}`}
-                          aria-pressed={isPinned}
-                          aria-label={isPinned ? "Unpin bead" : "Pin bead"}
-                          style={swimlaneStyles.pinButton(isPinned)}
-                        >
-                          {isPinned ? "*" : "+"}
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <div
-                    data-testid="tc-swimlanes-playhead"
-                    style={swimlaneStyles.playhead(playheadLeftPercent)}
-                  />
-                </div>
+                        {isPinned ? "*" : "+"}
+                      </button>
+                    </div>
+                  );
+                })}
+                <div
+                  data-testid="tc-swimlanes-playhead"
+                  style={swimlaneStyles.playhead(playheadLeftPercent)}
+                />
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

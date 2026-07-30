@@ -84,16 +84,25 @@ class ModelCatalogItem(RuntimeContract):
     supports_attachments: bool = False
     supports_reasoning: bool = False
     reasoning: JsonObject | None = None
-    # LiteLLM-sourced metadata (see agent_runtime.api.litellm_model_source).
-    # All optional: entries without a LiteLLM row or supplement (e.g. the
-    # settings-driven default model placeholder) simply omit them. There is no
-    # ``release_date`` — LiteLLM does not carry one, and the catalog no longer
-    # orders or curates by release date.
+    # Source-derived metadata (see agent_runtime.api.models_dev_source). All
+    # optional: entries whose source carries no supplement (e.g. the
+    # settings-driven default model placeholder, or any record while the
+    # LiteLLM fallback is serving) simply omit them.
     context_window: int | None = None
     max_output_tokens: int | None = None
     input_cost_per_mtok: float | None = None
     output_cost_per_mtok: float | None = None
     supports_tools: bool | None = None
+    # ISO ``YYYY-MM-DD``. Settings -> Models sorts newest-first on this; absent
+    # means "unknown", which must sort last rather than as very old. Only
+    # models.dev supplies it — the LiteLLM fallback has no release date at all.
+    release_date: str | None = None
+    # Vendor product line (``claude-opus``, ``gpt-nano``), the size axis behind
+    # ``tier``. Exposed so the client can group without re-deriving it.
+    family: str | None = None
+    # Size rung within the provider's general-purpose ladder. ``None`` for
+    # models off that ladder (specialty and max-reasoning lines).
+    tier: Literal["small", "medium", "big"] | None = None
 
 
 class ModelCatalogResponse(RuntimeContract):

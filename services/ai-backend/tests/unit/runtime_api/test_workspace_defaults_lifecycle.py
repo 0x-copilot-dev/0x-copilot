@@ -280,14 +280,17 @@ class TestEnabledModelsCuration(WorkspaceDefaultsFixtureMixin):
         # Curation of one id must not enable the whole catalog.
         assert len(enabled) < len(models)
 
-    def test_models_route_enables_all_when_uncurated(self) -> None:
+    def test_models_route_enables_the_short_list_when_uncurated(self) -> None:
         client, _ = self.create_client()
-        # No PUT → enabled_models is None → the curated product catalog is the
-        # short list, so every model is enabled (no release-date trimming).
+        # No PUT → enabled_models is None → the DERIVED default short list, not
+        # the whole catalog. The full catalog still ships in the response so
+        # Settings → Models can offer the rest; only `enabled` narrows.
         response = client.get("/v1/agent/models", headers=self._headers())
         assert response.status_code == 200, response.text
         models = response.json()["models"]
-        assert models and all(m.get("enabled") for m in models)
+        enabled = [m for m in models if m.get("enabled")]
+        assert enabled, "the picker must never be empty"
+        assert len(enabled) < len(models), "uncurated must not enable everything"
         # The runtime default model is always in the enabled set.
         default_id = response.json()["default_model_id"]
         assert any(m["id"] == default_id and m.get("enabled") for m in models)

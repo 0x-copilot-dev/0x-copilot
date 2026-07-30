@@ -34,44 +34,34 @@ function source(overrides: Partial<CitationSourceRef> = {}): CitationSourceRef {
 }
 
 describe("InlineToolResultCard", () => {
-  it("renders only backend-linked citations as an inline chat source result", () => {
+  it("no longer renders sources under the tool call", () => {
+    // Sources moved to the Sources rail (`CompactSourceList`). Repeating the
+    // same list under every completed web_search pushed the answer down the
+    // transcript and duplicated what the rail already collects once.
     render(
       <InlineToolResultCard
         toolCall={toolCall()}
         citations={[
-          source({ citation_id: "citation-2", ordinal: 2, title: "Second" }),
-          source({
-            citation_id: "other",
-            ordinal: 3,
-            source_tool_call_id: "other-call",
-          }),
           source({ citation_id: "citation-1", ordinal: 1, title: "First" }),
+          source({ citation_id: "citation-2", ordinal: 2, title: "Second" }),
         ]}
       />,
     );
 
-    const card = screen.getByTestId("tc-inline-web-sources-card");
-    expect(card).toHaveAccessibleName(/2 sources returned by search the web/i);
-    expect(within(card).getByText("First")).toBeInTheDocument();
-    expect(within(card).getByText("Second")).toBeInTheDocument();
-    expect(within(card).queryByText("other")).not.toBeInTheDocument();
-    expect(within(card).getAllByRole("listitem")[0]).toHaveTextContent("First");
-    expect(
-      within(card).getByRole("link", { name: /open source 1/i }),
-    ).toHaveAttribute("href", "https://status.example.com/incidents/0128");
+    expect(screen.queryByTestId("tc-inline-web-sources-card")).toBeNull();
+    expect(screen.queryByText("First")).toBeNull();
   });
 
-  it("does not turn untrusted source URLs into links", () => {
-    render(
+  it("renders nothing at all for a tool call whose only facts were sources", () => {
+    // With sources gone and no CSV facts, there is no card left to draw — the
+    // component must collapse rather than leave an empty bordered box.
+    const { container } = render(
       <InlineToolResultCard
         toolCall={toolCall()}
-        citations={[source({ source_url: "javascript:alert(1)" })]}
+        citations={[source({ citation_id: "c1", ordinal: 1, title: "First" })]}
       />,
     );
-
-    const card = screen.getByTestId("tc-inline-web-sources-card");
-    expect(within(card).queryByRole("link")).not.toBeInTheDocument();
-    expect(card).toHaveTextContent("web");
+    expect(container.firstChild).toBeNull();
   });
 
   it("renders CSV facts, bounded metrics, and an escaped static preview", () => {

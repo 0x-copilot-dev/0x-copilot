@@ -25,80 +25,20 @@ export function InlineToolResultCard({
 }: InlineToolResultCardProps): ReactElement | null {
   if (toolCall.status !== "complete") return null;
 
-  const linkedSources = citations.filter(
-    (citation) => citation.source_tool_call_id === toolCall.id,
-  );
+  // Sources are NOT rendered here any more. They used to appear as a
+  // `SOURCES · N` card under every completed web_search, which repeated the
+  // same list once per tool call and pushed the answer down the transcript.
+  // That exact card now lives in the Sources rail (`CompactSourceList`), where
+  // the run's sources are collected once. The `citations` prop is kept because
+  // it is part of this component's contract with TcChat and a future inline
+  // fact card may need it; it is intentionally unused for sources today.
+  void citations;
   const csv = readCsvSummary(toolCall);
-  if (linkedSources.length === 0 && csv === null) return null;
+  if (csv === null) return null;
 
   return (
     <div style={stackStyle}>
-      {linkedSources.length > 0 ? (
-        <WebSourcesCard sources={linkedSources} toolTitle={toolCall.title} />
-      ) : null}
-      {csv !== null ? <CsvSummaryCard summary={csv} /> : null}
-    </div>
-  );
-}
-
-function WebSourcesCard({
-  sources,
-  toolTitle,
-}: {
-  readonly sources: readonly CitationSourceRef[];
-  readonly toolTitle: string;
-}): ReactElement {
-  const ordered = [...sources].sort((a, b) => a.ordinal - b.ordinal);
-  return (
-    <section
-      data-testid="tc-inline-web-sources-card"
-      aria-label={`${ordered.length} sources returned by ${toolTitle}`}
-      style={cardStyle}
-    >
-      <div style={cardHeaderStyle}>
-        <span data-testid="tc-inline-web-sources" style={eyebrowStyle}>
-          {`SOURCES · ${ordered.length}`}
-        </span>
-        <span style={chatOnlyStyle}>Synthesized in chat</span>
-      </div>
-      <div role="list">
-        {ordered.map((source) => (
-          <SourceLine key={source.citation_id} source={source} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SourceLine({
-  source,
-}: {
-  readonly source: CitationSourceRef;
-}): ReactElement {
-  const href = safeHttpUrl(source.source_url);
-  const hostname = href === null ? source.source_connector : displayUrl(href);
-  return (
-    <div role="listitem" style={sourceRowStyle}>
-      <span aria-hidden="true" style={sourceGlyphStyle}>
-        {initials(source.title)}
-      </span>
-      <span style={sourceCopyStyle}>
-        {href === null ? (
-          <span style={sourceTitleStyle}>{source.title}</span>
-        ) : (
-          <a
-            href={href}
-            rel="noreferrer"
-            target="_blank"
-            style={sourceTitleStyle}
-            aria-label={`Open source ${source.ordinal}: ${source.title}`}
-          >
-            {source.title}
-          </a>
-        )}
-        <span style={sourceUrlStyle}>{hostname}</span>
-      </span>
-      <span style={citationStyle}>{`[${source.ordinal}]`}</span>
+      <CsvSummaryCard summary={csv} />
     </div>
   );
 }
@@ -299,36 +239,6 @@ function scalarText(value: unknown): string | null {
   return null;
 }
 
-function safeHttpUrl(value: string | null): string | null {
-  if (typeof value !== "string" || value.length > 2048) return null;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:"
-      ? parsed.href
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function displayUrl(value: string): string {
-  const parsed = new URL(value);
-  return `${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`.slice(
-    0,
-    120,
-  );
-}
-
-function initials(value: string): string {
-  const words = value.trim().split(/\s+/).filter(Boolean);
-  return (
-    words
-      .slice(0, 2)
-      .map((word) => word[0]?.toUpperCase() ?? "")
-      .join("") || "•"
-  );
-}
-
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -365,59 +275,6 @@ const chatOnlyStyle: CSSProperties = {
   lineHeight: 1.3,
   marginLeft: "auto",
   textAlign: "right",
-};
-const sourceRowStyle: CSSProperties = {
-  alignItems: "center",
-  borderBottom: "1px solid var(--color-border)",
-  display: "flex",
-  gap: 9,
-  minWidth: 0,
-  padding: "8px 11px",
-};
-const sourceGlyphStyle: CSSProperties = {
-  alignItems: "center",
-  background: "var(--color-surface-elevated)",
-  borderRadius: 5,
-  color: "var(--color-text-secondary)",
-  display: "inline-flex",
-  flex: "0 0 auto",
-  fontFamily: "var(--font-sans)",
-  fontSize: 8,
-  fontWeight: 700,
-  height: 18,
-  justifyContent: "center",
-  width: 18,
-};
-const sourceCopyStyle: CSSProperties = {
-  display: "flex",
-  flex: "1 1 auto",
-  flexDirection: "column",
-  minWidth: 0,
-};
-const sourceTitleStyle: CSSProperties = {
-  color: "var(--color-text-secondary)",
-  fontFamily: "var(--font-sans)",
-  fontSize: 11,
-  lineHeight: "15px",
-  overflow: "hidden",
-  textDecoration: "none",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-const sourceUrlStyle: CSSProperties = {
-  color: "var(--color-text-muted)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 9,
-  lineHeight: "13px",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-const citationStyle: CSSProperties = {
-  color: "var(--color-accent)",
-  flex: "0 0 auto",
-  fontFamily: "var(--font-mono)",
-  fontSize: 9,
 };
 const csvGlyphStyle: CSSProperties = {
   alignItems: "center",

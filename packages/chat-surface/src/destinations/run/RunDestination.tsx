@@ -209,7 +209,6 @@ import { muteConnectorSuggestion } from "./muteConnectorSuggestion";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
-import { RunMultiSelect } from "./RunMultiSelect";
 // PRD-04: pure selector projecting proposed surface diffs off the SAME single
 // canonical event stream (FR-3.3). Feeds the on-surface Approve/Reject controls
 // in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
@@ -1393,6 +1392,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
   // rail onto the Approvals tab (one-directional; the rail reacts to increases).
   const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
+  // Same nonce contract, for Sources: bumped when an inline `[[N]]` chip is
+  // clicked so the rail reveals the source that chip points at. Owned here
+  // rather than by each host because the rail is in-package — making it a host
+  // responsibility would mean both hosts writing the same wiring, and desktop
+  // (which had no citation wiring at all) simply not having it.
+  const [sourcesFocusSignal, setSourcesFocusSignal] = useState(0);
   // E1 D6: a Review action from the canonical cross-run list carries an opaque
   // run/subject target. Effects resolve onto the destination run's existing
   // lifecycle URI after its stream binds; gates intentionally have no canvas
@@ -1634,6 +1639,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Clear the inline start error (dismiss / retry) — handed to the empty-state
   // composer via `RunEmptyComposerCtx.dismissError`.
   const clearStartError = useCallback((): void => setStartError(null), []);
+
+  // An inline `[[N]]` chip was clicked. Reveal the source it points at by
+  // commanding the workspace rail onto Sources, then let the host do any
+  // substrate-specific navigation on top (web scrolls its pane; desktop has
+  // none). In-package so a citation is followable on BOTH hosts without either
+  // one re-implementing it — the previous arrangement left the click inert
+  // wherever a host forgot to wire it, which was everywhere.
+  const handleOrdinalSelect = useCallback(
+    (citationId: string): void => {
+      setSourcesFocusSignal((n) => n + 1);
+      onOrdinalSelect?.(citationId);
+    },
+    [onOrdinalSelect],
+  );
 
   // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
   // the started/explicit run in `useRunSession`, so the event projector, tabs,
@@ -3915,16 +3934,21 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // WC-P6a (AD-11): the citation registry provider wraps the ONE TcChat so the
     // host-supplied `markdownComponents` chip wrappers resolve chips against the
     // pure `projectCitations` output. The provider component is substrate-agnostic
-    // (pure React context); the nav-aware chip node + `onOrdinalSelect` stay
-    // host-owned. Omitting `markdownComponents` leaves chips unresolved (chip
-    // wrappers read the same context either way, so mounting it is always safe).
+    // (pure React context); the nav-aware chip node stays host-owned. Omitting
+    // `markdownComponents` leaves chips unresolved (chip wrappers read the same
+    // context either way, so mounting it is always safe).
+    //
+    // `onOrdinalSelect` is ALWAYS wired now — see `handleOrdinalSelect`. It used
+    // to be forwarded only when a host passed one, which meant the cockpit's
+    // chips were inert: web's cockpit binder never passed it and desktop had no
+    // citation wiring at all, so clicking a citation did nothing on either host.
     <CitationsProvider
       citations={citationProjection.citations}
       byRun={citationProjection.byRun}
       terminalRuns={citationProjection.terminalRuns}
       linksByRun={citationProjection.linksByRun}
       activeRunId={citationProjection.activeRunId}
-      {...(onOrdinalSelect !== undefined ? { onOrdinalSelect } : {})}
+      onOrdinalSelect={handleOrdinalSelect}
     >
       <TcChat
         conversationId={conversationId as unknown as string}
@@ -4002,6 +4026,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       pendingV2={railPendingV2}
       pendingWorkV21={railPendingWorkV21}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
+      // Unflagged, unlike the approvals signal: following a citation is core
+      // cockpit behavior, not a v2 surface feature.
+      focusSourcesSignal={sourcesFocusSignal}
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
       onPanelCollapsedChange={setFocusPanelCollapsed}
@@ -4161,14 +4188,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         status={v2HeaderStatus}
       />
 
-      {/* The selector owns the multiple-run case only. It returns null for zero
-          or one run, so the idle and single-run cockpits stay chrome-free while
-          every barrel-exported selector has a real in-package mount. */}
-      <RunMultiSelect
-        runs={session.runs}
-        selectedRunId={session.runId}
-        onSelectRun={handleSelectRun}
-      />
+      {/* No multi-run selector strip. The cockpit shows ONE run — the active
+          one — in both Studio and Focus; a "3 RUNS" chip rail above the canvas
+          was chrome the user never asked for and it competed with the header
+          for the same glance. Rebinding to another run is still possible, but
+          only from a surface whose whole job is choosing a run: the Pending
+          Work card (`handleReviewPendingWorkV2`) and the Agents stage. Do not
+          reinstate a persistent selector rail here. */}
 
       {session.error !== null ? (
         <RunErrorBanner

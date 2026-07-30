@@ -13,6 +13,7 @@ table except the pinned-version assertions.
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 
 from agent_runtime.api.litellm_model_source import (
     CatalogModelRecord,
@@ -355,13 +356,30 @@ class TestModelCatalogRealLitellm:
         assert opus.input_cost_per_mtok == 5.0
         assert opus.context_window == 1_000_000
 
-    def test_openrouter_present_selectable_and_reasoning_off(self) -> None:
+    def test_openrouter_selectability_follows_the_caller_key(self) -> None:
         ModelCatalog.configure_source(LitellmModelSource())
-        items = ModelCatalog.build(_settings())
-        openrouter = [item for item in items if item.provider == "openrouter"]
-        assert openrouter, "LiteLLM must supply openrouter discovery models"
-        # BYOK availability is per-user and unknown here, so always selectable.
-        assert all(item.configured for item in openrouter)
+        # Hermetic: RuntimeSettings.load() would pick up a developer's real
+        # OPENROUTER_API_KEY and mask the no-key case this pins.
+        keyless = RuntimeSettings.load(env_file=Path("/nonexistent/.env"), environ={})
+        without = [
+            item
+            for item in ModelCatalog.build(keyless)
+            if item.provider == "openrouter"
+        ]
+        assert without, "LiteLLM must supply openrouter discovery models"
+        # No env key and no BYOK key -> not selectable. OpenRouter used to be
+        # exempt here, which made the picker advertise "your key" to a user who
+        # had none while the run-create gate rejected the very same model.
+        assert all(item.configured is False for item in without)
+
+        with_key = [
+            item
+            for item in ModelCatalog.build(
+                keyless, user_key_providers=frozenset({"openrouter"})
+            )
+            if item.provider == "openrouter"
+        ]
+        assert with_key and all(item.configured for item in with_key)
         # Reasoning passthrough for OpenAI-compat gateways is a follow-up.
-        assert all(not item.supports_reasoning for item in openrouter)
-        assert all(item.id == item.model_name for item in openrouter)
+        assert all(not item.supports_reasoning for item in without)
+        assert all(item.id == item.model_name for item in without)

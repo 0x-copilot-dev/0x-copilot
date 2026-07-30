@@ -646,46 +646,62 @@ function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
 
 describe("TcChat — inline tool-call card (Workstream D)", () => {
   it("shows fact-bound inline results in Studio but not Focus", async () => {
+    // Uses CSV facts, not sources: the inline SOURCES card was removed from the
+    // transcript (sources live in the Sources rail now), so the CSV summary is
+    // what remains of `InlineToolResultCard` and it still must be Studio-only.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
-    const citations = [
-      {
-        citation_id: "source-1",
-        freshness_at: null,
-        ordinal: 1,
-        snippet: null,
-        source_connector: "web",
-        source_doc_id: "postmortem",
-        source_tool_call_id: "call-1",
-        source_url: "https://example.com/postmortem",
-        title: "Incident postmortem",
-      },
-    ];
+    const csvCall = toolCall({
+      status: "complete",
+      args: { path: "/tmp/forecast.csv" },
+      result: { rows: 12, columns: 3 },
+    });
     const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" toolCalls={[csvCall]} />,
+      ),
+    );
+    expect(
+      await screen.findByTestId("tc-inline-csv-summary-card"),
+    ).toBeInTheDocument();
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" toolCalls={[csvCall]} />,
+      ),
+    );
+    expect(
+      screen.queryByTestId("tc-inline-csv-summary-card"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("no longer renders a sources card under a completed web search", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
       withTransport(
         transport,
         <TcChat
           conversationId="c"
           mode="studio"
           toolCalls={[toolCall({ status: "complete" })]}
-          toolCallCitations={citations}
+          toolCallCitations={[
+            {
+              citation_id: "source-1",
+              freshness_at: null,
+              ordinal: 1,
+              snippet: null,
+              source_connector: "web",
+              source_doc_id: "postmortem",
+              source_tool_call_id: "call-1",
+              source_url: "https://example.com/postmortem",
+              title: "Incident postmortem",
+            },
+          ]}
         />,
       ),
     );
-    expect(
-      await screen.findByTestId("tc-inline-web-sources-card"),
-    ).toBeInTheDocument();
-
-    rerender(
-      withTransport(
-        transport,
-        <TcChat
-          conversationId="c"
-          mode="focus"
-          toolCalls={[toolCall({ status: "complete" })]}
-          toolCallCitations={citations}
-        />,
-      ),
-    );
+    await screen.findByTestId("tc-chat");
     expect(
       screen.queryByTestId("tc-inline-web-sources-card"),
     ).not.toBeInTheDocument();

@@ -5,11 +5,13 @@ Turns a raw model catalog into a curated one by stamping each item's
 
 * An EXPLICIT selection (a tuple, possibly empty) enables exactly the
   ids/model_names it names — the workspace has curated its picker.
-* NO selection (``None``) enables the **whole catalog**. The catalog is now a
-  curated product-model set sourced from LiteLLM (not the hundreds-strong
-  models.dev firehose), so it is already the short list a fresh workspace
-  should see — there is nothing left to trim, and LiteLLM carries no
-  ``release_date`` to trim by. Workspace curation still narrows it later.
+* NO selection (``None``) enables the **derived default short list** — the 6-9
+  models :class:`DefaultModelSelectionPolicy` picks, spanning small/medium/big
+  for the providers the caller holds a key for plus a taste of the others. The
+  full catalog stays reachable in Settings -> Models; it is simply not what the
+  composer's pill opens on. Enabling everything (the previous behaviour) put
+  ~190 rows behind a 264px scroller, most of them dated snapshots the user has
+  no reason to choose between.
 
 Two invariants hold in BOTH modes so a user can never lock themselves out of a
 working picker:
@@ -24,6 +26,8 @@ Class-based with no module-level helpers, per the service conventions.
 
 from __future__ import annotations
 
+from agent_runtime.api.litellm_model_source import CatalogModelRecord
+from agent_runtime.api.model_tiers import DefaultModelSelectionPolicy
 from runtime_api.schemas.runs import ModelCatalogItem
 from runtime_api.schemas.workspace_defaults import DefaultModelSelection
 
@@ -41,27 +45,57 @@ class ModelEnablementResolver:
         *,
         enabled_models: tuple[str, ...] | None,
         default_model: DefaultModelSelection | None,
+        user_key_providers: frozenset[str] = frozenset(),
     ) -> tuple[ModelCatalogItem, ...]:
         """Return the catalog with each item's ``enabled`` flag resolved."""
 
         default_keys = cls._default_model_keys(default_model)
-        if enabled_models is not None:
-            selection = frozenset(enabled_models)
-            return tuple(
-                item.model_copy(
-                    update={
-                        "enabled": cls._explicitly_enabled(
-                            item, selection=selection, default_keys=default_keys
-                        )
-                    }
-                )
-                for item in items
+        selection = (
+            frozenset(enabled_models)
+            if enabled_models is not None
+            else cls._derived_default_selection(items, user_key_providers)
+        )
+        return tuple(
+            item.model_copy(
+                update={
+                    "enabled": cls._explicitly_enabled(
+                        item, selection=selection, default_keys=default_keys
+                    )
+                }
             )
-        # Uncurated default: the curated product catalog is itself the short
-        # list, so every model is enabled. The local/default invariants are
-        # trivially satisfied here but are re-asserted explicitly so the rule
-        # stays safe if the default is ever re-narrowed.
-        return tuple(item.model_copy(update={"enabled": True}) for item in items)
+            for item in items
+        )
+
+    @classmethod
+    def _derived_default_selection(
+        cls,
+        items: tuple[ModelCatalogItem, ...],
+        user_key_providers: frozenset[str],
+    ) -> frozenset[str]:
+        """The default short list for a workspace that has not curated.
+
+        Adapts catalog items back onto :class:`CatalogModelRecord` because the
+        tier ladder is defined over records — one shape for the selection logic,
+        whether it runs at build time or here.
+        """
+
+        records = tuple(
+            CatalogModelRecord(
+                provider=item.provider,
+                model_id=item.id,
+                display_name=item.name,
+                output_cost_per_mtok=item.output_cost_per_mtok,
+                release_date=item.release_date,
+                family=item.family,
+            )
+            for item in items
+            if item.provider not in _LOCAL_PROVIDERS
+        )
+        return frozenset(
+            DefaultModelSelectionPolicy.select(
+                records, user_key_providers=user_key_providers
+            )
+        )
 
     # ------------------------------------------------------------------
     # Explicit-selection mode

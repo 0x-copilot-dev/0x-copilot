@@ -1750,22 +1750,22 @@ export {
 export { projectCitations, type CitationProjection } from "./destinations/run";
 // === end WC-P6a ===
 
-// === Phase 3 (PR-3.11) run empty/multi-run ===
-// The two prototype-gap states `RunDestination` mounts internally: the
-// empty/idle goal composer (`RunEmptyState`, FR-3.25 — shown when the
-// conversation has no active run; its submit starts a run the shell binds via
-// the `runId` seam, no shell remount) and the multi-run selector
-// (`RunMultiSelect`, FR-3.26 — shown when the conversation has >1 run; picking
-// one rebinds the cockpit via `useRunSession.selectRun`, and it renders no
-// chrome for ≤1 run). Both are presentational; `RunDestination` owns the wiring,
-// so hosts embedding the cockpit need nothing more, but they are exported for
-// standalone hosts / tests.
+// === Phase 3 (PR-3.11) run empty state ===
+// The empty/idle goal composer `RunDestination` mounts internally
+// (`RunEmptyState`, FR-3.25 — shown when the conversation has no active run;
+// its submit starts a run the shell binds via the `runId` seam, no shell
+// remount). Presentational; `RunDestination` owns the wiring, so hosts
+// embedding the cockpit need nothing more, but it is exported for standalone
+// hosts / tests.
+//
+// `RunMultiSelect` (FR-3.26, the ">1 run" selector rail) was exported here and
+// has been REMOVED — the cockpit binds exactly one run in both modes. FR-3.26
+// is withdrawn, not merely unmounted; see the note at its old mount site in
+// `RunDestination`.
 export {
   RunEmptyState,
   type RunEmptyStateProps,
   type StartRunError,
-  RunMultiSelect,
-  type RunMultiSelectProps,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.11) ===
 

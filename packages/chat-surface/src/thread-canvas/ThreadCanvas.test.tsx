@@ -214,16 +214,17 @@ describe("ThreadCanvas", () => {
       expect(screen.queryByTestId("tc-swimlanes-slot")).not.toBeInTheDocument();
     });
 
-    it("renders the mini-timeline in Focus always; in Studio only once events exist", () => {
-      // Studio + zero events: the swimlanes band owns the single empty status
-      // line, so the mini strip is withheld (progressive disclosure — no
-      // duplicate "No activity yet" under "Listening for run events…").
+    it("renders the mini-timeline in both modes, with and without events", () => {
+      // The strip is permanent chrome. It used to be withheld in Studio while
+      // the timeline was empty, which meant it VANISHED the moment a send
+      // started a new run (fresh run → zero beads) and returned only when the
+      // first event landed. Zero events must still render the strip.
       const empty = renderCanvas({ mode: "studio" });
-      expect(
-        screen.queryByTestId("tc-mini-timeline-slot"),
-      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("tc-mini-timeline-slot")).toBeInTheDocument();
+      // …and the Live pill rides with it, rather than blinking out on send.
+      expect(screen.getByTestId("tc-mini-timeline-now")).toBeInTheDocument();
       empty.unmount();
-      // Studio + events → the strip appears.
+      // Studio + events → still there.
       const { rerender } = renderCanvas({
         mode: "studio",
         events: [

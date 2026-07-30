@@ -18,15 +18,25 @@ import {
 
 import { Badge, Button, TextInput } from "@0x-copilot/design-system";
 
+import { ProviderMark } from "../icons/providerMarks";
 import { SetCard, SetNote, SecHead } from "./SettingsChrome";
 import {
   contextLabel,
   filterModels,
   groupModelsByProvider,
   priceLabel,
+  providerLabel,
+  releaseLabel,
   type CatalogModel,
   type ModelsPort,
 } from "./data/models";
+
+/** Size rung, spelled out — "S/M/L" is too terse to read cold in a settings list. */
+const TIER_LABEL: Record<string, string> = {
+  small: "small",
+  medium: "medium",
+  big: "large",
+};
 
 export interface ModelsPageProps {
   readonly port: ModelsPort;
@@ -34,7 +44,7 @@ export interface ModelsPageProps {
 }
 
 export const MODELS_PAGE_NOTE =
-  "Choose which models appear in the composer picker. New models are shown by default; turn any off to hide it. Local models and your default model always stay available.";
+  "Choose which models appear in the composer picker. By default it shows a short list — the current small, medium and large model for each provider — and everything else lives here. Local models and your default model always stay available.";
 
 function toMessage(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
@@ -58,14 +68,24 @@ const rowStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: "var(--space-md)",
-  padding: "8px 4px",
+  padding: "var(--space-sm) var(--space-xs)",
   borderTop: "1px solid var(--color-border)",
+};
+
+// Provider badge + text column, matching the composer picker's row anatomy
+// (`.ui-pop-row__lg` + `.ui-pop-row__m`) so the same model reads the same way
+// in Settings and in the pill.
+const rowLeadStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "var(--space-sm)",
+  minWidth: 0,
 };
 
 const nameColStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "2px",
+  gap: "var(--space-2xs)",
   minWidth: 0,
 };
 
@@ -259,6 +279,7 @@ export function ModelsPage({ port, onToast }: ModelsPageProps): ReactElement {
               {group.models.map((model) => {
                 const price = priceLabel(model);
                 const ctx = contextLabel(model);
+                const released = releaseLabel(model);
                 const locked = isLocked(model);
                 return (
                   <div
@@ -266,24 +287,42 @@ export function ModelsPage({ port, onToast }: ModelsPageProps): ReactElement {
                     style={rowStyle}
                     data-testid={`models-row-${model.id}`}
                   >
-                    <div style={nameColStyle}>
-                      <span style={nameStyle} title={model.id}>
-                        {model.name}
-                      </span>
-                      <div style={metaRowStyle}>
-                        {ctx ? <span style={metaTextStyle}>{ctx}</span> : null}
-                        {price ? (
-                          <span style={metaTextStyle}>{price}</span>
-                        ) : null}
-                        {model.supports_reasoning ? (
-                          <Badge tone="accent">reasoning</Badge>
-                        ) : null}
-                        {model.supports_tools ? (
-                          <Badge tone="neutral">tools</Badge>
-                        ) : null}
-                        {!model.configured ? (
-                          <Badge tone="warning">needs key</Badge>
-                        ) : null}
+                    <div style={rowLeadStyle}>
+                      <ProviderMark
+                        provider={model.provider}
+                        size={16}
+                        tone="brand"
+                        title={providerLabel(model.provider)}
+                      />
+                      <div style={nameColStyle}>
+                        <span style={nameStyle} title={model.id}>
+                          {model.name}
+                        </span>
+                        <div style={metaRowStyle}>
+                          {/* Released-on leads the meta row because the list is
+                              ordered by it — without the date on screen the
+                              newest-first sort reads as an arbitrary shuffle. */}
+                          {released ? (
+                            <span style={metaTextStyle}>{released}</span>
+                          ) : null}
+                          {ctx ? (
+                            <span style={metaTextStyle}>{ctx}</span>
+                          ) : null}
+                          {price ? (
+                            <span style={metaTextStyle}>{price}</span>
+                          ) : null}
+                          {model.tier ? (
+                            <Badge tone="neutral">
+                              {TIER_LABEL[model.tier]}
+                            </Badge>
+                          ) : null}
+                          {model.supports_reasoning ? (
+                            <Badge tone="accent">reasoning</Badge>
+                          ) : null}
+                          {!model.configured ? (
+                            <Badge tone="warning">needs key</Badge>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                     <Button
