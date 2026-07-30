@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
 
 from pydantic import ValidationError
 
@@ -81,6 +83,107 @@ class _Fields:
     # can detect subagent-scoped pauses without rescanning the event log.
     # Mirrors the envelope-level field.
     PARENT_TASK_ID = "parent_task_id"
+
+
+class _FilesystemApproval:
+    """Projects a deepagents filesystem interrupt into an approval payload.
+
+    deepagents' ``FilesystemPermission(mode="interrupt")`` installs LangChain's
+    ``HumanInTheLoopMiddleware``, so a parked filesystem call arrives in exactly
+    the same interrupt shape MCP approvals use. Only the action NAME differs —
+    ``ls`` / ``read_file`` rather than ``call_mcp_tool`` — which is why the MCP
+    branch's name filter silently dropped every one of them.
+
+    The payload deliberately mirrors the MCP one field-for-field (same batch
+    contract, same ids, same status vocabulary) so the existing approval batch,
+    card and resume machinery applies unchanged. Nothing downstream needs to
+    learn a new shape.
+    """
+
+    #: deepagents' built-in filesystem tools, mapped to the operation a rule is
+    #: written against. Only these can produce a filesystem approval; anything
+    #: else falls through to the MCP branch as before.
+    TOOL_OPERATIONS: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            "ls": "read",
+            "read_file": "read",
+            "glob": "read",
+            "grep": "read",
+            "write_file": "write",
+            "edit_file": "write",
+        }
+    )
+
+    #: Where each tool carries the path the user is being asked about. Deep
+    #: Agents is not uniform here, so the argument name is looked up per tool
+    #: rather than guessed — a wrong guess would show a card naming no folder.
+    _PATH_ARGS: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            "ls": "path",
+            "read_file": "file_path",
+            "glob": "path",
+            "grep": "path",
+            "write_file": "file_path",
+            "edit_file": "file_path",
+        }
+    )
+
+    _MAX_PATH_CHARS: Final = 512
+
+    @classmethod
+    def payload(
+        cls,
+        *,
+        interrupt_id: str,
+        index: int,
+        action_count: int,
+        action_name: str,
+        args: object,
+        allowed_decisions: Sequence[str],
+    ) -> dict[str, object] | None:
+        operation = cls.TOOL_OPERATIONS.get(action_name)
+        if operation is None:
+            return None
+        arguments = args if isinstance(args, Mapping) else {}
+        raw_path = arguments.get(cls._PATH_ARGS.get(action_name, "path"))
+        path = StreamTextHelper.extract(raw_path) or ""
+        # A pathless bulk call (e.g. `grep` with no path) is exactly the case
+        # deepagents fires unconditionally, because it could touch anything.
+        # Say so rather than rendering a card that names nothing.
+        display = path[: cls._MAX_PATH_CHARS] if path else "anywhere on this computer"
+        folder = display.rstrip("/").rsplit("/", 1)[-1] or display
+        approval_id = f"{interrupt_id}:{index}"
+        read_only = operation == "read"
+        return {
+            "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+            "event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
+            Keys.Field.APPROVAL_ID: approval_id,
+            _Fields.ACTION_ID: approval_id,
+            # Distinct from "mcp_tool" so the client can render a folder card
+            # rather than a connector card; the batch contract is identical.
+            Keys.Field.APPROVAL_KIND: "filesystem_access",
+            _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
+            _Fields.ACTION_INDEX: index,
+            _Fields.ACTION_COUNT: action_count,
+            _Fields.BATCH_ID: interrupt_id,
+            _Fields.BATCH_INDEX: index,
+            _Fields.TOOL_NAME: action_name,
+            _Fields.DISPLAY_NAME: folder,
+            _Fields.ARGUMENTS: dict(arguments),
+            "path": display,
+            "operation": operation,
+            "message": (
+                f"Allow reading {display}?"
+                if read_only
+                else f"Allow writing to {display}?"
+            ),
+            _Fields.READ_ONLY: read_only,
+            # A write reaches the user's real files; a read does not.
+            _Fields.RISK_LEVEL: "low" if read_only else "high",
+            Keys.Field.STATUS: "pending",
+            _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
+            _Fields.GRANT_OPTIONS: ["allow_once"],
+        }
 
 
 class StreamCustomProcessor:
@@ -837,6 +940,27 @@ class StreamOrchestrator:
                 continue
             action = raw_action
             action_name = StreamTextHelper.extract(action.get(Keys.Field.NAME))
+            if action_name in _FilesystemApproval.TOOL_OPERATIONS:
+                # A deepagents FilesystemPermission(mode="interrupt") rule parks
+                # the run through the SAME HumanInTheLoopMiddleware that gates
+                # MCP, so its interrupt arrives in this very shape
+                # (action_requests + review_configs). Until this branch existed
+                # the `continue` below dropped it: no payload, so no
+                # `approval_requested` event, so the client was never told a
+                # decision was pending. The run sat at `waiting_for_approval`
+                # while the tool card spun forever — verified live, and read to
+                # the user as a hang.
+                fs_payload = _FilesystemApproval.payload(
+                    interrupt_id=interrupt_id,
+                    index=index,
+                    action_count=len(action_requests),
+                    action_name=action_name,
+                    args=action.get(Keys.Field.ARGS),
+                    allowed_decisions=review_configs.get(action_name, ()),
+                )
+                if fs_payload is not None:
+                    approvals.append(fs_payload)
+                continue
             if action_name != McpValues.ToolName.CALL_MCP_TOOL:
                 continue
             args = action.get(Keys.Field.ARGS)

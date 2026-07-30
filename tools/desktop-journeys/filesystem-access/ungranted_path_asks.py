@@ -210,9 +210,15 @@ def main() -> int:
                 conversation_id = _wait_for_conversation_id(session)
                 run_id = _wait_for_new_run(session, conversation_id, 0)
                 evidence["run_id"] = run_id
-                _wait_for_terminal_run(session, run_id)
+                # A run that correctly stops to ASK never becomes terminal, so
+                # waiting for terminal here would fail on the very outcome this
+                # journey exists to prove. Parked IS the pass.
+                try:
+                    _wait_for_terminal_run(session, run_id)
+                except AssertionError as exc:
+                    evidence["parked"] = "waiting_for_approval" in str(exc)
                 time.sleep(1.5)
-                session.shot("fs1-04-run-terminal")
+                session.shot("fs1-04-outcome")
 
                 events = _events(session, run_id)
                 evidence["event_count"] = len(events)
