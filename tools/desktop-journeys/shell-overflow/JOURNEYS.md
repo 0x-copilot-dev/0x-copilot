@@ -100,3 +100,80 @@ a new primitive absolutely-positions a child without anchoring its wrapper.
 Deliberate `position: fixed` overlays (the toast stack) report
 `offsetParent === null` and are correctly ignored, as are elements inside a
 `display: none` subtree (the hidden destination outlet).
+
+---
+
+## J3 — A short window makes nothing unreachable
+
+`short_window_surfaces.py`. J1/J2 sweep at the default 1200x800 window, where
+every surface fits. This journey resizes the **real** window short and checks the
+half that only breaks there.
+
+**User story:** I make the window short — half my screen, or a small laptop
+display. Nothing is cut off: anything taller than the window scrolls _inside_ its
+own panel, and the window frame still never moves.
+
+### Why enforcing the document invariant needed a second fix
+
+`desktop.css` only set `body { margin: 0 }`; it never declared that the document
+must not scroll. The web host has declared it all along
+(`apps/frontend/src/styles.css`: `body { margin: 0; overflow: hidden }`), and that
+asymmetry is why the escaped switch above produced visible damage on desktop and
+none on web. `desktop.css` now declares `overflow: hidden` too, so the _next_
+escape degrades to an invisible layout artefact instead of a scrollable window.
+
+That is only safe if nothing leans on the document to scroll — otherwise the
+defense-in-depth fix silently creates an **unreachable-content** bug. Both
+pre-shell full-window surfaces did lean on it:
+
+| Surface      | Root            | Stylesheet     | Was                                                            | Now                                                 |
+| ------------ | --------------- | -------------- | -------------------------------------------------------------- | --------------------------------------------------- |
+| Sign-in gate | `.loginx-shell` | `signin.css`   | `min-height: 100vh`, **no internal overflow**                  | `height: 100%` + `overflow: auto`, column direction |
+| FTUE         | `.fr`           | `firstrun.css` | `height: 100%; overflow: auto` + inherited `min-height: 100vh` | adds `min-height: 0` to drop the inherited `100vh`  |
+
+Two details matter beyond "add `overflow: auto`":
+
+- **`height: 100%`, not `min-height: 100vh`.** The frame's content box is one
+  titlebar inset _shorter_ than the viewport (33px with its hairline borders), so
+  a `100vh` surface hangs past the frame and that tail is **clipped** by the
+  frame — and since min-height beats height, `height: 100%` alone does not save
+  it. `.fr` hit this via the shared
+  `packages/chat-surface/src/onboarding/onboarding.css`, which sets
+  `min-height: 100vh` for web hosts where the document _does_ scroll. Measured:
+  33px of the FTUE surface, footer included, was unreachable at every height.
+- **Column flex direction on `.loginx-shell`.** Scrollable overflow never extends
+  above a scroll container's start edge. `.loginx-pane` centres the card with
+  `align-items: center`; as a **row** flex item it is stretched to container
+  height, so a tall card overflows symmetrically and its top lands above the
+  scrollable region — unreachable even _with_ `overflow: auto`. As a **column**
+  flex item its automatic minimum size holds it at content height, so overflow
+  grows downward into the scrollable region.
+
+The desktop host needs **no** document-scroll escape hatch. The web host has one
+(`html.login-html, body.login-body { overflow: auto !important }`) for a login
+screen that genuinely scrolls the page. Any new full-window desktop surface must
+scroll internally instead — do not re-open the document scroll.
+
+### Coverage
+
+| Step                                                              | Coverage                                                                                  |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Resize the real window to 1200x600, then 1200x420                 | ASSERTED (`resizeWindow` RPC; FAILS if the size was refused)                              |
+| Sign-in gate + FTUE: surface owns `overflow-y: auto`              | ASSERTED (`.loginx-shell`, `.fr`)                                                         |
+| Neither surface is clipped past the frame's top or bottom         | ASSERTED (this is the `100vh`-past-the-frame check)                                       |
+| Content reachable at BOTH ends of each surface's own scroll range | ASSERTED (nothing above its visible top at `scrollTop=0`, none below when scrolled fully) |
+| Every destination + every settings section, at BOTH short sizes   | ASSERTED (root overflow 0px; enumerated live, so new ones are covered)                    |
+
+Resizing goes through the driver's `resizeWindow` RPC, which calls
+`setContentSize` on the real `BrowserWindow` — not a Playwright viewport
+override — so `vh` units, the titlebar inset, and internal scroll regions behave
+as they do for a user dragging the window smaller.
+
+### Why zero overflow, not "the window refuses to scroll"
+
+`overflow: hidden` clips and drops the scrollbar, but the box **remains a scroll
+container**: `scrollHeight` still reports the full scrollable overflow region and
+a programmatic `scrollTop` write is still honoured. So asserting that a wheel or a
+forced `scrollTop` does nothing would pass over a fully escaped element and prove
+only that the defense-in-depth layer is present. Zero scrollable overflow is what
+catches the escape — the same reason J1/J2 assert the ICB cause directly.

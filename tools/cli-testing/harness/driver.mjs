@@ -253,6 +253,47 @@ async function rpc(cmd, args) {
       const val = await p.evaluate(args.js);
       return { value: val };
     }
+    case "resizeWindow": {
+      // Resize the REAL BrowserWindow (not a Playwright viewport override) so
+      // window-size-dependent layout — internal scroll regions, the reserved
+      // titlebar strip, anything sized off `vh` — is exercised exactly as it is
+      // for a user who drags the window smaller. Sets the CONTENT size, so the
+      // requested height is the renderer viewport height on every platform
+      // regardless of the hidden-inset titlebar.
+      const { width, height } = args;
+      if (!Number.isFinite(width) || !Number.isFinite(height)) {
+        throw new Error("resizeWindow needs numeric width and height");
+      }
+      const applied = await app.evaluate(
+        async ({ BrowserWindow }, size) => {
+          const win = BrowserWindow.getAllWindows().find(
+            (w) => !w.isDestroyed(),
+          );
+          if (!win) throw new Error("no live BrowserWindow to resize");
+          win.setContentSize(Math.round(size.width), Math.round(size.height));
+          const [w, h] = win.getContentSize();
+          return { width: w, height: h };
+        },
+        { width, height },
+      );
+      // Let the renderer settle on the new size before the caller measures.
+      const viewport = await p
+        .evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() =>
+                  resolve({
+                    innerWidth: window.innerWidth,
+                    innerHeight: window.innerHeight,
+                  }),
+                ),
+              );
+            }),
+        )
+        .catch(() => null);
+      return { requested: { width, height }, applied, viewport };
+    }
     case "dumpDom": {
       const name = args.name ?? `dom-${Date.now()}`;
       const html = await p.content();
