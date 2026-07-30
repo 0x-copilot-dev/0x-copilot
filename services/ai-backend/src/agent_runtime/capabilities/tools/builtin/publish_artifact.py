@@ -73,10 +73,47 @@ class _ArtifactMediaPolicy:
     )
 
     @classmethod
+    def _bare(cls, media_type: str) -> str:
+        return media_type.lower().split(";", 1)[0].strip()
+
+    @classmethod
+    def owning_kind(cls, media_type: str) -> ArtifactKind | None:
+        """The kind whose renderer owns this media type, when exactly one does.
+
+        Derived from the allow-lists above rather than restated, so a media type
+        added to one of them cannot start disagreeing with this answer.
+
+        A type on two lists has no owner: ``application/json`` is both a dataset
+        and code, and ``text/plain`` is both a document and code, so neither
+        names a renderer that is more right than ``file``. Only the *exact* code
+        list participates — the ``text/x-``/``application/x-`` prefix rule below
+        admits a long tail of types a code editor accepts but does not own.
+        """
+
+        bare = cls._bare(media_type)
+        owners = {
+            kind
+            for kind, allowed in (
+                (ArtifactKind.DATASET, cls._DATASET),
+                (ArtifactKind.DOCUMENT, cls._DOCUMENT),
+                (ArtifactKind.CODE, cls._CODE_EXACT),
+            )
+            if bare in allowed
+        }
+        return next(iter(owners)) if len(owners) == 1 else None
+
+    @classmethod
     def validate(cls, *, kind: ArtifactKind, media_type: str) -> None:
         normalized = media_type.lower()
         bare = normalized.split(";", 1)[0].strip()
         if kind is ArtifactKind.FILE:
+            # PRD-B2 D5 scopes the file renderer to unsupported/binary media:
+            # metadata, a digest, and a download, deliberately no preview. A CSV
+            # published as `file` therefore reaches a surface with no table and
+            # no editor — an author who chose the wrong one of two fields gets a
+            # dead end rather than a correction, so refuse the pairing.
+            if cls.owning_kind(bare) is not None:
+                raise ValueError("media_type is not allowed for artifact kind")
             return
         if kind is ArtifactKind.DATASET and bare in cls._DATASET:
             return
