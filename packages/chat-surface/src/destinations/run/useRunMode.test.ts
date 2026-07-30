@@ -11,12 +11,16 @@ import type { KeyValueStore } from "../../storage/key-value-store";
 import {
   readRunFocusPanelCollapsed,
   readRunMode,
+  readRunStudioRailCollapsed,
   runFocusPanelCollapsedKey,
   runModeKey,
+  runStudioRailCollapsedKey,
   useRunMode,
   useRunPanelCollapsed,
+  useRunStudioRailCollapsed,
   writeRunFocusPanelCollapsed,
   writeRunMode,
+  writeRunStudioRailCollapsed,
   type RunMode,
 } from "./useRunMode";
 
@@ -352,6 +356,98 @@ describe("useRunPanelCollapsed", () => {
     const { result, rerender } = renderHook(
       ({ id }: { id: ConversationId }) =>
         useRunPanelCollapsed({ conversationId: id }),
+      { wrapper: wrapperFor(store), initialProps: { id: CONV } },
+    );
+    expect(result.current.collapsed).toBe(false);
+    rerender({ id: other });
+    expect(result.current.collapsed).toBe(true);
+  });
+});
+
+// ============================================================
+// useRunStudioRailCollapsed (Studio workspace-rail fold)
+// ============================================================
+
+function renderStudioRailCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId = CONV,
+) {
+  return renderHook(() => useRunStudioRailCollapsed({ conversationId }), {
+    wrapper: wrapperFor(store),
+  });
+}
+
+describe("readRunStudioRailCollapsed / persistence helpers", () => {
+  it("defaults to expanded (false) when nothing is persisted", () => {
+    expect(readRunStudioRailCollapsed(makeStore(), CONV)).toBe(false);
+  });
+
+  it('reads only the literal "1" as collapsed', () => {
+    const key = runStudioRailCollapsedKey(CONV);
+    expect(readRunStudioRailCollapsed(makeStore({ [key]: "1" }), CONV)).toBe(
+      true,
+    );
+    expect(readRunStudioRailCollapsed(makeStore({ [key]: "0" }), CONV)).toBe(
+      false,
+    );
+    expect(readRunStudioRailCollapsed(makeStore({ [key]: "yes" }), CONV)).toBe(
+      false,
+    );
+  });
+
+  it("round-trips through write/read", () => {
+    const store = makeStore();
+    writeRunStudioRailCollapsed(store, CONV, true);
+    expect(readRunStudioRailCollapsed(store, CONV)).toBe(true);
+    writeRunStudioRailCollapsed(store, CONV, false);
+    expect(readRunStudioRailCollapsed(store, CONV)).toBe(false);
+  });
+
+  // The Studio rail and the Focus panel are different objects doing different
+  // jobs; sharing a key would fold one when the reader folded the other.
+  it("uses a key distinct from the Focus panel's", () => {
+    expect(runStudioRailCollapsedKey(CONV)).not.toBe(
+      runFocusPanelCollapsedKey(CONV),
+    );
+    const store = makeStore();
+    writeRunStudioRailCollapsed(store, CONV, true);
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(false);
+    writeRunFocusPanelCollapsed(store, CONV, false);
+    expect(readRunStudioRailCollapsed(store, CONV)).toBe(true);
+  });
+});
+
+describe("useRunStudioRailCollapsed", () => {
+  it("hydrates the persisted fold on mount", () => {
+    const store = makeStore({ [runStudioRailCollapsedKey(CONV)]: "1" });
+    const { result } = renderStudioRailCollapsed(store);
+    expect(result.current.collapsed).toBe(true);
+  });
+
+  it("persists an explicit setCollapsed to the KeyValueStore", () => {
+    const store = makeStore();
+    const { result } = renderStudioRailCollapsed(store);
+    act(() => result.current.setCollapsed(true));
+    expect(result.current.collapsed).toBe(true);
+    expect(store.get(runStudioRailCollapsedKey(CONV))).toBe("1");
+  });
+
+  it("toggles folded↔expanded and persists", () => {
+    const store = makeStore();
+    const { result } = renderStudioRailCollapsed(store);
+    act(() => result.current.toggle());
+    expect(result.current.collapsed).toBe(true);
+    act(() => result.current.toggle());
+    expect(result.current.collapsed).toBe(false);
+    expect(store.get(runStudioRailCollapsedKey(CONV))).toBe("0");
+  });
+
+  it("re-hydrates when the conversation changes (per-conversation state)", () => {
+    const other = "conv-2" as ConversationId;
+    const store = makeStore({ [runStudioRailCollapsedKey(other)]: "1" });
+    const { result, rerender } = renderHook(
+      ({ id }: { id: ConversationId }) =>
+        useRunStudioRailCollapsed({ conversationId: id }),
       { wrapper: wrapperFor(store), initialProps: { id: CONV } },
     );
     expect(result.current.collapsed).toBe(false);

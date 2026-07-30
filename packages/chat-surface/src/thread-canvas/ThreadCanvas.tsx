@@ -88,6 +88,13 @@ const MODE_VALUES: readonly ThreadMode[] = ["studio", "focus"];
 export const DEFAULT_RAIL_WIDTH = 360;
 export const MIN_RAIL_WIDTH = 300;
 export const MAX_RAIL_WIDTH = 760;
+/**
+ * Width of the Studio rail while collapsed — the icon strip only. Matches the
+ * Focus Run-details strip (`.sd-strip`, 46px) so the folded rail reads as the
+ * same object in both modes. Deliberately outside the clamp range above: this
+ * is a folded state, not a width the user can drag to.
+ */
+export const COLLAPSED_RAIL_WIDTH = 46;
 /** Minimum width kept for the surface (center) column while dragging. */
 const MIN_SURFACE_WIDTH = 320;
 
@@ -232,6 +239,16 @@ export interface ThreadCanvasProps {
    * rail divider. Omit for a non-persistent, session-only resize.
    */
   readonly onRailWidthChange?: (width: number) => void;
+  /**
+   * Studio only: the rail is folded to its icon strip (`COLLAPSED_RAIL_WIDTH`),
+   * handing the reclaimed width to the surface column so the generative surface
+   * can be worked with at full canvas width. The rail node itself is unchanged —
+   * it renders its own collapsed presentation (`RunWorkspaceRail`); this prop
+   * only tells the GRID how wide that column is, since the template lives here.
+   * The drag divider is withheld while folded (there is no width to drag).
+   * Defaults to `false`; ignored in Focus (single centered column).
+   */
+  readonly railCollapsed?: boolean;
 }
 
 const EMPTY_EVENTS: readonly RuntimeEventEnvelope[] = [];
@@ -274,6 +291,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     showModeSwitcher = true,
     railWidth = DEFAULT_RAIL_WIDTH,
     onRailWidthChange,
+    railCollapsed = false,
   } = props;
 
   // SINGLE projector — every consumer reads slices off this object.
@@ -287,6 +305,9 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const draggingRef = useRef(false);
   const railWidthPx = clampRailWidth(dragWidth ?? railWidth);
+  // What the GRID uses. A folded rail shows only its icon strip; the user's
+  // chosen width above is left untouched so expanding restores it exactly.
+  const gridRailWidthPx = railCollapsed ? COLLAPSED_RAIL_WIDTH : railWidthPx;
 
   const widthFromPointer = useCallback((clientX: number): number => {
     const grid = gridRef.current;
@@ -457,11 +478,12 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
       data-conversation-id={conversationId}
       data-mode={mode}
       data-resolved-mode={mode}
+      data-rail-collapsed={railCollapsed ? "true" : "false"}
       data-has-active-surfaces={
         projection.surface.hasActiveSurfaces ? "true" : "false"
       }
       style={{
-        ...gridStyleFor(mode, railWidthPx, showTabs),
+        ...gridStyleFor(mode, gridRailWidthPx, showTabs),
         // Kill the 300ms grid-template animation during an active drag so the
         // rail tracks the pointer 1:1 (the animation is for mode switches).
         ...(dragWidth !== null ? { transition: "none" } : null),
@@ -564,8 +586,12 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
         {/* Draggable divider between the surface and the rail — Studio only.
             The 1px `handle` grid column carries the line; the inner span widens
             the grab area to ~9px. Pointer capture keeps the drag alive off the
-            thin target; arrow keys nudge for keyboard users. */}
-        {showSurfaceColumn ? (
+            thin target; arrow keys nudge for keyboard users.
+
+            Withheld while the rail is folded: a col-resize target against a
+            strip that has no width to give would drag the rail back open by
+            the side door, out of sync with the collapse state the host owns. */}
+        {showSurfaceColumn && !railCollapsed ? (
           <div
             role="separator"
             aria-orientation="vertical"
