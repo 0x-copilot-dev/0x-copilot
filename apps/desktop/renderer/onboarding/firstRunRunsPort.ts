@@ -76,14 +76,20 @@ export function createFirstRunRunsPort(transport: Transport): FirstRunRunsPort {
       if (input.attachments !== undefined && input.attachments.length > 0) {
         body.attachments = input.attachments;
       }
-      // P4 — active connectors from the Tools popover seed the run's
-      // `request_context.connector_scopes` (no conversation exists to PATCH at
-      // toggle time). Sent only when the user actually activated a connector.
+      // P4 — connectors the user PAUSED in the Tools popover seed the run's
+      // `request_context.paused_connectors` (no conversation exists to PATCH at
+      // toggle time). Connected connectors are live by default, so this is sent
+      // only when the user actually paused one — and it must be
+      // `paused_connectors`, not an omission from `connector_scopes`: the MCP
+      // gate (`McpPermissionPolicy.is_server_card_authorized`) reads this field
+      // and nothing else for a per-run opt-out.
       if (
-        input.connectorScopes !== undefined &&
-        Object.keys(input.connectorScopes).length > 0
+        input.pausedConnectorIds !== undefined &&
+        input.pausedConnectorIds.length > 0
       ) {
-        body.request_context = { connector_scopes: input.connectorScopes };
+        body.request_context = {
+          paused_connectors: input.pausedConnectorIds,
+        };
       }
 
       const run = await transport.request<CreateRunResponseLite>({

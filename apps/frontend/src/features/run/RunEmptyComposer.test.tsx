@@ -160,7 +160,12 @@ describe("RunEmptyComposer (web)", () => {
     expect(arg.model).toBeTruthy();
   });
 
-  it("includes the connector that just completed OAuth in the next run", async () => {
+  // Connected connectors are live by default, so a connector that just finished
+  // OAuth needs nothing sent for it — the run body stays empty of connector
+  // payload and the runtime's default (available) stands. What the old
+  // `connectorScopes: { linear: [] }` assertion really pinned was "don't pause
+  // it", and that is what `pausedConnectorIds` now says directly.
+  it("does not pause the connector that just completed OAuth", async () => {
     const ctx = makeCtx({ autoActivateConnectorId: "linear" });
     const { container } = renderEmpty(ctx);
     await waitFor(() => expect(textarea(container)).not.toBeNull());
@@ -174,7 +179,7 @@ describe("RunEmptyComposer (web)", () => {
     );
     await waitFor(() => expect(ctx.onStartRun).toHaveBeenCalledTimes(1));
     const arg = (ctx.onStartRun as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(arg.connectorScopes).toEqual({ linear: [] });
+    expect(arg.pausedConnectorIds).toEqual([]);
   });
 
   it("stays LIVE with no model configured — the send still reaches the cockpit seam", async () => {

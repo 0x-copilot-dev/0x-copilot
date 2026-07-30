@@ -941,6 +941,14 @@ export interface RunStartRequest {
   readonly webSearchEnabled?: boolean;
   /** Active connector scopes (Tools popover) → `request_context`. */
   readonly connectorScopes?: ConversationConnectorScopes;
+  /**
+   * Connectors the user paused in the Tools popover for THIS run →
+   * `request_context.paused_connectors`, the only signal the runtime's MCP gate
+   * (`McpPermissionPolicy.is_server_card_authorized`) reads for a per-run
+   * opt-out. Omitting an id from `connectorScopes` does NOT pause it, which is
+   * why a popover row toggled off used to stay callable.
+   */
+  readonly pausedConnectorIds?: readonly string[];
 }
 
 /**
@@ -4383,11 +4391,23 @@ export function buildRunCreateBody(
   if (request.webSearchEnabled === false) {
     body.web_search_enabled = false;
   }
+  // Both live under `request_context`, so build it once — assigning twice would
+  // silently drop whichever came first.
+  const requestContext: Record<string, unknown> = {};
   if (
     request.connectorScopes !== undefined &&
     Object.keys(request.connectorScopes).length > 0
   ) {
-    body.request_context = { connector_scopes: request.connectorScopes };
+    requestContext.connector_scopes = request.connectorScopes;
+  }
+  if (
+    request.pausedConnectorIds !== undefined &&
+    request.pausedConnectorIds.length > 0
+  ) {
+    requestContext.paused_connectors = request.pausedConnectorIds;
+  }
+  if (Object.keys(requestContext).length > 0) {
+    body.request_context = requestContext;
   }
   return body;
 }

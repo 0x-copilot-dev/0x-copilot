@@ -8,7 +8,9 @@ import type { McpCatalogEntry, McpServer } from "@0x-copilot/api-types";
 
 import {
   firstRunActiveToolCount,
+  isFirstRunConnectorActive,
   projectFirstRunConnectors,
+  type FirstRunConnectedConnector,
 } from "./projectFirstRunConnectors";
 
 function server(overrides: Partial<McpServer>): McpServer {
@@ -76,7 +78,42 @@ describe("projectFirstRunConnectors — connected classification", () => {
       scopesSummary: "read & write workbooks",
       logoUrl: "https://logo.test/s.png",
       brandColor: "#0f0",
+      accessMode: "read",
     });
+  });
+
+  it("carries read_act through and defaults a missing access_mode to read", () => {
+    const { connected } = projectFirstRunConnectors(
+      [
+        server({ server_id: "a", access_mode: "read_act" }),
+        server({ server_id: "b" }), // field absent — older backend
+      ],
+      [],
+    );
+    expect(connected.map((c) => c.accessMode)).toEqual(["read_act", "read"]);
+  });
+
+  it("drops an `off` server — the runtime never offers it to the model", () => {
+    // `list_internal_cards` skips `off` servers, so a per-run toggle here would
+    // be a control that cannot grant anything. Settings → Tools owns that switch.
+    const { connected } = projectFirstRunConnectors(
+      [
+        server({ server_id: "a", access_mode: "off" }),
+        server({ server_id: "b", access_mode: "read" }),
+      ],
+      [],
+    );
+    expect(connected.map((c) => c.serverId)).toEqual(["b"]);
+  });
+
+  it("keeps an `off` seed out of the installable list too", () => {
+    // It IS installed; re-offering "Connect" would install what already exists.
+    const { connected, installable } = projectFirstRunConnectors(
+      [server({ server_id: "seed:safe", access_mode: "off" })],
+      [catalogEntry({ slug: "safe" })],
+    );
+    expect(connected).toHaveLength(0);
+    expect(installable).toHaveLength(0);
   });
 });
 
@@ -122,34 +159,45 @@ describe("projectFirstRunConnectors — installable cross-reference", () => {
   });
 });
 
+function connectedRow(serverId: string): FirstRunConnectedConnector {
+  return {
+    serverId,
+    displayName: serverId.toUpperCase(),
+    scopesSummary: null,
+    logoUrl: null,
+    brandColor: null,
+    accessMode: "read",
+  };
+}
+
+describe("isFirstRunConnectorActive", () => {
+  it("is active by default — connected means the runtime can call it", () => {
+    expect(isFirstRunConnectorActive(connectedRow("a"), [])).toBe(true);
+  });
+
+  it("is inactive only when explicitly paused for this run", () => {
+    expect(isFirstRunConnectorActive(connectedRow("a"), ["a"])).toBe(false);
+    expect(isFirstRunConnectorActive(connectedRow("a"), ["b"])).toBe(true);
+  });
+});
+
 describe("firstRunActiveToolCount", () => {
-  const connected = [
-    {
-      serverId: "a",
-      displayName: "A",
-      scopesSummary: null,
-      logoUrl: null,
-      brandColor: null,
-    },
-    {
-      serverId: "b",
-      displayName: "B",
-      scopesSummary: null,
-      logoUrl: null,
-      brandColor: null,
-    },
-  ];
+  const connected = [connectedRow("a"), connectedRow("b")];
 
-  it("counts web search when on", () => {
-    expect(firstRunActiveToolCount(true, connected, [])).toBe(1);
-    expect(firstRunActiveToolCount(false, connected, [])).toBe(0);
+  it("counts every connected connector when nothing is paused", () => {
+    // The regression this pins: an empty selection used to mean "1 on" (web
+    // search alone) while the panel listed two connected connectors.
+    expect(firstRunActiveToolCount(true, connected, [])).toBe(3);
+    expect(firstRunActiveToolCount(false, connected, [])).toBe(2);
   });
 
-  it("adds active connectors that resolve to a connected row", () => {
-    expect(firstRunActiveToolCount(true, connected, ["a", "b"])).toBe(3);
+  it("subtracts paused connectors", () => {
+    expect(firstRunActiveToolCount(true, connected, ["a"])).toBe(2);
+    expect(firstRunActiveToolCount(true, connected, ["a", "b"])).toBe(1);
+    expect(firstRunActiveToolCount(false, connected, ["a", "b"])).toBe(0);
   });
 
-  it("ignores active ids not present in the connected set", () => {
-    expect(firstRunActiveToolCount(false, connected, ["a", "ghost"])).toBe(1);
+  it("ignores paused ids not present in the connected set", () => {
+    expect(firstRunActiveToolCount(false, connected, ["ghost"])).toBe(2);
   });
 });

@@ -1730,7 +1730,16 @@ class McpRegistryService:
         effective_record = record.model_copy(
             update={_Fields.AUTH_STATE: self._effective_auth_state(record)}
         )
-        return McpServerResponse.from_record(effective_record)
+        # Carry the durable authority mode so clients can tell an `off`
+        # connector from an available one. `list_internal_cards` already drops
+        # `off` servers before the model sees them; without this field on the
+        # public list, the composer's Tools popover had no way to know and
+        # rendered an `off` connector as an ordinary connected row.
+        access_mode = self._resolve_access_mode(record)
+        return McpServerResponse.from_record(
+            effective_record,
+            access_mode=None if access_mode is None else access_mode.value,
+        )
 
     def _effective_auth_state(self, record: McpServerRecord) -> McpAuthState:
         if record.auth_state == McpAuthState.AUTHENTICATED:

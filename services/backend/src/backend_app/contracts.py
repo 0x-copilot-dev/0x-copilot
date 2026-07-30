@@ -627,11 +627,23 @@ class McpServerResponse(BackendContract):
     default_scopes: tuple[str, ...] = ()
     admin_managed: bool = False
     description: str = ""
+    # Durable authority mode from the joined ``connectors`` row. Mirrors the
+    # value ``list_internal_cards`` gates on, so a client can render what the
+    # runtime will actually do: an ``off`` server is dropped from the model's
+    # cards entirely, and the composer's Tools popover must therefore not offer
+    # it a per-run toggle. Defaults to ``read`` when no connector row joins the
+    # server — an unprojected server is not a user-set ``off``.
+    access_mode: str = "read"
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_record(cls, record: McpServerRecord) -> "McpServerResponse":
+    def from_record(
+        cls,
+        record: McpServerRecord,
+        *,
+        access_mode: str | None = None,
+    ) -> "McpServerResponse":
         return cls(
             server_id=record.server_id,
             name=record.name,
@@ -649,6 +661,7 @@ class McpServerResponse(BackendContract):
             default_scopes=record.default_scopes,
             admin_managed=record.admin_managed,
             description=record.description,
+            access_mode=access_mode or "read",
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

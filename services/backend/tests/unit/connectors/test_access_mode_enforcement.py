@@ -208,3 +208,39 @@ def test_proxy_internal_rpc_allows_unjoined_server(request_factory) -> None:
         request=request_factory(),
     )
     assert out.payload["result"] is not None
+
+
+# ── The public `/v1/mcp/servers` list carries the durable mode ───────────────
+# `list_internal_cards` DROPS an `off` server, so the model never sees it. The
+# public list keeps the row (Settings → Tools has to render and un-off it), which
+# left every other client unable to tell an `off` connector from an available
+# one — the composer's Tools popover rendered it as an ordinary connected row
+# with a per-run toggle that could not grant anything. Carrying `access_mode`
+# here is what lets a client match what the runtime will actually do.
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (ConnectorAccessMode.READ, "read"),
+        (ConnectorAccessMode.READ_ACT, "read_act"),
+        (ConnectorAccessMode.OFF, "off"),
+    ],
+)
+def test_list_servers_reports_access_mode(mode, expected) -> None:
+    # `seed_token` mints an internal client session, which the `off` gate
+    # rejects outright — the same reason the deny test above skips it. The token
+    # has no bearing on the reported access mode.
+    service, server_id, _vault, _remote = _service(
+        access_mode=mode, seed_token=mode is not ConnectorAccessMode.OFF
+    )
+    listed = service.list_servers(org_id=ORG, user_id=USER)
+    row = next(s for s in listed.servers if s.server_id == server_id)
+    assert row.access_mode == expected
+
+
+def test_list_servers_defaults_an_unjoined_server_to_read() -> None:
+    # No connector row joins the server (resolver returns None). An unprojected
+    # server is not a user-set `off`, so it must read as the default `read`.
+    service, server_id, _vault, _remote = _service(access_mode=None)
+    listed = service.list_servers(org_id=ORG, user_id=USER)
+    row = next(s for s in listed.servers if s.server_id == server_id)
+    assert row.access_mode == "read"

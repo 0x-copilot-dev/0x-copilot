@@ -2,7 +2,6 @@ import type {
   ApprovalDecision,
   ApprovalForwardTarget,
   Conversation,
-  ConversationConnectorScopes,
   CreateRunRequest,
   Message,
   ModelCatalogModel,
@@ -977,35 +976,32 @@ export function ChatScreen({
     ],
   );
 
-  // Composer Tools pill state (SPEC `webOn`, default true; connectors
-  // held as active ids since a toggle is per-turn intent, threaded into the
-  // run-create body — no per-toggle PATCH, the FTUE model). Declared before
-  // `submitUserMessage` so the send closure can read the current selection.
+  // Composer Tools pill state (SPEC `webOn`, default true; connectors held as
+  // PAUSED ids since a toggle is per-turn intent, threaded into the run-create
+  // body — no per-toggle PATCH, the FTUE model). Both knobs default to ON: a
+  // connected connector is one the runtime can already call, so the toggle is an
+  // opt-out. Declared before `submitUserMessage` so the send closure can read
+  // the current selection.
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [activeConnectorIds, setActiveConnectorIds] = useState<
+  const [pausedConnectorIds, setPausedConnectorIds] = useState<
     readonly string[]
   >([]);
-  // Reset per-run tool selection when the conversation switches (active
-  // connectors / web-search default are per-turn intent).
+  // Bumped after a 1-click connect so the pill badge and the open panel refetch
+  // and the new connector shows up — already on — without reopening.
+  const [toolsReloadToken, setToolsReloadToken] = useState(0);
+  // Reset per-run tool selection when the conversation switches (pauses /
+  // web-search default are per-turn intent).
   useEffect(() => {
-    setActiveConnectorIds([]);
+    setPausedConnectorIds([]);
     setWebSearchEnabled(true);
   }, [conversationId]);
-  // Active connector ids → the run's `request_context.connector_scopes` (active →
-  // `[]`, i.e. enabled with no extra scopes). Undefined when nothing is active so
-  // a default run body carries no connector-scope payload.
-  const toolConnectorScopes = useMemo<
-    ConversationConnectorScopes | undefined
-  >(() => {
-    if (activeConnectorIds.length === 0) {
-      return undefined;
-    }
-    const scopes: Record<string, readonly string[] | null> = {};
-    for (const id of activeConnectorIds) {
-      scopes[id] = [];
-    }
-    return scopes;
-  }, [activeConnectorIds]);
+  // Paused ids → the run's `request_context.paused_connectors`, the one signal
+  // the runtime's MCP gate reads for a per-run opt-out. Undefined when nothing
+  // is paused so a default run body carries no connector payload.
+  const toolPausedConnectorIds = useMemo<readonly string[] | undefined>(
+    () => (pausedConnectorIds.length === 0 ? undefined : pausedConnectorIds),
+    [pausedConnectorIds],
+  );
 
   const submitUserMessage = useCallback(
     async (
@@ -1074,11 +1070,11 @@ export function ChatScreen({
             // workaround from before the wire field landed.
             model: modelSelectionForId(allModels, selectedModelId),
             reasoningDepth: depth,
-            // Composer Tools popover — per-turn web-search + connector scopes.
+            // Composer Tools popover — per-turn web-search + paused connectors.
             // `createRun` only sends web_search_enabled on an explicit `false`,
-            // and request_context.connector_scopes only when non-empty.
+            // and request_context.paused_connectors only when non-empty.
             webSearchEnabled,
-            connectorScopes: toolConnectorScopes,
+            pausedConnectorIds: toolPausedConnectorIds,
             attachments,
             content,
             quote,
@@ -1142,7 +1138,7 @@ export function ChatScreen({
       selectedModelId,
       startEventStream,
       webSearchEnabled,
-      toolConnectorScopes,
+      toolPausedConnectorIds,
     ],
   );
 
@@ -1699,9 +1695,9 @@ export function ChatScreen({
   );
   // --- Composer-chrome parity: the inline Tools popover (web-search toggle +
   // Connected rows + 1-click Installable + Custom-MCP) that supersedes the flat
-  // ComposerConnectorsButton. The per-run `webSearchEnabled` / `activeConnectorIds`
-  // state + `toolConnectorScopes` memo live ABOVE `submitUserMessage` (which reads
-  // them on send); the port + handlers + trigger node are assembled here.
+  // ComposerConnectorsButton. The per-run `webSearchEnabled` / `pausedConnectorIds`
+  // state + `toolPausedConnectorIds` memo live ABOVE `submitUserMessage` (which
+  // reads them on send); the port + handlers + trigger node are assembled here.
   const composerConnectorsPort = useMemo<ComposerConnectorsPort>(
     () => createComposerConnectorsPort(identity),
     [identity],
@@ -1713,12 +1709,12 @@ export function ChatScreen({
 
   const onToggleToolConnector = useCallback(
     (serverId: string, active: boolean): void => {
-      setActiveConnectorIds((prev) =>
+      setPausedConnectorIds((prev) =>
         active
-          ? prev.includes(serverId)
+          ? prev.filter((id) => id !== serverId)
+          : prev.includes(serverId)
             ? prev
-            : [...prev, serverId]
-          : prev.filter((id) => id !== serverId),
+            : [...prev, serverId],
       );
     },
     [],
@@ -1735,6 +1731,7 @@ export function ChatScreen({
       void composerConnectorsPort
         .installFromCatalog(entry.slug)
         .then((server) => composerConnectorsPort.beginAuth(server.server_id))
+        .then(() => setToolsReloadToken((n) => n + 1))
         .catch(() => {
           // Workspace-authorize only; a failed install surfaces later via the
           // run-time `mcp_auth_required` card, so a swallow keeps the composer
@@ -1748,9 +1745,10 @@ export function ChatScreen({
     () => (
       <ChatToolsTrigger
         port={composerConnectorsPort}
+        reloadToken={toolsReloadToken}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
-        activeConnectorIds={activeConnectorIds}
+        pausedConnectorIds={pausedConnectorIds}
         onToggleConnector={onToggleToolConnector}
         onConnectCatalog={onToolConnectCatalog}
         onAddCustom={() => onOpenSettings("connectors")}
@@ -1758,8 +1756,9 @@ export function ChatScreen({
     ),
     [
       composerConnectorsPort,
+      toolsReloadToken,
       webSearchEnabled,
-      activeConnectorIds,
+      pausedConnectorIds,
       onToggleToolConnector,
       onToolConnectCatalog,
       onOpenSettings,

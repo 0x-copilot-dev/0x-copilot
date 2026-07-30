@@ -14,18 +14,29 @@
 // user already connected drops out of the installable list.
 //
 // This projection is per-run-state-agnostic: the FTUE has no conversation and
-// therefore no `ConversationConnectorScopes` at toggle time. Active/paused is
-// held as component state (`activeConnectorIds`) by the popover, not derived
-// here — so this function takes no scopes argument.
+// therefore no `ConversationConnectorScopes` at toggle time. What IS derived
+// here is availability — `connected` means "the runtime can call this right
+// now". The popover's toggle is an OPT-OUT on top of that (`pausedConnectorIds`,
+// empty by default), never an opt-in: a connector the Tools destination reports
+// as connected must not render as disabled in the composer. That inversion is
+// the whole reason a freshly authorized connector shows up already on.
+//
+// `access_mode === "off"` drops out entirely, mirroring the backend's own card
+// gate (`backend_app/service.py::list_internal_cards` skips `off` servers, so
+// the model never sees them). Listing an `off` row with a per-run toggle would
+// offer a control that cannot grant anything — the durable switch lives in
+// Settings → Tools. An `off` server still suppresses its catalog entry, so it
+// does not reappear as a 1-click "Connect" for something already installed.
 
 import type {
+  ConnectorAccessMode,
   McpAuthState,
   McpCatalogEntry,
   McpServer,
 } from "@0x-copilot/api-types";
 
-/** A workspace-installed, user-authenticated connector — rendered in the
- *  "Connected" section with a per-run active/paused toggle. */
+/** A workspace-installed, user-authenticated connector the runtime can call —
+ *  rendered in the "Connected" section, ON unless paused for this run. */
 export interface FirstRunConnectedConnector {
   readonly serverId: string;
   readonly displayName: string;
@@ -33,6 +44,12 @@ export interface FirstRunConnectedConnector {
   readonly scopesSummary: string | null;
   readonly logoUrl: string | null;
   readonly brandColor: string | null;
+  /**
+   * Durable authority mode. Never `off` on a projected row (those are dropped);
+   * carried so a row can say `read` vs `read_act` without a second fetch.
+   * Servers from a backend that predates the field default to `read`.
+   */
+  readonly accessMode: ConnectorAccessMode;
 }
 
 /** A curated catalog entry the user has not connected yet — rendered as a
@@ -79,16 +96,23 @@ export function projectFirstRunConnectors(
     if (server.enabled !== true || !isAuthenticated(server.auth_state)) {
       continue;
     }
+    // Installed either way, so the catalog entry is suppressed before the
+    // access-mode gate — an `off` connector must not resurface as "Connect".
+    if (server.server_id.startsWith(SEED_PREFIX)) {
+      connectedSlugs.add(server.server_id.slice(SEED_PREFIX.length));
+    }
+    const accessMode = server.access_mode ?? "read";
+    if (accessMode === "off") {
+      continue;
+    }
     connected.push({
       serverId: server.server_id,
       displayName: server.display_name || server.name || server.url,
       scopesSummary: server.scopes_summary ?? null,
       logoUrl: server.logo_url ?? null,
       brandColor: server.brand_color ?? null,
+      accessMode,
     });
-    if (server.server_id.startsWith(SEED_PREFIX)) {
-      connectedSlugs.add(server.server_id.slice(SEED_PREFIX.length));
-    }
   }
 
   const installable: FirstRunInstallableConnector[] = catalog
@@ -107,17 +131,28 @@ export function projectFirstRunConnectors(
   return { connected, installable };
 }
 
-/** Count the tools currently ON: web search (when enabled) + active
- *  connectors that actually resolve to a connected row. Drives the popover
- *  header meta `{n} on` and the composer pill badge. */
+/** Is this connected row live for the run? Connected means callable, so the
+ *  answer is yes unless the user paused it for this run. */
+export function isFirstRunConnectorActive(
+  row: FirstRunConnectedConnector,
+  pausedConnectorIds: readonly string[],
+): boolean {
+  return !pausedConnectorIds.includes(row.serverId);
+}
+
+/** Count the tools currently ON: web search (when enabled) + every connected
+ *  connector the user has not paused. Drives the popover header meta `{n} on`
+ *  and the composer pill badge — one function so the two can never disagree.
+ *  Paused ids that resolve to no connected row (uninstalled since, or switched
+ *  off in Settings) are ignored rather than subtracted. */
 export function firstRunActiveToolCount(
   webSearchEnabled: boolean,
   connected: readonly FirstRunConnectedConnector[],
-  activeConnectorIds: readonly string[],
+  pausedConnectorIds: readonly string[],
 ): number {
-  const active = new Set(activeConnectorIds);
   const activeConnectors = connected.reduce(
-    (n, row) => (active.has(row.serverId) ? n + 1 : n),
+    (n, row) =>
+      isFirstRunConnectorActive(row, pausedConnectorIds) ? n + 1 : n,
     0,
   );
   return (webSearchEnabled ? 1 : 0) + activeConnectors;

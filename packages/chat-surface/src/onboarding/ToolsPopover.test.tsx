@@ -65,7 +65,7 @@ function renderPopover(
     port: makePort(),
     webSearchEnabled: true,
     onToggleWebSearch: vi.fn(),
-    activeConnectorIds: [],
+    pausedConnectorIds: [],
     onToggleConnector: vi.fn(),
     onConnectCatalog: vi.fn(),
     onAddCustom: vi.fn(),
@@ -84,7 +84,7 @@ describe("<ToolsPopover> — open/closed", () => {
         port={makePort()}
         webSearchEnabled
         onToggleWebSearch={vi.fn()}
-        activeConnectorIds={[]}
+        pausedConnectorIds={[]}
         onToggleConnector={vi.fn()}
         onConnectCatalog={vi.fn()}
         onAddCustom={vi.fn()}
@@ -149,10 +149,10 @@ describe("<ToolsPopover> — load states", () => {
 });
 
 describe("<ToolsPopover> — header meta count", () => {
-  it("counts web search + active connectors (`{n} on · none required`)", async () => {
+  it("counts web search + every unpaused connected connector", async () => {
     renderPopover({
       webSearchEnabled: true,
-      activeConnectorIds: ["seed:sheets"],
+      pausedConnectorIds: [],
       port: makePort({ listServers: vi.fn().mockResolvedValue([server({})]) }),
     });
     await screen.findByTestId("first-run-tools-connected");
@@ -161,7 +161,19 @@ describe("<ToolsPopover> — header meta count", () => {
     );
   });
 
-  it("web search off with no active connectors reads `0 on`", () => {
+  it("drops a paused connector from the count", async () => {
+    renderPopover({
+      webSearchEnabled: true,
+      pausedConnectorIds: ["seed:sheets"],
+      port: makePort({ listServers: vi.fn().mockResolvedValue([server({})]) }),
+    });
+    await screen.findByTestId("first-run-tools-connected");
+    expect(screen.getByTestId("first-run-tools-meta").textContent).toBe(
+      "1 on · none required",
+    );
+  });
+
+  it("web search off before the list resolves reads `0 on`", () => {
     renderPopover({
       webSearchEnabled: false,
       port: makePort({
@@ -186,30 +198,64 @@ describe("<ToolsPopover> — callbacks", () => {
     expect(props.onToggleWebSearch).toHaveBeenCalledWith(false);
   });
 
-  it("toggles a connected connector to active when currently paused", async () => {
+  // The reported bug: Settings → Tools showed Linear connected while the
+  // composer pill showed it disabled, because the toggle read an opt-in set that
+  // nothing seeded. A connected row must render ON with no per-run state at all.
+  it("renders a connected connector ON when nothing is paused", async () => {
     const props = renderPopover({
-      activeConnectorIds: [],
-      port: makePort({ listServers: vi.fn().mockResolvedValue([server({})]) }),
-    });
-    const row = await screen.findByTestId(
-      "first-run-tools-connected-seed:sheets",
-    );
-    expect(row.getAttribute("aria-checked")).toBe("false");
-    fireEvent.click(row);
-    expect(props.onToggleConnector).toHaveBeenCalledWith("seed:sheets", true);
-  });
-
-  it("toggles a connected connector to paused when currently active", async () => {
-    const props = renderPopover({
-      activeConnectorIds: ["seed:sheets"],
+      pausedConnectorIds: [],
       port: makePort({ listServers: vi.fn().mockResolvedValue([server({})]) }),
     });
     const row = await screen.findByTestId(
       "first-run-tools-connected-seed:sheets",
     );
     expect(row.getAttribute("aria-checked")).toBe("true");
+    expect(row.getAttribute("data-off")).toBeNull();
     fireEvent.click(row);
     expect(props.onToggleConnector).toHaveBeenCalledWith("seed:sheets", false);
+  });
+
+  it("renders a paused connector OFF and toggles it back on", async () => {
+    const props = renderPopover({
+      pausedConnectorIds: ["seed:sheets"],
+      port: makePort({ listServers: vi.fn().mockResolvedValue([server({})]) }),
+    });
+    const row = await screen.findByTestId(
+      "first-run-tools-connected-seed:sheets",
+    );
+    expect(row.getAttribute("aria-checked")).toBe("false");
+    expect(row.getAttribute("data-off")).toBe("true");
+    fireEvent.click(row);
+    expect(props.onToggleConnector).toHaveBeenCalledWith("seed:sheets", true);
+  });
+
+  it("refetches when `reloadToken` changes — a connect completed", async () => {
+    // The auto-on path: authorizing installs + authenticates the server, so the
+    // row can only appear (already on) if the panel re-reads the list.
+    const listServers = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([server({})]);
+    const props: ToolsPopoverProps = {
+      open: true,
+      onClose: vi.fn(),
+      port: makePort({ listServers }),
+      reloadToken: 0,
+      webSearchEnabled: true,
+      onToggleWebSearch: vi.fn(),
+      pausedConnectorIds: [],
+      onToggleConnector: vi.fn(),
+      onConnectCatalog: vi.fn(),
+      onAddCustom: vi.fn(),
+    };
+    const { rerender } = render(<ToolsPopover {...props} />);
+    await screen.findByTestId("first-run-tools-empty");
+
+    rerender(<ToolsPopover {...props} reloadToken={1} />);
+    const row = await screen.findByTestId(
+      "first-run-tools-connected-seed:sheets",
+    );
+    expect(row.getAttribute("aria-checked")).toBe("true");
   });
 
   it("connects a 1-click catalog entry, preserving requiresPreRegisteredClient", async () => {
@@ -276,7 +322,7 @@ describe("<ToolsPopover> — click-out scrim + Escape (row 46)", () => {
       }),
       webSearchEnabled: true,
       onToggleWebSearch: vi.fn(),
-      activeConnectorIds: [],
+      pausedConnectorIds: [],
       onToggleConnector: vi.fn(),
       onConnectCatalog: vi.fn(),
       onAddCustom: vi.fn(),
