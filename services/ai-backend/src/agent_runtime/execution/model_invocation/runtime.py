@@ -7,9 +7,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
+import logging
 from threading import Lock
 from time import monotonic
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
@@ -69,10 +70,15 @@ from agent_runtime.execution.providers.model_failure_adapters import (
     ProviderFailureAdapterRegistry,
 )
 from agent_runtime.observability.attribution import Purpose
+from agent_runtime.observability.context_occupancy import (
+    ContextOccupancySnapshot,
+    GraphScope,
+)
 from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
     TokenUsageExtractorRegistry,
 )
+from agent_runtime.prompts.assembly import PromptAssemblyPlan
 from agent_runtime.prompts.cache_fallback import (
     PromptCacheFallbackContext,
     PromptCacheFallbackHandoff,
@@ -80,6 +86,60 @@ from agent_runtime.prompts.cache_fallback import (
 from agent_runtime.prompts.provider_cache import ProviderCacheFallbackSignal
 from agent_runtime.prompts import tool_schema_revision
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
+
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Deferred at runtime, not merely for tidiness. The occupancy recorder pulls
+    # the message classifier, which reads the citation and tool-budget note
+    # constants from ``agent_runtime.capabilities`` — a package that is itself
+    # mid-import when ``runtime_api.schemas`` reaches this module. Importing it
+    # eagerly here closes that loop and breaks service start-up. The one runtime
+    # import lives in ``_shared_occupancy_recorder``, by which time every module
+    # in the cycle is fully initialized.
+    from agent_runtime.observability.context_occupancy_recorder import (
+        ContextOccupancyRecorder,
+        ContextOccupancySink,
+    )
+
+
+_OCCUPANCY_LOGGER = logging.getLogger(__name__)
+# Wall-clock budget for appending one occupancy row, enforced in
+# ``_append_occupancy``. The append sits between the provider's answer and the
+# response handed back to the graph, so an unbounded await would let a slow or
+# contended store add latency to every model call. Two seconds is generous for a
+# single-row insert or a JSONL append+fsync and still bounds a stalled disk to a
+# blip rather than a systemic slowdown. Occupancy is observability: a breach
+# drops the measurement, never the run.
+_OCCUPANCY_PERSIST_TIMEOUT_SECONDS: Final[float] = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingOccupancyAppend:
+    """One measured snapshot plus every fact needed to append it.
+
+    Exists so the append call site reads only plain locals. Resolving a tenant or
+    a conversation id in the argument list would put an unguarded attribute read
+    on the model-call path, where an ``AttributeError`` fails the run instead of
+    dropping a measurement — the §6.4 hole that shipped and was caught by driving
+    a real run rather than by any test.
+    """
+
+    sink: "ContextOccupancySink"
+    snapshot: ContextOccupancySnapshot
+    org_id: str
+    run_id: str
+    conversation_id: str
+    model_call_id: str
+
+
+"""Logger for the Context Occupancy Ledger's guards, and only for them.
+
+The F10 seam itself is deliberately silent: every fact it has is journaled as a
+typed record, so a log line would be a second, weaker copy of durable truth.
+Occupancy is the exception because its failures are *not* journaled — a dropped
+snapshot leaves no record by construction (§6.4) — so a log line is the only
+evidence that measurement degraded.
+"""
 
 
 class AtomicModelInvocationAuthorityAdapterPort(Protocol):
@@ -155,6 +215,13 @@ class ModelInvocationRuntimeBinding:
     circuit_failure_observer: (
         Callable[[ModelRouteEntry, ModelFailureClass], None] | None
     ) = None
+    # Context Occupancy Ledger sink (design §5). Optional and defaulted because
+    # occupancy is an *observation* lane, not a precondition for dispatching a
+    # model call: a deployment that has not wired a store still measures, and
+    # simply drops the snapshot. It is deliberately kept off the journal port —
+    # occupancy rows have a different lifecycle, a different read pattern, and
+    # must never be able to fail an F10 append.
+    context_occupancy_store: ContextOccupancySink | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
     def __post_init__(self) -> None:
@@ -342,9 +409,95 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
 
 
 class ModelInvocationMiddleware(AgentMiddleware):
-    """Inner F10 provider-call seam; RuntimeControl/F2 must run outside it."""
+    """Inner F10 provider-call seam; RuntimeControl/F2 must run outside it.
+
+    This is also the Context Occupancy Ledger's measurement boundary (design
+    §3.1): the one place a fully materialized ``ModelRequest`` exists, after
+    every library and middleware contribution has landed. Occupancy is measured
+    here rather than at assembly because it is the difference between reporting
+    the prompt we intended to send and the one that was sent — and because the
+    AST topology gate proves this middleware is installed on the root graph
+    *and* on every child, so subagent windows are covered with no new plumbing.
+
+    Occupancy is strictly additive to this seam. It reads the materialized
+    request and the observed usage; it never touches ``request_digest``, the
+    semantic request, attempt admission, or the records appended, and every
+    entry point into it is wrapped in a guard that logs and continues (§6.4).
+    """
 
     name = "0xCopilotModelInvocationMiddleware"
+
+    class _Scopes:
+        """The two execution-scope spellings this seam mints and reads."""
+
+        SUPERVISOR: Final[str] = "supervisor"
+        SUBAGENT_PREFIX: Final[str] = "subagent:"
+        SUPERVISOR_TASK_CALL_ID: Final[str] = "supervisor_task_call_id"
+
+    _SHARED_OCCUPANCY_RECORDER: ClassVar["ContextOccupancyRecorder | None"] = None
+    _OCCUPANCY_RECORDER_GUARD: ClassVar[Lock] = Lock()
+
+    def __init__(
+        self,
+        *,
+        occupancy_recorder: "ContextOccupancyRecorder | None" = None,
+    ) -> None:
+        """Bind the occupancy recorder; every argument must stay optional.
+
+        The graph funnel constructs this middleware as ``ModelInvocationMiddleware()``
+        for the root and passes the *class itself* as a universal child-graph
+        factory, and the AST topology gate pins both spellings. A required
+        constructor argument would therefore break child-graph construction, not
+        merely this call site.
+        """
+
+        super().__init__()
+        self._occupancy = occupancy_recorder or self._shared_occupancy_recorder()
+
+    @classmethod
+    def _shared_occupancy_recorder(cls) -> "ContextOccupancyRecorder | None":
+        """Return the process-wide recorder, constructing it on first use.
+
+        Shared rather than per-instance because a fresh middleware is built for
+        the root graph and for every child graph, and the recorder holds the two
+        caches that make §3.4's cost model work: the digest-keyed token cache and
+        the one-time ``deepagents`` constant sweep. Rebuilding them per graph
+        would pay the memoization cost without ever collecting the benefit.
+
+        ``None`` when the recorder cannot be built, and the guard is the whole
+        point. This runs from ``__init__``, and ``__init__`` runs at harness
+        construction — ``factory._build_harness`` both instantiates this class
+        and hands it to ``build_deep_agent`` as a universal child-graph factory,
+        inside a ``try`` that converts *any* exception into
+        ``AgentRuntimeError(RUNTIME_FACTORY_ERROR)``. So an unguarded failure
+        here does not degrade measurement, it fails the run with "The agent
+        runtime could not be constructed", which is precisely what §6.4 forbids.
+        The failure is not hypothetical: the import below is deferred *because*
+        there is a live import cycle through ``agent_runtime.capabilities``
+        (see the module's ``TYPE_CHECKING`` block), and a cycle re-entered from a
+        new call order raises ``ImportError`` rather than returning a module.
+
+        A ``None`` recorder is the correct degradation and not a special case
+        downstream: capture and persist both check for it, and the seam then
+        behaves exactly as a deployment with no occupancy store wired.
+        """
+
+        try:
+            from agent_runtime.observability.context_occupancy_recorder import (  # noqa: PLC0415 — break import cycle
+                ContextOccupancyRecorder,
+            )
+
+            with cls._OCCUPANCY_RECORDER_GUARD:
+                if cls._SHARED_OCCUPANCY_RECORDER is None:
+                    cls._SHARED_OCCUPANCY_RECORDER = ContextOccupancyRecorder()
+                return cls._SHARED_OCCUPANCY_RECORDER
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not construct the context occupancy recorder; this "
+                "process will dispatch model calls without measuring occupancy.",
+                exc_info=True,
+            )
+            return None
 
     def wrap_model_call(
         self,
@@ -364,7 +517,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
     ) -> ModelResponse[Any]:
         binding = RunControlContext.model_invocation_runtime()
         if binding is None:
-            return await handler(request)
+            return await self._awrap_occupancy_only(request, handler)
         control = RunControlContext.require_current()
         identity = RuntimeModelCallIdentity.from_current(
             execution_scope=self._execution_scope(request.runtime),
@@ -403,6 +556,11 @@ class ModelInvocationMiddleware(AgentMiddleware):
         await self._reconcile_replay(binding, invocation, records)
         last_error: BaseException | None = None
         pending_cache_retry: _PendingCacheRetry | None = None
+        # Read once per model call rather than per attempt: the F2 plan is a
+        # property of the assembled prompt, and every attempt of one call is
+        # dispatched against the same assembly. Guarded because occupancy may
+        # never influence dispatch.
+        occupancy_plan = self._occupancy_assembly_plan()
 
         while True:
             cache_retry = pending_cache_retry
@@ -532,6 +690,18 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     stream_state=observer.state.stream_state,
                 ),
             )
+            # Measured per attempt, never per call: a retry re-materializes the
+            # request against a different window state, so it earns its own
+            # snapshot under its own ordinal rather than overwriting the first
+            # (design §6.3). Captured from ``attempt_request`` — the exact
+            # payload this attempt dispatches, after routing.
+            occupancy = self._capture_occupancy(
+                request=attempt_request,
+                identity=identity,
+                attempt_ordinal=len(prior) + 1,
+                route=route,
+                plan=occupancy_plan,
+            )
             started = monotonic()
             try:
                 response = await handler(attempt_request)
@@ -557,6 +727,27 @@ class ModelInvocationMiddleware(AgentMiddleware):
                         prior=prior,
                         records=records,
                         duration_ms=duration_ms,
+                    )
+                    # A failed attempt still occupied a window, and its snapshot
+                    # is what makes "two attempts, two snapshots" true (§6.3).
+                    # Strictly *after* the failure record, never before it: the
+                    # occupancy sink is an external store with no timeout, and
+                    # sequencing it ahead of the journal append would let a
+                    # degraded observability store delay the record that drives
+                    # retry admission and terminal failure. Occupancy is
+                    # subordinate to the journal on this path exactly as it is on
+                    # the success path below. Inside this ``try`` so a
+                    # ``BaseException`` escaping a persistence call is handled
+                    # exactly as one escaping the journal append is — the
+                    # occupancy write must not introduce a second,
+                    # differently-shaped failure mode on the seam's most delicate
+                    # path.
+                    await self._persist_occupancy(
+                        binding=binding,
+                        control=control,
+                        identity=identity,
+                        snapshot=occupancy,
+                        observer=observer,
                     )
                     failure = prior[-1].failure_class
                     assert failure is not None
@@ -645,6 +836,16 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 )
                 if binding.post_response_error_observer is not None:
                     binding.post_response_error_observer(diagnostic)
+            # After the usage-bearing records, so the occupancy row reconciles
+            # against exactly the ``NormalizedTokenUsage`` the usage lane just
+            # recorded (§6.1) — read-side denormalization, never a second meter.
+            await self._persist_occupancy(
+                binding=binding,
+                control=control,
+                identity=identity,
+                snapshot=occupancy,
+                observer=observer,
+            )
             return response
 
     @staticmethod
@@ -1288,19 +1489,353 @@ class ModelInvocationMiddleware(AgentMiddleware):
             )
         )
 
-    @staticmethod
-    def _execution_scope(runtime: object) -> str:
+    @classmethod
+    def _execution_scope(cls, runtime: object) -> str:
         config = getattr(runtime, "config", None)
         if not isinstance(config, Mapping):
-            return "supervisor"
+            return cls._Scopes.SUPERVISOR
         for container_name in ("metadata", "configurable"):
             container = config.get(container_name)
             if not isinstance(container, Mapping):
                 continue
-            task_id = container.get("supervisor_task_call_id")
+            task_id = container.get(cls._Scopes.SUPERVISOR_TASK_CALL_ID)
             if isinstance(task_id, str) and task_id.strip():
-                return f"subagent:{task_id.strip()}"
-        return "supervisor"
+                return f"{cls._Scopes.SUBAGENT_PREFIX}{task_id.strip()}"
+        return cls._Scopes.SUPERVISOR
+
+    # --- context occupancy (design §3.1, §6.2-§6.5) --------------------------
+
+    @classmethod
+    def _graph_scope(cls, execution_scope: str) -> GraphScope:
+        """Project the F10 execution scope onto the occupancy graph scope (§6.2).
+
+        A subagent runs against its **own** context window, so a snapshot has to
+        say which window it describes; summing a child's occupancy into its
+        parent is not a rounding error but a category error that reports >100%
+        utilization on any run that delegates. The projection is deliberately
+        lossy in one direction only — occupancy needs "root or child", not
+        *which* child, and the child's identity is already carried by the
+        attribution context's ``task_id`` / ``subagent_slug``.
+        """
+
+        return (
+            GraphScope.SUBAGENT
+            if execution_scope.startswith(cls._Scopes.SUBAGENT_PREFIX)
+            else GraphScope.ROOT
+        )
+
+    @staticmethod
+    def _occupancy_assembly_plan() -> PromptAssemblyPlan | None:
+        """Return the F2 plan for this call, when one was assembled.
+
+        The plan is what lets the system block be attributed per fragment rather
+        than as one anonymous blob (§3.2), and it is reachable here because
+        ``RuntimeToolControlMiddleware`` binds its F2 handoff around the handler
+        this middleware runs inside. The read is strictly non-mutating: it
+        touches ``result.plan`` and nothing else, and in particular never calls
+        ``consume_rejection``, so the handoff's one-shot cache-fallback permit is
+        untouched and F2's retry semantics are exactly what they were.
+
+        ``None`` whenever F2 is off, assembly was skipped, or the handoff is not
+        bound — all of which mean the same thing to the measurement: the system
+        block will be attributed by the third-party adapter and otherwise
+        recorded as undeclared.
+        """
+
+        try:
+            handoff = PromptCacheFallbackContext.current()
+            return None if handoff is None else handoff.result.plan
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.debug(
+                "Could not read the F2 assembly plan for occupancy measurement; "
+                "the system block will measure as unattributed.",
+                exc_info=True,
+            )
+            return None
+
+    def _capture_occupancy(
+        self,
+        *,
+        request: ModelRequest[Any],
+        identity: RuntimeModelCallIdentity,
+        attempt_ordinal: int,
+        route: ModelRouteEntry,
+        plan: PromptAssemblyPlan | None,
+    ) -> ContextOccupancySnapshot | None:
+        """Measure this attempt's materialized request, or return ``None``.
+
+        The recorder is already total, so this second guard exists for the one
+        thing the recorder cannot promise: that *it* is the object it claims to
+        be. A caller may inject a recorder, and a middleware seam that trusted
+        an injected collaborator not to raise would have moved the fail-open
+        contract outside the code that owns it.
+
+        ``context_window_tokens`` comes from the resolved route's
+        ``max_input_tokens`` — the deployment descriptor's own declared input
+        window, from the same catalog lane the pricing source reads. Taking it
+        here rather than re-looking-up a pricing row keeps the denominator
+        consistent with the route the attempt actually used, including on an
+        alternate-route retry to a differently-sized deployment.
+
+        Capture runs wherever the F10 binding is installed and a recorder was
+        built (see :meth:`_shared_occupancy_recorder`), while *persistence* is
+        additionally gated on a wired store. That asymmetry is deliberate: the
+        snapshot is the input to both the durable row (§5) and the streamed
+        ``context_occupancy`` event (§7), so gating the measurement on a store
+        would make a streaming surface depend on persistence being configured.
+        The cost of measuring is bounded by §3.4's digest memoization — a
+        resident prompt and tool surface is tokenized once per process — and by
+        the fact that nothing here can fail a run.
+        """
+
+        if self._occupancy is None:
+            return None
+        try:
+            return self._occupancy.capture(
+                request,
+                identity=identity,
+                attempt_ordinal=attempt_ordinal,
+                graph_scope=self._graph_scope(identity.execution_scope),
+                provider=route.provider,
+                model_family=route.model_name,
+                context_window_tokens=route.max_input_tokens,
+                plan=plan,
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy capture failed for model call %s; "
+                "continuing without a snapshot.",
+                identity.model_call_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _awrap_occupancy_only(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        """Measure occupancy on the path where F10 is not installed.
+
+        This is the default deployment. ``FeatureModeSet.f10`` ships ``OFF``, so
+        ``ModelInvocationComposer.compose`` returns ``None`` and no F10 binding
+        exists — and the ledger has no business depending on that. What occupancy
+        actually needs is the materialized request, which is present on every
+        call, and a sink, which the run handler installs unconditionally.
+
+        Deliberately **not** a partial F10 binding. Everything else the F10 path
+        does — the journal, the authority checks, admission, alternate-route
+        retry — reads a binding it is entitled to assume is complete, so handing
+        those code paths a half-populated one to get an observability side effect
+        would trade a measurement gap for a correctness hazard. This is a
+        separate, much smaller path: measure, call the handler, append.
+
+        Two honest limits. There is no ``_ProviderLifecycleCallback`` here, so
+        the snapshot carries no ``provider_input_tokens`` and no cache figures —
+        it is estimate-only, and ``unattributed_delta`` stays 0 rather than
+        pretending to reconcile against a total nobody reported. And the route
+        facts come from the request's own model object rather than a resolved
+        deployment descriptor, so ``context_window_tokens`` is ``None`` and
+        ``free_tokens`` with it. Segment attribution — the reason the ledger
+        exists — is unaffected.
+
+        The handler is called exactly once whatever happens above it. Capture
+        sits in its own guard so a measurement failure cannot become a failed
+        model call (§6.4).
+        """
+
+        pending = self._plan_occupancy_only(request)
+
+        response = await handler(request)
+
+        # Every argument below is a plain local resolved inside the guarded
+        # planner above. That is deliberate rather than stylistic: computing an
+        # argument at the call site would put an unguarded attribute read on the
+        # model-call path, and an AttributeError there fails the run — which is
+        # exactly how the first draft of this method broke a real run before it
+        # ever reached a test.
+        if pending is not None:
+            await self._append_occupancy(
+                sink=pending.sink,
+                snapshot=pending.snapshot,
+                usage=None,
+                org_id=pending.org_id,
+                run_id=pending.run_id,
+                conversation_id=pending.conversation_id,
+                model_call_id=pending.model_call_id,
+            )
+        return response
+
+    def _plan_occupancy_only(
+        self, request: ModelRequest[Any]
+    ) -> "_PendingOccupancyAppend | None":
+        """Resolve everything the non-F10 append needs, under one guard.
+
+        Returns ``None`` when occupancy cannot or should not be recorded — no
+        recorder, no installed sink, no bound run control, or any failure while
+        measuring. The caller then simply skips the append.
+        """
+
+        if self._occupancy is None:
+            return None
+        installed = RunControlContext.context_occupancy_store()
+        if installed is None:
+            return None
+        sink, org_id = installed
+        try:
+            control = RunControlContext.current()
+            identity = RuntimeModelCallIdentity.from_current(
+                execution_scope=self._execution_scope(request.runtime),
+                model_turn=max(self._model_turn(request.state), 1),
+            )
+            if control is None or identity is None:
+                return None
+            snapshot = self._occupancy.capture(
+                request,
+                identity=identity,
+                attempt_ordinal=1,
+                graph_scope=self._graph_scope(identity.execution_scope),
+                provider=self._request_provider(request),
+                model_family=self._request_model_family(request),
+                context_window_tokens=None,
+                plan=self._occupancy_assembly_plan(),
+            )
+            return _PendingOccupancyAppend(
+                sink=sink,
+                snapshot=snapshot,
+                org_id=org_id,
+                run_id=identity.run_id,
+                conversation_id=control.snapshot.conversation_id,
+                model_call_id=identity.model_call_id,
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy capture failed outside F10; "
+                "continuing without a snapshot.",
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _request_provider(request: ModelRequest[Any]) -> str:
+        """Provider slug from the request's own model, for the non-F10 path.
+
+        Mirrors ``canonical_model_request_digest``'s derivation so the two agree
+        about what provider a call belongs to.
+        """
+
+        model = request.model
+        return str(getattr(model, "_llm_type", type(model).__name__)).strip().lower()
+
+    @staticmethod
+    def _request_model_family(request: ModelRequest[Any]) -> str:
+        """Model name from the request's own model, for the non-F10 path."""
+
+        model = request.model
+        for attribute in ("model_name", "model", "deployment_name"):
+            value = getattr(model, attribute, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return type(model).__name__
+
+    async def _append_occupancy(
+        self,
+        *,
+        sink: "ContextOccupancySink | None",
+        snapshot: ContextOccupancySnapshot,
+        usage: NormalizedTokenUsage | None,
+        org_id: str,
+        run_id: str,
+        conversation_id: str,
+        model_call_id: str,
+    ) -> None:
+        """Reconcile and append one snapshot under a bounded timeout.
+
+        The timeout is the point. ``§6.4``'s fail-open guard absorbs a store that
+        *raises*; it does nothing about a store that is merely **slow**, and this
+        await sits between the provider's answer and the response returned to the
+        graph. On the file-native store — the desktop default — an append is a
+        write plus ``flush`` plus ``fsync`` under the global store lock, so a
+        contended or stalled disk would add that latency to every model call in
+        the process. An observability ledger is never worth a slow run, so a
+        breach of the budget is logged and the measurement dropped.
+
+        Not fire-and-forget: a detached task would routinely lose the last
+        snapshot of a run to worker teardown, and would need its own strong
+        reference set to avoid being garbage-collected mid-write. A short bound
+        keeps the row in the common case and caps the pathological one.
+        """
+
+        if sink is None or self._occupancy is None:
+            return
+        try:
+            await asyncio.wait_for(
+                self._occupancy.persist(
+                    self._occupancy.finalize(snapshot, usage),
+                    sink=sink,
+                    org_id=org_id,
+                    run_id=run_id,
+                    conversation_id=conversation_id,
+                ),
+                timeout=_OCCUPANCY_PERSIST_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy persistence exceeded %.1fs for model call %s; "
+                "dropping the measurement rather than delaying the run.",
+                _OCCUPANCY_PERSIST_TIMEOUT_SECONDS,
+                model_call_id,
+            )
+        except Exception:  # noqa: BLE001 — a dropped snapshot is the failure mode
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy persistence failed for model call %s; "
+                "dropping the measurement.",
+                model_call_id,
+                exc_info=True,
+            )
+
+    async def _persist_occupancy(
+        self,
+        *,
+        binding: ModelInvocationRuntimeBinding,
+        control: RunControlBinding,
+        identity: RuntimeModelCallIdentity,
+        snapshot: ContextOccupancySnapshot | None,
+        observer: _ProviderLifecycleCallback,
+    ) -> None:
+        """Reconcile and append one attempt's snapshot; never raises an ``Exception``.
+
+        The precision matters, because "never raises" is the claim that lets
+        callers stop checking. A ``BaseException`` — a task cancellation, an
+        interpreter shutdown — deliberately still propagates: swallowing a
+        cancellation to finish an observability write would keep a torn-down run
+        alive, which is worse than losing the snapshot. Every failure mode this
+        seam is actually meant to absorb (a store that is down, an unprojectable
+        snapshot, a raising adapter) is an ``Exception`` and is absorbed here.
+
+        ``usage`` is passed as ``None`` when the provider reported nothing,
+        which is *not* the same as a zero-token usage object: the former leaves
+        ``provider_input_tokens`` unset and ``unattributed_delta`` at zero,
+        while the latter would claim the provider billed nothing and turn the
+        whole estimate into a large negative residual on every unreported call.
+        """
+
+        if (
+            snapshot is None
+            or self._occupancy is None
+            or binding.context_occupancy_store is None
+        ):
+            return
+        usage, reported = observer.usage
+        await self._append_occupancy(
+            sink=binding.context_occupancy_store,
+            snapshot=snapshot,
+            usage=usage if reported else None,
+            org_id=binding.org_id,
+            run_id=identity.run_id,
+            conversation_id=control.snapshot.conversation_id,
+            model_call_id=identity.model_call_id,
+        )
 
     @staticmethod
     def _model_turn(state: object) -> int:

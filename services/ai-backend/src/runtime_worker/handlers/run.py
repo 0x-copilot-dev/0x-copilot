@@ -609,6 +609,20 @@ class RuntimeRunHandler:
                     prepared_run_control.control,
                     task_policy=prepared_run_control.task_policy,
                 )
+                # Context Occupancy Ledger sink (design §3.1/§5), installed
+                # BEFORE the F10 composition below and unconditionally. The
+                # ledger measures at the model-call seam but is not an F10
+                # feature, and hanging its sink off the F10 binding is what made
+                # it inert everywhere: ``compose`` returns ``None`` whenever
+                # ``effective_f10_mode`` is ``OFF`` — the shipped default — so
+                # the seam took its no-binding early return and recorded nothing
+                # on every model call of every run. Installing here ties the sink
+                # to the run's control lifetime and to the same unbind token,
+                # without giving an observability concern a say in whether a
+                # reliability feature is on.
+                RunControlContext.install_context_occupancy_store(
+                    self.persistence, org_id=run.org_id
+                )
                 composed_model_invocation = (
                     await self._model_invocation_composer.compose(
                         run=run,
@@ -1595,6 +1609,12 @@ class RuntimeRunHandler:
         composer exists), the run's control snapshot resolved F6 to ``enforce``,
         and the operator declared at least one capability's concurrency policy.
         Any one of them missing leaves the run on the untouched serial path.
+
+        The persisted ``runtime_context`` carries the run's tool-use policy,
+        which is the authority BUG-15's rule folds with the catalog's claim. It
+        is the persisted one rather than the command's on purpose: the command
+        was already refused unless it matched the record, and the hydrated copy
+        differs only by BYOK keys, which say nothing about approval.
         """
 
         if self._batch_concurrency_composer is None:
@@ -1603,6 +1623,7 @@ class RuntimeRunHandler:
             org_id=run.org_id,  # type: ignore[attr-defined]
             trace_id=run.trace_id,  # type: ignore[attr-defined]
             control=control,  # type: ignore[arg-type]
+            runtime_context=run.runtime_context,  # type: ignore[attr-defined]
         )
 
     def _dependencies_for_run(

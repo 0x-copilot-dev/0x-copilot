@@ -305,6 +305,21 @@ class TestBothCompositionRootsAreWired:
             assert "RuntimeBatchAdmissionContext.install(" in source, name
             assert "RuntimeBatchAdmissionContext.reset(" in source, name
 
+    def test_both_roots_name_the_runs_approval_authority(self) -> None:
+        """BUG-19's regression, guarded where root drift is already guarded.
+
+        Both roots did compose and install F6 all along. What neither did was
+        name the run authority BUG-15's rule folds with the catalog's claim, so
+        ``GraphApprovalRequirementResolver`` answered *not declared* on every
+        call and the rule could not fire. That is root drift of a different
+        shape rather than a different problem, and it belongs in the same
+        canary — a root that stops passing the context is a root that has
+        silently re-opened the bug.
+        """
+
+        for name in ("run.py", "approval.py"):
+            assert "runtime_context=run.runtime_context" in self._read(name), name
+
     def test_the_worker_loop_builds_one_composer_for_both_roots(self) -> None:
         source = (_SOURCE_ROOT / "runtime_worker" / "loop.py").read_text()
 

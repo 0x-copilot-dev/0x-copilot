@@ -39,6 +39,16 @@ through F6.1's precedence, where ``PRODUCT_CATALOG`` is the one source that may
 *establish* a policy and everything else may only narrow it.  A capability the
 operator never described therefore resolves to the conservative floor no matter
 what any connector claims about itself.
+
+*No batch is planned without a run-scoped approval authority.*  BUG-15 made
+approval-gated work structurally unplannable and BUG-19 found that the authority
+it named was never passed here, so the rule could never fire.  ``_compose`` now
+constructs :class:`ToolUsePolicyApprovalSource` on every path — there is no
+branch that yields an admission without one — and a run whose tool-use policy
+could not be read gets a source that answers ``UNKNOWN`` rather than no source at
+all.  The difference is load-bearing: an absent source leaves the catalog's own
+claim untouched, so collapsing the two would make a broken policy lane quieter
+than a missing one.
 """
 
 from __future__ import annotations
@@ -60,7 +70,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
     )
     from agent_runtime.control_plane.context import RunControlBinding
     from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
+    from agent_runtime.execution.contracts import AgentRuntimeContext
     from agent_runtime.persistence.ports import EventStorePort
+    from runtime_worker.batch_approval_authority import ToolUsePolicyApprovalSource
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -256,11 +268,23 @@ class BatchConcurrencyComposer:
         org_id: str,
         trace_id: str,
         control: RunControlBinding,
+        runtime_context: AgentRuntimeContext | None,
     ) -> RunBatchAdmission | None:
-        """Return this run's batch admission, or ``None`` to stay serial."""
+        """Return this run's batch admission, or ``None`` to stay serial.
+
+        ``runtime_context`` carries the run's tool-use policy and has no
+        default: a composition root that has no context must say so and get the
+        conservative authority, rather than silently reproduce the BUG-19 state
+        where the seam consulted nothing.
+        """
 
         try:
-            return self._compose(org_id=org_id, trace_id=trace_id, control=control)
+            return self._compose(
+                org_id=org_id,
+                trace_id=trace_id,
+                control=control,
+                runtime_context=runtime_context,
+            )
         except Exception:  # noqa: BLE001 - an uncomposable run is a serial run.
             _LOGGER.warning("F6 batch concurrency did not compose", exc_info=True)
             return None
@@ -297,22 +321,66 @@ class BatchConcurrencyComposer:
             _LOGGER.warning("F6 restart recovery did not plan", exc_info=True)
             return None
 
-    def _recovery(self) -> Any:
-        """Build the recovery service over the same one journal F6 already writes."""
+    def _journal(self) -> Any:
+        """Build the one durable store every F6 write and read in a run uses.
+
+        A single seam rather than a construction at each call site, so the plan
+        recorder, the child transition recorder, and the restart recovery cannot
+        end up reading and writing different journals.
+        """
 
         from agent_runtime.capabilities.concurrency.batch_journal_store import (
             EventJournalBatchPlanStore,
         )
+
+        return EventJournalBatchPlanStore(
+            events=self._events,
+            snapshots=self._snapshots,
+        )
+
+    def _recovery(self) -> Any:
+        """Build the recovery service over the same one journal F6 already writes."""
+
         from agent_runtime.capabilities.concurrency.batch_run_recovery import (
             BatchRunRecovery,
         )
 
-        return BatchRunRecovery(
-            store=EventJournalBatchPlanStore(
-                events=self._events,
-                snapshots=self._snapshots,
-            )
+        return BatchRunRecovery(store=self._journal())
+
+    def _approvals(
+        self,
+        runtime_context: AgentRuntimeContext | None,
+    ) -> ToolUsePolicyApprovalSource:
+        """Return the run-scoped approval authority this admission consults.
+
+        Never ``None``, on any path. BUG-15 built the seam that refuses a plan
+        entry to a capability whose dispatch can park and BUG-19 found that the
+        only construction site in ``src/`` passed no source, so the seam read
+        ``None`` — *not declared* — and the catalog's claim went unchallenged on
+        every call. Returning a value unconditionally is what makes that state
+        unreachable rather than merely fixed once.
+
+        A context that is absent, or a policy that will not resolve, yields a
+        source that answers ``UNKNOWN`` for everything. That is the conservative
+        outcome and it is structural: the run then plans no batch at all, which
+        is exactly the pre-F6 serial path.
+        """
+
+        from agent_runtime.capabilities.tools.tool_use_enforcement import (
+            ToolUsePolicyResolver,
         )
+        from runtime_worker.batch_approval_authority import (
+            ToolUsePolicyApprovalSource,
+        )
+
+        if runtime_context is None:
+            return ToolUsePolicyApprovalSource(None)
+        try:
+            snapshot = ToolUsePolicyResolver.resolve(runtime_context)
+        except Exception:  # noqa: BLE001 - an unread policy is an unknown one.
+            _LOGGER.warning("F6 could not resolve the run tool-use policy")
+            return ToolUsePolicyApprovalSource(None)
+        return ToolUsePolicyApprovalSource(snapshot)
 
     def _compose(
         self,
@@ -320,6 +388,7 @@ class BatchConcurrencyComposer:
         org_id: str,
         trace_id: str,
         control: RunControlBinding,
+        runtime_context: AgentRuntimeContext | None,
     ) -> RunBatchAdmission | None:
         from agent_runtime.capabilities.concurrency.batch_child_journal import (
             BatchChildTransitionRecorder,
@@ -331,9 +400,6 @@ class BatchConcurrencyComposer:
         )
         from agent_runtime.capabilities.concurrency.batch_journal import (
             BatchPlanRecorder,
-        )
-        from agent_runtime.capabilities.concurrency.batch_journal_store import (
-            EventJournalBatchPlanStore,
         )
         from agent_runtime.capabilities.concurrency.contracts import (
             ConcurrencyAllowance,
@@ -372,10 +438,7 @@ class BatchConcurrencyComposer:
             ),
             source=self._kill_switch_source,
         )
-        journal = EventJournalBatchPlanStore(
-            events=self._events,
-            snapshots=self._snapshots,
-        )
+        journal = self._journal()
         profile_id = snapshot.deployment_profile
         subject_fingerprint = snapshot.subject_fingerprint
 
@@ -428,6 +491,12 @@ class BatchConcurrencyComposer:
             snapshot=snapshot,
             org_id=org_id,
             trace_id=trace_id,
+            # The run half of the approval fact. The catalog above was written
+            # by somebody who could not see this run's tool-use policy, so a
+            # capability they honestly declared parallel-safe and non-parking
+            # may still open a human decision on every dispatch here. Folding
+            # the two is what makes BUG-15's rule reachable at all.
+            approvals=self._approvals(runtime_context),
         )
 
     def _declarations(

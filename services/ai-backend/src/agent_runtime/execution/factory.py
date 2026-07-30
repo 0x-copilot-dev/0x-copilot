@@ -18,6 +18,10 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.tool_surface import (
+    ModelToolDeclaration,
+    ModelToolOwner,
+)
 from agent_runtime.execution.provider_kwargs import (
     RegionUnavailableError,
     user_policy_model_kwargs,
@@ -490,9 +494,27 @@ def _model_visible_tools(
     capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
-    model_tools = [
-        wrap_model_tool_for_shadow(tool, capability="builtin") for tool in tools
-    ]
+    # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
+    # the owner of that tool's schema text. The declarations are what the
+    # Context Occupancy Ledger reports against, and they are made *here* — at
+    # the one place model tools are composed — rather than in a central table,
+    # so adding a tool and accepting its resident context cost are the same
+    # edit. They change no tool, no order, and no schema: the wrapper stamps an
+    # attribute and returns the same object.
+    #
+    # Tools listed by the injected registry are marked third-party. Owner
+    # attribution for library-installed tools is refined by PRD-06's pinned
+    # ``deepagents`` adapter, which resolves them through the live
+    # ``HarnessProfile``; until then they roll up under one honest bucket rather
+    # than being claimed by a package that does not author them. A registry tool
+    # that already declares its own origin keeps it.
+    model_tools = list(
+        ModelToolDeclaration.declared_all(
+            (wrap_model_tool_for_shadow(tool, capability="builtin") for tool in tools),
+            owner=ModelToolOwner.DEEP_AGENTS_MIDDLEWARE,
+            third_party=True,
+        )
+    )
     auth_session_creator = _auth_session_creator(mcp_registry)
     local_tool_names = _local_tool_names(
         model_tools,
@@ -522,13 +544,16 @@ def _model_visible_tools(
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
-            _structured_tool(
-                LoadMcpServerTool(
-                    loader=loader,
-                    runtime_context=runtime_context,
-                    local_tool_names=local_tool_names,
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    LoadMcpServerTool(
+                        loader=loader,
+                        runtime_context=runtime_context,
+                        local_tool_names=local_tool_names,
+                    ),
+                    LoadMcpServerInput,
                 ),
-                LoadMcpServerInput,
+                owner=ModelToolOwner.MCP,
             )
         )
         mcp_dispatcher = CallMcpTool(
@@ -540,44 +565,66 @@ def _model_visible_tools(
                 runtime_context=runtime_context,
             ),
         )
-        model_tools.append(_structured_tool(mcp_dispatcher, McpToolCallRequest))
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                _structured_tool(mcp_dispatcher, McpToolCallRequest),
+                owner=ModelToolOwner.MCP,
+            )
+        )
     if auth_session_creator is not None:
         model_tools.append(
-            _structured_tool(
-                AuthMcpTool(
-                    auth_session_creator=auth_session_creator,
-                    runtime_context=runtime_context,
-                    cache=typed_discovery_cache,
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    AuthMcpTool(
+                        auth_session_creator=auth_session_creator,
+                        runtime_context=runtime_context,
+                        cache=typed_discovery_cache,
+                    ),
+                    AuthMcpInput,
                 ),
-                AuthMcpInput,
+                owner=ModelToolOwner.MCP,
             )
         )
     if skill_registry is not None and callable(
         getattr(skill_registry, "load_skill_by_name", None)
     ):
         model_tools.append(
-            _structured_tool(LoadSkillTool(registry=skill_registry), LoadSkillInput)
-        )  # type: ignore[arg-type]
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    LoadSkillTool(registry=skill_registry), LoadSkillInput
+                ),  # type: ignore[arg-type]
+                owner=ModelToolOwner.SKILLS,
+            )
+        )
     if prior_tool_result_loader is not None:
         model_tools.append(
-            _structured_tool(
-                LoadPriorToolResultTool(
-                    loader=prior_tool_result_loader,
-                    runtime_context=runtime_context,
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    LoadPriorToolResultTool(
+                        loader=prior_tool_result_loader,
+                        runtime_context=runtime_context,
+                    ),
+                    LoadPriorToolResultInput,
                 ),
-                LoadPriorToolResultInput,
+                owner=ModelToolOwner.TOOLS,
             )
         )
     model_tools.append(
-        _structured_tool(
-            AskAQuestionTool(runtime_context=runtime_context),
-            AskAQuestionInput,
+        ModelToolDeclaration.declared(
+            _structured_tool(
+                AskAQuestionTool(runtime_context=runtime_context),
+                AskAQuestionInput,
+            ),
+            owner=ModelToolOwner.TOOLS,
         )
     )
     model_tools.append(
-        _structured_tool(
-            SuggestMcpConnectorTool(),
-            SuggestMcpConnectorInput,
+        ModelToolDeclaration.declared(
+            _structured_tool(
+                SuggestMcpConnectorTool(),
+                SuggestMcpConnectorInput,
+            ),
+            owner=ModelToolOwner.DISCOVERY,
         )
     )
     # F3 — bounded capability-discovery bridge tools. Which tools (if any) a run
@@ -591,14 +638,17 @@ def _model_visible_tools(
     # production posture: the composed surface is then byte-identical to the
     # pre-F3 disclosure path.
     model_tools.extend(
-        _capability_bridge_tools(
-            activation=capability_activation,
-            catalog=capability_catalog,
-            bridge=capability_bridge,
-            loader=loader,
-            dispatcher=mcp_dispatcher,
-            local_tool_names=local_tool_names,
-            runtime_context=runtime_context,
+        ModelToolDeclaration.declared_all(
+            _capability_bridge_tools(
+                activation=capability_activation,
+                catalog=capability_catalog,
+                bridge=capability_bridge,
+                loader=loader,
+                dispatcher=mcp_dispatcher,
+                local_tool_names=local_tool_names,
+                runtime_context=runtime_context,
+            ),
+            owner=ModelToolOwner.DISCOVERY,
         )
     )
     # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
@@ -607,16 +657,22 @@ def _model_visible_tools(
     # budget middleware every other model tool does — they are not privileged.
     if code_mode_tool is not None:
         model_tools.append(
-            wrap_model_tool_for_shadow(
-                code_mode_tool,
-                capability="builtin",
+            ModelToolDeclaration.declared(
+                wrap_model_tool_for_shadow(
+                    code_mode_tool,
+                    capability="builtin",
+                ),
+                owner=ModelToolOwner.INTERPRETER,
             )
         )
     if sandbox_execute_tool is not None:
         model_tools.append(
-            wrap_model_tool_for_shadow(
-                sandbox_execute_tool,
-                capability="builtin",
+            ModelToolDeclaration.declared(
+                wrap_model_tool_for_shadow(
+                    sandbox_execute_tool,
+                    capability="builtin",
+                ),
+                owner=ModelToolOwner.SANDBOX,
             )
         )
     # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
@@ -624,17 +680,34 @@ def _model_visible_tools(
     # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
     if stage_rowset_write_tool is not None:
         model_tools.append(
-            _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput)
+            ModelToolDeclaration.declared(
+                _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput),
+                owner=ModelToolOwner.DATAFLOW,
+            )
         )
+    # The three tools below are the design document's headline number:
+    # ``publish_artifact`` alone is ~650 estimated tokens of description, and
+    # with ``revise_artifact`` and ``stage_rowset_write`` the trio is ~1,337
+    # tokens of RESIDENT rent charged on every model call of every run. Naming
+    # their owner here is what lets the occupancy report say that out loud
+    # instead of folding them into an anonymous tool-block total.
     if publish_artifact_tool is not None:
         model_tools.append(
-            _structured_tool(publish_artifact_tool, PublishArtifactInput)
+            ModelToolDeclaration.declared(
+                _structured_tool(publish_artifact_tool, PublishArtifactInput),
+                owner=ModelToolOwner.BACKENDS,
+            )
         )
     # Paired with publication so the model can change an artifact instead of
     # minting a near-duplicate. Composed by the same worker seam, so a run that
     # can publish can also revise.
     if revise_artifact_tool is not None:
-        model_tools.append(_structured_tool(revise_artifact_tool, ReviseArtifactInput))
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                _structured_tool(revise_artifact_tool, ReviseArtifactInput),
+                owner=ModelToolOwner.BACKENDS,
+            )
+        )
     return tuple(model_tools)
 
 
@@ -1241,28 +1314,32 @@ def _prompt_policy_revision(runtime_context: AgentRuntimeContext) -> str:
 
 
 def _model_tool_schema_revision(model_tools: Sequence[object]) -> str:
-    """Digest exactly the body-free tool schema fields visible to the model."""
+    """Digest exactly the body-free tool schema fields visible to the model.
 
-    schemas: list[dict[str, object]] = []
-    for tool in model_tools:
-        args_schema = getattr(tool, "args_schema", None)
-        schema: object = None
-        model_json_schema = getattr(args_schema, "model_json_schema", None)
-        if callable(model_json_schema):
-            schema = model_json_schema()
-        schemas.append(
-            {
-                "name": str(getattr(tool, "name", "")),
-                "description": str(getattr(tool, "description", "")),
-                "args_schema": schema,
-            }
-        )
-    return canonical_json_sha256(
-        {
-            "schema_revision": "model-visible-tools-v1",
-            "tools": sorted(schemas, key=lambda item: str(item["name"])),
-        }
+    Delegates to :meth:`ToolSchemaLedger.revision` so this digest and the
+    Context Occupancy Ledger's per-tool footprints are produced by one
+    serializer. Two independently written serializers over the same block would
+    eventually disagree, and a disagreement here is not an observability bug:
+    ``tool_schema_revision`` is bound into prompt-cache identity, so a drifted
+    payload silently re-keys the cache on a live deployment.
+
+    Kept as a module function with its original name and signature because
+    ``_prompt_assembly_plan`` and the F3 factory tests call it; the delegation
+    is byte-identical and is pinned by a test against a hand-built digest.
+
+    The import is deferred rather than taken at module scope:
+    ``agent_runtime.observability.context_tool_ledger`` imports
+    ``RuntimeContract`` from ``agent_runtime.execution.contracts``, and
+    ``agent_runtime.execution.__init__`` eagerly imports this module, so a
+    module-scope edge would make ``import agent_runtime.observability...``
+    fail depending on which package a caller happened to import first.
+    """
+
+    from agent_runtime.observability.context_tool_ledger import (  # noqa: PLC0415
+        ToolSchemaLedger,
     )
+
+    return ToolSchemaLedger.revision(model_tools)
 
 
 def _workspace_write_permissions(

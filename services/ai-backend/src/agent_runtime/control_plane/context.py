@@ -49,6 +49,7 @@ from agent_runtime.control_plane.parallel_admission import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 if TYPE_CHECKING:
+    from agent_runtime.api.ports import ContextOccupancySink
     from agent_runtime.execution.model_invocation.runtime import (
         ModelInvocationRuntimeBinding,
     )
@@ -251,9 +252,29 @@ class _PromptRuntimeSlot:
 
 @dataclass(slots=True)
 class _ModelInvocationRuntimeSlot:
-    """Run-lifetime F10 slot inherited by supervisor and local child tasks."""
+    """Run-lifetime F10 slot inherited by supervisor and local child tasks.
+
+    ``occupancy_store`` rides on this slot rather than in a ContextVar of its
+    own, and deliberately does **not** ride on ``binding``. The Context
+    Occupancy Ledger measures at the model-call seam (design §3.1) but has no
+    dependency on F10: it needs the materialized request, which is always
+    present, and a durable sink. Carrying the sink on ``binding`` is what made
+    the ledger inert on a default deployment — ``compose`` returns ``None``
+    whenever ``effective_f10_mode`` is ``OFF``, which is the shipped default, so
+    the seam took its no-binding early return and captured nothing on every
+    model call of every run. Sharing the slot keeps one lifetime and one unbind
+    token for both, so an occupancy sink can never outlive the run that
+    installed it.
+    """
 
     binding: ModelInvocationRuntimeBinding | None = None
+    occupancy_store: "ContextOccupancySink | None" = None
+    # Tenant for the occupancy rows. ``RunControlSnapshot`` deliberately carries
+    # no ``org_id`` — it identifies a run and its policy, not its tenant — and
+    # the F10 binding is the only other place it lives, which is exactly the
+    # dependency being removed here. So it is installed with the sink, from the
+    # run record the handler already holds.
+    occupancy_org_id: str | None = None
 
 
 _CURRENT_PROMPT_RUNTIME: ContextVar[_PromptRuntimeSlot | None] = ContextVar(
@@ -408,7 +429,12 @@ class RunSerialAdmission:
     - **Shared** — taken only by a call an installed
       :class:`~agent_runtime.control_plane.parallel_admission.ParallelAdmissionPort`
       positively named. Bounded twice: by the grant's own cohort semaphore, and
-      by the shared lane itself.
+      by the shared lane itself. A grant of width *one* is a shared-lane call
+      too, and a narrow one: it waits behind its own cohort instead of behind
+      every other call in the run, which is what lets a grantor with its own
+      ordering barrier make progress at all. When the cohort table cannot hold a
+      cohort, :meth:`_unrepresentable_cohort_lane` says which of the two lanes
+      answers.
 
     The two lanes are mutually exclusive, which is the point. The shared lane is
     a *lightswitch*: the first entrant takes the same exclusive lock a serial
@@ -463,9 +489,13 @@ class RunSerialAdmission:
         """
 
         grant = ParallelAdmissionResolver.resolve(self._parallel_admission, request)
-        cohort = None if grant is None else self._bind_cohort(grant)
-        if cohort is None:
+        if grant is None:
             async with self._async_lock:
+                yield
+            return
+        cohort = self._bind_cohort(grant)
+        if cohort is None:
+            async with self._unrepresentable_cohort_lane(grant):
                 yield
             return
         try:
@@ -477,6 +507,42 @@ class RunSerialAdmission:
                     self._leave_shared()
         finally:
             self._release_cohort(grant, cohort)
+
+    @asynccontextmanager
+    async def _unrepresentable_cohort_lane(
+        self,
+        grant: ParallelAdmissionGrant,
+    ) -> AsyncIterator[None]:
+        """Admit a granted call whose cohort this gate cannot currently hold.
+
+        Two things can make a cohort unrepresentable: the bounded cohort table is
+        full, or a live cohort already fixed a different width. Either way this
+        gate has no slot through which to apply the grant's width, and it has
+        exactly two ways to answer.
+
+        The exclusive lock is the fail-closed answer and stays the default,
+        because a grantor that does not enforce its own width has no other
+        enforcer and admitting it unbounded would widen the run.
+
+        It is also, on its own, a way to *stall* a grantor that orders its calls
+        behind a barrier: a member waiting for an earlier sibling would hold this
+        lock while that sibling waits for it. So a grantor that positively states
+        it enforces the width itself is admitted into the shared lane without a
+        slot. Nothing is unbounded there — the shared lane still takes the run's
+        exclusive lock on the group's behalf, so granted work still cannot
+        overlap ungranted work, and the grantor's own gate still decides how many
+        of its members run at once.
+        """
+
+        if not grant.width_enforced_by_grantor:
+            async with self._async_lock:
+                yield
+            return
+        await self._join_shared()
+        try:
+            yield
+        finally:
+            self._leave_shared()
 
     @contextmanager
     def sync_permit(self) -> Iterator[None]:
@@ -497,8 +563,11 @@ class RunSerialAdmission:
         """Reserve a reference on this grant's cohort, or refuse to widen.
 
         Synchronous and await-free, so the check and the reservation are atomic
-        against every other coroutine on the loop. ``None`` means serial: the
-        cohort table is full, or a live cohort already fixed a different width.
+        against every other coroutine on the loop. ``None`` means this gate holds
+        no slot for the grant — the cohort table is full, or a live cohort
+        already fixed a different width — and
+        :meth:`_unrepresentable_cohort_lane` decides what a call with no slot is
+        answered by.
         """
 
         cohort = self._cohorts.get(grant.cohort_id)
@@ -686,6 +755,49 @@ class RunControlContext:
 
         slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
         return None if slot is None else slot.binding
+
+    @staticmethod
+    def install_context_occupancy_store(
+        sink: "ContextOccupancySink",
+        *,
+        org_id: str,
+    ) -> None:
+        """Install the run-scoped occupancy sink and tenant, independently of F10.
+
+        Called unconditionally by the run handler, which is the whole point: the
+        ledger is not an F10 feature and must not inherit F10's rollout posture.
+        Idempotent for the same object so a re-entrant bind is not an error, and
+        rejects a *different* sink for the same run — two sinks would mean two
+        durable destinations for one run's measurements.
+        """
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        if slot is None:
+            raise RuntimeError("run control is not bound")
+        if slot.occupancy_store is not None and slot.occupancy_store is not sink:
+            raise RuntimeError("context occupancy sink is already installed")
+        if not org_id.strip():
+            raise ValueError("context occupancy sink requires a tenant")
+        slot.occupancy_store = sink
+        slot.occupancy_org_id = org_id
+
+    @staticmethod
+    def context_occupancy_store() -> "tuple[ContextOccupancySink, str] | None":
+        """Return the run-scoped ``(sink, org_id)`` pair, or ``None`` when unbound.
+
+        Returned as a pair because a sink without its tenant is unusable — every
+        occupancy row is tenant-scoped, and the read API filters on org before it
+        touches a row. ``None`` is a normal answer, not a failure: a legacy or
+        direct-factory path that never bound run control has nowhere to persist,
+        and the seam degrades to measuring nothing rather than raising (§6.4).
+        """
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        if slot is None or slot.occupancy_store is None:
+            return None
+        if slot.occupancy_org_id is None:
+            return None
+        return (slot.occupancy_store, slot.occupancy_org_id)
 
     @staticmethod
     def unbind(token: _RunControlContextToken) -> None:

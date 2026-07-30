@@ -7,6 +7,8 @@ Covers the spec-acquisition ladder (builtin → store → miss), the URI grammar
 
 from __future__ import annotations
 
+import pytest
+
 from agent_runtime.capabilities.surfaces import builtin
 from agent_runtime.capabilities.surfaces.projector import (
     InMemorySurfaceSpecStore,
@@ -177,3 +179,52 @@ class TestSurfaceProjectorShortCircuits:
     def test_disabled_projector_returns_none(self) -> None:
         projector = SurfaceProjector(enabled=False)
         assert projector.resolve("linear", "get_issue", _linear_issue_output()) is None
+
+
+class TestSurfaceProjectorProvenance:
+    """``state.source`` — the envelope's own ``{server, tool}``.
+
+    On a ladder MISS this is the only thing that can name the tool for the
+    tier-3 note: there is no spec to read it from, and reading it out of
+    ``data`` would let tool output declare its own provenance.
+    """
+
+    def test_miss_names_the_tool_the_ladder_could_not_match(self) -> None:
+        envelope = SurfaceProjector().resolve(
+            "customsvc", "do_thing", {"widget": {"id": "w-9"}}
+        )
+
+        assert envelope is not None
+        assert envelope.state.spec is None
+        assert envelope.state.source is not None
+        assert envelope.state.source.server == "customsvc"
+        assert envelope.state.source.tool == "do_thing"
+
+    def test_hit_carries_the_same_provenance_as_its_spec(self) -> None:
+        envelope = SurfaceProjector().resolve(
+            "linear", "get_issue", _linear_issue_output()
+        )
+
+        assert envelope is not None
+        assert envelope.state.source is not None
+        assert envelope.state.source.tool == "get_issue"
+
+    @pytest.mark.parametrize(
+        ("server", "tool"),
+        [("", "do_thing"), ("customsvc", ""), ("   ", "   ")],
+        ids=["blank-server", "blank-tool", "both-blank"],
+    )
+    def test_a_nameless_call_still_projects(self, server: str, tool: str) -> None:
+        # ``SurfaceSource`` requires both members. This projector is called
+        # outside any ``try`` (``SurfaceLedgerOperationOutcomePresenter``), so a
+        # ValidationError here would turn a nameless tool into a failed tool
+        # call. Absent provenance is the honest answer, and the tier-3 note has
+        # a sentence for it.
+        envelope = SurfaceProjector().resolve(server, tool, {"id": "x"})
+
+        assert envelope is not None
+        assert envelope.state.source is None
+        # And nothing empty rides the wire.
+        assert (
+            "source" not in envelope.model_dump(mode="json", exclude_none=True)["state"]
+        )

@@ -38,11 +38,12 @@ Nothing here sleeps on the wall clock.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
+from langchain.agents.middleware.types import ToolCallRequest
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from agent_runtime.capabilities.concurrency import (
@@ -193,7 +194,12 @@ class TestIndependentReadsCostOneLatencyUnitNotThree:
         result, journal, _ = await _run_configured(clock.spend_one_unit_of_latency)
 
         assert result["messages"][-1].content == "done"
-        assert clock.waves == [(0, 1, 2)], (
+        # Membership, not sequence. The claim is that all three reads shared one
+        # wave, and a wave records the order its members happened to arrive in —
+        # which is the scheduler's choice among children the plan declared
+        # unordered. Asserting the arrival sequence would assert a guarantee a
+        # parallel segment does not make and was never meant to make.
+        assert [sorted(wave) for wave in clock.waves] == [[0, 1, 2]], (
             "the three reads did not share one release wave, so their latency "
             f"was not max-of-children: {clock.waves}"
         )
@@ -209,10 +215,18 @@ class TestIndependentReadsCostOneLatencyUnitNotThree:
         result = await _run_unconfigured(clock.spend_one_unit_of_latency)
 
         assert result["messages"][-1].content == "done"
-        assert clock.waves == [(0,), (1,), (2,)], (
+        # Three waves of one child each, and every child accounted for. *Which*
+        # child gets which wave is not asserted: with no F6 install the only gate
+        # is the Step-2 exclusive lock, whose queue is arrival order at the lock,
+        # and arrival order is the framework's scheduling of coroutines it started
+        # together. Under load that is observably not input order, and it never
+        # promised to be — what feature-off parity claims is that nothing
+        # overlapped, which is exactly one child per wave.
+        assert [len(wave) for wave in clock.waves] == [1, 1, 1], (
             "an unconfigured run overlapped, which would break feature-off "
             f"parity: {clock.waves}"
         )
+        assert sorted(value for wave in clock.waves for value in wave) == [0, 1, 2]
 
     async def test_the_speedup_is_the_segment_width(self) -> None:
         """Stated as the ratio the performance budget is written in.
@@ -282,6 +296,136 @@ class TestOnlyDeclaredReadsCanEverOverlap:
         )
 
         assert len(clock.waves) == _FANOUT
+
+
+class TestAPlannedChildIsAdmittedWhateverOrderItArrivesIn:
+    """The regression that made ``ci-ai-backend`` hang for eleven 300s stretches.
+
+    A serial plan orders its children by segment, and the coordinator's cursor can
+    only order the children that have *arrived*. Nothing gives them a
+    plan-ordered arrival: the framework starts a turn's tool coroutines together
+    and the scheduler picks who reaches the run's tool gate first. So an
+    admission that serialized planned siblings against each other could park a
+    later segment's child inside the coordinator while it held the one lock its
+    blocker needed to arrive at all, and neither moved until the whole 300s
+    admission budget expired and the child was refused ``NOT_ADMITTED``.
+
+    That is why these arrival orders are parametrized rather than assumed. The
+    tests drive the real ``RuntimeToolControlMiddleware.awrap_tool_call`` — the
+    seam that owns the gate/coordinator nesting — so nothing here can pass while
+    the composition it is protecting has drifted.
+
+    Wall clock: a passing run never waits, because ``asyncio.wait`` returns as
+    soon as the last child settles. The bound exists so a *reintroduced* deadlock
+    fails this test in a second instead of parking CI for five minutes per case.
+    """
+
+    #: Long enough that no admission path plausibly needs it, short enough that a
+    #: regression is a fast red rather than another hour-long job.
+    _SETTLE_SECONDS = 5.0
+
+    @staticmethod
+    def _tool_call_request(value: int) -> ToolCallRequest:
+        return ToolCallRequest(
+            tool_call={
+                "name": _TOOL,
+                "args": {"value": value},
+                "id": f"call-{value}",
+                "type": "tool_call",
+            },
+            tool=None,
+            state={},
+            runtime=cast(Any, object()),
+        )
+
+    @pytest.mark.parametrize(
+        "arrival_order",
+        [[0, 1, 2], [1, 0, 2], [2, 1, 0], [1, 2, 0]],
+        ids=["plan-order", "middle-first", "reversed", "last-first"],
+    )
+    async def test_every_child_of_a_serial_plan_runs_in_plan_order(
+        self,
+        arrival_order: list[int],
+    ) -> None:
+        """Arrival order chooses nothing: the plan does, and every child runs."""
+
+        journal = _InMemoryBatchJournal()
+        token = RunControlContext.bind_for_run(_binding())
+        admission = _admission(
+            journal,
+            # A write is the ordinary case that plans serially, and the case the
+            # hang was found on.
+            declarations=_declarations(side_effect=SideEffectKind.IRREVERSIBLE_WRITE),
+        )
+        serial_admission = RunControlContext.serial_admission()
+        assert serial_admission is not None
+        serial_admission.install_parallel_admission(admission)
+        batch_token = RuntimeBatchAdmissionContext.install(admission)
+        middleware = RuntimeToolControlMiddleware()
+
+        entered: list[int] = []
+        active = 0
+        maximum_active = 0
+
+        async def handler(request: ToolCallRequest) -> ToolMessage:
+            nonlocal active, maximum_active
+            value = int(request.tool_call["args"]["value"])
+            entered.append(value)
+            active += 1
+            maximum_active = max(maximum_active, active)
+            for _ in range(_QUIESCENCE_YIELDS):
+                await asyncio.sleep(0)
+                maximum_active = max(maximum_active, active)
+            active -= 1
+            return ToolMessage(content=str(value), tool_call_id=f"call-{value}")
+
+        try:
+            await admission.aplan_model_batch(
+                execution_scope="supervisor",
+                model_turn=1,
+                tool_calls=[
+                    dict(self._tool_call_request(value).tool_call)
+                    for value in range(_FANOUT)
+                ],
+            )
+            assert len(journal.plans[0].record.segments) == _FANOUT, (
+                "this test only says anything while the plan is segmented"
+            )
+
+            tasks: list[asyncio.Task[object]] = []
+            for value in arrival_order:
+                tasks.append(
+                    asyncio.create_task(
+                        middleware.awrap_tool_call(
+                            self._tool_call_request(value),
+                            handler,
+                        )
+                    )
+                )
+                # One scheduler turn apart, so arrival order at the gate is this
+                # test's choice rather than the scheduler's.
+                await asyncio.sleep(0)
+
+            _, pending = await asyncio.wait(tasks, timeout=self._SETTLE_SECONDS)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        finally:
+            RuntimeBatchAdmissionContext.reset(batch_token)
+            RunControlContext.unbind(token)
+
+        assert not pending, (
+            f"{len(pending)} planned child(ren) never settled after arriving in "
+            f"{arrival_order} — a child is parked behind a lock its blocker "
+            "needs, which is the 300s admission hang"
+        )
+        assert entered == [0, 1, 2], (
+            "a serial plan must run its children in plan order whatever order "
+            f"they arrived in, but arriving in {arrival_order} produced {entered}"
+        )
+        assert maximum_active == 1, (
+            f"a serial plan overlapped {maximum_active} children"
+        )
 
 
 class TestAResourceSubjectIsSerialAtTheGraphSeam:

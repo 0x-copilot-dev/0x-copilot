@@ -1,0 +1,158 @@
+{
+  "surface": "surface-language",
+  "state": "board",
+  "prd": "docs/plan/surface-language/PRD-01-board-lanes.md",
+  "viewport": "1200x816",
+  "design": "surfaces/surface-language/design/index.html?state=board",
+  "live": "surfaces/surface-language/live/board.html",
+  "note": "board:// at rest — four lanes, 2/2/1/2 cards, nothing changed. The live fixture reproduces the mock's own BOARD_COLS payload (same lane order, same copy), so a row in this report is a treatment difference and not a fixture difference.\n\nTHREE THINGS TO READ PAST BEFORE FILING ANYTHING. (1) WIDTH IS NOISE: the live card is capped at max-width 820px inside a 1040px frame, so its lane track clamps to the 196px minimum while the design's full-bleed card gives each lane ~249px. (2) EVERY GROUND COLOUR CARRIES ONE SYSTEMIC DELTA: the design is measured in its own default `data-color=\"functional\"`, which re-declares the neutral ladder in oklch (`--panel` → oklch(0.212 0.010 276)); the live app adopted the hues but not that ladder, so the same difference repeats on every anchor with a background. Re-run the design side with `?color=quiet` to hold the ladder constant and see what is left. (3) A DECORATIVE DOT INHERITS TYPE: `card.kicker-dot` paints no text, so its fontFamily/fontSize/lineHeight/letterSpacing/color rows are its parent kicker's register showing through — that register is measured properly on `card.kicker`. Read backgroundColor / boxShadow / width / height on the dot and nothing else.\n\nEverything else on these anchors — type, colour, padding, gap, radius, border, shadow — is container-independent and load-bearing.",
+  "extraProps": [
+    "position",
+    "top",
+    "zIndex",
+    "gridAutoFlow",
+    "gridAutoColumns",
+    "minHeight",
+    "maxHeight",
+    "overflowX",
+    "overflowY",
+    "overscrollBehaviorX",
+    "overscrollBehaviorY",
+    "textWrap",
+    "textWrapStyle"
+  ],
+  "elements": [
+    {
+      "label": "card",
+      "group": "Card",
+      "design": ".sf > .sfc",
+      "live": "[data-testid=\"board-renderer\"] > section"
+    },
+    {
+      "label": "card.header",
+      "group": "Card",
+      "design": ".sfc > .sfc-h",
+      "live": "[data-testid=\"surface-header\"]"
+    },
+    {
+      "label": "card.kicker",
+      "group": "Card",
+      "design": ".sfc-k",
+      "live": "[data-testid=\"surface-header\"] > div > span:first-child"
+    },
+    {
+      "label": "card.kicker-dot",
+      "group": "Card",
+      "design": ".sfc-k > .sd",
+      "live": ".sf-kicker__dot",
+      "note": "The IDENTITY register. Live reads --surface-src from data-surface-hue=\"plum\" on the mount wrapper and resolves oklch(0.76 0.1 288) + the 3px halo. The design side is NOT the surface's own `src`: `.sfc[data-tier=\"2\"] .sfc-k .sd` overrides tier-2 surfaces to --violet regardless of src, so the mock paints board's dot violet (#a98be0) while its tab strip paints it plum. Worth reading twice before calling either side wrong. Ignore the typography rows on this anchor — see (3) in the state note."
+    },
+    {
+      "label": "card.title",
+      "group": "Card",
+      "design": ".sfc-t",
+      "live": "[data-testid=\"surface-title\"]"
+    },
+    {
+      "label": "card.subtitle",
+      "group": "Card",
+      "design": ".sfc-s",
+      "live": "[data-testid=\"surface-subtitle\"]",
+      "note": "SurfaceHeader supports a subtitle; BoardRenderer never passes one, so this is expected to report ABSENT in live. Not waived — the mock's \"Platform · 7 issues\" line is real."
+    },
+    {
+      "label": "card.badge",
+      "group": "Card",
+      "design": ".sfc-r > .sfb",
+      "live": "[data-testid=\"surface-badge\"]"
+    },
+    {
+      "label": "card.link",
+      "group": "Card",
+      "design": ".sf-lnk",
+      "live": "[data-testid=\"surface-link\"], [data-testid=\"surface-link-text\"]",
+      "note": "Same affordance, different home: the design puts it in the header rail (.sfc-r), live puts it in a row beneath the lanes. Placement is not a computed style, so read this row for the type/colour register only and the placement from the DOM outline."
+    },
+    {
+      "label": "lanes",
+      "group": "Lanes",
+      "design": ".sfbd",
+      "live": "[data-testid=\"board-lanes\"]",
+      "note": "The whole PRD-01 grid: column auto-flow, minmax(196px,1fr) tracks, gap:1px over --line (the gap IS the divider), min-height 230px, overflow-x auto with contained overscroll."
+    },
+    {
+      "label": "lane.first",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(1)",
+      "live": "[data-testid=\"board-lane-0\"]"
+    },
+    {
+      "label": "lane.first.header",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfbd-h",
+      "live": "[data-testid=\"board-lane-0-header\"]",
+      "note": "Sticky inside its lane. position/top/margin are the pair PRD-01 calls out; `position` is not in the extractor's property set, so confirm stickiness from the source and read padding/margin/type/background here."
+    },
+    {
+      "label": "lane.first.name",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfbd-h > span:first-child",
+      "live": "[data-testid=\"board-lane-0-header\"] > span:first-child"
+    },
+    {
+      "label": "lane.first.count",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfbd-h > .n",
+      "live": "[data-testid=\"board-lane-0-count\"]",
+      "note": "margin-left:auto in both. The extractor normalizes a right-aligned auto margin to `auto-end` so the count's copy length cannot masquerade as a spacing delta."
+    },
+    {
+      "label": "lane.first.card",
+      "group": "Card chrome",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfk:nth-child(2)",
+      "live": "[data-testid=\"board-lane-0-card-0\"]",
+      "note": "8px radius, elevated ground, hairline border, 8px 9px padding, 6px gap. The first .sfk is the lane's SECOND child — the sticky header is the first."
+    },
+    {
+      "label": "lane.first.card.title",
+      "group": "Card chrome",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfk:nth-child(2) > .t",
+      "live": "[data-testid=\"board-lane-0-card-0-title\"]"
+    },
+    {
+      "label": "lane.first.card.meta",
+      "group": "Card chrome",
+      "design": ".sfbd > .sfbd-c:nth-child(1) > .sfk:nth-child(2) > .f",
+      "live": "[data-testid=\"board-lane-0-card-0-meta\"]",
+      "note": "Mono 9.5px meta row. Copy differs by design: the mock's row is one pre-composed string (\"LW-208 · nova.eth\"), while a spec-driven card renders LABEL + value per non-title column — so expect a text INFO row here."
+    },
+    {
+      "label": "lane.single-card",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(3)",
+      "live": "[data-testid=\"board-lane-2\"]",
+      "note": "The one-card lane — catches a lane that sizes to its content instead of to the grid row."
+    },
+    {
+      "label": "lane.last",
+      "group": "Lane",
+      "design": ".sfbd > .sfbd-c:nth-child(4)",
+      "live": "[data-testid=\"board-lane-3\"]",
+      "note": "The last lane. PRD-01 warns that reproducing the 1px divider with borders puts a stray edge on the two ends; this anchor is where that shows up."
+    }
+  ],
+  "unmapped": [
+    {
+      "live": "board-diff-rows",
+      "why": "BoardDiffRenderer, i.e. data-mode=\"diff\" — a different render from the current-state view this PRD covers. The mock has no diff-rows view for board at all (its proposed state marks cards in place), so there is nothing to compare it against."
+    },
+    {
+      "live": "surface-empty",
+      "why": "The empty board. The mock has a .sf-empty register but never renders it on the board surface, so a comparison would require authoring design markup rather than vendoring it. Renderable live at any time by passing an empty items array."
+    },
+    {
+      "live": "board-card-cap",
+      "why": "Only renders past CARD_RENDER_CAP. Measured separately in anchors/board-capped.json, against the design's one cap-line register (.sft-cap)."
+    }
+  ]
+}

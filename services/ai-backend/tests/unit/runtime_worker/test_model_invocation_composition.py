@@ -20,6 +20,7 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelRoutePlan,
 )
 from agent_runtime.execution.model_invocation.runtime import ModelInvocationMiddleware
+from agent_runtime.observability.context_occupancy_recorder import ContextOccupancySink
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord, RuntimeApiEventType
@@ -165,6 +166,41 @@ async def test_enforce_missing_journal_fails_before_dispatch() -> None:
             context=_context(),
             control=_control(FeatureMode.ENFORCE),
         )
+
+
+@pytest.mark.asyncio
+async def test_the_context_occupancy_sink_is_wired_to_the_persistence_store() -> None:
+    """The Context Occupancy Ledger's only writer, on the only production path.
+
+    ``ModelInvocationRuntimeBinding.context_occupancy_store`` defaults to
+    ``None`` and this composer is the sole place the binding is constructed
+    outside tests. With the field left defaulted, ``_persist_occupancy``
+    returned before ``finalize`` on every model call of every deployment: no
+    ``provider_input_tokens``, no ``cached_input_tokens``, no signed
+    ``unattributed_delta``, no row — so the whole reconciliation half of the
+    design (§3.3, §4.4, §6.6) never ran on real traffic and the shipped read API
+    could only ever answer with an empty series. The seam's own tests inject a
+    sink directly into the binding, so only an assertion here can catch it.
+    """
+
+    store = InMemoryRuntimeApiStore()
+    composer = ModelInvocationWorkerComposer(
+        settings=_settings(),
+        persistence=store,
+        event_store=store,
+        journal=object(),  # type: ignore[arg-type]
+        facts_factory=_facts,
+    )
+
+    composed = await composer.compose(
+        run=_run(_context()), context=_context(), control=_control(FeatureMode.SHADOW)
+    )
+
+    assert composed is not None
+    assert composed.binding.context_occupancy_store is store
+    # Structural, not nominal: the seam types the field as a one-method protocol,
+    # so the store has to actually satisfy it rather than merely be passed.
+    assert isinstance(composed.binding.context_occupancy_store, ContextOccupancySink)
 
 
 @pytest.mark.asyncio

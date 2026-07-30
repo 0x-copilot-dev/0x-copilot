@@ -101,6 +101,15 @@ class ToolBudgetUsage:
     # information while there is plenty of headroom.
     NOTICE_THRESHOLD = 3
 
+    # The invariant head of every rendered note, factored out of the two
+    # branches below so a reader of a materialized tool result can recognise
+    # the note without re-deriving its shape. The Context Occupancy Ledger
+    # splits these appended notes off a ``ToolMessage`` tail to report what
+    # they cost (design §4.6, audit item M); that split has to be exact rather
+    # than a regex guess, which it can only be while the producer and the
+    # recogniser read the same constant.
+    NOTE_PREFIX = "[Tool budget — "
+
     @property
     def remaining(self) -> int:
         """Calls left before the next one is refused; never negative."""
@@ -121,13 +130,13 @@ class ToolBudgetUsage:
 
         if self.remaining == 0:
             return (
-                f"[Tool budget — {self.tool_name}: {self.used} of {self.limit} "
+                f"{self.NOTE_PREFIX}{self.tool_name}: {self.used} of {self.limit} "
                 "calls used this turn. None left. Do not call it again; "
                 "answer with what you already have.]"
             )
         call_word = "call" if self.remaining == 1 else "calls"
         return (
-            f"[Tool budget — {self.tool_name}: {self.used} of {self.limit} "
+            f"{self.NOTE_PREFIX}{self.tool_name}: {self.used} of {self.limit} "
             f"calls used this turn, {self.remaining} {call_word} left. "
             "Make them count, then answer with what you have.]"
         )

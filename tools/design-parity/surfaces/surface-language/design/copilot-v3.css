@@ -1,0 +1,15 @@
+/* Shim — NOT design source.
+ *
+ * `surface-lang.css` is vendored byte-faithfully and opens with
+ * `@import url("copilot-v3.css")`, which resolves relative to ITSELF (this
+ * directory). Rather than vendor a second copy of the 14 KB v3 sheet (and the
+ * 16 KB base sheet it imports) next to it, point that import at the SHARED
+ * design-kit copy every other surface links. One token source, one place to
+ * refresh (design-kit/REFRESH.md).
+ *
+ * design-kit/copilot-v3.css itself opens with `@import url("copilot.css")`,
+ * which resolves inside design-kit/ — so this single line pulls the full
+ * cascade: copilot.css (v2 tokens + base + .cbtn) → copilot-v3.css (.cmp/.pop)
+ * → surface-lang.css (.sl/.sfc/.sfbd/.sfr/.sf-note/.sf-bar).
+ */
+@import url("../../../design-kit/copilot-v3.css");

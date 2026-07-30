@@ -83,6 +83,16 @@
     "artifact_author": ["model", "subagent", "user", "system", "import"],
     "artifact_presentation_preference": ["auto", "canvas", "chat_card", "none"],
     "presentation_decision": ["canvas", "chat_card", "activity_only", "none"],
+    "surface_accent": [
+      "jade",
+      "sky",
+      "indigo",
+      "ember",
+      "violet",
+      "plum",
+      "amber",
+      "none"
+    ],
     "surface_subject_type": ["artifact", "stage", "record", "receipt", "gate"],
     "effect_policy": ["auto", "ask", "require", "block"],
     "effect_decision": ["approve", "reject", "restore", "cancel"],
@@ -158,7 +168,7 @@
         "agent_summary",
         "retryable"
       ],
-      "optional": ["activity_ref"]
+      "optional": ["activity_ref", "failure_code"]
     },
     "Artifact": {
       "required": [

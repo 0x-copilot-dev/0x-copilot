@@ -9,11 +9,11 @@ import {
   EmptyBody,
   FieldRow,
   fieldGridStyle,
-  GenericFieldList,
+  NoSpecView,
   pageStyle,
-  PreparingHint,
   SurfaceHeader,
   SurfaceLinkRow,
+  toolNameFromState,
 } from "../_shared/primitives";
 import { formatValue, resolvePath } from "../_shared/path";
 import {
@@ -30,9 +30,9 @@ const KICKER = "Message";
 
 /**
  * The `message://` archetype — a composer-card layout (subject/from/to/body
- * from spec paths). Spec-less state falls back to the generic list; the diff
- * view renders a PENDING body block echoing the EmailRenderer treatment
- * (PRD-06 upgrades it to a word diff).
+ * from spec paths). Spec-less state falls back to the no-spec view (PRD-02);
+ * the diff view renders a PENDING body block echoing the EmailRenderer
+ * treatment (PRD-06 upgrades it to a word diff).
  */
 export function MessageRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
@@ -46,7 +46,7 @@ export function MessageRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Message surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(data)}
+        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
       </section>
     </article>
   );
@@ -85,12 +85,13 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   );
 }
 
-function renderFallback(data: unknown): ReactElement {
+/** Both halves of the boundary value: `state` is where a tool identity would
+ * ride, `data` is the payload the note is about. */
+function renderFallback(state: unknown, data: unknown): ReactElement {
   return (
     <>
       <SurfaceHeader kicker={KICKER} title="Message" />
-      <PreparingHint />
-      <GenericFieldList data={data} format={(v) => formatValue(v)} />
+      <NoSpecView data={data} tool={toolNameFromState(state)} />
     </>
   );
 }

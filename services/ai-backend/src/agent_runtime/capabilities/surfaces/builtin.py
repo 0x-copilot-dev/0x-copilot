@@ -59,6 +59,36 @@ def tool_slug(raw: str) -> str:
     return raw.strip().lower()
 
 
+def display_name(raw: object) -> str:
+    """The connector/tool name as the source declared it — the DISPLAY register.
+
+    Sibling of, and deliberately not, :func:`server_slug` / :func:`tool_slug`.
+    Those two answer "which entry does this key resolve to" and are lossy on
+    purpose (``Get_Issue`` and ``get_issue`` MUST be one registry entry). This
+    one answers "what is this thing called", and losing case there is pure
+    damage: ``getIssue`` slugs to ``getissue``, which names no tool the user has
+    ever seen. A name that reaches a person goes through here; a name that
+    reaches a lookup goes through the slugs.
+
+    Note what this can and cannot fix. It guarantees the surface layer never
+    re-spells a name it was given; it cannot restore a name that was already
+    folded upstream. Today's MCP path folds it early — ``McpToolCallRequest``
+    and ``McpToolDescriptor`` both run every server/tool name through
+    ``normalize_slug``, so a connector's ``getJiraIssue`` is ``getjiraissue``
+    before any surface code sees it, and this function faithfully serves that.
+    Recovering the connector's own spelling means carrying it from the MCP
+    descriptor (its ``annotations.title``, currently dropped as untrusted), not
+    changing anything here.
+
+    Total over ``object`` because its callers sit on the tool-call path where a
+    raise would fail the call: a non-string is no name at all, and the empty
+    string it returns is what the provenance sites already treat as "unknown
+    tool".
+    """
+
+    return raw.strip() if isinstance(raw, str) else ""
+
+
 def _spec_key(server: str, tool: str) -> tuple[str, str]:
     return (server_slug(server), tool_slug(tool))
 
@@ -122,6 +152,7 @@ def all_specs() -> tuple[SurfaceSpec, ...]:
 __all__ = [
     "BuiltinSpecError",
     "all_specs",
+    "display_name",
     "load_builtin_specs",
     "lookup",
     "server_slug",

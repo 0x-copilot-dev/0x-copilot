@@ -1,0 +1,155 @@
+{
+  "surface": "surface-language",
+  "state": "no-spec",
+  "prd": "docs/plan/surface-language/PRD-02-no-spec-view.md",
+  "viewport": "1200x816",
+  "design": "surfaces/surface-language/design/index.html?state=no-spec",
+  "live": "surfaces/surface-language/live/no-spec.html  ·  live/no-spec-board.html",
+  "note": "The tier-3 generic view — the degradation target EVERY archetype falls to when specFromState returns undefined. This one anchor set is used for two live renders (TableRenderer's fallback and BoardRenderer's), which is why the card root is a selector list rather than one testid: the two differ only in the kicker word and the root testid.\n\nSame two read-past caveats as anchors/board.json: the design is measured in its own default `data-color=\"functional\"`, whose oklch neutral ladder puts one systemic delta on every anchor with a ground (`?color=quiet` holds it constant); and `card.kicker-dot` paints no text, so only its backgroundColor/boxShadow/size mean anything.\n\nTWO ANCHORS ARE BOUND STRUCTURALLY, NOT BY TESTID, and that is deliberate. PRD-02's NoSpecView had not landed when this was authored (primitives.tsx still exports PreparingHint and the archetypes still call it), so naming a testid that does not exist yet would have been a guess. `nospec.note` binds to \"whatever element occupies the slot immediately after the header\" — today the preparing hint, after PRD-02 the honest note — and `nospec.footer` binds to \"the card's last child, provided it is not the generic field list\", which matches nothing today and will match the read-only footer whenever it arrives. Both keep reporting the truth without an edit.",
+  "extraProps": [
+    "gridTemplateColumns",
+    "fontVariantNumeric",
+    "alignItems",
+    "position",
+    "overflowWrap",
+    "maxHeight",
+    "overflowY",
+    "textWrap"
+  ],
+  "elements": [
+    {
+      "label": "card",
+      "group": "Card",
+      "design": ".sf > .sfc",
+      "live": "[data-testid$=\"-renderer\"] > section"
+    },
+    {
+      "label": "card.header",
+      "group": "Card",
+      "design": ".sfc > .sfc-h",
+      "live": "[data-testid=\"surface-header\"]"
+    },
+    {
+      "label": "card.kicker",
+      "group": "Card",
+      "design": ".sfc-k",
+      "live": "[data-testid=\"surface-header\"] > div > span:first-child",
+      "note": "Copy differs by design: the mock names the THING (\"Incident / no spec\"); live names the archetype whose fallback ran (\"Table\" / \"Board\"). Read the register, not the word."
+    },
+    {
+      "label": "card.kicker-dot",
+      "group": "Card",
+      "design": ".sfc-k > .sd",
+      "live": ".sf-kicker__dot",
+      "note": "The hollow ring — the honest absence of identity. Design: .sfc[data-tier=\"3\"] .sd → transparent background + inset 0 0 0 1.5px --mut2. Live: data-surface-hue=\"none\" → the same treatment via --color-text-subtle. PRD-02 states these already agree; this anchor is what proves it."
+    },
+    {
+      "label": "card.title",
+      "group": "Card",
+      "design": ".sfc-t",
+      "live": "[data-testid=\"surface-title\"]"
+    },
+    {
+      "label": "card.subtitle",
+      "group": "Card",
+      "design": ".sfc-s",
+      "live": "[data-testid=\"surface-subtitle\"]"
+    },
+    {
+      "label": "card.chip",
+      "group": "Card",
+      "design": ".sfc-r > .sfb",
+      "live": "[data-testid=\"surface-badge\"]"
+    },
+    {
+      "label": "nospec.note",
+      "group": "The honest note",
+      "design": ".sf-note",
+      "live": "[data-testid=\"surface-header\"] + *",
+      "note": "STRUCTURAL BINDING — see the state note. The design's band: flex row, 9px 12px, 12px/1.55 on --tx2, --ink2 ground, hairline bottom border. What live puts in that slot today is the \"Preparing view…\" pill, which is exactly what PRD-02 requirement 6 replaces."
+    },
+    {
+      "label": "nospec.note.tool-code",
+      "group": "The honest note",
+      "design": ".sf-note code",
+      "live": "[data-testid=\"surface-header\"] + * code",
+      "note": "The unmatched tool name in a code register (mono 11px on --tx). PRD-02 requirement 5: inert text, never a link, length-capped. Unmatched in live until the note lands."
+    },
+    {
+      "label": "nospec.note.icon",
+      "group": "The honest note",
+      "design": ".sf-note svg",
+      "live": "[data-testid=\"surface-header\"] + * svg",
+      "note": "13×13, flex:none, 2px top offset, --mut. The design spends a token making the icon quieter than the copy."
+    },
+    {
+      "label": "row.first",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:nth-child(1)",
+      "live": "[data-testid=\"field-incident_number\"]",
+      "note": "PRD-02 requirement 3: 172px minmax(0,1fr) grid, 14px gap, baseline aligned, 9px 12px padding, hairline bottom border."
+    },
+    {
+      "label": "row.first.label",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:nth-child(1) > .l",
+      "live": "[data-testid=\"field-incident_number\"] > span:first-child",
+      "note": "Mono 9.5px caps at .11em on --mut2 — the IDENTIFIER register, because a raw payload key is a name the tool chose."
+    },
+    {
+      "label": "row.first.value",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:nth-child(1) > .v",
+      "live": "[data-testid=\"field-incident_number-value\"]",
+      "note": "REGISTER DIVERGENCE TO EXPECT, and it is real, not fixture noise: the mock declares which fields are numeric by hand (incident_number is NOT), while the live list infers it from the value — \"4127\" parses, so live paints it in the mono tabular register. Same payload, two different answers to \"is this a number\"."
+    },
+    {
+      "label": "row.numeric.value",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:nth-child(5) > .v",
+      "live": "[data-testid=\"field-created_at-value\"]",
+      "note": "The mirror image of the row above: the mock marks Created At numeric (mono 12px, tabular figures), live does not — an ISO timestamp does not parse as a number. Together these two rows are the whole numeric-register question for a spec-less view."
+    },
+    {
+      "label": "row.summarised-object",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:nth-child(6) > .v",
+      "live": "[data-testid=\"field-service-value\"]",
+      "note": "\"{ 6 fields }\" — PRD-02 requirement 2's second honest limit. The live fixture carries a real 6-key object so the summary is produced, not transcribed."
+    },
+    {
+      "label": "row.last",
+      "group": "Field rows",
+      "design": ".sf-note + div > .sfr:last-child",
+      "live": "[data-testid=\"field-html_url\"]",
+      "note": "The design drops the bottom hairline on the last row (.sfr:last-child{border-bottom:0}); this is where a live list that keeps it shows up."
+    },
+    {
+      "label": "nospec.footer",
+      "group": "Read-only footer",
+      "design": ".sf-bar",
+      "live": "[data-testid$=\"-renderer\"] > section > *:last-child:not([data-testid=\"surface-generic-fields\"])",
+      "note": "STRUCTURAL BINDING — see the state note. PRD-02 requirement 4 calls this a SAFETY statement, not decoration. Unmatched today, which is the correct finding: there is no footer on the spec-less path yet."
+    },
+    {
+      "label": "nospec.footer.copy",
+      "group": "Read-only footer",
+      "design": ".sf-bar > .c",
+      "note": "DESIGN-ONLY until the footer exists. 12px on --mut with the second clause dropped to --mut2 — \"Read-only. Generic views never carry a write action.\""
+    }
+  ],
+  "unmapped": [
+    {
+      "design": ".sf-bar .cbtn",
+      "why": "The mock's footer carries an \"Open in PagerDuty\" button. PRD-02 explicitly declines it as a non-goal: there is no safe generic destination and spec.link.url_path is the sanctioned path when a spec exists. Excluded so it cannot be re-filed as a missing control."
+    },
+    {
+      "design": ".sf-note + div",
+      "why": "The design's field-row wrapper is an unstyled <div>; live's surface-generic-fields is a flex column. Comparing them measures scaffolding, not language — the rows themselves are anchored individually and carry every value that matters."
+    },
+    {
+      "live": "surface-generic-field-cap",
+      "why": "GENERIC_FIELD_CAP (40) truncation. The mock's payload has 8 fields and no cap line, so there is nothing to compare against; renderable live by passing a >40-key payload."
+    }
+  ]
+}

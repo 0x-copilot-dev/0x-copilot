@@ -14,7 +14,7 @@ import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
-import { surfaceHueForUri } from "../surfaces/surfaceHue";
+import { resolveSurfaceHue, type SurfaceHue } from "../surfaces/surfaceHue";
 import { GenericRecordFallback } from "../surfaces/record/GenericRecordFallback";
 import { projectAt, type SurfacePayload } from "./eventProjector";
 
@@ -80,6 +80,25 @@ export interface TcSurfaceMountProps {
   readonly uri: string;
   /** Active tab title, used only by the generic record fallback. */
   readonly title?: string;
+  /**
+   * The author's chosen identity hue, when one was chosen — the same value, in
+   * the same shape, that `TcTab.hue` carries, and where a `publish_artifact`
+   * accent lands on the card. Absent is the normal case: the hue is then
+   * derived from the URI's scheme, exactly as before this prop existed.
+   *
+   * Deliberately resolved through the SAME `resolveSurfaceHue` the tab strip
+   * uses rather than re-deriving the fallback here. A tab and the card it opens
+   * are one surface's identity shown twice; a second copy of the rule is how
+   * they would come to disagree.
+   *
+   * Typed as the closed hue set, not `string`. A model-authored accent is
+   * narrowed with `isSurfaceHue` at the boundary it enters (the conversation
+   * record parser), so callers hold a `SurfaceHue` by the time they get here.
+   * `resolveSurfaceHue` still validates at runtime — the mount stays total over
+   * a value that arrived without a type — but the prop no longer throws away a
+   * check its callers can already satisfy.
+   */
+  readonly hue?: SurfaceHue;
   readonly transport: Transport;
   readonly state?: unknown;
   readonly pendingDiff?: PendingDiffHandle | null;
@@ -249,6 +268,7 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
   const {
     uri,
     title,
+    hue,
     state,
     pendingDiff,
     onApprove,
@@ -377,7 +397,11 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
       // renderer never has to be handed a colour or resolve one itself. A tier-3
       // fallback resolves to `none` through the same path — a generic view is a
       // real view, it just has no source identity to claim.
-      data-surface-hue={surfaceHueForUri(uri)}
+      //
+      // An author's chosen hue overrides the URI's default, through the same
+      // helper the tab strip calls: the card and its tab show one surface's
+      // identity, so they resolve it once, the same way.
+      data-surface-hue={resolveSurfaceHue({ uri, choice: hue })}
       data-streaming={streamPercent !== null ? "true" : "false"}
       data-editing={isEditing ? "true" : "false"}
       style={rootStyle}

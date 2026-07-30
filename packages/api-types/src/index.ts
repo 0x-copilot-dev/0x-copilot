@@ -79,6 +79,7 @@ export type {
   ArtifactAuthor,
   ArtifactPresentationPreference,
   PresentationDecision,
+  SurfaceAccent,
   SurfaceSubjectType,
   EffectPolicy,
   EffectDecisionKind,
@@ -668,6 +669,7 @@ export type RuntimeApiEventType =
   | "model.invocation.completed.v1"
   | "model.invocation.failed.v1"
   | "operation_batch.journal.v1"
+  | "context_occupancy"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -761,6 +763,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "model.invocation.completed.v1",
   "model.invocation.failed.v1",
   "operation_batch.journal.v1",
+  "context_occupancy",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -1844,6 +1847,153 @@ export interface ConversationContextResponse {
   model: ContextWindowSummary;
   current: ContextCurrentSlice;
   breakdown: ContextBreakdown;
+}
+
+// ---------------------------------------------------------------------------
+// Context Occupancy Ledger (context-attribution design §7).
+//
+// `ConversationContextResponse` above answers "how full is the window".
+// Occupancy answers the question it cannot: "who filled it". One snapshot per
+// measured model call, decomposed into the segments that produced the input
+// token count, so a client can show that a tool nobody calls is charging rent
+// on every request.
+//
+// Served at:
+//   GET /v1/agent/runs/{run_id}/context/occupancy            -> per-turn series
+//   GET /v1/agent/conversations/{id}/context/occupancy       -> right now
+//
+// Both are sub-resources of `/context` rather than `/context` itself, because
+// that path is already the window summary above.
+// ---------------------------------------------------------------------------
+
+/** Which model context window one snapshot describes.
+ *
+ * A subagent runs against its OWN window. Snapshots from different scopes have
+ * different denominators and must never be summed — a client that adds an
+ * unfiltered series together reports utilization no model ever saw.
+ */
+export type ContextGraphScope = "root" | "subagent";
+
+/** The closed structural taxonomy of one provider request. */
+export type ContextSegmentClass =
+  | "system"
+  | "tools"
+  | "messages"
+  | "response_format";
+
+/** How often a contributor's bytes are re-sent to the model.
+ *
+ * The field that makes a number actionable rather than merely large:
+ * `resident` bytes are rent on every call and are fixed by trimming or
+ * deferring the surface, while `per_result` bytes are a multiplier on
+ * tool-call count and are fixed by shrinking the per-result note.
+ */
+export type ContextLifecycle =
+  | "resident"
+  | "per_turn"
+  | "per_result"
+  | "on_demand";
+
+/** Which tier of the counting fallback chain produced an estimate.
+ *
+ * `proxy` is the fail-open signature — the ledger chose a worse number over a
+ * failed run — so a client may want to mark those figures as approximate.
+ */
+export type ContextTokenCounterSource = "tokenizer" | "heuristic" | "proxy";
+
+/** Provider-neutral prompt-cache intent carried through from the declaration.
+ *
+ * Load-bearing for interpretation: a cached stable prefix bills at roughly a
+ * tenth of a fresh one, so "large but cached" and "large and re-billed every
+ * turn" are different findings with different fixes.
+ */
+export type ContextCacheEligibility = "never" | "stable_prefix";
+
+export interface ContextOccupancySegment {
+  segment_class: ContextSegmentClass;
+  /** Owner-namespaced `"owner:name"` declaration, or the reserved `UNDECLARED`
+   *  sentinel for measured bytes no declaration covers. Deliberately NOT an
+   *  enum — treat it as an opaque grouping key and never switch on values. */
+  label: string;
+  lifecycle: ContextLifecycle;
+  third_party: boolean;
+  /** Bounded sub-identity within a label: a tool name, a `fragment_id`, a
+   *  message ordinal range. Never content. */
+  detail: string | null;
+  byte_count: number;
+  estimated_tokens: number;
+  item_count: number;
+  cache_eligibility: ContextCacheEligibility | null;
+  counter_source: ContextTokenCounterSource;
+}
+
+export interface ContextOccupancySnapshot {
+  schema_version: 1;
+  model_call_id: string;
+  /** Retries do not overwrite: a retried call is a second snapshot. Dedupe on
+   *  `model_call_id` and take the last attempt when charting utilization. */
+  attempt_ordinal: number;
+  assembly_record_id: string | null;
+  graph_scope: ContextGraphScope;
+  provider: string;
+  model_family: string;
+  measured_at: string;
+  /** `null` when the model is absent from the pricing catalog — the window
+   *  denominator is unknown, which is why `free_tokens` is then also `null`. */
+  context_window_tokens: number | null;
+  /** Ours: decomposable into `segments`, approximate. */
+  estimated_input_tokens: number;
+  /** The provider's: authoritative and opaque, `null` when none was reported. */
+  provider_input_tokens: number | null;
+  cached_input_tokens: number;
+  cache_creation_input_tokens: number;
+  /** Measured bytes matching no declaration. EXPECTED 0 — anything above it is
+   *  a first-party contract defect, not drift. Already counted inside
+   *  `estimated_input_tokens`; this names the subset, it does not carve it out. */
+  undeclared_tokens: number;
+  /** `provider_input_tokens - estimated_input_tokens`, SIGNED. Provider wire
+   *  overhead and tokenizer drift; negative means we over-counted. */
+  unattributed_delta: number;
+  /** Remaining window WITHIN THIS SCOPE only, `null` when unknown. Signed:
+   *  negative means the request exceeded the window we believe the model has. */
+  free_tokens: number | null;
+  segments: ContextOccupancySegment[];
+  /** Normally 0. Non-zero means the server read a row whose decomposition it
+   *  does not fully understand (a reader older than the writer). The totals
+   *  above stay exact regardless — they are stored, not summed from `segments`. */
+  unreadable_segment_count: number;
+}
+
+/** `GET /v1/agent/runs/{run_id}/context/occupancy`.
+ *
+ * Oldest-first. `graph_scope` echoes the filter that was applied (`null` = all
+ * scopes) because the series is summable only within one scope. An empty
+ * `snapshots` covers unknown / other-tenant / other-user / not-yet-measured
+ * alike — deliberately indistinguishable, so the endpoint is not an existence
+ * oracle for run ids in other organizations.
+ */
+export interface ContextOccupancyResponse {
+  run_id: string;
+  graph_scope: ContextGraphScope | null;
+  snapshots: ContextOccupancySnapshot[];
+}
+
+/** `GET /v1/agent/conversations/{conversation_id}/context/occupancy`.
+ *
+ * The newest ROOT-scope snapshot across the conversation's runs — "what is in
+ * context right now" — plus the run it came from. Root scope only: a subagent's
+ * last call describes a window that has since been discarded.
+ */
+export interface ConversationContextOccupancyResponse {
+  conversation_id: string;
+  run_id: string | null;
+  snapshot: ContextOccupancySnapshot | null;
+}
+
+/** Payload of the `context_occupancy` run event. Same snapshot shape the read
+ *  API returns, so stream and fetch fold through one reducer. */
+export interface ContextOccupancyEventPayload {
+  snapshot: ContextOccupancySnapshot;
 }
 
 export interface MessageListResponse {
@@ -3668,6 +3818,12 @@ export interface RuntimeEventPayloadByType
    * child is dispatched. INTERNAL/REDACTED: identities, closed vocabularies,
    * keyed resource-scope digests, allowances, and reason codes only. */
   "operation_batch.journal.v1": OperationBatchJournalPayload;
+  /** Context Occupancy Ledger — one per measured model call: the context window
+   * decomposed into who occupies it. Carries the SAME snapshot shape
+   * `GET /v1/agent/runs/{run_id}/context/occupancy` returns, so a client folds
+   * the stream and the fetch through one reducer. Content-free by construction:
+   * counts, closed vocabulary values, and bounded identifiers only. */
+  context_occupancy: ContextOccupancyEventPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
@@ -3873,9 +4029,18 @@ export interface SurfaceFieldChange {
 
 /** The rendered state of a surface. `spec` absent ⇒ the host renders the tier-3
  * generic view; a spec may arrive later via `surface_spec_generated` and be
- * merged by `surface_uri`. `data` is untrusted tool output. */
+ * merged by `surface_uri`. `data` is untrusted tool output.
+ *
+ * `source` names the connector tool whose output `data` is — the ENVELOPE's
+ * provenance, written by the runtime, not a key read out of `data`. It is what
+ * lets the spec-less view say *which* tool it could not match instead of "this
+ * tool result". It is optional **forever**: every surface emitted before this
+ * field existed carries none, and every replay of those events still must
+ * render. Absent means "unknown tool" — never an error, and never a reason to
+ * reject the state. */
 export interface SurfaceState {
   spec?: SurfaceSpec;
+  source?: SurfaceSource;
   data: unknown;
 }
 

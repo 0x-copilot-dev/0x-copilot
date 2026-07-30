@@ -21,17 +21,26 @@ from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 _LOGGER = logging.getLogger(__name__)
 
 
-class _CitationHint:
+class CitationHint:
     """Appends a ``[[N]]`` ordinal pointer to a tool result so the model can cite it.
 
     Handles ``str``, ``tuple`` (LangChain content_and_artifact), ``list``, ``dict``
     (MCP content array or generic key-value), and falls through unchanged for all
     other shapes. The hint is the only instruction the model needs to embed a stable
     pointer in its prose.
+
+    ``NOTE_PREFIX`` is the invariant head of every rendered hint, factored out of
+    :attr:`HINT_TEMPLATE` so a reader of a materialized tool result can recognise
+    the note without re-deriving its shape. The Context Occupancy Ledger splits
+    these appended notes off a ``ToolMessage`` tail to report what they cost
+    (design §4.6, audit item L); the split has to be exact rather than a regex
+    guess, which it can only be while both the producer and the recogniser read
+    the same constant.
     """
 
+    NOTE_PREFIX = "[Tool call #"
     HINT_TEMPLATE = (
-        "[Tool call #{ordinal} — {tool_name} — "
+        NOTE_PREFIX + "{ordinal} — {tool_name} — "
         "cite as [[{ordinal}]] when referencing this result.]"
     )
     # Top-level key added to dict-shaped results (MCP, internal APIs)
@@ -56,6 +65,12 @@ class _CitationHint:
             note=cls.render(ordinal=ordinal, tool_name=tool_name),
             dict_key=cls.DICT_HINT_KEY,
         )
+
+
+# The class was module-private until the occupancy ledger needed to recognise
+# the note it appends. The old private name is kept as an alias so existing
+# importers are unaffected by the promotion.
+_CitationHint = CitationHint
 
 
 class CitationCapturingTool(DelegatingTool):
@@ -120,7 +135,7 @@ class CitationCapturingTool(DelegatingTool):
                 ordinal = await allocator.allocate_for_tool_call(
                     tool_call_id=tool_call_id, tool_name=self.name
                 )
-                result = _CitationHint.append_to(
+                result = CitationHint.append_to(
                     result, ordinal=ordinal, tool_name=self.name
                 )
                 _LOGGER.info(
@@ -213,4 +228,4 @@ class CitationCapturingRegistry:
         )
 
 
-__all__ = ("CitationCapturingRegistry", "CitationCapturingTool")
+__all__ = ("CitationCapturingRegistry", "CitationCapturingTool", "CitationHint")

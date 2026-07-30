@@ -214,6 +214,29 @@ class OperationDisposition(RuntimeContract):
     activity_ref: str | None = None
     agent_summary: str
     retryable: bool
+    #: The stable reason a FAILED operation failed, so a tool can tell one
+    #: failure from another and give the model something it can act on.
+    #:
+    #: The gateway already derives this for the ledger and for metrics; it used
+    #: to stop there, and every failure reached the tool as one generic summary.
+    #: A model that lost a compare-and-append was therefore told only
+    #: "Operation failed", when the recoverable move — re-read the current
+    #: revision and retry from it — depends on knowing *which* failure it was.
+    #:
+    #: Never populated for a success, so a caller cannot read a reason into an
+    #: outcome that did not fail. The values are the existing closed vocabularies
+    #: (``ArtifactErrorCode`` / ``OperationGatewayErrorCode``), never free text,
+    #: and never an internal message — a tool may map a code to safe wording of
+    #: its own, but nothing from an exception body reaches the model.
+    failure_code: str | None = None
+
+    @model_validator(mode="after")
+    def _failure_code_only_on_failure(self) -> OperationDisposition:
+        if self.failure_code is not None and self.outcome is not (
+            OperationOutcome.FAILED
+        ):
+            raise ValueError("failure_code is only meaningful on a FAILED outcome")
+        return self
 
     @field_validator("activity_ref")
     @classmethod
