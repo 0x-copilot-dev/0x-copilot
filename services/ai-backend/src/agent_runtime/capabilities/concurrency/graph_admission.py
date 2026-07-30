@@ -544,12 +544,28 @@ class RunBatchAdmission:
         self,
         request: ToolAdmissionRequest,
     ) -> ParallelAdmissionGrant | None:
-        """Return the width this call may overlap at, or ``None`` for serial.
+        """Return the width this call may overlap at, or ``None`` when unplanned.
 
         Synchronous and allocation-light because the Step-2 admission consults it
         on the hot path before taking any lock. It reads the coordinator's
         pre-permit fold and nothing else, so it can neither wait for, nor be
         blocked by, the gate it is answering for.
+
+        **Every planned child is granted, including one whose segment is serial.**
+        A width of one buys no overlap, and asking for it is not about overlap: a
+        planned child parks on the coordinator's segment cursor until every
+        earlier segment has settled, and a cursor can only order the children that
+        have arrived. Ungranted calls cross the Step-2 gate one at a time behind
+        one exclusive lock, so a child of a later segment that arrives first parks
+        inside the coordinator *holding* the lock its blocker needs to arrive at
+        all — and nothing moves until the admission budget expires. The framework
+        chooses arrival order, not this module, so that is not a rare interleaving
+        to tolerate; it is a stall waiting for a scheduler to pick a different
+        order. A grant routes the child through the cohort lane instead, where a
+        serial segment's semaphore of one still holds it to a width of one.
+
+        Only work no durable plan accounts for is answered ``None`` — the case
+        that must stay serial, because nothing downstream would bound it.
         """
 
         planned = self._children.get(request.tool_call_id)
@@ -559,13 +575,19 @@ class RunBatchAdmission:
             batch_id=planned.batch_id,
             operation_id=planned.operation_id,
         )
-        width = allowance.effective_max_parallelism
-        if not allowance.permits_parallel or width < 2:
-            return None
         return ParallelAdmissionGrant(
             tool_call_id=planned.model_tool_call_id,
             cohort_id=self._cohort_id(planned),
-            max_parallelism=width,
+            # Already the fold of segment ∧ plan ∧ live kill switch, and never
+            # below one: a non-parallel allowance reports a width of one rather
+            # than zero.
+            max_parallelism=allowance.effective_max_parallelism,
+            # The coordinator gates every child on a segment slot and then on a
+            # run permit before its body runs, and both are narrower than this
+            # width. So when the gate's cohort table cannot hold this cohort, the
+            # honest answer is "admit it, I bound it" rather than an exclusive
+            # lock that would stall the segment cursor.
+            width_enforced_by_grantor=True,
         )
 
     async def arun_tool_body(

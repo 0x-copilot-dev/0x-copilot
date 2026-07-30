@@ -287,7 +287,16 @@ class TestUnknownMeansSerial:
 
         assert meter.maximum == 1
 
-    async def test_a_grant_of_width_one_takes_the_exclusive_lane(self) -> None:
+    async def test_a_grant_of_width_one_is_held_to_a_width_of_one(self) -> None:
+        """A width-one grant buys no overlap — it only changes what it waits on.
+
+        The grant is honoured rather than discarded, because a grantor that orders
+        its calls behind its own barrier needs them all to reach it, and the
+        exclusive lock admits one at a time. Honouring it must not cost the width:
+        a cohort semaphore of one is exactly as narrow as the lock it replaces,
+        which is what this asserts over a cohort of four.
+        """
+
         call_ids = {f"call-{index}" for index in range(4)}
         admission = RunSerialAdmission(
             parallel_admission=_GrantingPort(call_ids=call_ids, max_parallelism=1),
@@ -575,3 +584,137 @@ class TestGateIntegrity:
 
         assert len(meter.entered) == count
         assert meter.maximum == bound
+
+
+class TestAGrantorThatEnforcesItsOwnWidth:
+    """The one case where a slotless cohort is admitted instead of serialized.
+
+    The cohort table is finite, and a grant it cannot represent has to be
+    answered somehow. Answering with the exclusive lock is fail-closed on
+    *width* and open on *liveness*: a grantor that orders its calls behind its
+    own barrier has members that wait for each other, and one of them holding
+    the run's only lock is a stall, not a narrowing.
+
+    So the grant carries who enforces the width. Absent that claim nothing
+    changes — the exclusive lock, as before. With it, the call joins the shared
+    lane without a slot, where the lightswitch still keeps granted work from
+    overlapping ungranted work and the grantor's own gate still decides how many
+    of its members run at once.
+    """
+
+    class _SaturatingPort:
+        """One fresh cohort per call, so the table saturates by construction."""
+
+        def __init__(self, *, width_enforced_by_grantor: bool) -> None:
+            self._self_enforcing = width_enforced_by_grantor
+            self.calls = 0
+
+        def grant_for(self, request: ToolAdmissionRequest) -> ParallelAdmissionGrant:
+            self.calls += 1
+            return ParallelAdmissionGrant(
+                tool_call_id=request.tool_call_id,
+                cohort_id=f"cohort-{self.calls}",
+                max_parallelism=2,
+                width_enforced_by_grantor=self._self_enforcing,
+            )
+
+    def test_a_grant_makes_no_such_claim_by_default(self) -> None:
+        grant = ParallelAdmissionGrant(
+            tool_call_id="call-1",
+            cohort_id="cohort-1",
+            max_parallelism=2,
+        )
+
+        assert grant.width_enforced_by_grantor is False
+
+    async def test_saturating_the_table_serializes_a_grantor_that_does_not_claim_it(
+        self,
+    ) -> None:
+        """The unchanged answer, restated beside its opposite so both are pinned."""
+
+        admission = RunSerialAdmission(
+            parallel_admission=self._SaturatingPort(width_enforced_by_grantor=False),
+        )
+        meter = _Meter()
+        bound = ParallelAdmissionBounds.MAX_TRACKED_COHORTS
+
+        await asyncio.gather(
+            *(
+                meter.run(admission, _request(f"call-{index}"), label=str(index))
+                for index in range(bound * 2)
+            )
+        )
+
+        assert len(meter.entered) == bound * 2
+        assert meter.maximum == bound
+
+    async def test_saturating_the_table_still_admits_a_self_enforcing_grantor(
+        self,
+    ) -> None:
+        """Past the table bound it is admitted, not pushed onto the run's lock."""
+
+        admission = RunSerialAdmission(
+            parallel_admission=self._SaturatingPort(width_enforced_by_grantor=True),
+        )
+        meter = _Meter()
+        bound = ParallelAdmissionBounds.MAX_TRACKED_COHORTS
+        count = bound * 2
+
+        await asyncio.gather(
+            *(
+                meter.run(admission, _request(f"call-{index}"), label=str(index))
+                for index in range(count)
+            )
+        )
+
+        assert len(meter.entered) == count
+        assert meter.maximum > bound, (
+            "a self-enforcing grantor was serialized past the table bound, which "
+            "is the stall the claim exists to avoid"
+        )
+
+    async def test_a_slotless_grant_still_never_overlaps_an_ungranted_call(
+        self,
+    ) -> None:
+        """The lightswitch, not the slot, is what excludes ungranted work.
+
+        This is the claim that makes admitting a slotless cohort safe rather than
+        merely convenient: the shared lane takes the same exclusive lock a serial
+        call takes, on the whole group's behalf.
+        """
+
+        class _SelfEnforcingForKnownCalls:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def grant_for(
+                self,
+                request: ToolAdmissionRequest,
+            ) -> ParallelAdmissionGrant | None:
+                if not request.tool_call_id.startswith("granted-"):
+                    return None
+                self.calls += 1
+                return ParallelAdmissionGrant(
+                    tool_call_id=request.tool_call_id,
+                    cohort_id=f"cohort-{self.calls}",
+                    max_parallelism=2,
+                    width_enforced_by_grantor=True,
+                )
+
+        admission = RunSerialAdmission(
+            parallel_admission=_SelfEnforcingForKnownCalls(),
+        )
+        meter = _Meter()
+        bound = ParallelAdmissionBounds.MAX_TRACKED_COHORTS
+
+        await asyncio.gather(
+            *(
+                meter.run(admission, _request(f"granted-{index}"), label=f"g{index}")
+                for index in range(bound * 2)
+            ),
+            meter.run(admission, _request("plain"), label="serial"),
+        )
+
+        assert meter.ever_shared_with("serial") == set(), (
+            "an ungranted serial call shared the gate with a granted cohort"
+        )

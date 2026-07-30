@@ -1,102 +1,169 @@
-# FINDING — batch admission hangs 300s under load (main is red)
+# FINDING — batch admission hangs 300s under load (fixed)
 
-**Status:** open, reproducible, not fixed. Owned by the F6 batch-concurrency work.
+**Status:** root-caused and fixed. Owned by the F6 batch-concurrency work.
 **Found:** 2026-07-29, diagnosing the red `ci-ai-backend` on `main`.
+**Fixed:** 2026-07-30.
 
-## What is red
+## What was red
 
 `ci-ai-backend` on `main` at the #426 merge: **17 failed, 7594 passed in 3634s
 (1:00:34)**. The normal runtime of that job is ~380s.
 
 Eleven of the seventeen took **exactly 300.0x seconds each** — that is
 `BatchCoordinatorBounds.DEFAULT_ADMISSION_WAIT_SECONDS`, and it accounts for
-~3300s of the hour. The job is not slow; it is eleven separate 5-minute hangs.
+~3300s of the hour. The job was not slow; it was eleven separate 5-minute hangs.
 
-The remaining six are assertion failures in the same files
-(`assert 2 == 3`, `assert [1, 0, 2] == [0, 1, 2]`, "a sibling's completed work
-was lost when its neighbour failed").
+## Root cause — two gates with contradictory ordering requirements
 
-## Reproduction
+A planned batch child crosses two gates, in this order
+(`runtime_tool_control.py:498` → `:544`):
 
-Deterministic enough to iterate on — roughly 50% of runs, ~3 of 6:
+1. the run's Step-2 tool admission (`RunSerialAdmission.async_permit`), then
+2. F6's coordinator (`BatchExecutionCoordinator.run_child` → the segment gate).
 
-```bash
-cd services/ai-backend
-for i in 1 2 3 4 5 6; do
-  (PYTHONPATH="src:../../packages/service-contracts/src" .venv/bin/python -m pytest \
-     tests/unit/agent_runtime/capabilities/concurrency/test_step10_gate.py \
-     tests/unit/agent_runtime/capabilities/middleware/test_runtime_tool_control_batch.py \
-     -q 2>&1 | tail -1) &
-done; wait
-```
+Gate 1 serializes in **arrival** order. Gate 2 admits only the **plan's** current
+segment and parks everything else. Nothing made those two orders agree:
 
-Observed: three runs print `27 passed in 0.74s`, three print
-`1 failed, 26 passed in 300.7s`.
+- Gate 1's exclusive lane is one `asyncio.Lock`, whose queue is the order
+  coroutines happen to reach it. The framework starts a turn's tool coroutines
+  together, so that order is the scheduler's choice — it is _not_ input order,
+  and under CPU contention observably is not. Measured directly, in an
+  unconfigured run: `waves == [(1,), (2,), (0,)]`.
+- `RunBatchAdmission.grant_for` returned `None` for any segment of width 1, so
+  every child of a **serial** plan took that exclusive lane.
 
-Two conditions are both required:
+So a child of segment 1 that reached gate 1 first parked on gate 2 **while
+holding the one lock segment 0's child needed to arrive at all**. Segment 0 could
+never settle, the cursor could never advance, and neither coroutine moved until
+the 300s admission budget expired — at which point the parked child was refused
+`REFUSED_DEADLINE` and surfaced as
+`BatchChildExecutionError: NOT_ADMITTED` (`graph_admission.py:604`).
 
-- **CPU contention.** A single run passes in 0.74s, every time.
-- **Both files together.** `test_step10_gate.py` alone passes 5-way concurrent.
-  It imports its helpers _from_ `test_runtime_tool_control_batch.py`, so the two
-  share `_admission`, `_binding`, `_declarations`, `_FanoutModel`.
+The general statement: **a barrier over N children cannot be satisfied behind a
+gate that admits fewer than N of them.**
 
-The full suite passes locally **unloaded**: 7611 passed in 126s. CI's runner is
-small and the job runs the whole suite, which is why CI hits it and a laptop
-does not.
+### Why it presented as intermittent
 
-## The failure
+It is not intermittent in the deadlock; it is intermittent in the arrival order.
+Plan-order arrival works, every other order stalls. CPU contention only changes
+how often the scheduler picks a different order — which is why the whole suite on
+a small CI runner hit it and an unloaded laptop did not.
 
-```
-src/agent_runtime/capabilities/concurrency/graph_admission.py:604
-BatchChildExecutionError: The batch child was not admitted and did not run.
-```
+It also self-clears after each stall: the timed-out child releases the lock, the
+next one runs, and the batch completes minus the refused children. That is why
+one test could burn 300s (one stall) and another 600s (two).
 
-A child waits the full admission budget and is then refused. Both gates in
-`batch_coordinator.py` use `_wait_seconds(batch)` → 300s: the segment gate
-(`~line 969`) and the permit request (`~line 1163`).
+### Deterministic reproduction
 
-## Ruled out
+Arrival order was the only variable. Driving three planned children through the
+real `awrap_tool_call` nesting, one scheduler turn apart, with the admission
+budget shortened so a stall shows up immediately:
 
-Each of these was read and is correct, so they are not worth re-checking:
+| plan                        | arrival order | before the fix                      | after   |
+| --------------------------- | ------------- | ----------------------------------- | ------- |
+| 3 serial segments           | `0,1,2`       | all ran                             | all ran |
+| 3 serial segments           | `1,0,2`       | child 1 `NOT_ADMITTED`              | all ran |
+| 3 serial segments           | `2,1,0`       | children 1 **and** 2 `NOT_ADMITTED` | all ran |
+| 1 parallel segment, width 3 | any           | all ran                             | all ran |
+
+This is now a test —
+`test_step10_gate.py::TestAPlannedChildIsAdmittedWhateverOrderItArrivesIn` —
+parametrized over four arrival orders, driving the real middleware so it cannot
+pass while the composition it protects has drifted. Reverting the one-line
+`grant_for` guard reds all three out-of-order cases in ~15s.
+
+The original load-based reproduction (6 concurrent pytest runs of
+`test_step10_gate.py` + `test_runtime_tool_control_batch.py`, ~50% hit rate) still
+works and was used to confirm the fix under contention:
+
+- **72 runs** of that exact command, 12 rounds of 6: all green, slowest 0.83s.
+- **192 runs** of the whole concurrency + admission surface at 24-way on 12 cores
+  (2× oversubscribed): all green, slowest 11.4s — CPU starvation, nowhere near
+  the 300s budget. The first 144-run pass at that width is what surfaced the
+  `test_approval_serialisation.py` order assertions below.
+- Full `ai-backend` suite: 7773 passed, 127 skipped, in ~122s.
+
+## The fix
+
+**Every planned child is granted, and a granted call never takes the exclusive
+lane.** Three changes:
+
+- `graph_admission.py` — `grant_for` no longer bails on `width < 2`. A width-one
+  grant buys no overlap; it buys _what the child waits behind_ — its own cohort
+  rather than every other tool call in the run. Only work no durable plan
+  accounts for is answered `None`.
+- `parallel_admission.py` — the resolver stops discarding width-one grants. Every
+  other fail-closed rule is untouched: no port, a raising port, a foreign type,
+  and a grant for a different call are all still serial.
+- `context.py` — a granted call whose cohort the bounded table cannot represent
+  is answered by `_unrepresentable_cohort_lane` rather than by the exclusive lock
+  it used to fall back to.
+
+Width is not widened anywhere:
+
+- A serial segment holds exactly one operation (`planner.py:54`), so its cohort
+  semaphore of one is exactly as narrow as the lock it replaces.
+- The lightswitch still takes the run's exclusive lock on the whole group's
+  behalf, so granted work still cannot overlap ungranted work — and holds it for
+  longer than the old lane did, not shorter.
+- The coordinator's segment gate and the run permit table still decide how many
+  bodies run, both strictly narrower than the grant's width.
+
+A serial plan now also runs its children in **plan order whatever order they
+arrive in**, which is the property whose absence was the bug, and is asserted
+directly.
+
+### The one contract addition
+
+`ParallelAdmissionGrant.width_enforced_by_grantor: bool = False`. The gate's
+cohort table is finite (`MAX_TRACKED_COHORTS = 32`) while a turn may plan up to
+100 operations, so a grant the table cannot hold has to be answered somehow. The
+old answer — the exclusive lock — is fail-closed on width and _open on liveness_:
+it reintroduces exactly this stall for a grantor whose members wait on each
+other. The field lets a grantor state that it applies the width itself; F6 sets
+it because its coordinator does, and the default keeps every other grantor's
+behaviour byte-identical.
+
+## Separately: assertions that asserted more than the system guarantees
+
+Four assertions across three files pinned an **arrival sequence** that nothing
+produces. All of them are the same mistake and all are now membership or shape
+assertions:
+
+| file                                | was                                 | now                                       |
+| ----------------------------------- | ----------------------------------- | ----------------------------------------- |
+| `test_step10_gate.py`               | `clock.waves == [(0, 1, 2)]`        | one wave whose members are `{0,1,2}`      |
+| `test_step10_gate.py`               | `clock.waves == [(0,), (1,), (2,)]` | three waves of one, covering `{0,1,2}`    |
+| `test_approval_serialisation.py` ×2 | `probe.arrived == list(range(3))`   | `sorted(probe.arrived) == list(range(3))` |
+
+Where the run is unconfigured or handed back to the pre-F6 path, the only gate is
+the Step-2 exclusive lock, whose queue is arrival order _at the lock_ — the
+framework's scheduling of coroutines it started together. Where the run is a
+planned parallel segment, the members are unordered by construction. In neither
+case is input order promised, and under 2× CPU oversubscription it is observably
+not what happens.
+
+These were real test bugs independent of the hang, and they are the shape of the
+six non-hang failures in the red job — the reported
+`assert [1, 0, 2] == [0, 1, 2]` is `TestPendingInterruptCountIsAFrameworkProperty`
+in `test_approval_serialisation.py`.
+
+The one place an order _is_ now asserted is the new regression test, where the
+coordinator's segment barrier genuinely guarantees plan order.
+
+## Ruled out during diagnosis
+
+Each of these was read and is correct — recorded so nobody re-checks them:
 
 - **`_settle` always pumps** — every settle path ends in `self._pump(batch)`
-  (`:1220`).
-- **`_stop` refuses waiters** — it calls `_refuse_waiters` (`:1260`) before
-  settling pending children, so a failure-policy stop does not strand a parked
-  child. `_pump`'s `if batch.stopped: return` guard is therefore safe.
-- **No permit leak** — `_run_admitted` uses `async with self._permits.acquire(...)`,
-  the guarded path that releases on success, refusal, exception, and cancellation.
-- **No shared singleton across tests** — `_admission()` constructs a fresh
-  `BatchExecutionCoordinator` and `RunPermitManager` per call.
-- **Not `pytest-randomly`** — CI's plugin list is `anyio, asyncio, langsmith`;
-  ordering is deterministic file order.
-
-## Where to look next
-
-The two remaining candidates, in likelihood order:
-
-1. **A lost wakeup between the segment gate and the permit gate.** A child that
-   clears the segment cursor and then parks on a permit is holding a segment
-   slot (`state.holds_slot`) while queued in a different structure. Whether
-   every path that could free capacity pumps _both_ is the thing to instrument.
-2. **The 32-yield quiescence windows.** `_QUIESCENCE_YIELDS` (test*step10_gate)
-   and `_ConcurrencyProbe.YIELDS` (test_runtime_tool_control_batch) are both 32,
-   each documented as "comfortably more turns than the admission path spends".
-   Both docstrings argue widening is always safe and narrowing only under-reports
-   — which is sound — but under contention the admission path can plausibly
-   spend more than 32 turns, and that is exactly what the six \_assertion*
-   failures look like. This does not explain the 300s hangs on its own.
-
-Note `assert [1, 0, 2] == [0, 1, 2]` is a separate, smaller problem regardless
-of the above: it asserts _arrival order within a parallel wave_, which the
-system does not guarantee and never claimed to. That assertion should compare
-membership, not order.
-
-## Why this is filed rather than fixed
-
-Diagnosed while landing unrelated surface work (#425, #427 — both green on
-every job they triggered, including `ci-ai-backend` on #425). The reproduction
-above is the hard part and is done; the fix needs instrumentation inside the
-coordinator by someone who owns its concurrency model, and each iteration costs
-300s. Guessing at those semantics would risk trading an intermittent hang for a
-silent admission bug, which is strictly worse.
+  (`batch_coordinator.py:1220`).
+- **`_stop` refuses waiters** — `_refuse_waiters` (`:1260`) runs before pending
+  children are settled, so a failure-policy stop strands nothing.
+- **No permit leak** — `_run_admitted` uses `async with self._permits.acquire(...)`.
+- **No shared singleton across tests** — `_admission()` builds a fresh
+  coordinator and permit manager per call.
+- **Not `pytest-randomly`** — CI's plugin list is `anyio, asyncio, langsmith`.
+- **Not the 32-yield quiescence windows.** `_QUIESCENCE_YIELDS` and
+  `_ConcurrencyProbe.YIELDS` count scheduler _turns_, not elapsed time, and the
+  admission path's await count does not grow under load. They were the second
+  hypothesis and they were not implicated.
