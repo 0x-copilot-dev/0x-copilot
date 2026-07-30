@@ -6,18 +6,33 @@
 //   • Web search  — built-in toggle, default on (host owns the default;
 //                   the component only reflects `webSearchEnabled`)
 //   • Connected   — workspace-installed + authenticated connectors, each with
-//                   a per-run active/paused toggle (no conversation exists yet,
-//                   so state is held by the surface via `activeConnectorIds`)
+//                   a per-run PAUSE toggle (no conversation exists yet, so the
+//                   opt-outs are held by the surface via `pausedConnectorIds`)
 //   • Installable — curated 1-click rows; group note
 //                   `1-click connect · you approve first use`.
 //                   `requiresPreRegisteredClient` → the host routes the click
 //                   to the custom-config form (a keyless install would 422).
 //   • Custom MCP  — "Custom MCP server" → host opens the paste-a-config form.
 //
-// Data comes from the host-injected `FirstRunConnectorsPort` (fetched once on
-// open) and is classified by the pure `projectFirstRunConnectors`. The package
-// has no `document`; the legacy standalone dialog takes an opt-in host-owned
-// `portalTarget`, while the shipping composer pill uses design-system `Menu`.
+// Data comes from the host-injected `FirstRunConnectorsPort` via
+// `useConnectorPopoverData`, called by whoever OWNS the panel (the standalone
+// dialog below, or `ComposerToolsTrigger`) and passed in as `data` — so the pill
+// badge and these rows count the same projection. The package has no `document`;
+// the legacy standalone dialog takes an opt-in host-owned `portalTarget`, while
+// the shipping composer pill uses design-system `Menu`.
+//
+// ── Connected means ON (the toggle is an opt-OUT) ───────────────────────────
+// A connected row renders ON unless its id is in `pausedConnectorIds`, which
+// starts EMPTY. Before this, the toggle read an `activeConnectorIds` set that
+// every host initialised to `[]` and nothing ever seeded from durable state, so
+// a connector the Tools destination showed as "Connected · read" appeared here
+// disabled — and stayed disabled until hand-toggled, in that one mount, for a
+// connector the runtime could already call. (Omission from `connector_scopes` is
+// not a pause: `McpPermissionPolicy.is_server_card_authorized` gates on
+// `paused_connectors`, so the OFF state was decorative.) Defaulting to ON is
+// what makes a just-authorized connector show up live, and it makes the pause
+// the only claim this control makes — one the host now actually sends as
+// `request_context.paused_connectors`.
 //
 // ── Design parity, composer punch-list rows 43 + 46 ─────────────────────────
 // This surface used to be styled with 100% inline `CSSProperties` objects — a
@@ -81,24 +96,25 @@
 import {
   useEffect,
   useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 
-import type { McpCatalogEntry, McpServer } from "@0x-copilot/api-types";
-
 import { Icon } from "../icons/Icon";
 import { providerInitials } from "../icons/providerMarks";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import {
   firstRunActiveToolCount,
-  projectFirstRunConnectors,
+  isFirstRunConnectorActive,
   type FirstRunConnectedConnector,
   type FirstRunInstallableConnector,
 } from "./projectFirstRunConnectors";
+import {
+  useConnectorPopoverData,
+  type ConnectorPopoverData,
+} from "./useConnectorPopoverData";
 
 export const TOOLS_POPOVER_COPY = {
   title: "Tools",
@@ -119,11 +135,16 @@ export interface ToolsPopoverProps {
   readonly onClose: () => void;
   /** Host-injected MCP surface (servers + catalog + install + auth). */
   readonly port: FirstRunConnectorsPort;
+  /** Bump to refetch the connector list (e.g. a connect just completed). */
+  readonly reloadToken?: number;
   /** Built-in web search; default TRUE is owned by the surface. */
   readonly webSearchEnabled: boolean;
   readonly onToggleWebSearch: (next: boolean) => void;
-  /** Per-run active connector ids (component state — no conversation yet). */
-  readonly activeConnectorIds: readonly string[];
+  /**
+   * Connector ids the user paused FOR THIS RUN (component state — no
+   * conversation yet). Empty means every connected connector is live.
+   */
+  readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   /**
    * 1-click connect of a catalog entry. The host mirrors
@@ -143,10 +164,11 @@ export interface ToolsPopoverProps {
  * standalone `ToolsPopover` below remains for callers that need a dialog.
  */
 export interface ToolsPopoverContentProps {
-  readonly port: FirstRunConnectorsPort;
+  /** The owner's `useConnectorPopoverData` result — one fetch per panel. */
+  readonly data: ConnectorPopoverData;
   readonly webSearchEnabled: boolean;
   readonly onToggleWebSearch: (next: boolean) => void;
-  readonly activeConnectorIds: readonly string[];
+  readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
   readonly onAddCustom: () => void;
@@ -156,19 +178,15 @@ export interface ToolsPopoverContentProps {
   readonly onClose?: () => void;
 }
 
-type LoadState =
-  | { readonly status: "idle" }
-  | { readonly status: "loading" }
-  | {
-      readonly status: "ready";
-      readonly servers: readonly McpServer[];
-      readonly catalog: readonly McpCatalogEntry[];
-    }
-  | { readonly status: "error" };
-
 export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
   const { open, onClose, portalTarget } = props;
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // The panel owns the fetch so the content stays pure. `enabled: open` keeps
+  // the pre-existing timing — a closed dialog issues no request.
+  const data = useConnectorPopoverData(props.port, {
+    reloadToken: props.reloadToken,
+    enabled: open,
+  });
 
   // Escape-to-close needs the keydown to land inside the panel — this package
   // cannot attach a `window`/`document` listener. Taking focus on open is the
@@ -208,10 +226,10 @@ export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
         onKeyDown={onKeyDown}
       >
         <ToolsPopoverContent
-          port={props.port}
+          data={data}
           webSearchEnabled={props.webSearchEnabled}
           onToggleWebSearch={props.onToggleWebSearch}
-          activeConnectorIds={props.activeConnectorIds}
+          pausedConnectorIds={props.pausedConnectorIds}
           onToggleConnector={props.onToggleConnector}
           onConnectCatalog={props.onConnectCatalog}
           onAddCustom={props.onAddCustom}
@@ -231,52 +249,20 @@ export function ToolsPopoverContent(
   props: ToolsPopoverContentProps,
 ): ReactNode {
   const {
-    port,
+    data,
     webSearchEnabled,
     onToggleWebSearch,
-    activeConnectorIds,
+    pausedConnectorIds,
     onToggleConnector,
     onConnectCatalog,
     onAddCustom,
     onBack,
     onClose,
   } = props;
-  const [state, setState] = useState<LoadState>({ status: "idle" });
-
-  // No "already loaded" ref guard here. Both hosts mount under <StrictMode>, so
-  // this effect is deliberately double-invoked: a ref guard set on the first run
-  // makes the second run bail out, while the first run's cleanup has already set
-  // `cancelled = true` and suppressed its own result — leaving the popover stuck
-  // on "Loading connectors…" forever. The `cancelled` flag below is the whole
-  // StrictMode contract: the discarded pass resolves into nothing and the live
-  // pass sets the state.
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    Promise.all([port.listServers(), port.listCatalog()])
-      .then(([servers, catalog]) => {
-        if (!cancelled) {
-          setState({ status: "ready", servers, catalog });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setState({ status: "error" });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [port]);
-
-  const projection =
-    state.status === "ready"
-      ? projectFirstRunConnectors(state.servers, state.catalog)
-      : { connected: [], installable: [] };
   const activeCount = firstRunActiveToolCount(
     webSearchEnabled,
-    projection.connected,
-    activeConnectorIds,
+    data.connected,
+    pausedConnectorIds,
   );
 
   return (
@@ -313,10 +299,10 @@ export function ToolsPopoverContent(
         <WebSearchRow enabled={webSearchEnabled} onToggle={onToggleWebSearch} />
         <div className="ui-pop__div" />
         <PopoverBody
-          state={state}
-          connected={projection.connected}
-          installable={projection.installable}
-          activeConnectorIds={activeConnectorIds}
+          state={data.state}
+          connected={data.connected}
+          installable={data.installable}
+          pausedConnectorIds={pausedConnectorIds}
           onToggleConnector={onToggleConnector}
           onConnectCatalog={onConnectCatalog}
         />
@@ -362,10 +348,10 @@ function WebSearchRow(props: {
 }
 
 interface BodyProps {
-  readonly state: LoadState;
+  readonly state: ConnectorPopoverData["state"];
   readonly connected: readonly FirstRunConnectedConnector[];
   readonly installable: readonly FirstRunInstallableConnector[];
-  readonly activeConnectorIds: readonly string[];
+  readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
 }
@@ -375,7 +361,7 @@ function PopoverBody(props: BodyProps): ReactNode {
     state,
     connected,
     installable,
-    activeConnectorIds,
+    pausedConnectorIds,
     onToggleConnector,
     onConnectCatalog,
   } = props;
@@ -417,8 +403,6 @@ function PopoverBody(props: BodyProps): ReactNode {
     );
   }
 
-  const activeSet = new Set(activeConnectorIds);
-
   return (
     <>
       {connected.length > 0 ? (
@@ -427,7 +411,7 @@ function PopoverBody(props: BodyProps): ReactNode {
             {TOOLS_POPOVER_COPY.connectedHeader}
           </div>
           {connected.map((row) => {
-            const active = activeSet.has(row.serverId);
+            const active = isFirstRunConnectorActive(row, pausedConnectorIds);
             return (
               <button
                 key={row.serverId}

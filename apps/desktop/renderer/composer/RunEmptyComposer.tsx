@@ -136,9 +136,9 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
   );
 
   // The Tools pill (when a connectors port is injected) owns the per-run
-  // web-search toggle + active connector ids, and yields the values threaded
-  // into the start-run payload.
-  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+  // web-search toggle + the paused-connector opt-outs, and yields the values
+  // threaded into the start-run payload.
+  const { toolsTrigger, webSearchEnabled, pausedConnectorIds } =
     useDesktopComposerTools({
       connectorsPort,
       onAddCustom: onShowConnectors,
@@ -148,7 +148,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
 
   // Send → start the first run through the cockpit seam. The model pill's
   // selection and the composer attachments become the run body; the Tools pill
-  // threads the per-run web-search toggle + active connector scopes
+  // threads the per-run web-search toggle + the paused connectors
   // (RunStartRequest already carries them). The cockpit owns the empty→live
   // binding + the submitting/error state (surfaced back through `ctx`).
   const { onStartRun } = ctx;
@@ -167,10 +167,10 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
         model,
         attachments: runAttachments.length > 0 ? runAttachments : undefined,
         webSearchEnabled,
-        connectorScopes,
+        pausedConnectorIds,
       });
     },
-    [models, selectedModel, onStartRun, webSearchEnabled, connectorScopes],
+    [models, selectedModel, onStartRun, webSearchEnabled, pausedConnectorIds],
   );
 
   const connectorsTrigger =

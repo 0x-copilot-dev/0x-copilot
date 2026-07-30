@@ -39,7 +39,6 @@ import {
   type HashRouter,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
-import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import { DesktopAnchoredPlusMenu } from "./composer/DesktopAnchoredPlusMenu";
 import { DesktopComposerFilePicker } from "./composer/DesktopComposerFilePicker";
@@ -342,7 +341,7 @@ export function FirstRunSurfaceMount({
   // `onSentRef`) so `handleSubmit` reads the value live at send time and the
   // acknowledgment's tools line reflects the real toggle.
   const webSearchRef = useRef(true);
-  const connectorScopesRef = useRef<ConversationConnectorScopes | undefined>(
+  const pausedConnectorIdsRef = useRef<readonly string[] | undefined>(
     undefined,
   );
 
@@ -413,7 +412,7 @@ export function FirstRunSurfaceMount({
         text: payload.text,
         attachments: toReadableRunAttachments(payload.attachments),
         webSearchEnabled: webSearchRef.current,
-        connectorScopes: connectorScopesRef.current,
+        pausedConnectorIds: pausedConnectorIdsRef.current,
       });
     },
     [launchPhase, resetLaunch, startLaunch],
@@ -456,7 +455,7 @@ export function FirstRunSurfaceMount({
       // Capture the surface-owned Tools state for `handleSubmit` (live at send)
       // and the acknowledgment's tools line.
       webSearchRef.current = ctx.webSearchEnabled;
-      connectorScopesRef.current = ctx.connectorScopes;
+      pausedConnectorIdsRef.current = ctx.pausedConnectorIds;
       return (
         <OnboardingComposer
           connectors={{ servers: [], loading: false }}

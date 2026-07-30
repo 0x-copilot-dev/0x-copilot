@@ -30,7 +30,6 @@ import {
   type ProviderKeysPort,
   type RunStartRequest,
 } from "@0x-copilot/chat-surface";
-import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { ChatToolsTrigger } from "../chat/components/composer/ChatToolsTrigger";
@@ -79,20 +78,34 @@ export function useWebRunComposerTools(
     modelName: null,
   });
 
-  // Tools pill state (web-search default on + per-run active connectors).
+  // Tools pill state. Both knobs are opt-OUTS: web search defaults on, and every
+  // connected connector is live unless the user paused it for this run. The old
+  // opt-in `activeConnectorIds` started empty and nothing seeded it from the
+  // server list, so a connected connector rendered disabled in the composer
+  // while Settings → Tools reported it connected.
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [activeConnectorIds, setActiveConnectorIds] = useState<
+  const [pausedConnectorIds, setPausedConnectorIds] = useState<
     readonly string[]
-  >(() => (autoActivateConnectorId === null ? [] : [autoActivateConnectorId]));
+  >([]);
+  // Bumped when durable connector state moves (an OAuth return), so the pill
+  // badge and the open panel refetch rather than showing a pre-connect world.
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (autoActivateConnectorId === null) return;
-    setActiveConnectorIds((prev) =>
-      prev.includes(autoActivateConnectorId)
-        ? prev
-        : [...prev, autoActivateConnectorId],
-    );
+    setReloadToken((n) => n + 1);
   }, [autoActivateConnectorId]);
+
+  // A connector that just came back from OAuth must not stay paused from
+  // earlier in the session. Derived, not an effect — an effect would paint one
+  // frame of the stale answer.
+  const effectivePausedIds = useMemo<readonly string[]>(
+    () =>
+      autoActivateConnectorId === null
+        ? pausedConnectorIds
+        : pausedConnectorIds.filter((id) => id !== autoActivateConnectorId),
+    [autoActivateConnectorId, pausedConnectorIds],
+  );
 
   const connectorsPort = useMemo<ComposerConnectorsPort>(
     () => createComposerConnectorsPort(identity),
@@ -105,12 +118,12 @@ export function useWebRunComposerTools(
 
   const onToggleConnector = useCallback(
     (serverId: string, active: boolean): void => {
-      setActiveConnectorIds((prev) =>
+      setPausedConnectorIds((prev) =>
         active
-          ? prev.includes(serverId)
+          ? prev.filter((id) => id !== serverId)
+          : prev.includes(serverId)
             ? prev
-            : [...prev, serverId]
-          : prev.filter((id) => id !== serverId),
+            : [...prev, serverId],
       );
     },
     [],
@@ -134,27 +147,14 @@ export function useWebRunComposerTools(
     [connectorsPort],
   );
 
-  // Active connector ids → `request_context.connector_scopes` (active → `[]`).
-  const connectorScopes = useMemo<
-    ConversationConnectorScopes | undefined
-  >(() => {
-    if (activeConnectorIds.length === 0) {
-      return undefined;
-    }
-    const scopes: Record<string, readonly string[] | null> = {};
-    for (const id of activeConnectorIds) {
-      scopes[id] = [];
-    }
-    return scopes;
-  }, [activeConnectorIds]);
-
   const toolsTrigger = useMemo(
     () => (
       <ChatToolsTrigger
         port={connectorsPort}
+        reloadToken={reloadToken}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
-        activeConnectorIds={activeConnectorIds}
+        pausedConnectorIds={effectivePausedIds}
         onToggleConnector={onToggleConnector}
         onConnectCatalog={onConnectCatalog}
         onAddCustom={noop}
@@ -162,8 +162,9 @@ export function useWebRunComposerTools(
     ),
     [
       connectorsPort,
+      reloadToken,
       webSearchEnabled,
-      activeConnectorIds,
+      effectivePausedIds,
       onToggleConnector,
       onConnectCatalog,
     ],
@@ -180,10 +181,10 @@ export function useWebRunComposerTools(
         model: modelSelectionForId(models, selectedModel),
         attachments: runAttachments.length > 0 ? runAttachments : undefined,
         webSearchEnabled,
-        connectorScopes,
+        pausedConnectorIds: effectivePausedIds,
       };
     },
-    [models, selectedModel, webSearchEnabled, connectorScopes],
+    [models, selectedModel, webSearchEnabled, effectivePausedIds],
   );
 
   return {

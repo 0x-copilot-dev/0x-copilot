@@ -466,32 +466,80 @@ describe("RunComposer Tools pill", () => {
     expect(request.webSearchEnabled).not.toBe(false);
   });
 
-  it("enables a connector immediately after OAuth and scopes the next run to it", async () => {
-    const { container, dispatch } = renderComposer({
-      connectorsPort: connectedLinearPort(),
-      autoActivateConnectorId: "linear",
-    });
-    await waitFor(() => expect(textarea(container)).not.toBeNull());
-
+  async function openToolsAndFindLinear(
+    container: HTMLElement,
+  ): Promise<HTMLButtonElement> {
     fireEvent.click(
       container.querySelector(
         "[data-testid='first-run-tools-button']",
       ) as HTMLButtonElement,
     );
-    const linear = await waitFor(() => {
+    return await waitFor(() => {
       const row = document.querySelector(
         "[data-testid='first-run-tools-connected-linear']",
       );
       expect(row).not.toBeNull();
       return row as HTMLButtonElement;
     });
-    expect(linear).toHaveAttribute("aria-checked", "true");
+  }
+
+  // The reported bug, at the host level: Settings → Tools reported Linear
+  // connected (read) while this pill rendered it disabled, because the toggle
+  // read an opt-in set the host initialised to `[]` and never seeded. No OAuth
+  // signal, no per-run state — a connected connector is simply on.
+  it("shows an already-connected connector as ON with no activation signal", async () => {
+    const { container, dispatch } = renderComposer({
+      connectorsPort: connectedLinearPort(),
+    });
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    expect(await openToolsAndFindLinear(container)).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
 
     typeAndSend(container, "Show my open Linear issues");
     await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    const request = dispatch.mock.calls[0][0] as RunStartRequest;
+    // Nothing paused ⇒ nothing to say. `buildRunCreateBody` then emits no
+    // `request_context` at all and the runtime's default (connector available)
+    // stands.
+    expect(request.pausedConnectorIds).toEqual([]);
+  });
+
+  it("keeps a connector ON immediately after OAuth completes", async () => {
+    const { container } = renderComposer({
+      connectorsPort: connectedLinearPort(),
+      autoActivateConnectorId: "linear",
+    });
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    expect(await openToolsAndFindLinear(container)).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+  });
+
+  it("sends a paused connector as pausedConnectorIds so the runtime gates it", async () => {
+    // Under the opt-out model the toggle is the ONLY exclusion control, so OFF
+    // has to reach the runtime. Omission from `connector_scopes` never gated
+    // anything — only `paused_connectors` does.
+    const { container, dispatch } = renderComposer({
+      connectorsPort: connectedLinearPort(),
+    });
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    const linear = await openToolsAndFindLinear(container);
+    fireEvent.click(linear);
+    await waitFor(() =>
+      expect(linear).toHaveAttribute("aria-checked", "false"),
+    );
+
+    typeAndSend(container, "Answer without Linear");
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     expect(
-      (dispatch.mock.calls[0][0] as RunStartRequest).connectorScopes,
-    ).toEqual({ linear: [] });
+      (dispatch.mock.calls[0][0] as RunStartRequest).pausedConnectorIds,
+    ).toEqual(["linear"]);
   });
 });
 

@@ -1,10 +1,32 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { McpServer } from "@0x-copilot/api-types";
+
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import { ComposerToolsTrigger } from "./ComposerToolsTrigger";
 
-function port(): FirstRunConnectorsPort {
+function connectedServer(): McpServer {
+  return {
+    server_id: "seed:linear",
+    name: "Linear",
+    display_name: "Linear",
+    url: "https://linear.test/mcp",
+    transport: "http",
+    auth_mode: "oauth2",
+    auth_state: "authenticated",
+    health: "healthy",
+    enabled: true,
+    oauth_client_configured: true,
+    access_mode: "read",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+function port(
+  over: Partial<FirstRunConnectorsPort> = {},
+): FirstRunConnectorsPort {
   return {
     listServers: vi.fn().mockResolvedValue([]),
     listCatalog: vi.fn().mockResolvedValue([]),
@@ -12,17 +34,18 @@ function port(): FirstRunConnectorsPort {
     addCustomServer: vi.fn(),
     beginAuth: vi.fn(),
     deleteServer: vi.fn(),
+    ...over,
   };
 }
 
-function renderTrigger() {
+function renderTrigger(over: Partial<FirstRunConnectorsPort> = {}) {
   const onToggleWebSearch = vi.fn();
   render(
     <ComposerToolsTrigger
-      port={port()}
+      port={port(over)}
       webSearchEnabled
       onToggleWebSearch={onToggleWebSearch}
-      activeConnectorIds={[]}
+      pausedConnectorIds={[]}
       onToggleConnector={vi.fn()}
       onConnectCatalog={vi.fn()}
       onAddCustom={vi.fn()}
@@ -76,6 +99,20 @@ describe("ComposerToolsTrigger", () => {
 
     fireEvent.click(button);
     fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("composer-tools-popover")).toBeNull();
+  });
+
+  // The pill and the panel it opens must answer from one projection. The badge
+  // used to count an opt-in set that started empty, so a closed pill read "1"
+  // (web search) while the panel listed a connected connector — the same
+  // disagreement as the Settings-vs-composer mismatch, one level up.
+  it("counts connected connectors in the badge without opening the panel", async () => {
+    renderTrigger({
+      listServers: vi.fn().mockResolvedValue([connectedServer()]),
+    });
+    const badge = screen.getByTestId("first-run-tools-button-badge");
+    expect(badge).toHaveTextContent("1");
+    await vi.waitFor(() => expect(badge).toHaveTextContent("2"));
     expect(screen.queryByTestId("composer-tools-popover")).toBeNull();
   });
 });

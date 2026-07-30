@@ -99,28 +99,31 @@ describe("createFirstRunRunsPort", () => {
     });
   });
 
-  it("threads web_search_enabled=false + request_context.connector_scopes (P4)", async () => {
+  // A pause must ride as `paused_connectors`. Omitting the id from
+  // `connector_scopes` is NOT a pause — the runtime's MCP gate reads only this
+  // field — so the popover's OFF state was decorative before this.
+  it("threads web_search_enabled=false + request_context.paused_connectors (P4)", async () => {
     const { transport, calls } = fakeTransport({
       "/v1/agent/conversations": { conversation_id: "conv_p4" },
       "/v1/agent/runs": { run_id: "run_p4" },
     });
 
     await createFirstRunRunsPort(transport).createFirstRun({
-      userInput: "no web, sheets on",
+      userInput: "no web, sheets paused",
       model: null,
       webSearchEnabled: false,
-      connectorScopes: { "seed:sheets": [] },
+      pausedConnectorIds: ["seed:sheets"],
     });
 
     expect(calls[1].body).toEqual({
       conversation_id: "conv_p4",
-      user_input: "no web, sheets on",
+      user_input: "no web, sheets paused",
       web_search_enabled: false,
-      request_context: { connector_scopes: { "seed:sheets": [] } },
+      request_context: { paused_connectors: ["seed:sheets"] },
     });
   });
 
-  it("omits request_context when no connectors are active (P4)", async () => {
+  it("omits request_context when no connectors are paused (P4)", async () => {
     const { transport, calls } = fakeTransport({
       "/v1/agent/conversations": { conversation_id: "conv_empty" },
       "/v1/agent/runs": { run_id: "run_empty" },
@@ -130,7 +133,7 @@ describe("createFirstRunRunsPort", () => {
       userInput: "just web",
       model: null,
       webSearchEnabled: true,
-      connectorScopes: {},
+      pausedConnectorIds: [],
     });
 
     expect(calls[1].body).toEqual({

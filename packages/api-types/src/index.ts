@@ -274,6 +274,10 @@ import type {
   TenantId,
   UserId,
 } from "./brands";
+// Local binding for `McpServer.access_mode` below. Canonical declaration site is
+// `./connectors.ts`; the public re-export is the connectors block near the end of
+// this file, which does not bind the name into local scope.
+import type { ConnectorAccessMode } from "./connectors";
 // Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
 // below (the block above re-exports them but does not bind them into local scope).
 import type {
@@ -346,6 +350,14 @@ export interface McpServer {
    * install. Empty for custom (non-catalog) servers.
    */
   description?: string;
+  /**
+   * Durable authority mode from the joined `connectors` row — the same value
+   * the runtime's card feed gates on (`off` servers are dropped before the
+   * model sees them). Clients must therefore treat `off` as "not available",
+   * not as a togglable connected row. Absent on responses from a backend that
+   * predates the field; read it as `read`.
+   */
+  access_mode?: ConnectorAccessMode;
   created_at: string;
   updated_at: string;
 }
