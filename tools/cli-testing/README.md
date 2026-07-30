@@ -12,7 +12,11 @@ supervised stack end-to-end, not mocks.
   **same** electron binary + appDir + env the CLI uses (`COPILOT_RUNTIME_DIR`,
   `COPILOT_PRODUCTION=1`), and exposes an HTTP control server (`POST /rpc`). Commands:
   `status`, `screenshot`, `click`, `fill`, `press`, `typeText`, `waitFor`, `text`,
-  `pageEval`, `dumpDom`, `openedUrls` (captured `shell.openExternal` handoff URLs — the
+  `pageEval`, `resizeWindow` (`setContentSize` on the REAL `BrowserWindow`, not a
+  Playwright viewport override, so `vh` units / the hidden-inset titlebar / internal
+  scroll regions behave as they do for a user dragging the window — returns the applied
+  size and the resulting viewport, since the window manager may refuse a request),
+  `dumpDom`, `openedUrls` (captured `shell.openExternal` handoff URLs — the
   main process intercept lets sign-in browser flows be driven in a controlled Chrome),
   `quit`. Env: `CTL_PORT` (default 8790), `POSTURE` (`prod`|`dev`), `RUN_DIR`.
 - `harness/siwe-session.mjs` — completes a real SIWE login against the live facade

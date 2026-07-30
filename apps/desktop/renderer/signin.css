@@ -16,9 +16,22 @@
  * renderer does not load the web app's stylesheet.
  * ============================================================ */
 
+/* Fills the desktop window frame and owns its OWN scroll — it must not rely on
+ * the document scrolling, because the desktop document never scrolls (see
+ * desktop.css invariant 3). `height: 100%` (not `min-height: 100vh`) keeps the
+ * card inside the frame's content box, which is a titlebar inset shorter than
+ * the viewport; `overflow: auto` then makes a card taller than a short window
+ * reachable INSIDE this surface. Column direction is what makes that safe: as a
+ * column flex item, `.loginx-pane` cannot shrink below its content height, so an
+ * overflowing card grows the scrollable region downward instead of being centred
+ * past the top edge (scrollable overflow never extends above the start edge, so
+ * a centre-overflowing row child would be permanently unreachable). This mirrors
+ * the FTUE surface's `.fr` contract in firstrun.css. */
 .loginx-shell {
-  min-height: 100vh;
+  height: 100%;
   display: flex;
+  flex-direction: column;
+  overflow: auto;
   background-color: var(--color-bg);
   color: var(--color-text);
 }

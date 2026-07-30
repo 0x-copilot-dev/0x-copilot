@@ -1384,6 +1384,17 @@ textarea {
   cursor: pointer;
   display: inline-flex;
   gap: var(--space-sm);
+  /* Containing block for the visually-hidden input below. Without it the
+     absolutely-positioned checkbox resolves its containing block all the way up
+     to the INITIAL containing block, and overflow clipping only applies to
+     descendants whose containing block is inside the clipper — so no scroll
+     container between here and the root can clip it. Each escaped checkbox then
+     grew the document's scrollable overflow region: measured live in the desktop
+     app, one Settings section (model & behavior) reported a 1239px document
+     against a 600px viewport, and the whole app window could be scrolled out of
+     its own frame. No visual effect — there are no offsets and z-index stays
+     auto, so nothing moves and no stacking context is created. */
+  position: relative;
 }
 
 .ui-switch input {
