@@ -50,6 +50,7 @@ from runtime_api.schemas.common import (
     RuntimeEventRedactionState,
     RuntimeEventVisibility,
 )
+from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayload
 
 # PRD-D3 — hard cap for row-set text the projector lets through (hold reasons,
 # row titles, change field names / string values). Rendered UI text is treated
@@ -303,6 +304,24 @@ class OperationBatchJournalPayload(RuntimeContract):
     record: BatchJournalRecord
 
 
+class ContextOccupancyPayload(RuntimeContract):
+    """One measured context-window decomposition carried by the run stream.
+
+    The live half of the Context Occupancy Ledger's §7 surface. ``snapshot`` is
+    the *same* :class:`ContextOccupancySnapshotPayload` the read API returns, not
+    a stream-only variant — a client that folds this event and a client that
+    fetches ``/context/occupancy`` are looking at one shape through one reducer,
+    and there is no second contract to keep in step.
+
+    Content-free by construction (§6.5): every field is a count, a closed
+    vocabulary value, or a bounded identifier. The nested contract's own
+    validation is what enforces that, which is why the projector below validates
+    rather than allow-lists key by key — the shape already *is* the allow-list.
+    """
+
+    snapshot: ContextOccupancySnapshotPayload
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -461,6 +480,8 @@ class RuntimeEventPresentationProjector:
             return cls._model_invocation_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_BATCH_JOURNAL:
             return cls._operation_batch_journal_payload(payload)
+        if event_type is RuntimeApiEventType.CONTEXT_OCCUPANCY:
+            return cls._context_occupancy_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -574,6 +595,15 @@ class RuntimeEventPresentationProjector:
             # Generative Surfaces v2 (PRD-A2) — a metering ledger event, not a
             # timeline card. Explicit (matches the default) so a MODEL-sourced
             # emit can't be rerouted; A3's UsageTotals fold consumes it.
+            return RuntimeActivityKind.EVENT
+        if event_type is RuntimeApiEventType.CONTEXT_OCCUPANCY:
+            # Context Occupancy Ledger (§7) — an occupancy meter is state to
+            # merge, not a card on the timeline. Stated explicitly rather than
+            # left to the default because measurement happens inside the model
+            # call: the emit is MODEL-sourced, and a source-driven fallback would
+            # be one refactor away from routing it into a message bucket. It also
+            # carries no display title or status for the same reason — there is
+            # no per-turn "Measured the context window" beat to render.
             return RuntimeActivityKind.EVENT
         if event_type in {
             RuntimeApiEventType.ACTION_CLASSIFIED,
@@ -1942,6 +1972,31 @@ class RuntimeEventPresentationProjector:
         except ValidationError:
             logging.getLogger(__name__).warning(
                 "Rejected malformed operation_batch.journal.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _context_occupancy_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one measured occupancy snapshot and reject anything else.
+
+        Validate-and-re-dump rather than a hand-written key allow-list, because
+        the snapshot contract is already strict (``extra="forbid"``, bounded
+        strings, closed enums) and §6.5's no-content rule is enforced by those
+        bounds. A second, hand-maintained allow-list here would be a copy of the
+        contract that drifts from it, and drift on this particular surface means
+        either dropping a real field or letting an unbounded one through.
+
+        A malformed payload projects to ``{}`` and is logged, matching every
+        sibling journal projector: an occupancy event is observability, and
+        rejecting the payload must not cost the run the event's ordering slot.
+        """
+
+        try:
+            validated = ContextOccupancyPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed context_occupancy payload"
             )
             return {}
         return validated.model_dump(mode="json")

@@ -25,6 +25,9 @@ from agent_runtime.harness_quality.evaluation_contracts import (
     ProjectionJobStatus,
 )
 from agent_runtime.harness_quality.ports import EvaluationObjectDeletionPolicy
+from agent_runtime.persistence.records import (
+    RuntimeContextOccupancyRecord,
+)
 from agent_runtime.persistence.records.retention import RetentionKind
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.file._deletion import (
@@ -647,3 +650,157 @@ class TestFailSafeAndGcGuards(_SeedMixin):
         except DeletionPlanError:
             return
         raise AssertionError("expected DeletionPlanError")
+
+
+class TestPhysicalDeleteRemovesContextOccupancy(_SeedMixin):
+    """A purged conversation's occupancy rows leave with it (design §5).
+
+    Occupancy is the one telemetry family whose §5 contract says it is erased by
+    the conversation-deletion cascade and therefore needs no retention class of
+    its own. On Postgres that is two ``ON DELETE CASCADE`` clauses. Here it was
+    nothing: occupancy lives in a shared back-office ledger, not in the
+    per-session directories :class:`SessionEraser` removes, and
+    ``_drop_conversation_state`` folded conversations, messages, runs, events and
+    the index while leaving one occupancy row per model call behind — on the
+    store that is the desktop default. "No longer readable" is not "erased".
+    """
+
+    async def _occupancy(
+        self,
+        store: FileRuntimeApiStore,
+        *,
+        conversation_id: str,
+        run_id: str,
+        model_call_id: str,
+    ) -> None:
+        await store.append_context_occupancy(
+            RuntimeContextOccupancyRecord.from_measurement(
+                org_id=_ORG,
+                run_id=run_id,
+                conversation_id=conversation_id,
+                model_call_id=model_call_id,
+                provider="openai",
+                model_family="gpt-5.4-mini",
+                estimated_input_tokens=971,
+                segments=(
+                    {
+                        "segment_class": "tools",
+                        "label": "a:b",
+                        "lifecycle": "resident",
+                        "detail": "publish_artifact",
+                        "byte_count": 8,
+                        "estimated_tokens": 2,
+                        "counter_source": "tokenizer",
+                    },
+                ),
+            )
+        )
+
+    async def test_purge_erases_the_rows_from_memory_and_from_disk(
+        self, tmp_path
+    ) -> None:
+        store = await self._store(tmp_path)
+        conversation, run, _sha = await self._seed_conversation(
+            store, object_content="PAYLOAD\n" * 100
+        )
+        await self._occupancy(
+            store,
+            conversation_id=conversation.conversation_id,
+            run_id=run.run_id,
+            model_call_id="call_purged",
+        )
+        ledger_path = store.layout.state_path("context_occupancy")
+        assert "call_purged" in ledger_path.read_text()
+
+        await store.delete_user_history(org_id=_ORG, user_id=_USER, reason="erase")
+
+        assert store.context_occupancy == {}
+        # The bytes are gone, not tombstoned: an append-only delete marker would
+        # leave the original ``put`` line — and its contents — on disk.
+        assert "call_purged" not in ledger_path.read_text()
+        await store.close()
+
+    async def test_erasure_survives_a_reopen(self, tmp_path) -> None:
+        """The fold on the next boot must not resurrect the purged rows."""
+
+        store = await self._store(tmp_path)
+        conversation, run, _sha = await self._seed_conversation(
+            store, object_content="PAYLOAD\n" * 100
+        )
+        await self._occupancy(
+            store,
+            conversation_id=conversation.conversation_id,
+            run_id=run.run_id,
+            model_call_id="call_purged",
+        )
+        await store.delete_user_history(org_id=_ORG, user_id=_USER, reason="erase")
+        await store.close()
+
+        reopened = FileRuntimeApiStore(tmp_path / "store")
+        await reopened.open()
+
+        assert reopened.context_occupancy == {}
+        await reopened.close()
+
+    async def test_another_conversations_rows_survive(self, tmp_path) -> None:
+        """Erasure is scoped: a survivor's measurements are not collateral.
+
+        The row is matched on ``conversation_id`` rather than on the victim runs,
+        so this also pins that the wider key does not over-collect.
+        """
+
+        store = await self._store(tmp_path)
+        victim, victim_run, _a = await self._seed_conversation(
+            store, object_content="VICTIM\n" * 100
+        )
+        survivor, survivor_run, _b = await self._seed_conversation(
+            store, object_content="SURVIVOR\n" * 100, user="user_other"
+        )
+        await self._occupancy(
+            store,
+            conversation_id=victim.conversation_id,
+            run_id=victim_run.run_id,
+            model_call_id="call_victim",
+        )
+        await self._occupancy(
+            store,
+            conversation_id=survivor.conversation_id,
+            run_id=survivor_run.run_id,
+            model_call_id="call_survivor",
+        )
+
+        await store.delete_user_history(org_id=_ORG, user_id=_USER, reason="erase")
+
+        keys = set(store.context_occupancy)
+        assert keys == {("call_survivor", 1)}
+        rows = await store.list_context_occupancy(
+            org_id=_ORG, run_id=survivor_run.run_id
+        )
+        assert [row.model_call_id for row in rows] == ["call_survivor"]
+        await store.close()
+
+    async def test_legal_hold_retains_the_occupancy_rows_too(self, tmp_path) -> None:
+        """A held conversation is counted and untouched — including its occupancy.
+
+        The purge already skips held conversations wholesale; asserting it here
+        stops a future erasure from being wired ahead of the hold check, which is
+        the ordering mistake that would make a legal hold unenforceable.
+        """
+
+        store = await self._store(tmp_path)
+        conversation, run, _sha = await self._seed_conversation(
+            store,
+            object_content="HELD\n" * 100,
+            metadata={"legal_hold": True},
+        )
+        await self._occupancy(
+            store,
+            conversation_id=conversation.conversation_id,
+            run_id=run.run_id,
+            model_call_id="call_held",
+        )
+
+        await store.delete_user_history(org_id=_ORG, user_id=_USER, reason="erase")
+
+        assert set(store.context_occupancy) == {("call_held", 1)}
+        await store.close()
