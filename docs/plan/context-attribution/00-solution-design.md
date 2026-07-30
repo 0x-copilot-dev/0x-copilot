@@ -180,6 +180,25 @@ honesty valve: provider-side wire overhead, tokenizer drift, and any occupancy
 source this document missed all land there visibly rather than being smeared
 across segments.
 
+> **Correction (measured during review).** The next paragraph's closing claim —
+> that counting routes to "the provider's real tokenizer where litellm bundles
+> one" — is **false for this deployment**. Under this service's
+> `apply_offline_litellm_config` guardrail the HF tokenizer downloads are
+> disabled, so `gpt-4o-mini`, two Claude slugs and `gemini/gemini-2.0-flash` all
+> return the **same** count for the same text: one tiktoken encoder for every
+> provider. `counter_source=TOKENIZER` therefore means "counted by a real BPE
+> tokenizer", **not** "counted by this provider's tokenizer". A test pins the
+> single-encoder equality so a future litellm bump that _does_ bundle
+> provider tokenizers fails rather than silently making the claim true.
+>
+> A second, larger correction: per-segment counting carries a fixed
+> per-call envelope of ~7 tokens **per segment**. On a request shaped like §11's
+> reference measurements (~81 segments) that is +610 tokens, or **+5.9%** versus
+> counting the identical text once — which already exceeds the ±5% bound §9
+> proposes below. The bias scales with segment count, not with drift. It is left
+> in deliberately: netting it out would move segments toward the provider total,
+> which §3.3 forbids. See §9 for what the bound actually became.
+
 Shrink it by counting through the existing `TokenCounterPort` fallback chain
 (`litellm.token_counter` → char/4 → window proxy) already used at
 `runtime_worker/handlers/run.py:1119`, which routes to the provider's real
@@ -419,9 +438,17 @@ A third record in the existing observation family, mirroring how
   table would add 30+ rows per model call for no query benefit.
 - Additive migration, `schema_version: 1`, all new columns nullable. No
   backfill: pre-migration calls report `null` occupancy, not zero.
-- Retention follows the existing `runtime_events` / usage retention policy —
+- ~~Retention follows the existing `runtime_events` / usage retention policy —
   occupancy rows are deleted by the same conversation-deletion cascade. No new
-  retention class.
+  retention class.~~ **This was false and is corrected.** On Postgres nothing
+  hard-deletes a conversation or a run, and `runtime_events` is erased by an
+  explicit `RetentionKind` rather than by a cascade — so there was no cascade to
+  inherit. On the **file store** (the desktop default) the conversation purge
+  folded sessions, runs, events and the index but never touched occupancy,
+  leaking one row per model call permanently. The file-store erasure is fixed;
+  the Postgres path needs occupancy added to the explicit retention enumeration,
+  which is tracked, not done here. Do not describe occupancy retention as
+  "inherited" again without checking the erasure path it claims to inherit from.
 
 Do **not** add columns to `runtime_model_call_usage`. That table is the money
 tracker; occupancy is a different lifecycle and a different read pattern.
@@ -491,7 +518,15 @@ draft of this section proposed exactly that collision — corrected here.
   root-scope snapshot, i.e. "who is filling the window right now".
 - `context_occupancy` `RuntimeEventEnvelope` on the existing SSE stream so
   consumers update live on the established `sequence_no` contract instead of
-  polling.
+  polling. **NOT IMPLEMENTED.** The event type, the payload contract, its
+  projector branches and the public TypeScript contract all ship — but nothing
+  in the repository ever appends an event of that type. Three independent
+  reviewers found this separately. Emitting a run event touches the
+  `sequence_no` / causal-prefix seal contract, which is not something to bolt on
+  at the end of a build; it is tracked as the one deliberately unfinished
+  deliverable in §7. Until a producer exists, the read endpoints above are the
+  only way to reach occupancy, and any consumer written against the streamed
+  event will silently receive nothing.
 - Scope-guarded under `RUNTIME_USE`, same as `/v1/usage/*`. Facade proxies
   `/v1/*`; no `/internal/v1/*` exposure.
 
@@ -528,10 +563,22 @@ surface cost."
   per declared origin, per harness profile. This is the regression net for
   `deepagents` bumps — a library upgrade that adds prompt text moves the
   third-party fixture (§4.3) and fails loudly with the constant named.
-- **Reconciliation bound.** Against recorded provider fixtures per provider,
-  assert `|unattributed_delta| / provider_input_tokens < 0.05` for
-  openai/anthropic/gemini. Distinct from the undeclared test: this bounds
-  tokenizer/wire drift, that one bounds contract compliance.
+- **Reconciliation bound — NOT as originally specified.** The plan was
+  `|unattributed_delta| / provider_input_tokens < 0.05` against per-provider
+  fixtures. That test never shipped, and it would not have passed: per-segment
+  counting adds a ~7-token envelope per segment, so a realistically-shaped
+  request over-counts by ~5.9% before any provider drift at all (§3.3). A single
+  ratio therefore cannot separate the two things it was supposed to bound.
+
+  What ships instead is the bias itself, pinned: `TestMeasuredCountingBias`
+  asserts the per-segment envelope and the single-encoder equality, so the known
+  artifact cannot grow silently and the false provider-tokenizer claim cannot
+  quietly become true. The honest position is that `unattributed_delta` today
+  carries **envelope + drift together**, and the envelope dominates. Separating
+  them — by netting the envelope out at the reporting layer, never by moving
+  segments (§3.3) — plus a real per-provider fixture bound, is the remaining
+  work before any consumer should read the delta as "drift".
+
 - **Scope isolation.** A run with subagents asserts no cross-scope summation and
   that root `free_tokens` ignores child occupancy (§6.2).
 - **Retry.** Two attempts produce two snapshots; the rollup counts one.

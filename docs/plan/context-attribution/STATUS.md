@@ -23,17 +23,57 @@ could proceed unblocked — all are reversible, none changes the contract shape:
 Implemented as a 6-phase workflow, not in the doc's PRD numbering (the doc's order is
 logical; this order is what parallelises safely without two agents fighting over a file).
 
-| Phase      | Contents                                                                                                          | State       |
-| ---------- | ----------------------------------------------------------------------------------------------------------------- | ----------- |
-| Foundation | `context_origin.py` — ContextOrigin, lifecycle, registry, declare/read seam                                       | **done**    |
-| Build      | tool footprints + declarations · snapshot + token counter · message classifier · deepagents adapter · persistence | **done**    |
-| Integrate  | `ModelInvocationMiddleware` hook, capture + reconcile, fail-open guard                                            | in progress |
-| Gate       | AST conformance gate + pinned golden inventory (the keystone)                                                     | pending     |
-| API        | `/v1/agent/runs/{id}/context`, conversation latest, SSE event, facade proxy                                       | pending     |
-| Verify     | full-suite regression sweep + adversarial invariant review                                                        | pending     |
+| Phase      | Contents                                                                                                          | State                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| Foundation | `context_origin.py` — ContextOrigin, lifecycle, registry, declare/read seam                                       | **done**                    |
+| Build      | tool footprints + declarations · snapshot + token counter · message classifier · deepagents adapter · persistence | **done**                    |
+| Integrate  | `ModelInvocationMiddleware` hook, capture + reconcile, fail-open guard                                            | **done**                    |
+| Gate       | AST conformance gate + pinned golden inventory (the keystone)                                                     | **done** — 0 undeclared     |
+| API        | read routes + facade proxy **done**; SSE event contract ships but **has no producer**                             | **partial** — see below     |
+| Verify     | full-suite sweep + 3-lens adversarial review + mutation-verified confirmation                                     | **done** — 16 defects fixed |
 
-Phase states are updated as they land. See git log on this branch for what is actually
-committed.
+## Final verified state
+
+`ai-backend tests/unit` **8908 passed / 107 skipped**. `backend-facade tests`
+**373 passed / 1 skipped**. `ruff check` + `ruff format --check` clean across
+1570 files. Seam gate + origin gate **44 passed**, `undeclared_context_contributors`
+= **0**, inventory 36 rows. Tool-schema digest proven **byte-identical to
+`origin/main`** across 9 shape cases by copying main's implementation verbatim
+and comparing — prompt-cache identity is intact.
+
+Every adversarial fix was **mutation-verified**: reverted in place, the claimed
+test made to fail, then restored. No test was weakened — the only two deletions
+in the round were retargeted tests replaced with stronger assertions, and every
+removed line was read.
+
+## Known NOT done — read before building on this
+
+1. **The `context_occupancy` SSE event has no producer.** The event type, payload
+   contract, projector branches and public TypeScript contract all ship; nothing
+   emits one. A consumer written against the stream will silently receive
+   nothing. Use the read endpoints. Wiring it touches the `sequence_no` /
+   causal-prefix seal contract, which is why it was not bolted on at the end.
+2. **`assembly_record_id` is NULL on every row**, so the designed link to
+   `PromptAssembledRecord` does not exist in practice. The naive fix is wrong:
+   the F2 handoff carries `PromptRuntimeResult`, not the assembled record.
+3. **Postgres retention does not erase occupancy.** The file store (desktop
+   default) now does. Postgres needs occupancy added to the explicit
+   `RetentionKind` enumeration — there was never a cascade to inherit.
+4. **`unattributed_delta` is envelope + drift together, and the envelope
+   dominates** (~+5.9% on a realistically-shaped request). Do not read it as
+   drift yet. The §9 ±5% bound was never achievable as specified; the bias is
+   pinned by test instead.
+5. **`counter_source=TOKENIZER` is not provider-authoritative** in this
+   deployment — the offline guardrail means one tiktoken encoder for every
+   provider (measured).
+6. **Zero CI coverage of the Postgres relation.** All 10 postgres store tests
+   skip without a live database.
+7. **Occupancy persist is on the model call's critical path** with no timeout.
+   Fail-open covers exceptions, not latency; on the file store that is an
+   `fsync` under the global store lock.
+8. **`detail` carries up to 200 chars of MCP-registry-controlled tool text**
+   verbatim onto a tenant-readable API. Bounded and printable-only, but it is
+   third-party-controlled text on an authenticated surface.
 
 ## Verified so far
 
