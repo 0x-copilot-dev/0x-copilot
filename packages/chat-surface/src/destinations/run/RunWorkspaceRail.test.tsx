@@ -773,3 +773,140 @@ describe("RunWorkspaceRail — scrubbed approvals gate (FR-3.15/3.16)", () => {
     expect(screen.queryByTestId("run-rail-panel-approvals")).toBeNull();
   });
 });
+
+// ============================================================
+// Following a citation — `focusSourcesSignal`
+// ============================================================
+//
+// Clicking an inline `[[N]]` chip must reveal the source it points at. The
+// cockpit drives that through a one-directional nonce, mirroring the header
+// chip's `focusApprovalsSignal`. Before this existed the chip was inert on both
+// hosts, so these cases pin the whole point of a citation: it is followable.
+
+describe("RunWorkspaceRail — focusSourcesSignal", () => {
+  it("ignores the initial value so mounting never force-selects Sources", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        focusSourcesSignal={7}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "chat",
+    );
+  });
+
+  it("selects Sources in Studio when the nonce increases", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "sources",
+    );
+    expect(screen.getByRole("tab", { name: "Sources" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("does not fight the reader's own tab clicks after the nonce fires", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    // The reader navigates away; a re-render at the SAME nonce must not yank
+    // them back to Sources (the effect keys on the nonce, not on every render).
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "agents",
+    );
+  });
+
+  it("expands a collapsed Focus panel so the reveal is not swallowed", () => {
+    const onPanelCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={1}
+      />,
+    );
+    // Selecting a tab inside a collapsed panel would read as a dead chip.
+    expect(onPanelCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("leaves the Focus collapse state alone in Studio", () => {
+    const onPanelCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source()])}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(onPanelCollapsedChange).not.toHaveBeenCalled();
+  });
+});

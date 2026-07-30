@@ -42,6 +42,7 @@
 
 import {
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -198,6 +199,18 @@ export interface RunWorkspaceRailProps {
   readonly focusApprovalsSignal?: number;
 
   /**
+   * The same one-directional nonce contract as `focusApprovalsSignal`, for the
+   * Sources tab. Bumped when the reader clicks an inline `[[N]]` citation chip
+   * in the transcript — a citation's whole job is to be followed, so the click
+   * reveals the source it points at instead of doing nothing. Every increase
+   * selects Sources (Studio tab / Focus Run-details panel) and, in Focus,
+   * expands the panel if the reader had collapsed it — selecting a tab inside a
+   * collapsed panel would look like the click was swallowed. The initial value
+   * is ignored, so mounting with it set never force-selects.
+   */
+  readonly focusSourcesSignal?: number;
+
+  /**
    * PR-3.10 SEAM (do not build here): inline approve/reject resolution +
    * Focus-mode `.conf-card` confirmation cards. Threaded through so PR-3.10 can
    * wire them without changing this signature; unused in PR-3.6.
@@ -257,6 +270,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     pendingV2,
     pendingWorkV21,
     focusApprovalsSignal,
+    focusSourcesSignal,
     panelCollapsed,
     onPanelCollapsedChange,
     focusPlan,
@@ -290,6 +304,39 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     }
     setActiveTab("approvals");
   }, [focusApprovalsSignal]);
+
+  // Clicking an inline `[[N]]` chip commands the Sources tab through the same
+  // nonce contract — but this one only reacts to a genuine INCREASE, compared
+  // against a ref seeded with the mount value.
+  //
+  // The `focusApprovalsSignal` effect above documents that same "initial value
+  // is ignored" rule but does not implement it: a bare `> 0` guard also fires on
+  // mount. That is harmless there only because its host always starts the
+  // counter at 0. Rather than inherit a latent bug, this effect enforces the
+  // contract, so a rail mounted with a non-zero nonce (a remount mid-session)
+  // does not silently yank the reader onto Sources.
+  //
+  // `setCollapsed` is deliberately absent from the dep array: it is a plain
+  // closure rebuilt every render, so listing it would re-run this effect
+  // constantly and fight the reader's own tab clicks.
+  const lastSourcesSignalRef = useRef(focusSourcesSignal ?? 0);
+  useEffect(() => {
+    const next = focusSourcesSignal ?? 0;
+    const previous = lastSourcesSignalRef.current;
+    lastSourcesSignalRef.current = next;
+    if (next <= previous) {
+      return;
+    }
+    setActiveTab("sources");
+    // Focus-only: a tab selection inside a collapsed Run-details panel is
+    // invisible, which reads as a dead chip.
+    if (mode !== "studio") {
+      setCollapsed(false);
+    }
+    // Deps are the nonce ALONE, deliberately — `mode` and `setCollapsed` are
+    // read but must not retrigger. (No exhaustive-deps disable: that rule is not
+    // configured in this package, and the directive itself would error.)
+  }, [focusSourcesSignal]);
 
   const isStudio = mode === "studio";
   const isFocus = !isStudio;

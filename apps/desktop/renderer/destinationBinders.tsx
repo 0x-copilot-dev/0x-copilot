@@ -96,6 +96,7 @@ import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
 import { isSurfacesV2Enabled } from "./featureFlags";
+import { runMarkdownComponents } from "./runMarkdownComponents";
 import {
   bridgeMcpAuthDeps,
   createDesktopMcpAuthPort,
@@ -1267,6 +1268,11 @@ export function RunBinder({
       onSaveFile={saveTextToFile}
       artifactDownloadPort={{ saveArtifact: saveArtifactStream }}
       workspaceStageHost={workspaceStageHost}
+      // Citation chips. Without this prop `MarkdownText` has no `components.a`,
+      // so Streamdown renders the raw `[[N]]` token AND fires its own
+      // "Open external link?" popover on the internal `#cite-ord:N` href. The
+      // web host has always passed its equivalent; desktop never did.
+      markdownComponents={runMarkdownComponents}
     />
   );
 }
