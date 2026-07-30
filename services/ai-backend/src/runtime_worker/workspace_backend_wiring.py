@@ -102,6 +102,17 @@ class WorkspaceBackendWorkerWiring:
 
         config = WorkspaceBackendConfig.from_env(env=self._env)
         if not config.broker_base_url or not config.broker_token:
+            # Say WHICH half is missing. Silence here is indistinguishable from
+            # "not a desktop image", which is how a broker env-name mismatch hid
+            # for an entire release: the route was never composed, host paths
+            # fell through to agent memory, and `ls ~/Downloads` answered with an
+            # empty listing and a green tick. No secret is logged — only whether
+            # each value was present.
+            logger.info(
+                "workspace_backend.broker_config_absent url=%s token=%s",
+                bool(config.broker_base_url),
+                bool(config.broker_token),
+            )
             return None
         client = DesktopBrokerClient(
             BrokerClientConfig(
@@ -116,9 +127,20 @@ class WorkspaceBackendWorkerWiring:
         )
         try:
             snapshot = await client.grants_snapshot()
-        except BrokerError:
-            # Diagnostics carry no token, no path, no broker internals.
-            logger.debug("workspace_backend.grants_unavailable")
+        except BrokerError as exc:
+            # WARNING, not debug. This branch silently disables host filesystem
+            # access for the whole run: no `/workspace/` route, so a host path
+            # lands on the StateBackend default and agent memory answers it with
+            # an empty listing. At debug level that outage was invisible in every
+            # packaged log, which is why it survived a live investigation.
+            # Diagnostics carry no token, no path, no broker internals — the
+            # error CLASS is enough to tell "broker refused me" from
+            # "broker unreachable".
+            logger.warning(
+                "workspace_backend.grants_unavailable error_class=%s "
+                "(host filesystem access is DISABLED for this run)",
+                type(exc).__name__,
+            )
             return None
         mounts = WorkspaceMountTable.from_broker_grants(snapshot.grants)
         scoped = config.with_mounts(mounts).with_run(run_id or self._run_id)
