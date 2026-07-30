@@ -10,8 +10,10 @@ export const REVIEWED_ARTIFACT_AUTHORS: ReadonlySet<ArtifactAuthor> =
 
 /**
  * An agent revision that landed on top of the revision the reader had on
- * screen. `baseRevision` is its parent — the one that was being read, and the
- * one a revert appends a copy of.
+ * screen. `baseRevision` is the one that was being read — the comparison base,
+ * and the one a revert appends a copy of. It is the landed revision's parent in
+ * the usual case, but not when a turn writes several revisions and the tab
+ * jumps past them (PRD-03 D1).
  */
 export interface ArtifactRevisionReviewState {
   readonly baseRevision: number;
@@ -31,6 +33,13 @@ export function ArtifactRevisionReview(props: {
   readonly review: ArtifactRevisionReviewState | null;
   readonly comparison: ArtifactTextComparison | null;
   readonly status: "idle" | "loading" | "ready" | "error";
+  /**
+   * The artifact's own renderer is showing the change in its own language — a
+   * dataset diffing cells (PRD-03 D4). The panel then keeps the announcement
+   * and the two actions and drops its text diff, rather than putting a second,
+   * poorer reading of the same change on screen.
+   */
+  readonly changeShownInSurface?: boolean;
   readonly onKeep: () => void;
   readonly onRevert: () => void;
   readonly revertDisabled: boolean;
@@ -51,6 +60,7 @@ export function ArtifactRevisionReview(props: {
         baseRevision={review.baseRevision}
         comparison={props.comparison}
         status={props.status}
+        changeShownInSurface={props.changeShownInSurface === true}
       />
       <div style={actionsStyle}>
         <button
@@ -77,6 +87,7 @@ function ReviewBody(props: {
   readonly baseRevision: number;
   readonly comparison: ArtifactTextComparison | null;
   readonly status: "idle" | "loading" | "ready" | "error";
+  readonly changeShownInSurface: boolean;
 }): ReactElement {
   if (props.status === "loading")
     return (
@@ -91,6 +102,12 @@ function ReviewBody(props: {
       <p className="ui-caption" role="alert">
         This change cannot be shown as bounded UTF-8 text. Download the exact
         bytes to compare, or revert to r{props.baseRevision}.
+      </p>
+    );
+  if (props.changeShownInSurface)
+    return (
+      <p className="ui-caption">
+        What changed is shown in the dataset view above.
       </p>
     );
   const { comparison } = props;

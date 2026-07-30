@@ -18,6 +18,7 @@ import pytest
 
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.ledger_seal import LedgerAmendment
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.models import ModelConfigResolver
@@ -192,6 +193,70 @@ class TestStableEventIdConformance(_CrudSeedMixin):
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.PROGRESS,
             summary="artifact event",
+        )
+        await store.append_event(draft)
+
+        with pytest.raises(RuntimeEventIdempotencyConflict):
+            await store.append_event(
+                draft.model_copy(update={"summary": "different body"})
+            )
+
+    async def test_redelivery_ignores_the_amendment_delivery_annotation(
+        self, store
+    ) -> None:
+        """A ``LedgerAmendment`` describes the attempt, not the event.
+
+        Its two keys cannot be stable across a redelivery of the same
+        content-addressed event: the reason differs between the lane that
+        published a fact causally and the recovery lane that republishes it
+        after the seal, and ``ledger_amends`` is read from the run's sequence
+        cursor, which moves between an attempt and its retry. Comparing them
+        turned every artifact redelivery into a worker crash-loop.
+        """
+
+        conversation, run = await self._new_run(store)
+        draft = RuntimeEventDraft(
+            org_id=self._ORG,
+            event_id=f"artevt_{'d' * 64}",
+            run_id=run.run_id,
+            conversation_id=conversation.conversation_id,
+            trace_id=run.trace_id,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.PROGRESS,
+            summary="artifact event",
+        )
+        first = await store.append_event(draft)
+
+        annotated = await store.append_event(
+            draft.model_copy(
+                update={
+                    "metadata": {
+                        LedgerAmendment.Keys.REASON: "late_causal_recovery",
+                        LedgerAmendment.Keys.AMENDS: f"{run.run_id}·9",
+                    }
+                }
+            )
+        )
+
+        assert annotated == first
+        # The stored copy stands: it really did land inside the causal prefix.
+        assert annotated.metadata == {}
+        assert await store.get_latest_sequence(run_id=run.run_id) == first.sequence_no
+
+    async def test_annotated_redelivery_with_a_different_body_still_fails_closed(
+        self, store
+    ) -> None:
+        conversation, run = await self._new_run(store)
+        draft = RuntimeEventDraft(
+            org_id=self._ORG,
+            event_id=f"artevt_{'e' * 64}",
+            run_id=run.run_id,
+            conversation_id=conversation.conversation_id,
+            trace_id=run.trace_id,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.PROGRESS,
+            summary="artifact event",
+            metadata={LedgerAmendment.Keys.REASON: "late_causal_recovery"},
         )
         await store.append_event(draft)
 

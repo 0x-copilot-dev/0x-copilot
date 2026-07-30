@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { magnitudeShares, numericValue } from "../_shared/path";
+import {
+  DatasetRevisionDiff,
+  datasetRevisionChangeFor,
+  diffDatasetGrids,
+} from "./DatasetRevisionDiff";
 import type { ArtifactRenderState } from "./model";
 import { previewNotice } from "./model";
 
@@ -60,10 +65,30 @@ interface DatasetModel {
   readonly headers: readonly string[];
   readonly rows: readonly (readonly string[])[];
   readonly formulaCells: number;
+  /** False when the preview budget truncated the parse, so rows are missing. */
+  readonly complete: boolean;
   readonly editable: boolean;
   readonly fidelityWarning: string | null;
   readonly serialize: (patch: DatasetPatch) => string;
   readonly safeExport: (patch: DatasetPatch) => string;
+}
+
+/**
+ * The read-only half of the parsed model — what a comparison needs, without the
+ * write path. Exported so the revision diff reads the SAME parse the grid
+ * renders from; a second CSV reader is how a diff and its own table would come
+ * to disagree about what a row is.
+ */
+export type DatasetGrid = Pick<
+  DatasetModel,
+  "kind" | "headers" | "rows" | "complete"
+>;
+
+export function datasetGrid(
+  text: string,
+  mediaType: string,
+): DatasetGrid | null {
+  return parseDatasetModel(text, mediaType);
 }
 
 /**
@@ -254,6 +279,7 @@ function parseJsonObjectRows(text: string): DatasetModel | null {
       0,
       DATASET_PREVIEW_ROW_BUDGET,
     ) as readonly Record<string, unknown>[];
+    const complete = records.length === parsed.length;
     const headers = [
       ...new Set(records.flatMap((row) => Object.keys(row))),
     ].slice(0, MAX_PREVIEW_COLUMNS);
@@ -285,7 +311,8 @@ function parseJsonObjectRows(text: string): DatasetModel | null {
       headers,
       rows,
       formulaCells: formulaCount([headers, ...rows]),
-      editable: records.length === parsed.length,
+      complete,
+      editable: complete,
       fidelityWarning:
         "Saving JSON cell edits normalizes indentation, key serialization and scalar values. Review this fidelity change before saving.",
       serialize: (patch) => serialize(patch),
@@ -297,23 +324,30 @@ function parseJsonObjectRows(text: string): DatasetModel | null {
 }
 
 function datasetModel(artifact: ArtifactRenderState): DatasetModel | null {
-  if (artifact.text === undefined) return null;
-  if (artifact.mediaType === "application/json") {
-    return parseJsonObjectRows(artifact.text);
+  return artifact.text === undefined
+    ? null
+    : parseDatasetModel(artifact.text, artifact.mediaType);
+}
+
+function parseDatasetModel(
+  text: string,
+  mediaType: string,
+): DatasetModel | null {
+  if (mediaType === "application/json") {
+    return parseJsonObjectRows(text);
   }
-  const delimiter =
-    artifact.mediaType === "text/tab-separated-values" ? "\t" : ",";
+  const delimiter = mediaType === "text/tab-separated-values" ? "\t" : ",";
   if (
-    artifact.mediaType !== "text/csv" &&
-    artifact.mediaType !== "text/tab-separated-values" &&
-    artifact.mediaType !== "text/plain"
+    mediaType !== "text/csv" &&
+    mediaType !== "text/tab-separated-values" &&
+    mediaType !== "text/plain"
   ) {
     return null;
   }
   // Delimited previews reserve one retained row for the header so the public
   // data-row budget still means a 100k-row CSV can be viewed and edited.
   const parsed = parseLosslessDelimited(
-    artifact.text,
+    text,
     delimiter,
     DATASET_PREVIEW_ROW_BUDGET + 1,
   );
@@ -324,6 +358,7 @@ function datasetModel(artifact: ArtifactRenderState): DatasetModel | null {
     headers: headers.slice(0, MAX_PREVIEW_COLUMNS),
     rows: body.map((row) => row.slice(0, MAX_PREVIEW_COLUMNS)),
     formulaCells: formulaCount(rows),
+    complete: parsed.complete,
     editable: parsed.roundTripSafe,
     fidelityWarning: parsed.fidelityWarning,
     serialize: (patch) => serializeDelimitedPatch(parsed, patch),
@@ -400,12 +435,41 @@ function DatasetPreview(props: {
     () => datasetModel(props.artifact),
     [props.artifact.mediaType, props.artifact.text],
   );
+  // A revision the reader did not make landed on this artifact (PRD-03 D4).
+  // Diffed against the SAME parse the grid below renders from, so the change
+  // reads in cells rather than as a word diff of CSV source.
+  const change = datasetRevisionChangeFor(props.artifact);
+  const cellDiff = useMemo(
+    () =>
+      change === null
+        ? null
+        : diffDatasetGrids(
+            datasetGrid(change.baseText, props.artifact.mediaType),
+            model,
+            DATASET_DOM_ROW_BUDGET,
+          ),
+    [change?.baseText, model, props.artifact.mediaType],
+  );
+  const revisionDiff =
+    change === null ? null : (
+      <DatasetRevisionDiff
+        change={change}
+        diff={cellDiff}
+        revision={props.artifact.revision}
+      />
+    );
   if (model === null) {
     return (
-      <div className="ui-card ui-body" data-testid="artifact-dataset-fallback">
-        This dataset format cannot be safely previewed. Download the exact
-        artifact bytes.
-      </div>
+      <>
+        {revisionDiff}
+        <div
+          className="ui-card ui-body"
+          data-testid="artifact-dataset-fallback"
+        >
+          This dataset format cannot be safely previewed. Download the exact
+          artifact bytes.
+        </div>
+      </>
     );
   }
   const actions = editorActionsFor(props.artifact);
@@ -414,6 +478,7 @@ function DatasetPreview(props: {
       className="ui-dataset-surface"
       data-testid="artifact-dataset-renderer"
     >
+      {revisionDiff}
       {model.formulaCells > 0 ? (
         <p className="ui-dataset-notice" role="note">
           Formula-like cells are shown as text and are never evaluated. Exact

@@ -112,6 +112,13 @@ export function ArtifactSurface(props: {
   );
   const [reviewComparison, setReviewComparison] =
     useState<ArtifactTextComparison | null>(null);
+  /**
+   * The base revision's full source, kept only while a review is open. A
+   * renderer that understands the artifact's structure diffs it itself — the
+   * dataset surface compares cells with it (PRD-03 D4) — which a line
+   * comparison cannot express.
+   */
+  const [reviewBaseText, setReviewBaseText] = useState<string | null>(null);
   const [reviewStatus, setReviewStatus] = useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
@@ -215,6 +222,22 @@ export function ArtifactSurface(props: {
     data.state.text !== undefined &&
     kind !== "file" &&
     kind !== "dataset";
+  // A dataset revision is a table change, not a text change, so the review's
+  // "what changed" is handed to the dataset renderer and shown in cells
+  // (PRD-03 D4). It renders there rather than in the review panel below because
+  // only the renderer can parse a grid — `chat-surface` must not import
+  // `surface-renderers`, which is the sole legal direction between the two —
+  // and it is the renderer that decides a CSV is not a grid after all, falling
+  // back to the bounded text pair carried here.
+  const datasetRevisionChange =
+    review !== null && reviewComparison !== null && reviewBaseText !== null
+      ? {
+          baseRevision: review.baseRevision,
+          baseText: reviewBaseText,
+          textBefore: reviewComparison.removed.join("\n"),
+          textAfter: reviewComparison.added.join("\n"),
+        }
+      : null;
   const mountedState =
     data.state?.kind === "dataset"
       ? {
@@ -223,14 +246,24 @@ export function ArtifactSurface(props: {
             disabled: !isArtifactTransport(props.transport),
             saveRevision: save,
           },
+          ...(datasetRevisionChange !== null ? { datasetRevisionChange } : {}),
         }
       : data.state;
   // Bounded fetch-and-diff of one revision against the current head. Two callers
   // share it — the reader's explicit "Compare to current" and the automatic
   // review of an agent revision — so both read the same bytes through the same
   // per-kind limits. `null` means "not comparable as bounded UTF-8 text".
+  //
+  // The base text rides along with the comparison because a structured renderer
+  // needs the source, not the line summary, to diff its own shape. Both come
+  // from the one bounded read rather than a second fetch.
   const buildComparison = useCallback(
-    async (targetRevision: number): Promise<ArtifactTextComparison | null> => {
+    async (
+      targetRevision: number,
+    ): Promise<{
+      readonly comparison: ArtifactTextComparison;
+      readonly baseText: string;
+    } | null> => {
       if (
         parsed === null ||
         data.detail === null ||
@@ -272,12 +305,15 @@ export function ArtifactSurface(props: {
         const targetText = decodeArtifactUtf8(targetBytes);
         const currentText = decodeArtifactUtf8(currentBytes);
         if (targetText === null || currentText === null) return null;
-        return compareArtifactText(
-          targetText,
-          currentText,
-          target.revision,
-          current.revision,
-        );
+        return {
+          comparison: compareArtifactText(
+            targetText,
+            currentText,
+            target.revision,
+            current.revision,
+          ),
+          baseText: targetText,
+        };
       } catch {
         return null;
       }
@@ -288,7 +324,7 @@ export function ArtifactSurface(props: {
     async (targetRevision: number): Promise<void> => {
       setCompareStatus("loading");
       const next = await buildComparison(targetRevision);
-      setComparison(next);
+      setComparison(next?.comparison ?? null);
       setCompareStatus(next === null ? "error" : "ready");
     },
     [buildComparison],
@@ -339,8 +375,14 @@ export function ArtifactSurface(props: {
   // instead of swapping the bytes underneath them (PRD-03 D1). This is not a
   // gate: the revision is already current, and nothing here blocks the write.
   //
+  // ANY agent revision newer than the one on screen qualifies, not only the
+  // direct child. A turn that writes r2 and r3 moves the tab r1→r3, and keying
+  // on `parent_revision === previous` let exactly that case swap content
+  // silently — the defect the review exists to prevent. The base is therefore
+  // the revision that WAS on screen, whatever distance it sits at.
+  //
   // Only the head qualifies. A revision that is not current has no honest
-  // r(n-1)→r(n) reading, and the comparison below is always against the head.
+  // reading here, and the comparison below is always against the head.
   useEffect(() => {
     const shown = data.detail?.current_revision;
     if (shown === undefined) return;
@@ -350,12 +392,13 @@ export function ArtifactSurface(props: {
     const deliberate = navigated.current;
     navigated.current = false;
     setReviewComparison(null);
+    setReviewBaseText(null);
     reviewFetch.current = null;
     if (
       previous === null ||
       deliberate ||
       shown.revision !== data.latestRevision ||
-      shown.parent_revision !== previous ||
+      shown.revision <= previous ||
       !REVIEWED_ARTIFACT_AUTHORS.has(shown.author)
     ) {
       // Includes the reader's own revision — a user edit, or the revert
@@ -384,7 +427,8 @@ export function ArtifactSurface(props: {
     reviewFetch.current = pair;
     void buildComparison(review.baseRevision).then((next) => {
       if (reviewFetch.current !== pair) return;
-      setReviewComparison(next);
+      setReviewComparison(next?.comparison ?? null);
+      setReviewBaseText(next?.baseText ?? null);
       setReviewStatus(next === null ? "error" : "ready");
     });
   }, [buildComparison, data.revisions, review, reviewStatus]);
@@ -393,6 +437,7 @@ export function ArtifactSurface(props: {
     // appends nothing.
     setReview(null);
     setReviewComparison(null);
+    setReviewBaseText(null);
     setReviewStatus("idle");
     reviewFetch.current = null;
   }, []);
@@ -443,6 +488,9 @@ export function ArtifactSurface(props: {
         review={review}
         comparison={reviewComparison}
         status={reviewStatus}
+        changeShownInSurface={
+          kind === "dataset" && datasetRevisionChange !== null
+        }
         onKeep={keepRevision}
         onRevert={revertRevision}
         revertDisabled={restoreStatus === "restoring"}

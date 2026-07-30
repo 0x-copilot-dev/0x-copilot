@@ -12,7 +12,6 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
 from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceEventWindow,
 )
@@ -62,6 +61,7 @@ from runtime_adapters.base import (
     _Fields,
 )
 from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
+from runtime_adapters._event_idempotency import EventRedeliveryResolver
 from runtime_adapters.artifact_lifecycle import (
     ArtifactCleanupExecutionFence,
     ArtifactLifecycleJobs,
@@ -2838,12 +2838,7 @@ class InMemoryRuntimeApiStore:
                 None,
             )
             if existing is not None:
-                if event.matches_envelope(existing):
-                    return existing
-                raise RuntimeEventIdempotencyConflict(
-                    run_id=event.run_id,
-                    event_id=event.event_id,
-                )
+                return EventRedeliveryResolver.resolve(event=event, existing=existing)
         fence = self._assert_e2_legacy_materialization(event=event, events=events)
         envelope_kwargs: dict[str, object] = {}
         if event.event_id is not None:
