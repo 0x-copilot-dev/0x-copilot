@@ -79,6 +79,7 @@ export type {
   ArtifactAuthor,
   ArtifactPresentationPreference,
   PresentationDecision,
+  SurfaceAccent,
   SurfaceSubjectType,
   EffectPolicy,
   EffectDecisionKind,

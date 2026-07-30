@@ -10,6 +10,7 @@ from runtime_adapters.in_memory.artifact_metadata_store import (
 from runtime_adapters.in_memory.evaluation_repository import (
     InMemoryEvaluationRepository,
 )
+from runtime_adapters.in_memory.offload import InMemoryOffloadWriter
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "InMemoryArtifactGarbageCollector",
     "InMemoryArtifactMetadataStore",
     "InMemoryEvaluationRepository",
+    "InMemoryOffloadWriter",
     "InMemoryRuntimeApiStore",
 ]

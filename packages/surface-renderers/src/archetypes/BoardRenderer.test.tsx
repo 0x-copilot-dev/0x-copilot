@@ -16,6 +16,74 @@ function renderBoard(state: unknown): ReactElement {
   return boardAdapter.renderCurrent(state as SurfaceState);
 }
 
+/**
+ * The mark, spelled as the pixels that actually ship.
+ *
+ * `cardChromeStyle` composes these inline, so they are the whole of what a user
+ * sees: the accent's hairline rung on the border, the accent at full strength as
+ * a 2px inset bar. The plain card's values are stated too — a mark is only
+ * legible as a mark because the unmarked card is visibly something else.
+ *
+ * Asserted WHOLE rather than with `toContain`, for the reason the lane-grid test
+ * already records: "--color-border" is a prefix of "--color-border-strong", and
+ * a substring check let a wrong rung ship on this very surface for a year.
+ */
+const MARKED_BORDER = "1px solid var(--color-accent-line, var(--color-accent))";
+const MARKED_BAR = "inset 2px 0 0 var(--color-accent)";
+const PLAIN_BORDER = "1px solid var(--color-border)";
+
+/**
+ * A card carrying the mark.
+ *
+ * The mark is CHROME plus the off-screen word a screen reader gets — never
+ * `data-changed`. No stylesheet matches `[data-changed]` and no host reads it at
+ * runtime, so a test that asserted only the attribute would still pass if the
+ * mark rendered and the attribute went missing — and, worse in the other
+ * direction, its absence would "prove" no mark on a card wearing a real accent
+ * bar. That is not hypothetical: the provenance block below used to assert
+ * exactly that, and it passed in full against a renderer that let tool output
+ * paint the accent border and inset bar.
+ *
+ * The attribute is asserted here too, and only ever AFTER the chrome, so a
+ * failure always reports the pixels rather than the label. Keeping it asserted
+ * is what stops it drifting from what ships — and it does have one real
+ * consumer, which is why it is not simply deleted: the design-parity harness
+ * (`tools/design-parity/lib/render-live-surface-language.test.tsx`) counts
+ * `data-changed="true"` in static markup, where no computed styles exist.
+ */
+function expectMarked(testId: string): void {
+  const card = screen.getByTestId(testId);
+  expect(card.style.border).toBe(MARKED_BORDER);
+  expect(card.style.boxShadow).toBe(MARKED_BAR);
+  expect(card).toHaveAttribute("data-changed", "true");
+  expect(screen.getByTestId(`${testId}-changed`)).toHaveTextContent("Changed");
+}
+
+/**
+ * A card carrying no mark — the assertion every provenance case turns on.
+ *
+ * States the plain chrome POSITIVELY: the card wears the neutral hairline and
+ * has no bar at all. An absent attribute is not evidence of an absent mark, so a
+ * forgery that lit the accent register fails here even if it never touched
+ * `data-changed`.
+ */
+function expectUnmarked(testId: string): void {
+  const card = screen.getByTestId(testId);
+  expect(card.style.border).toBe(PLAIN_BORDER);
+  expect(card.style.boxShadow).toBe("");
+  expect(card).not.toHaveAttribute("data-changed");
+  expect(screen.queryByTestId(`${testId}-changed`)).toBeNull();
+  expect(screen.queryByTestId(`${testId}-transition`)).toBeNull();
+}
+
+/** Every card the fixture board paints, so a case that must mark nothing can
+ * say so about the whole board rather than about a card it remembered. */
+const FIXTURE_CARDS = [
+  "board-lane-0-card-0",
+  "board-lane-0-card-1",
+  "board-lane-1-card-0",
+] as const;
+
 describe("boardAdapter contract", () => {
   it("registers scheme 'board' with first-party metadata", () => {
     expect(boardAdapter.scheme).toBe("board");
@@ -233,6 +301,277 @@ describe("BoardRenderer empty board", () => {
   });
 });
 
+/**
+ * A spec is untrusted input, and the renderer has to be total over it.
+ *
+ * `specFromState` admits a value on two checks — a string `archetype` and a
+ * string `title_path` — and `applySurfaceEvent` merges `payload.state` verbatim
+ * with no allow-list, so every other field arrives as whatever the tool wrote.
+ * The `SurfaceSpec` annotation on it is a claim, not a guarantee, and four
+ * shapes below used to take the whole surface down with a throw:
+ *
+ *  - a non-list `columns` — `columns is not iterable` from the rest destructure,
+ *    and `.map is not a function` in the diff;
+ *  - a null entry inside `columns` — `Cannot read properties of null`;
+ *  - a non-string `label` on a column, or on the link — React's "Objects are not
+ *    valid as a React child".
+ *
+ * Each case asserts what the board PAINTS, not merely that nothing threw: a
+ * renderer that swallowed the spec and rendered a blank card would satisfy
+ * `not.toThrow()` while being just as broken.
+ */
+describe("BoardRenderer hostile spec", () => {
+  // `title_path` addresses a field on each CARD, so the fallback the renderer
+  // uses when there is no usable title column paints something real and the
+  // assertions can tell "fell back" from "rendered nothing".
+  const BASE = {
+    spec_version: 1,
+    archetype: "board",
+    source: { server: "s", tool: "t" },
+    title_path: "title",
+    items_path: "cards",
+    group_by_path: "status",
+  };
+  const DATA = {
+    url: "https://example.com/board",
+    cards: [
+      { title: "Wire renderers", status: "Todo", assignee: "Sarah" },
+      { title: "Golden fixtures", status: "Todo", assignee: "Priya" },
+    ],
+  };
+  const renderHostile = (spec: Record<string, unknown>): void => {
+    render(renderBoard({ spec: { ...BASE, ...spec }, data: DATA }));
+  };
+
+  // Anything a spec spelled wrongly must be ABSENT on screen, never coerced:
+  // `String({})` painted into a label is the failure mode where the renderer
+  // survives and the surface still lies about the payload.
+  const expectNoCoercedObject = (): void => {
+    expect(screen.getByTestId("board-renderer")).not.toHaveTextContent(
+      "[object Object]",
+    );
+  };
+
+  it("paints the board when `columns` is not a list", () => {
+    for (const columns of [5, { a: 1 }, "title", true, null]) {
+      const { unmount } = render(
+        renderBoard({ spec: { ...BASE, columns }, data: DATA }),
+      );
+      expect(screen.getByTestId("board-lane-0-header")).toHaveTextContent(
+        "Todo",
+      );
+      expect(screen.getByTestId("board-lane-0-count")).toHaveTextContent("2");
+      // No title column ⇒ the card title falls back to `title_path`, which is
+      // the branch an absent `columns` already had.
+      expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveTextContent(
+        "Wire renderers",
+      );
+      expect(screen.queryByTestId("board-lane-0-card-0-meta")).toBeNull();
+      expectNoCoercedObject();
+      unmount();
+    }
+  });
+
+  // The throw itself: a hole in a FIELD slot is dereferenced for every card,
+  // where a hole in the title slot never was — `Cannot read properties of null
+  // (reading 'path')`, one malformed entry taking the whole surface down.
+  it("skips an entry in a field slot that is not a column", () => {
+    for (const hole of [null, undefined, 7, "status", ["status"]]) {
+      const { unmount } = render(
+        renderBoard({
+          spec: {
+            ...BASE,
+            columns: [
+              { label: "Title", path: "title" },
+              hole,
+              { label: "Assignee", path: "assignee" },
+            ],
+          },
+          data: DATA,
+        }),
+      );
+      expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveTextContent(
+        "Wire renderers",
+      );
+      const meta = screen.getByTestId("board-lane-0-card-0-meta");
+      expect(meta).toHaveTextContent("Assignee");
+      expect(meta).toHaveTextContent("Sarah");
+      expectNoCoercedObject();
+      unmount();
+    }
+  });
+
+  // The reason a malformed entry becomes a HOLE rather than being compacted
+  // away: the first column is the card title and the rest are fields, so
+  // dropping entry 0 would silently promote "Status" from a meta fact to the
+  // card's title — a wrong render, where an absent one was available.
+  it("keeps a column in its slot when the entry before it is not a column", () => {
+    renderHostile({ columns: [null, { label: "Status", path: "status" }] });
+    expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveTextContent(
+      "Wire renderers",
+    );
+    const meta = screen.getByTestId("board-lane-0-card-0-meta");
+    expect(meta).toHaveTextContent("Status");
+    expect(meta).toHaveTextContent("Todo");
+    expectNoCoercedObject();
+  });
+
+  it("drops a column whose path is not a string, keeping the rest", () => {
+    renderHostile({
+      columns: [
+        { label: "Title", path: "title" },
+        { label: "Owner", path: { a: 1 } },
+        { label: "Assignee", path: "assignee" },
+      ],
+    });
+    expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveTextContent(
+      "Wire renderers",
+    );
+    const meta = screen.getByTestId("board-lane-0-card-0-meta");
+    expect(meta).not.toHaveTextContent("Owner");
+    expect(meta).toHaveTextContent("Assignee");
+    expect(meta).toHaveTextContent("Sarah");
+    expectNoCoercedObject();
+  });
+
+  // The fact is real even when its NAME is not: the value survives, bare.
+  it("states a column's value when its label is not a string", () => {
+    renderHostile({
+      columns: [
+        { label: "Title", path: "title" },
+        { label: { a: 1 }, path: "assignee" },
+      ],
+    });
+    expect(screen.getByTestId("board-lane-0-card-0-meta")).toHaveTextContent(
+      "Sarah",
+    );
+    expectNoCoercedObject();
+  });
+
+  it("shows an empty board when `items_path` is not a string", () => {
+    renderHostile({ items_path: { a: 1 }, columns: [] });
+    expect(screen.getByTestId("surface-empty")).toHaveTextContent(
+      "No cards to display.",
+    );
+    expect(screen.getByTestId("surface-badge")).toHaveTextContent("0 cards");
+  });
+
+  it("groups nothing when `group_by_path` is not a string", () => {
+    renderHostile({ group_by_path: 7, columns: [] });
+    expect(screen.getByTestId("board-lane-0-header")).toHaveTextContent(
+      "Ungrouped",
+    );
+    expect(screen.getByTestId("board-lane-0-count")).toHaveTextContent("2");
+    expect(screen.queryByTestId("board-lane-1")).toBeNull();
+  });
+
+  // A string `link` used to paint an EMPTY inert row — a band of chrome stating
+  // nothing — because `"…".label` and `"…".url_path` are both `undefined`.
+  it("paints no link row when the spec's link is not an object", () => {
+    for (const link of ["https://example.com/board", 5, true, ["x"]]) {
+      const { unmount } = render(
+        renderBoard({ spec: { ...BASE, columns: [], link }, data: DATA }),
+      );
+      expect(screen.queryByTestId("surface-link")).toBeNull();
+      expect(screen.queryByTestId("surface-link-text")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("falls back to the url as link text when the link's label is not a string", () => {
+    renderHostile({ columns: [], link: { label: { a: 1 }, url_path: "url" } });
+    const link = screen.getByTestId("surface-link");
+    expect(link).toHaveAttribute("href", "https://example.com/board");
+    expect(link).toHaveTextContent("https://example.com/board");
+    expectNoCoercedObject();
+  });
+
+  // The sweep behind the named cases above. Every shape here either has no
+  // usable title column or has one pointing at `title`, so ONE assertion holds
+  // across all of them — and it is an assertion about painted text, because a
+  // renderer that swallowed the spec and drew a blank card would pass a bare
+  // `not.toThrow()` while being exactly as broken as one that threw.
+  it("paints a card title for every shape a spec's fields can arrive in", () => {
+    const shapes: readonly Record<string, unknown>[] = [
+      { columns: [[{ label: "T", path: "title" }]] },
+      { columns: [{ label: "T", path: "title", format: { a: 1 } }] },
+      { columns: [{ label: "T", path: "title" }, "assignee"] },
+      { columns: [{ label: "T", path: "title" }, 7] },
+      { columns: [{ label: "T", path: "title" }, { label: "A" }] },
+      { columns: [{ path: "title" }] },
+      { columns: [{ label: "T", path: "title", align: { x: 1 } }] },
+      // `title_path` is the one field `specFromState` does gate, but only as a
+      // string — the empty one still has to reach the column fallback.
+      { title_path: "", columns: [{ label: "T", path: "title" }] },
+      { columns: [], link: [] },
+      { columns: [], link: {} },
+      { columns: [], link: { label: "Open" } },
+      { columns: [], link: { url_path: 9 } },
+    ];
+    for (const shape of shapes) {
+      const { unmount } = render(
+        renderBoard({ spec: { ...BASE, ...shape }, data: DATA }),
+      );
+      expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveTextContent(
+        "Wire renderers",
+      );
+      expectNoCoercedObject();
+      unmount();
+    }
+  });
+});
+
+describe("BoardDiffRenderer hostile spec", () => {
+  const CHANGE = { field: "status", old: "In Progress", new: "Done" };
+  const renderHostileDiff = (columns: unknown): (() => void) =>
+    render(
+      boardAdapter.renderDiff({
+        spec: {
+          spec_version: 1,
+          archetype: "board",
+          source: { server: "s", tool: "t" },
+          title_path: "title",
+          columns,
+        },
+        changes: [CHANGE],
+      } as unknown as Parameters<typeof boardAdapter.renderDiff>[0]),
+    ).unmount;
+
+  it("names the changed field by its path when `columns` is not a list", () => {
+    renderHostileDiff(5);
+    const row = screen.getByTestId("field-status");
+    // No column labels to draw on, so the field path is the name — the honest
+    // fallback, and a real row rather than a swallowed one.
+    expect(row).toHaveTextContent("status");
+    expect(screen.getByTestId("field-status-next")).toHaveTextContent("Done");
+    expect(screen.getByTestId("field-status-previous")).toHaveTextContent(
+      "In Progress",
+    );
+  });
+
+  it("keeps a column's label when a neighbouring entry is not a column", () => {
+    // Both sides of the label column: the diff builds its label map by walking
+    // every entry, so a hole anywhere in the list used to throw.
+    for (const columns of [
+      [null, { label: "Status", path: "status" }],
+      [{ label: "Status", path: "status" }, null],
+      [7, { label: "Status", path: "status" }, "x"],
+    ]) {
+      const unmount = renderHostileDiff(columns);
+      expect(screen.getByTestId("field-status")).toHaveTextContent("Status");
+      expect(screen.getByTestId("field-status-next")).toHaveTextContent("Done");
+      unmount();
+    }
+  });
+
+  it("names the field by its path when a column's label is not a string", () => {
+    renderHostileDiff([{ label: { a: 1 }, path: "status" }]);
+    const row = screen.getByTestId("field-status");
+    expect(row).toHaveTextContent("status");
+    expect(row).not.toHaveTextContent("[object Object]");
+  });
+});
+
 describe("BoardRenderer card cap", () => {
   const spec: SurfaceSpec = {
     spec_version: 1,
@@ -294,14 +633,12 @@ describe("BoardRenderer changed-card mark", () => {
     render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
     // Fixture card 2 ("Golden fixtures") is the SECOND card of lane 0 —
     // grouping reorders cards, and the mark has to survive that.
-    const marked = screen.getByTestId("board-lane-0-card-1");
-    expect(marked).toHaveAttribute("data-changed", "true");
+    expectMarked("board-lane-0-card-1");
     expect(screen.getByTestId("board-lane-0-card-1-title")).toHaveTextContent(
       "Golden fixtures",
     );
-    for (const testId of ["board-lane-0-card-0", "board-lane-1-card-0"]) {
-      expect(screen.getByTestId(testId)).not.toHaveAttribute("data-changed");
-    }
+    expectUnmarked("board-lane-0-card-0");
+    expectUnmarked("board-lane-1-card-0");
   });
 
   it("gives the marked card the accent hairline and the 2px inset bar", () => {
@@ -309,8 +646,8 @@ describe("BoardRenderer changed-card mark", () => {
     const marked = screen.getByTestId("board-lane-0-card-1");
     // The bar is the accent at full strength; the border is the accent's
     // hairline rung — NOT the board's identity hue, which stays on the kicker.
-    expect(marked.style.boxShadow).toBe("inset 2px 0 0 var(--color-accent)");
-    expect(marked.style.border).toContain("--color-accent-line");
+    expect(marked.style.boxShadow).toBe(MARKED_BAR);
+    expect(marked.style.border).toBe(MARKED_BORDER);
     expect(marked.style.border).not.toContain("--surface-src");
 
     const plain = screen.getByTestId("board-lane-0-card-0");
@@ -358,10 +695,7 @@ describe("BoardRenderer changed-card mark", () => {
     render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
     // Marked, because a decision is owed; no chip, because "→" would be a claim
     // about a lane change that is not in the change list.
-    expect(screen.getByTestId("board-lane-0-card-1")).toHaveAttribute(
-      "data-changed",
-      "true",
-    );
+    expectMarked("board-lane-0-card-1");
     expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
   });
 
@@ -395,13 +729,7 @@ describe("BoardRenderer changed-card mark", () => {
 
   it("marks nothing when no trusted change list is supplied", () => {
     render(boardAdapter.renderCurrent(BOARD_STATE));
-    for (const testId of [
-      "board-lane-0-card-0",
-      "board-lane-0-card-1",
-      "board-lane-1-card-0",
-    ]) {
-      expect(screen.getByTestId(testId)).not.toHaveAttribute("data-changed");
-    }
+    FIXTURE_CARDS.forEach(expectUnmarked);
   });
 
   it("ignores change paths that do not name a card index", () => {
@@ -417,13 +745,7 @@ describe("BoardRenderer changed-card mark", () => {
         { field: "cards.99.status", old: "a", new: "b" },
       ]),
     );
-    for (const testId of [
-      "board-lane-0-card-0",
-      "board-lane-0-card-1",
-      "board-lane-1-card-0",
-    ]) {
-      expect(screen.getByTestId(testId)).not.toHaveAttribute("data-changed");
-    }
+    FIXTURE_CARDS.forEach(expectUnmarked);
   });
 
   // A spec that groups by nothing puts every card in one lane, so no card can
@@ -443,9 +765,10 @@ describe("BoardRenderer changed-card mark", () => {
         ],
       ),
     );
-    const card = screen.getByTestId("board-lane-0-card-1");
-    expect(card).toHaveAttribute("data-changed", "true");
-    expect(card).not.toHaveTextContent("→");
+    expectMarked("board-lane-0-card-1");
+    expect(screen.getByTestId("board-lane-0-card-1")).not.toHaveTextContent(
+      "→",
+    );
     expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
     // One lane, because an empty group path groups nothing.
     expect(screen.getByTestId("board-lane-0-header")).toHaveTextContent(
@@ -459,15 +782,11 @@ describe("BoardRenderer changed-card mark", () => {
         { field: "cards.1", old: null, new: { title: "x" } },
       ]),
     );
-    expect(screen.getByTestId("board-lane-1-card-0")).toHaveAttribute(
-      "data-changed",
-      "true",
-    );
+    expectMarked("board-lane-1-card-0");
     // A whole-card change names no lane, so it makes no claim about one.
     expect(screen.queryByTestId("board-lane-1-card-0-transition")).toBeNull();
-    expect(screen.getByTestId("board-lane-0-card-0")).not.toHaveAttribute(
-      "data-changed",
-    );
+    expectUnmarked("board-lane-0-card-0");
+    expectUnmarked("board-lane-0-card-1");
   });
 
   it("survives a hostile change list without throwing", () => {
@@ -479,10 +798,10 @@ describe("BoardRenderer changed-card mark", () => {
       { field: "cards.0" },
     ] as unknown as Parameters<typeof BoardRenderer>[1];
     expect(() => render(BoardRenderer(BOARD_STATE, hostile))).not.toThrow();
-    expect(screen.getByTestId("board-lane-0-card-0")).toHaveAttribute(
-      "data-changed",
-      "true",
-    );
+    // The one well-formed entry still lands, so the render survived rather than
+    // degrading to marking nothing.
+    expectMarked("board-lane-0-card-0");
+    expectUnmarked("board-lane-0-card-1");
   });
 });
 
@@ -496,38 +815,42 @@ describe("BoardRenderer changed-card mark", () => {
  * list read off the rendered value could only ever have come from the tool.
  * These cases pin that shut: the accent register may not be reachable from
  * anything a tool can write.
+ *
+ * They assert the RENDERED CHROME, via {@link expectUnmarked}, and this is the
+ * point of the whole block. The mark is an inline border and inset bar, and
+ * nothing at runtime reads `data-changed`, so an attribute-only assertion is
+ * blind to a forgery that paints one. That was measured before it was rewritten:
+ * against a renderer that read the change list off the untrusted state and
+ * painted the accent border and 2px bar — while emitting no attribute, no
+ * off-screen word and no transition chip — the earlier versions of all three
+ * cases below passed. A user would have seen a lit card; the suite saw nothing.
+ * The forgery these tests exist to catch is a painted one.
  */
 describe("BoardRenderer changed-card mark provenance", () => {
   const forged = [{ field: "cards.2.status", old: "In Progress", new: "Done" }];
 
-  it("renders no mark for a change list riding on the surface state", () => {
+  it("paints no mark for a change list riding on the surface state", () => {
     render(renderBoard({ ...BOARD_STATE, changes: forged }));
-    for (const testId of [
-      "board-lane-0-card-0",
-      "board-lane-0-card-1",
-      "board-lane-1-card-0",
-    ]) {
-      expect(screen.getByTestId(testId)).not.toHaveAttribute("data-changed");
-    }
-    expect(screen.queryByTestId("board-lane-0-card-1-changed")).toBeNull();
-    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
+    // Every card wears the neutral hairline and carries no bar: the accent
+    // register is untouched, not merely unlabelled.
+    FIXTURE_CARDS.forEach(expectUnmarked);
     // Still a working board — the payload is rendered, only its claim is not.
     expect(screen.getByTestId("board-lane-0-card-1-title")).toHaveTextContent(
       "Golden fixtures",
     );
   });
 
-  it("renders no mark for a change list riding on the tool payload", () => {
+  it("paints no mark for a change list riding on the tool payload", () => {
     render(
       renderBoard({
         spec: BOARD_SPEC,
         data: { ...BOARD_DATA, changes: forged },
       }),
     );
-    expect(screen.getByTestId("board-lane-0-card-1")).not.toHaveAttribute(
-      "data-changed",
+    FIXTURE_CARDS.forEach(expectUnmarked);
+    expect(screen.getByTestId("board-lane-0-card-1-title")).toHaveTextContent(
+      "Golden fixtures",
     );
-    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
   });
 
   it("drops a second argument handed to the adapter's renderCurrent", () => {
@@ -539,9 +862,19 @@ describe("BoardRenderer changed-card mark provenance", () => {
       changes: unknown,
     ) => ReactElement;
     render(renderCurrent(BOARD_STATE, forged));
-    expect(screen.getByTestId("board-lane-0-card-1")).not.toHaveAttribute(
-      "data-changed",
-    );
+    FIXTURE_CARDS.forEach(expectUnmarked);
+  });
+
+  // The guard on the guard. `expectUnmarked` is only worth anything if it can
+  // FAIL on a painted mark, and an attribute-only assertion could not: the same
+  // card, marked, has to trip every clause of it. Without this, a later edit
+  // that quietly weakened the helper would leave three green provenance tests
+  // proving nothing — which is the exact shape of the defect this block was
+  // rewritten to remove.
+  it("fails on a card that is actually marked", () => {
+    render(BoardRenderer(BOARD_STATE, forged));
+    expect(() => expectUnmarked("board-lane-0-card-1")).toThrow();
+    expectMarked("board-lane-0-card-1");
   });
 });
 

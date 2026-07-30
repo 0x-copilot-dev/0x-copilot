@@ -1595,6 +1595,12 @@ class RuntimeRunHandler:
         composer exists), the run's control snapshot resolved F6 to ``enforce``,
         and the operator declared at least one capability's concurrency policy.
         Any one of them missing leaves the run on the untouched serial path.
+
+        The persisted ``runtime_context`` carries the run's tool-use policy,
+        which is the authority BUG-15's rule folds with the catalog's claim. It
+        is the persisted one rather than the command's on purpose: the command
+        was already refused unless it matched the record, and the hydrated copy
+        differs only by BYOK keys, which say nothing about approval.
         """
 
         if self._batch_concurrency_composer is None:
@@ -1603,6 +1609,7 @@ class RuntimeRunHandler:
             org_id=run.org_id,  # type: ignore[attr-defined]
             trace_id=run.trace_id,  # type: ignore[attr-defined]
             control=control,  # type: ignore[arg-type]
+            runtime_context=run.runtime_context,  # type: ignore[attr-defined]
         )
 
     def _dependencies_for_run(

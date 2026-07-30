@@ -51,6 +51,7 @@ from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScop
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.ledger_models import EffectActor, LedgerEventType
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
@@ -315,6 +316,107 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         assert surface.view is not None
         assert surface.view.tier == "shaped"
 
+    async def test_one_served_name_reaches_the_client_for_a_read(
+        self,
+    ) -> None:
+        # WHAT PRODUCTION ACTUALLY SERVES, measured through the real chain
+        # rather than by calling the two provenance sites directly with names
+        # of the test's choosing. The distinction matters and is the reason
+        # this test lives here: an MCP name is slug-folded at the OUTERMOST
+        # boundary (`McpToolCallRequest` and `McpToolDescriptor` both run every
+        # server/tool name through `normalize_slug`), so `Get_Issue` is already
+        # `get_issue` before any surface code runs. A test that hands the
+        # emitter a mixed-case name proves something about the function and
+        # nothing about the screen.
+        #
+        # So the claim under test is the one that is actually true end to end:
+        # there is exactly ONE served name, the surface layer does not re-spell
+        # it, and it agrees with the pair the v1 envelope carries.
+        store = InMemoryRuntimeApiStore()
+        settings = _default_on_settings()
+        run_id = await _TestHelpers.create_queued_run(store, settings)
+        run = await store.get_run(org_id="org_123", run_id=run_id)
+        assert run is not None
+        handler = RuntimeRunHandler(
+            persistence=store, event_store=store, settings=settings
+        )
+        emitter = handler._build_work_ledger_emitter(run)
+        assert emitter is not None
+        runtime_context = _runtime_context_for_run(run_id)
+
+        # The connector publishes `get_issue`; the caller asks for `Get_Issue`.
+        # The MCP boundary folds the request onto the published name, which is
+        # exactly why nothing downstream ever sees the caller's spelling.
+        tool = self._call_tool(
+            runtime_context,
+            server="linear",
+            tool="get_issue",
+            output=_LINEAR_ISSUE_OUTPUT,
+        )
+        token = WorkLedgerEmitter.bind_for_run(emitter)
+        operation_token, service_token = self._bind_canonical_gateway(
+            handler=handler,
+            store=store,
+            run=run,
+        )
+        try:
+            await tool.ainvoke(
+                {
+                    "server_name": "linear",
+                    "tool_name": "Get_Issue",
+                    "arguments": {"query": "ENG-1421"},
+                    "tool_call_id": "call_jira",
+                }
+            )
+        finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
+            WorkLedgerEmitter.unbind(token)
+
+        events = list(
+            await store.list_events_after(
+                org_id="org_123", run_id=run_id, after_sequence=0
+            )
+        )
+        created = next(
+            e.payload
+            for e in events
+            if e.event_type is RuntimeApiEventType.SURFACE_CREATED
+        )
+        classified = next(
+            e.payload
+            for e in events
+            if e.event_type is RuntimeApiEventType.ACTION_CLASSIFIED
+        )
+
+        # What reaches the screen. `state.source` is the pair the tier-3 note
+        # reads out; it is the ledger's `surface.created.source` restated by the
+        # v2 fold, and it is `get_issue` — the name as it survived the MCP
+        # boundary, NOT re-lowercased a second time by the surface layer, and
+        # not the `Get_Issue` the test typed (which never reached this code).
+        content = SurfaceContentProjection.fold(
+            events, surface_payload_refs={created["surface_id"]: created["payload_ref"]}
+        )
+        served = content[created["surface_id"]]["source"]
+        assert served == {"server": "linear", "tool": "get_issue"}
+
+        # One name, not two. The emitter restates the projector's `state.source`
+        # instead of deriving its own, so the ledger pair and the pair a v1
+        # envelope would carry are the same value rather than two computations
+        # that happen to agree.
+        assert created["source"] == {
+            "connector": served["server"],
+            "op": served["tool"],
+        }
+
+        # And the identity register is untouched by any of that: the surface URI
+        # is a stable name and the classification is what the curated read
+        # catalog is keyed on.
+        assert created["surface_id"] == "record://linear/get_issue/issue-uuid-1"
+        assert classified["connector"] == "linear"
+        assert classified["op"] == "get_issue"
+        assert classified["class"] == "read"
+
     async def test_read_executed_event_is_present_for_the_call(
         self,
     ) -> None:
@@ -335,7 +437,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         tool = self._call_tool(
             runtime_context,
             server="linear",
-            tool="get_issue",
+            tool="Get_Issue",
             output=_LINEAR_ISSUE_OUTPUT,
         )
         token = WorkLedgerEmitter.bind_for_run(emitter)

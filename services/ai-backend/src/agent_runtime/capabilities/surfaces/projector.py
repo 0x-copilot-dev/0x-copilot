@@ -165,6 +165,21 @@ class SurfaceProjector:
         can name the unmatched tool for the tier-3 note, and on a hit it agrees
         with ``spec.source`` at no cost.
 
+        **This is the one place the served name is decided.**
+        ``WorkLedgerEmitter`` does not compute its own — it restates this pair
+        off the envelope onto ``surface.created.source``, which is what the v2
+        fold hands the renderer. They used to derive it separately, one through
+        ``tool_slug`` and one not, which is how two names for one tool reached
+        two different screens.
+
+        It uses :func:`builtin.display_name`, deliberately not the lookup slugs.
+        What the caller passes is what gets served, unchanged apart from
+        whitespace: a name that reaches a person must not be re-spelled on the
+        way. That the MCP path happens to hand it names already lowercased at
+        the ``McpToolCallRequest`` boundary is that contract's business, not
+        this function's — this one must not lowercase a name a second time, and
+        must not lowercase a name that arrived intact from anywhere else.
+
         Returns ``None`` rather than raising when either name is blank.
         :class:`SurfaceSource` requires both members to be non-empty, and this
         projector is called outside any ``try`` (see
@@ -173,8 +188,8 @@ class SurfaceProjector:
         exactly the "unknown tool" the note already has a sentence for.
         """
 
-        server = server_name.strip() if isinstance(server_name, str) else ""
-        tool = tool_name.strip() if isinstance(tool_name, str) else ""
+        server = builtin.display_name(server_name)
+        tool = builtin.display_name(tool_name)
         if not server or not tool:
             return None
         return SurfaceSource(server=server, tool=tool)

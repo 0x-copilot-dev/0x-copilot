@@ -179,6 +179,15 @@ from agent_runtime.capabilities.concurrency.kill_switches import (
 )
 from agent_runtime.capabilities.concurrency.permits import RunPermitManager
 from agent_runtime.capabilities.concurrency.planner import BatchPlanner
+from agent_runtime.capabilities.concurrency.rate_limits import (
+    DeclaredRateLimitPolicies,
+    RateLimitedPermitScopeFactory,
+    RateLimitPolicyLookup,
+    RateLimitPoolDecision,
+    RateLimitPoolReason,
+    RateLimitScopeIdentity,
+    RateLimitScopeResolver,
+)
 
 __all__ = (
     "APPROVAL_REQUIREMENT_KEY",
@@ -280,6 +289,7 @@ __all__ = (
     "ConcurrencyPolicyWideningRejected",
     "ConcurrencyRejectionReason",
     "ConcurrencyScope",
+    "DeclaredRateLimitPolicies",
     "DurableBatchPlan",
     "DurableChildTransition",
     "GatewayBatchChildExecutor",
@@ -304,6 +314,12 @@ __all__ = (
     "PlannedOperation",
     "PolicySource",
     "ProviderSessionConstraint",
+    "RateLimitPolicyLookup",
+    "RateLimitPoolDecision",
+    "RateLimitPoolReason",
+    "RateLimitScopeIdentity",
+    "RateLimitScopeResolver",
+    "RateLimitedPermitScopeFactory",
     "ResourceKeyDimension",
     "ResourceKeyRenderRejected",
     "ResourceKeyTemplate",

@@ -15,6 +15,7 @@ import it without a cycle.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import hashlib
 from typing import ClassVar
 
@@ -57,14 +58,44 @@ from runtime_api.schemas import (
 )
 
 
-def _next_sequence(view: BatchRecoveryView) -> int:
-    """Return a provisional sequence one past the durable prefix.
+@dataclass(slots=True)
+class _RunJournal:
+    """One run's F6 prefix, folded once and carried forward across appends.
 
-    Only ever used to place a not-yet-written candidate at the end of the
-    journal for validation. The real sequence is assigned by the event store.
+    This is a *projection*, not a cache of answers: it holds exactly the state
+    the replay rules fold left-to-right over the journal, so extending it by
+    one record applies the same checks reading the whole journal would.  It
+    exists because the alternative — re-reading every event the run has ever
+    produced before each append — made F6's cost quadratic in appends and made
+    it scale with model deltas and tool events F6 does not even look at.
+
+    ``read_through`` is the contract that keeps it honest: the projection has
+    folded the run's log up to that sequence and no further, so the next read
+    asks only for what comes after it.  Nothing here is ever trusted across a
+    process boundary — a new store instance starts empty and rebuilds from the
+    durable log, which is what recovery and restart do.
     """
 
-    return max((item.sequence_no for item in view.records), default=0) + 1
+    snapshot: RunControlSnapshot
+    read_through: int = 0
+    records: list[SequencedBatchJournalRecord] = field(default_factory=list)
+    by_record_id: dict[str, SequencedBatchJournalRecord] = field(default_factory=dict)
+    by_event_id: dict[str, SequencedBatchJournalRecord] = field(default_factory=dict)
+    planned: dict[str, frozenset[str]] = field(default_factory=dict)
+    intents: set[tuple[str, str]] = field(default_factory=set)
+    last_sequence: int = 0
+    bindings: int = 0
+
+    @property
+    def next_sequence(self) -> int:
+        """Return a provisional sequence one past the durable prefix.
+
+        Only ever used to place a not-yet-written candidate at the end of the
+        journal for validation. The real sequence is assigned by the event
+        store.
+        """
+
+        return self.last_sequence + 1
 
 
 class EventJournalBatchPlanStore(BatchPlanStorePort):
@@ -74,6 +105,9 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
         RuntimeApiEventType.OPERATION_BATCH_JOURNAL
     )
     EVENT_ID_PREFIX: ClassVar[str] = "operation_batch"
+    SNAPSHOT_EVENT_TYPE: ClassVar[RuntimeApiEventType] = (
+        RuntimeApiEventType.QUALITY_CONTROL_BOUND
+    )
 
     def __init__(
         self,
@@ -83,6 +117,7 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
     ) -> None:
         self._events = events
         self._snapshots = snapshots
+        self._journals: dict[tuple[str, str, str], _RunJournal] = {}
 
     async def put_plan(self, write: BatchJournalWrite) -> DurableBatchPlan:
         """Append one plan, returning the durable handle F6.3 dispatches from.
@@ -162,27 +197,23 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
         an unrecoverable journal at the moment recovery is most needed.
         """
 
-        snapshot = await self._load_snapshot(
+        journal = await self._synced(
             org_id=org_id,
             run_id=record.run_id,
             subject_fingerprint=subject_fingerprint,
         )
-        if snapshot is None:
+        if journal is None:
             raise BatchJournalCorruption(
                 run_id=record.run_id,
                 reason=missing_snapshot_reason,
             )
+        snapshot = journal.snapshot
         self._validate_snapshot_binding(snapshot=snapshot, record=record)
 
-        view = await self.load_recovery_view(
-            org_id=org_id,
-            run_id=record.run_id,
-            subject_fingerprint=subject_fingerprint,
-        )
-        existing = self._identical_prior(view=view, record=record)
+        existing = journal.by_record_id.get(record.record_id)
         if existing is not None:
-            return existing
-        self._validate_candidate(snapshot=snapshot, view=view, record=record)
+            return self._identical_prior(existing=existing, record=record)
+        self._validate_candidate(journal=journal, record=record)
 
         write = BatchJournalWrite(
             org_id=org_id,
@@ -211,8 +242,8 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
             concurrent = await self._record_by_event_id(
                 org_id=write.org_id,
                 run_id=record.run_id,
+                subject_fingerprint=subject_fingerprint,
                 event_id=event_id,
-                expected_conversation_id=snapshot.conversation_id,
             )
             if concurrent is None:
                 raise BatchJournalCorruption(
@@ -235,10 +266,14 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
                 run_id=record.run_id,
                 reason="appended F6 record does not match its canonical digest",
             )
-        return SequencedBatchJournalRecord(
-            sequence_no=envelope.sequence_no,
-            record=durable,
-        )
+        item = self._fold(journal=journal, event=envelope, record=durable)
+        # Reading back the record we just wrote would be pointless, but only a
+        # contiguous sequence proves that is all we would find: the store
+        # allocates per-run sequences without gaps, so landing one past the
+        # last read means nothing else slipped in unseen.
+        if envelope.sequence_no == journal.read_through + 1:
+            journal.read_through = envelope.sequence_no
+        return item
 
     async def load_recovery_view(
         self,
@@ -252,70 +287,174 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
 
         if after_sequence < 0:
             raise ValueError("after_sequence must be non-negative")
-        snapshot = await self._load_snapshot(
+        journal = await self._synced(
             org_id=org_id,
             run_id=run_id,
             subject_fingerprint=subject_fingerprint,
         )
-        if snapshot is None:
+        if journal is None:
             raise BatchJournalCorruption(
                 run_id=run_id,
                 reason="a batch journal cannot be recovered without its snapshot",
             )
-        records = await self._replay(org_id=org_id, snapshot=snapshot)
         return BatchRecoveryView(
-            run_id=snapshot.run_id,
-            snapshot_id=snapshot.snapshot_id,
+            run_id=journal.snapshot.run_id,
+            snapshot_id=journal.snapshot.snapshot_id,
             records=tuple(
-                item for item in records if item.sequence_no > after_sequence
+                item for item in journal.records if item.sequence_no > after_sequence
             ),
         )
 
     @staticmethod
     def _identical_prior(
         *,
-        view: BatchRecoveryView,
+        existing: SequencedBatchJournalRecord,
         record: BatchJournalRecord,
-    ) -> SequencedBatchJournalRecord | None:
+    ) -> SequencedBatchJournalRecord:
         """Return an identical prior append, or refuse a changed one."""
 
-        durable = next(
-            (
-                item
-                for item in view.records
-                if item.record.record_id == record.record_id
-            ),
-            None,
-        )
-        if durable is None:
-            return None
-        if durable.record.record_digest != record.record_digest:
+        if existing.record.record_digest != record.record_digest:
             raise BatchJournalConflict(
                 run_id=record.run_id,
                 record_id=record.record_id,
             )
-        return durable
+        return existing
 
     @classmethod
     def _validate_candidate(
         cls,
         *,
-        snapshot: RunControlSnapshot,
-        view: BatchRecoveryView,
+        journal: _RunJournal,
         record: BatchJournalRecord,
     ) -> None:
-        """Apply the replay rules to a record that has not been written yet."""
+        """Apply the replay rules to a record that has not been written yet.
 
-        cls._validate_replay(
-            snapshot=snapshot,
-            records=(
-                *view.records,
-                SequencedBatchJournalRecord(
-                    sequence_no=_next_sequence(view),
-                    record=record,
-                ),
+        The candidate is checked against the folded prefix and *not* folded
+        into it: a record that has not reached the store is not part of the
+        journal, and a refused one must leave no trace behind.
+        """
+
+        cls._admit(
+            journal=journal,
+            item=SequencedBatchJournalRecord(
+                sequence_no=journal.next_sequence,
+                record=record,
             ),
         )
+
+    async def _synced(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+    ) -> _RunJournal | None:
+        """Return this run's projection, folded up to the log's visible end.
+
+        The control snapshot is loaded once per run rather than once per
+        append.  That is not an optimisation of a mutable read: the snapshot is
+        bound exactly once under a stable event id, a divergent rebind is
+        refused by the control store, and :meth:`_advance` drops this whole
+        projection the moment a second binding appears in the log — so the
+        memo can never serve a value the durable journal disagrees with.
+        """
+
+        key = (org_id, run_id, subject_fingerprint)
+        for _attempt in range(2):
+            journal = self._journals.get(key)
+            if journal is None:
+                snapshot = await self._load_snapshot(
+                    org_id=org_id,
+                    run_id=run_id,
+                    subject_fingerprint=subject_fingerprint,
+                )
+                if snapshot is None:
+                    return None
+                journal = _RunJournal(snapshot=snapshot)
+                self._journals[key] = journal
+            if await self._advance(journal=journal, org_id=org_id):
+                return journal
+            # The run bound a second control snapshot. Nothing folded under the
+            # old one may be trusted, so discard it and rebuild from the log —
+            # where the control store is the authority on what that means.
+            del self._journals[key]
+        raise BatchJournalCorruption(
+            run_id=run_id,
+            reason="the bound control snapshot is not replayable",
+        )
+
+    async def _advance(self, *, journal: _RunJournal, org_id: str) -> bool:
+        """Fold every event this run appended since the last read.
+
+        Returns ``False`` when the run rebound its control snapshot, which
+        invalidates the projection rather than extending it.
+
+        A projection that has folded nothing reads the whole log and folds
+        everything the store makes visible, which is exactly what a full replay
+        did and is what restart recovery must keep seeing: truncating a
+        recovery view would understate what already ran, and understating that
+        is how a child gets dispatched twice.
+
+        Once it *has* folded something the rule tightens, because the cost of
+        being wrong is now permanent: the fold stops at the first gap in the
+        sequence.  Sequence allocation is not commit order — the postgres
+        adapter appends without a per-run row lock, so a later event can become
+        visible while its predecessor is still in flight.  Advancing past that
+        hole would skip the missing record for the life of this projection;
+        stopping leaves it for the next read, which self-heals.
+        """
+
+        events = await self._events.list_events_after(
+            org_id=org_id,
+            run_id=journal.snapshot.run_id,
+            after_sequence=journal.read_through,
+        )
+        primed = journal.read_through > 0
+        for event in events:
+            if primed and event.sequence_no != journal.read_through + 1:
+                return True
+            if event.event_type is self.SNAPSHOT_EVENT_TYPE:
+                # The run's own binding is expected — it is the event the
+                # memoized snapshot was read from. A *second* one means the
+                # snapshot this projection folded under is no longer the only
+                # answer, which only the control store may adjudicate.
+                journal.bindings += 1
+                if journal.bindings > 1:
+                    return False
+            if event.event_type is self.EVENT_TYPE:
+                self._fold(
+                    journal=journal,
+                    event=event,
+                    record=self._record_from_event(
+                        event,
+                        expected_conversation_id=journal.snapshot.conversation_id,
+                    ),
+                )
+            journal.read_through = event.sequence_no
+        return True
+
+    def _fold(
+        self,
+        *,
+        journal: _RunJournal,
+        event: RuntimeEventEnvelope,
+        record: BatchJournalRecord,
+    ) -> SequencedBatchJournalRecord:
+        """Extend the folded prefix by one durable F6 record, checking it first."""
+
+        item = SequencedBatchJournalRecord(
+            sequence_no=event.sequence_no,
+            record=record,
+        )
+        self._admit(journal=journal, item=item)
+        if event.event_id in journal.by_event_id:
+            raise BatchJournalCorruption(
+                run_id=journal.snapshot.run_id,
+                reason="duplicate stable F6 event identity",
+            )
+        self._commit(journal=journal, item=item)
+        journal.by_event_id[event.event_id] = item
+        return item
 
     async def _load_snapshot(
         self,
@@ -338,61 +477,32 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
                 reason="the bound control snapshot is not replayable",
             ) from exc
 
-    async def _replay(
-        self,
-        *,
-        org_id: str,
-        snapshot: RunControlSnapshot,
-    ) -> tuple[SequencedBatchJournalRecord, ...]:
-        events = await self._events.list_events_after(
-            org_id=org_id,
-            run_id=snapshot.run_id,
-            after_sequence=0,
-        )
-        records = tuple(
-            SequencedBatchJournalRecord(
-                sequence_no=event.sequence_no,
-                record=self._record_from_event(
-                    event,
-                    expected_conversation_id=snapshot.conversation_id,
-                ),
-            )
-            for event in events
-            if event.event_type is self.EVENT_TYPE
-        )
-        self._validate_replay(snapshot=snapshot, records=records)
-        return records
-
     async def _record_by_event_id(
         self,
         *,
         org_id: str,
         run_id: str,
+        subject_fingerprint: str,
         event_id: str,
-        expected_conversation_id: str,
     ) -> SequencedBatchJournalRecord | None:
-        events = await self._events.list_events_after(
+        """Read the record a concurrent writer put at this stable identity.
+
+        Reached only when the store refused our append because that identity
+        was already taken, which means the winner's record is by definition one
+        this projection has not folded.  So the projection is discarded and
+        rebuilt from the durable log: a losing racer must never answer from
+        state that predates the race it just lost.
+        """
+
+        self._journals.pop((org_id, run_id, subject_fingerprint), None)
+        journal = await self._synced(
             org_id=org_id,
             run_id=run_id,
-            after_sequence=0,
+            subject_fingerprint=subject_fingerprint,
         )
-        matches = tuple(
-            SequencedBatchJournalRecord(
-                sequence_no=event.sequence_no,
-                record=self._record_from_event(
-                    event,
-                    expected_conversation_id=expected_conversation_id,
-                ),
-            )
-            for event in events
-            if event.event_type is self.EVENT_TYPE and event.event_id == event_id
-        )
-        if len(matches) > 1:
-            raise BatchJournalCorruption(
-                run_id=run_id,
-                reason="duplicate stable F6 event identity",
-            )
-        return matches[0] if matches else None
+        if journal is None:
+            return None
+        return journal.by_event_id.get(event_id)
 
     @staticmethod
     def _durable(item: SequencedBatchJournalRecord) -> DurableBatchPlan:
@@ -494,62 +604,81 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
     ) -> None:
         """Refuse any journal that could not have been produced legitimately.
 
-        The child-transition rules below are the durable half of "nothing runs
-        ahead of the plan".  Because they are checked in *sequence* order on
-        every replay, a journal in which a child started before its batch was
-        ordered, a child the plan never named ran, or a child settled without
-        ever declaring an intent cannot be recovered from at all — it is
-        corruption, not a recoverable state.
+        The rules live in :meth:`_admit` and are applied here by folding this
+        journal through a throwaway projection, one record at a time in
+        sequence order.  There is deliberately no second copy of them: the
+        checks a restart applies to a durable journal and the checks an append
+        applies to a candidate are the same checks, so they cannot drift.
         """
 
-        if any(
-            left.sequence_no >= right.sequence_no
-            for left, right in zip(records, records[1:], strict=False)
-        ):
+        journal = _RunJournal(snapshot=snapshot)
+        for item in records:
+            cls._admit(journal=journal, item=item)
+            cls._commit(journal=journal, item=item)
+
+    @staticmethod
+    def _commit(*, journal: _RunJournal, item: SequencedBatchJournalRecord) -> None:
+        """Extend the folded prefix by one record :meth:`_admit` accepted."""
+
+        record = item.record
+        journal.records.append(item)
+        journal.by_record_id[record.record_id] = item
+        journal.last_sequence = item.sequence_no
+        if isinstance(record, BatchPlanBoundRecord):
+            journal.planned[record.batch_id] = frozenset(
+                record.rebuild_plan().operation_ids
+            )
+        elif record.phase is BatchChildPhase.DISPATCH_INTENT:
+            journal.intents.add((record.batch_id, record.operation_id))
+
+    @classmethod
+    def _admit(cls, *, journal: _RunJournal, item: SequencedBatchJournalRecord) -> None:
+        """Check one record against the folded prefix that precedes it.
+
+        Pure by construction — it decides, it never records.  That is what lets
+        the same rules serve replay, where the record is already durable, and
+        an append, where refusing must leave the projection untouched.
+
+        The child-transition rules are the durable half of "nothing runs ahead
+        of the plan".  Because they are checked in *sequence* order, a journal
+        in which a child started before its batch was ordered, a child the plan
+        never named ran, or a child settled without ever declaring an intent
+        cannot be recovered from at all — it is corruption, not a recoverable
+        state.
+        """
+
+        snapshot = journal.snapshot
+        record = item.record
+        if item.sequence_no <= journal.last_sequence:
             raise BatchJournalCorruption(
                 run_id=snapshot.run_id,
                 reason="F6 event sequence is not strictly increasing",
             )
-        seen_records: set[str] = set()
-        planned: dict[str, frozenset[str]] = {}
-        intents: set[tuple[str, str]] = set()
-        for item in records:
-            record = item.record
-            cls._validate_snapshot_binding(snapshot=snapshot, record=record)
-            if record.record_id in seen_records:
+        cls._validate_snapshot_binding(snapshot=snapshot, record=record)
+        if record.record_id in journal.by_record_id:
+            raise BatchJournalCorruption(
+                run_id=snapshot.run_id,
+                reason="duplicate F6 record identity",
+            )
+        if isinstance(record, BatchPlanBoundRecord):
+            if record.batch_id in journal.planned:
                 raise BatchJournalCorruption(
                     run_id=snapshot.run_id,
-                    reason="duplicate F6 record identity",
+                    reason="a batch bound more than one plan",
                 )
-            seen_records.add(record.record_id)
-            if isinstance(record, BatchPlanBoundRecord):
-                if record.batch_id in planned:
-                    raise BatchJournalCorruption(
-                        run_id=snapshot.run_id,
-                        reason="a batch bound more than one plan",
-                    )
-                planned[record.batch_id] = frozenset(
-                    record.rebuild_plan().operation_ids
-                )
-                continue
-            cls._validate_transition(
-                snapshot=snapshot,
-                record=record,
-                planned=planned,
-                intents=intents,
-            )
+            return
+        cls._validate_transition(journal=journal, record=record)
 
     @staticmethod
     def _validate_transition(
         *,
-        snapshot: RunControlSnapshot,
+        journal: _RunJournal,
         record: BatchChildTransitionRecord,
-        planned: dict[str, frozenset[str]],
-        intents: set[tuple[str, str]],
     ) -> None:
         """Check one child fact against the plan prefix that precedes it."""
 
-        operations = planned.get(record.batch_id)
+        snapshot = journal.snapshot
+        operations = journal.planned.get(record.batch_id)
         if operations is None:
             raise BatchJournalCorruption(
                 run_id=snapshot.run_id,
@@ -560,11 +689,9 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
                 run_id=snapshot.run_id,
                 reason="a child transition names an unplanned operation",
             )
-        child = (record.batch_id, record.operation_id)
         if record.phase is BatchChildPhase.DISPATCH_INTENT:
-            intents.add(child)
             return
-        if child not in intents:
+        if (record.batch_id, record.operation_id) not in journal.intents:
             raise BatchJournalCorruption(
                 run_id=snapshot.run_id,
                 reason="a child settled without a durable dispatch intent",

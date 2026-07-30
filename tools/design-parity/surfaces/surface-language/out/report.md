@@ -4,20 +4,18 @@ Computed-style comparison of the vendored `0xCopilot Surface Language` mock agai
 
 **Aggregate:** 🔴 HIGH 88 · 🟠 MEDIUM 123 · 🟡 LOW 170 · ⚪ INFO 61.
 
-**Measured** 2026-07-29T17:52:26.906Z against `claude/surface-language-board-nospec` @ `1a4a3236` with **11 uncommitted change(s)** in the packages this reads:
+**Measured** 2026-07-29T19:08:53.734Z against `claude/surface-language-board-nospec` @ `48c77c1e` with **9 uncommitted change(s)** in the packages this reads:
 
 ```
+M packages/chat-surface/src/artifacts/ArtifactSurface.hue.test.tsx
 M packages/chat-surface/src/artifacts/ArtifactSurface.tsx
-M packages/chat-surface/src/destinations/run/RunDestination.tsx
 M packages/chat-surface/src/thread-canvas/TcSurfaceMount.test.tsx
 M packages/chat-surface/src/thread-canvas/TcSurfaceMount.tsx
 M packages/surface-renderers/src/_shared/path.test.ts
 M packages/surface-renderers/src/_shared/path.ts
-M packages/surface-renderers/src/_shared/primitives.test.tsx
-M packages/surface-renderers/src/_shared/primitives.tsx
 M packages/surface-renderers/src/archetypes/BoardRenderer.test.tsx
 M packages/surface-renderers/src/archetypes/BoardRenderer.tsx
-?? packages/chat-surface/src/artifacts/ArtifactSurface.hue.test.tsx
+?? packages/chat-surface/src/destinations/run/RunDestination.accentSeam.test.tsx
 ```
 
 Re-run before treating any row below as current.
