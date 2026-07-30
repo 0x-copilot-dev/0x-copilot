@@ -11,7 +11,7 @@ import { formatValue, isSafeHttpUrl, numericValue, resolvePath } from "./path";
 // system. No interactivity, no globals, no I/O — D28.
 
 export const SURFACE_FONT =
-  "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  "var(--font-sans, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif)";
 
 /**
  * The mono face, for the IDENTIFIER register: a tool name, a raw payload key.
@@ -37,26 +37,129 @@ export const SURFACE_MONO_FONT =
 const BAND_BG = "var(--color-bg-elevated)";
 const TEXT_SUBTLE = "var(--color-text-subtle)";
 
+/* ==========================================================================
+ * THE TYPE / SPACE / RADIUS RUNGS THIS FILE COMPOSES
+ * ==========================================================================
+ *
+ * Everything below used to be a bare number — `fontSize: 11`,
+ * `letterSpacing: 0.6`, `padding: 22`, `borderRadius: 14`, `fontWeight: 600`.
+ * That is the same failure `palette.ts` fixed for colour, one tier over: a
+ * private ladder inside a package that eleven renderers share, which no
+ * density switch, no theme, and no design import can reach. `packages/
+ * design-system/CLAUDE.md` states the rule those literals broke — "never
+ * hard-code rems / pixels for font-size, never hard-code numeric font-weight
+ * literals", and "letter-spacing never takes a raw em".
+ *
+ * TWO RULES, and they are not the same rule:
+ *
+ * 1. TYPE always resolves through a token. Family, size, weight, tracking and
+ *    line-height have no exceptions here — the design's mono metadata register
+ *    steps in HALF pixels (8.5 / 9.5 / 10 / 10.5), which is exactly why the
+ *    mono micro-ladder exists and why reaching for a nearby sans rung is how a
+ *    label shipped 18% too large. The `var(--token, <px>)` form carries the
+ *    intended pixel as a fallback on purpose: this package renders inside three
+ *    hosts, and a host that fails to load `design-system/src/styles.css` would
+ *    otherwise resolve an unset custom property to the 16px INITIAL — a 9.5px
+ *    mono label rendering at 16px is the loudest possible failure. The fallback
+ *    is a floor, never the source of truth.
+ *
+ * 2. SPACE / RADIUS take a rung when one lands EXACTLY on the design's value,
+ *    and stay a documented literal when none does. The surface language authors
+ *    several of its gaps and paddings in odd pixels (7 / 9 / 14) that a
+ *    2/4/8/12/16/24 ladder cannot express, and rounding them would move
+ *    geometry that currently MATCHES the design in order to satisfy a token —
+ *    the wrong trade, and not one the design system asks for: its own recipes
+ *    keep the same odd values (`.ui-badge { gap: 5px; padding: 1px 8px }`,
+ *    `.ui-input { padding: 7px 10px }`). Each surviving literal names the
+ *    design rule it comes from, so the next reader can tell a considered
+ *    number from a forgotten one.
+ */
+
+/** Mono micro-ladder. `.sfc-k`, `.sfr > .l` and `.sfbd-h` are all `--sf-lab`. */
+const SIZE_MONO_9_5 = "var(--font-size-mono-9-5, 9.5px)";
+/** `.sfb` (the badge) and `.sf-lnk` (the source link) — the ladder's top rung. */
+const SIZE_MONO_10_5 = "var(--font-size-mono-10-5, 10.5px)";
+/** `.sf-note code` — the tool identifier inside the note's sentence. */
+const SIZE_11 = "var(--font-size-11, 11px)";
+/** `.sf-note`, `.sf-bar .c`, `.sfc-s`, `.sfr > .v.n`. A whole-pixel rung the
+ * rem ladder steps over (11.2 / 12.5); named for its px value, like
+ * `--font-size-mono-10`. Its declaration scopes itself to the composer +
+ * popover recipes because those were its only consumers when it landed — the
+ * surface language authors the same whole pixels, and the alternative
+ * (`--font-size-xs`, 12.5px) would break four rows that match the design today
+ * to honour a comment. Recorded rather than silently widened. */
+const SIZE_12 = "var(--font-size-12, 12px)";
+/** `.sfr > .v` and the app's inherited body base. */
+const SIZE_13 = "var(--font-size-sm, 13px)";
+/** `.ui-item-title`'s rung. The design's `.sfc-t` is 15px and the sans ladder
+ * has no 15px rung; `md` is the recipe that names this role ("Item / card / row
+ * title"), and the design putting a surface title BELOW a section heading is
+ * the same statement — a surface card is a compact artifact frame, not a page
+ * section. */
+const SIZE_ITEM_TITLE = "var(--font-size-md, 14px)";
+/** `.ui-section-label` / `.ui-pill`'s rung — an uppercase micro-label. */
+const SIZE_LABEL = "var(--font-size-2xs, 11.2px)";
+
+const WEIGHT_SEMIBOLD = "var(--font-weight-semibold, 600)";
+const WEIGHT_MEDIUM = "var(--font-weight-medium, 500)";
+
+/** `.ui-mono-caps`' tracking — the 9.5px mono caps register. The design writes
+ * 0.12em on `.sfc-k` and 0.11em (`--sf-tr`) on `.sfr > .l`; both land on this
+ * rung, and 0.11 → 0.12em moves the label by 0.095px. */
+const TRACK_MONO_CAPS = "var(--tracking-mono-caps, 0.12em)";
+/** `.ui-section-label`'s tracking — the fold that 0.04–0.06em lands in. */
+const TRACK_LABEL = "var(--tracking-label, 0.05em)";
+/** `.ui-heading--3`'s tracking. `.sfc-t` carries -0.014em; `--tracking-normal`
+ * would leave the title reporting `normal` against a design that tightens. */
+const TRACK_SNUG = "var(--tracking-snug, -0.01em)";
+
+/** `.sf-note`'s 1.55 — and it is the DENSITY-aware token, not the raw number,
+ * so a compact workspace tightens the note with everything else. */
+const LINE_BODY = "var(--line-height-body, 1.55)";
+
+const SPACE_2XS = "var(--space-2xs, 2px)";
+const SPACE_XS = "var(--space-xs, 4px)";
+const SPACE_SM = "var(--space-sm, 8px)";
+const SPACE_MD = "var(--space-md, 12px)"; // the design's `--sf-cx`
+const SPACE_LG = "var(--space-lg, 16px)";
+const SPACE_XL = "var(--space-xl, 24px)";
+
+const RADIUS_MD = "var(--radius-md, 8px)";
+const RADIUS_LG = "var(--radius-lg, 12px)"; // `.sfc`
+const RADIUS_FULL = "var(--radius-full, 999px)";
+
 export const pageStyle: CSSProperties = {
   background: PALETTE.pageBg,
   minHeight: "100%",
-  padding: 24,
+  padding: SPACE_XL,
   fontFamily: SURFACE_FONT,
   color: PALETTE.textHi,
   display: "flex",
   justifyContent: "center",
 };
 
+// NOTE on `padding` below: the parity row `card · padding` reads `0px → 24px`
+// and does NOT close by changing this number. The design's `.sfc` declares no
+// padding at all — its children (`.sfc-h`, `.sft-wrap`, `.sf-bar`) carry it,
+// and we put it on the card. That is a STRUCTURAL difference, so 22px and 24px
+// are equally open; the token is kept because tokenisation is the point.
 export const cardStyle: CSSProperties = {
   background: PALETTE.surface,
   border: `1px solid ${PALETTE.border}`,
-  borderRadius: 14,
+  // `.sfc` is 12px. The 14px this replaces predated the v3 import and was the
+  // legacy sheet's own radius (`[data-lang="legacy"] .sfc`).
+  borderRadius: RADIUS_LG,
   width: "100%",
   maxWidth: 820,
   display: "flex",
   flexDirection: "column",
-  gap: 16,
-  padding: 22,
+  gap: SPACE_LG,
+  // The design's card pads NOTHING (`.sfc { padding: 0 }`) because every band
+  // inside it bleeds edge to edge; ours insets its bands instead, so the inset
+  // lives here — see `noteStyle` for why that divergence is deliberate. 22px
+  // was the legacy header's inset and is not on any rung; `xl` is the rung it
+  // rounds to, 2px out.
+  padding: SPACE_XL,
   boxShadow: "0 8px 28px rgba(0,0,0,0.4)",
 };
 
@@ -65,48 +168,78 @@ const headerRowStyle: CSSProperties = {
   justifyContent: "space-between",
   alignItems: "flex-start",
   borderBottom: `1px solid ${PALETTE.border}`,
-  paddingBottom: 12,
-  gap: 12,
+  paddingBottom: SPACE_MD,
+  gap: SPACE_MD,
 };
 
 const headerTitleStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 4,
+  gap: SPACE_XS,
   minWidth: 0,
 };
 
+/**
+ * `.sfc-k` — mono caps at the micro rung on `--mut2`, i.e. the `.ui-mono-caps`
+ * recipe. It names the ARCHETYPE whose renderer ran ("Board", "Table"), which
+ * is a machine's word for the view, not a title we wrote — the same reason the
+ * canvas tab beside it is mono.
+ *
+ * It shipped as sans 11px on `--mut`: one whole register too loud, and 1.5px
+ * too large. The dot inherits every one of these values (it paints no text), so
+ * this declaration is also what the `card.kicker-dot` anchor measures.
+ */
 const kickerStyle: CSSProperties = {
   alignItems: "center",
   display: "flex",
-  fontSize: 11,
-  gap: 7,
-  letterSpacing: 0.6,
-  color: PALETTE.textLo,
+  fontFamily: SURFACE_MONO_FONT,
+  fontSize: SIZE_MONO_9_5,
+  gap: 7, // `.sfc-k { gap: 7px }` — between the 4px and 8px rungs
+  letterSpacing: TRACK_MONO_CAPS,
+  color: TEXT_SUBTLE,
   textTransform: "uppercase",
 };
 
+/** `.sfc-t`. See {@link SIZE_ITEM_TITLE} for why this is the item-title rung
+ * and not a heading one. */
 const titleStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: SIZE_ITEM_TITLE,
   color: PALETTE.textHi,
-  fontWeight: 600,
+  fontWeight: WEIGHT_SEMIBOLD,
+  letterSpacing: TRACK_SNUG,
   overflowWrap: "anywhere",
 };
 
+/** `.sfc-s` — 12px on `--mut`, a step under the title in BOTH size and colour.
+ * At 13px on `--tx2` it sat one rung under the title and one over the values,
+ * which reads as a second title rather than as the title's aside. */
 const subtitleStyle: CSSProperties = {
-  fontSize: 13,
-  color: PALETTE.textMid,
+  fontSize: SIZE_12,
+  color: PALETTE.textLo,
   overflowWrap: "anywhere",
 };
 
+/**
+ * `.sfb` — the design's badge: mono at the top micro rung, on `--mut`, hugging
+ * its text inside a full-radius hairline with NO fill.
+ *
+ * No `letterSpacing` and no `fontWeight`, deliberately and not by omission:
+ * `.sfb` declares neither, so both inherit, and the design measures 400 with
+ * `normal` tracking. Pinning either (`.ui-badge` pins 500) would manufacture a
+ * difference against the thing this is copied from. The 0.4px tracking removed
+ * here had no design source at all.
+ */
 const badgeStyle: CSSProperties = {
+  alignItems: "center",
   background: "transparent",
   border: `1px solid ${PALETTE.border}`,
-  color: PALETTE.textMid,
-  fontSize: 11,
-  padding: "3px 8px",
-  borderRadius: 999,
-  letterSpacing: 0.4,
+  borderRadius: RADIUS_FULL,
+  color: PALETTE.textLo,
+  display: "inline-flex",
+  fontFamily: SURFACE_MONO_FONT,
+  fontSize: SIZE_MONO_10_5,
+  gap: 6, // `.sfb { gap: 6px }` — between the 4px and 8px rungs
+  padding: `${SPACE_2XS} ${SPACE_SM}`,
   whiteSpace: "nowrap",
 };
 
@@ -153,22 +286,27 @@ const rowStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "150px 1fr",
   alignItems: "baseline",
-  gap: 12,
-  paddingBlock: 6,
+  gap: SPACE_MD,
+  paddingBlock: 6, // no rung between `--space-xs` (4px) and `--space-sm` (8px)
   borderBottom: `1px solid ${PALETTE.border}`,
 };
 
+/** The SPEC-DRIVEN row's label — a name a spec author wrote, which is why it
+ * stays sans where `genericLabelStyle` (a key the tool chose) is mono. That
+ * makes it the `.ui-section-label` role exactly: uppercase micro-label heading
+ * a value. Taking the recipe's rungs rather than re-assembling them is what
+ * stops this label drifting to a fourth tracking value. */
 const fieldLabelStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 12,
-  letterSpacing: 0.4,
+  fontSize: SIZE_LABEL,
+  letterSpacing: TRACK_LABEL,
   textTransform: "uppercase",
-  fontWeight: 600,
+  fontWeight: WEIGHT_SEMIBOLD,
 };
 
 const fieldValueStyle: CSSProperties = {
   color: PALETTE.textHi,
-  fontSize: 13,
+  fontSize: SIZE_13,
   overflowWrap: "anywhere",
 };
 
@@ -202,7 +340,7 @@ export function FieldRow(props: FieldRowProps): ReactElement {
 export const fieldGridStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 2,
+  gap: SPACE_2XS,
 };
 
 // A "Preparing view…" hint used to sit above the generic field list on every
@@ -222,13 +360,36 @@ export const fieldGridStyle: CSSProperties = {
 // pending affordance belongs there, with the signal, not here without it.
 
 const linkRowStyle: CSSProperties = {
-  paddingTop: 6,
+  paddingTop: 6, // no rung between `--space-xs` (4px) and `--space-sm` (8px)
 };
 
+/**
+ * `.sf-lnk` — mono at the top micro rung. A `url_path` resolves to an address
+ * a machine emitted, so it belongs in the same IDENTIFIER register as the tool
+ * name, not in the 13px sans body register it shipped in.
+ *
+ * The COLOUR deliberately does not follow `.sf-lnk` to `--mut`. The design
+ * carries "this is clickable" on four channels an inline style has none of — a
+ * cursor, an 11px external-link glyph, and a `:hover` that lifts the colour to
+ * the accent — and {@link SurfaceLinkRow} renders anything that is NOT a safe
+ * http(s) URL as inert text in `--mut`. Painting the live anchor `--mut` too
+ * would erase the only difference between a link we resolved and a value we
+ * refused, on the one view whose whole job is to be honest about untrusted
+ * payload. So the register moves and the accent stays.
+ */
 const linkStyle: CSSProperties = {
   color: PALETTE.lime,
-  fontSize: 13,
+  fontFamily: SURFACE_MONO_FONT,
+  fontSize: SIZE_MONO_10_5,
   textDecoration: "none",
+};
+
+/** The refused half of the same row: same register, quieted to `--mut`, so the
+ * two states differ by exactly the one thing that differs. */
+const inertLinkStyle: CSSProperties = {
+  ...linkStyle,
+  color: PALETTE.textLo,
+  overflowWrap: "anywhere",
 };
 
 /** Renders `link.url_path` as a real anchor only when it resolves to an
@@ -254,10 +415,7 @@ export function SurfaceLinkRow(props: {
   }
   return (
     <div style={linkRowStyle}>
-      <span
-        style={{ ...fieldValueStyle, color: PALETTE.textLo }}
-        data-testid="surface-link-text"
-      >
+      <span style={inertLinkStyle} data-testid="surface-link-text">
         {label || String(value ?? "")}
       </span>
     </div>
@@ -265,9 +423,9 @@ export function SurfaceLinkRow(props: {
 }
 
 const emptyStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: SIZE_13,
   color: PALETTE.textLo,
-  paddingBlock: 6,
+  paddingBlock: 6, // no rung between `--space-xs` (4px) and `--space-sm` (8px)
 };
 
 export function EmptyBody(props: {
@@ -297,25 +455,28 @@ function titleize(key: string): string {
 const genericRowStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "172px minmax(0, 1fr)",
-  gap: 14,
+  gap: 14, // `.sfr { gap: 14px }` — between the 12px and 16px rungs
   alignItems: "baseline",
-  padding: "9px 12px",
+  // `.sfr { padding: 9px var(--sf-cx) }`. The inline half IS a rung (`--sf-cx`
+  // is 12px); the block half sits between 8px and 12px and stays a literal.
+  padding: `9px ${SPACE_MD}`,
   borderBottom: `1px solid ${PALETTE.border}`,
 };
 
-// Mono caps at the micro rung. A raw payload key is an identifier; setting it
-// in the same sans face as the value would claim it is prose we chose.
+// Mono caps at the micro rung — the `.ui-mono-caps` recipe. A raw payload key
+// is an identifier; setting it in the same sans face as the value would claim
+// it is prose we chose.
 const genericLabelStyle: CSSProperties = {
   fontFamily: SURFACE_MONO_FONT,
-  fontSize: 9.5,
-  letterSpacing: "0.11em",
+  fontSize: SIZE_MONO_9_5,
+  letterSpacing: TRACK_MONO_CAPS,
   textTransform: "uppercase",
   color: TEXT_SUBTLE,
   overflowWrap: "anywhere",
 };
 
 const genericValueStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: SIZE_13,
   color: PALETTE.textHi,
   minWidth: 0,
   overflowWrap: "anywhere",
@@ -327,7 +488,7 @@ const genericValueStyle: CSSProperties = {
 const genericNumericValueStyle: CSSProperties = {
   ...genericValueStyle,
   fontFamily: SURFACE_MONO_FONT,
-  fontSize: 12,
+  fontSize: SIZE_12,
   fontVariantNumeric: "tabular-nums",
 };
 
@@ -343,8 +504,8 @@ const genericGridStyle: CSSProperties = {
 // hairline: a meta line is always the list's last child, and the hairline is a
 // separator with nothing below it to separate.
 const genericMetaStyle: CSSProperties = {
-  padding: "9px 12px",
-  fontSize: 12,
+  padding: `9px ${SPACE_MD}`,
+  fontSize: SIZE_12,
   color: TEXT_SUBTLE,
 };
 
@@ -590,20 +751,23 @@ function isSurfaceEnvelopeShape(state: unknown): boolean {
 const noteStyle: CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
-  gap: 9,
-  padding: "9px 12px",
-  fontSize: 12,
-  lineHeight: 1.55,
+  gap: 9, // `.sf-note { gap: 9px }` — between the 8px and 12px rungs
+  padding: `9px ${SPACE_MD}`,
+  fontSize: SIZE_12,
+  lineHeight: LINE_BODY,
   color: PALETTE.textMid,
   background: BAND_BG,
   border: `1px solid ${PALETTE.border}`,
-  borderRadius: 10,
+  // The design's band has no radius because it bleeds to the card's edges and
+  // the card clips it; an inset band needs one. `md` is a rung under the card's
+  // `lg`, which is what a band nested inside a rounded card wants.
+  borderRadius: RADIUS_MD,
 };
 
 /** `.sf-note svg` — 13px, one rung quieter than the copy it introduces. */
 const noteIconStyle: CSSProperties = {
   flex: "none",
-  marginTop: 2,
+  marginTop: SPACE_2XS,
   color: PALETTE.textLo,
 };
 
@@ -616,7 +780,7 @@ const noteIconStyle: CSSProperties = {
  */
 const noteCodeStyle: CSSProperties = {
   fontFamily: SURFACE_MONO_FONT,
-  fontSize: 11,
+  fontSize: SIZE_11,
   color: PALETTE.textHi,
   overflowWrap: "anywhere",
 };
@@ -625,16 +789,16 @@ const noteCodeStyle: CSSProperties = {
 const readOnlyBarStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 9,
+  gap: 9, // `.sf-bar { gap: 9px }` — between the 8px and 12px rungs
   flexWrap: "wrap",
-  padding: "9px 12px",
+  padding: `9px ${SPACE_MD}`,
   background: BAND_BG,
   border: `1px solid ${PALETTE.border}`,
-  borderRadius: 10,
+  borderRadius: RADIUS_MD, // see `noteStyle` — an inset band needs one
 };
 
 const readOnlyCopyStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: SIZE_12,
   color: PALETTE.textLo,
   minWidth: 0,
 };
@@ -712,32 +876,39 @@ export function NoSpecView(props: {
 const changedRowStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: 6,
-  paddingBlock: 8,
-  paddingInline: 10,
-  borderRadius: 8,
+  gap: 6, // `.sfk { gap: 6px }` — between the 4px and 8px rungs
+  paddingBlock: SPACE_SM,
+  paddingInline: 10, // between the 8px and 12px rungs
+  borderRadius: RADIUS_MD,
   background: PALETTE.limeBgSoft,
   border: `1px solid ${PALETTE.lime}`,
-  marginBlock: 2,
+  marginBlock: SPACE_2XS,
 };
 
 const changeHeaderStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  gap: 12,
+  gap: SPACE_MD,
   flexWrap: "wrap",
 };
 
+/** The `.ui-pill` role — "the canonical rounded status/selection chip: a
+ * leading dot + tone variants" is this element exactly. It takes the recipe's
+ * size and weight; the tracking comes from `.ui-section-label` instead, because
+ * this pill's label is UPPERCASE and `--tracking-normal` (what `.ui-pill`
+ * carries, for sentence-case chips) would set caps solid. `--tracking-label` is
+ * the fold the 0.4px literal it replaces already landed in. */
 const provenancePillStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 6,
-  padding: "2px 8px",
-  borderRadius: 999,
+  gap: 6, // `.sfb { gap: 6px }` — between the 4px and 8px rungs
+  padding: `${SPACE_2XS} ${SPACE_SM}`,
+  borderRadius: RADIUS_FULL,
   border: `1px solid ${PALETTE.border}`,
-  fontSize: 11,
-  letterSpacing: 0.4,
+  fontSize: SIZE_LABEL,
+  fontWeight: WEIGHT_MEDIUM,
+  letterSpacing: TRACK_LABEL,
   color: PALETTE.textLo,
   textTransform: "uppercase",
 };
@@ -753,9 +924,9 @@ const provenanceDotStyle: CSSProperties = {
 const diffPairStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: SPACE_SM,
   flexWrap: "wrap",
-  fontSize: 13,
+  fontSize: SIZE_13,
 };
 
 const previousValueStyle: CSSProperties = {
@@ -767,12 +938,16 @@ const previousValueStyle: CSSProperties = {
 
 const arrowStyle: CSSProperties = {
   color: PALETTE.textMid,
-  fontSize: 12,
+  fontSize: SIZE_12,
 };
 
 const nextValueStyle: CSSProperties = {
   color: PALETTE.textHi,
   background: "color-mix(in srgb, var(--color-accent) 18%, transparent)",
+  // `.sfn { padding: 1px 5px; border-radius: 4px }` — a chip that hugs one
+  // value inside a line of text. Every number here is under the ladder's
+  // smallest rung (`--space-2xs` 2px / `--radius-sm` 6px); rounding up would
+  // make the highlight taller than the line it sits in.
   padding: "1px 6px",
   borderRadius: 4,
   overflowWrap: "anywhere",

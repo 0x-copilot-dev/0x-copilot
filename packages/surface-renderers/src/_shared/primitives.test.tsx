@@ -9,6 +9,8 @@ import { ARCHETYPE_ADAPTERS } from "../archetypes";
 import {
   GenericFieldList,
   NoSpecView,
+  SurfaceHeader,
+  SurfaceLinkRow,
   TOOL_NAME_MAX_CHARS,
   toolNameFromState,
 } from "./primitives";
@@ -146,6 +148,111 @@ describe("NoSpecView read-only footer", () => {
   });
 });
 
+// The card chrome, on the design system.
+//
+// WHAT THESE ASSERT, AND WHERE THE REAL PROOF IS. `primitives.tsx` composes
+// INLINE styles, so a token reaches the browser as the literal string
+// `var(--font-size-mono-9-5, 9.5px)` in the style attribute — that string IS
+// the rendered declaration, and it is what these tests read. jsdom loads no
+// stylesheet, so it cannot resolve the custom property; the RESOLVED pixel is
+// measured in chromium against the vendored mock by
+// `tools/design-parity/surfaces/surface-language`, and that report is what says
+// whether the rung was the right one. These tests say only that the value goes
+// through a rung at all — which is the thing that regressed, eleven renderers
+// at once, when every one of these was a bare number.
+describe("card chrome type registers", () => {
+  const header = (): HTMLElement => {
+    render(
+      <SurfaceHeader kicker="Board" title="Cycle 14" subtitle="7 issues" />,
+    );
+    return screen.getByTestId("surface-header");
+  };
+
+  // `.sfc-k` — the archetype's name is a machine's word for the view. It
+  // shipped as sans 11px, one whole register too loud.
+  it("sets the kicker in the mono caps register", () => {
+    const kicker = header().querySelector("div > span:first-child")!;
+    const style = (kicker as HTMLElement).style;
+    expect(style.fontFamily).toContain("--font-mono");
+    expect(style.fontSize).toBe("var(--font-size-mono-9-5, 9.5px)");
+    expect(style.letterSpacing).toBe("var(--tracking-mono-caps, 0.12em)");
+    expect(kicker).toHaveStyle({ textTransform: "uppercase" });
+    // `--mut2`, a rung quieter than the subtitle it sits above.
+    expect(style.color).toBe("var(--color-text-subtle)");
+  });
+
+  // The dot paints no text, so it INHERITS the kicker's whole register — which
+  // is why the parity harness reads its font rows off the kicker. Its own
+  // colour + halo live in chat-surface's `surface-language.css`.
+  it("leaves the identity dot to inherit that register, styling none of it inline", () => {
+    const dot = header().querySelector(".sf-kicker__dot") as HTMLElement;
+    expect(dot).not.toBeNull();
+    expect(dot.getAttribute("style")).toBeNull();
+  });
+
+  it("sets the title on the item-title rung, not a heading one", () => {
+    const title = header().querySelector<HTMLElement>(
+      '[data-testid="surface-title"]',
+    )!;
+    expect(title.style.fontSize).toBe("var(--font-size-md, 14px)");
+    expect(title.style.fontWeight).toBe("var(--font-weight-semibold, 600)");
+    expect(title.style.letterSpacing).toBe("var(--tracking-snug, -0.01em)");
+  });
+
+  // `.sfc-s` — a step under the title in BOTH size and colour, so it reads as
+  // the title's aside rather than as a second title.
+  it("keeps the subtitle a rung under the title", () => {
+    const subtitle = header().querySelector<HTMLElement>(
+      '[data-testid="surface-subtitle"]',
+    )!;
+    expect(subtitle.style.fontSize).toBe("var(--font-size-12, 12px)");
+    expect(subtitle.style.color).toBe("var(--color-text-muted)");
+  });
+
+  // `.sfb` — mono, outlined, no fill, and NO weight or tracking of its own:
+  // the design declares neither, so pinning either would invent a difference
+  // against the thing this is copied from.
+  it("sets the badge in the mono chip register with nothing pinned that the design leaves open", () => {
+    render(<SurfaceHeader kicker="Board" title="Cycle 14" badge="7 cards" />);
+    const badge = screen.getByTestId("surface-badge");
+    expect(badge.style.fontFamily).toContain("--font-mono");
+    expect(badge.style.fontSize).toBe("var(--font-size-mono-10-5, 10.5px)");
+    expect(badge.style.padding).toBe(
+      "var(--space-2xs, 2px) var(--space-sm, 8px)",
+    );
+    expect(badge.style.borderRadius).toBe("var(--radius-full, 999px)");
+    expect(badge.style.color).toBe("var(--color-text-muted)");
+    expect(badge.style.fontWeight).toBe("");
+    expect(badge.style.letterSpacing).toBe("");
+  });
+});
+
+describe("SurfaceLinkRow register", () => {
+  // `.sf-lnk` — a url_path is an address a machine emitted, so it belongs in
+  // the identifier register with the tool name, not in 13px sans body copy.
+  it("sets a resolved link in the mono register", () => {
+    render(<SurfaceLinkRow label="Open" value="https://example.com/x" />);
+    const link = screen.getByTestId("surface-link");
+    expect(link.tagName).toBe("A");
+    expect(link.style.fontFamily).toContain("--font-mono");
+    expect(link.style.fontSize).toBe("var(--font-size-mono-10-5, 10.5px)");
+  });
+
+  // The refused half of the same row. Same register — a value we would not
+  // link is still the same KIND of thing — and the colour is the only channel
+  // that separates them, which is why the anchor keeps the accent and this
+  // does not. Collapsing both to one colour would hide the refusal.
+  it("keeps a refused value in that register but never in the link colour", () => {
+    render(<SurfaceLinkRow label="Open" value="javascript:alert(1)" />);
+    const inert = screen.getByTestId("surface-link-text");
+    expect(inert.tagName).not.toBe("A");
+    expect(inert.style.fontFamily).toContain("--font-mono");
+    expect(inert.style.fontSize).toBe("var(--font-size-mono-10-5, 10.5px)");
+    expect(inert.style.color).toBe("var(--color-text-muted)");
+    expect(inert.style.color).not.toBe("var(--color-accent)");
+  });
+});
+
 // Requirement 3 — the design's `.sfr` grid and its two value registers.
 describe("GenericFieldList registers", () => {
   it("lays each row out on the design's two-column grid", () => {
@@ -156,8 +263,12 @@ describe("GenericFieldList registers", () => {
       display: "grid",
       alignItems: "baseline",
       gap: "14px",
-      padding: "9px 12px",
     });
+    // `.sfr { padding: 9px var(--sf-cx) }` — the inline half is the 12px rung,
+    // the block half is not on the ladder. Asserted as the declaration that
+    // ships rather than through `toHaveStyle`, because jsdom resolves an
+    // unknown custom property to nothing and would report `padding: 0`.
+    expect(row.style.padding).toBe("9px var(--space-md, 12px)");
   });
 
   it("sets the label in the mono identifier register", () => {
@@ -165,12 +276,10 @@ describe("GenericFieldList registers", () => {
     const label = screen.getByTestId("field-incident_number")
       .firstElementChild as HTMLElement;
     expect(label).toHaveTextContent("Incident Number");
-    expect(label).toHaveStyle({
-      fontSize: "9.5px",
-      letterSpacing: "0.11em",
-      textTransform: "uppercase",
-    });
+    expect(label).toHaveStyle({ textTransform: "uppercase" });
     expect(label.style.fontFamily).toContain("--font-mono");
+    expect(label.style.fontSize).toBe("var(--font-size-mono-9-5, 9.5px)");
+    expect(label.style.letterSpacing).toBe("var(--tracking-mono-caps, 0.12em)");
   });
 
   it("paints a numeric-looking value with tabular figures", () => {

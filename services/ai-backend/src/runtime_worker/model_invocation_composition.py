@@ -221,6 +221,19 @@ class ModelInvocationWorkerComposer:
                     )
                 ),
                 journal=self._journal,
+                # Context Occupancy Ledger sink (design §5). The store is the
+                # same ``PersistencePort`` this composer already holds, and it
+                # already implements ``append_context_occupancy``; leaving the
+                # field defaulted meant the *only* production construction of
+                # this binding never wired one, so ``_persist_occupancy``
+                # returned before ``finalize`` on every model call of every
+                # deployment. Every reconciliation field in §3.3 / §4.4 / §6.6 —
+                # ``provider_input_tokens``, the signed ``unattributed_delta``,
+                # ``cached_input_tokens`` — was therefore never computed on the
+                # real path, and the read API §7 ships could only ever answer
+                # with an empty series. Wiring it here, in the composer that owns
+                # every other durable port, is what makes the ledger a ledger.
+                context_occupancy_store=self._persistence,
                 route_model_resolver=_RouteModelResolver(frozen_context),
                 release=release,
                 org_id=run.org_id,

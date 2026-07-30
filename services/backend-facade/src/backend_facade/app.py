@@ -602,6 +602,36 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/conversations/{conversation_id}/context/occupancy")
+    async def get_conversation_context_occupancy(
+        request: Request,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        """Proxy the Context Occupancy Ledger's "what is in context right now".
+
+        Sub-resource of the window summary above: ``/context`` reports how full
+        the window is, ``/context/occupancy`` reports who filled it. The
+        ai-backend returns the newest **root-scope** snapshot only — a subagent's
+        last call describes a window that has since been discarded.
+
+        Passthrough with no facade-side interpretation. Only the verified
+        identity is forwarded; a caller cannot widen the read by supplying its
+        own ``org_id`` / ``user_id`` query values, because ``scoped_params``
+        overwrites both. Absence — unknown conversation, another tenant's,
+        another user's, or not yet measured — comes back as ``200`` with a null
+        snapshot, which is the ai-backend's deliberate non-oracle contract.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/context/occupancy",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # PR 1.2 — per-chat connector scope override. RFC 7396 merge-patch body.
     @app.patch("/v1/agent/conversations/{conversation_id}/connectors")
     async def update_conversation_connectors(
@@ -1313,6 +1343,38 @@ def create_app(
             f"/v1/agent/runs/{run_id}/surfaces",
             target="ai_backend",
             params=identity.scoped_params({}),
+            identity=identity,
+        )
+
+    @app.get("/v1/agent/runs/{run_id}/context/occupancy")
+    async def run_context_occupancy(
+        request: Request,
+        run_id: str,
+        graph_scope: Literal["root", "subagent"] | None = Query(None),
+    ) -> dict[str, object]:
+        """Proxy one run's per-turn context-occupancy series to ai-backend.
+
+        ``graph_scope`` is the only client-supplied input and is constrained to
+        the closed vocabulary here so a malformed value is a ``422`` at the edge
+        rather than a round trip. It matters because occupancy is summable only
+        *within* a scope: a subagent runs against its own window, so a client
+        that adds an unfiltered series together reports utilization no model ever
+        saw.
+
+        Passthrough otherwise. Sibling of the conversation endpoint above; the
+        two share one response shape so a client folds both through one reducer.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        scoped: dict[str, object] = {}
+        if graph_scope is not None:
+            scoped["graph_scope"] = graph_scope
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/context/occupancy",
+            target="ai_backend",
+            params=identity.scoped_params(scoped),
             identity=identity,
         )
 

@@ -43,6 +43,12 @@ from runtime_api.schemas.common import (
     RuntimeEventRedactionState,
     RuntimeEventVisibility,
 )
+from runtime_api.schemas.context_occupancy import (
+    ContextOccupancyResponse,
+    ContextOccupancySegment,
+    ContextOccupancySnapshotPayload,
+    ConversationContextOccupancyResponse,
+)
 from runtime_api.schemas.conversation_canvas import (
     ConversationCanvasResponse,
     ConversationCanvasSubject,
@@ -125,6 +131,7 @@ from runtime_api.schemas.events import (
     AssistantPerformanceMetrics,
     AssistantSubagentUsageRollup,
     AssistantUsageMetrics,
+    ContextOccupancyPayload,
     QualityControlBoundPayload,
     QualityDecisionPayload,
     PromptAssembledPayload,
@@ -236,8 +243,12 @@ __all__ = [
     "ContextCurrentSlice",
     "ContextSubagentRow",
     "ContextWindowSummary",
+    "ContextOccupancyResponse",
+    "ContextOccupancySegment",
+    "ContextOccupancySnapshotPayload",
     "ConversationCanvasResponse",
     "ConversationCanvasSubject",
+    "ConversationContextOccupancyResponse",
     "ConversationContextResponse",
     "CreateRunRequest",
     "RunRecord",
@@ -256,6 +267,7 @@ __all__ = [
     "PromptAssembledPayload",
     "PromptCacheObservedPayload",
     "ModelInvocationJournalPayload",
+    "ContextOccupancyPayload",
     "OperationBatchJournalPayload",
     "TaskPolicyJournalPayload",
     "RuntimeEventPresentation",

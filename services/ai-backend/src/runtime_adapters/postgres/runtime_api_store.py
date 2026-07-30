@@ -69,6 +69,8 @@ from agent_runtime.persistence.records import (
     LegalHoldReasonCode,
     LegalHoldRecord,
     LegalHoldScope,
+    RuntimeContextGraphScope,
+    RuntimeContextOccupancyRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -3506,6 +3508,108 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._usage_attribution_edge(row) for row in rows)
 
+    async def append_context_occupancy(
+        self,
+        record: RuntimeContextOccupancyRecord,
+    ) -> bool:
+        """Append one occupancy snapshot, idempotent on its measured attempt.
+
+        ``ON CONFLICT ... DO NOTHING`` rather than ``DO UPDATE``: the row is a
+        fact about a request that has already been sent, so a redelivery has
+        nothing new to say and the application role holds no UPDATE privilege
+        to say it with. ``RETURNING id`` distinguishes a fresh append from a
+        replay without a second round trip.
+
+        The natural key is deliberately ``(model_call_id, attempt_ordinal)``
+        with no ``org_id``: a model-call id is runtime-minted and opaque, and
+        RLS still confines both the insert and any conflict resolution to the
+        stamped tenant, so a foreign row can never be observed or rewritten
+        through this path.
+        """
+
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            cur = await conn.execute(
+                """
+                INSERT INTO runtime_context_occupancy (
+                    id, org_id, run_id, conversation_id, model_call_id,
+                    attempt_ordinal, assembly_record_id, graph_scope,
+                    provider, model_family, context_window_tokens,
+                    estimated_input_tokens, provider_input_tokens,
+                    cached_input_tokens, cache_creation_input_tokens,
+                    undeclared_tokens, unattributed_delta, segments_json,
+                    schema_version, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s
+                )
+                ON CONFLICT (model_call_id, attempt_ordinal) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    record.id,
+                    record.org_id,
+                    record.run_id,
+                    record.conversation_id,
+                    record.model_call_id,
+                    record.attempt_ordinal,
+                    record.assembly_record_id,
+                    record.graph_scope.value,
+                    record.provider,
+                    record.model_family,
+                    record.context_window_tokens,
+                    record.estimated_input_tokens,
+                    record.provider_input_tokens,
+                    record.cached_input_tokens,
+                    record.cache_creation_input_tokens,
+                    record.undeclared_tokens,
+                    record.unattributed_delta,
+                    Jsonb(record.segments_json),
+                    record.schema_version,
+                    record.created_at,
+                ),
+            )
+            return (await cur.fetchone()) is not None
+
+    @reader
+    async def list_context_occupancy(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        graph_scope: RuntimeContextGraphScope | None = None,
+    ) -> Sequence[RuntimeContextOccupancyRecord]:
+        """Read one run's occupancy series, oldest-first, within one tenant.
+
+        Served by ``idx_runtime_context_occupancy_org_run``. The optional scope
+        filter exists so a caller can ask for one window rather than post-
+        filtering a mixed result and risking a cross-scope sum (§6.2).
+
+        Ties break on the natural key, not on ``id``: ``id`` is a random UUID,
+        so ordering by it would make the per-turn series non-deterministic for
+        two attempts measured inside the same clock tick and would disagree
+        with the in-memory and file backends.
+        """
+
+        clauses = ["org_id = %s", "run_id = %s"]
+        params: list[object] = [org_id, run_id]
+        if graph_scope is not None:
+            clauses.append("graph_scope = %s")
+            params.append(graph_scope.value)
+        sql = (
+            "SELECT * FROM runtime_context_occupancy "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY created_at ASC, model_call_id ASC, attempt_ordinal ASC"
+        )
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+        return tuple(self._context_occupancy_record(row) for row in rows)
+
     async def update_run_usage_cost(
         self,
         *,
@@ -5761,6 +5865,58 @@ class PostgresRuntimeApiStore:
                 if row.get("pricing_version") is not None
                 else None
             ),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _context_occupancy_record(
+        cls, row: dict[str, object]
+    ) -> RuntimeContextOccupancyRecord:
+        """Rehydrate one occupancy row, keeping NULL distinct from zero.
+
+        Every nullable count is mapped with an explicit ``is not None`` test
+        rather than ``or 0``: ``provider_input_tokens`` and
+        ``context_window_tokens`` are ``None`` when the provider reported no
+        usage or the model is absent from the pricing catalog, and collapsing
+        either into ``0`` would turn "unknown" into a confident wrong answer —
+        the exact failure this ledger exists to avoid.
+        """
+
+        segments = row.get("segments_json")
+        return RuntimeContextOccupancyRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            run_id=str(row["run_id"]),
+            conversation_id=str(row["conversation_id"]),
+            model_call_id=str(row["model_call_id"]),
+            attempt_ordinal=int(row.get("attempt_ordinal") or 1),
+            assembly_record_id=(
+                str(row["assembly_record_id"])
+                if row.get("assembly_record_id") is not None
+                else None
+            ),
+            graph_scope=RuntimeContextGraphScope(str(row["graph_scope"])),
+            provider=str(row["provider"]),
+            model_family=str(row["model_family"]),
+            context_window_tokens=(
+                int(row["context_window_tokens"])
+                if row.get("context_window_tokens") is not None
+                else None
+            ),
+            estimated_input_tokens=int(row.get("estimated_input_tokens") or 0),
+            provider_input_tokens=(
+                int(row["provider_input_tokens"])
+                if row.get("provider_input_tokens") is not None
+                else None
+            ),
+            cached_input_tokens=int(row.get("cached_input_tokens") or 0),
+            cache_creation_input_tokens=int(
+                row.get("cache_creation_input_tokens") or 0
+            ),
+            undeclared_tokens=int(row.get("undeclared_tokens") or 0),
+            unattributed_delta=int(row.get("unattributed_delta") or 0),
+            segments_json=segments if isinstance(segments, dict) else {},
+            schema_version=int(row.get("schema_version") or 1),
             created_at=cls._coerce_datetime(row["created_at"]),
         )
 

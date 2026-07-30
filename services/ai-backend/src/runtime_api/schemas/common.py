@@ -349,6 +349,16 @@ class RuntimeApiEventType(StrEnum):
     # any child of the batch is dispatched, so a restart recovers the ordering
     # by replay rather than by re-deriving it.
     OPERATION_BATCH_JOURNAL = "operation_batch.journal.v1"
+    # Context Occupancy Ledger (context-attribution design §7). One per measured
+    # model call: the window decomposed into who occupies it, so a client updates
+    # live on the established ``sequence_no`` contract instead of polling
+    # ``/context/occupancy``. The payload is the SAME snapshot shape that read
+    # API returns, so a consumer folds the stream and the fetch through one
+    # reducer. Content-free by construction (§6.5) — counts plus bounded
+    # identifiers, never prompt, message, or tool-result text. Projects to
+    # ``RuntimeActivityKind.EVENT``: an occupancy meter is state to merge, not a
+    # card on the timeline.
+    CONTEXT_OCCUPANCY = "context_occupancy"
 
     @classmethod
     def from_stream_event_type(

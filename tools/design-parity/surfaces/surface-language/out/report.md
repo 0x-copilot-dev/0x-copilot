@@ -2,31 +2,24 @@
 
 Computed-style comparison of the vendored `0xCopilot Surface Language` mock against the real `@0x-copilot/surface-renderers` archetypes, for the two renders `docs/plan/surface-language/` covers.
 
-**Aggregate:** 🔴 HIGH 88 · 🟠 MEDIUM 123 · 🟡 LOW 170 · ⚪ INFO 61.
+**Aggregate:** 🔴 HIGH 65 · 🟠 MEDIUM 105 · 🟡 LOW 158 · ⚪ INFO 61.
 
-**Measured** 2026-07-29T19:08:53.734Z against `claude/surface-language-board-nospec` @ `48c77c1e` with **9 uncommitted change(s)** in the packages this reads:
+**Measured** 2026-07-30T06:10:36.590Z against `claude/surface-language-board-nospec` @ `d69f0cfb` with **2 uncommitted change(s)** in the packages this reads:
 
 ```
-M packages/chat-surface/src/artifacts/ArtifactSurface.hue.test.tsx
-M packages/chat-surface/src/artifacts/ArtifactSurface.tsx
-M packages/chat-surface/src/thread-canvas/TcSurfaceMount.test.tsx
-M packages/chat-surface/src/thread-canvas/TcSurfaceMount.tsx
-M packages/surface-renderers/src/_shared/path.test.ts
-M packages/surface-renderers/src/_shared/path.ts
-M packages/surface-renderers/src/archetypes/BoardRenderer.test.tsx
-M packages/surface-renderers/src/archetypes/BoardRenderer.tsx
-?? packages/chat-surface/src/destinations/run/RunDestination.accentSeam.test.tsx
+M packages/surface-renderers/src/_shared/primitives.test.tsx
+M packages/surface-renderers/src/_shared/primitives.tsx
 ```
 
 Re-run before treating any row below as current.
 
 | State           | PRD    | Design anchors | Live anchors | HIGH | MEDIUM | Report                                               |
 | --------------- | ------ | -------------: | -----------: | ---: | -----: | ---------------------------------------------------- |
-| `board`         | PRD-01 |          18/18 |        17/18 |   28 |     37 | [report-board.md](./report-board.md)                 |
-| `board-changed` | PRD-01 |            9/9 |        10/10 |   12 |     11 | [report-board-changed.md](./report-board-changed.md) |
-| `no-spec`       | PRD-02 |          18/18 |        15/17 |   19 |     28 | [report-no-spec.md](./report-no-spec.md)             |
-| `no-spec-board` | PRD-02 |          18/18 |        15/17 |   19 |     28 | [report-no-spec-board.md](./report-no-spec-board.md) |
-| `board-capped`  | PRD-01 |            3/3 |          3/3 |   10 |     19 | [report-board-capped.md](./report-board-capped.md)   |
+| `board`         | PRD-01 |          18/18 |        17/18 |   19 |     30 | [report-board.md](./report-board.md)                 |
+| `board-changed` | PRD-01 |            9/9 |        10/10 |   10 |     10 | [report-board-changed.md](./report-board-changed.md) |
+| `no-spec`       | PRD-02 |          18/18 |        15/17 |   14 |     26 | [report-no-spec.md](./report-no-spec.md)             |
+| `no-spec-board` | PRD-02 |          18/18 |        15/17 |   14 |     26 | [report-no-spec-board.md](./report-no-spec-board.md) |
+| `board-capped`  | PRD-01 |            3/3 |          3/3 |    8 |     13 | [report-board-capped.md](./report-board-capped.md)   |
 
 A live anchor count below the design count is not a harness fault — it is the finding. Each unmatched label is listed in its own report as `present in design, ABSENT in live`.
 

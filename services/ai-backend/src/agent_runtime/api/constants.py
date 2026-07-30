@@ -201,6 +201,16 @@ class Keys:
         USAGE_ORG_SUBAGENTS = "usage_org_subagents"
         USAGE_ORG_PURPOSE = "usage_org_purpose"
         USAGE_ORG_AGENT = "usage_org_agent"
+        # Context Occupancy Ledger read API (context-attribution design §7).
+        # Named ``.../context/occupancy`` rather than ``.../context``: the
+        # literal ``/v1/agent/conversations/{conversation_id}/context`` is
+        # already taken by ``GET_CONVERSATION_CONTEXT`` (the token-window
+        # summary), and a second registration on that exact path would be
+        # silently shadowed. Occupancy is the decomposition *of* that window, so
+        # it reads naturally as a sub-resource; the run endpoint takes the same
+        # shape so the two halves of one family cannot drift apart.
+        RUN_CONTEXT_OCCUPANCY = "run_context_occupancy"
+        CONVERSATION_CONTEXT_OCCUPANCY = "conversation_context_occupancy"
         # Budget endpoints.
         BUDGETS_LIST = "budgets_list"
         BUDGETS_CREATE = "budgets_create"

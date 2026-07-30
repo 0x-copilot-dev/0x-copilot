@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/surface-language/out/design-board-capped.json`
 - Live: `surfaces/surface-language/out/live-board-capped.json`
 
-**Summary:** 🔴 HIGH 10 · 🟠 MEDIUM 19 · 🟡 LOW 10 · ⚪ INFO 6
+**Summary:** 🔴 HIGH 8 · 🟠 MEDIUM 13 · 🟡 LOW 9 · ⚪ INFO 6
 
-## 🔴 HIGH (10)
+## 🔴 HIGH (8)
 
 | Element     | Group | Property        | Design → Live                                                                                             |
 | ----------- | ----- | --------------- | --------------------------------------------------------------------------------------------------------- |
@@ -16,37 +16,29 @@ Design baseline (source of truth) vs live app, by computed style.
 | `cap.line`  | Cap   | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                  |
 | `cap.line`  | Cap   | backgroundColor | oklch(0.188 0.009 276) → rgba(0, 0, 0, 0) (transparent)                                                   |
 | `cap.line`  | Cap   | borderColor     | oklch(1 0 0 / 0.07) rgb(100, 100, 109) rgb(100, 100, 109) rgb(100, 100, 109) → rgb(152, 152, 159) (--mut) |
-| `cap.badge` | Cap   | fontFamily      | typeface class changed (mono → sans)                                                                      |
-| `cap.badge` | Cap   | color           | rgb(152, 152, 159) (--mut) → rgb(212, 212, 219) (--tx2)                                                   |
 | `cap.badge` | Cap   | borderColor     | oklch(1 0 0 / 0.115) → rgba(255, 255, 255, 0.1) (--line2)                                                 |
 | `cap.card`  | Cap   | backgroundColor | oklch(0.212 0.01 276) → rgb(17, 17, 20) (--panel)                                                         |
 | `cap.card`  | Cap   | borderColor     | oklch(1 0 0 / 0.115) → rgba(255, 255, 255, 0.1) (--line2)                                                 |
 
-## 🟠 MEDIUM (19)
+## 🟠 MEDIUM (13)
 
-| Element     | Group | Property      | Design → Live                                                                                                                   |
-| ----------- | ----- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `cap.line`  | Cap   | display       | flex → block                                                                                                                    |
-| `cap.line`  | Cap   | alignItems    | center → normal                                                                                                                 |
-| `cap.line`  | Cap   | minHeight     | 0px → auto                                                                                                                      |
-| `cap.line`  | Cap   | padding       | 7px 12px → 0px                                                                                                                  |
-| `cap.line`  | Cap   | borderWidth   | 1px 0px 0px 0px → 0px                                                                                                           |
-| `cap.line`  | Cap   | gap           | 13px → normal                                                                                                                   |
-| `cap.badge` | Cap   | fontSize      | 10.5px → 11px (+0.5px)                                                                                                          |
-| `cap.badge` | Cap   | display       | flex → block                                                                                                                    |
-| `cap.badge` | Cap   | alignItems    | center → normal                                                                                                                 |
-| `cap.badge` | Cap   | padding       | 2px 8px → 3px 8px                                                                                                               |
-| `cap.badge` | Cap   | gap           | 6px → normal                                                                                                                    |
-| `cap.card`  | Cap   | display       | block → flex                                                                                                                    |
-| `cap.card`  | Cap   | flexDirection | row → column                                                                                                                    |
-| `cap.card`  | Cap   | boxShadow     | rgba(255, 255, 255, 0.035) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.85) 0px 20px 44px -30px → rgba(0, 0, 0, 0.4) 0px 8px 28px 0px |
-| `cap.card`  | Cap   | overflowX     | hidden → visible                                                                                                                |
-| `cap.card`  | Cap   | overflowY     | hidden → visible                                                                                                                |
-| `cap.card`  | Cap   | padding       | 0px → 22px                                                                                                                      |
-| `cap.card`  | Cap   | borderRadius  | 12px → 14px                                                                                                                     |
-| `cap.card`  | Cap   | gap           | normal → 16px                                                                                                                   |
+| Element    | Group | Property      | Design → Live                                                                                                                   |
+| ---------- | ----- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `cap.line` | Cap   | display       | flex → block                                                                                                                    |
+| `cap.line` | Cap   | alignItems    | center → normal                                                                                                                 |
+| `cap.line` | Cap   | minHeight     | 0px → auto                                                                                                                      |
+| `cap.line` | Cap   | padding       | 7px 12px → 0px                                                                                                                  |
+| `cap.line` | Cap   | borderWidth   | 1px 0px 0px 0px → 0px                                                                                                           |
+| `cap.line` | Cap   | gap           | 13px → normal                                                                                                                   |
+| `cap.card` | Cap   | display       | block → flex                                                                                                                    |
+| `cap.card` | Cap   | flexDirection | row → column                                                                                                                    |
+| `cap.card` | Cap   | boxShadow     | rgba(255, 255, 255, 0.035) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.85) 0px 20px 44px -30px → rgba(0, 0, 0, 0.4) 0px 8px 28px 0px |
+| `cap.card` | Cap   | overflowX     | hidden → visible                                                                                                                |
+| `cap.card` | Cap   | overflowY     | hidden → visible                                                                                                                |
+| `cap.card` | Cap   | padding       | 0px → 24px                                                                                                                      |
+| `cap.card` | Cap   | gap           | normal → 16px                                                                                                                   |
 
-## 🟡 LOW (10)
+## 🟡 LOW (9)
 
 | Element     | Group | Property      | Design → Live                                     |
 | ----------- | ----- | ------------- | ------------------------------------------------- |
@@ -55,8 +47,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `cap.line`  | Cap   | height        | 30px → 15px                                       |
 | `cap.line`  | Cap   | borderStyle   | solid none none none → none                       |
 | `cap.badge` | Cap   | lineHeight    | 15.75px → normal                                  |
-| `cap.badge` | Cap   | letterSpacing | normal → 0.4px                                    |
-| `cap.badge` | Cap   | height        | 21.75px → 21px                                    |
+| `cap.badge` | Cap   | height        | 21.75px → 20px                                    |
 | `cap.card`  | Cap   | lineHeight    | 19.5px → normal                                   |
 | `cap.card`  | Cap   | height        | 500.75px → 712px                                  |
 | `cap.card`  | Cap   | tag           | <div> → <section> (semantic/default-style change) |
@@ -66,8 +57,8 @@ Design baseline (source of truth) vs live app, by computed style.
 | Element     | Group | Property | Design → Live                                                                                                                     |
 | ----------- | ----- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `cap.line`  | Cap   | text     | “Showing 8 of 1284 rows6 of 6 columnsrender cap 200” → “Showing 200 of 260 cards.”                                                |
-| `cap.line`  | Cap   | width    | expected: intrinsic width follows dynamic runtime copy — 1000px → 774px                                                           |
+| `cap.line`  | Cap   | width    | expected: intrinsic width follows dynamic runtime copy — 1000px → 770px                                                           |
 | `cap.badge` | Cap   | text     | “8 of 1284 rows” → “260 cards”                                                                                                    |
-| `cap.badge` | Cap   | width    | expected: intrinsic width follows dynamic runtime copy — 106.219px → 74.625px                                                     |
+| `cap.badge` | Cap   | width    | expected: intrinsic width follows dynamic runtime copy — 106.219px → 74.7031px                                                    |
 | `cap.card`  | Cap   | text     | “Table/curated specLaunch Week payout batch8 transfers · ops …” → “BoardCycle 14 — Launch Week260 cardsTriage58Payout CSV drops…” |
 | `cap.card`  | Cap   | width    | expected: intrinsic width follows dynamic runtime copy — 1002px → 820px                                                           |
