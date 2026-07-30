@@ -13,6 +13,7 @@ from agent_runtime.artifacts.contracts import (
     ArtifactStoredRecord,
     ArtifactStoredRevision,
 )
+from agent_runtime.artifacts.execution_mode import ArtifactExecutionMode
 from agent_runtime.surfaces_v2.entities import Artifact, ArtifactRevision
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactContentRefCodec
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -24,6 +25,10 @@ from agent_runtime.surfaces_v2.ledger_models import (
 )
 
 NOW = datetime(2026, 7, 24, 8, 30, tzinfo=timezone.utc)
+# Every artifact command states the mode it ran under. The service derives it;
+# these store-level fixtures state it literally, and `staged` is the only value
+# anything produces today.
+EXECUTION_MODE = ArtifactExecutionMode.STAGED
 SCOPE = ArtifactScope(
     org_id="org_artifacts",
     user_id="user_artifacts",
@@ -135,6 +140,7 @@ def make_create_command(
             scope=scope,
         ),
         ledger_events=(event,),
+        execution_mode=EXECUTION_MODE,
     )
 
 
@@ -191,6 +197,7 @@ def make_append_command(
             payload=payload.model_dump(mode="json", by_alias=True),
             created_at=created_at,
         ),
+        execution_mode=EXECUTION_MODE,
     )
 
 
@@ -212,4 +219,5 @@ def make_delete_command(
             request_digest=None,
             scope=scope,
         ),
+        execution_mode=EXECUTION_MODE,
     )

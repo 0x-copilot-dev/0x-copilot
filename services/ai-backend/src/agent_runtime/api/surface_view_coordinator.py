@@ -77,7 +77,12 @@ class _CoordMessages:
 
 
 class _StateKey:
-    """Keys read out of the B2 content fold's ``{spec?, data}`` state."""
+    """Keys read out of the B2 content fold's ``{spec?, source?, data}`` state.
+
+    Only ``data`` is named here on purpose: ``spec`` and ``source`` are the
+    RUNTIME's own output, and this coordinator's one job with the state is to
+    find the connector's. See :meth:`SurfaceViewCoordinator._stored_payload`.
+    """
 
     DATA = "data"
 
@@ -346,9 +351,18 @@ class SurfaceViewCoordinator:
     ) -> object:
         """The stored tool-output payload for a surface (B2 content fold).
 
-        Prefers the surface's ``data`` (the tool output shape a spec is generated
-        for); falls back to the whole hydrated ``state`` when no ``data`` key is
-        present. ``None`` ⇒ the deriver raises ``surface_not_found``.
+        ``data`` is the ONLY member of the folded state that is tool output. A
+        surface whose ``payload_ref`` does not resolve still folds to a state
+        when a generated ``spec`` landed for it — and the fold attaches
+        ``source`` to any state with content — so the state is
+        ``{'spec': …, 'source': …}`` with no ``data`` at all. Returning that as
+        the payload handed the spec generator OUR OWN provenance and OUR OWN
+        prior spec as if a connector had returned them, and hashed that shape
+        into the cache key the regenerated spec is stored under.
+
+        So there is no fallback: no ``data`` ⇒ ``None`` ⇒ the deriver raises
+        ``surface_not_found``, which is the honest answer to "re-derive this
+        from the stored response" when no stored response resolved.
         """
 
         content = SurfaceContentProjection.fold(
@@ -358,8 +372,7 @@ class SurfaceViewCoordinator:
         state = content.get(surface_id)
         if not isinstance(state, Mapping):
             return None
-        data = state.get(_StateKey.DATA)
-        return data if data is not None else dict(state)
+        return state.get(_StateKey.DATA)
 
     @staticmethod
     def _regen_count(events, *, surface_id: str) -> int:

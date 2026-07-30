@@ -541,14 +541,15 @@ function displayToolName(value: unknown): string | undefined {
  *
  * Both paths are then the contract's own `SurfaceSource` shape
  * (`{server, tool}`), never an invented key: `source.tool` is where a spec-less
- * envelope would name its tool, and `spec.source.tool` covers the real case
- * where a spec DID ride along but failed `specFromState`'s minimal-shape gate —
- * we could not use it, so "no spec matched" is still true, but it still tells
- * us which tool this was.
+ * envelope names its tool, and `spec.source.tool` covers the real case where a
+ * spec DID ride along but failed `specFromState`'s minimal-shape gate — we
+ * could not use it, so "no spec matched" is still true, but it still tells us
+ * which tool this was.
  *
- * Nothing on the wire sets the first key today (`SurfaceState` is `{spec?,
- * data}`), which is exactly why the note must read without it. `resolvePath`
- * never throws and returns `undefined` on every miss.
+ * `source` is optional on `SurfaceState` and always will be: every surface
+ * emitted before the field existed carries none, so absent stays a first-class
+ * answer rather than a fault. `resolvePath` never throws and returns
+ * `undefined` on every miss.
  */
 export function toolNameFromState(state: unknown): string | undefined {
   if (!isSurfaceEnvelopeShape(state)) {
@@ -661,7 +662,8 @@ const readOnlyReasonStyle: CSSProperties = {
  */
 export function NoSpecView(props: {
   readonly data: unknown;
-  /** Untrusted — see {@link displayToolName}. Absent is the common case. */
+  /** Untrusted — see {@link displayToolName}. Absent whenever the envelope
+   * carried no provenance, which every pre-`source` surface does. */
   readonly tool?: unknown;
 }): ReactElement {
   const tool = displayToolName(props.tool);

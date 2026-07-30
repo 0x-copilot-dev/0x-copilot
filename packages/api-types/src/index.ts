@@ -79,6 +79,7 @@ export type {
   ArtifactAuthor,
   ArtifactPresentationPreference,
   PresentationDecision,
+  SurfaceAccent,
   SurfaceSubjectType,
   EffectPolicy,
   EffectDecisionKind,
@@ -3873,9 +3874,18 @@ export interface SurfaceFieldChange {
 
 /** The rendered state of a surface. `spec` absent ⇒ the host renders the tier-3
  * generic view; a spec may arrive later via `surface_spec_generated` and be
- * merged by `surface_uri`. `data` is untrusted tool output. */
+ * merged by `surface_uri`. `data` is untrusted tool output.
+ *
+ * `source` names the connector tool whose output `data` is — the ENVELOPE's
+ * provenance, written by the runtime, not a key read out of `data`. It is what
+ * lets the spec-less view say *which* tool it could not match instead of "this
+ * tool result". It is optional **forever**: every surface emitted before this
+ * field existed carries none, and every replay of those events still must
+ * render. Absent means "unknown tool" — never an error, and never a reason to
+ * reject the state. */
 export interface SurfaceState {
   spec?: SurfaceSpec;
+  source?: SurfaceSource;
   data: unknown;
 }
 

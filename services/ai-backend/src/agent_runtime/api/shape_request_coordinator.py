@@ -384,7 +384,24 @@ class ShapeRequestCoordinator:
         surface_id: str,
         payload_ref: str,
     ) -> object:
-        """The stored tool-output payload for a surface (B2 content fold)."""
+        """The stored tool-output payload for a surface (B2 content fold).
+
+        Identical rule to :meth:`SurfaceViewCoordinator._stored_payload`, and it
+        must stay identical: both routes feed the SAME shaping model, so a
+        fallback on either one is a fallback on the feature.
+
+        ``data`` is the only member of the folded state that is tool output. A
+        surface whose ``payload_ref`` does not resolve still folds to a state
+        when a generated ``spec`` landed for it — and the fold attaches
+        ``source`` to any state with content — so the state is
+        ``{'spec': …, 'source': …}`` with no ``data`` at all. Returning that
+        handed the generator OUR OWN provenance and OUR OWN prior spec as if a
+        connector had produced them.
+
+        So there is no fallback: no ``data`` ⇒ ``None`` ⇒ the caller raises
+        ``surface_not_found``, the honest answer to "shape this from the stored
+        response" when no stored response resolved.
+        """
 
         content = SurfaceContentProjection.fold(
             events,
@@ -393,8 +410,7 @@ class ShapeRequestCoordinator:
         state = content.get(surface_id)
         if not isinstance(state, Mapping):
             return None
-        data = state.get(_StateKey.DATA)
-        return data if data is not None else dict(state)
+        return state.get(_StateKey.DATA)
 
     async def _run_for_scope(
         self, *, org_id: str, user_id: str, run_id: str

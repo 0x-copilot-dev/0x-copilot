@@ -1,4 +1,10 @@
-import { useCallback, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 import {
   isArtifactMutationResponse,
   type ArtifactRevision,
@@ -9,6 +15,7 @@ import {
   type Transport,
 } from "@0x-copilot/chat-transport";
 import { TcSurfaceMount } from "../thread-canvas/TcSurfaceMount";
+import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { ArtifactDownloadPort } from "../ports/ArtifactDownloadPort";
 import { ArtifactEditor } from "./ArtifactEditor";
 import { ArtifactFrame } from "./ArtifactFrame";
@@ -18,6 +25,11 @@ import {
   type ArtifactTextComparison,
 } from "./ArtifactRevisionCompare";
 import { ArtifactRevisionHistory } from "./ArtifactRevisionHistory";
+import {
+  ArtifactRevisionReview,
+  REVIEWED_ARTIFACT_AUTHORS,
+  type ArtifactRevisionReviewState,
+} from "./ArtifactRevisionReview";
 import {
   decodeArtifactUtf8,
   readBoundedArtifactBytes,
@@ -33,9 +45,54 @@ function idempotencyKey(): string {
     : `artifact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * SHA-256 of the bytes about to be uploaded, as the server expects.
+ *
+ * Returns an empty object when `crypto.subtle` is unavailable (a non-secure
+ * context) rather than sending something wrong: the field is optional, and an
+ * absent integrity check is honest where an incorrect one rejects every write.
+ */
+async function contentDigest(
+  content: Uint8Array,
+): Promise<{ expectedDigest?: string }> {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) return {};
+  try {
+    const digest = await subtle.digest(
+      "SHA-256",
+      new Uint8Array(content).buffer,
+    );
+    return {
+      expectedDigest: Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function ArtifactSurface(props: {
   readonly uri: string;
   readonly transport: Transport;
+  /**
+   * The artifact's chosen identity hue — `publish_artifact`'s `accent`, as the
+   * conversation-canvas record carries it. The caller holds that record (this
+   * surface fetches content and revisions, not the canvas), so the choice is
+   * passed in rather than re-fetched here, and it is the SAME value the caller
+   * gives the artifact's tab. Omitted means no choice was made: the hue is then
+   * derived from the artifact URI's scheme, which is what every artifact
+   * rendered before this prop existed.
+   *
+   * Typed as the closed hue set, not `string`. Untrusted values are narrowed
+   * with `isSurfaceHue` where they enter — `useConversationCanvas` does exactly
+   * that when parsing the record — so every real caller already holds a
+   * `SurfaceHue`, and `string` here only discarded a check they could satisfy.
+   * The runtime fallback in `resolveSurfaceHue` stays regardless: this prop is
+   * a compile-time guarantee, and the renderer must remain total over a value
+   * that reached it without one.
+   */
+  readonly hue?: SurfaceHue;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
 }): ReactElement {
@@ -50,6 +107,20 @@ export function ArtifactSurface(props: {
   const [restoreStatus, setRestoreStatus] = useState<
     "idle" | "restoring" | "conflict" | "error" | "too_large"
   >("idle");
+  const [review, setReview] = useState<ArtifactRevisionReviewState | null>(
+    null,
+  );
+  const [reviewComparison, setReviewComparison] =
+    useState<ArtifactTextComparison | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  /** The revision last shown, so an arrival can be told from a first paint. */
+  const shownRevision = useRef<number | null>(null);
+  /** Set when the reader themselves moved — a move is never an arrival. */
+  const navigated = useRef(false);
+  /** The `base:revision` pair whose comparison is in flight or settled. */
+  const reviewFetch = useRef<string | null>(null);
   const artifactId = parsed?.artifactId ?? "";
   const kind = parsed?.kind ?? "file";
   const revision = selectedRevision ?? parsed?.revision ?? 1;
@@ -75,7 +146,14 @@ export function ArtifactSurface(props: {
         const response = await props.transport.createArtifactRevision({
           artifactId: data.detail.artifact.artifact_id,
           parentRevision: parent.revision,
-          expectedDigest: parent.content_digest,
+          // The digest of the bytes BEING UPLOADED, never the parent's.
+          // The server hashes the incoming stream and compares, so sending the
+          // parent digest made every real edit fail its own integrity check —
+          // a 422 that was invisible while the sealed-run 409 fired first.
+          // Optimistic concurrency is carried by `parentRevision` and the
+          // If-Match etag; this field is only a transit-integrity check, so it
+          // is omitted rather than faked when the platform cannot compute it.
+          ...(await contentDigest(content)),
           ...(etag !== undefined ? { etag } : {}),
           content,
           contentType: data.detail.artifact.media_type,
@@ -128,6 +206,7 @@ export function ArtifactSurface(props: {
   const selectRevision = (next: number): void => {
     setComparison(null);
     setCompareStatus("idle");
+    navigated.current = true;
     setSelectedRevision(next);
     props.onNavigateRevision?.(artifactUri(kind, artifactId, next));
   };
@@ -146,16 +225,19 @@ export function ArtifactSurface(props: {
           },
         }
       : data.state;
-  const compareToCurrent = useCallback(
-    async (targetRevision: number): Promise<void> => {
+  // Bounded fetch-and-diff of one revision against the current head. Two callers
+  // share it — the reader's explicit "Compare to current" and the automatic
+  // review of an agent revision — so both read the same bytes through the same
+  // per-kind limits. `null` means "not comparable as bounded UTF-8 text".
+  const buildComparison = useCallback(
+    async (targetRevision: number): Promise<ArtifactTextComparison | null> => {
       if (
         parsed === null ||
         data.detail === null ||
         data.latestRevision === null ||
         !isArtifactTransport(props.transport)
       ) {
-        setCompareStatus("error");
-        return;
+        return null;
       }
       const current = data.revisions.find(
         (item) => item.revision === data.latestRevision,
@@ -170,11 +252,8 @@ export function ArtifactSurface(props: {
         current.byte_size > limit ||
         target.byte_size > limit
       ) {
-        setComparison(null);
-        setCompareStatus("error");
-        return;
+        return null;
       }
-      setCompareStatus("loading");
       try {
         const [targetContent, currentContent] = await Promise.all([
           props.transport.getArtifactContent({
@@ -192,22 +271,27 @@ export function ArtifactSurface(props: {
         ]);
         const targetText = decodeArtifactUtf8(targetBytes);
         const currentText = decodeArtifactUtf8(currentBytes);
-        if (targetText === null || currentText === null) throw new Error();
-        setComparison(
-          compareArtifactText(
-            targetText,
-            currentText,
-            target.revision,
-            current.revision,
-          ),
+        if (targetText === null || currentText === null) return null;
+        return compareArtifactText(
+          targetText,
+          currentText,
+          target.revision,
+          current.revision,
         );
-        setCompareStatus("ready");
       } catch {
-        setComparison(null);
-        setCompareStatus("error");
+        return null;
       }
     },
-    [data, parsed, props.transport],
+    [data.detail, data.latestRevision, data.revisions, parsed, props.transport],
+  );
+  const compareToCurrent = useCallback(
+    async (targetRevision: number): Promise<void> => {
+      setCompareStatus("loading");
+      const next = await buildComparison(targetRevision);
+      setComparison(next);
+      setCompareStatus(next === null ? "error" : "ready");
+    },
+    [buildComparison],
   );
   const restore = useCallback(
     async (targetRevision: number): Promise<void> => {
@@ -250,6 +334,75 @@ export function ArtifactSurface(props: {
     },
     [appendRevision, data, parsed, props.transport],
   );
+  // A revision the reader did not make can land on top of the one they are
+  // reading — the model revising an artifact mid-run. Announce it as a diff
+  // instead of swapping the bytes underneath them (PRD-03 D1). This is not a
+  // gate: the revision is already current, and nothing here blocks the write.
+  //
+  // Only the head qualifies. A revision that is not current has no honest
+  // r(n-1)→r(n) reading, and the comparison below is always against the head.
+  useEffect(() => {
+    const shown = data.detail?.current_revision;
+    if (shown === undefined) return;
+    const previous = shownRevision.current;
+    if (previous === shown.revision) return;
+    shownRevision.current = shown.revision;
+    const deliberate = navigated.current;
+    navigated.current = false;
+    setReviewComparison(null);
+    reviewFetch.current = null;
+    if (
+      previous === null ||
+      deliberate ||
+      shown.revision !== data.latestRevision ||
+      shown.parent_revision !== previous ||
+      !REVIEWED_ARTIFACT_AUTHORS.has(shown.author)
+    ) {
+      // Includes the reader's own revision — a user edit, or the revert
+      // appended just below — which needs no review of its own.
+      setReview(null);
+      setReviewStatus("idle");
+      return;
+    }
+    setReview({
+      baseRevision: previous,
+      revision: shown.revision,
+      author: shown.author,
+    });
+    setReviewStatus("loading");
+  }, [data.detail, data.latestRevision]);
+  // Deferred until both revisions are in the loaded history, because the
+  // comparison reads their byte sizes to stay inside the per-kind bound. The
+  // pair ref keeps one comparison in flight and drops a stale resolution.
+  useEffect(() => {
+    if (review === null || reviewStatus !== "loading") return;
+    const loaded = (target: number): boolean =>
+      data.revisions.some((item) => item.revision === target);
+    if (!loaded(review.baseRevision) || !loaded(review.revision)) return;
+    const pair = `${review.baseRevision}:${review.revision}`;
+    if (reviewFetch.current === pair) return;
+    reviewFetch.current = pair;
+    void buildComparison(review.baseRevision).then((next) => {
+      if (reviewFetch.current !== pair) return;
+      setReviewComparison(next);
+      setReviewStatus(next === null ? "error" : "ready");
+    });
+  }, [buildComparison, data.revisions, review, reviewStatus]);
+  const keepRevision = useCallback((): void => {
+    // Dismiss only. The reviewed revision is already current, so keeping it
+    // appends nothing.
+    setReview(null);
+    setReviewComparison(null);
+    setReviewStatus("idle");
+    reviewFetch.current = null;
+  }, []);
+  const revertRevision = useCallback((): void => {
+    if (review === null) return;
+    // Appends a copy of the parent through the same bounded restore the history
+    // uses; the reviewed revision stays in history. The review closes on its
+    // own once that appended revision becomes the one on screen.
+    void restore(review.baseRevision);
+  }, [restore, review]);
   if (parsed === null)
     return (
       <section className="ui-card" role="status">
@@ -270,6 +423,10 @@ export function ArtifactSurface(props: {
             mountedState.artifactId,
             mountedState.revision,
           )}
+          // Forwarded unresolved. The mount resolves it through the same helper
+          // the tab strip uses, so an artifact's card and its tab cannot end up
+          // claiming different sources.
+          hue={props.hue}
           transport={props.transport}
           state={mountedState}
         />
@@ -282,6 +439,14 @@ export function ArtifactSurface(props: {
           onSave={save}
         />
       ) : null}
+      <ArtifactRevisionReview
+        review={review}
+        comparison={reviewComparison}
+        status={reviewStatus}
+        onKeep={keepRevision}
+        onRevert={revertRevision}
+        revertDisabled={restoreStatus === "restoring"}
+      />
       <ArtifactRevisionCompare
         comparison={comparison}
         status={compareStatus}

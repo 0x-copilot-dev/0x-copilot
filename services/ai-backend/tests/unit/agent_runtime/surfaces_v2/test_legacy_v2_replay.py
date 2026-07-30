@@ -200,3 +200,30 @@ def test_evaluation_metadata_is_explicitly_quarantined_from_event_replay() -> No
     assert "events" not in json.loads(
         (_REPO_ROOT / str(shadow_vectors["path"])).read_text(encoding="utf-8")
     )
+
+
+def test_reader_1_state_shape_is_not_widened_by_an_upstream_fold() -> None:
+    """The reader publishes ``{spec?, data}`` and nothing the fold learns later.
+
+    ``SurfaceContentProjection`` now also resolves ``source`` (a surface's
+    connector/tool provenance) so the live canvas can name the tool on a
+    spec-less surface. This reader must not inherit it: its projection is a
+    cross-language contract implemented twice (Python here, TypeScript in
+    ``packages/api-types/src/legacyV2Replay.ts``) and pinned to the shared
+    ``legacy_v2_replay_corpus.json`` vectors, so widening the shape is a
+    ``reader_version`` change made on both sides at once — never a side effect.
+
+    The same two facts are already published as first-class
+    ``source_connector`` / ``source_op``, so nothing is lost by withholding them
+    from ``state``.
+    """
+
+    case = _case("connector_subject_declared_reference_hydration")
+    projection = project_legacy_v2_replay(_events(case))
+
+    assert projection.reader_version == 1
+    surface = projection.surfaces[0]
+    assert surface.state is not None
+    assert set(surface.state) <= {"spec", "data"}
+    # The provenance the source event carried is published, just not in `state`.
+    assert (surface.source_connector, surface.source_op) == ("linear", "get_issue")

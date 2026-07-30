@@ -1,10 +1,11 @@
 """Pure-domain surface projection (generative-UI PRD-02, plan D3/D4).
 
 :class:`SurfaceProjector` turns a connector tool's output into a
-:class:`SurfaceEnvelope` — a ``surface_uri`` plus ``{spec?, data}`` — that rides
-inside the ``tool_result`` / ``draft_updated`` event payload. It is a *pure*
-function of its inputs: no I/O, no transport, no env reads. Two injected seams:
-an optional :class:`~agent_runtime.capabilities.surfaces.store.SurfaceSpecReadPort`
+:class:`SurfaceEnvelope` — a ``surface_uri`` plus ``{spec?, source?, data}`` —
+that rides inside the ``tool_result`` / ``draft_updated`` event payload. It is a
+*pure* function of its inputs: no I/O, no transport, no env reads. Two injected
+seams: an optional
+:class:`~agent_runtime.capabilities.surfaces.store.SurfaceSpecReadPort`
 (rung-2 cache read) and an optional :class:`SurfaceGenerationSchedulerPort`
 (rung-3 async generation, PRD-07).
 
@@ -37,6 +38,7 @@ from agent_runtime.capabilities.surfaces import builtin
 from agent_runtime.capabilities.surfaces.spec_models import (
     SurfaceArchetype,
     SurfaceEnvelope,
+    SurfaceSource,
     SurfaceSpec,
     SurfaceState,
 )
@@ -146,8 +148,51 @@ class SurfaceProjector:
         return SurfaceEnvelope(
             surface_uri=surface_uri,
             archetype=archetype,
-            state=SurfaceState(spec=spec, data=output),
+            state=SurfaceState(
+                spec=spec,
+                source=self._state_source(server_name, tool_name),
+                data=output,
+            ),
         )
+
+    # -- provenance -----------------------------------------------------------
+
+    @staticmethod
+    def _state_source(server_name: str, tool_name: str) -> SurfaceSource | None:
+        """The envelope's ``{server, tool}`` provenance, or ``None``.
+
+        Carried on EVERY state, spec or not: on a miss it is the only thing that
+        can name the unmatched tool for the tier-3 note, and on a hit it agrees
+        with ``spec.source`` at no cost.
+
+        **This is the one place the served name is decided.**
+        ``WorkLedgerEmitter`` does not compute its own — it restates this pair
+        off the envelope onto ``surface.created.source``, which is what the v2
+        fold hands the renderer. They used to derive it separately, one through
+        ``tool_slug`` and one not, which is how two names for one tool reached
+        two different screens.
+
+        It uses :func:`builtin.display_name`, deliberately not the lookup slugs.
+        What the caller passes is what gets served, unchanged apart from
+        whitespace: a name that reaches a person must not be re-spelled on the
+        way. That the MCP path happens to hand it names already lowercased at
+        the ``McpToolCallRequest`` boundary is that contract's business, not
+        this function's — this one must not lowercase a name a second time, and
+        must not lowercase a name that arrived intact from anywhere else.
+
+        Returns ``None`` rather than raising when either name is blank.
+        :class:`SurfaceSource` requires both members to be non-empty, and this
+        projector is called outside any ``try`` (see
+        ``SurfaceLedgerOperationOutcomePresenter``) — a ValidationError here
+        would turn a nameless tool into a failed tool call. An unnamed source is
+        exactly the "unknown tool" the note already has a sentence for.
+        """
+
+        server = builtin.display_name(server_name)
+        tool = builtin.display_name(tool_name)
+        if not server or not tool:
+            return None
+        return SurfaceSource(server=server, tool=tool)
 
     # -- ladder ---------------------------------------------------------------
 

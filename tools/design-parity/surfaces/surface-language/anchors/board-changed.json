@@ -5,7 +5,7 @@
   "viewport": "1200x816",
   "design": "surfaces/surface-language/design/index.html?state=board-changed",
   "live": "surfaces/surface-language/live/board-changed.html",
-  "note": "The ATTENTION register on a board card. Both sides mark the SAME card — LW-142, lane index 1, card index 0 — because the live fixture rides the one trusted signal BoardRenderer accepts (a SurfaceFieldChange whose field indexes items_path). PRD-01 requirement 5: accent border + 2px inset accent bar, and NOT the board's plum identity hue, which stays on the kicker dot. So `changed.card` borderColor/boxShadow are the two rows this state exists to check, and `card.kicker-dot` is the control that must NOT have moved.\n\nSame two read-past caveats as anchors/board.json: the functional-mode oklch neutral ladder puts one systemic delta on every background, and the decorative kicker dot inherits its parent's type (read only its backgroundColor/boxShadow/size).",
+  "note": "The ATTENTION register on a board card. Both sides mark the SAME card \u2014 LW-142, lane index 1, card index 0 \u2014 because the live fixture rides the one trusted signal BoardRenderer accepts (a SurfaceFieldChange whose field indexes items_path). PRD-01 requirement 5: accent border + 2px inset accent bar, and NOT the board's plum identity hue, which stays on the kicker dot. So `changed.card` borderColor/boxShadow are the two rows this state exists to check, and `card.kicker-dot` is the control that must NOT have moved.\n\nSame two read-past caveats as anchors/board.json: the functional-mode oklch neutral ladder puts one systemic delta on every background, and the decorative kicker dot inherits its parent's type (read only its backgroundColor/boxShadow/size).",
   "extraProps": [
     "position",
     "top",
@@ -70,7 +70,8 @@
       "label": "changed.transition-chip",
       "group": "Changed card",
       "design": ".sfbd > .sfbd-c:nth-child(2) > .sfk[data-chg] > .f > .sfn",
-      "note": "DESIGN-ONLY on purpose (no live selector). The mock states the transition in words on the card — an accent chip reading \"→ In review\". Live's only statement is colour plus a visually-hidden \"Changed\". Left unbound rather than pointed at the hidden span, because measuring an off-screen 1×1 element against a visible chip would report font and colour deltas that mean nothing; the honest finding is that the visible statement is absent."
+      "note": "The mock states the transition in words on the card \u2014 an accent chip reading \"\u2192 In review\". Live now renders the same statement, so this is bound rather than design-only. It was DESIGN-ONLY until the chip existed; leaving it unbound now would keep reporting an absence that has been closed.",
+      "live": "[data-testid=\"board-lane-1-card-0-transition\"]"
     },
     {
       "label": "changed.sr-marker",
@@ -89,11 +90,11 @@
   "unmapped": [
     {
       "design": ".sf-note",
-      "why": "The mock's proposed state also renders an explanatory note above the board (\"LW-142 moves In progress → In review …\"). That belongs to the approval flow, not to PRD-01's card mark, and PRD-01 scopes itself to the current-state view. Excluded deliberately rather than filed as drift."
+      "why": "The mock's proposed state also renders an explanatory note above the board (\"LW-142 moves In progress \u2192 In review \u2026\"). That belongs to the approval flow, not to PRD-01's card mark, and PRD-01 scopes itself to the current-state view. Excluded deliberately rather than filed as drift."
     },
     {
       "design": ".sf-bar",
-      "why": "Same reason — the mock's proposed state carries an approve/reject bar. Approval chrome is host-owned (TcSurfaceMount renders the controls), not part of the board renderer PRD-01 changes."
+      "why": "Same reason \u2014 the mock's proposed state carries an approve/reject bar. Approval chrome is host-owned (TcSurfaceMount renders the controls), not part of the board renderer PRD-01 changes."
     }
   ]
 }

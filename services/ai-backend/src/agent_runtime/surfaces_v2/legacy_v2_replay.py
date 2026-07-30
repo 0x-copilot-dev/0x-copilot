@@ -521,7 +521,7 @@ def _hydrate_ledger_surfaces(
     for subject_id, surface in surfaces.items():
         hydrated = content.get(subject_id)
         if hydrated:
-            surface.state = _merge_state(surface.state, hydrated)
+            surface.state = _merge_state(surface.state, _reader_1_state(hydrated))
             continue
         if surface.state is None and surface.payload_ref is not None:
             _quarantine(
@@ -568,6 +568,31 @@ def _is_canonical_v21(event_type: str) -> bool:
 
 def _is_uri(value: str) -> bool:
     return bool(_URI_PATTERN.fullmatch(value))
+
+
+#: The surface-state keys ``reader_version: 1`` publishes. The reader's output is
+#: a cross-language contract — the same projection is implemented in TypeScript
+#: (``packages/api-types/src/legacyV2Replay.ts``) and both are pinned to the
+#: shared ``legacy_v2_replay_corpus.json`` vectors. A key the content fold learns
+#: to resolve later is therefore NOT automatically a key this reader publishes:
+#: widening the projection is a reader-version change made on both sides at once,
+#: not a side effect of an upstream fold gaining a field.
+_READER_1_STATE_KEYS: frozenset[str] = frozenset({"spec", "data"})
+
+
+def _reader_1_state(hydrated: Mapping[str, object]) -> dict[str, object]:
+    """Narrow resolved content to the state shape reader 1 declares.
+
+    ``SurfaceContentProjection`` also resolves ``source`` (the surface's
+    connector/tool provenance) for the live canvas, which reads it to name the
+    unmatched tool on a spec-less surface. Historic replay does not publish it:
+    the legacy display model already carries the same two facts as first-class
+    ``source_connector`` / ``source_op`` fields, and its wire shape is frozen.
+    """
+
+    return {
+        key: value for key, value in hydrated.items() if key in _READER_1_STATE_KEYS
+    }
 
 
 def _merge_state(

@@ -171,6 +171,20 @@ class ArtifactLedgerPublisherPort(Protocol):
 
 
 @runtime_checkable
+class ArtifactOperationAuditPort(Protocol):
+    """Append one artifact operation to the runtime's hash-chained audit log.
+
+    Deliberately the exact signature the runtime persistence stores already
+    expose, so every existing adapter (in-memory, file, postgres) satisfies it
+    unchanged and artifact operations land in the same signed, exportable log
+    as approvals and conversation lifecycle events rather than a private one.
+    """
+
+    async def write_audit_log(self, *, event_type: str, record: object) -> None:
+        """Append a signed audit row for one security-relevant action."""
+
+
+@runtime_checkable
 class ArtifactReferenceProviderPort(Protocol):
     """One exact per-digest reference source used during final GC checks."""
 
@@ -208,6 +222,7 @@ __all__ = (
     "ArtifactGarbageCollectorPort",
     "ArtifactLedgerPublisherPort",
     "ArtifactMetadataStorePort",
+    "ArtifactOperationAuditPort",
     "ArtifactReferenceProviderPort",
     "ArtifactRunScopeResolverPort",
     "ArtifactSourceResolverPort",

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
+// The wire test below drives the real archetype entry point rather than
+// `NoSpecView` directly. `toolNameFromState` returning the right string proves
+// nothing on its own — the defect PRD-02 shipped with was a lookup that was
+// correct and unreachable, because no wire carried what it read.
+import { ARCHETYPE_ADAPTERS } from "../archetypes";
 import {
   GenericFieldList,
   NoSpecView,
@@ -311,5 +316,89 @@ describe("toolNameFromState", () => {
       data: {},
     });
     expect(capped?.length).toBe(TOOL_NAME_MAX_CHARS + 1);
+  });
+});
+
+// PRD-02 requirement 1, end to end.
+//
+// `RUNTIME_SPECLESS_STATE` is not a hand-written state. It is the byte-for-byte
+// `HydratedSurfaceSnapshot.state` the ai-backend serves from
+// `GET /v1/agent/runs/{run_id}/surfaces` for a tool with no matching spec — the
+// value `useSurfacesV2.stateFor` hands the host mount, which is the only surface
+// input the client treats as renderer payload.
+//
+// The Python half is pinned to the identical literal in
+// `services/ai-backend/tests/unit/runtime_api/test_run_surfaces_endpoint.py`
+// (`TestSpecLessSurfaceWire.SPEC_LESS_STATE`), where the real projector +
+// ledger emitter + endpoint produce it rather than a fixture asserting itself.
+// The two must be edited together: if the server stops emitting `source`, that
+// test fails and this one keeps passing on a fixture that no longer describes
+// anything real — which is exactly how the original lookup came to read a key
+// nothing wrote.
+const RUNTIME_SPECLESS_STATE = {
+  data: {
+    incident_number: "4127",
+    title: "Elevated 5xx on checkout",
+    status: "acknowledged",
+    service: { id: "svc-9", name: "checkout-api" },
+  },
+  source: { server: "pagerduty", tool: "pagerduty.incident.read" },
+};
+
+describe("the spec-less state the runtime actually writes", () => {
+  it("names the unmatched tool in the note the user reads", () => {
+    // `renderCurrent` is the entry point the host mount calls; `record` is the
+    // archetype the projector infers for this payload.
+    const record = ARCHETYPE_ADAPTERS.find(
+      (adapter) => adapter.scheme === "record",
+    );
+    expect(record).toBeDefined();
+    render(record!.renderCurrent(RUNTIME_SPECLESS_STATE as never));
+
+    // No spec on this wire ⇒ the generic view, and it says which tool.
+    expect(screen.getByTestId("record-renderer")).toHaveAttribute(
+      "data-spec",
+      "absent",
+    );
+    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
+      "No spec matched pagerduty.incident.read, so this is the payload as the tool sent it",
+    );
+    // The failing state this closes: the note falling back to the nameless
+    // sentence because nothing on the wire carried a tool.
+    expect(screen.getByTestId("surface-no-spec-note")).not.toHaveTextContent(
+      "this tool result",
+    );
+    // Still inert — provenance arriving over the wire does not make it a link.
+    expect(screen.getByTestId("record-renderer").querySelector("a")).toBeNull();
+  });
+
+  it("names the tool through every archetype that degrades here", () => {
+    // The generic view is the degradation target for all of them, so a wire
+    // that only worked for `record` would be a per-archetype fix.
+    for (const adapter of ARCHETYPE_ADAPTERS) {
+      const view = render(
+        adapter.renderCurrent(RUNTIME_SPECLESS_STATE as never),
+      );
+      expect(screen.getByTestId("surface-no-spec-tool")).toHaveTextContent(
+        "pagerduty.incident.read",
+      );
+      view.unmount();
+    }
+  });
+
+  it("still renders the honest note for a surface emitted before `source` existed", () => {
+    // Every state persisted before this field carries none, and every replay of
+    // those runs still has to render. Absent means "unknown tool", not an error.
+    const { source: _source, ...beforeThisField } = RUNTIME_SPECLESS_STATE;
+    const record = ARCHETYPE_ADAPTERS[0];
+    render(record.renderCurrent(beforeThisField as never));
+
+    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
+      "No spec matched this tool result, so this is the payload as the tool sent it",
+    );
+    expect(screen.queryByTestId("surface-no-spec-tool")).toBeNull();
+    expect(screen.getByTestId("field-incident_number-value")).toHaveTextContent(
+      "4127",
+    );
   });
 });

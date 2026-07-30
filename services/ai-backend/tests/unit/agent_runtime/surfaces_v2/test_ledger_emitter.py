@@ -165,12 +165,102 @@ class TestOnToolResult(RecordingEmitMixin):
         created = recorded[2]["payload"]
         assert created["surface_id"] == "record://linear/get_issue/issue-1"
         assert created["kind"] == "record"
-        assert created["source"] == {"connector": "linear", "op": "get_issue"}
+        # The surface's provenance is the DISPLAY register: the names the call
+        # was made with, passed through unaltered — not the lookup slugs
+        # ``action.classified`` carries. The v2 content fold restates this pair
+        # verbatim as the renderer's ``state.source``, which the tier-3 note
+        # prints. (An MCP caller hands these already slug-folded; this asserts
+        # the surface layer does not fold them a second time.)
+        assert created["source"] == {"connector": "seed:linear", "op": "Get_Issue"}
         assert created["title"] == "ENG-142 Fix streaming reconnect"
         assert created["payload_ref"] == "call:call_01"
         derived = recorded[3]["payload"]
         assert derived["tier"] == "shaped"
         assert derived["basis"] == "registry"
+
+    def test_classification_keeps_the_lookup_slugs(self) -> None:
+        # The two registers do not collapse into one. ``surface.created.source``
+        # names the tool; ``action.classified`` / ``read.executed`` identify the
+        # CALL and stay on the normalised pair the catalogs key on.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        assert recorded[0]["payload"]["connector"] == "linear"
+        assert recorded[0]["payload"]["op"] == "get_issue"
+        assert recorded[1]["payload"]["connector"] == "linear"
+        assert recorded[1]["payload"]["op"] == "get_issue"
+        assert recorded[2]["payload"]["source"] != {
+            "connector": recorded[0]["payload"]["connector"],
+            "op": recorded[0]["payload"]["op"],
+        }
+
+    def test_surface_source_is_restated_from_the_envelope_not_recomputed(
+        self,
+    ) -> None:
+        # The structural pin behind "one served name". Two computations that
+        # agree today can drift tomorrow; this asserts the emitter does not
+        # compute at all. The envelope's ``state.source`` deliberately differs
+        # from the names this call was made with, and the envelope wins — that
+        # is only possible if the value is READ rather than derived.
+        emitter, recorded = self._make_emitter()
+        env = self._specless_envelope()
+        env["state"]["source"] = {"server": "Linear", "tool": "getIssue"}
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            server="somewhere-else",
+            tool="some_other_tool",
+        )
+
+        created = recorded[2]["payload"]
+        assert created["source"] == {"connector": "Linear", "op": "getIssue"}
+        assert created["title"] == "Linear · getIssue"
+
+    def test_surface_source_falls_back_when_the_envelope_names_nothing(
+        self,
+    ) -> None:
+        # Total over an untrusted envelope: a half-named source is no name, and
+        # taking it would pair a real connector with a slugged op. The call's
+        # own names are the honest fallback.
+        emitter, recorded = self._make_emitter()
+        env = self._specless_envelope()
+        env["state"]["source"] = {"server": "Linear"}
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            server="Linear",
+            tool="getIssue",
+        )
+
+        assert recorded[2]["payload"]["source"] == {
+            "connector": "Linear",
+            "op": "getIssue",
+        }
+
+    def test_fallback_title_names_the_tool_not_its_slug(self) -> None:
+        # The no-spec tab label is read by a person, so the emitter must serve
+        # the name it was given: ``getIssue`` put through ``tool_slug`` becomes
+        # ``getissue``, which names no tool anyone has seen. Whether a given
+        # caller still holds the connector's spelling by this point is that
+        # caller's business — this pins that the emitter does not destroy one.
+        emitter, recorded = self._make_emitter()
+        env = self._specless_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            server="Linear",
+            tool="getIssue",
+        )
+
+        assert recorded[2]["payload"]["title"] == "Linear · getIssue"
 
     def test_specless_envelope_yields_generic_schema_view_and_fallback_title(
         self,
