@@ -288,15 +288,20 @@ describe("desktop Run cockpit — the mid-run folder ask", () => {
       expect(decisionPosts(recorder)).toHaveLength(1);
     });
     expect(decisionPosts(recorder)[0]?.body).toEqual({ decision: "approved" });
-    // The ask is settled, not left hanging: the card gives way to an approved
-    // receipt (the cockpit's optimistic resolution of the interrupt).
+    // The ask is settled, not left hanging. It used to be observed via an
+    // approved RECEIPT, but a resolved approval is no longer pinned above the
+    // composer: by then the run has continued and its result is in the
+    // transcript, so the receipt carried no information and only cost height.
+    // The invariant it was really protecting — the card gives way and nothing
+    // is left dangling — is what is asserted now.
     await waitFor(() => {
-      const receipt = container.querySelector<HTMLElement>(
-        `[data-testid='tc-chat-approval-receipt-${APPROVAL_ID}']`,
-      );
-      expect(receipt?.dataset.decision).toBe("approved");
+      expect(card(container)).toBeNull();
     });
-    expect(card(container)).toBeNull();
+    expect(
+      container.querySelector(
+        `[data-testid='tc-chat-approval-receipt-${APPROVAL_ID}']`,
+      ),
+    ).toBeNull();
   });
 
   it("shows the failure and leaves the run paused when the capability is opted out", async () => {
