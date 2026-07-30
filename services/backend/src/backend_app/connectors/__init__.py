@@ -26,10 +26,14 @@ Audit (connectors-prd §6.2):
 
 * ``connector.connected`` (write-through-from-mcp: auth complete / skip +
   the internal test-token upsert landing a valid token)
-* ``connector.installed`` / ``connector.updated`` / ``connector.removed``
-  (write-through-from-mcp: register-by-URL + catalog install / PATCH +
-  auth start [public **and** internal chat-driven route] / DELETE —
-  wired in ``backend_app.app``)
+* ``connector.installed`` / ``connector.updated`` /
+  ``connector.server_deleted`` (write-through-from-mcp: register-by-URL +
+  catalog install / PATCH + auth start [public **and** internal chat-driven
+  route] / MCP-server DELETE — wired in ``backend_app.app``). Note
+  ``server_deleted`` keeps the row, projected to ``disconnected``.
+* ``connector.removed`` (``DELETE /v1/connectors/{id}`` — the row itself is
+  deleted, along with the MCP registration and vault token behind it). The
+  audit row outlives the connector it describes.
 * ``connector.disconnected`` / ``connector.token_refreshed`` /
   ``connector.error`` / ``connector.scope_added`` / ``connector.scope_removed``
 

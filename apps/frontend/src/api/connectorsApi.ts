@@ -5,6 +5,7 @@
 //   2. `fetchConnector(identity, id)`               — GET /v1/connectors/{id}.
 //   3. `refreshConnector(identity, id)`             — POST /v1/connectors/{id}/refresh.
 //   4. `disconnectConnector(identity, id)`          — POST /v1/connectors/{id}/disconnect.
+//   4b. `removeConnector(identity, id)`             — DELETE /v1/connectors/{id}.
 //   5. `patchConnectorScopes(identity, id, body)`   — PATCH /v1/connectors/{id}/scopes.
 //   6. `setConnectorAccessMode(identity, id, body)` — PATCH /v1/connectors/{id}/access-mode.
 //   7. `fetchConnectorAudit(identity, id, opts)`    — GET /v1/connectors/{id}/audit (admin).
@@ -43,7 +44,13 @@ import type {
 import type { ConnectorId, ConnectorSlug } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
-import { httpGet, httpJson, httpPatchQuery, httpPostQuery } from "./http";
+import {
+  httpDelete,
+  httpGet,
+  httpJson,
+  httpPatchQuery,
+  httpPostQuery,
+} from "./http";
 import { getAppTransport } from "./transport";
 
 const SSE_EVENT_NAME = "connector_event";
@@ -146,6 +153,27 @@ export function disconnectConnector(
     {},
     identity,
   );
+}
+
+/**
+ * DELETE /v1/connectors/{id} — remove the connector for good.
+ *
+ * The destructive sibling of `disconnectConnector`: disconnect wipes the
+ * token and keeps the row (reconnectable); this deletes the row AND the MCP
+ * registration + vault token behind it, server-side, resolved from the row's
+ * own `vault_ref`.
+ *
+ * The client used to do this itself — list `/v1/mcp/servers`, guess which one
+ * backed the row from its slug, and DELETE that. Two things were wrong with
+ * it: the guess failed whenever a server's `name` diverged from its connector
+ * slug, and deleting the server left the connector row behind as a permanently
+ * "Disconnected" tool that no further remove could clear.
+ */
+export function removeConnector(
+  identity: RequestIdentity,
+  id: ConnectorId,
+): Promise<void> {
+  return httpDelete(`/v1/connectors/${encodeURIComponent(id)}`, identity);
 }
 
 /**
@@ -375,14 +403,25 @@ function isConnectorStreamEnvelope(
   );
 }
 
-const KNOWN_EVENTS: ReadonlySet<ConnectorStreamEventType> =
-  new Set<ConnectorStreamEventType>([
-    "connector.created",
-    "connector.status_changed",
-    "connector.scope_changed",
-    "connector.error_threshold",
-    "heartbeat",
-  ]);
+// Exhaustive BY CONSTRUCTION: a `Record` keyed on the union makes TypeScript
+// fail the build when `ConnectorStreamEventType` grows and this list doesn't.
+// It was a plain `Set<ConnectorStreamEventType>` before, which type-checks
+// happily while incomplete — so adding `connector.removed` to the union left
+// this filter silently dropping every removal frame. The list then only ever
+// replayed `connector.created`, and a connector the user had just deleted
+// reappeared on the Tools surface on the next stream reconnect.
+const KNOWN_EVENT_MAP: Readonly<Record<ConnectorStreamEventType, true>> = {
+  "connector.created": true,
+  "connector.status_changed": true,
+  "connector.scope_changed": true,
+  "connector.error_threshold": true,
+  "connector.removed": true,
+  heartbeat: true,
+};
+
+const KNOWN_EVENTS: ReadonlySet<ConnectorStreamEventType> = new Set(
+  Object.keys(KNOWN_EVENT_MAP) as ConnectorStreamEventType[],
+);
 
 function isKnownConnectorEvent(
   value: string,

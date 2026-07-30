@@ -12,8 +12,10 @@ from backend_app.connectors.service import (
     ConnectorsService,
     ConsumerProjectionPort,
     load_catalog,
+    mcp_server_id_from_vault_ref,
 )
 from backend_app.connectors.store import (
+    ConnectorRecord,
     ConnectorScopeEntry,
     InMemoryConnectorsStore,
     McpUpsertInput,
@@ -355,3 +357,148 @@ class TestCatalogEntryConstructor:
         assert entry.slug == "gmail"
         assert entry.description == ""
         assert entry.icon_hint is None
+
+
+class TestRemove:
+    """``remove`` is the DESTRUCTIVE sibling of ``disconnect``.
+
+    The bug it fixes: removal used to be "delete the MCP server" alone, which
+    the write-through projected as ``status=disconnected`` — so the read-model
+    row survived, kept rendering on the Tools list as an installed tool, and
+    no later remove could clear it (nothing backed it any more).
+    """
+
+    def test_removes_the_row_from_the_read_model(self) -> None:
+        service, store = _service()
+        record = _seed(service, store)
+
+        service.remove(
+            tenant_id="tenant_a",
+            caller_user_id="user_1",
+            caller_roles=(),
+            connector_id=record.id,
+        )
+
+        assert store.get_connector(tenant_id="tenant_a", connector_id=record.id) is None
+        rows, _ = service.list_connectors(
+            tenant_id="tenant_a", caller_user_id="user_1", caller_roles=()
+        )
+        assert [r.id for r in rows] == []
+
+    def test_tears_down_the_backing_mcp_server_before_deleting_the_row(self) -> None:
+        service, store = _service()
+        record = _seed(service, store)
+        seen: list[tuple[str, bool]] = []
+
+        def _remover(rec) -> None:
+            # The row must still exist when teardown runs: a failure here has
+            # to leave the connector recoverable, not half-removed.
+            still_present = (
+                store.get_connector(tenant_id="tenant_a", connector_id=rec.id)
+                is not None
+            )
+            seen.append((rec.id, still_present))
+
+        service.backing_server_remover = _remover
+        service.remove(
+            tenant_id="tenant_a",
+            caller_user_id="user_1",
+            caller_roles=(),
+            connector_id=record.id,
+        )
+
+        assert seen == [(record.id, True)]
+
+    def test_keeps_the_row_when_teardown_fails(self) -> None:
+        service, store = _service()
+        record = _seed(service, store)
+
+        def _boom(_rec) -> None:
+            raise RuntimeError("mcp delete failed")
+
+        service.backing_server_remover = _boom
+        with pytest.raises(RuntimeError):
+            service.remove(
+                tenant_id="tenant_a",
+                caller_user_id="user_1",
+                caller_roles=(),
+                connector_id=record.id,
+            )
+
+        assert (
+            store.get_connector(tenant_id="tenant_a", connector_id=record.id)
+            is not None
+        )
+
+    def test_emits_an_audit_row_that_outlives_the_connector(self) -> None:
+        service, store = _service()
+        record = _seed(service, store)
+
+        service.remove(
+            tenant_id="tenant_a",
+            caller_user_id="user_1",
+            caller_roles=(),
+            connector_id=record.id,
+        )
+
+        removed = [
+            r
+            for r in store.audits
+            if r.target_id == record.id and r.action == "connector.removed"
+        ]
+        assert len(removed) == 1
+        assert removed[0].before_state is not None
+        assert removed[0].after_state is None
+
+    def test_non_owner_non_admin_cannot_remove(self) -> None:
+        service, store = _service()
+        record = _seed(service, store, owner_user_id="user_1")
+        with pytest.raises(ConnectorForbidden):
+            service.remove(
+                tenant_id="tenant_a",
+                caller_user_id="user_2",
+                caller_roles=(),
+                connector_id=record.id,
+            )
+        assert (
+            store.get_connector(tenant_id="tenant_a", connector_id=record.id)
+            is not None
+        )
+
+    def test_other_tenant_cannot_remove(self) -> None:
+        service, store = _service()
+        record = _seed(service, store, tenant_id="tenant_a")
+        with pytest.raises(ConnectorNotFound):
+            service.remove(
+                tenant_id="tenant_b",
+                caller_user_id="user_1",
+                caller_roles=("admin",),
+                connector_id=record.id,
+            )
+
+
+class TestVaultRefPointer:
+    """``vault_ref`` is the authoritative row → MCP-server pointer."""
+
+    def test_resolves_the_server_id_the_write_through_stamped(self) -> None:
+        record = ConnectorRecord(
+            tenant_id="tenant_a",
+            slug="linear",
+            display_name="Linear",
+            description="",
+            owner_user_id="user_1",
+            vault_ref="mcp:seed:linear",
+        )
+        assert mcp_server_id_from_vault_ref(record) == "seed:linear"
+
+    @pytest.mark.parametrize("vault_ref", ["", "mcp:", "vault:abc"])
+    def test_no_mcp_server_behind_the_row(self, vault_ref: str) -> None:
+        record = ConnectorRecord(
+            tenant_id="tenant_a",
+            slug="linear",
+            display_name="Linear",
+            description="",
+            owner_user_id="user_1",
+            vault_ref=vault_ref,
+        )
+        assert mcp_server_id_from_vault_ref(record) is None

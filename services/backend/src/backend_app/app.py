@@ -160,6 +160,7 @@ from backend_app.routines import (
 )
 from backend_app.connectors import (
     ConnectorAccessMode,
+    ConnectorRecord,
     ConnectorsService,
     ConnectorsStore,
     InMemoryConnectorsStore,
@@ -168,6 +169,7 @@ from backend_app.connectors import (
 )
 from backend_app.connectors.service import (
     mcp_connector_slug,
+    mcp_server_id_from_vault_ref,
     mcp_upsert_input_from_server,
 )
 from backend_app.connectors.desktop_routes import (
@@ -399,9 +401,11 @@ def _connector_write_through(
         )
         bus = getattr(application.state, "connector_activity_bus", None)
         if bus is not None:
-            # Sync publish: MCP handlers are plain ``def`` routes. The
-            # closed event enum has no ``connector.removed`` — deletion
-            # streams as a ``status_changed`` to ``disconnected``.
+            # Sync publish: MCP handlers are plain ``def`` routes. An
+            # MCP-server delete streams as a ``status_changed`` to
+            # ``disconnected``, NOT ``connector.removed`` — the row survives
+            # it, and clients drop rows on ``connector.removed``. Only
+            # ``DELETE /v1/connectors/{id}`` publishes that one.
             bus.publish_nowait(
                 org_id=stored.tenant_id,
                 user_id=stored.owner_user_id,
@@ -1111,8 +1115,14 @@ def create_app(
         if not deleted:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
         if existing is not None:
+            # NOT ``connector.removed`` — the connector row SURVIVES this,
+            # projected to ``disconnected`` / ``mcp_server_deleted``. Only
+            # ``DELETE /v1/connectors/{id}`` removes the row, and it owns the
+            # ``connector.removed`` action. Sharing one action for both left
+            # the audit trail unable to answer "was this tool removed, or did
+            # its server go away underneath it?".
             _connector_write_through(
-                app, existing, action="connector.removed", removed=True
+                app, existing, action="connector.server_deleted", removed=True
             )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -2142,7 +2152,50 @@ def create_app(
         app.state.webhooks_service = webhooks_service
         register_webhook_routes(app, service=webhooks_service)
 
-    register_connector_routes(app, service=connectors_service)
+    # ``DELETE /v1/connectors/{id}`` teardown seam. The connectors module owns
+    # no MCP imports, so the composition root supplies the two halves it cannot
+    # reach: the MCP registration + vault token behind the row, and the SSE bus.
+    #
+    # The pointer is the row's own ``vault_ref`` (``mcp:<server_id>``, stamped
+    # by the write-through) — NOT a slug-derived guess. A row with no MCP
+    # server behind it (already deleted, or announced-only) removes cleanly:
+    # there is simply nothing to tear down.
+    def _remove_backing_mcp_server(record: ConnectorRecord) -> None:
+        server_id = mcp_server_id_from_vault_ref(record)
+        if server_id is None:
+            return
+        _AppServices.mcp(app).delete_server(
+            org_id=record.tenant_id,
+            user_id=record.owner_user_id,
+            server_id=server_id,
+        )
+
+    connectors_service.backing_server_remover = _remove_backing_mcp_server
+
+    def _publish_connector_removed(record: ConnectorRecord) -> None:
+        # Post-commit publish, log-and-continue: the delete already landed, so
+        # a bus failure must not report a false failure for a succeeded
+        # removal. Clients that miss it reconverge on their next list.
+        bus = getattr(app.state, "connector_activity_bus", None)
+        if bus is None:
+            return
+        try:
+            bus.publish_nowait(
+                org_id=record.tenant_id,
+                user_id=record.owner_user_id,
+                event_type="connector.removed",
+                connector=record.model_dump(mode="json", exclude={"vault_ref"}),
+            )
+        except Exception:  # noqa: BLE001 — see note above.
+            logger.exception(
+                "connector.removed publish failed (connector_id=%s)", record.id
+            )
+
+    register_connector_routes(
+        app,
+        service=connectors_service,
+        on_removed=_publish_connector_removed,
+    )
 
     # AC9 — Desktop MCP connector OAuth. The generic desktop coordinator is the
     # missing bridge between Electron's system-browser / loopback delivery and
