@@ -1378,12 +1378,36 @@ textarea {
   color: var(--color-text-subtle);
 }
 
+/* `position: relative` is LOAD-BEARING, not decoration — do not remove it.
+ *
+ * The visually-hidden `input` below is `position: absolute`. Without a
+ * positioned ancestor its containing block is the INITIAL containing block, and
+ * an abs-positioned box whose containing block sits outside a clipper is NOT
+ * clipped by that clipper's `overflow: hidden`. So the input escaped every
+ * scroll container between it and `<html>` — including the desktop app's
+ * `.desktop-window-frame` — and reported its static position in DOCUMENT
+ * coordinates as scrollable overflow on the root element.
+ *
+ * Shipped consequence: on any surface tall enough to push a switch below the
+ * fold (Settings → Model & behavior, whose Spend guardrail toggle is the last
+ * row of the tallest page), `<html>` gained hundreds of px of scrollable
+ * overflow in a window that must never scroll. Wheeling past the settings pane,
+ * trackpad overscroll, or tabbing to that off-screen input then lifted the
+ * ENTIRE app shell — rail, nav, content — out of the window, leaving dead
+ * background below and the rail/nav tops clipped off. Measured live: root
+ * scrollHeight 1239 vs clientHeight 800, shell top dragged from +32 to -407.
+ *
+ * Anchoring the switch makes the input's containing block the switch itself, so
+ * the frame clips it like every other descendant. The knob
+ * (`.ui-switch span::after`) is already anchored to the track and is unaffected.
+ */
 .ui-switch {
   align-items: center;
   color: var(--color-text);
   cursor: pointer;
   display: inline-flex;
   gap: var(--space-sm);
+  position: relative;
 }
 
 .ui-switch input {
