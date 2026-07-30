@@ -29,8 +29,10 @@ import { parseQuestion, type QuestionSpec } from "../../approvals/question";
 import {
   parseApprovalPresentation,
   parseConnectorTrust,
+  parseWorkspaceGrantRequest,
   type ApprovalPresentation,
   type ConnectorTrust,
+  type WorkspaceGrantRequest,
 } from "../../approvals/presentation";
 import type {
   ApprovalsQueueItem,
@@ -112,6 +114,13 @@ export interface RunApproval {
    * the difference between a card you answer and a card you approve.
    */
   readonly question: QuestionSpec | null;
+  /**
+   * The parsed folder ask (`payload.workspace_grant`). Non-null makes this
+   * approval a filesystem grant request, which routes to `WorkspaceGrantCard`
+   * instead of Approve/Reject — the folder is handed over by the host's OS
+   * dialog, so there is nothing for a `/decision` POST alone to do.
+   */
+  readonly workspaceGrant: WorkspaceGrantRequest | null;
   readonly runId: string | null;
   /** Anchor for the rail's jump-to-card (the requesting event's id). */
   readonly messageId: string;
@@ -173,6 +182,7 @@ interface MutableApproval {
   presentation: ApprovalPresentation | null;
   connectorTrust: ConnectorTrust;
   question: QuestionSpec | null;
+  workspaceGrant: WorkspaceGrantRequest | null;
   runId: string | null;
   messageId: string;
   sequenceNo: number;
@@ -327,6 +337,13 @@ function reduceRequested(
       resolveApprovalKind(event) === "ask_a_question"
         ? (parseQuestion(payload) ?? existing?.question ?? null)
         : null,
+    // Keyed on its own payload block rather than on a kind, so any interrupt a
+    // backend already emits becomes a folder ask by stamping one field. Same
+    // replay rule as `presentation`: a redelivered frame that omits the block
+    // must not erase it, or a card the user was reading turns into an
+    // Approve/Reject for an action that was never the question.
+    workspaceGrant:
+      parseWorkspaceGrantRequest(payload) ?? existing?.workspaceGrant ?? null,
     runId: event.run_id,
     messageId: event.event_id,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -372,6 +389,7 @@ function freeze(m: MutableApproval): RunApproval {
     presentation: m.presentation,
     connectorTrust: m.connectorTrust,
     question: m.question,
+    workspaceGrant: m.workspaceGrant,
     runId: m.runId,
     messageId: m.messageId,
     sequenceNo: m.sequenceNo,

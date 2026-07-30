@@ -17,11 +17,41 @@ export interface OpenBeneathOptions {
  */
 export interface NativeWorkspaceFs {
   readonly platform: NodeJS.Platform;
+  /**
+   * `false` on the fail-closed stand-in `loadNative()` returns when a production
+   * install has no compiled binary on a platform that requires one. Every method
+   * then throws `EPERM`, so the caller denies instead of falling back.
+   */
+  readonly available?: boolean;
   openBeneath(rootReal: string, rel: string, opts: OpenBeneathOptions): number;
 }
 
 /**
- * Load the compiled addon, or return `undefined` when no binary is available
- * for this platform/ABI. Never throws.
+ * Test seams. Production passes nothing and reads `process`/`__dirname`.
  */
-export function loadNative(): NativeWorkspaceFs | undefined;
+export interface LoadNativeOverrides {
+  readonly platform?: string;
+  readonly arch?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly isPackaged?: boolean;
+  readonly resourcesPath?: string;
+  readonly dir?: string;
+  readonly require?: (id: string) => unknown;
+  readonly log?: (message: string) => void;
+}
+
+/**
+ * Load the compiled addon. NEVER throws — `host-fs.ts` catches around the
+ * require, so a throw would be swallowed and would land back on the silent
+ * fallback. The three outcomes are therefore all return values:
+ *
+ *   - a working addon (`available: true`);
+ *   - `undefined`, meaning "no binary, and running without one is acceptable
+ *     here" — darwin always, or a development posture anywhere;
+ *   - a FAIL-CLOSED stand-in (`available: false`) whose `openBeneath` throws
+ *     `EPERM`, when a production install lacks the binary on a platform whose
+ *     confined read has no other atomic primitive. See ./README.md.
+ */
+export function loadNative(
+  overrides?: LoadNativeOverrides,
+): NativeWorkspaceFs | undefined;

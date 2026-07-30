@@ -13,10 +13,17 @@ Gated on the desktop capability broker. For each run this seam:
 
 It returns ``None`` — and the factory composes no ``/workspace/`` route —
 whenever broker config is absent (non-desktop / web / postgres / in-memory
-images), the broker is unreachable, or the user has granted no folders. That
-keeps every non-desktop image byte-identical: no route, dependency stays
-``None``. This adapter is permanently read-only; C2 workspace effects are
-constructed through their separate staged authority.
+images) or the broker is unreachable. That keeps every non-desktop image
+byte-identical: no route, dependency stays ``None``. This adapter is permanently
+read-only; C2 workspace effects are constructed through their separate staged
+authority.
+
+A user who has granted NO folders yet is no longer one of those cases. Host
+access is on by default and stays grant-scoped: with zero grants the route still
+exists, holding an empty mount table, so a host-absolute path can reach the grant
+request instead of falling through to a virtual backend that would answer
+``ls /Users/<name>/Downloads`` with an empty listing and a green tick. Nothing is
+readable until the user grants it — the affordance exists, the access does not.
 
 Kept in its own module (mirroring :class:`runtime_worker.file_store_wiring.FileStoreWorkerWiring`)
 so the run path constructs the workspace backend exactly once, per run, without
@@ -27,8 +34,8 @@ package is imported lazily so it never loads on non-desktop images.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -47,8 +54,15 @@ class WorkspaceBackendWorkerWiring:
     ``env`` defaults to ``os.environ`` (via ``WorkspaceBackendConfig.from_env``);
     ``http_client`` defaults to the process-shared broker pool. Both are
     injectable so a test can drive the whole path against an in-memory fake
-    broker without touching the environment or the network.
+    broker without touching the environment or the network. ``run_id`` scopes the
+    deterministic approval id of a mid-run grant request; callers that have the
+    run in hand should pass it, and it is optional so existing call sites keep
+    working unchanged.
 
+    ``interrupt_handler`` overrides the seam the grant request blocks on. It
+    defaults to ``langgraph.types.interrupt`` — the same mechanism the MCP auth
+    gate parks on — and is injectable so the grant path can be driven without a
+    graph.
     """
 
     def __init__(
@@ -56,16 +70,22 @@ class WorkspaceBackendWorkerWiring:
         *,
         env: Mapping[str, str] | None = None,
         http_client: httpx.AsyncClient | None = None,
+        run_id: str | None = None,
+        interrupt_handler: Callable[[dict[str, Any]], object] | None = None,
     ) -> None:
         self._env = env
         self._http_client = http_client
+        self._run_id = run_id
+        self._interrupt_handler = interrupt_handler
 
-    async def workspace_backend(self) -> object | None:
+    async def workspace_backend(self, *, run_id: str | None = None) -> object | None:
         """Build the ``/workspace/`` backend for this run, or ``None`` off desktop.
 
-        Fails soft: a broker that is unreachable or returns no active grants
-        yields ``None`` rather than raising, so a run never breaks because host
-        reads happen to be unavailable.
+        Fails soft on the broker: an unreachable broker yields ``None`` rather
+        than raising, so a run never breaks because host reads happen to be
+        unavailable. An empty grant snapshot is NOT a soft failure — it yields a
+        zero-mount backend, because "you have granted nothing" is an answer the
+        agent must be able to give.
         """
 
         # Lazy import: the desktop capability package must not load on the
@@ -75,6 +95,7 @@ class WorkspaceBackendWorkerWiring:
             BrokerError,
             DesktopBrokerClient,
             WorkspaceBackendConfig,
+            WorkspaceGrantGate,
             WorkspaceMountTable,
             build_workspace_backend,
         )
@@ -100,10 +121,17 @@ class WorkspaceBackendWorkerWiring:
             logger.debug("workspace_backend.grants_unavailable")
             return None
         mounts = WorkspaceMountTable.from_broker_grants(snapshot.grants)
-        if not mounts:
-            return None
-
-        return build_workspace_backend(config.with_mounts(mounts), client=client)
+        scoped = config.with_mounts(mounts).with_run(run_id or self._run_id)
+        gate = (
+            None
+            if self._interrupt_handler is None
+            else WorkspaceGrantGate(
+                grants=client,
+                interrupt_handler=self._interrupt_handler,
+                run_id=scoped.run_id,
+            )
+        )
+        return build_workspace_backend(scoped, client=client, grant_gate=gate)
 
     @staticmethod
     async def release_backend(backend: object | None) -> None:

@@ -1671,7 +1671,8 @@ def _composed_deep_backend(
       paths stay on the ``StateBackend`` default exactly as before.
 
     Any FS path not routed above (and, off the file store, ``/memories/`` &c.)
-    stays on deepagents' ``StateBackend`` default.
+    stays on deepagents' ``StateBackend`` default — except a HOST-absolute path,
+    which the default is guarded against (see ``guarded_default`` below).
     """
 
     routes: dict[str, object] = {}
@@ -1697,7 +1698,20 @@ def _composed_deep_backend(
     from deepagents.backends.composite import CompositeBackend
     from deepagents.backends.state import StateBackend
 
-    return CompositeBackend(default=StateBackend(), routes=routes)
+    from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
+
+    # A host-absolute path is not a prefix of anything, so it can never be a
+    # route: it lands on the DEFAULT. Left as a bare ``StateBackend`` that is
+    # agent memory, which held nothing at ``/Users/<name>/Downloads`` and so
+    # answered ``ls`` with an empty listing AS A SUCCESS. ``guarded_default``
+    # diverts exactly the paths the workspace backend claims — which answers
+    # them with a real listing, a grant request, or an explicit refusal — and
+    # returns the default untouched when there is no workspace backend, so
+    # every non-desktop run composes byte-for-byte as before.
+    return CompositeBackend(
+        default=guarded_default(StateBackend(), workspace_backend),
+        routes=routes,
+    )
 
 
 def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:

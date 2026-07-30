@@ -24,6 +24,14 @@ directories:
 files:
   - out/**/*
   - package.json
+  # host-fs.ts requires ../../native/workspace-fs/index.cjs relative to
+  # out/main/index.js, i.e. <appRoot>/native/workspace-fs/index.cjs. Without this
+  # entry that require throws inside the asar, host-fs catches, and the confined
+  # read silently uses its non-atomic fallback — the loader's fail-closed check
+  # never gets a chance to run. The compiled .node is NOT here: it goes to
+  # extraResources, because a native module should not be dlopen'd out of an
+  # archive.
+  - native/workspace-fs/index.cjs
 asar: true
 
 # Local iteration uses normal compression for speed; CI overrides to maximum
@@ -45,6 +53,22 @@ extraResources:
     to: workspace-commit-helper
     filter:
       - "workspace-commit-helper"
+  # The read-side workspace-fs addon: the kernel's own root-confined,
+  # symlink/reparse-refusing open. On Windows it is the ONLY atomic primitive
+  # available (O_NOFOLLOW guards just the final component there), so a packaged
+  # Windows app without it serves every confined read through a post-open
+  # realpath recheck — same denials, but with a TOCTOU window per read.
+  #
+  # The per-target subdirectory is preserved: index.cjs probes
+  # <resourcesPath>/workspace-fs/<platform>-<arch>/workspace_fs.node. build.mjs
+  # keeps this directory populated even when the compile fails, leaving an
+  # UNAVAILABLE.txt that states the reason, so the source path always exists and
+  # a user-visible reason travels with the app. `dist:*` and `package` pass
+  # --require, so a distributable cannot actually be produced without the binary.
+  - from: native/workspace-fs/prebuilds
+    to: workspace-fs
+    filter:
+      - "**/*"
 
 # Icons are committed binaries generated from build/icon-source.svg by
 # build/generate-icons.mjs (macOS host). Regenerate them when the mark changes.

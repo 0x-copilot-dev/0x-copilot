@@ -199,6 +199,53 @@ fs.writeFileSync(
 );
 log(`copied built desktop app (v${desktopVersion})`);
 
+// --- 6a. read-side workspace-fs native addon -----------------------------
+// host-fs.ts requires ../../native/workspace-fs/index.cjs relative to
+// out/main/index.js. In this layout appDir is payload/desktop, so the loader has
+// to sit at payload/desktop/native/workspace-fs/index.cjs — otherwise the
+// require throws, host-fs catches, and the confined read silently uses its
+// NON-ATOMIC fallback on Windows and Linux without the loader ever getting to
+// state that it is doing so. Shipping index.cjs is what makes that decision
+// (and its fail-closed refusal) reachable on this channel at all.
+//
+// prebuilds/ is copied when present. It only ever contains binaries for the
+// {platform, arch} pairs that were built on the assembling host, so a payload
+// assembled on macOS carries no Windows binary and a Windows install off this
+// channel fail-closes with a stated reason. Prebuilding every target from one
+// tarball needs a multi-OS publish matrix (release-desktop.yml already has one;
+// the CLI publish does not) — see native/workspace-fs/README.md.
+const wfsFrom = path.join(
+  REPO_ROOT,
+  "apps",
+  "desktop",
+  "native",
+  "workspace-fs",
+);
+const wfsDest = path.join(appDest, "native", "workspace-fs");
+fs.mkdirSync(wfsDest, { recursive: true });
+for (const file of ["index.cjs", "index.d.ts", "selfcheck.cjs"]) {
+  const from = path.join(wfsFrom, file);
+  if (!fs.existsSync(from)) fail(`missing ${from}`);
+  fs.copyFileSync(from, path.join(wfsDest, file));
+}
+const wfsPrebuilds = path.join(wfsFrom, "prebuilds");
+if (fs.existsSync(wfsPrebuilds)) {
+  fs.cpSync(wfsPrebuilds, path.join(wfsDest, "prebuilds"), { recursive: true });
+  const targets = fs
+    .readdirSync(wfsPrebuilds, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+  log(
+    `copied workspace-fs addon (loader + prebuilds for ${targets.length > 0 ? targets.join(", ") : "no target"})`,
+  );
+} else {
+  log(
+    "copied workspace-fs loader WITHOUT any prebuilt binary — " +
+      "run `npm run build:workspace-fs --workspace @0x-copilot/desktop` first " +
+      "if this payload is being published",
+  );
+}
+
 // --- 6b. bundled-default Google OAuth client -----------------------------
 // Ships next to the app (app.getAppPath()) so "Continue with Google" works
 // with zero user setup. Source of truth is a gitignored google-oauth.json

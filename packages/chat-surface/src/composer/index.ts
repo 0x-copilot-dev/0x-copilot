@@ -73,3 +73,14 @@ export {
 export { AttachmentPill } from "./AttachmentPill";
 export { fileAttachmentAccept } from "./fileAttachmentAccept";
 // === end Phase 1 (PR-1.3) ===
+// === Workspace folder grants — the composer's Attach Folder affordance ===
+// The `+` menu's folder row and the granted-folder pills are inside
+// `AssistantComposer`, driven by the optional `workspaceGrantPort` prop. This
+// hook is the state half, exported because Settings shows the same list: the
+// broker stays the source of truth (every change re-reads `listGrants`) and a
+// failure is never rendered as an empty list. The port itself is host-owned.
+export {
+  useWorkspaceFolderGrants,
+  type WorkspaceFolderGrantsState,
+} from "./useWorkspaceFolderGrants";
+// === end Workspace folder grants ===

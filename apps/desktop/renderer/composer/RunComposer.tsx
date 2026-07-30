@@ -26,6 +26,7 @@ import {
   skillInstructionPrompt,
 } from "./composerPrompts";
 import { useRunComposerBindings } from "./useRunComposerBindings";
+import { bridgeWorkspaceGrantPort } from "../workspaceGrantPort";
 
 // Substrate-bound singletons — one hidden-input file picker and one
 // single-stage attachment adapter per renderer. Both are stateless, so a module
@@ -131,6 +132,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
   // provider key" CTA (onboarding), not nothing. Cleared on the next successful
   // send or an explicit dismiss.
   const [startError, setStartError] = useState<StartRunError | null>(null);
+
+  // The folder-grant capability. `bridgeWorkspaceGrantPort` memoizes per bridge,
+  // so calling it here is identity-stable (the shared hook keys its grant read on
+  // the port, and a fresh object would re-read on every keystroke) without
+  // depending on preload having run before this module was imported.
+  // `undefined` outside Electron, which is what keeps the "Attach folder" row and
+  // the folder pills off substrates that have no such capability — a control that
+  // cannot work is worse than no control.
+  const workspaceGrantPort = bridgeWorkspaceGrantPort();
 
   // Shared Run-cockpit composer data (skills, MCP servers, model catalog +
   // selection, `+`-menu) — the SAME source the empty-state `RunEmptyComposer`
@@ -281,6 +291,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         skills={{ skills: [...skills], loading: skillsLoading }}
         attachmentAdapter={attachmentAdapter}
         filePicker={filePicker}
+        // Real host folders, granted not assumed: adds the `+` menu's folder row
+        // and a pill per active grant, whose dismiss REVOKES the access.
+        workspaceGrantPort={workspaceGrantPort}
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}
         mcpServerInstructionPrompt={mcpServerInstructionPrompt}

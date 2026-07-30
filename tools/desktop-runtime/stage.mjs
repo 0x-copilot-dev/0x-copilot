@@ -46,6 +46,7 @@ import { fileURLToPath } from "node:url";
 
 import { stageBrowserRuntime } from "./browser-runtime.mjs";
 import macosSigning from "./macos-signing.cjs";
+import { auditWorkspaceFsAddon } from "./workspace-fs-audit.mjs";
 
 const { signAndVerifyMacAppBundle } = macosSigning;
 
@@ -831,6 +832,15 @@ async function main() {
   // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
   stageWebAssets(args.dest);
 
+  // Read-side confinement audit — recorded in staging-manifest.json, so whether
+  // the shipped tree has the atomic confined open is never inferred from silence.
+  const workspaceFs = auditWorkspaceFsAddon({
+    repoRoot: REPO_ROOT,
+    platform: args.platform,
+    arch: args.arch,
+    log,
+  });
+
   // Ad-hoc sign LAST: signing seals each Mach-O, so it must run after every
   // write (extraction, pip, prune, compileall). Only on a macOS host, and only
   // when staging for this host's arch (nothing else is executable here).
@@ -860,6 +870,7 @@ async function main() {
       sha256: pgEntry.sha256,
     },
     browser,
+    workspace_fs: workspaceFs,
     services: SERVICES.map((s) => ({
       name: s.name,
       site_packages: hostExec,

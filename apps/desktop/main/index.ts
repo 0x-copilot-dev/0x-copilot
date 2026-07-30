@@ -67,9 +67,12 @@ import {
   createCapabilityService,
   CAPABILITY_BROKER_AUDIENCE,
   DesktopWorkspaceAttestationPublisher,
-  isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
+// Direct subpath import (like the two workspace modules below): the boot path
+// wants the gate's REASON, not just its boolean, so a disabled subsystem never
+// looks like a bug and an unreadable flag value never looks like a decision.
+import { resolveDesktopFilesystemGate } from "./capabilities/feature-gate";
 import {
   createProductionWorkspaceAuthority,
   type WorkspaceAuthorityLifecycle,
@@ -347,11 +350,17 @@ async function resolveVerifiedWorkspaceProfileId(): Promise<string | null> {
 async function startCapabilitySubsystem(
   workspaceConfinement: MacosWorkspaceConfinement | null,
 ): Promise<{
+  /**
+   * The child's READ credential for this boot. Non-null whenever the broker
+   * bound — a subsystem that could not start returns null as a whole, so "no
+   * broker" is already expressed. Writes are gated separately, one layer down;
+   * see the comment at the return statement.
+   */
   readonly workspaceBroker: {
     readonly baseUrl: string;
     readonly token: string;
     readonly audience: typeof CAPABILITY_BROKER_AUDIENCE;
-  } | null;
+  };
   /** Main-only signer; its private key never reaches a child process. */
   readonly workspaceAttestation: DesktopWorkspaceAttestationPublisher;
   /** The exact confinement instance used to launch the supervised children. */
@@ -440,19 +449,30 @@ async function startCapabilitySubsystem(
       );
     }
     const handle = await capabilityService.startBroker();
-    // baseUrl (host+port) is non-secret; the token is NOT logged.  The
-    // supervised ai-backend receives the credential only when C2's writable
-    // host authority is available, so an unavailable workspace fails closed.
+    // baseUrl (host+port) is non-secret; the token is NOT logged.
     console.log("[capability-broker] listening on", handle.baseUrl);
     return {
-      workspaceBroker:
-        workspaceApprovalPermitSource === null
-          ? null
-          : {
-              baseUrl: handle.baseUrl,
-              token: capabilityService.brokerClientCredential("ai-backend"),
-              audience: CAPABILITY_BROKER_AUDIENCE,
-            },
+      // READS and WRITES are two different authorities, and this credential is
+      // the read one. It used to be withheld unless C2's writable host
+      // authority existed — which is a macOS-only, packaged-only, native-helper
+      // -only condition — so on Windows and in every dev run the supervised
+      // ai-backend got RUNTIME_ENABLE_DESKTOP_WORKSPACE=false, built no
+      // `/workspace/` mount, and the agent's `ls` fell through to its virtual
+      // memory filesystem and reported real folders as empty. Withholding the
+      // read lane never bought safety: a read is authorized by a GRANT the user
+      // created in the native picker (the broker answers `grant_required` for
+      // anything else), so a booted broker with no grants still exposes nothing.
+      //
+      // The write lane stays exactly as gated as it was, one layer down and
+      // independent of this: without C2's authority `prepareChangeSet` fails
+      // closed with `workspace_write_unsupported`, the legacy mutation routes
+      // answer `capability_retired`, and no approval-permit handoff is
+      // installed (see `workspaceApprovalPermitSource` above).
+      workspaceBroker: {
+        baseUrl: handle.baseUrl,
+        token: capabilityService.brokerClientCredential("ai-backend"),
+        audience: CAPABILITY_BROKER_AUDIENCE,
+      },
       workspaceAttestation,
       workspaceConfinement:
         workspaceAuthorityLifecycle === null ? null : workspaceConfinement,
@@ -629,16 +649,28 @@ if (hasSingleInstanceLock) {
 
     // Capability subsystem (AC5): folder-grant model + loopback broker. Built
     // here so the picker can parent its dialog to the main window; started
-    // defensively so a broker bind failure never blocks boot. G4: gated behind
-    // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
-    // the broker never binds and (because capabilityService stays null) the
-    // capability IPC channels are never registered, so calls fail closed.
+    // defensively so a broker bind failure never blocks boot.
+    //
+    // G4: gated on RUNTIME_ENABLE_DESKTOP_FILESYSTEM, resolved ONCE here (the
+    // three former call sites read the same env three times) and now ON BY
+    // DEFAULT. An explicit opt-out still wins and still fails closed: the
+    // broker never binds, `capabilityService` stays null, the capability IPC
+    // channels are never registered, so every capability call fails closed.
+    //
+    // Enabled is NOT the same as granted. What starts below is the broker, the
+    // grant store and the native picker — the ability to ASK. Every read is
+    // resolved against a grant the user created in that picker, so a booted
+    // subsystem with no grants exposes no readable path (see the gate's module
+    // header and the no-grants test in capabilities/feature-gate.test.ts).
+    //
     // C2 supports only a signed packaged macOS runtime. The confinement object
     // is constructed from main-owned runtime paths and is handed to both the
     // authority launch gate and the actual supervisor; no renderer or service
     // can select its profile or weaken its rules.
+    const filesystemGate = resolveDesktopFilesystemGate(process.env);
+    console.log(`[capabilities] desktop filesystem ${filesystemGate.reason}`);
     let workspaceConfinement: MacosWorkspaceConfinement | null = null;
-    if (isDesktopFilesystemEnabled(process.env) && app.isPackaged) {
+    if (filesystemGate.enabled && app.isPackaged) {
       try {
         const runtimePaths = resolveRuntimePaths({
           resourcesPath: process.resourcesPath,
@@ -670,7 +702,7 @@ if (hasSingleInstanceLock) {
         );
       }
     }
-    const capabilitySubsystem = isDesktopFilesystemEnabled(process.env)
+    const capabilitySubsystem = filesystemGate.enabled
       ? await startCapabilitySubsystem(workspaceConfinement)
       : null;
     const workspaceBroker = capabilitySubsystem?.workspaceBroker ?? null;
@@ -678,12 +710,6 @@ if (hasSingleInstanceLock) {
       capabilitySubsystem?.workspaceAttestation ?? null;
     const verifiedWorkspaceConfinement =
       capabilitySubsystem?.workspaceConfinement ?? null;
-    if (!isDesktopFilesystemEnabled(process.env)) {
-      console.log(
-        "[capabilities] desktop filesystem disabled " +
-          "(set RUNTIME_ENABLE_DESKTOP_FILESYSTEM=1 to enable)",
-      );
-    }
 
     if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
       // Seed the bundled-default Google OAuth client (id + secret) into the env

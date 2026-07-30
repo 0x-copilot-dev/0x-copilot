@@ -1,4 +1,4 @@
-"""Read-only Deep Agents backend exposing user-granted host folders as ``/workspace/``.
+r"""Read-only Deep Agents backend exposing user-granted host folders as ``/workspace/``.
 
 AC5 slice 3a — the ai-backend side. This is the adapter that lets the agent
 READ user-granted host folders by translating Deep Agents ``BackendProtocol``
@@ -18,6 +18,31 @@ host-absolute path is never constructed or sent. When this backend is routed by
 Deep Agents' ``CompositeBackend`` under the ``/workspace/`` prefix, the prefix
 is stripped before delegation, so paths arrive here as ``/<mount>/...``. We also
 accept the un-stripped ``/workspace/<mount>/...`` form for direct callers/tests.
+
+Host-absolute paths
+-------------------
+The agent does not only speak in mounts: a user says "read my downloads folder"
+and the model calls ``ls`` with ``/Users/<name>/Downloads`` or
+``C:\Users\<name>\Downloads``. Such a path is claimed by this backend
+(:meth:`BrokeredWorkspaceBackend.claims_path`) so it can never fall through to a
+virtual backend that would answer an EMPTY LISTING with SUCCESS — the live defect
+:mod:`agent_runtime.capabilities.desktop.host_path` documents.
+
+The broker's security property survives intact because a host-absolute path is an
+input to the GRANT flow only, never to the READ flow:
+
+* covered by a grant → resolved locally to ``mount`` + root-relative path and
+  served exactly as a virtual path is (the host string stops here);
+* not covered → :class:`~agent_runtime.capabilities.desktop.workspace_grant.WorkspaceGrantGate`
+  parks the run and asks the user to grant that folder; on approval a mount is
+  created and the read proceeds as above;
+* traversal, device namespace, reserved name, or a path whose meaning depends on
+  host state this process cannot see → refused with a safe message. A refusal is
+  never converted into a grant request, so a grant request can never launder an
+  escape.
+
+Every one of those outcomes is an explicit answer. None of them is an empty
+listing.
 
 Reads
 -----
@@ -47,6 +72,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import Final, Literal, cast
 
 from deepagents.backends.protocol import (
@@ -73,6 +99,17 @@ from agent_runtime.capabilities.desktop.broker_client import (
     DesktopBrokerClient,
     FsDirEntry,
     FsReadResult,
+)
+from agent_runtime.capabilities.desktop.host_path import (
+    ClassifiedPath,
+    HostPathClassifier,
+    HostPathKind,
+    HostPathMessages,
+    HostRootIndex,
+)
+from agent_runtime.capabilities.desktop.workspace_grant import (
+    WorkspaceGrantGate,
+    WorkspaceGrantMessages,
 )
 
 #: Grant access modes carried for read-side presentation and compatibility.
@@ -115,6 +152,13 @@ class _SafeMessage:
     IS_A_DIRECTORY: Final = "The requested workspace path is a directory, not a file."
     PERMISSION_DENIED: Final = "Access to the requested workspace path was denied."
     UNAVAILABLE: Final = "The workspace is temporarily unavailable."
+    #: Host access is on, but the user has granted nothing yet. Said out loud
+    #: rather than answered with an empty listing.
+    NO_GRANTS: Final = (
+        "No host folders have been shared with this workspace yet, so there is "
+        "nothing to list. Ask the user which folder to use and read it by its "
+        "full path — they will be asked to grant access."
+    )
 
 
 class WorkspaceWriteNotSupportedError(RuntimeError):
@@ -174,12 +218,21 @@ class WorkspaceMount:
     ``project-notes``); it must be a single path segment (no ``/``). ``label``
     is an optional human hint carried for future presentation — it is never sent
     to the broker. ``mode`` is retained only for read-side compatibility.
+
+    ``host_root`` is the host-absolute folder this mount stands for, and it is
+    **local knowledge only**: it is populated exclusively by the grant flow, from
+    the root the user themselves picked, and — like ``label`` — is never sent to
+    the broker. Mounts resolved from a broker grant snapshot leave it ``None``,
+    because that snapshot is deliberately path-free and must never become a
+    host-path oracle. Its only job is to let a host-absolute path be translated
+    to ``mount`` + root-relative path inside this process.
     """
 
     name: str
     grant_id: str
     label: str | None = None
     mode: GrantMode = "read_only"
+    host_root: str | None = None
 
     def __post_init__(self) -> None:
         """Reject empty or separator-bearing mount names — they must be one segment."""
@@ -189,6 +242,15 @@ class WorkspaceMount:
         if not self.grant_id:
             msg = "workspace mount grant_id must be non-empty"
             raise ValueError(msg)
+        if self.host_root is not None and not self.classified_host_root().is_host:
+            # Fail loud: a binding we cannot resolve would silently mis-root
+            # every read served through this mount.
+            msg = "workspace mount host_root must be a host-absolute path"
+            raise ValueError(msg)
+
+    def classified_host_root(self) -> ClassifiedPath:
+        """Classify :attr:`host_root` (an unusable root classifies as refused)."""
+        return HostPathClassifier.classify(self.host_root)
 
 
 class WorkspaceMountTable:
@@ -220,10 +282,7 @@ class WorkspaceMountTable:
         for grant in grants:
             if grant.status != cls._ACTIVE or not grant.grant_id:
                 continue
-            base = (
-                cls._slug(grant.label) or cls._slug(grant.mount) or cls._FALLBACK_NAME
-            )
-            name = cls._dedupe(base, used)
+            name = cls.mount_name(grant, used=frozenset(used))
             used.add(name)
             mounts.append(
                 WorkspaceMount(
@@ -234,6 +293,16 @@ class WorkspaceMountTable:
                 )
             )
         return tuple(mounts)
+
+    @classmethod
+    def mount_name(cls, grant: BrokerGrant, *, used: frozenset[str]) -> str:
+        """Return the readable mount name for ``grant``, unique against ``used``.
+
+        Shared with the grant flow so a mount created mid-run is named by exactly
+        the rule a fresh run would have used.
+        """
+        base = cls._slug(grant.label) or cls._slug(grant.mount) or cls._FALLBACK_NAME
+        return cls._dedupe(base, set(used))
 
     @classmethod
     def _slug(cls, value: str) -> str:
@@ -270,6 +339,31 @@ class _UnknownMountError(Exception):
     """Internal signal: the leading segment names no configured mount."""
 
 
+class _WorkspaceRefusalError(Exception):
+    """Internal signal: the path is refused, with the message the model sees.
+
+    Carries a safe, actionable string — never a host path, never broker
+    internals. Raised instead of returning an empty result so a question about
+    the filesystem can never be answered with silence.
+    """
+
+    def __init__(self, safe_message: str) -> None:
+        """Store the model-facing refusal message."""
+        super().__init__(safe_message)
+        self.safe_message = safe_message
+
+
+class _GrantScope(StrEnum):
+    """Which folder a grant request should name for a given operation.
+
+    A listing addresses the folder itself; a file read addresses its container,
+    since a grant covers a folder rather than a single file.
+    """
+
+    PATH = "path"
+    CONTAINER = "container"
+
+
 class BrokeredWorkspaceBackend(BackendProtocol):
     """Deep Agents ``BackendProtocol`` translating file ops into broker ``/v1/fs/*`` calls.
 
@@ -281,6 +375,12 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     * ``grep`` / ``agrep``  → ``/v1/fs/grep`` (literal substring, per Deep Agents)
     The required mutation methods raise ``WorkspaceWriteNotSupportedError``.
     The only host-write protocol is C2's staged/prepared/attested authority.
+
+    A host-absolute path is accepted on every read op: covered by a grant it is
+    translated locally to ``mount`` + root-relative path (so the broker sees the
+    same request it always did), and otherwise it parks the run on a grant
+    request through ``grant_gate``. With no gate wired the same path is refused
+    out loud. It is never answered with an empty listing.
     """
 
     PATH_PREFIX: str = ROUTE_PREFIX
@@ -294,8 +394,9 @@ class BrokeredWorkspaceBackend(BackendProtocol):
         client: DesktopBrokerClient,
         mounts: Sequence[WorkspaceMount],
         read_max_bytes: int = DEFAULT_READ_MAX_BYTES,
+        grant_gate: WorkspaceGrantGate | None = None,
     ) -> None:
-        """Bind the read-only backend to a broker client and its mounts."""
+        """Bind the read-only backend to a broker client, its mounts and a gate."""
         self._client = client
         self._read_max_bytes = read_max_bytes
         by_name: dict[str, WorkspaceMount] = {}
@@ -304,12 +405,35 @@ class BrokeredWorkspaceBackend(BackendProtocol):
                 msg = f"duplicate workspace mount name: {mount.name!r}"
                 raise ValueError(msg)
             by_name[mount.name] = mount
-        self._mounts: Mapping[str, WorkspaceMount] = by_name
+        # Mutable because the grant flow binds a new mount mid-run; every other
+        # read of it is by name.
+        self._mounts: dict[str, WorkspaceMount] = by_name
+        self._grant_gate = grant_gate
+        self._host_roots: HostRootIndex | None = None
 
     @property
     def supports_writes(self) -> bool:
         """Direct host mutation is retired independently of every rollout flag."""
         return False
+
+    @property
+    def mounts(self) -> tuple[WorkspaceMount, ...]:
+        """The mount table as it stands now (the grant flow can extend it)."""
+        return tuple(self._mounts.values())
+
+    @classmethod
+    def claims_path(cls, path: str | None) -> bool:
+        """True when a router MUST deliver ``path`` here rather than fall through.
+
+        A host-shaped path belongs to this backend even when it is unsafe or
+        ungranted, because only this backend can answer it truthfully — with a
+        grant request or an explicit refusal. Letting it reach a virtual backend
+        is what produced the empty-success defect.
+        """
+        raw = path or ""
+        if raw == ROUTE_PREFIX.rstrip("/") or raw.startswith(ROUTE_PREFIX):
+            return True
+        return HostPathClassifier.is_host_shaped(raw)
 
     # --- BackendProtocol: list ---------------------------------------------
 
@@ -320,12 +444,17 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     async def als(self, path: str) -> LsResult:
         """List the mounts (at root) or a directory's children under a mount."""
         try:
-            resolution = self._resolve(path)
+            resolution = await self._aresolve(path, scope=_GrantScope.PATH)
         except _WorkspaceRootError:
+            if not self._mounts:
+                # Host access is on but nothing is granted: say so.
+                return LsResult(error=_SafeMessage.NO_GRANTS)
             entries = [self._mount_dir_entry(m) for m in self._mounts.values()]
             return LsResult(entries=entries)
         except _UnknownMountError:
             return LsResult(error=_SafeMessage.NOT_FOUND)
+        except _WorkspaceRefusalError as exc:
+            return LsResult(error=exc.safe_message)
         try:
             result = await self._client.list(
                 resolution.mount.grant_id, resolution.relative
@@ -348,11 +477,14 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     ) -> ReadResult:
         """Read a grant-relative file, slicing text by line (base64 for binary)."""
         try:
-            resolution = self._resolve(file_path)
+            # A read addresses a file, so the grantable folder is its container.
+            resolution = await self._aresolve(file_path, scope=_GrantScope.CONTAINER)
         except _WorkspaceRootError:
             return ReadResult(error=_SafeMessage.IS_A_DIRECTORY)
         except _UnknownMountError:
             return ReadResult(error=_SafeMessage.NOT_FOUND)
+        except _WorkspaceRefusalError as exc:
+            return ReadResult(error=exc.safe_message)
         if not resolution.relative:
             # The mount root is a directory, not a file.
             return ReadResult(error=_SafeMessage.IS_A_DIRECTORY)
@@ -375,7 +507,11 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         """Match ``pattern`` under the addressed mount, or across all mounts at root."""
         matches: list[FileInfo] = []
-        for mount, relative in self._targets(path):
+        try:
+            targets = await self._atargets(path)
+        except _WorkspaceRefusalError as exc:
+            return GlobResult(error=exc.safe_message)
+        for mount, relative in targets:
             scoped = self._scoped_glob(relative, pattern)
             try:
                 result = await self._client.glob(mount.grant_id, scoped)
@@ -397,7 +533,11 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     ) -> GrepResult:
         """Literal-substring content search under the addressed mount(s)."""
         matches: list[GrepMatch] = []
-        for mount, relative in self._targets(path):
+        try:
+            targets = await self._atargets(path)
+        except _WorkspaceRefusalError as exc:
+            return GrepResult(error=exc.safe_message)
+        for mount, relative in targets:
             path_glob = self._scoped_path_glob(relative, glob)
             try:
                 result = await self._client.grep(
@@ -483,21 +623,149 @@ class BrokeredWorkspaceBackend(BackendProtocol):
         """True when ``path`` denotes the workspace root (mount listing)."""
         return (path or "") in self._ROOT_PATHS
 
-    def _targets(self, path: str | None) -> list[tuple[WorkspaceMount, str]]:
+    async def _atargets(self, path: str | None) -> list[tuple[WorkspaceMount, str]]:
         """Resolve a glob/grep ``path`` to the ``(mount, relative)`` pairs to scan.
 
         ``None`` / root fans out across every mount; a mount-scoped path narrows
-        to one; an unknown mount yields no targets (an empty match set).
+        to one; a host-absolute path resolves (or requests a grant) exactly as a
+        read does. An unknown mount and an empty mount table are *refusals*, not
+        empty match sets — an empty search result is indistinguishable from "no
+        such folder", which is the ambiguity this route exists to remove.
         """
         if path is None or self._is_root(path):
-            return [(mount, "") for mount in self._mounts.values()]
+            return self._all_targets()
         try:
-            resolution = self._resolve(path)
+            resolution = await self._aresolve(path, scope=_GrantScope.PATH)
         except _WorkspaceRootError:
-            return [(mount, "") for mount in self._mounts.values()]
+            return self._all_targets()
         except _UnknownMountError:
-            return []
+            raise _WorkspaceRefusalError(_SafeMessage.NOT_FOUND) from None
         return [(resolution.mount, resolution.relative)]
+
+    def _all_targets(self) -> list[tuple[WorkspaceMount, str]]:
+        """Every mount at its root, refusing when nothing has been granted."""
+        if not self._mounts:
+            raise _WorkspaceRefusalError(_SafeMessage.NO_GRANTS)
+        return [(mount, "") for mount in self._mounts.values()]
+
+    # --- host-path resolution ----------------------------------------------
+
+    async def _aresolve(self, path: str | None, *, scope: _GrantScope) -> _Resolution:
+        """Resolve any accepted path shape to ``(mount, relative)``.
+
+        Virtual paths take the synchronous path unchanged. Host-absolute paths
+        are covered by a grant or become a grant request. Everything else is
+        refused with a safe message.
+        """
+        classified = HostPathClassifier.classify(path)
+        if classified.kind is HostPathKind.UNSAFE:
+            # Traversal / device / reserved shapes fail closed here — BEFORE any
+            # grant request, so a grant can never launder an escape.
+            raise _WorkspaceRefusalError(
+                HostPathMessages.for_refusal(classified.refusal)
+            )
+        if self._is_virtual_namespace(path):
+            return self._resolve(path)
+        if classified.kind is not HostPathKind.HOST_ABSOLUTE:
+            raise _WorkspaceRefusalError(
+                HostPathMessages.for_refusal(classified.refusal)
+            )
+        return await self._resolve_host(classified, scope=scope)
+
+    def _is_virtual_namespace(self, path: str | None) -> bool:
+        """True when ``path`` addresses this backend's own mount namespace.
+
+        Three ways in: the explicit ``/workspace/...`` form (unstripped, so an
+        unknown mount there is a not-found rather than a host folder), a leading
+        segment that names a configured mount (the prefix-stripped form
+        ``CompositeBackend`` delivers), and any path that is not host-shaped at
+        all. A mount name always wins over a same-named host folder.
+        """
+        raw = path or ""
+        if raw == ROUTE_PREFIX.rstrip("/") or raw.startswith(ROUTE_PREFIX):
+            return True
+        segments = self._split(raw)
+        if segments and segments[0] in self._mounts:
+            return True
+        return not HostPathClassifier.is_host_shaped(raw)
+
+    async def _resolve_host(
+        self, target: ClassifiedPath, *, scope: _GrantScope
+    ) -> _Resolution:
+        """Serve a host-absolute path through a covering grant, or request one."""
+        resolution = self._cover(target)
+        if resolution is not None:
+            return resolution
+        folder = target if scope is _GrantScope.PATH else target.parent()
+        if not folder.is_host:
+            # e.g. reading ``/a.csv``: the container is a whole volume, which is
+            # never a grantable folder.
+            raise _WorkspaceRefusalError(HostPathMessages.for_refusal(folder.refusal))
+        if self._grant_gate is None:
+            raise _WorkspaceRefusalError(WorkspaceGrantMessages.NOT_GRANTED)
+        outcome = await self._grant_gate.request(
+            folder, bound_grant_ids=self._bound_grant_ids()
+        )
+        if (
+            not outcome.approved
+            or outcome.grant is None
+            or outcome.granted_root is None
+        ):
+            raise _WorkspaceRefusalError(outcome.message)
+        self._bind_grant(outcome.grant, outcome.granted_root)
+        resolution = self._cover(target)
+        if resolution is None:
+            raise _WorkspaceRefusalError(WorkspaceGrantMessages.UNBOUND)
+        return resolution
+
+    def _cover(self, target: ClassifiedPath) -> _Resolution | None:
+        """Translate ``target`` to ``(mount, relative)`` through a bound root."""
+        match = self._host_root_index().cover(target)
+        if match is None:
+            return None
+        return _Resolution(mount=self._mounts[match.key], relative=match.relative)
+
+    def _host_root_index(self) -> HostRootIndex:
+        """The mount-name-keyed index of granted host roots (built on demand)."""
+        if self._host_roots is None:
+            self._host_roots = HostRootIndex(
+                [
+                    (mount.name, mount.classified_host_root())
+                    for mount in self._mounts.values()
+                    if mount.host_root is not None
+                ]
+            )
+        return self._host_roots
+
+    def _bound_grant_ids(self) -> frozenset[str]:
+        """Grant ids already bound to a mount — how a NEW grant is recognised."""
+        return frozenset(mount.grant_id for mount in self._mounts.values())
+
+    def _bind_grant(self, grant: BrokerGrant, root: ClassifiedPath) -> None:
+        """Bind an approved grant to its host root, extending the mount table.
+
+        A grant already bound to this exact root is reused; one bound with no
+        root yet adopts it (a snapshot-derived mount cannot know its own root).
+        Two different roots for one grant id mean one of them is wrong, so that
+        case is left unbound and the read is refused rather than mis-rooted.
+        """
+        existing = next(
+            (m for m in self._mounts.values() if m.grant_id == grant.grant_id), None
+        )
+        if existing is not None:
+            if existing.host_root is None:
+                self._mounts[existing.name] = replace(existing, host_root=root.display)
+                self._host_roots = None
+            return
+        name = WorkspaceMountTable.mount_name(grant, used=frozenset(self._mounts))
+        self._mounts[name] = WorkspaceMount(
+            name=name,
+            grant_id=grant.grant_id,
+            label=grant.label or None,
+            mode=grant.mode,
+            host_root=root.display,
+        )
+        self._host_roots = None
 
     # --- projection helpers -------------------------------------------------
 
@@ -620,6 +888,14 @@ class WorkspaceBackendConfig:
     non-desktop deployments are wholly unaffected. ``mounts`` are supplied by the
     caller (the factory follow-up resolves them from the run's active grant
     snapshot) — this seam performs no network I/O at construction time.
+
+    ``grant_requests`` is ON by default: wherever host access is configured at
+    all, an ungranted folder must be able to ASK. Access stays grant-scoped
+    either way — default-on means the affordance exists, not that anything is
+    readable. Turning it off does not restore the silent fallthrough: an
+    ungranted host path is then refused out loud instead.
+
+    ``run_id`` only scopes the grant request's deterministic approval id.
     """
 
     broker_base_url: str | None = None
@@ -630,6 +906,8 @@ class WorkspaceBackendConfig:
     timeout_seconds: float = 10.0
     read_max_bytes: int = DEFAULT_READ_MAX_BYTES
     mounts: tuple[WorkspaceMount, ...] = field(default_factory=tuple)
+    grant_requests: bool = True
+    run_id: str | None = None
 
     @classmethod
     def from_env(
@@ -649,6 +927,10 @@ class WorkspaceBackendConfig:
             mounts=tuple(mounts),
         )
 
+    def with_run(self, run_id: str | None) -> WorkspaceBackendConfig:
+        """Return a copy scoped to ``run_id`` (frozen-safe replace)."""
+        return replace(self, run_id=run_id)
+
     def with_mounts(self, mounts: Sequence[WorkspaceMount]) -> WorkspaceBackendConfig:
         """Return a copy of this config carrying ``mounts`` (frozen-safe replace).
 
@@ -663,6 +945,7 @@ def build_workspace_backend(
     config: WorkspaceBackendConfig,
     *,
     client: DesktopBrokerClient | None = None,
+    grant_gate: WorkspaceGrantGate | None = None,
 ) -> BrokeredWorkspaceBackend | None:
     """Construct the ``/workspace/`` backend, or ``None`` when broker config is absent.
 
@@ -675,6 +958,16 @@ def build_workspace_backend(
     grant-snapshot fetch (one client per run, and a test can inject a fake
     transport). When omitted, a client is constructed from ``config`` over the
     process-shared HTTP pool.
+
+    ``grant_gate`` overrides the gate that asks the user to grant an ungranted
+    folder (tests inject one with a fake interrupt handler). When omitted, a gate
+    is built over the same broker client unless ``config.grant_requests`` is off.
+
+    An EMPTY mount table still yields a backend. That is deliberate: host access
+    is on by default and stays grant-scoped, so the route must exist for a host
+    path to be able to ask for a grant. Returning ``None`` here is what left
+    ``ls /Users/<name>/Downloads`` to a virtual backend that answered it with an
+    empty listing.
 
     This seam is read-only. C2's prepared authority is composed separately by
     the workspace-effect executor and is never passed through this backend.
@@ -691,10 +984,14 @@ def build_workspace_backend(
             timeout_seconds=config.timeout_seconds,
         )
     )
+    resolved_gate = grant_gate
+    if resolved_gate is None and config.grant_requests:
+        resolved_gate = WorkspaceGrantGate(grants=resolved_client, run_id=config.run_id)
     return BrokeredWorkspaceBackend(
         client=resolved_client,
         mounts=config.mounts,
         read_max_bytes=config.read_max_bytes,
+        grant_gate=resolved_gate,
     )
 
 

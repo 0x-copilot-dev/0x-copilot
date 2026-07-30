@@ -80,6 +80,13 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
+      # tools/desktop-runtime ships inside the CLI tarball, and until now nothing
+      # ran its node:test files at all — `grep -rn -- --test .github/workflows/`
+      # matched only the CLI's own suite. They cover the staging modules this job
+      # then packs, so this is their natural home.
+      - name: Test desktop-runtime staging modules
+        run: node --test "tools/desktop-runtime/*.test.mjs"
+
       - name: Build payload inputs
         run: |
           npm run build --workspace @0x-copilot/desktop

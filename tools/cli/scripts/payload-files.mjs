@@ -5,5 +5,6 @@ export const DESKTOP_RUNTIME_FILES = [
   "stage.mjs",
   "browser-runtime.mjs",
   "macos-signing.cjs",
+  "workspace-fs-audit.mjs",
   "manifest.json",
 ];

@@ -69,6 +69,16 @@ export {
   type ConnectorConsentStates,
 } from "./useConnectorConsentStates";
 
+// === Workspace folder grants — the mid-run folder ask's state machine ===
+// Its sibling: `requestGrant` resolves, so this hook settles the card itself and
+// needs no host `markGranted`. Resuming the run stays host-owned (`onGranted`).
+export {
+  useWorkspaceGrantCardStates,
+  type WorkspaceGrantCardController,
+  type WorkspaceGrantCardHandlers,
+  type WorkspaceGrantCardStates,
+} from "./useWorkspaceGrantCardStates";
+
 // === PRD-C2 — global write-posture chip ===
 export { PostureChip, type PostureChipProps } from "./PostureChip";
 
