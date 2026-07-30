@@ -1472,23 +1472,39 @@ p {
 }
 
 .aui-composer {
-  --composer-padding: 0.5rem;
-  --composer-radius: 1.5rem;
-  /* Phase 9 composer redesign: base shell sized for a 3-row textarea
-   * (matches minRows={3} in AssistantComposer). Switched from fixed
-   * `height` to `min-height` so the container GROWS when the textarea
-   * auto-expands past 3 rows — previously the fixed height + overflow:
-   * hidden clipped the textarea and pushed the toolbar/hint past the
-   * workspace bottom (the "why do I need to scroll?" bug). */
-  --composer-shell-height: 11rem;
+  /* WEB FORK of the package SSOT, packages/chat-surface/src/composer/composer.css
+   * — composer.css is imported by the desktop host only (see ModelPill.tsx),
+   * so these three tokens have to track it by hand. They had NOT: the v3 pass
+   * updated the package and left this copy on its Phase-9 values, so the two
+   * hosts rendered different composers.
+   *
+   * `--composer-radius` / `--composer-padding` are inert either way — the shell's
+   * box model is authored INLINE by `containerStyle` in Composer.tsx (11px / 0),
+   * and an inline shorthand beats any stylesheet. They are corrected here so the
+   * fork stops advertising values it does not paint.
+   *
+   * `--composer-shell-height` is the one that bites, precisely BECAUSE it is the
+   * only box-model property NOT authored inline — it falls through to CSS, and
+   * this fork's `11rem` floor held the shell at 176px around ~104px of content
+   * (72px textarea + 32px action row), leaving ~72px of dead space under the
+   * toolbar. `auto` is the package's value: the v3 composer reserves no minimum
+   * and sizes to its content, growing as the textarea auto-expands. */
+  --composer-padding: 0;
+  --composer-radius: 11px;
+  --composer-shell-height: auto;
   background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  /* `--color-border-strong` per the package: the .06 hairline was invisible
+   * against the rail ground. (Inert while Composer.tsx authors the border
+   * inline, but the fork should not advertise a colour it does not paint.) */
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--composer-radius);
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  margin: var(--space-lg) auto 0;
+  gap: 0;
+  /* `--space-sm`, not `--space-lg`: the v3 composer sits close under the
+   * transcript. */
+  margin: var(--space-sm) auto 0;
   max-width: var(--chat-content-width);
   box-sizing: border-box;
   min-height: var(--composer-shell-height);
@@ -1507,9 +1523,13 @@ p {
 /* data-focused no longer needs a separate input-height — the textarea
  * auto-sizes via Composer.tsx's useLayoutEffect, and removing the
  * hint row (max-height:0 below) is what gives back visual breath when
- * the user is actively typing. */
+ * the user is actively typing.
+ *
+ * The topbar variant used to lift the floor 11rem → 13rem; with no floor left
+ * to lift it tracks the package SSOT at `auto`. A composer with a topbar is
+ * TALLER because it has one more row in it, not because it was told to be. */
 .aui-composer[data-has-topbar="true"] {
-  --composer-shell-height: 13rem;
+  --composer-shell-height: auto;
 }
 
 .aui-composer[data-focused="true"] .atlas-depth {
@@ -1521,9 +1541,20 @@ p {
   padding-right: 10px;
 }
 
+/* Tracks the package SSOT. The design's `.cmp:focus-within{border-color:
+ * var(--line3)}` is a quiet darkening of the hairline, NOT an accent ring —
+ * the accent border + 2px glow this fork used to carry made the composer the
+ * loudest thing on the surface the moment it took focus, and was dropped from
+ * the package for exactly that reason.
+ *
+ * `border-color` cannot be used here: Composer.tsx authors the border as an
+ * inline SHORTHAND, which no stylesheet longhand can override. Flipping the
+ * custom property that shorthand reads is how the darkening lands without
+ * `!important`. (That is also why this fork's old `border-color` never
+ * painted — only its glow did.) */
 .aui-composer:focus-within {
-  border-color: color-mix(in srgb, var(--color-accent) 75%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  --composer-shell-border: var(--color-border-stronger);
+  box-shadow: none;
 }
 
 .aui-composer__dropzone {
@@ -1553,13 +1584,21 @@ p {
   display: none;
 }
 
+/* Tracks the package SSOT (design `.cmp-row{padding:6px 8px 8px}`). The row
+ * owns its own inset because the shell is flush (`--composer-padding: 0`), and
+ * the 5px gap is the design's, not the 8px `--space-sm` this fork drifted to.
+ *
+ * `justify-content: space-between` + `min-height: 2rem` are dropped WITH the
+ * `flex` changes below, not independently: the fork pushed the right cluster
+ * over with `space-between` + `tools{flex:1 1 auto}`, the package does it with
+ * `__right{margin-left:auto}` + `tools{flex:0 1 auto}`. Mixing the two halves
+ * collapses the row, so the four blocks here change together. */
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
-  gap: var(--space-sm);
-  justify-content: space-between;
-  min-height: 2rem;
+  gap: 5px;
   min-width: 0;
+  padding: 6px 8px 8px;
   position: relative;
 }
 
@@ -1577,9 +1616,12 @@ p {
 .aui-composer-action-wrapper__right {
   align-items: center;
   display: flex;
-  flex: 0 1 auto;
-  gap: var(--space-sm);
+  flex: 0 0 auto;
+  gap: 5px;
   justify-content: flex-end;
+  /* This is what pushes the right cluster over, replacing the row's
+   * `space-between` (see the note above). */
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -1625,9 +1667,11 @@ p {
 .aui-composer-tools {
   align-items: center;
   display: flex;
-  flex: 1 1 auto;
+  /* `0 1 auto`: the tools cluster shrinks but never GROWS to fill the row —
+   * growing is what made `space-between` necessary in the first place. */
+  flex: 0 1 auto;
   flex-wrap: nowrap;
-  gap: var(--space-sm);
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
 }
