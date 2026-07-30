@@ -59,8 +59,9 @@ describe("SourcesV2Tab", () => {
         "Everything the agent read or fetched this run — the receipts behind each surface.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Artifacts · 1")).toBeInTheDocument();
-    expect(screen.getByText("Linear · 1")).toBeInTheDocument();
+    // The compact list uppercases its eyebrow label.
+    expect(screen.getByText("ARTIFACTS · 1")).toBeInTheDocument();
+    expect(screen.getByText("LINEAR · 1")).toBeInTheDocument();
     expect(screen.getByText("Generated Artifact")).toBeInTheDocument();
     expect(screen.getByText("Get issue")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Open Generated Artifact"));
@@ -86,8 +87,13 @@ describe("SourcesV2Tab", () => {
   it("keeps non-artifact provenance honestly non-openable", () => {
     render(<SourcesV2Tab sources={sources} onOpenSource={vi.fn()} />);
 
-    expect(screen.getAllByTestId("sources-v2-row")).toHaveLength(2);
-    expect(screen.getAllByTestId("sources-v2-open-artifact")).toHaveLength(1);
+    const rows = screen.getAllByTestId("sources-v2-row");
+    expect(rows).toHaveLength(2);
+    // Openability is a row attribute now, not a trailing glyph — only the
+    // artifact fact is owner-routed openable.
+    expect(
+      rows.filter((r) => r.getAttribute("data-openable") === "true"),
+    ).toHaveLength(1);
   });
 
   it("renders the supplied v3 empty-state contract", () => {
@@ -145,16 +151,14 @@ describe("SourcesV2Tab — citationsSlot", () => {
   });
 });
 
-describe("SourcesV2Tab — fact rows use the citation card", () => {
-  it("renders v2 fact rows with the same .atlas-source-row card as citations", () => {
-    // One Sources rail, one row language. Before this the facts rendered as a
-    // compact list row while cited documents rendered as rich cards, so the two
-    // halves of the same panel looked like different products.
+describe("SourcesV2Tab — fact rows use the compact source card", () => {
+  it("renders v2 fact rows as compact list rows, not tall cards", () => {
+    // One Sources rail, one row language: the same dense card that used to sit
+    // under each web_search tool call. The previous `.atlas-source-row` cards
+    // stacked a badge row, a snippet and a footnote per source and ate the panel.
     render(<SourcesV2Tab sources={sources} />);
     const row = screen.getAllByTestId("sources-v2-row")[0];
-    expect(row).toHaveClass("atlas-source-row");
-    expect(row.querySelector(".atlas-source-row__title")).not.toBeNull();
-    // The metadata takes the footnote slot where a citation shows its snippet.
-    expect(row.querySelector(".atlas-source-row__footnote")).not.toBeNull();
+    expect(row).not.toHaveClass("atlas-source-row");
+    expect(row.getAttribute("role")).toBe("listitem");
   });
 });

@@ -74,7 +74,16 @@ import {
   type SubagentSnapshotMap,
   type WorkspaceTabsItem,
 } from "../../workspace";
-import { isRunningStatus } from "../../workspace/workspaceHelpers";
+import {
+  isRunningStatus,
+  sourcesByCitationCount,
+} from "../../workspace/workspaceHelpers";
+import {
+  CompactSourceList,
+  displayUrl,
+  safeHttpUrl,
+  type CompactSourceItem,
+} from "../../workspace/CompactSourceList";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
@@ -424,16 +433,17 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // `undefined` when there is nothing cited, so the v2 tab omits the section
   // entirely rather than showing an empty "Cited" header — and so its own
   // no-sources empty state still works.
+  //
+  // Rendered with the SAME compact card that used to sit under each web_search
+  // tool call in the transcript, not the tall `.atlas-source-row` cards: at four
+  // results those ate the whole panel. One line per source — glyph, title, URL,
+  // ordinal.
   const citationsSlot: ReactNode =
     sources.size > 0 ? (
-      <SourcesTab
-        sources={sources}
-        loading={sourcesLoading}
-        error={sourcesError}
-        searching={sourcesSearching}
-        onSelect={onSelectSource}
-        onJumpToChat={onJumpToChatSource}
-        SourceRowComponent={SourceRowComponent}
+      <CompactSourceList
+        label="Cited"
+        testId="sources-v2-citations-list"
+        items={toCompactCitations(sources)}
       />
     ) : undefined;
 
@@ -1105,3 +1115,24 @@ const approvalsBadgeStyle: CSSProperties = {
   color: "var(--color-accent, #5fb2ec)",
   fontWeight: 600,
 };
+
+/**
+ * Project the citation registry into rows of the shared compact source list.
+ *
+ * Ordinals come from `sourcesByCitationCount`, the same ordering the legacy
+ * Sources tab uses, so a row's `[N]` matches the `[[N]]` chip in the transcript.
+ * `safeHttpUrl` gates the link: a citation URL is model-adjacent data, so a
+ * non-http(s) value renders as plain text rather than an anchor.
+ */
+function toCompactCitations(sources: SourceEntryMap): CompactSourceItem[] {
+  return sourcesByCitationCount(sources).map((entry, index) => {
+    const href = safeHttpUrl(entry.source_url);
+    return {
+      id: entry.citation_id,
+      ordinal: index + 1,
+      title: entry.title ?? entry.source_doc_id,
+      subtitle: href === null ? entry.source_connector : displayUrl(href),
+      href,
+    };
+  });
+}

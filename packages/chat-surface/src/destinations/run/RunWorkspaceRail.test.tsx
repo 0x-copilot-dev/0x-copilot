@@ -276,7 +276,12 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
     expect(screen.getByTestId("sources-v2-tab")).toBeInTheDocument();
     expect(screen.queryByTestId("ledger-sources-tab")).toBeNull();
-    fireEvent.click(screen.getByTestId("sources-v2-open-artifact"));
+    // Opening is the row's title button now (the trailing glyph is gone with
+    // the compact card); find it by the row that is owner-routed openable.
+    const openable = screen
+      .getAllByTestId("sources-v2-row")
+      .find((r) => r.getAttribute("data-openable") === "true");
+    fireEvent.click(within(openable as HTMLElement).getByRole("button"));
     expect(onOpenSource).toHaveBeenCalledWith("source:v2:004:artifact");
   });
 
