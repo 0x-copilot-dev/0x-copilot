@@ -52,7 +52,7 @@ describe("TcMiniTimeline", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the empty state when there are no beads (receded: no Live pill, out of tab order)", () => {
+  it("keeps the Live pill with no beads (receded, but never blinks out)", () => {
     render(
       <TcMiniTimeline
         beads={[]}
@@ -62,11 +62,15 @@ describe("TcMiniTimeline", () => {
       />,
     );
     expect(screen.getByTestId("tc-mini-timeline-empty")).toBeInTheDocument();
-    // Progressive disclosure: an empty timeline is permanently live, so the
-    // Live/Now pill is withheld and the strip drops out of the tab order.
-    expect(
-      screen.queryByTestId("tc-mini-timeline-now"),
-    ).not.toBeInTheDocument();
+    // The pill is PERMANENT. Withholding it at zero beads made the bar's right
+    // edge disappear every time a send started a fresh run — the exact moment
+    // the user is looking at it. At zero beads it honestly reads "Live"; the
+    // no-op click is flagged to assistive tech via aria-disabled rather than
+    // `disabled`, which would shift layout.
+    const pill = screen.getByTestId("tc-mini-timeline-now");
+    expect(pill).toHaveTextContent("Live");
+    expect(pill).toHaveAttribute("aria-disabled", "true");
+    // The strip itself still recedes: quiet styling, out of the tab order.
     const strip = screen.getByTestId("tc-mini-timeline");
     expect(strip).toHaveAttribute("data-empty", "true");
     expect(strip).toHaveAttribute("tabindex", "-1");

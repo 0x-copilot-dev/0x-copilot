@@ -152,8 +152,14 @@ so mode/tab switches never spawn a second chat mount.
 Seams the shell owns: scrub cursor (`scrubbedSeq`; `null` = live) + the "Viewing…"
 banner (approvals hidden while scrubbed); the empty/idle `RunEmptyState` goal composer
 (mounts when `session.runId === null`; starting a goal binds the fresh run via the
-`runId` seam without remounting the shell); and `RunMultiSelect` (renders nothing for
-≤1 run; picking one rebinds via `useRunSession.selectRun`).
+`runId` seam without remounting the shell).
+
+The cockpit is **single-run**: it binds the conversation head and renders NO run-picker
+chrome in either mode. `RunMultiSelect` — the old "N RUNS" chip rail above the canvas —
+was deleted (FR-3.26 withdrawn), not merely unmounted. Rebinding still works and is
+still tested: `useRunSession.selectRun` and the `runId` prop swap the session's SSE tail
+without remounting the canvas, driven from surfaces whose job is picking a run (the
+Pending Work card, the Agents stage). Don't add a persistent selector rail back.
 
 ## Settings
 

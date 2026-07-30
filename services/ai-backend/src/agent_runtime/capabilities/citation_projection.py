@@ -1,9 +1,24 @@
 """Stateless extractor that pattern-matches tool results to CitationLedger sources.
 
-Recognizes content-blocks, results-list, single-resource, and top-level list-of-dicts
-shapes (covering most web-search wrappers). Never mutates the result returned to the
-model; registers each detected source via CitationLedger. Silent no-op when no ledger
-is bound (replay / eval / test paths).
+Two concerns, deliberately split:
+
+* WHICH PAYLOADS to read — owned by
+  :class:`~agent_runtime.capabilities.tool_result_shapes.ToolResultPayloads`,
+  the single source of truth for tool-result envelopes (``content_and_artifact``
+  tuples, MCP ``CallToolResult``, Pydantic models, bare lists, plain dicts).
+  Teach a new ENVELOPE there and every consumer inherits it.
+* HOW TO READ one payload — owned here: content-blocks, results-list,
+  single-resource, and top-level list-of-dicts (covering most web-search
+  wrappers). Teach a new SOURCE shape here.
+
+That split exists because this module used to own both, re-deriving an envelope
+walk that ``ToolResultNote`` already had — and missing the ``content_and_artifact``
+tuple that the built-in ``web_search`` returns on every call. Sources silently
+never registered while ``[[N]]`` chips kept working, because the note half of the
+same wrapper unwrapped the tuple correctly.
+
+Never mutates the result returned to the model; registers each detected source via
+CitationLedger. Silent no-op when no ledger is bound (replay / eval / test paths).
 """
 
 from __future__ import annotations
@@ -13,6 +28,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from agent_runtime.capabilities.citations import CitationLedger, SourceRef
+from agent_runtime.capabilities.tool_result_shapes import ToolResultPayloads
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -93,7 +109,44 @@ class CitationProjector:
 
     @classmethod
     def _extract_sources(cls, connector: str, result: object) -> Iterable[SourceRef]:
-        """Dispatch ``result`` to the appropriate shape extractor."""
+        """Extract sources from any tool result, whatever envelope it arrives in.
+
+        Envelope unwrapping is NOT done here — it is delegated to
+        :class:`ToolResultPayloads`, the single place that knows tool-result
+        shapes (see that module for why). This method only knows how to read an
+        already-unwrapped payload. Adding a new envelope shape is a change there,
+        which every consumer inherits; adding a new *source* shape is a change
+        here.
+
+        Payload order is priority order, and the first payload that yields
+        anything wins: a ``content_and_artifact`` result must register its content
+        once, not content plus the artifact's copy of the same rows.
+        """
+
+        for payload in ToolResultPayloads.candidates(result):
+            yielded = False
+            for ref in cls._extract_from_payload(connector, payload):
+                yielded = True
+                yield ref
+            if yielded:
+                return
+        # Nothing matched any known source shape. Distinguishing "recognised the
+        # shape, genuinely no sources" from "did not understand this result" is
+        # what makes a future tool's silence loud: the web_search tuple bug
+        # produced exactly this state for months with nothing in the logs.
+        _LOGGER.debug(
+            "[citations] projector.no_sources connector=%s result_type=%s "
+            "payload_types=%s",
+            connector,
+            type(result).__name__,
+            [type(p).__name__ for p in ToolResultPayloads.candidates(result)],
+        )
+
+    @classmethod
+    def _extract_from_payload(
+        cls, connector: str, result: object
+    ) -> Iterable[SourceRef]:
+        """Dispatch ONE unwrapped payload to the appropriate source extractor."""
         if isinstance(result, list):
             yield from cls._from_results_list(connector, result)
             return

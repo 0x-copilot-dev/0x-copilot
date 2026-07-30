@@ -216,3 +216,185 @@
   gap: var(--space-sm);
   line-height: var(--line-height-base);
 }
+
+/* ── Citation source rows (moved from apps/frontend/src/styles.css) ──────────
+ *
+ * These render the cited-document rows in the Sources rail. They lived ONLY in
+ * the web app's private stylesheet, which the desktop renderer never imports —
+ * the third instance of the same stranded-CSS trap (after the citation chip and
+ * the subagent cards). It went unnoticed because the desktop Sources rail showed
+ * the v2 ledger fold, which has no citation rows; surfacing cited documents
+ * there exposed them as unstyled boxes. Both hosts now load this file.
+ * Do NOT re-add a copy to a host stylesheet.
+ */
+
+.atlas-source-row {
+  list-style: none;
+  margin: 0 0 8px;
+}
+
+.atlas-source-row--focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.atlas-source-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.atlas-source-row__head:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* PR 3.7.1 — single shimmer row shown while a source-producing tool is
+ * in flight. Same row footprint as .atlas-source-row so the first real
+ * row replaces it without layout shift. */
+.atlas-source-row--skeleton .atlas-source-row__title--skeleton {
+  color: var(--color-text-subtle);
+  font-style: italic;
+  font-weight: var(--font-weight-regular);
+}
+
+.atlas-source-row__snippet--skeleton {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-border) 30%, transparent) 0%,
+    color-mix(in srgb, var(--color-border) 60%, transparent) 50%,
+    color-mix(in srgb, var(--color-border) 30%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 4px;
+  height: 0.6rem;
+  margin-top: 8px;
+  animation: atlas-source-shimmer 1.4s linear infinite;
+}
+
+.atlas-source-row__pulse-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: atlas-source-pulse 1.2s ease-in-out infinite;
+}
+
+.atlas-source-row__glyph-trigger {
+  display: inline-flex;
+  outline: none;
+}
+
+.atlas-source-row__glyph-trigger:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.atlas-source-row__title {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atlas-source-row__title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.atlas-source-row__title a:hover {
+  text-decoration: underline;
+}
+
+.atlas-source-row__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.atlas-source-row__top > .atlas-source-row__head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.atlas-source-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.atlas-source-row__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-subtle);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.atlas-source-row__action:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border-subtle, var(--color-border, transparent));
+}
+
+.atlas-source-row__action:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.atlas-source-row__snippet {
+  margin: 6px 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.atlas-source-row__snippet--full {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.atlas-source-row__footnote {
+  margin: 6px 0 0;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+}
+
+/* The web stylesheet's `prefers-reduced-motion` block still covers its own
+ * `.atlas-sources-strip__chip`; the row half of that rule belongs here with the
+ * row's `transition`. */
+@media (prefers-reduced-motion: reduce) {
+  .atlas-source-row {
+    transition: none;
+  }
+}

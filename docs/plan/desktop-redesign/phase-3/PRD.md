@@ -184,7 +184,7 @@ _As a Developer/maintainer, I want the Run destination to live in `chat-surface`
 
 - **FR-3.24** All hardcoded lime `#c2ff5a` (and lime-derived palette constants) in `TcChat.tsx`, `TcTabs.tsx`, `TcInlineDiff.tsx`, `TcSurfaceMount.tsx`, `ThreadCanvas.tsx`, `TcSwimlanes.styles.ts`, `surfaces/GenericStructuredDiff.tsx`, and `surface-renderers/src/{_shared/palette.ts,sheet/*}` MUST be replaced by the sky accent tokens (`--color-accent`, `--color-accent-soft`, `--color-accent-contrast`) and semantic tokens (`--color-success` = jade `#57c785`, `--color-danger` = the destructive/"ember" token). Phase 3 consumes the `--color-danger` **token name**; its exact hex is owned by `packages/design-system/src/styles.css` (Phase 0B) — do **not** hardcode `#f0764f`/`#d97777` at the leaf. (US-3.10)
 - **FR-3.25** The Run **empty/idle** state MUST render a goal composer with "Give it a goal…" prompt when no active run exists (no blank canvas / placeholder string), and starting a goal MUST transition to the live layout without shell remount. (US-3.8)
-- **FR-3.26** The **multi-run** state MUST render a run selector (goal, status, time) when the conversation has >1 run and rebind the projection/tabs/timeline/surface on selection. (US-3.9)
+- **FR-3.26** ~~The **multi-run** state MUST render a run selector (goal, status, time) when the conversation has >1 run and rebind the projection/tabs/timeline/surface on selection.~~ (US-3.9) — **WITHDRAWN.** The selector shipped as `RunMultiSelect` and was removed on product call: a persistent "N RUNS" chip rail above the canvas is chrome in both Studio and Focus, and it competes with the run header for the same glance. The cockpit binds exactly ONE run — the conversation head. The **rebind** half of this requirement survives and is still pinned by tests: `useRunSession.selectRun` + the `runId` prop rebind the session's SSE tail without remounting the canvas, driven from surfaces whose job is picking a run (Pending Work card, Agents stage) rather than from always-on chrome. Do not reinstate a persistent selector rail.
 
 ### H. Boundaries & a11y
 
@@ -247,7 +247,7 @@ _As a Developer/maintainer, I want the Run destination to live in `chat-surface`
 | `useRunSession` (SSE + events + run resolution)    | **New**                                                                      | `packages/chat-surface/src/destinations/run/useRunSession.ts`                                                          |
 | `useRunMode` (KV mode + `⌘M`)                      | **New**                                                                      | `packages/chat-surface/src/destinations/run/useRunMode.ts`                                                             |
 | `RunEmptyState` (goal composer)                    | **New**                                                                      | `packages/chat-surface/src/destinations/run/RunEmptyState.tsx`                                                         |
-| `RunMultiSelect` (run picker)                      | **New**                                                                      | `packages/chat-surface/src/destinations/run/RunMultiSelect.tsx`                                                        |
+| ~~`RunMultiSelect` (run picker)~~                  | **Deleted** (FR-3.26 withdrawn — cockpit is single-run)                      | ~~`packages/chat-surface/src/destinations/run/RunMultiSelect.tsx`~~                                                    |
 | Run module barrel                                  | **New**                                                                      | `packages/chat-surface/src/destinations/run/index.ts`                                                                  |
 | `DesktopPlaceholder` (run path)                    | **Delete from run mount** (kept only until FR-3.2 lands; removed in PR-3.11) | `apps/desktop/renderer/DesktopPlaceholder.tsx`                                                                         |
 
@@ -402,7 +402,7 @@ Runner: **vitest** for all TS packages/apps via `npm run test --workspace @0x-co
 - `surface-renderers/sheet/SheetDiff.test.tsx` — **FR-3.20/3.21**: pending row highlight + `Approve & sign`; resolved → `✓ Signed` (jade) / `Rejected` (ember) / `Queued` (muted); `streaming · N%` chip.
 - `thread-canvas/TcInlineDiff.test.tsx` — **FR-3.23**: `idle→streaming→pending→accepted|rejected`; invalid transition throws `InvalidInlineDiffTransitionError`.
 - `destinations/run/RunEmptyState.test.tsx` — **FR-3.25**: renders goal composer when no run; submit fires start callback.
-- `destinations/run/RunMultiSelect.test.tsx` — **FR-3.26**: lists runs (goal/status/time); selection fires `selectRun`.
+- ~~`destinations/run/RunMultiSelect.test.tsx` — **FR-3.26**~~ — deleted with the component (FR-3.26 withdrawn). The surviving rebind half is covered by `destinations/run/RunDestination.test.tsx` (head-run auto-bind asserts NO selector chrome; `runId`-seam rebind keeps the same canvas node) and `destinations/run/useRunSession.test.ts` (`selectRun`).
 - `thread-canvas/*` token tests / `surface-renderers` snapshot tests — **FR-3.24**: no `#c2ff5a`; accent = `--color-accent`.
 - a11y assertions across the above — **FR-3.29/3.30**: focus-ring style, roles, `prefers-reduced-motion` zeroing; light/dark render.
 

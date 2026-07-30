@@ -25,6 +25,11 @@ import "@0x-copilot/chat-surface/src/subagents/subagents.css";
 // cockpit's approval card rendered as a bare frame. Shipping them from the
 // package is what keeps both hosts on one copy.
 import "@0x-copilot/chat-surface/src/approvals/approvals.css";
+// Inline citation chips (`[[N]]` superscripts). These rules used to live ONLY in
+// the web app's styles.css, so before this the desktop cockpit could not render
+// a styled chip even once its renderer was wired — the same stranded-CSS class
+// of bug as composer.css above.
+import "@0x-copilot/chat-surface/src/citations/citations.css";
 // Staged message/table review surfaces — shared verbatim with the web host.
 import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";
 // Surface-language chrome: canvas tabs, card kicker dots, and the numeric/value

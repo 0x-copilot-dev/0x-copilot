@@ -19,8 +19,11 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import BaseModel
 
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.citation_projection import CitationProjector
+from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.capabilities.citations import CitationLedger, SourceRef
 from agent_runtime.execution.contracts import AgentRuntimeContext, StreamEventSource
 from runtime_adapters.in_memory.citation_store import InMemoryCitationStore
@@ -563,3 +566,192 @@ class TestBase36Token:
     def test_to_base36_rejects_non_positive(self) -> None:
         with pytest.raises(ValueError):
             CitationLedger._to_base36(0)
+
+
+# ── tool-result ENVELOPES: one SSOT, and the symmetry that must hold ─────────
+
+
+_ROWS: list[dict[str, str]] = [
+    {
+        "title": "LangGraph",
+        "link": "https://langchain-ai.github.io/langgraph/",
+        "snippet": "LangGraph is a framework for agent workflows.",
+    },
+    {"title": "Docs", "link": "https://example.com/docs", "snippet": "Second."},
+]
+_MCP_BLOCKS = [{"type": "resource", "resource": {"uri": "https://a.b", "title": "T"}}]
+
+
+class _DuckedEnvelope:
+    """A non-Pydantic object exposing ``.content`` (custom MCP-ish client)."""
+
+    content = _MCP_BLOCKS
+
+
+class _McpBlock(BaseModel):
+    type: str = "resource"
+    resource: dict
+
+
+class _McpCallToolResult(BaseModel):
+    """Stands in for the MCP client's ``CallToolResult`` (a Pydantic model)."""
+
+    content: list[_McpBlock]
+
+
+# Every envelope a tool result can arrive in. The projector must see through all
+# of them; the point of the table is that adding a row here is how a new shape
+# gets taught, in one place, to every consumer.
+_ENVELOPES: list[tuple[str, object]] = [
+    # DuckDuckGo declares response_format="content_and_artifact" for ALL three
+    # output_formats, so every web search is a 2-tuple. This is the shape that
+    # silently registered nothing and left the Sources rail empty.
+    ("ddg_output_format_list", (_ROWS, _ROWS)),
+    ("ddg_output_format_string", ("title: x, link: https://a.b", _ROWS)),
+    ("ddg_output_format_json", ('[{"link": "x"}]', _ROWS)),
+    ("bare_results_list", _ROWS),
+    ("results_key_dict", {"results": _ROWS}),
+    ("single_resource_dict", {"resource": {"uri": "https://a.b", "title": "T"}}),
+    # The live MCP path (operation_adapter.execute_read) passes a dict.
+    ("mcp_content_blocks_dict", {"content": _MCP_BLOCKS}),
+    # DEFENSIVE, reader-only: no current caller hands the projector an object
+    # form, but a future MCP client that returns its model directly would
+    # otherwise regress silently to zero sources. See the directional-invariant
+    # note in TestNoteAndProjectorAgreeOnShapes for why reader-only is safe.
+    (
+        "mcp_call_tool_result_model",
+        _McpCallToolResult(
+            content=[_McpBlock(resource={"uri": "https://a.b", "title": "T"})]
+        ),
+    ),
+    ("ducked_content_object", _DuckedEnvelope()),
+    # Arity is not a contract: a 3-tuple must still be walked, not discarded.
+    ("tuple_arity_three", (_ROWS, _ROWS, _ROWS)),
+    ("nested_tuple_of_list", ((_ROWS,), _ROWS)),
+]
+
+
+class TestToolResultEnvelopes:
+    """Envelope unwrapping is delegated to ToolResultPayloads — verify the union."""
+
+    @pytest.mark.parametrize("label,result", _ENVELOPES, ids=[e[0] for e in _ENVELOPES])
+    def test_every_envelope_yields_at_least_one_source(
+        self, label: str, result: object
+    ) -> None:
+        sources = list(CitationProjector._extract_sources("web_search", result))
+        assert sources, f"{label}: envelope yielded no sources"
+        assert all(s.source_url or s.source_doc_id for s in sources)
+
+    def test_content_wins_so_the_artifact_copy_is_not_double_registered(self) -> None:
+        # output_format="list" hands identical rows as content AND artifact. The
+        # first payload that yields must win, or every web result registers twice.
+        sources = list(CitationProjector._extract_sources("web_search", (_ROWS, _ROWS)))
+        assert len(sources) == len(_ROWS)
+
+    def test_artifact_is_the_fallback_when_content_is_opaque(self) -> None:
+        # output_format="string": content is an unparseable blob, artifact holds
+        # the rows. Content-only unwrapping would silently under-report here.
+        sources = list(
+            CitationProjector._extract_sources("web_search", ("opaque blob", _ROWS))
+        )
+        assert [s.source_url for s in sources] == [
+            "https://langchain-ai.github.io/langgraph/",
+            "https://example.com/docs",
+        ]
+
+    @pytest.mark.parametrize(
+        "result",
+        [None, "plain string", 42, (), {}, [], {"unrelated": "keys"}],
+        ids=[
+            "none",
+            "str",
+            "int",
+            "empty_tuple",
+            "empty_dict",
+            "empty_list",
+            "no_keys",
+        ],
+    )
+    def test_sourceless_results_yield_nothing_without_raising(
+        self, result: object
+    ) -> None:
+        assert list(CitationProjector._extract_sources("x", result)) == []
+
+    def test_a_model_dump_that_raises_is_swallowed(self) -> None:
+        # Enrichment must never break the tool call it is enriching.
+        class Hostile:
+            def model_dump(self) -> dict:
+                raise RuntimeError("boom")
+
+        assert list(CitationProjector._extract_sources("x", Hostile())) == []
+
+
+class TestNoteAndProjectorAgreeOnShapes:
+    """The invariant whose violation caused the empty-Sources bug.
+
+    ``ToolResultNote`` (write side: where to append the ``[[N]]`` hint) and the
+    projector (read side: what to scan for sources) are two halves of the same
+    tool wrapper. The asymmetry is DIRECTIONAL, and only one direction is a bug:
+
+    * writer understands, reader does not  → the bug we shipped. The model is
+      told "cite this as [[1]]", emits the marker, the chip resolves… and no
+      source was ever registered, so the Sources rail is empty. Silent and
+      maximally confusing, because the visible half works.
+    * reader understands, writer does not  → merely degraded. No hint means the
+      model does not emit ``[[N]]``, but sources still register and still show up
+      in Sources. Nothing lies to the user.
+
+    So the invariant is implication, not equality: anything the writer can
+    annotate, the reader MUST be able to see into. A reader that knows more
+    shapes is strictly safe, which is why the two defensive object envelopes in
+    the corpus (Pydantic ``CallToolResult`` / duck-typed ``.content``) are
+    allowed to be reader-only — the live MCP path passes a dict (verified at
+    ``operation_adapter.execute_read``), so the writer never meets them.
+    """
+
+    @pytest.mark.parametrize("label,result", _ENVELOPES, ids=[e[0] for e in _ENVELOPES])
+    def test_anything_the_writer_annotates_the_reader_can_read(
+        self, label: str, result: object
+    ) -> None:
+        annotated = ToolResultNote.append(result, note="[note]", dict_key="_k")
+        writer_understood = annotated is not result
+        reader_understood = bool(
+            list(CitationProjector._extract_sources("web_search", result))
+        )
+        if not writer_understood:
+            pytest.skip(f"{label}: writer does not annotate this shape")
+        assert reader_understood, (
+            f"{label}: the note writer annotates this envelope but the source "
+            f"reader cannot see into it — this is the exact asymmetry that made "
+            f"[[N]] chips work while the Sources rail stayed empty"
+        )
+
+
+class TestWebSearchTupleEndToEnd(CitationLedgerFixtureMixin):
+    """The reported bug, through the real ledger: one sources_ingested event."""
+
+    def test_web_search_tuple_emits_sources_ingested_with_tool_call_id(self) -> None:
+        ledger, events, store = self._build()
+        token = CitationLedger.bind_for_run(ledger)
+        try:
+            asyncio.run(
+                CitationProjector.project(
+                    connector="web_search",
+                    tool_call_id="toolu_abc",
+                    result=(_ROWS, _ROWS),
+                )
+            )
+        finally:
+            CitationLedger.unbind(token)
+
+        assert len(events.drafts) == 1
+        draft = events.drafts[0]
+        assert draft.event_type is RuntimeApiEventType.SOURCES_INGESTED
+        citations = draft.payload["citations"]
+        assert [c["source_url"] for c in citations] == [
+            "https://langchain-ai.github.io/langgraph/",
+            "https://example.com/docs",
+        ]
+        # Stamped so a Sources row ties back to the call that produced it.
+        assert {c["source_tool_call_id"] for c in citations} == {"toolu_abc"}
+        assert len(store.rows) == 2
