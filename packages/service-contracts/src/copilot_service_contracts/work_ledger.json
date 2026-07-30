@@ -168,7 +168,7 @@
         "agent_summary",
         "retryable"
       ],
-      "optional": ["activity_ref"]
+      "optional": ["activity_ref", "failure_code"]
     },
     "Artifact": {
       "required": [

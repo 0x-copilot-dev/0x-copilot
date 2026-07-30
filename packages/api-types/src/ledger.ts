@@ -1085,6 +1085,16 @@ export interface OperationDisposition {
   readonly activity_ref?: string;
   readonly agent_summary: string;
   readonly retryable: boolean;
+  /**
+   * Why a FAILED operation failed, from a closed server-side vocabulary — never
+   * free text and never an exception message. Present only on `FAILED`, so a
+   * reader cannot infer a reason for an outcome that did not fail.
+   *
+   * `agent_summary` stays the generic human sentence; this is the value to
+   * branch on. Parsing the summary instead is what left a model that lost a
+   * compare-and-append with nothing actionable to do.
+   */
+  readonly failure_code?: string;
 }
 
 export interface Artifact {

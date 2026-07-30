@@ -89,6 +89,7 @@ const ENTITY_KEYS = {
     "activity_ref",
     "agent_summary",
     "retryable",
+    "failure_code",
   ),
   Artifact: exactKeys<Artifact>()(
     "artifact_id",
