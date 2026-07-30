@@ -41,6 +41,7 @@ const EXCLUDE = new Set([
   "node_modules",
   "dist",
   "build",
+  "tests",
   ".pytest_cache",
   ".mypy_cache",
   ".git",
