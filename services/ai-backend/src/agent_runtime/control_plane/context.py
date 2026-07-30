@@ -408,7 +408,12 @@ class RunSerialAdmission:
     - **Shared** — taken only by a call an installed
       :class:`~agent_runtime.control_plane.parallel_admission.ParallelAdmissionPort`
       positively named. Bounded twice: by the grant's own cohort semaphore, and
-      by the shared lane itself.
+      by the shared lane itself. A grant of width *one* is a shared-lane call
+      too, and a narrow one: it waits behind its own cohort instead of behind
+      every other call in the run, which is what lets a grantor with its own
+      ordering barrier make progress at all. When the cohort table cannot hold a
+      cohort, :meth:`_unrepresentable_cohort_lane` says which of the two lanes
+      answers.
 
     The two lanes are mutually exclusive, which is the point. The shared lane is
     a *lightswitch*: the first entrant takes the same exclusive lock a serial
@@ -463,9 +468,13 @@ class RunSerialAdmission:
         """
 
         grant = ParallelAdmissionResolver.resolve(self._parallel_admission, request)
-        cohort = None if grant is None else self._bind_cohort(grant)
-        if cohort is None:
+        if grant is None:
             async with self._async_lock:
+                yield
+            return
+        cohort = self._bind_cohort(grant)
+        if cohort is None:
+            async with self._unrepresentable_cohort_lane(grant):
                 yield
             return
         try:
@@ -477,6 +486,42 @@ class RunSerialAdmission:
                     self._leave_shared()
         finally:
             self._release_cohort(grant, cohort)
+
+    @asynccontextmanager
+    async def _unrepresentable_cohort_lane(
+        self,
+        grant: ParallelAdmissionGrant,
+    ) -> AsyncIterator[None]:
+        """Admit a granted call whose cohort this gate cannot currently hold.
+
+        Two things can make a cohort unrepresentable: the bounded cohort table is
+        full, or a live cohort already fixed a different width. Either way this
+        gate has no slot through which to apply the grant's width, and it has
+        exactly two ways to answer.
+
+        The exclusive lock is the fail-closed answer and stays the default,
+        because a grantor that does not enforce its own width has no other
+        enforcer and admitting it unbounded would widen the run.
+
+        It is also, on its own, a way to *stall* a grantor that orders its calls
+        behind a barrier: a member waiting for an earlier sibling would hold this
+        lock while that sibling waits for it. So a grantor that positively states
+        it enforces the width itself is admitted into the shared lane without a
+        slot. Nothing is unbounded there — the shared lane still takes the run's
+        exclusive lock on the group's behalf, so granted work still cannot
+        overlap ungranted work, and the grantor's own gate still decides how many
+        of its members run at once.
+        """
+
+        if not grant.width_enforced_by_grantor:
+            async with self._async_lock:
+                yield
+            return
+        await self._join_shared()
+        try:
+            yield
+        finally:
+            self._leave_shared()
 
     @contextmanager
     def sync_permit(self) -> Iterator[None]:
@@ -497,8 +542,11 @@ class RunSerialAdmission:
         """Reserve a reference on this grant's cohort, or refuse to widen.
 
         Synchronous and await-free, so the check and the reservation are atomic
-        against every other coroutine on the loop. ``None`` means serial: the
-        cohort table is full, or a live cohort already fixed a different width.
+        against every other coroutine on the loop. ``None`` means this gate holds
+        no slot for the grant — the cohort table is full, or a live cohort
+        already fixed a different width — and
+        :meth:`_unrepresentable_cohort_lane` decides what a call with no slot is
+        answered by.
         """
 
         cohort = self._cohorts.get(grant.cohort_id)
