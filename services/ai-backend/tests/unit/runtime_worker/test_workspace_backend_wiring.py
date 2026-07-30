@@ -11,9 +11,6 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from agent_runtime.capabilities.desktop.workspace_grant import (
-    WorkspaceGrantMessages,
-)
 from agent_runtime.capabilities.desktop.workspace_backend import (
     BrokeredWorkspaceBackend,
     WorkspaceWriteNotSupportedError,
@@ -156,51 +153,69 @@ class TestSilentFallthroughRegression:
         assert isinstance(backend, BrokeredWorkspaceBackend)
         return backend
 
-    async def test_claimed_host_path_is_not_delivered_to_the_memory_default(
-        self,
-    ) -> None:
-        # Nothing granted — the live app's state for an ungranted folder.
-        broker = RecordingBroker(grants={})
-        consent = RecordingConsent(
-            resume={
-                "decision": "approved",
-                "grant_id": "grant-dl",
-                "root": _DOWNLOADS,
-            },
-            on_ask=lambda _p: broker.add_grant(
-                "grant-dl", {"q4.csv": b"period\n"}, label="Downloads"
-            ),
-        )
-        backend = await self._workspace_backend(broker, consent)
-        assert backend.claims_path(_DOWNLOADS) is True
-        composite = _composed_deep_backend(None, workspace_backend=backend)
-        assert composite is not None
-        result = await composite.als(_DOWNLOADS)
-        # The workspace backend answered, not memory: the user was ASKED.
-        assert consent.asked, (
-            "the composite handed a claimed host path to its default "
-            "(agent-memory) backend instead of the workspace route"
-        )
-        # And the approval served the real listing rather than an empty one.
-        assert result.error is None
-        assert {entry["path"] for entry in (result.entries or [])} == {
-            "/downloads/q4.csv"
-        }
+    async def test_a_host_path_is_never_answered_by_agent_memory(self) -> None:
+        """The defect, pinned at the level where it was actually caused.
 
-    async def test_declined_host_path_refuses_instead_of_answering_empty(
-        self,
-    ) -> None:
-        # The other half of the defect: a "no" must not degrade to an empty
-        # listing either, which reads to the model as "the folder is empty".
+        `ls /Users/<name>/Downloads` came back empty with a green tick because
+        a host path is not a prefix of any route, so it landed on the composite
+        DEFAULT — and that default was a `StateBackend`, which answers every
+        path with success and nothing.
+
+        The ASK now happens one layer up, in deepagents' filesystem permission
+        rules at tool time, so this test can no longer observe consent by
+        calling the backend directly. What it still owns, and what the defect
+        actually was, is this: whatever sits at the default must not be agent
+        memory.
+        """
+
+        from deepagents.backends.filesystem import FilesystemBackend
+        from deepagents.backends.state import StateBackend
+
         broker = RecordingBroker(grants={})
         consent = RecordingConsent(resume={"decision": "rejected"})
         backend = await self._workspace_backend(broker, consent)
         composite = _composed_deep_backend(None, workspace_backend=backend)
         assert composite is not None
-        result = await composite.als(_DOWNLOADS)
-        assert consent.asked
-        assert result.entries is None
-        assert result.error == WorkspaceGrantMessages.DECLINED
+        assert not isinstance(composite.default, StateBackend), (
+            "a host-absolute path would fall through to agent memory, which "
+            "answers it with an empty listing and a green tick"
+        )
+        assert isinstance(composite.default, FilesystemBackend)
+        assert composite.default.virtual_mode is False, (
+            "virtual_mode=True anchors absolute paths under root_dir, so a host "
+            "path would resolve somewhere else entirely rather than be read"
+        )
+
+    async def test_the_capability_and_its_boundary_ship_together(self) -> None:
+        """The one combination that must never exist: disk without rules.
+
+        `FilesystemBackend(virtual_mode=False)` is deliberately unguarded — it
+        reads whatever absolute path it is handed. That is safe ONLY because
+        the permission rules are applied in the tool layer before it runs. If a
+        refactor ever installs the backend without the rules, the model gets
+        the user's disk, and no other test in this file would notice.
+        """
+
+        from deepagents.backends.filesystem import FilesystemBackend
+        from deepagents.middleware.filesystem import _check_fs_permission
+
+        from agent_runtime.execution.factory import _host_filesystem_permissions
+
+        broker = RecordingBroker(grants={})
+        consent = RecordingConsent(resume={"decision": "rejected"})
+        backend = await self._workspace_backend(broker, consent)
+        composite = _composed_deep_backend(None, workspace_backend=backend)
+        assert composite is not None
+
+        if not isinstance(composite.default, FilesystemBackend):
+            return  # No real disk exposed; nothing to guard.
+
+        rules = list(_host_filesystem_permissions(backend))
+        assert rules, "a real filesystem is exposed with NO permission rules"
+        # Reads of an ungranted host folder must ask...
+        assert _check_fs_permission(rules, "read", _DOWNLOADS) == "interrupt"
+        # ...and no filesystem interrupt may ever authorize a host mutation (D7).
+        assert _check_fs_permission(rules, "write", f"{_DOWNLOADS}/x") == "deny"
 
     async def test_non_desktop_composition_is_unchanged(self) -> None:
         # With no workspace backend the default must stay the bare StateBackend,

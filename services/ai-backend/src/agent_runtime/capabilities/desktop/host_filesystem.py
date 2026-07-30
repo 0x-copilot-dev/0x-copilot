@@ -140,38 +140,68 @@ class HostFilesystemRules:
             }
         )
 
-        # 2. Granted roots. Reads always; writes only where the grant allows it,
-        #    so a read-only grant cannot be widened by this rule set. A
-        #    read-only root's writes fall through to rule 3 and ASK, which is
-        #    the honest outcome — the user may well say yes.
-        for root in roots:
-            operations = list(_ALL_OPERATIONS) if root.writable else [_READ]
+        # 2. The agent's scratch directory inside each granted root. This is the
+        #    ONE host location the agent may write directly, because it holds
+        #    the agent's own working files rather than the user's content. It
+        #    must precede rule 3, which is read-only.
+        writable_scratch = [
+            f"{root.scratch_path}/**" for root in roots if root.writable
+        ] + [root.scratch_path for root in roots if root.writable]
+        if writable_scratch:
             rules.append(
                 {
-                    "operations": operations,
+                    "operations": list(_ALL_OPERATIONS),
+                    "paths": writable_scratch,
+                    "mode": _Mode.ALLOW,
+                }
+            )
+
+        # 3. Granted roots — READ only, deliberately. Granting a folder makes it
+        #    readable without prompting; it does not make it directly writable.
+        #    See rule 5 for why.
+        for root in roots:
+            rules.append(
+                {
+                    "operations": [_READ],
                     "paths": [root.path, root.glob()],
                     "mode": _Mode.ALLOW,
                 }
             )
 
-        # 3. Everything else asks, and this is also the FLOOR. It turns the
-        #    original defect — a confident empty listing — into a consent
-        #    request, and it is present even when `roots` is empty.
-        #
-        #    There is deliberately no terminal `deny` rule after it. Two facts
-        #    make one both impossible and unnecessary: deepagents validates that
-        #    every rule path starts with "/" (a bare `**` raises), and `/**`
-        #    already matches every absolute path, so nothing an fs tool can
-        #    receive is left to the matcher's unmatched-means-allow default.
-        #    `interrupt` is itself fail-closed — the call does not proceed
-        #    unless a human approves — so using it as the floor asks where a
-        #    `deny` floor would simply refuse, which is the better product
-        #    behaviour and the same safety.
+        # 4. Every other READ asks. This is the rule that turns the original
+        #    defect — a confident empty listing over a folder full of files —
+        #    into a consent request, and it applies even when `roots` is empty,
+        #    which is exactly the first-run case that was broken. Approving it
+        #    yields a REAL listing, because the backend beneath is a real
+        #    filesystem rather than agent memory.
         rules.append(
             {
-                "operations": list(_ALL_OPERATIONS),
+                "operations": [_READ],
                 "paths": ["/**"],
                 "mode": _Mode.INTERRUPT,
+            }
+        )
+
+        # 5. Every other WRITE is denied outright — NOT interrupted.
+        #
+        #    This is D7, and it is the reason `permissions` was empty before:
+        #    "generic filesystem interrupts never authorize a host mutation."
+        #    If this rule were `interrupt`, approving a read-shaped prompt would
+        #    quietly become a way to mutate the user's disk outside the staged
+        #    C3 overlay and C2's commit authority — the one path that records
+        #    what changed and can undo it. Host writes keep going through the
+        #    typed workspace operation adapter; this rule set only ever widens
+        #    READS.
+        #
+        #    Together, rules 4 and 5 are total over absolute paths, so nothing
+        #    is left to deepagents' unmatched-means-allow default. No separate
+        #    terminal rule is possible anyway: deepagents rejects a rule path
+        #    that does not start with "/", so a bare `**` raises.
+        rules.append(
+            {
+                "operations": [_WRITE],
+                "paths": ["/**"],
+                "mode": _Mode.DENY,
             }
         )
         return tuple(rules)

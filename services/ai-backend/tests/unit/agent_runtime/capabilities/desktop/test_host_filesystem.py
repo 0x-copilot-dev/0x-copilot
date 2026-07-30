@@ -73,27 +73,24 @@ class TestGrantedRoots(RuleSetMixin):
         assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
         assert self.verdict(GRANTED, roots=roots) == "allow"
 
-    def test_a_granted_root_is_writable_when_the_grant_says_so(self) -> None:
-        roots = (GrantedRoot(path=GRANTED, writable=True),)
-        assert self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots) == (
-            "allow"
-        )
+    def test_granting_a_folder_does_not_make_it_directly_writable(self) -> None:
+        """D7: a generic filesystem interrupt must never authorize a mutation.
 
-    def test_a_read_only_grant_does_not_silently_become_writable(self) -> None:
-        """A read-only grant must not be widened by the rule set.
-
-        The write ASKS rather than being denied outright — the user may say yes
-        — but it must never be silently allowed.
+        Host writes belong to the staged C3 overlay + C2's commit authority —
+        the only path that records what changed and can undo it. If this were
+        `interrupt`, approving a read-shaped prompt would become a side door to
+        the user's disk. Granting widens READS only.
         """
 
-        roots = (GrantedRoot(path=GRANTED, writable=False),)
-        assert self.verdict(f"{GRANTED}/out.csv", operation="read", roots=roots) == (
-            "allow"
-        )
+        roots = (GrantedRoot(path=GRANTED, writable=True),)
+        assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
         assert (
-            self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots)
-            == "interrupt"
+            self.verdict(f"{GRANTED}/notes.md", operation="write", roots=roots)
+            == "deny"
         )
+
+    def test_an_ungranted_write_is_denied_not_merely_asked(self) -> None:
+        assert self.verdict(f"{UNGRANTED}/x", operation="write") == "deny"
 
     def test_granting_one_folder_does_not_grant_its_siblings(self) -> None:
         roots = (GrantedRoot(path=GRANTED),)
