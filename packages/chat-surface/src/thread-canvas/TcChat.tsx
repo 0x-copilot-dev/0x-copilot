@@ -505,7 +505,19 @@ export function TcChat(props: TcChatProps): ReactElement {
   // past state). The host also drops them from `approvals` when scrubbed, but
   // guarding on the scrub cursor here keeps standalone usage correct too.
   const scrubbedOffNow = scrub.scrubbedTo !== "now";
-  const visibleApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+  // A RESOLVED approval is history, not a live decision, so it does not belong
+  // in the strip directly above the composer. Once the user has approved, the
+  // run continues and its result — the listing, the answer — is already in the
+  // transcript; a "✓ Approved · <name>" line pinned above the input adds no
+  // information and pushes the conversation up. The record is not lost: the
+  // Approvals tab still projects every decision from the same event stream.
+  //
+  // Question cards are exempt because a resolved question still shows the
+  // answer the user gave, which the transcript does not repeat.
+  const liveApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+  const visibleApprovals = liveApprovals.filter(
+    (approval) => !approval.resolved || approval.question !== null,
+  );
   const projectedConnectedReceipt =
     connectedConnectorReceipt !== null &&
     visibleApprovals.some(
