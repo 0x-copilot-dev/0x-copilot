@@ -2105,10 +2105,16 @@ textarea {
   color: var(--color-text-subtle);
 }
 
-/* Scrolling row region — the design's `.pop__list`. */
+/* Scrolling row region — the design's `.pop__list`. Vertical ONLY: a popover is
+ * a fixed-width panel whose rows truncate, so a horizontal scrollbar is always
+ * a layout bug, never an affordance. It used to be plain `overflow: auto`, and
+ * one row whose sub-line failed to truncate (see `.ui-pop-row__sb`) turned the
+ * whole Tools panel into a sideways-scrolling strip with the badge column
+ * scrolled out of view and overflowing text sliding under the trailing pill. */
 .ui-pop__list {
   max-height: 264px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0 5px 5px;
 }
 
@@ -2202,8 +2208,15 @@ button.ui-pop-row {
   white-space: nowrap;
 }
 
-/* Row sub-line — the design's `.pop-row .sb`. */
+/* Row sub-line — the design's `.pop-row .sb`. `display: block` is load-bearing,
+ * not cosmetic: every consumer renders this as a `<span>` directly inside the
+ * `.ui-pop-row__m` text column, and `overflow` / `text-overflow` DO NOT APPLY to
+ * a non-replaced inline box. Without it the `nowrap` line box simply grew past
+ * the panel — no ellipsis ever appeared — which is what made the Tools popover
+ * scroll horizontally. (The name line's `.ui-pop-row__txt` never had the bug: it
+ * is a flex child of `.ui-pop-row__nm`, so it is already blockified.) */
 .ui-pop-row__sb {
+  display: block;
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
