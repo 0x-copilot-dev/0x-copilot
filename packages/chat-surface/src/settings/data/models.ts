@@ -138,8 +138,33 @@ export function groupModelsByProvider<T extends ModelCatalogModel>(
     .map((provider) => ({
       provider,
       label: providerLabel(provider),
-      models: byProvider.get(provider) ?? [],
+      models: sortModelsByReleaseDate(byProvider.get(provider) ?? []),
     }));
+}
+
+/**
+ * Newest release first, so Settings → Models reads as a timeline rather than an
+ * alphabetical jumble that files `gpt-3.5-turbo` above `gpt-5.6`.
+ *
+ * A model with NO release date sorts last, never first: absent means "the
+ * source didn't say" (the offline LiteLLM fallback publishes no release dates
+ * at all), and guessing "very old" would bury a brand-new model while guessing
+ * "very new" would float every unknown to the top. Ties fall back to name so
+ * the order is stable across renders.
+ */
+export function sortModelsByReleaseDate<T extends ModelCatalogModel>(
+  models: readonly T[],
+): T[] {
+  return [...models].sort((a, b) => {
+    const left = a.release_date ?? "";
+    const right = b.release_date ?? "";
+    if (left !== right) {
+      if (left === "") return 1;
+      if (right === "") return -1;
+      return right.localeCompare(left);
+    }
+    return a.name.localeCompare(b.name);
+  });
 }
 
 /** Filter models by a case-insensitive query over id / name / provider. */
@@ -164,6 +189,39 @@ export function priceLabel(model: CatalogModel): string | null {
   if (input === 0) return "Free";
   return `$${input.toFixed(2)}/M in`;
 }
+
+/**
+ * Release month, e.g. "Jul 2026". Month precision on purpose: the exact day is
+ * noise for choosing a model, and the full ISO date is already the sort key.
+ * Returns `null` when the source published no date, so the row simply omits it
+ * rather than showing an "unknown" placeholder on every LiteLLM-fallback row.
+ */
+export function releaseLabel(model: CatalogModel): string | null {
+  const raw = model.release_date;
+  if (raw === null || raw === undefined || raw === "") return null;
+  // Parse the ISO parts directly — `new Date("2026-07-24")` is UTC-midnight and
+  // renders as the PREVIOUS month for anyone west of Greenwich on the 1st.
+  const match = /^(\d{4})-(\d{2})/.exec(raw);
+  if (match === null) return null;
+  const monthIndex = Number(match[2]) - 1;
+  if (monthIndex < 0 || monthIndex > 11) return null;
+  return `${MONTHS[monthIndex]} ${match[1]}`;
+}
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
 
 /** Compact context-window label, e.g. "128K ctx". */
 export function contextLabel(model: CatalogModel): string | null {

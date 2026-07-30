@@ -186,6 +186,7 @@ class ConversationQueryService:
             unique_models,
             enabled_models=defaults.enabled_models if defaults is not None else None,
             default_model=effective_default,
+            user_key_providers=user_key_providers,
         )
         return ModelCatalogResponse(
             default_model_id=self._settings.default_model.model_name,
