@@ -49,6 +49,7 @@ from agent_runtime.control_plane.parallel_admission import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 if TYPE_CHECKING:
+    from agent_runtime.api.ports import ContextOccupancySink
     from agent_runtime.execution.model_invocation.runtime import (
         ModelInvocationRuntimeBinding,
     )
@@ -251,9 +252,29 @@ class _PromptRuntimeSlot:
 
 @dataclass(slots=True)
 class _ModelInvocationRuntimeSlot:
-    """Run-lifetime F10 slot inherited by supervisor and local child tasks."""
+    """Run-lifetime F10 slot inherited by supervisor and local child tasks.
+
+    ``occupancy_store`` rides on this slot rather than in a ContextVar of its
+    own, and deliberately does **not** ride on ``binding``. The Context
+    Occupancy Ledger measures at the model-call seam (design §3.1) but has no
+    dependency on F10: it needs the materialized request, which is always
+    present, and a durable sink. Carrying the sink on ``binding`` is what made
+    the ledger inert on a default deployment — ``compose`` returns ``None``
+    whenever ``effective_f10_mode`` is ``OFF``, which is the shipped default, so
+    the seam took its no-binding early return and captured nothing on every
+    model call of every run. Sharing the slot keeps one lifetime and one unbind
+    token for both, so an occupancy sink can never outlive the run that
+    installed it.
+    """
 
     binding: ModelInvocationRuntimeBinding | None = None
+    occupancy_store: "ContextOccupancySink | None" = None
+    # Tenant for the occupancy rows. ``RunControlSnapshot`` deliberately carries
+    # no ``org_id`` — it identifies a run and its policy, not its tenant — and
+    # the F10 binding is the only other place it lives, which is exactly the
+    # dependency being removed here. So it is installed with the sink, from the
+    # run record the handler already holds.
+    occupancy_org_id: str | None = None
 
 
 _CURRENT_PROMPT_RUNTIME: ContextVar[_PromptRuntimeSlot | None] = ContextVar(
@@ -734,6 +755,49 @@ class RunControlContext:
 
         slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
         return None if slot is None else slot.binding
+
+    @staticmethod
+    def install_context_occupancy_store(
+        sink: "ContextOccupancySink",
+        *,
+        org_id: str,
+    ) -> None:
+        """Install the run-scoped occupancy sink and tenant, independently of F10.
+
+        Called unconditionally by the run handler, which is the whole point: the
+        ledger is not an F10 feature and must not inherit F10's rollout posture.
+        Idempotent for the same object so a re-entrant bind is not an error, and
+        rejects a *different* sink for the same run — two sinks would mean two
+        durable destinations for one run's measurements.
+        """
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        if slot is None:
+            raise RuntimeError("run control is not bound")
+        if slot.occupancy_store is not None and slot.occupancy_store is not sink:
+            raise RuntimeError("context occupancy sink is already installed")
+        if not org_id.strip():
+            raise ValueError("context occupancy sink requires a tenant")
+        slot.occupancy_store = sink
+        slot.occupancy_org_id = org_id
+
+    @staticmethod
+    def context_occupancy_store() -> "tuple[ContextOccupancySink, str] | None":
+        """Return the run-scoped ``(sink, org_id)`` pair, or ``None`` when unbound.
+
+        Returned as a pair because a sink without its tenant is unusable — every
+        occupancy row is tenant-scoped, and the read API filters on org before it
+        touches a row. ``None`` is a normal answer, not a failure: a legacy or
+        direct-factory path that never bound run control has nowhere to persist,
+        and the seam degrades to measuring nothing rather than raising (§6.4).
+        """
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        if slot is None or slot.occupancy_store is None:
+            return None
+        if slot.occupancy_org_id is None:
+            return None
+        return (slot.occupancy_store, slot.occupancy_org_id)
 
     @staticmethod
     def unbind(token: _RunControlContextToken) -> None:
