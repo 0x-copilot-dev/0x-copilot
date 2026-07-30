@@ -8,6 +8,8 @@
  *   node tools/desktop-runtime/stage.mjs --platform win32 --arch x64
  *   node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --dest apps/desktop/resources
  *   node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --adhoc-sign
+ *   node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --skip-browser
+ *   node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --include-monty
  *
  * --adhoc-sign (macOS host only): after staging, ad-hoc code-sign every
  * bundled Mach-O binary (identity "-") and strip the quarantine xattr. Apple
@@ -19,12 +21,12 @@
  *
  * Zero non-builtin node deps. External processes used: the system `tar`
  * (bsdtar on macOS / Windows 10+; handles .tar.gz, .txz via xz, and reads
- * the zonky .jar because a jar is a zip), the *staged* python for pip /
- * compileall, and (with --adhoc-sign) the system `codesign` + `xattr`.
+ * the zonky .jar because a jar is a zip), the *staged* python for pip and
+ * verification, and (with --adhoc-sign) the system `codesign` + `xattr`.
  *
  * Behavior matrix:
  *   - target platform+arch == host  -> full staging: download, extract,
- *     pip install per service, prune, compileall.
+ *     pip install per service, prune, and verify.
  *   - cross-target (e.g. win32 on a mac) -> download + sha256 verify +
  *     extract only. The staged python cannot be executed on this host, so
  *     site-packages are NOT populated; a later run on the matching host
@@ -34,10 +36,12 @@
  * sha256; per-service pip installs are stamped with a hash of
  * requirements.txt + the local shared packages. Re-runs skip work whose
  * stamp matches; service src/ trees are always refreshed (cheap copy).
+ * The CLI uses --skip-browser by default because browser automation is
+ * feature-gated off; `copilot install --browser` opts into Chromium.
  */
 
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,11 +57,16 @@ const { signAndVerifyMacAppBundle } = macosSigning;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const MANIFEST_PATH = path.join(HERE, "manifest.json");
-const CACHE_DIR = path.join(
-  os.homedir(),
-  ".cache",
-  "enterprise-desktop-runtime",
+const MONTY_REQUIREMENTS_PATH = path.join(
+  HERE,
+  "features",
+  "monty-requirements.txt",
 );
+const cacheOverride = process.env.COPILOT_DOWNLOAD_CACHE?.trim();
+const CACHE_DIR =
+  cacheOverride === undefined || cacheOverride === ""
+    ? path.join(os.homedir(), ".cache", "enterprise-desktop-runtime")
+    : path.resolve(cacheOverride);
 
 const SERVICES = [
   {
@@ -76,6 +85,38 @@ const SERVICES = [
     requireHashes: false,
   },
 ];
+
+// The desktop explicitly disables OTel exporting and keeps structured local
+// logs instead. Do not download/install SDK, exporter, instrumentation, or
+// test-only packages that no desktop process imports in that posture. Server
+// and CI requirements remain untouched and retain full observability.
+const DESKTOP_COMMON_EXCLUDES = new Set([
+  "asgiref",
+  "googleapis-common-protos",
+  "grpcio",
+  "opentelemetry-exporter-otlp-proto-common",
+  "opentelemetry-exporter-otlp-proto-grpc",
+  "opentelemetry-instrumentation",
+  "opentelemetry-instrumentation-asgi",
+  "opentelemetry-instrumentation-dbapi",
+  "opentelemetry-instrumentation-fastapi",
+  "opentelemetry-instrumentation-httpx",
+  "opentelemetry-instrumentation-psycopg",
+  "opentelemetry-proto",
+  "opentelemetry-sdk",
+  "opentelemetry-semantic-conventions",
+  "opentelemetry-util-http",
+  "protobuf",
+  "wrapt",
+]);
+const DESKTOP_TEST_EXCLUDES = new Set([
+  "iniconfig",
+  "packaging",
+  "pluggy",
+  "pygments",
+  "pytest",
+  "pytest-asyncio",
+]);
 
 const SHARED_PACKAGES = [
   path.join(REPO_ROOT, "packages", "service-contracts"),
@@ -99,6 +140,8 @@ function parseArgs(argv) {
   const args = {
     dest: path.join(REPO_ROOT, "apps", "desktop", "resources"),
     adhocSign: false,
+    skipBrowser: false,
+    includeMonty: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -106,6 +149,8 @@ function parseArgs(argv) {
     else if (a === "--arch") args.arch = argv[++i];
     else if (a === "--dest") args.dest = path.resolve(argv[++i]);
     else if (a === "--adhoc-sign") args.adhocSign = true;
+    else if (a === "--skip-browser") args.skipBrowser = true;
+    else if (a === "--include-monty") args.includeMonty = true;
     else fail(`unknown argument ${a}`);
   }
   if (!["darwin", "win32"].includes(args.platform ?? "")) {
@@ -135,6 +180,58 @@ function run(cmd, argv, opts = {}) {
     fail(`${printable} exited with status ${res.status}`);
   }
   return res.status ?? 0;
+}
+
+function runAsync(cmd, argv, opts = {}) {
+  const printable = [cmd, ...argv].join(" ");
+  const { allowFailure = false, ...spawnOptions } = opts;
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, argv, { stdio: "inherit", ...spawnOptions });
+    child.once("error", (error) => {
+      reject(new Error(`${printable}: ${error.message}`));
+    });
+    child.once("exit", (code, signal) => {
+      const status = code ?? 1;
+      if (status !== 0 && !allowFailure) {
+        reject(
+          new Error(
+            `${printable} exited with status ${status}` +
+              (signal === null ? "" : ` (${signal})`),
+          ),
+        );
+        return;
+      }
+      resolve(status);
+    });
+  });
+}
+
+const HOST_TOOLCHAIN_ENV = [
+  "CC",
+  "CXX",
+  "CXX11",
+  "CXX14",
+  "CXX17",
+  "CXX1X",
+  "CFLAGS",
+  "CPPFLAGS",
+  "LDFLAGS",
+];
+
+function cleanPipBuildEnv() {
+  const env = { ...process.env };
+  if (env.COPILOT_PRESERVE_BUILD_ENV === "1") return env;
+  const removed = HOST_TOOLCHAIN_ENV.filter(
+    (name) => env[name] !== undefined && env[name] !== "",
+  );
+  for (const name of HOST_TOOLCHAIN_ENV) delete env[name];
+  if (removed.length > 0) {
+    log(
+      `pip build: ignored host toolchain overrides (${removed.join(", ")}); ` +
+        "set COPILOT_PRESERVE_BUILD_ENV=1 to keep them",
+    );
+  }
+  return env;
 }
 
 function readStamp(stampPath) {
@@ -326,14 +423,50 @@ function copyTree(from, to) {
   });
 }
 
-function pipDependencyStamp(svc) {
+function normalizeDistributionName(name) {
+  return name.toLowerCase().replaceAll("_", "-").replaceAll(".", "-");
+}
+
+function desktopRequirementExcludes(svc) {
+  const excluded = new Set(DESKTOP_COMMON_EXCLUDES);
+  for (const name of DESKTOP_TEST_EXCLUDES) {
+    // AI's runtime graph still needs packaging through non-test dependencies.
+    if (svc.name === "ai-backend" && name === "packaging") continue;
+    excluded.add(name);
+  }
+  return excluded;
+}
+
+function desktopRequirementsText(svc) {
   const reqPath = path.join(
     REPO_ROOT,
     "services",
     svc.name,
     "requirements.txt",
   );
-  const parts = [fs.readFileSync(reqPath, "utf8")];
+  const excluded = desktopRequirementExcludes(svc);
+  const output = [];
+  let skippingContinuation = false;
+  for (const line of fs.readFileSync(reqPath, "utf8").split("\n")) {
+    const requirement = line.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?==/);
+    if (requirement !== null) {
+      skippingContinuation = excluded.has(
+        normalizeDistributionName(requirement[1]),
+      );
+      if (!skippingContinuation) output.push(line);
+      continue;
+    }
+    if (skippingContinuation && (/^\s+/.test(line) || line === "")) {
+      continue;
+    }
+    skippingContinuation = false;
+    output.push(line);
+  }
+  return `${output.join("\n").trimEnd()}\n`;
+}
+
+function pipDependencyStamp(svc) {
+  const parts = ["desktop-requirements-v2", desktopRequirementsText(svc)];
   for (const pkg of SHARED_PACKAGES) {
     parts.push(fs.readFileSync(path.join(pkg, "pyproject.toml"), "utf8"));
     // Include the shared packages' source so edits re-trigger the install.
@@ -356,13 +489,32 @@ function pipDependencyStamp(svc) {
   return sha256String(parts.join("\n---\n"));
 }
 
+function stageSharedPackages(sitePackages) {
+  const staged = [];
+  for (const pkg of SHARED_PACKAGES) {
+    const sourceRoot = path.join(pkg, "src");
+    for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.endsWith(".egg-info")) continue;
+      const destination = path.join(sitePackages, entry.name);
+      rmrf(destination);
+      copyTree(path.join(sourceRoot, entry.name), destination);
+      staged.push(entry.name);
+    }
+  }
+  return staged;
+}
+
 /**
  * Verify that everything pinned in requirements.txt landed in site-packages
  * at exactly the pinned version (safety net for the hashed installs and the
  * only integrity check for ai-backend's unhashed pins).
  */
-function assertPinnedSetInstalled(pythonExe, sitePackages, svcName) {
-  const reqPath = path.join(REPO_ROOT, "services", svcName, "requirements.txt");
+async function assertPinnedSetInstalled(
+  pythonExe,
+  sitePackages,
+  reqPath,
+  buildEnv,
+) {
   const script = `
 import json, pathlib, sys
 import importlib.metadata as md
@@ -397,10 +549,12 @@ if missing or mismatched:
     sys.exit(1)
 print(f"pin-check OK: {len(pins)} pinned, {len(installed)} installed")
 `;
-  run(pythonExe, ["-c", script, sitePackages, reqPath]);
+  await runAsync(pythonExe, ["-c", script, sitePackages, reqPath], {
+    env: buildEnv,
+  });
 }
 
-function stageService(runtimeDir, svc, pythonExe, hostExec) {
+async function stageService(runtimeDir, svc, pythonExe, hostExec, buildEnv) {
   const svcSrc = path.join(REPO_ROOT, "services", svc.name);
   const svcDest = path.join(runtimeDir, "services", svc.name);
   fs.mkdirSync(svcDest, { recursive: true });
@@ -419,7 +573,7 @@ function stageService(runtimeDir, svc, pythonExe, hostExec) {
 
   if (!hostExec) {
     log(
-      `${svc.name}: cross-target staging — skipping pip install/compileall (no exec)`,
+      `${svc.name}: cross-target staging — skipping pip install/verification (no exec)`,
     );
     return;
   }
@@ -434,7 +588,8 @@ function stageService(runtimeDir, svc, pythonExe, hostExec) {
   } else {
     rmrf(sitePackages);
     fs.rmSync(stampPath, { force: true });
-    const reqPath = path.join(svcSrc, "requirements.txt");
+    const reqPath = path.join(svcDest, ".desktop-requirements.txt");
+    fs.writeFileSync(reqPath, desktopRequirementsText(svc));
     const pipBase = [
       "-m",
       "pip",
@@ -450,14 +605,16 @@ function stageService(runtimeDir, svc, pythonExe, hostExec) {
     log(
       `${svc.name}: pip install -r requirements.txt${svc.requireHashes ? " --require-hashes" : ""}`,
     );
-    run(pythonExe, pipArgs);
+    await runAsync(pythonExe, pipArgs, { env: buildEnv });
 
-    // Local shared packages (unhashable local dirs — separate invocation so
-    // --require-hashes above stays strict for the pinned third-party set).
-    log(`${svc.name}: pip install service-contracts + audit-chain`);
-    run(pythonExe, [...pipBase, "--no-deps", ...SHARED_PACKAGES]);
+    // These are constants-only internal packages with no dependencies or build
+    // hooks. Stage their package directories directly instead of launching six
+    // isolated PEP 517 builds across the three services.
+    const shared = stageSharedPackages(sitePackages);
+    log(`${svc.name}: staged shared packages (${shared.join(", ")})`);
 
-    assertPinnedSetInstalled(pythonExe, sitePackages, svc.name);
+    await assertPinnedSetInstalled(pythonExe, sitePackages, reqPath, buildEnv);
+    fs.rmSync(reqPath, { force: true });
     writeStamp(stampPath, {
       hash: wantStamp,
       staged_at: new Date().toISOString(),
@@ -472,23 +629,97 @@ function stageService(runtimeDir, svc, pythonExe, hostExec) {
     `${svc.name}: pruned ${prunedTests} tests/__pycache__ dirs, ${prunedRecords} dist-info RECORDs`,
   );
 
-  // --- bytecode ------------------------------------------------------------
-  // compileall exits 1 when ANY file fails to compile; several shipped deps
-  // carry py2-only or intentionally-broken fixture files, so a nonzero exit
-  // is a warning (bytecode is a startup optimization, not a correctness
-  // requirement — anything uncompiled just compiles lazily at runtime).
-  const status = run(
-    pythonExe,
-    ["-m", "compileall", "-q", sitePackages, path.join(svcDest, "src")],
-    { allowFailure: true },
-  );
-  if (status !== 0) {
-    log(
-      `${svc.name}: compileall reported uncompilable files (non-fatal, see above)`,
-    );
-  } else {
-    log(`${svc.name}: compileall OK`);
+  // Eager compileall generated ~100 MiB of bytecode for modules most desktop
+  // users never import. Python compiles only the actually-used startup path.
+  log(`${svc.name}: bytecode deferred to first import`);
+}
+
+function removeMontyFeature(runtimeDir) {
+  const serviceDir = path.join(runtimeDir, "services", "ai-backend");
+  const sitePackages = path.join(serviceDir, "site-packages");
+  if (fs.existsSync(sitePackages)) {
+    for (const entry of fs.readdirSync(sitePackages)) {
+      if (
+        entry === "pydantic_monty" ||
+        /^pydantic_monty-.*\.dist-info$/i.test(entry)
+      ) {
+        rmrf(path.join(sitePackages, entry));
+      }
+    }
   }
+  fs.rmSync(path.join(serviceDir, ".monty-feature-stamp.json"), {
+    force: true,
+  });
+}
+
+async function stageMontyFeature(
+  runtimeDir,
+  pythonExe,
+  hostExec,
+  buildEnv,
+  includeMonty,
+) {
+  const serviceDir = path.join(runtimeDir, "services", "ai-backend");
+  const sitePackages = path.join(serviceDir, "site-packages");
+  const stampPath = path.join(serviceDir, ".monty-feature-stamp.json");
+  if (!includeMonty) {
+    removeMontyFeature(runtimeDir);
+    log("monty: omitted from base runtime");
+    return null;
+  }
+  if (!hostExec) {
+    removeMontyFeature(runtimeDir);
+    log("monty: cross-target staging cannot install a native feature wheel");
+    return null;
+  }
+
+  const wantHash = sha256File(MONTY_REQUIREMENTS_PATH);
+  const installedModule = path.join(sitePackages, "pydantic_monty");
+  const haveStamp = readStamp(stampPath);
+  if (haveStamp?.hash !== wantHash || !fs.existsSync(installedModule)) {
+    removeMontyFeature(runtimeDir);
+    log("monty: installing optional Code Mode feature");
+    await runAsync(
+      pythonExe,
+      [
+        "-m",
+        "pip",
+        "install",
+        "--no-compile",
+        "--disable-pip-version-check",
+        "--only-binary=:all:",
+        "--require-hashes",
+        "--no-deps",
+        "--target",
+        sitePackages,
+        "-r",
+        MONTY_REQUIREMENTS_PATH,
+      ],
+      { env: buildEnv },
+    );
+    writeStamp(stampPath, {
+      hash: wantHash,
+      version: "0.0.18",
+      staged_at: new Date().toISOString(),
+    });
+  } else {
+    log("monty: optional Code Mode feature up to date (stamp match)");
+  }
+
+  await runAsync(
+    pythonExe,
+    [
+      "-c",
+      "import importlib.metadata as m, pydantic_monty; assert m.version('pydantic-monty') == '0.0.18'",
+    ],
+    {
+      env: {
+        ...buildEnv,
+        PYTHONPATH: sitePackages,
+      },
+    },
+  );
+  return { version: "0.0.18", enabled: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -502,20 +733,33 @@ const MACHO_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xcafebabf,
   0xbebafeca, 0xbfbafeca,
 ]);
+const FAT_MACHO_MAGICS = new Set([
+  0xcafebabe, 0xcafebabf, 0xbebafeca, 0xbfbafeca,
+]);
 const SIGNABLE_EXT = new Set([".so", ".dylib", ".bundle"]);
 
-function isMachO(file) {
+function machoMagic(file) {
   let fd;
   try {
     fd = fs.openSync(file, "r");
     const buf = Buffer.alloc(4);
-    if (fs.readSync(fd, buf, 0, 4, 0) < 4) return false;
-    return MACHO_MAGICS.has(buf.readUInt32BE(0));
+    if (fs.readSync(fd, buf, 0, 4, 0) < 4) return null;
+    return buf.readUInt32BE(0);
   } catch {
-    return false;
+    return null;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+function isMachO(file) {
+  const magic = machoMagic(file);
+  return magic !== null && MACHO_MAGICS.has(magic);
+}
+
+function isFatMachO(file) {
+  const magic = machoMagic(file);
+  return magic !== null && FAT_MACHO_MAGICS.has(magic);
 }
 
 /** Executables + loadable libraries that are actually Mach-O. */
@@ -624,12 +868,64 @@ function pruneRuntimeCruft(runtimeDir) {
 function stripSymbols(targets) {
   if (spawnSync("strip", [], { stdio: "ignore" }).error) return 0;
   let stripped = 0;
-  for (const f of targets) {
-    if (spawnSync("strip", ["-x", f], { stdio: "ignore" }).status === 0) {
-      stripped++;
+  const BATCH = 100;
+  for (let i = 0; i < targets.length; i += BATCH) {
+    const batch = targets.slice(i, i + BATCH);
+    if (
+      spawnSync("strip", ["-x", ...batch], { stdio: "ignore" }).status === 0
+    ) {
+      stripped += batch.length;
+      continue;
+    }
+    // Preserve the old best-effort behavior and isolate any unusual binary.
+    for (const file of batch) {
+      if (spawnSync("strip", ["-x", file], { stdio: "ignore" }).status === 0) {
+        stripped++;
+      }
     }
   }
   return stripped;
+}
+
+function thinDarwinBinaries(runtimeDir, arch) {
+  if (process.platform !== "darwin") return { thinned: 0, bytesSaved: 0 };
+  if (spawnSync("lipo", ["-version"], { stdio: "ignore" }).error) {
+    log("lipo unavailable; universal binaries were not thinned");
+    return { thinned: 0, bytesSaved: 0 };
+  }
+
+  const { targets } = collectSignTargets(runtimeDir);
+  let thinned = 0;
+  let bytesSaved = 0;
+  for (const file of targets) {
+    if (!isFatMachO(file)) continue;
+    const before = fs.statSync(file);
+    const tmp = `${file}.thin-${process.pid}`;
+    const result = spawnSync("lipo", [file, "-thin", arch, "-output", tmp], {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      fs.rmSync(tmp, { force: true });
+      const why =
+        (result.stderr || "").trim().split("\n").pop() ?? "unknown error";
+      fail(
+        `could not thin ${path.relative(runtimeDir, file)} for ${arch}: ${why}`,
+      );
+    }
+    fs.chmodSync(tmp, before.mode & 0o7777);
+    fs.renameSync(tmp, file);
+    const after = fs.statSync(file);
+    thinned++;
+    bytesSaved += Math.max(0, before.size - after.size);
+  }
+  if (thinned > 0) {
+    log(
+      `thinned ${thinned} universal binaries for ${arch} ` +
+        `(${(bytesSaved / 1024 / 1024).toFixed(1)} MiB removed)`,
+    );
+  }
+  return { thinned, bytesSaved };
 }
 
 function adhocSignTree(runtimeDir) {
@@ -642,10 +938,6 @@ function adhocSignTree(runtimeDir) {
   if (spawnSync("codesign", ["-h"], { stdio: "ignore" }).error) {
     fail("--adhoc-sign requires `codesign` (Xcode command line tools) on PATH");
   }
-
-  // Slim first (deletes cruft; must precede target collection so we never sign
-  // a file we're about to remove).
-  pruneRuntimeCruft(runtimeDir);
 
   const { targets, appBundles } = collectSignTargets(runtimeDir);
   if (targets.length === 0 && appBundles.length === 0) {
@@ -799,8 +1091,10 @@ async function main() {
 
   log(`staging ${platformKey} -> ${runtimeDir} (host exec: ${hostExec})`);
 
-  const pyArchive = await download(pyEntry.url, pyEntry.sha256);
-  const pgArchive = await download(pgEntry.url, pgEntry.sha256);
+  const [pyArchive, pgArchive] = await Promise.all([
+    download(pyEntry.url, pyEntry.sha256),
+    download(pgEntry.url, pgEntry.sha256),
+  ]);
 
   const pythonRoot = stagePython(runtimeDir, pyArchive, pyEntry);
   stagePostgres(runtimeDir, pgArchive, pgEntry);
@@ -810,23 +1104,50 @@ async function main() {
     run(pythonExe, ["--version"]);
   }
 
-  for (const svc of SERVICES) {
-    stageService(runtimeDir, svc, pythonExe, hostExec);
-  }
-
-  let browser;
+  const pipBuildEnv = cleanPipBuildEnv();
   try {
-    browser = stageBrowserRuntime({
-      runtimeDir,
-      platform: args.platform,
-      arch: args.arch,
-      hostExec,
-      cacheDir: CACHE_DIR,
-      expected: manifest.browser,
-      log,
-    });
+    await Promise.all(
+      SERVICES.map((svc) =>
+        stageService(runtimeDir, svc, pythonExe, hostExec, pipBuildEnv),
+      ),
+    );
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
+  }
+
+  let monty = null;
+  try {
+    monty = await stageMontyFeature(
+      runtimeDir,
+      pythonExe,
+      hostExec,
+      pipBuildEnv,
+      args.includeMonty,
+    );
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+
+  let browser = null;
+  if (args.skipBrowser) {
+    rmrf(path.join(runtimeDir, "browser"));
+    log(
+      "browser: skipped (install later with `copilot install --browser` when needed)",
+    );
+  } else {
+    try {
+      browser = stageBrowserRuntime({
+        runtimeDir,
+        platform: args.platform,
+        arch: args.arch,
+        hostExec,
+        cacheDir: CACHE_DIR,
+        expected: manifest.browser,
+        log,
+      });
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
@@ -841,8 +1162,18 @@ async function main() {
     log,
   });
 
+  // Prune and thin on every distribution path. `--adhoc-sign` used to be the
+  // only path that removed runtime cruft, leaving signed DMG builds needlessly
+  // larger. Architecture thinning must precede either ad-hoc or Developer-ID
+  // signing because lipo invalidates an existing code signature.
+  pruneRuntimeCruft(runtimeDir);
+  const thinning =
+    args.platform === "darwin"
+      ? thinDarwinBinaries(runtimeDir, args.arch)
+      : { thinned: 0, bytesSaved: 0 };
+
   // Ad-hoc sign LAST: signing seals each Mach-O, so it must run after every
-  // write (extraction, pip, prune, compileall). Only on a macOS host, and only
+  // write (extraction, pip, and prune). Only on a macOS host, and only
   // when staging for this host's arch (nothing else is executable here).
   const signed = args.adhocSign && hostExec && args.platform === "darwin";
   if (args.adhocSign && !signed) {
@@ -871,11 +1202,18 @@ async function main() {
     },
     browser,
     workspace_fs: workspaceFs,
+    features: {
+      monty,
+    },
     services: SERVICES.map((s) => ({
       name: s.name,
       site_packages: hostExec,
       require_hashes: s.requireHashes,
     })),
+    native_thinning: {
+      files: thinning.thinned,
+      bytes_saved: thinning.bytesSaved,
+    },
     adhoc_signed: signed,
     staged_at: new Date().toISOString(),
   };

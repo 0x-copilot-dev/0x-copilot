@@ -15,6 +15,8 @@ Endpoint coverage (connectors-prd §4):
 
 * §4.1  ``GET    /v1/connectors``
 * §4.2  ``GET    /v1/connectors/{id}``
+* §4.4  ``DELETE /v1/connectors/{id}`` — remove for good (row + backing
+  MCP registration + vault token). The destructive sibling of §4.6.
 * §4.5  ``POST   /v1/connectors/{id}/refresh``
 * §4.6  ``POST   /v1/connectors/{id}/disconnect``
 * §4.7  ``PATCH  /v1/connectors/{id}/scopes``
@@ -26,10 +28,10 @@ registered alongside the routes from :func:`register_connector_routes`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from copilot_service_contracts.scopes import RUNTIME_USE
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.auth import BackendServiceAuthenticator
@@ -237,8 +239,20 @@ class ConnectorAuditResponseModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> None:
-    """Attach ``/v1/connectors`` routes to ``app``."""
+def register_connector_routes(
+    app: FastAPI,
+    *,
+    service: ConnectorsService,
+    on_removed: Callable[[ConnectorRecord], None] | None = None,
+) -> None:
+    """Attach ``/v1/connectors`` routes to ``app``.
+
+    ``on_removed`` is the post-commit publish seam for ``DELETE
+    /v1/connectors/{id}`` — the composition root passes a closure over the
+    SSE bus (which lives on ``app.state``, not in this module) so open
+    clients drop the row instead of waiting for a refetch. Optional: tests
+    and wirings without a bus simply omit it.
+    """
 
     @app.get(
         "/v1/connectors",
@@ -328,6 +342,46 @@ def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> No
                 chats_with_grant=int(consumers["chats_with_grant"]),
             ),
         )
+
+    @app.delete(
+        "/v1/connectors/{connector_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def remove_connector(
+        request: Request,
+        connector_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> Response:
+        """Remove a connector for good — row, MCP registration, and token.
+
+        The destructive sibling of ``POST .../disconnect``: disconnect is
+        reversible and keeps the row; this deletes it. See
+        :meth:`ConnectorsService.remove` for the ordering contract.
+        """
+
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            removed = service.remove(
+                tenant_id=identity.org_id,
+                caller_user_id=identity.user_id,
+                caller_roles=identity.roles,
+                connector_id=connector_id,
+            )
+        except ConnectorNotFound as exc:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "connector_not_found"
+            ) from exc
+        except ConnectorForbidden as exc:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "owner_or_admin_only"
+            ) from exc
+        if on_removed is not None:
+            on_removed(removed)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/v1/connectors/{connector_id}/refresh",

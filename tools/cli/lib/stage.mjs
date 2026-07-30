@@ -41,6 +41,31 @@ export function readStagedVersion() {
   }
 }
 
+/** Whether the optional, pinned browser runtime is already present. */
+export function isBrowserStaged() {
+  const manifest = readStagingManifest();
+  return (
+    manifest !== null &&
+    typeof manifest.browser === "object" &&
+    manifest.browser !== null &&
+    typeof manifest.browser.executable === "string" &&
+    manifest.browser.executable !== ""
+  );
+}
+
+/** Whether the optional Monty Code Mode feature is installed and enabled. */
+export function isMontyStaged() {
+  const manifest = readStagingManifest();
+  return (
+    manifest !== null &&
+    typeof manifest.features === "object" &&
+    manifest.features !== null &&
+    typeof manifest.features.monty === "object" &&
+    manifest.features.monty !== null &&
+    manifest.features.monty.enabled === true
+  );
+}
+
 /**
  * True when we must (re)stage: no runnable runtime, or it was staged for a
  * different CLI version (an upgrade ships a new app bundle + service source, so
@@ -55,11 +80,23 @@ export function needsStage(version) {
  * stamp matches, so a warm call only re-verifies. Streams stage.mjs output
  * straight through. Records `version` so a later CLI upgrade re-stages.
  */
-export function stageRuntime({ stageScript, version, force = false } = {}) {
+export function stageRuntime({
+  stageScript,
+  version,
+  force = false,
+  includeBrowser = false,
+  includeMonty = false,
+} = {}) {
   if (!existsSync(stageScript)) {
     throw new Error(`staging script not found at ${stageScript}`);
   }
-  if (!force && isStaged() && readStagedVersion() === version) {
+  if (
+    !force &&
+    isStaged() &&
+    readStagedVersion() === version &&
+    (!includeBrowser || isBrowserStaged()) &&
+    (!includeMonty || isMontyStaged())
+  ) {
     ui.ok("runtime already staged");
     return;
   }
@@ -73,6 +110,8 @@ export function stageRuntime({ stageScript, version, force = false } = {}) {
     "--dest",
     RUNTIME_DEST,
   ];
+  if (!includeBrowser) args.push("--skip-browser");
+  if (includeMonty) args.push("--include-monty");
   // Credential-free ad-hoc signing is macOS-only; Windows .exe run unsigned.
   if (PLATFORM === "darwin") args.push("--adhoc-sign");
 

@@ -285,3 +285,57 @@ describe("ConnectorsDestination — states", () => {
     expect(onConnect).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ConnectorsDestination — remove confirmation", () => {
+  it("renders no Remove affordance when the host wires no handler", () => {
+    render(<ConnectorsDestination items={makeItems()} />);
+    expect(screen.queryByTestId("connector-remove")).toBeNull();
+  });
+
+  it("opens a confirmation dialog instead of removing on the first click", () => {
+    const onRemove = vi.fn();
+    render(<ConnectorsDestination items={makeItems()} onRemove={onRemove} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Gmail" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Remove Gmail?")).toBeInTheDocument();
+    // The whole point: one click asks, it does not delete.
+    expect(onRemove).not.toHaveBeenCalled();
+  });
+
+  it("removes the connector the dialog named once confirmed", () => {
+    const onRemove = vi.fn();
+    render(<ConnectorsDestination items={makeItems()} onRemove={onRemove} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Slack" }));
+    fireEvent.click(screen.getByTestId("connector-remove-confirm"));
+
+    expect(onRemove).toHaveBeenCalledWith("conn_slack");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancels without removing", () => {
+    const onRemove = vi.fn();
+    render(<ConnectorsDestination items={makeItems()} onRemove={onRemove} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Gmail" }));
+    fireEvent.click(screen.getByTestId("connector-remove-cancel"));
+
+    expect(onRemove).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("dismisses on Escape without removing", () => {
+    const onRemove = vi.fn();
+    render(<ConnectorsDestination items={makeItems()} onRemove={onRemove} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Gmail" }));
+    fireEvent.keyDown(screen.getByTestId("settings-modal-scrim"), {
+      key: "Escape",
+    });
+
+    expect(onRemove).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});

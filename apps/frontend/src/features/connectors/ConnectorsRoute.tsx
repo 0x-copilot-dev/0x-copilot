@@ -48,14 +48,13 @@ import type { RequestIdentity } from "../../api/config";
 import {
   type ConnectorEventsStream,
   fetchConnectors,
+  removeConnector,
   setConnectorAccessMode,
   streamConnectorEvents,
 } from "../../api/connectorsApi";
 import {
   createMcpServer,
-  deleteMcpServer,
   installMcpServer,
-  listMcpServers,
   startMcpAuth,
 } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
@@ -320,27 +319,24 @@ export function ConnectorsRoute({
   }, [identity, state.kind, markConnected]);
 
   // ---- Reconnect (FR-4.25) — restart OAuth for an error/expired row --
-  // Remove a connector for good. The row projects an MCP server, so the delete
-  // targets the server; `mcp_auth_connections` is ON DELETE CASCADE, so the
-  // stored auth connection goes with it. The surface confirms before calling.
+  // Remove a connector for good — ONE verb, `DELETE /v1/connectors/{id}`. The
+  // server resolves the backing MCP registration from the row's own
+  // `vault_ref` and deletes the row, the registration, and the vault token
+  // together. The surface confirms before calling.
+  //
+  // This used to be a client-side two-step: list `/v1/mcp/servers`, guess the
+  // one backing this row from its slug, DELETE that. It failed twice over —
+  // the guess missed whenever a server's `name` diverged from the connector
+  // slug, and even on a hit the connector row survived as a permanently
+  // "Disconnected" tool that no later remove could clear (the guess then had
+  // nothing left to find: "No MCP server backs this connector").
   const handleRemove = useCallback(
     async (id: ConnectorId): Promise<void> => {
       const connector = connectorsRef.current.find((c) => c.id === id);
       if (connector === undefined) return;
       setPendingError(null);
       try {
-        const servers = await listMcpServers(identity);
-        const underscored = connector.slug.replace(/-/g, "_");
-        const server = servers.find(
-          (s) =>
-            s.server_id === `seed:${connector.slug}` ||
-            s.name === connector.slug ||
-            s.name === underscored,
-        );
-        if (server === undefined) {
-          throw new Error("No MCP server backs this connector.");
-        }
-        await deleteMcpServer(server.server_id, identity);
+        await removeConnector(identity, id);
         setReloadToken((t) => t + 1);
       } catch (error: unknown) {
         setPendingError(errorMessage(error, "Could not remove this tool."));

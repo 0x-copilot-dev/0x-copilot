@@ -26,6 +26,7 @@ tools/desktop-journeys/
   focus-mode/
   chat-rich-cards/       ← required live tool + subagent card matrix
   chat-nav-model/
+  shell-overflow/        ← the shell must never scroll the document (incl. short windows)
 ```
 
 One **folder per set** of related journeys; each set has one **`JOURNEYS.md`**
@@ -156,10 +157,16 @@ CLI target and intentionally cannot take `app_dir`.
 
 `driver.mjs` launches Electron via Playwright and exposes `POST /rpc` with:
 `status`, `screenshot`, `click`, `fill`, `press`, `typeText`, `waitFor`, `text`,
-`pageEval`, `dumpDom`, `openedUrls`, `quit`. `_lib.py` adds:
+`pageEval`, `resizeWindow`, `dumpDom`, `openedUrls`, `quit`. `_lib.py` adds:
 
 - `sign_in_local()` / `ftue_add_key(provider, key)` / `send_first_run_message(text)` —
   the common first-run actions, by real testId.
+- `resize(width, height)` — resize the REAL window's content area, as a user dragging
+  it would. Use it to exercise layout that only breaks on a short or narrow window;
+  assert on the returned `viewport`, since a window manager may refuse a size.
+- `document_scroll()` — measure whether the DOCUMENT can scroll. It must never be able
+  to: the desktop window is a fixed frame and every scroll region lives inside
+  `.desktop-window-frame`. See [`shell-overflow/`](./shell-overflow/JOURNEYS.md).
 - `transport(method, path)` — an **authenticated** facade call made through the app
   (`window.bridge.ipc.invoke("transport.request", …)`), e.g. `transport("GET",
 "/v1/agent/models")` to read the model catalog as the signed-in user.

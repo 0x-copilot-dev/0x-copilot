@@ -7,4 +7,5 @@ export const DESKTOP_RUNTIME_FILES = [
   "macos-signing.cjs",
   "workspace-fs-audit.mjs",
   "manifest.json",
+  "features/monty-requirements.txt",
 ];

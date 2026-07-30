@@ -11,6 +11,7 @@ import type { ArtifactRoute, Router } from "../routing/router";
 import type { KeyValueStore } from "../storage/key-value-store";
 
 import { ChatShell } from "./ChatShell";
+import type { ContextPanelProps } from "./ContextPanel";
 import type { ShellDestinationSlug } from "./destinations";
 
 function staticRouter(): Router<ArtifactRoute> {
@@ -69,6 +70,10 @@ interface MountOptions {
   readonly walletChip?: React.ReactNode;
   /** Override the transport (e.g. one that answers /active_count). */
   readonly transport?: Transport;
+  /** Side-column content. Omitted = no column, which is now the default.
+   *  Mirrors ChatShell's own union: a props bag OR a composed node. */
+  readonly contextPanel?: ContextPanelProps | React.ReactNode;
+  readonly rightRail?: React.ReactNode;
   readonly children?: React.ReactNode;
 }
 
@@ -81,6 +86,8 @@ function mount({
   profile,
   walletChip,
   transport = stubTransport,
+  contextPanel,
+  rightRail,
   children,
 }: MountOptions = {}) {
   const shell = (
@@ -92,6 +99,8 @@ function mount({
       activeDestination={activeDestination}
       onNavigate={onNavigate}
       onOpenSettings={onOpenSettings}
+      contextPanel={contextPanel}
+      rightRail={rightRail}
       // PRD-03: the four discrete props are now one total binding.
       binding={{
         railIdentity: null,
@@ -130,18 +139,34 @@ function shellRoot(): HTMLElement {
 }
 
 describe("ChatShell", () => {
-  it("renders a four-region grid for non-full-bleed destinations and starts with the right rail closed", () => {
+  it("reserves NO side columns for a destination that supplies no panel content", () => {
+    // The content gate. Four destinations (Projects / Activity / Tools /
+    // Skills) used to get a 224px column reading "Nothing here yet." plus an
+    // edge toggle onto an empty rail, purely because they were absent from
+    // FULL_BLEED_DESTINATIONS. Chrome without content is not a layout.
     mount({ activeDestination: "home" });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "home");
-    // Right rail defaults to closed — Activity / Approvals content is a
-    // Wave 5 thread-canvas job; an open empty rail was visual noise.
-    expect(shell).toHaveAttribute("data-right-rail-open", "closed");
-    // v2 geometry: the rail is 48px wide (was 52), then the 224px context
-    // column, main, and a collapsed (0) right column.
-    expect(shell).toHaveStyle({
-      gridTemplateColumns: "48px 224px 1fr 0",
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
+    expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
+    expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
+    // "closed" must keep meaning "a rail exists and is collapsed".
+    expect(shell).not.toHaveAttribute("data-right-rail-open");
+  });
+
+  it("reserves the columns once a host supplies panel content", () => {
+    mount({
+      activeDestination: "home",
+      contextPanel: { title: "Home", children: <div>panel body</div> },
+      rightRail: <div>rail body</div>,
     });
+    const shell = shellRoot();
+    // Right rail starts collapsed (0 track) — first-open state of a REAL rail.
+    expect(shell).toHaveAttribute("data-right-rail-open", "closed");
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 224px 1fr 0" });
+    expect(
+      screen.getByRole("complementary", { name: /home panel/i }),
+    ).toBeInTheDocument();
   });
 
   it("hides the ContextPanel column when the destination is chats (full-bleed)", () => {
@@ -149,15 +174,19 @@ describe("ChatShell", () => {
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "chats");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "48px 1fr 0",
+      gridTemplateColumns: "48px 1fr",
     });
     // The ContextPanel is absent for chats — single source of truth: no
     // double-sidebar.
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
   });
 
-  it("renders AppRail, ContextPanel, Topbar (title/subtitle), and RightRail on non-full-bleed destinations", () => {
-    mount({ activeDestination: "home" });
+  it("renders AppRail, ContextPanel, Topbar (title/subtitle), and RightRail when fed on a non-full-bleed destination", () => {
+    mount({
+      activeDestination: "home",
+      contextPanel: { title: "Home", children: <div>panel body</div> },
+      rightRail: <div>rail body</div>,
+    });
     expect(
       screen.getByRole("navigation", { name: /copilot destinations/i }),
     ).toBeInTheDocument();
@@ -196,7 +225,11 @@ describe("ChatShell", () => {
   });
 
   it("toggles the right column open when the edge toggle is clicked", () => {
-    mount({ activeDestination: "home" });
+    mount({
+      activeDestination: "home",
+      contextPanel: { title: "Home", children: <div>panel body</div> },
+      rightRail: <div>rail body</div>,
+    });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-right-rail-open", "closed");
     fireEvent.click(screen.getByTestId("right-rail-toggle"));
@@ -241,7 +274,7 @@ describe("ChatShell", () => {
       "every conversation with the agent",
     );
     // Still full-bleed for the SIDE columns: no ContextPanel, no RightRail.
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
   });
@@ -262,9 +295,9 @@ describe("ChatShell", () => {
   });
 
   it("suppresses the shell RightRail on full-bleed chats", () => {
-    // ChatScreen owns the right panel on chats; the empty shell rail would
-    // be a duplicate. (It still renders on non-full-bleed destinations —
-    // covered by "toggles the right column open ...".)
+    // ChatScreen owns the right panel on chats; the shell rail would be a
+    // duplicate. Elsewhere it renders only when fed — covered by "toggles the
+    // right column open ...".
     mount({ activeDestination: "chats" });
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
   });
@@ -275,7 +308,7 @@ describe("ChatShell", () => {
     mount({ activeDestination: "run", profile: "single_user_desktop" });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "run");
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
@@ -294,7 +327,7 @@ describe("ChatShell", () => {
       onOpenSettings: () => {},
     });
     const shell = shellRoot();
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
     // The gear is active; Projects is NOT highlighted while in Settings.
@@ -340,10 +373,21 @@ describe("ChatShell", () => {
   });
 
   it("resolves the label for the new `activity` slug without crashing (registry-safe)", () => {
-    // `activity` is a Phase-2 addition; the topbar title and context panel
-    // label must resolve from the registry rather than render `undefined`.
-    mount({ activeDestination: "activity", profile: "single_user_desktop" });
+    // `activity` is a Phase-2 addition; the topbar title and — when a host
+    // supplies a panel — the panel label must resolve from the registry
+    // rather than render `undefined`.
+    const first = mount({
+      activeDestination: "activity",
+      profile: "single_user_desktop",
+    });
     expect(screen.getByTestId("topbar-title")).toHaveTextContent("Activity");
+    first.unmount();
+
+    mount({
+      activeDestination: "activity",
+      profile: "single_user_desktop",
+      contextPanel: { title: "Activity", children: <div>panel body</div> },
+    });
     expect(
       screen.getByRole("complementary", { name: /activity panel/i }),
     ).toBeInTheDocument();

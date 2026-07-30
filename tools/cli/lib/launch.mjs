@@ -55,7 +55,7 @@ export function ensureAppBuilt({ appDir, mode, repoRoot }) {
  * Spawn Electron pointed at the app dir. Returns the child process. The caller
  * wires signal forwarding + exit propagation.
  */
-export function launchApp({ electronBinary, appDir }) {
+export function launchApp({ electronBinary, appDir, enableMonty = false }) {
   const env = { ...process.env };
   // ELECTRON_RUN_AS_NODE=1 (set by some CI/agent harnesses) makes Electron
   // behave as plain Node — the window never opens. Force it off.
@@ -67,6 +67,13 @@ export function launchApp({ electronBinary, appDir }) {
   // explicitly so the app runs real sign-in and fails closed on stale sessions
   // (main/posture.ts#isProductionPosture) instead of dropping into dev-mint.
   env.COPILOT_PRODUCTION = "1";
+  if (enableMonty) {
+    env.RUNTIME_ENABLE_MONTY = "true";
+    env.RUNTIME_INTERPRETER_PROVIDER = "monty";
+  } else {
+    delete env.RUNTIME_ENABLE_MONTY;
+    delete env.RUNTIME_INTERPRETER_PROVIDER;
+  }
 
   ui.step("starting 0xCopilot…");
   const child = spawn(electronBinary, [appDir], { stdio: "inherit", env });

@@ -15,6 +15,7 @@ const mainTask = build({
   format: "cjs",
   target: "node20",
   external: ["electron"],
+  minify: true,
   sourcemap: false,
   logLevel: "info",
 });
@@ -27,6 +28,7 @@ const preloadTask = build({
   format: "cjs",
   target: "node20",
   external: ["electron"],
+  minify: true,
   sourcemap: false,
   logLevel: "info",
 });
@@ -45,6 +47,7 @@ const browserWorkerTask = build({
   // module/data discovery that cannot be safely flattened into one esbuild
   // file. Only the isolated worker imports it.
   external: ["playwright"],
+  minify: true,
   sourcemap: false,
   logLevel: "info",
 });
@@ -66,6 +69,7 @@ const rendererTask = build({
     ".ttf": "dataurl",
   },
   external: ["electron"],
+  minify: true,
   sourcemap: false,
   logLevel: "info",
 });

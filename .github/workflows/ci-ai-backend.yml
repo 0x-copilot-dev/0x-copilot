@@ -36,14 +36,19 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: services/ai-backend/requirements.txt
+          cache-dependency-path: |
+            services/ai-backend/requirements.txt
+            services/ai-backend/requirements-dev.txt
 
       - name: Install tooling and service deps
         run: |
           python -m pip install --upgrade pip pip-audit cyclonedx-bom
           python -m pip install ./packages/service-contracts
           python -m pip install ./packages/audit-chain
-          python -m pip install -r services/ai-backend/requirements.txt
+          # requirements-dev.txt pulls in requirements.txt via `-r` and adds the
+          # pinned test tooling. The pip-audit and SBOM steps below stay on the
+          # runtime file on purpose — they must describe only what ships.
+          python -m pip install -r services/ai-backend/requirements-dev.txt
 
       - name: Verify installed dependency graph (pip check)
         run: cd services/ai-backend && python -m pip check

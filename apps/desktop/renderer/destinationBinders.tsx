@@ -495,29 +495,28 @@ export function ConnectorsBinder({
     [authorize, notify, port, retry],
   );
 
-  // Remove a connector for good. The row is a read-model projection of an MCP
-  // server, so the delete targets the server: DELETE /v1/mcp/servers/{id}, whose
-  // `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
-  // connection is removed with it rather than being left behind. The row is
-  // confirmed in the surface before this runs.
+  // Remove a connector for good — ONE verb, `DELETE /v1/connectors/{id}`. The
+  // server resolves the backing MCP registration from the row's own
+  // `vault_ref` and deletes the row, the registration, and the vault token
+  // together. The row is confirmed in the surface before this runs.
+  //
+  // This used to be a client-side two-step: list the MCP servers, guess which
+  // one backed this row from its slug (`seed:<slug>` / `<slug>` /
+  // `<slug_with_underscores>`), then DELETE that server. It failed twice over
+  // — the guess missed whenever a server's `name` diverged from the connector
+  // slug, and even on a hit the connector row survived as a permanently
+  // "Disconnected" tool that no later remove could clear, because the guess
+  // then had nothing left to find ("No MCP server backs this connector").
   const handleRemove = useCallback(
     (id: ConnectorId): void => {
       const connector = connectorsRef.current.find((c) => c.id === id);
       if (connector === undefined) return;
       void (async () => {
         try {
-          const servers = await port.listServers();
-          const underscored = connector.slug.replace(/-/g, "_");
-          const server = servers.find(
-            (s) =>
-              s.server_id === `seed:${connector.slug}` ||
-              s.name === connector.slug ||
-              s.name === underscored,
-          );
-          if (server === undefined) {
-            throw new Error("No MCP server backs this connector.");
-          }
-          await port.deleteServer(server.server_id);
+          await transport.request<null>({
+            method: "DELETE",
+            path: `/v1/connectors/${encodeURIComponent(id)}`,
+          });
           retry();
         } catch (error: unknown) {
           notify({
@@ -528,7 +527,7 @@ export function ConnectorsBinder({
         }
       })();
     },
-    [notify, port, retry],
+    [notify, retry, transport],
   );
 
   const catalog = useMemo<ReadonlyArray<ConnectorCatalogEntry>>(

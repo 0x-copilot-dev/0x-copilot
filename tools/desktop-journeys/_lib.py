@@ -379,6 +379,34 @@ class DriverSession:
         self._shot += 1
         self.rpc("screenshot", name=f"{self._shot:02d}-{label}")
 
+    def resize(self, width: int, height: int) -> dict:
+        """Resize the REAL desktop window's content area, as a user dragging it would.
+
+        Returns the driver's ``{requested, applied, viewport}``. Use this to
+        exercise layout that only breaks on a short/narrow window (internal
+        scroll regions, `vh`-sized surfaces). The window manager may refuse a
+        size, so assert on the reported ``viewport`` rather than the request.
+        """
+        return self.rpc("resizeWindow", width=width, height=height)
+
+    def document_scroll(self) -> dict:
+        """Measure whether the DOCUMENT can scroll.
+
+        The desktop window is a fixed application frame — every scroll region
+        lives inside `.desktop-window-frame`, so the document itself must never
+        be scrollable (apps/desktop/renderer/desktop.css, invariant 3). A
+        non-zero overflow here means some element escaped the frame's clip and
+        the whole shell can be scrolled out of the window.
+        """
+        return self.evaluate(
+            "(()=>{const d=document.documentElement,b=document.body;return{"
+            "scrollHeight:d.scrollHeight,clientHeight:d.clientHeight,"
+            "scrollWidth:d.scrollWidth,clientWidth:d.clientWidth,"
+            "scrollTop:d.scrollTop,scrollLeft:d.scrollLeft,"
+            "bodyScrollHeight:b.scrollHeight,bodyClientHeight:b.clientHeight,"
+            "innerHeight:window.innerHeight,innerWidth:window.innerWidth};})()"
+        )
+
     def transport(self, method: str, path: str):
         """Make an authenticated facade call THROUGH the app (the app attaches the
         session bearer). e.g. transport("GET", "/v1/agent/models")."""

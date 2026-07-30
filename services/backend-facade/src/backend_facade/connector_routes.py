@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from backend_facade.auth import FacadeAuthenticator
@@ -224,6 +224,32 @@ def register_connector_routes(app: FastAPI) -> None:
             timeout=15,
         )
         return _coerce_object_or_raise(response)
+
+    # ----- Remove --------------------------------------------------------
+
+    @app.delete(Constants.Paths.ITEM, status_code=status.HTTP_204_NO_CONTENT)
+    async def remove_connector(request: Request, connector_id: str) -> Response:
+        """Proxy the destructive remove — row + backing MCP server + token.
+
+        204 with no body, so this cannot go through
+        ``_coerce_object_or_raise`` (which returns a dict); upstream errors
+        are re-raised with their own status so a 403/404 stays a 403/404.
+        """
+
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.delete(
+            f"{backend_url}/v1/connectors/{connector_id}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            _raise_for_upstream(response)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ----- Refresh / Disconnect ------------------------------------------
 

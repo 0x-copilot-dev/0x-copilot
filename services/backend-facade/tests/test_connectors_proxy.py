@@ -159,3 +159,105 @@ class TestAccessModeProxy:
             "/v1/connectors/conn_1/access-mode", json={"access_mode": "off"}
         )
         assert resp.status_code == 401
+
+
+class TestRemoveProxy:
+    """``DELETE /v1/connectors/{id}`` — 204 passthrough, errors preserved."""
+
+    @staticmethod
+    def _fake_client(delete_response: httpx.Response, captured: list):
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def delete(self, url, *, params=None, headers=None, timeout=None):
+                captured.append(
+                    {
+                        "url": url,
+                        "params": dict(params or {}),
+                        "headers": dict(headers or {}),
+                    }
+                )
+                return delete_response
+
+        return _FakeAsyncClient
+
+    def test_delete_proxies_to_backend_and_returns_204(self, monkeypatch) -> None:
+        captured: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient",
+            self._fake_client(httpx.Response(204), captured),
+        )
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.delete(
+            "/v1/connectors/conn_1", headers=_bearer_headers(monkeypatch)
+        )
+
+        assert resp.status_code == 204
+        assert resp.content == b""
+        call = captured[-1]
+        assert call["url"] == "http://backend.local/v1/connectors/conn_1"
+        assert call["params"]["org_id"] == "org_acme"
+        assert call["params"]["user_id"] == "usr_sarah"
+        headers = {k.lower(): v for k, v in call["headers"].items()}
+        assert headers["x-enterprise-service-token"] == "test-service-token"
+        assert headers["x-enterprise-org-id"] == "org_acme"
+        assert headers["x-enterprise-user-id"] == "usr_sarah"
+
+    def test_upstream_403_is_not_flattened_into_a_204(self, monkeypatch) -> None:
+        # A silent 204 on a refused delete is the worst outcome: the UI would
+        # drop the row and the tool would still be connected.
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient",
+            self._fake_client(
+                httpx.Response(403, json={"detail": "owner_or_admin_only"}), []
+            ),
+        )
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.delete(
+            "/v1/connectors/conn_1", headers=_bearer_headers(monkeypatch)
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "owner_or_admin_only"
+
+    def test_upstream_404_is_preserved(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient",
+            self._fake_client(
+                httpx.Response(404, json={"detail": "connector_not_found"}), []
+            ),
+        )
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.delete(
+            "/v1/connectors/conn_1", headers=_bearer_headers(monkeypatch)
+        )
+
+        assert resp.status_code == 404
+
+    def test_unauthenticated_rejected(self) -> None:
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        assert client.delete("/v1/connectors/conn_1").status_code == 401

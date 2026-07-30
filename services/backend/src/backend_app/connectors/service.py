@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import yaml
 
@@ -182,6 +182,12 @@ class ConnectorsService:
             tuple(catalog) if catalog is not None else ()
         )
         self._consumers = consumer_projection or ConsumerProjectionPort()
+        # Set at wiring time by ``app.py`` (same seam shape as
+        # ``McpRegistryService.auth_completed_listener``): given the connector
+        # row being removed, tear down the MCP registration + vault token that
+        # back it. Left ``None`` in tests / stores wired without an MCP
+        # registry, where removal is a pure read-model delete.
+        self.backing_server_remover: Callable[[ConnectorRecord], None] | None = None
 
     @property
     def catalog(self) -> tuple[ConnectorCatalogEntry, ...]:
@@ -353,6 +359,64 @@ class ConnectorsService:
                 )
             )
         return stored
+
+    def remove(
+        self,
+        *,
+        tenant_id: str,
+        caller_user_id: str,
+        caller_roles: Iterable[str],
+        connector_id: str,
+    ) -> ConnectorRecord:
+        """Remove a connector for good; return the record that was deleted.
+
+        The DISTINCTION from :meth:`disconnect` is the whole point.
+        ``disconnect`` is reversible — the row survives with
+        ``status=disconnected`` and the user can reconnect it. ``remove`` is
+        the user saying "I don't want this tool", so the read-model row goes
+        too.
+
+        Deleting only the backing MCP server was the previous behaviour and it
+        was wrong in a way that could not be recovered from the UI: the
+        write-through projected the deletion as ``status=disconnected`` +
+        ``mcp_server_deleted``, so the removed tool stayed on the Tools list
+        looking installed, and every later remove attempt failed because no
+        MCP server backed it any more.
+
+        Order is deliberate: tear down the MCP registration (and with it the
+        vault token) FIRST, and only delete the row if that succeeded. The
+        reverse order would leave an orphaned server + live token with no row
+        pointing at it — invisible to the user and un-revocable from the UI.
+        A failure here surfaces to the caller rather than being swallowed.
+
+        The audit row is written INSIDE the same transaction as the delete
+        (audit-in-transaction discipline) and outlives the connector: the row
+        is gone, the evidence that it was removed, by whom, and what it looked
+        like is not.
+        """
+
+        existing = self._authorize_write(
+            tenant_id=tenant_id,
+            caller_user_id=caller_user_id,
+            caller_roles=caller_roles,
+            connector_id=connector_id,
+        )
+        if self.backing_server_remover is not None:
+            self.backing_server_remover(existing)
+        before_state = _safe_dump(existing)
+        with self._store.transaction(org_id=tenant_id):
+            self._store.delete_connector(tenant_id=tenant_id, connector_id=connector_id)
+            self._store.append_audit(
+                ConnectorAuditRecord(
+                    tenant_id=tenant_id,
+                    actor_user_id=caller_user_id,
+                    action="connector.removed",
+                    target_id=existing.id,
+                    before_state=before_state,
+                    after_state=None,
+                )
+            )
+        return existing
 
     def refresh_token(
         self,
@@ -751,6 +815,32 @@ def mcp_connector_slug(record: McpServerRecord) -> str:
     return record.name
 
 
+# The write-through stamps ``vault_ref = f"mcp:{server_id}"`` (see
+# ``mcp_upsert_input_from_server``), which makes it the AUTHORITATIVE
+# connector-row → MCP-server pointer.
+_VAULT_REF_MCP_PREFIX = "mcp:"
+
+
+def mcp_server_id_from_vault_ref(record: ConnectorRecord) -> str | None:
+    """The MCP ``server_id`` backing a connector row, or ``None``.
+
+    Removal needs to reach the MCP registration that owns the vault token,
+    and this is the only exact way to get there. Clients used to GUESS it by
+    re-deriving candidate ids from the slug (``seed:<slug>`` / ``<slug>`` /
+    ``<slug_with_underscores>``) — a heuristic that silently failed for any
+    server whose ``name`` diverged from its connector slug.
+
+    ``None`` means the row has no MCP registration behind it (an
+    announced-only row, or one whose server was already deleted). That is a
+    removable row, not an error — the caller deletes the row and stops.
+    """
+
+    if not record.vault_ref.startswith(_VAULT_REF_MCP_PREFIX):
+        return None
+    server_id = record.vault_ref[len(_VAULT_REF_MCP_PREFIX) :]
+    return server_id or None
+
+
 # Honest auth_state → connector status projection. The connector status
 # taxonomy is CLOSED (api-types ``ConnectorStatus``: connected /
 # disconnected / error / expired — connectors-prd §1.6), so states that
@@ -866,6 +956,7 @@ __all__ = [
     "ConsumerProjectionPort",
     "load_catalog",
     "mcp_connector_slug",
+    "mcp_server_id_from_vault_ref",
     "mcp_upsert_input_from_server",
     "project_mcp_status",
     "validate_status",

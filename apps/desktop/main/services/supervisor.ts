@@ -141,13 +141,17 @@ export class ServiceSupervisor {
       });
       this.#postgres = postgres;
       await postgres.start();
-      await postgres.ensureDatabase(BACKEND_DB_NAME);
-      await postgres.ensureDatabase(AI_BACKEND_DB_NAME);
+      await Promise.all([
+        postgres.ensureDatabase(BACKEND_DB_NAME),
+        postgres.ensureDatabase(AI_BACKEND_DB_NAME),
+      ]);
     });
 
     await this.#phase("migrations", "Setting up the database…", async () => {
-      await this.#deps.runMigrations("backend", { ports, secrets });
-      await this.#deps.runMigrations("ai-backend", { ports, secrets });
+      await Promise.all([
+        this.#deps.runMigrations("backend", { ports, secrets }),
+        this.#deps.runMigrations("ai-backend", { ports, secrets }),
+      ]);
     });
 
     await this.#phase("services", "Starting 0xCopilot…", () => {
