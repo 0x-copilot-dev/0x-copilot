@@ -84,6 +84,7 @@ import {
   safeHttpUrl,
   type CompactSourceItem,
 } from "../../workspace/CompactSourceList";
+import { COLLAPSED_RAIL_WIDTH } from "../../thread-canvas";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
@@ -243,6 +244,26 @@ export interface RunWorkspaceRailProps {
    * Run-details panel. Omit for a non-persistent, session-only collapse.
    */
   readonly onPanelCollapsedChange?: (collapsed: boolean) => void;
+
+  /**
+   * STUDIO rail collapse. When `true` the tabset folds to the 46px icon strip
+   * and the canvas hands the reclaimed width to the surface column, so the
+   * generative surface can be worked with directly at full width. Controlled by
+   * the host (`RunDestination` via `useRunStudioRailCollapsed`,
+   * KeyValueStore-backed) so it persists per conversation; omitted → the rail
+   * owns the state internally (session-only), so standalone callers still get a
+   * working toggle. Ignored in Focus mode, which has its own collapse above.
+   *
+   * The chat is never unmounted by folding — its panel is the same always-in-tree
+   * node, hidden the way a non-active tab is — so the transcript scroll and the
+   * composer draft survive a fold/unfold round trip.
+   */
+  readonly studioCollapsed?: boolean;
+  /**
+   * Fired with the next collapsed state when the user toggles the Studio rail.
+   * Omit for a non-persistent, session-only collapse.
+   */
+  readonly onStudioCollapsedChange?: (collapsed: boolean) => void;
   /**
    * The compact plan for Focus. It is derived by the cockpit from the same run
    * event stream as the transcript, so it is never a second subscription or a
@@ -282,6 +303,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     focusSourcesSignal,
     panelCollapsed,
     onPanelCollapsedChange,
+    studioCollapsed,
+    onStudioCollapsedChange,
     focusPlan,
     focusActivityLive = false,
   } = props;
@@ -304,14 +327,38 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     }
   };
 
+  // Studio rail collapse — same controlled/uncontrolled contract as the Focus
+  // panel above, on its own state so folding one mode never folds the other.
+  const [studioCollapsedInternal, setStudioCollapsedInternal] = useState(false);
+  const railCollapsed = studioCollapsed ?? studioCollapsedInternal;
+  const setStudioCollapsed = (next: boolean): void => {
+    if (onStudioCollapsedChange !== undefined) {
+      onStudioCollapsedChange(next);
+    } else {
+      setStudioCollapsedInternal(next);
+    }
+  };
+
   // PRD-E2: the header "N waiting" chip commands the Approvals tab through a
   // one-directional nonce. The initial value never force-selects (only an
   // increase does), so mounting with the signal set is inert until it bumps.
+  const lastApprovalsSignalRef = useRef(focusApprovalsSignal ?? 0);
   useEffect(() => {
+    const next = focusApprovalsSignal ?? 0;
+    const previous = lastApprovalsSignalRef.current;
+    lastApprovalsSignalRef.current = next;
     if (focusApprovalsSignal === undefined || focusApprovalsSignal <= 0) {
       return;
     }
     setActiveTab("approvals");
+    // A folded Studio rail hides the tab that was just selected, so the chip
+    // would read as dead. Unfold on a genuine INCREASE only — a remount holding
+    // a non-zero nonce must not yank the rail open on its own.
+    if (next > previous && mode === "studio") {
+      setStudioCollapsed(false);
+    }
+    // Deps are the nonce ALONE, deliberately — `mode` / `setStudioCollapsed` are
+    // read but must not retrigger (the latter is a closure rebuilt every render).
   }, [focusApprovalsSignal]);
 
   // Clicking an inline `[[N]]` chip commands the Sources tab through the same
@@ -337,9 +384,11 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       return;
     }
     setActiveTab("sources");
-    // Focus-only: a tab selection inside a collapsed Run-details panel is
-    // invisible, which reads as a dead chip.
-    if (mode !== "studio") {
+    // A tab selection inside a folded rail is invisible, which reads as a dead
+    // chip — unfold whichever rail this mode is showing.
+    if (mode === "studio") {
+      setStudioCollapsed(false);
+    } else {
       setCollapsed(false);
     }
     // Deps are the nonce ALONE, deliberately — `mode` and `setCollapsed` are
@@ -359,7 +408,11 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       ? "chat"
       : activeTab
     : "chat";
-  const chatVisible = isFocus || effectiveTab === "chat";
+  // A folded Studio rail shows no panel at all — only its icon strip. The chat
+  // panel stays MOUNTED and merely hidden (same as a non-active tab), so the
+  // transcript scroll + composer draft survive the fold.
+  const studioFolded = isStudio && railCollapsed;
+  const chatVisible = isFocus || (effectiveTab === "chat" && !studioFolded);
 
   // Counts (FR-3.12) derived from the injected maps — same semantics as
   // WorkspacePane so the two rails never disagree.
@@ -538,11 +591,13 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       data-approvals-hidden={scrubbed ? "true" : "false"}
       data-focus-panel-tab={isFocus ? focusPanelTab : undefined}
       data-focus-panel-collapsed={isFocus && collapsed ? "true" : "false"}
-      style={railStyle(mode)}
+      data-studio-collapsed={studioFolded ? "true" : "false"}
+      style={railStyle(mode, studioFolded)}
     >
       {/* Tab chrome is suppressed in Focus — the Studio tabset gives way to the
-          Chat | Run-details two-column layout below (WS-F / FR-3.13). */}
-      {isStudio ? (
+          Chat | Run-details two-column layout below (WS-F / FR-3.13) — and while
+          the Studio rail is folded, where the icon strip below is the chrome. */}
+      {isStudio && !studioFolded ? (
         <div style={tablistRowStyle}>
           <WorkspaceTabs
             items={tabItems}
@@ -550,6 +605,19 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
             onSelect={(id) => setActiveTab(id)}
             ariaLabel="Run workspace tabs"
           />
+          {/* The fold control. Sits at the tabset's trailing edge, pointing the
+              way the rail travels, exactly like the Focus panel's chevron. */}
+          <button
+            type="button"
+            data-testid="run-rail-collapse"
+            aria-label="Collapse workspace rail"
+            aria-expanded={true}
+            title="Collapse workspace rail"
+            onClick={() => setStudioCollapsed(true)}
+            style={railIconButtonStyle}
+          >
+            <ChevronRightIcon />
+          </button>
         </div>
       ) : null}
 
@@ -574,7 +642,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       {/* Sources / Agents / Approvals — Studio only; conditionally rendered
           (they carry no scroll/composer state worth preserving), each reusing
           the hoisted WorkspacePane body (which owns its own empty copy). */}
-      {isStudio && effectiveTab === "sources" ? (
+      {isStudio && !studioFolded && effectiveTab === "sources" ? (
         <div
           data-testid="run-rail-panel-sources"
           role="tabpanel"
@@ -585,7 +653,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         </div>
       ) : null}
 
-      {isStudio && effectiveTab === "agents" ? (
+      {isStudio && !studioFolded && effectiveTab === "agents" ? (
         <div
           data-testid="run-rail-panel-agents"
           role="tabpanel"
@@ -596,7 +664,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         </div>
       ) : null}
 
-      {isStudio && effectiveTab === "approvals" ? (
+      {isStudio && !studioFolded && effectiveTab === "approvals" ? (
         <div
           data-testid="run-rail-panel-approvals"
           role="tabpanel"
@@ -606,6 +674,25 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           {approvalsBody}
         </div>
       ) : null}
+
+      {/* Folded Studio rail — the icon strip. A trailing sibling (like the Focus
+          block below) so the Chat panel keeps its stable child position and
+          `chatSlot` is never remounted by folding. Picking an icon selects that
+          tab AND unfolds, so one click always lands on something visible. */}
+      {studioFolded
+        ? renderStudioStrip({
+            activeTab: effectiveTab,
+            runningAgents,
+            agentsCount,
+            pendingApprovals,
+            scrubbed,
+            onExpand: () => setStudioCollapsed(false),
+            onPick: (tab) => {
+              setActiveTab(tab);
+              setStudioCollapsed(false);
+            },
+          })
+        : null}
 
       {/* WS-F: Focus Activity panel — the RIGHT column. Expanded (340px):
           an "Activity" header + the Agents/Approvals/Sources SideTabs +
@@ -778,6 +865,128 @@ const FOCUS_TAB_LABELS: Record<FocusPanelTab, string> = {
   sources: "Sources",
 };
 
+// ============================================================
+// Studio — folded workspace rail (the icon strip)
+// ============================================================
+
+interface StudioStripArgs {
+  /** The tab that will be shown again on expand — marked in the strip. */
+  readonly activeTab: RunRailTabId;
+  readonly runningAgents: number;
+  readonly agentsCount: number;
+  readonly pendingApprovals: number;
+  readonly scrubbed: boolean;
+  readonly onExpand: () => void;
+  readonly onPick: (tab: RunRailTabId) => void;
+}
+
+/**
+ * The folded Studio rail: an expand chevron over one icon per tab, in the same
+ * v3 order as the tabset. Same 46px vocabulary as the Focus Run-details strip
+ * (`.sd-strip`) — a folded rail should read as the same object in both modes —
+ * plus a Chat icon, which Focus does not need (there, Chat is the left column).
+ */
+function renderStudioStrip(args: StudioStripArgs): ReactElement {
+  const {
+    activeTab,
+    runningAgents,
+    agentsCount,
+    pendingApprovals,
+    scrubbed,
+    onExpand,
+    onPick,
+  } = args;
+  const agentsBadgeCount = runningAgents > 0 ? runningAgents : agentsCount;
+  return (
+    <aside
+      data-testid="run-rail-strip"
+      aria-label="Workspace rail"
+      style={railStripStyle}
+    >
+      <button
+        type="button"
+        data-testid="run-rail-expand"
+        aria-label="Expand workspace rail"
+        aria-expanded={false}
+        title="Expand workspace rail"
+        onClick={onExpand}
+        style={railStripButtonStyle(false)}
+      >
+        <ChevronLeftIcon />
+      </button>
+      <button
+        type="button"
+        data-testid="run-rail-strip-chat"
+        aria-label="Chat"
+        title="Chat"
+        data-active={activeTab === "chat" ? "true" : "false"}
+        onClick={() => onPick("chat")}
+        style={railStripButtonStyle(activeTab === "chat")}
+      >
+        <ChatIcon />
+      </button>
+      <button
+        type="button"
+        data-testid="run-rail-strip-agents"
+        aria-label="Agents"
+        title="Agents"
+        data-active={activeTab === "agents" ? "true" : "false"}
+        onClick={() => onPick("agents")}
+        style={railStripButtonStyle(activeTab === "agents")}
+      >
+        <AgentsIcon />
+        {agentsBadgeCount > 0 ? (
+          <span
+            data-testid="run-rail-strip-agents-badge"
+            aria-label={
+              runningAgents > 0
+                ? `${runningAgents} running subagents`
+                : `${agentsCount} subagents`
+            }
+            style={railStripBadgeStyle(runningAgents > 0)}
+          >
+            {agentsBadgeCount}
+          </span>
+        ) : null}
+      </button>
+      {scrubbed ? null : (
+        <button
+          type="button"
+          data-testid="run-rail-strip-approvals"
+          aria-label="Approvals"
+          title="Approvals"
+          data-active={activeTab === "approvals" ? "true" : "false"}
+          onClick={() => onPick("approvals")}
+          style={railStripButtonStyle(activeTab === "approvals")}
+        >
+          <ApprovalsIcon />
+          {pendingApprovals > 0 ? (
+            <span
+              data-testid="run-rail-strip-approvals-badge"
+              data-tone="accent"
+              aria-label={`${pendingApprovals} pending approvals`}
+              style={railStripBadgeStyle(true)}
+            >
+              {pendingApprovals}
+            </span>
+          ) : null}
+        </button>
+      )}
+      <button
+        type="button"
+        data-testid="run-rail-strip-sources"
+        aria-label="Sources"
+        title="Sources"
+        data-active={activeTab === "sources" ? "true" : "false"}
+        onClick={() => onPick("sources")}
+        style={railStripButtonStyle(activeTab === "sources")}
+      >
+        <SourcesIcon />
+      </button>
+    </aside>
+  );
+}
+
 // Tiny inline icons (15px, currentColor) — the design-system ships no icon set,
 // so the rail owns these locally (same pattern as other chat-surface glyphs).
 function iconProps(): {
@@ -816,6 +1025,14 @@ function ChevronLeftIcon(): ReactElement {
   return (
     <svg {...iconProps()}>
       <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+
+function ChatIcon(): ReactElement {
+  return (
+    <svg {...iconProps()}>
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
     </svg>
   );
 }
@@ -911,7 +1128,7 @@ function approvalsBadge(pending: number): ReactNode {
 // `.ws3-main` two-column split — Chat (flex) | Run-details panel — so the rail
 // lays its children out in a row and drops the elevated fill (the Chat column
 // takes the base `--ink` bg; the panel keeps the elevated `--ink2`).
-const railStyle = (mode: RunMode): CSSProperties => ({
+const railStyle = (mode: RunMode, studioFolded = false): CSSProperties => ({
   display: "flex",
   flexDirection: mode === "focus" ? "row" : "column",
   height: "100%",
@@ -924,13 +1141,88 @@ const railStyle = (mode: RunMode): CSSProperties => ({
       : "var(--color-bg-elevated, #16181f)",
   color: "var(--color-text, #f4f5f6)",
   fontFamily: "var(--font-sans)",
+  // Folded, the rail is the strip: the canvas grid narrows this column to
+  // COLLAPSED_RAIL_WIDTH, and this cap keeps a standalone caller (one that
+  // renders the rail outside `ThreadCanvas`) honest too.
+  ...(studioFolded ? { width: COLLAPSED_RAIL_WIDTH, flex: "none" } : null),
 });
 
+// The tabset shares this row with the fold chevron; `.atlas-workspace-tabs`
+// already carries `flex: 1 1 auto; min-width: 0`, so the tabs take the space
+// they have and the chevron keeps its 24px at the trailing edge.
 const tablistRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  paddingRight: 6,
   flexShrink: 0,
   borderBottom: "1px solid var(--color-border, #22252e)",
   background: "var(--color-bg-elevated, #16181f)",
 };
+
+const railIconButtonStyle: CSSProperties = {
+  width: 24,
+  height: 24,
+  flex: "none",
+  display: "grid",
+  placeItems: "center",
+  borderRadius: 6,
+  border: 0,
+  background: "transparent",
+  color: "var(--color-text-muted, #9aa0a6)",
+  cursor: "pointer",
+};
+
+// ── Folded Studio rail (46px icon strip) ─────────────────────────────────
+const railStripStyle: CSSProperties = {
+  flex: 1,
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 4,
+  padding: "9px 0",
+  minWidth: 0,
+  borderLeft: "1px solid var(--color-border, #22252e)",
+  background: "var(--color-bg-elevated, #16181f)",
+};
+
+const railStripButtonStyle = (active: boolean): CSSProperties => ({
+  position: "relative",
+  width: 32,
+  height: 32,
+  flex: "none",
+  display: "grid",
+  placeItems: "center",
+  borderRadius: 8,
+  border: 0,
+  background: active ? "var(--color-surface)" : "transparent",
+  color: active
+    ? "var(--color-text, #f4f5f6)"
+    : "var(--color-text-muted, #9aa0a6)",
+  cursor: "pointer",
+});
+
+const railStripBadgeStyle = (accent: boolean): CSSProperties => ({
+  position: "absolute",
+  top: 1,
+  right: 1,
+  minWidth: 13,
+  height: 13,
+  padding: "0 3px",
+  borderRadius: 7,
+  display: "grid",
+  placeItems: "center",
+  fontSize: 8.5,
+  fontWeight: 700,
+  fontFamily: "var(--font-mono, monospace)",
+  color: accent
+    ? "var(--color-accent-contrast, #101113)"
+    : "var(--color-text-muted, #9aa0a6)",
+  background: accent
+    ? "var(--color-accent, #5fb2ec)"
+    : "var(--color-surface-muted)",
+});
 
 const panelStyle = (visible: boolean): CSSProperties => ({
   display: visible ? "flex" : "none",

@@ -28,7 +28,11 @@ import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
 import { TransportProvider } from "../providers/TransportProvider";
 import { clearRegistry } from "../surfaces/SurfaceRegistry";
-import { ThreadCanvas, type ThreadMode } from "./ThreadCanvas";
+import {
+  COLLAPSED_RAIL_WIDTH,
+  ThreadCanvas,
+  type ThreadMode,
+} from "./ThreadCanvas";
 import type { TcTab } from "./TcTabs";
 
 // ============================================================
@@ -102,6 +106,8 @@ interface RenderArgs {
   readonly onScrub?: (sequenceNo: number) => void;
   readonly onSnapToNow?: () => void;
   readonly focusCards?: ReactNode;
+  readonly railWidth?: number;
+  readonly railCollapsed?: boolean;
 }
 
 function renderCanvas(args: RenderArgs = {}) {
@@ -125,6 +131,8 @@ function renderCanvas(args: RenderArgs = {}) {
         onScrub={args.onScrub}
         onSnapToNow={args.onSnapToNow}
         focusCards={args.focusCards}
+        railWidth={args.railWidth}
+        railCollapsed={args.railCollapsed}
       />,
     ),
   );
@@ -685,5 +693,56 @@ describe("ThreadCanvas", () => {
       fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
       expect(onApprove).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// ============================================================
+// Studio rail fold — the grid hands the width to the surface
+// ============================================================
+
+describe("ThreadCanvas — collapsed Studio rail", () => {
+  it("keeps the rail at its chosen width by default", () => {
+    renderCanvas({ mode: "studio", railWidth: 480 });
+    const canvas = screen.getByTestId("thread-canvas");
+    expect(canvas).toHaveAttribute("data-rail-collapsed", "false");
+    expect(canvas.style.gridTemplateColumns).toContain("480px");
+  });
+
+  // The fold's whole job: the rail column shrinks to the icon strip and the
+  // `minmax(0, 1fr)` surface column absorbs everything it gave up.
+  it("narrows the rail column to the icon-strip width when collapsed", () => {
+    renderCanvas({ mode: "studio", railWidth: 480, railCollapsed: true });
+    const canvas = screen.getByTestId("thread-canvas");
+    expect(canvas).toHaveAttribute("data-rail-collapsed", "true");
+    expect(canvas.style.gridTemplateColumns).toContain(
+      `${COLLAPSED_RAIL_WIDTH}px`,
+    );
+    // The chosen width is not merely overridden in place — it is out of the
+    // template entirely, so the surface column really gets it.
+    expect(canvas.style.gridTemplateColumns).not.toContain("480px");
+  });
+
+  // A col-resize target against a strip with no width to give would drag the
+  // rail back open behind the host's back.
+  it("withholds the drag divider while collapsed", () => {
+    const { unmount } = renderCanvas({ mode: "studio" });
+    expect(screen.getByTestId("tc-rail-resizer")).toBeInTheDocument();
+    unmount();
+    renderCanvas({ mode: "studio", railCollapsed: true });
+    expect(screen.queryByTestId("tc-rail-resizer")).toBeNull();
+  });
+
+  // Folding must not spend the user's chosen width: expanding restores it.
+  it("restores the chosen width on expand", () => {
+    const { unmount } = renderCanvas({
+      mode: "studio",
+      railWidth: 480,
+      railCollapsed: true,
+    });
+    unmount();
+    renderCanvas({ mode: "studio", railWidth: 480, railCollapsed: false });
+    expect(
+      screen.getByTestId("thread-canvas").style.gridTemplateColumns,
+    ).toContain("480px");
   });
 });

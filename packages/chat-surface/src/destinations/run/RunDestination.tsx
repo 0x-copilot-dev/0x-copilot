@@ -216,7 +216,11 @@ import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
+import {
+  useRunMode,
+  useRunPanelCollapsed,
+  useRunStudioRailCollapsed,
+} from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -1300,6 +1304,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     collapsed: focusPanelCollapsed,
     setCollapsed: setFocusPanelCollapsed,
   } = useRunPanelCollapsed({ conversationId });
+  // The Studio rail's fold, persisted per conversation on its own key: folding
+  // hands the rail's width to the surface column, so the generative surface can
+  // be worked with at full canvas width.
+  const {
+    collapsed: studioRailCollapsed,
+    setCollapsed: setStudioRailCollapsed,
+  } = useRunStudioRailCollapsed({ conversationId });
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
@@ -4005,6 +4016,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
       onPanelCollapsedChange={setFocusPanelCollapsed}
+      // Studio rail fold — the chevron in the tabset; same per-conversation
+      // persistence, its own key. The canvas below narrows the column to match.
+      studioCollapsed={studioRailCollapsed}
+      onStudioCollapsedChange={setStudioRailCollapsed}
       focusPlan={focusPlan}
       focusActivityLive={
         session.runStatus !== null &&
@@ -4084,6 +4099,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // Draggable, persisted Studio rail width (useRailWidth → KV).
       railWidth={railWidth}
       onRailWidthChange={setRailWidth}
+      // …and its folded state, so the grid narrows the rail column to the icon
+      // strip and the surface column takes the width back.
+      railCollapsed={studioRailCollapsed}
     />
   );
 
