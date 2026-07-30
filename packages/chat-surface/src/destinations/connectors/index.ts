@@ -13,6 +13,8 @@ export {
   TOOLS_POLICY_NOTE_COPY,
 } from "./ConnectorsDestination";
 export type { ConnectorsDestinationProps } from "./ConnectorsDestination";
+export { RemoveConnectorDialog } from "./RemoveConnectorDialog";
+export type { RemoveConnectorDialogProps } from "./RemoveConnectorDialog";
 export { AccessModeSegment } from "./AccessModeSegment";
 export type { AccessModeSegmentProps } from "./AccessModeSegment";
 export type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";

@@ -79,6 +79,17 @@ function tarText(tarball, entry) {
   return run("tar", ["-xOf", tarball, entry]);
 }
 
+function assertNoTestFiles(entries) {
+  const unexpected = [...entries].filter(
+    (entry) =>
+      /(?:^|\/)(?:tests?|__tests__)\//u.test(entry) ||
+      /\/(?:test_[^/]+\.py|[^/]+\.(?:test|spec)\.[cm]?[jt]sx?)$/u.test(entry),
+  );
+  if (unexpected.length > 0) {
+    fail(`test files were packed: ${unexpected.slice(0, 5).join(", ")}`);
+  }
+}
+
 function relativeSpecifiers(source) {
   // These deliberately cover ESM static imports/re-exports, dynamic imports,
   // and CommonJS requires. Only literal relative specifiers can be proven at
@@ -144,6 +155,7 @@ try {
   const tarball = suppliedTarball ?? packArtifact(tempDir);
   if (!fs.existsSync(tarball)) fail(`tarball does not exist: ${tarball}`);
   const entries = tarEntries(tarball);
+  assertNoTestFiles(entries);
   const files = assertRuntimeFiles(tarball, entries);
   console.log(
     `packed-artifact-check: OK (${path.basename(tarball)}; ${files.size} runtime module${files.size === 1 ? "" : "s"} verified)`,

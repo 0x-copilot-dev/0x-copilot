@@ -58,6 +58,8 @@ ConnectorEventType = Literal[
     "connector.status_changed",
     "connector.scope_changed",
     "connector.error_threshold",
+    # Terminal — the row was DELETEd. Clients drop it rather than patch it.
+    "connector.removed",
     "heartbeat",
 ]
 

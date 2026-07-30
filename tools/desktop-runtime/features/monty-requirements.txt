@@ -1,0 +1,7 @@
+# Optional desktop Code Mode feature. The base runtime deliberately excludes
+# this native extension; `copilot install --code-mode` installs the matching
+# CPython 3.13 wheel into ai-backend after explicit user opt-in.
+pydantic-monty==0.0.18 \
+    --hash=sha256:765865634c2075ec816515db22acf0c71e42d25dcbf66638dc063d95c7d1a858 \
+    --hash=sha256:d47976a18e3e3da0e86f8cf6068fc8a125930422dc10d3d3bf0b5410a9e9282e \
+    --hash=sha256:52ce98be1e5bf76974597234ec857b7a6ef99374a036860cd2e2e1bd75c18f1e

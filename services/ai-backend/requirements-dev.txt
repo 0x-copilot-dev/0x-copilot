@@ -1,0 +1,30 @@
+# Test-only dependencies for services/ai-backend.
+#
+# `requirements.txt` is the RUNTIME set — what the Docker image (services/
+# ai-backend/Dockerfile) and the desktop's bundled runtime install. Test tooling
+# does not belong there: it ships nothing, and `pip-audit` plus the CycloneDX
+# SBOM step in ci-ai-backend.yml deliberately read `requirements.txt` ALONE so
+# they describe only what is actually deployed. Keep those two pointed at the
+# runtime file when editing that workflow.
+#
+# Every CI job that runs pytest installs THIS file instead, which pulls the
+# runtime set in via `-r`. That replaces the ad-hoc `pip install pytest` that
+# used to drift per workflow — one unpinned install is how a job ended up with
+# pytest but no pytest-asyncio.
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+
+# Optional AC6 "Code Mode" interpreter. It is gated OFF at runtime by
+# RUNTIME_ENABLE_MONTY and imported lazily behind InterpreterPort, so it is not
+# part of the runtime set; the desktop installs it only on explicit opt-in via
+# `copilot install --code-mode`, from
+# tools/desktop-runtime/features/monty-requirements.txt.
+#
+# The interpreter suite asserts the port BUILDS rather than skipping when the
+# wheel is absent ("Monty is a pinned dependency, so availability holds in this
+# suite" — tests/unit/agent_runtime/capabilities/interpreter/test_registration.py),
+# so tests need the wheel: without it 30 tests fail on build_monty_interpreter
+# returning None.
+pydantic-monty==0.0.18

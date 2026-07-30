@@ -11,7 +11,7 @@
 //   copilot help | version
 
 import { existsSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +21,12 @@ import {
   resolveElectronBinary,
   resolveRoots,
 } from "../lib/paths.mjs";
-import { isStaged, stageRuntime } from "../lib/stage.mjs";
+import {
+  isBrowserStaged,
+  isMontyStaged,
+  isStaged,
+  stageRuntime,
+} from "../lib/stage.mjs";
 import { ensureAppBuilt, launchApp } from "../lib/launch.mjs";
 import { ensureBrandedShell } from "../lib/mac-shell.mjs";
 import { doctor } from "../lib/doctor.mjs";
@@ -55,6 +60,12 @@ function printHelp() {
     `  ${ui.c.cyan("install")}        download + stage the runtime, don't launch`,
   );
   ui.plain(
+    `  ${ui.c.dim("                 add --browser to install optional browser automation")}`,
+  );
+  ui.plain(
+    `  ${ui.c.dim("                 add --code-mode to install the optional code interpreter")}`,
+  );
+  ui.plain(
     `  ${ui.c.cyan("doctor")}         check the install and report problems`,
   );
   ui.plain(
@@ -67,7 +78,7 @@ function printHelp() {
   ui.plain(`  ${ui.c.cyan("version")}        print the CLI version`);
   ui.plain();
   ui.plain(
-    `  ${ui.c.dim("Flags: --force (re-stage), --yes (skip prompts), --session (repair also clears sign-in)")}`,
+    `  ${ui.c.dim("Flags: --force (re-stage), --browser (optional Chromium), --code-mode (optional interpreter), --yes (skip prompts), --session (repair also clears sign-in)")}`,
   );
   ui.plain();
 }
@@ -80,16 +91,105 @@ function requireSupportedPlatform() {
   process.exit(1);
 }
 
-async function cmdStart({ force }) {
+function browserRequestedByEnvironment() {
+  const raw = process.env.RUNTIME_ENABLE_DESKTOP_BROWSER;
+  return (
+    typeof raw === "string" &&
+    new Set(["1", "true", "yes", "on", "enabled"]).has(raw.trim().toLowerCase())
+  );
+}
+
+function codeModeRequestedByEnvironment() {
+  const raw = process.env.RUNTIME_ENABLE_MONTY;
+  return (
+    typeof raw === "string" &&
+    new Set(["1", "true", "yes", "on", "enabled"]).has(raw.trim().toLowerCase())
+  );
+}
+
+function installTimingsEnabled() {
+  const raw = process.env.COPILOT_INSTALL_TIMINGS;
+  return (
+    typeof raw === "string" &&
+    new Set(["1", "true", "yes", "on", "enabled"]).has(raw.trim().toLowerCase())
+  );
+}
+
+function prepareDesktopShellInParallel() {
+  const startedAt = performance.now();
+  const script = path.join(PKG_ROOT, "lib", "prepare-shell.mjs");
+  const child = spawn(process.execPath, [script], { stdio: "inherit" });
+  const done = new Promise((resolve, reject) => {
+    child.once("error", (error) => {
+      reject(new Error(`could not prepare Electron: ${error.message}`));
+    });
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve((performance.now() - startedAt) / 1000);
+        return;
+      }
+      reject(
+        new Error(
+          `Electron preparation failed (exit ${code ?? "unknown"}${
+            signal === null ? "" : `, signal ${signal}`
+          })`,
+        ),
+      );
+    });
+  });
+  return {
+    done,
+    cancel: () => {
+      if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
+    },
+  };
+}
+
+async function stageRuntimeWithShellPreparation(options) {
+  const startedAt = performance.now();
+  const shellPreparation = prepareDesktopShellInParallel();
+  try {
+    const runtimeStartedAt = performance.now();
+    stageRuntime(options);
+    const runtimeSeconds = (performance.now() - runtimeStartedAt) / 1000;
+    const shellSeconds = await shellPreparation.done;
+    if (installTimingsEnabled()) {
+      ui.plain(`[install-timing] runtime-stage ${runtimeSeconds.toFixed(2)}s`);
+      ui.plain(`[install-timing] electron-shell ${shellSeconds.toFixed(2)}s`);
+      ui.plain(
+        `[install-timing] concurrent-critical-path ${(
+          (performance.now() - startedAt) /
+          1000
+        ).toFixed(2)}s`,
+      );
+    }
+  } catch (error) {
+    shellPreparation.cancel();
+    try {
+      await shellPreparation.done;
+    } catch {
+      // Preserve the staging/root cause; the companion task was cancelled.
+    }
+    throw error;
+  }
+}
+
+async function cmdStart({ force, browser, codeMode }) {
   requireSupportedPlatform();
   const roots = resolveRoots(PKG_ROOT);
   ensureAppBuilt(roots);
   // Passing the version makes stageRuntime re-stage when the CLI was upgraded
   // since the runtime was last staged (new app bundle ↔ matching services).
-  stageRuntime({
+  await stageRuntimeWithShellPreparation({
     stageScript: roots.stageScript,
     version: readVersion(),
     force,
+    // Once explicitly installed, retain the optional browser across CLI
+    // upgrades instead of silently dropping it during an automatic re-stage.
+    includeBrowser:
+      browser || browserRequestedByEnvironment() || isBrowserStaged(),
+    includeMonty:
+      codeMode || codeModeRequestedByEnvironment() || isMontyStaged(),
   });
   if (!isStaged()) {
     ui.err(
@@ -108,6 +208,7 @@ async function cmdStart({ force }) {
   const child = launchApp({
     electronBinary: launchBinary,
     appDir: roots.appDir,
+    enableMonty: isMontyStaged(),
   });
 
   // Forward termination to the app; exit with its code.
@@ -134,16 +235,18 @@ async function cmdStart({ force }) {
   });
 }
 
-async function cmdInstall() {
+async function cmdInstall({ browser, codeMode }) {
   requireSupportedPlatform();
   ui.banner();
   const roots = resolveRoots(PKG_ROOT);
   // install always re-runs staging (stamps make a warm run cheap); it's the
   // explicit "make sure everything is present + signed" entry point.
-  stageRuntime({
+  await stageRuntimeWithShellPreparation({
     stageScript: roots.stageScript,
     version: readVersion(),
     force: true,
+    includeBrowser: browser || isBrowserStaged(),
+    includeMonty: codeMode || isMontyStaged(),
   });
   ui.ok("ready — run `copilot` to start the app");
 }
@@ -155,6 +258,8 @@ async function main() {
   const force = flags.has("--force") || flags.has("-f");
   const yes = flags.has("--yes") || flags.has("-y");
   const session = flags.has("--session");
+  const browser = flags.has("--browser");
+  const codeMode = flags.has("--code-mode");
 
   const KNOWN_FLAGS = new Set([
     "--force",
@@ -162,6 +267,8 @@ async function main() {
     "--yes",
     "-y",
     "--session",
+    "--browser",
+    "--code-mode",
     "--help",
     "-h",
     "--version",
@@ -188,10 +295,10 @@ async function main() {
 
   switch (command) {
     case "start":
-      await cmdStart({ force });
+      await cmdStart({ force, browser, codeMode });
       break;
     case "install":
-      await cmdInstall();
+      await cmdInstall({ browser, codeMode });
       break;
     case "doctor":
       process.exit(doctor(PKG_ROOT) ? 0 : 1);

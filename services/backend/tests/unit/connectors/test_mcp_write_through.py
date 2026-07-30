@@ -268,6 +268,10 @@ class TestDisableAndDelete:
         assert row["status"] == "connected"
 
     def test_delete_projects_removed(self) -> None:
+        # Deleting the SERVER is not removing the CONNECTOR: the row survives,
+        # honestly disconnected. Removing the connector is
+        # ``DELETE /v1/connectors/{id}`` (TestRemoveConnectorEndToEnd), and the
+        # two must not share an audit action.
         client, app, _ = _make_app()
         created = _register(client, auth_mode="none")
         resp = client.delete(f"/v1/mcp/servers/{created['server_id']}", params=_q())
@@ -276,13 +280,114 @@ class TestDisableAndDelete:
         assert row["status"] == "disconnected"
         assert row["status_reason"] == "mcp_server_deleted"
         actions = [a.action for a in app.state.connectors_store.audits]
-        assert "connector.removed" in actions
+        assert "connector.server_deleted" in actions
+        assert "connector.removed" not in actions
 
     def test_delete_unknown_server_does_not_touch_read_model(self) -> None:
         client, app, _ = _make_app()
         resp = client.delete("/v1/mcp/servers/nope", params=_q())
         assert resp.status_code == 404
         assert _connectors(client) == []
+
+
+class TestRemoveConnectorEndToEnd:
+    """``DELETE /v1/connectors/{id}`` over the REAL ``create_app`` wiring.
+
+    The route-level tests re-register the connectors routes with a bare
+    service, so they cannot see the composition root's teardown seam. This is
+    the test that actually pins the fix: one call removes the row AND the MCP
+    registration behind it, resolved from the row's ``vault_ref``.
+    """
+
+    def _row(self, client: TestClient) -> dict:
+        rows = _connectors(client)
+        assert len(rows) == 1, rows
+        return rows[0]
+
+    def test_removes_the_row_and_the_backing_mcp_server(self) -> None:
+        client, app, mcp_store = _make_app()
+        created = _register(client, auth_mode="none")
+        row = self._row(client)
+
+        resp = client.delete(f"/v1/connectors/{row['id']}", params=_q())
+
+        assert resp.status_code == 204, resp.text
+        assert _connectors(client) == []
+        assert mcp_store.get_server(org_id=ORG, server_id=created["server_id"]) is None
+
+    def test_removing_twice_404s_rather_than_leaving_a_zombie_row(self) -> None:
+        # The reported symptom: the row kept coming back as "Disconnected" and
+        # every later Remove failed. Now the first remove is terminal and the
+        # second is an honest 404 on a row that no longer exists.
+        client, app, _ = _make_app()
+        _register(client, auth_mode="none")
+        row = self._row(client)
+
+        assert (
+            client.delete(f"/v1/connectors/{row['id']}", params=_q()).status_code == 204
+        )
+        assert (
+            client.delete(f"/v1/connectors/{row['id']}", params=_q()).status_code == 404
+        )
+        assert _connectors(client) == []
+
+    def test_removes_a_row_whose_mcp_server_is_already_gone(self) -> None:
+        # The state the bug left behind: server deleted, row stranded. It must
+        # be removable, not permanently stuck.
+        client, app, _ = _make_app()
+        created = _register(client, auth_mode="none")
+        client.delete(f"/v1/mcp/servers/{created['server_id']}", params=_q())
+        row = self._row(client)
+        assert row["status"] == "disconnected"
+
+        resp = client.delete(f"/v1/connectors/{row['id']}", params=_q())
+
+        assert resp.status_code == 204, resp.text
+        assert _connectors(client) == []
+
+    def test_publishes_connector_removed_without_vault_ref(self) -> None:
+        client, app, _ = _make_app()
+        _register(client, auth_mode="none")
+        row = self._row(client)
+
+        client.delete(f"/v1/connectors/{row['id']}", params=_q())
+
+        events = _events(app)
+        assert events[-1].event_type == "connector.removed"
+        assert events[-1].connector is not None
+        assert events[-1].connector["id"] == row["id"]
+        assert "vault_ref" not in events[-1].connector
+
+    def test_appends_a_connector_removed_audit_row(self) -> None:
+        client, app, _ = _make_app()
+        _register(client, auth_mode="none")
+        row = self._row(client)
+
+        client.delete(f"/v1/connectors/{row['id']}", params=_q())
+
+        audits = [
+            a
+            for a in app.state.connectors_store.audits
+            if a.action == "connector.removed"
+        ]
+        assert len(audits) == 1
+        assert audits[0].target_id == row["id"]
+        assert audits[0].actor_user_id == USER
+
+    def test_other_tenant_cannot_remove(self) -> None:
+        client, app, mcp_store = _make_app()
+        created = _register(client, auth_mode="none")
+        row = self._row(client)
+
+        resp = client.delete(
+            f"/v1/connectors/{row['id']}", params=_q(org=OTHER_ORG, user=OTHER_USER)
+        )
+
+        assert resp.status_code == 404
+        assert (
+            mcp_store.get_server(org_id=ORG, server_id=created["server_id"]) is not None
+        )
+        assert len(_connectors(client)) == 1
 
 
 class TestSseEmission:

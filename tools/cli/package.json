@@ -24,7 +24,7 @@
   },
   "scripts": {
     "assemble": "node scripts/assemble-payload.mjs",
-    "check": "node --check bin/copilot.mjs && node --check lib/paths.mjs && node --check lib/stage.mjs && node --check lib/launch.mjs && node --check lib/mac-shell.mjs && node --check lib/doctor.mjs && node --check lib/repair.mjs && node --check lib/uninstall.mjs && node --check lib/ui.mjs",
+    "check": "node --check bin/copilot.mjs && node --check lib/paths.mjs && node --check lib/stage.mjs && node --check lib/launch.mjs && node --check lib/mac-shell.mjs && node --check lib/prepare-shell.mjs && node --check lib/doctor.mjs && node --check lib/repair.mjs && node --check lib/uninstall.mjs && node --check lib/ui.mjs",
     "check:packed": "node scripts/packed-artifact-check.mjs",
     "test": "node --test test/*.test.mjs",
     "smoke": "node bin/copilot.mjs version && node bin/copilot.mjs help",

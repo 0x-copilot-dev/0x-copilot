@@ -1,6 +1,6 @@
 /* Desktop renderer globals (loaded once by bootstrap.tsx).
  *
- * Two structural fixes the packaged Electron window needs but the shared
+ * Three structural fixes the packaged Electron window needs but the shared
  * chat-surface shell can't own (they are substrate/window concerns):
  *
  * 1) FILL THE WINDOW. `ChatShell` (and the login `loginx-shell`) size to
@@ -15,6 +15,25 @@
  *    draggable titlebar strip at the top: content sits below it, and dragging
  *    the strip moves the window. The app itself opts back out of the drag
  *    region so every control stays clickable.
+ *
+ * 3) THE DOCUMENT NEVER SCROLLS. The window is a fixed application frame:
+ *    `.desktop-window-frame` is `height: 100%; overflow: hidden` and every
+ *    scroll region lives inside it. Nothing should ever be reachable by
+ *    scrolling the DOCUMENT — if it is, the reserved titlebar strip and the
+ *    frame's own border scroll away with it and the whole shell can be dragged
+ *    out of the window. Declaring the invariant here makes that structurally
+ *    impossible rather than merely unintended, so a single escaped
+ *    absolutely-positioned descendant (one whose containing block resolved to
+ *    the initial containing block instead of its own component, and which the
+ *    frame's `overflow: hidden` therefore does NOT clip) degrades to an
+ *    invisible layout artefact instead of a scrollable, broken window.
+ *
+ *    The web host declares the same invariant (apps/frontend/src/styles.css)
+ *    and needs an escape hatch for its login screen, which relies on document
+ *    scrolling (`html.login-html, body.login-body`). The desktop host needs no
+ *    such opt-out: its two pre-shell surfaces scroll internally instead — see
+ *    `.loginx-shell` (signin.css) and `.fr` (firstrun.css). Any future
+ *    full-window surface must do the same; do not re-open the document scroll.
  */
 
 html,
@@ -24,6 +43,7 @@ body,
 }
 body {
   margin: 0;
+  overflow: hidden;
 }
 
 :root {

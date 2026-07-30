@@ -415,6 +415,44 @@ describe("streamConnectorEvents", () => {
     subscribeSpy.mockRestore();
   });
 
+  it("delivers connector.removed — the guard's allowlist must not drop it", async () => {
+    // Regression: the allowlist was a plain Set typed as
+    // ReadonlySet<ConnectorStreamEventType>, which type-checks while
+    // incomplete. Adding `connector.removed` to the union left this guard
+    // silently dropping every removal frame, so a connector the user had just
+    // deleted reappeared on the next stream reconnect (the replayed
+    // `connector.created` was applied, its `connector.removed` was not).
+    const transport = await import("./transport");
+    const subscribeSpy = vi
+      .spyOn(transport.getAppTransport(), "subscribeServerSentEvents")
+      .mockImplementation((opts) => {
+        opts.onMessage(
+          JSON.stringify({
+            event_id: "evt_9",
+            sequence_no: 9,
+            event_type: "connector.removed",
+            created_at: "2026-05-18T09:00:02Z",
+          } satisfies ConnectorStreamEnvelope),
+        );
+        return { close: () => undefined };
+      });
+
+    const onEvent = vi.fn();
+    streamConnectorEvents({
+      identity: IDENTITY,
+      onEvent,
+      onError: () => undefined,
+    });
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent.mock.calls[0][0]).toMatchObject({
+      sequence_no: 9,
+      event_type: "connector.removed",
+    });
+
+    subscribeSpy.mockRestore();
+  });
+
   it("forwards transport-level errors through onError as an Event", async () => {
     const transport = await import("./transport");
     let capturedError: ((err: Error) => void) | undefined;

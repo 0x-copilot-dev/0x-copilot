@@ -48,6 +48,64 @@ def test_default_runtime_dependencies_include_web_search_tool(
     assert getattr(tools[0], "name", "") == "web_search"
 
 
+def test_web_search_tool_calls_ddgs_directly_and_preserves_result_shape(
+    runtime_context_admin,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeDDGS:
+        def __enter__(self) -> "FakeDDGS":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def text(self, query: str, **kwargs: object) -> list[dict[str, str]]:
+            calls.append({"query": query, **kwargs})
+            return [
+                {
+                    "body": "Result summary",
+                    "title": "Result title",
+                    "href": "https://example.test/result",
+                    "extra": "preserved in the citation artifact",
+                }
+            ]
+
+    monkeypatch.setattr("ddgs.DDGS", FakeDDGS)
+    tool = WebSearchToolRegistry().list_available_tools(runtime_context_admin)[0]
+
+    result = tool.invoke({"query": "desktop install performance"})
+
+    assert result == (
+        [
+            {
+                "snippet": "Result summary",
+                "title": "Result title",
+                "link": "https://example.test/result",
+            }
+        ],
+        [
+            {
+                "body": "Result summary",
+                "title": "Result title",
+                "href": "https://example.test/result",
+                "extra": "preserved in the citation artifact",
+            }
+        ],
+    )
+    assert calls == [
+        {
+            "query": "desktop install performance",
+            "region": "wt-wt",
+            "safesearch": "moderate",
+            "timelimit": "y",
+            "max_results": 4,
+            "backend": "auto",
+        }
+    ]
+
+
 def test_web_search_registry_omits_tool_when_disabled(runtime_context_admin) -> None:
     disabled = runtime_context_admin.model_copy(update={"web_search_enabled": False})
 

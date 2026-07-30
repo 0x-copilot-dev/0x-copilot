@@ -54,6 +54,22 @@ class _Messages:
     INVALID = "The artifact request is invalid and was not published."
     TOO_LARGE = "Inline artifact content exceeds 1 MiB; use a sanctioned content_ref."
     FAILED = "The artifact could not be published."
+    NOT_ALLOWED = "media_type is not allowed for artifact kind"
+    # Name the kind that WAS required: a bare "invalid" is what makes a model
+    # retry the identical call. The submitted media_type is deliberately not
+    # echoed — it is model input, and repeating it into the next turn's context
+    # carries injection risk for no diagnostic gain, since the required kind
+    # already says everything the model needs to correct the call.
+    _WRONG_KIND = (
+        "This media_type must be published as kind '{kind}', not 'file'. Use "
+        "'file' only for media no structured renderer can parse — the file view "
+        "shows metadata and a download only, with no table and no editor, so a "
+        "reader cannot edit what it holds."
+    )
+
+    @classmethod
+    def wrong_kind(cls, kind: ArtifactKind) -> str:
+        return cls._WRONG_KIND.format(kind=kind.value)
 
 
 class _ArtifactMediaPolicy:
@@ -73,11 +89,65 @@ class _ArtifactMediaPolicy:
     )
 
     @classmethod
+    def _bare(cls, media_type: str) -> str:
+        return media_type.lower().split(";", 1)[0].strip()
+
+    @classmethod
+    def owning_kind(cls, media_type: str) -> ArtifactKind | None:
+        """The one structured kind that owns a media type, when exactly one does.
+
+        Derived from the allow-lists above rather than a second hand-kept table,
+        so adding a media type to ``_DATASET`` also stops ``file`` from claiming
+        it. ``text/plain`` and ``application/json`` each sit in two lists and are
+        therefore owned by neither — ``file`` stays legal for them, because which
+        structured renderer should own those bytes is genuinely undecidable here.
+        """
+
+        bare = cls._bare(media_type)
+        owners = tuple(
+            kind
+            for kind, allowed in (
+                (ArtifactKind.DATASET, cls._DATASET),
+                (ArtifactKind.DOCUMENT, cls._DOCUMENT),
+                (ArtifactKind.CODE, cls._CODE_EXACT),
+            )
+            if bare in allowed
+        )
+        return owners[0] if len(owners) == 1 else None
+
+    @classmethod
+    def file_kind_rejection(cls, raw_input: object) -> str | None:
+        """Guidance for a ``kind: file`` request refused above, else ``None``.
+
+        Reads untrusted model arguments, so it re-consults ``owning_kind``
+        instead of restating the rule: one decision, asked twice.
+        """
+
+        if not isinstance(raw_input, Mapping):
+            return None
+        kind = raw_input.get("kind")
+        if not isinstance(kind, str) or kind.strip().lower() != ArtifactKind.FILE.value:
+            return None
+        media_type = raw_input.get("media_type")
+        if not isinstance(media_type, str):
+            return None
+        owner = cls.owning_kind(media_type)
+        return None if owner is None else _Messages.wrong_kind(owner)
+
+    @classmethod
     def validate(cls, *, kind: ArtifactKind, media_type: str) -> None:
-        normalized = media_type.lower()
-        bare = normalized.split(";", 1)[0].strip()
+        bare = cls._bare(media_type)
         if kind is ArtifactKind.FILE:
-            return
+            # PRD-B2 D5 scopes the file renderer to unsupported/binary media: it
+            # shows filename, size, digest and a download, and nothing else. A
+            # media type that D4's dataset grid already parses must therefore not
+            # be published as `file`, or the artifact lands in a renderer that by
+            # contract cannot preview or edit it. That is exactly how a CSV
+            # reached a canvas tab offering the reader no way to change a cell.
+            owner = cls.owning_kind(bare)
+            if owner is None:
+                return
+            raise ValueError(_Messages.wrong_kind(owner))
         if kind is ArtifactKind.DATASET and bare in cls._DATASET:
             return
         if kind is ArtifactKind.DOCUMENT and bare in cls._DOCUMENT:
@@ -88,7 +158,7 @@ class _ArtifactMediaPolicy:
             or bare.startswith("application/x-")
         ):
             return
-        raise ValueError("media_type is not allowed for artifact kind")
+        raise ValueError(_Messages.NOT_ALLOWED)
 
 
 class PublishArtifactInput(RuntimeContract):
@@ -182,11 +252,13 @@ class PublishArtifactTool:
                 else PublishArtifactInput.model_validate(raw_input)
             )
         except ValidationError as exc:
-            message = (
-                _Messages.TOO_LARGE
-                if _Messages.TOO_LARGE in str(exc)
-                else _Messages.INVALID
-            )
+            if _Messages.TOO_LARGE in str(exc):
+                message = _Messages.TOO_LARGE
+            else:
+                message = (
+                    _ArtifactMediaPolicy.file_kind_rejection(raw_input)
+                    or _Messages.INVALID
+                )
             return {"status": "failed", "message": message}
 
         try:

@@ -56,12 +56,17 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: services/ai-backend/requirements.txt
+          cache-dependency-path: |
+            services/ai-backend/requirements.txt
+            services/ai-backend/requirements-dev.txt
       - name: Install D9 runner dependencies
         run: |
-          python -m pip install --upgrade pip pytest
+          python -m pip install --upgrade pip
           python -m pip install ./packages/service-contracts
-          python -m pip install -r services/ai-backend/requirements.txt
+          # requirements-dev.txt carries the PINNED test tooling. An ad-hoc
+          # `pip install pytest` here is what left this job with pytest but no
+          # pytest-asyncio, so every async canary errored out.
+          python -m pip install -r services/ai-backend/requirements-dev.txt
       # Two invocations, deliberately. Mixing `services/ai-backend/tests/...`
       # with `../../tools/...` in ONE pytest run makes pytest resolve rootdir to
       # services/ai-backend and adopt its pyproject.toml as the config authority

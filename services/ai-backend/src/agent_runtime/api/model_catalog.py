@@ -6,21 +6,20 @@ validation (:class:`WorkspaceCoordinator`). Both import *this* module, so a
 model that appears here shows up in both the picker and the admin-default
 allow-set without drift.
 
-Model metadata comes from **LiteLLM**: :class:`LitellmModelSource` enriches a
-curated product-model registry with context window, capability flags, and
-per-Mtok cost from the installed ``litellm`` package's bundled ``model_cost``
-table (see :mod:`agent_runtime.api.litellm_model_source`), replacing the retired
-models.dev source. The settings-derived default model always remains the first
-catalog entry, so an empty source still produces a usable picker.
+Model discovery and metadata come from **LiteLLM**:
+:class:`LitellmModelSource` filters the installed package's bundled
+``model_cost`` table with generic provider/chat/tool-capability policy (see
+:mod:`agent_runtime.api.litellm_model_source`). There is no local per-model
+inventory to keep current. The settings-derived default model always remains
+the first catalog entry, so an empty source still produces a usable picker.
 
 The catalog advertises **only** providers the run path can actually execute.
 :class:`ModelConfigResolver` (the run path) accepts a fixed provider allowlist;
 :meth:`ModelConfigResolver.supports_provider` is the authority. Any source
 record for a provider outside that allowlist is filtered out in
 :meth:`ModelCatalog.build` so the picker can never surface a model that would be
-rejected the moment a run starts. The curated registry only lists allowlisted
-providers, so the filter is a defensive SSOT guard — adding a new provider is a
-run-path change (extend the allowlist), never a catalog-only change.
+rejected the moment a run starts. Adding a new provider is a run-path and
+provider-policy change, never a per-model catalog change.
 
 ``configured`` semantics: a model is ``configured`` (selectable without further
 setup) when its provider has a usable credential from **either** source the run
@@ -126,8 +125,8 @@ class ModelCatalog:
         items = [cls._default_item(settings, user_key_providers)]
         for record in cls._source_for().records():
             # SSOT: never advertise a model the run path cannot execute. The
-            # curated registry only lists allowlisted providers, but the filter
-            # stays here — the one place the catalog is assembled — so a fake or
+            # source already applies provider policy, but the filter stays here
+            # — the one place the catalog is assembled — so a fake or
             # future source that emits an out-of-allowlist provider record can
             # never leak a model the run path's ``ModelConfigResolver`` rejects.
             if not ModelConfigResolver.supports_provider(record.provider):

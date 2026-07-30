@@ -531,6 +531,14 @@ export interface TestFireWebhookRequest {
  * * `connector.error_threshold` — N consecutive errors crossed the
  *                                 tenant-policy threshold; FE renders the
  *                                 "needs reconnect" badge prominently.
+ * * `connector.removed`         — the row was DELETEd (`DELETE
+ *                                 /v1/connectors/{id}`). Terminal: clients
+ *                                 drop the row rather than patching it. This
+ *                                 exists because removal used to stream as a
+ *                                 `status_changed` to `disconnected`, which
+ *                                 every client renders as a still-installed
+ *                                 tool — the removed connector stayed on the
+ *                                 Tools list forever.
  * * `heartbeat`                 — keepalive comment frame on the SSE
  *                                 wire; not a real event.
  */
@@ -539,6 +547,7 @@ export type ConnectorStreamEventType =
   | "connector.status_changed"
   | "connector.scope_changed"
   | "connector.error_threshold"
+  | "connector.removed"
   | "heartbeat";
 
 /**

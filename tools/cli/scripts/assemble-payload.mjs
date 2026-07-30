@@ -41,6 +41,7 @@ const EXCLUDE = new Set([
   "node_modules",
   "dist",
   "build",
+  "tests",
   ".pytest_cache",
   ".mypy_cache",
   ".git",
@@ -132,9 +133,11 @@ fs.mkdirSync(PAYLOAD, { recursive: true });
 const stageDest = path.join(PAYLOAD, "tools", "desktop-runtime");
 fs.mkdirSync(stageDest, { recursive: true });
 for (const f of DESKTOP_RUNTIME_FILES) {
+  const destination = path.join(stageDest, f);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(
     path.join(REPO_ROOT, "tools", "desktop-runtime", f),
-    path.join(stageDest, f),
+    destination,
   );
 }
 log("copied tools/desktop-runtime " + `(${DESKTOP_RUNTIME_FILES.join(" + ")})`);

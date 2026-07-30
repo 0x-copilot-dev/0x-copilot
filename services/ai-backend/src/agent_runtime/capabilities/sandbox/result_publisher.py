@@ -110,6 +110,12 @@ class ArtifactServiceSandboxResultPublisher(SandboxResultPublisherPort):
             user_id=self._user_id,
             request=ArtifactCreateRequest(
                 run_id=publication.run_id,
+                # ``FILE`` for the same reason as every other sandbox
+                # publication (see ``ArtifactServiceSandboxPublisher``), and
+                # unambiguously so here: this is a machine-readable envelope the
+                # model dereferences by ``result_ref``, not authored content, and
+                # ``application/json`` has no single owning renderer anyway —
+                # ``_ArtifactMediaPolicy`` counts it as both dataset and code.
                 kind=ArtifactKind.FILE,
                 title=title,
                 media_type="application/json",

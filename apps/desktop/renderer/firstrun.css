@@ -6,8 +6,20 @@
  * parity styles; the shell here (top bar · centered main · footer) already
  * matches the mock's .fr layout so P1 only fills the body. */
 
+/* `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
+ * (packages/chat-surface/src/onboarding/onboarding.css) sizes `.fr` with
+ * `min-height: 100vh`, which is right for a web host whose DOCUMENT scrolls. The
+ * desktop document never scrolls (desktop.css invariant 3) and this surface sits
+ * inside `.desktop-window-frame`, whose content box is one titlebar inset — 33px
+ * with the frame's hairline borders — SHORTER than the viewport. A `100vh` box
+ * therefore hangs past the frame and has that tail CLIPPED by the frame's
+ * `overflow: hidden`; because min-height beats height, `height: 100%` alone does
+ * not save it, and internal `overflow: auto` cannot scroll a tail that was never
+ * inside the scrollport. Measured live at 1200x600 and 1200x420: exactly 33px of
+ * the surface, including its footer, was unreachable before this line. */
 .fr {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: auto;

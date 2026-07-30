@@ -4,10 +4,10 @@
 the invariants it guarantees by construction — the runtime default is always
 present exactly once and first, no id is ever double-listed, and only run-path
 providers ever reach the picker — plus the LiteLLM-sourced metadata mapping the
-frontend picker relies on. The metadata source is a curated product registry
-enriched from ``litellm.model_cost`` (:mod:`agent_runtime.api.litellm_model_source`);
-tests inject a deterministic ``model_cost`` map or a fake source so nothing
-touches LiteLLM's real table except the couple of pinned-version assertions.
+frontend picker relies on. The source discovers eligible rows directly from
+``litellm.model_cost`` (:mod:`agent_runtime.api.litellm_model_source`); tests
+inject a deterministic table or a fake source so nothing touches LiteLLM's real
+table except the pinned-version assertions.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from agent_runtime.api.litellm_model_source import (
     CatalogModelRecord,
     LitellmModelSource,
     ModelDisplayName,
-    ProductModelRegistry,
 )
 from agent_runtime.api.model_catalog import ModelCatalog
 from agent_runtime.settings import RuntimeSettings
@@ -26,6 +25,44 @@ from agent_runtime.settings import RuntimeSettings
 
 def _settings() -> RuntimeSettings:
     return RuntimeSettings.load()
+
+
+def _model_cost() -> dict[str, dict[str, object]]:
+    """Small representative LiteLLM table for hermetic catalog tests."""
+
+    return {
+        "claude-opus-4-8": {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "input_cost_per_token": 5e-06,
+            "output_cost_per_token": 2.5e-05,
+            "max_input_tokens": 1_000_000,
+            "max_output_tokens": 128_000,
+            "supports_reasoning": True,
+            "supports_vision": True,
+        },
+        "gpt-5.6": {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "max_input_tokens": 1_050_000,
+            "supports_reasoning": True,
+        },
+        "gemini/gemini-2.5-pro": {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "max_input_tokens": 1_048_576,
+            "supports_pdf_input": True,
+        },
+        "openrouter/anthropic/claude-sonnet-4.6": {
+            "litellm_provider": "openrouter",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "supports_reasoning": True,
+        },
+    }
 
 
 class _FakeSource:
@@ -67,22 +104,10 @@ class TestModelDisplayName:
 
 
 class TestLitellmModelSource:
-    """The curated registry, enriched from an injected ``model_cost`` map."""
+    """Generic discovery and enrichment from an injected ``model_cost`` map."""
 
-    def test_enriches_registry_entry_from_litellm_row(self) -> None:
-        source = LitellmModelSource(
-            model_cost={
-                "claude-opus-4-8": {
-                    "input_cost_per_token": 5e-06,
-                    "output_cost_per_token": 2.5e-05,
-                    "max_input_tokens": 1_000_000,
-                    "max_output_tokens": 128_000,
-                    "supports_reasoning": True,
-                    "supports_function_calling": True,
-                    "supports_vision": True,
-                }
-            }
-        )
+    def test_discovers_and_enriches_upstream_row(self) -> None:
+        source = LitellmModelSource(model_cost=_model_cost())
         record = {r.model_id: r for r in source.records()}["claude-opus-4-8"]
         assert record.provider == "anthropic"
         assert record.display_name == "Claude Opus 4.8"
@@ -99,6 +124,9 @@ class TestLitellmModelSource:
         source = LitellmModelSource(
             model_cost={
                 "gpt-5": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "supports_function_calling": True,
                     "input_cost_per_token": 1.25e-06,
                     "output_cost_per_token": 1e-05,
                     "max_tokens": 272_000,
@@ -112,6 +140,9 @@ class TestLitellmModelSource:
         source = LitellmModelSource(
             model_cost={
                 "gpt-5.4-mini": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "supports_function_calling": True,
                     "input_cost_per_token": 7.5e-07,
                     "output_cost_per_token": 4.5e-06,
                     "supports_pdf_input": True,
@@ -121,37 +152,59 @@ class TestLitellmModelSource:
         record = {r.model_id: r for r in source.records()}["gpt-5.4-mini"]
         assert record.supports_attachments is True
 
-    def test_gemini_3_flash_supplement_carries_it_when_litellm_lacks_it(self) -> None:
-        # Empty map: every native id falls through the LiteLLM lookup.
-        # gemini-3-flash must still be present — carried by the reviewed
-        # supplement, never silently dropped.
-        source = LitellmModelSource(model_cost={})
-        record = {r.model_id: r for r in source.records()}["gemini-3-flash"]
-        assert record.provider == "gemini"
-        assert record.context_window == 1_048_576
-        assert record.input_cost_per_mtok == 0.30
-        assert record.output_cost_per_mtok == 2.50
-        assert record.supports_reasoning is True
-        assert record.supports_tools is True
+    def test_normalizes_provider_prefixes_and_deduplicates_aliases(self) -> None:
+        table = _model_cost()
+        table["gemini-2.5-pro"] = {
+            "litellm_provider": "gemini",
+            "mode": "chat",
+            "supports_function_calling": True,
+            "max_input_tokens": 123,
+        }
+        records = LitellmModelSource(model_cost=table).records()
+        gemini = [
+            record
+            for record in records
+            if record.provider == "gemini" and record.model_id == "gemini-2.5-pro"
+        ]
+        assert len(gemini) == 1
+        # The provider-qualified row is canonical when a bare alias also exists.
+        assert gemini[0].context_window == 1_048_576
 
-    def test_unknown_model_yields_bare_record_never_dropped(self) -> None:
-        # No LiteLLM row and no supplement -> a metadata-less record, so a new
-        # registry entry is visible in the picker rather than vanishing.
-        source = LitellmModelSource(model_cost={})
-        record = {r.model_id: r for r in source.records()}["claude-opus-4-8"]
-        assert record.display_name == "Claude Opus 4.8"
-        assert record.context_window is None
-        assert record.input_cost_per_mtok is None
+    def test_openrouter_keeps_vendor_slug_and_derives_generic_name(self) -> None:
+        records = LitellmModelSource(model_cost=_model_cost()).records()
+        record = {(item.provider, item.model_id): item for item in records}[
+            ("openrouter", "anthropic/claude-sonnet-4.6")
+        ]
+        assert record.display_name == "Claude Sonnet 4.6 (OpenRouter)"
 
-    def test_covers_every_registry_entry(self) -> None:
-        ids = {r.model_id for r in LitellmModelSource(model_cost={}).records()}
-        for model_ids in ProductModelRegistry.NATIVE.values():
-            assert set(model_ids) <= ids
-        for slug, _name in ProductModelRegistry.OPENROUTER:
-            assert slug in ids
+    def test_filters_non_chat_non_tool_deprecated_finetune_and_mirrors(self) -> None:
+        common = {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_function_calling": True,
+        }
+        table = {
+            "gpt-good": common,
+            "gpt-embedding": {**common, "mode": "embedding"},
+            "gpt-no-tools": {**common, "supports_function_calling": False},
+            "gpt-old": {**common, "deprecation_date": "2025-01-01"},
+            "ft:gpt-4o": common,
+            "azure/gpt-mirror": common,
+            "bedrock-claude": {
+                **common,
+                "litellm_provider": "bedrock",
+            },
+        }
+        ids = {
+            record.model_id for record in LitellmModelSource(model_cost=table).records()
+        }
+        assert ids == {"gpt-good"}
+
+    def test_empty_upstream_table_returns_no_records(self) -> None:
+        assert LitellmModelSource(model_cost={}).records() == ()
 
     def test_records_ordered_provider_then_id(self) -> None:
-        records = LitellmModelSource(model_cost={}).records()
+        records = LitellmModelSource(model_cost=_model_cost()).records()
         keys = [(r.provider, r.model_id) for r in records]
         assert keys == sorted(keys)
 
@@ -160,7 +213,7 @@ class TestModelCatalogBuild:
     """``build`` invariants: default-first, id-unique, run-path-only providers."""
 
     def test_default_present_exactly_once_and_first(self) -> None:
-        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        ModelCatalog.configure_source(LitellmModelSource(model_cost=_model_cost()))
         settings = _settings()
         items = ModelCatalog.build(settings)
         ids = [item.id for item in items]
@@ -169,7 +222,7 @@ class TestModelCatalogBuild:
         assert ids.count(settings.default_model.model_name) == 1
 
     def test_no_duplicate_ids(self) -> None:
-        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        ModelCatalog.configure_source(LitellmModelSource(model_cost=_model_cost()))
         items = ModelCatalog.build(_settings())
         duplicates = {
             model_id: n
@@ -203,16 +256,16 @@ class TestModelCatalogBuild:
         assert "xai" not in providers
         assert any(item.id == "claude-opus-4-8" for item in items)
 
-    def test_gemini_3_flash_reaches_the_catalog(self) -> None:
-        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+    def test_upstream_gemini_row_reaches_the_catalog(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource(model_cost=_model_cost()))
         items = ModelCatalog.build(_settings())
-        assert any(item.id == "gemini-3-flash" for item in items)
+        assert any(item.id == "gemini-2.5-pro" for item in items)
 
     def test_every_item_is_chat_kind(self) -> None:
-        # The curated catalog is chat-only; the ``kind`` default flows through so
+        # The source catalog is chat-only; the ``kind`` default flows through so
         # a chat picker filtering ``kind == "chat"`` never drops a real model, and
         # a non-chat model could never masquerade as a selectable chat model.
-        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        ModelCatalog.configure_source(LitellmModelSource(model_cost=_model_cost()))
         items = ModelCatalog.build(_settings())
         assert items, "catalog must be non-empty"
         assert all(item.kind == "chat" for item in items)
@@ -266,14 +319,14 @@ class TestModelCatalogByokConfigured:
             "OPENROUTER_API_KEY",
         ):
             monkeypatch.setenv(var, "")
-        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        ModelCatalog.configure_source(LitellmModelSource(model_cost=_model_cost()))
         settings = _settings()
 
         without = {i.id: i for i in ModelCatalog.build(settings)}
         anthropic_ids = [
             i for i, item in without.items() if item.provider == "anthropic"
         ]
-        assert anthropic_ids, "registry must ship anthropic models"
+        assert anthropic_ids, "upstream table fixture must include anthropic models"
         assert all(without[i].configured is False for i in anthropic_ids)
 
         with_key = {
@@ -306,7 +359,7 @@ class TestModelCatalogRealLitellm:
         ModelCatalog.configure_source(LitellmModelSource())
         items = ModelCatalog.build(_settings())
         openrouter = [item for item in items if item.provider == "openrouter"]
-        assert openrouter, "registry must supply openrouter discovery models"
+        assert openrouter, "LiteLLM must supply openrouter discovery models"
         # BYOK availability is per-user and unknown here, so always selectable.
         assert all(item.configured for item in openrouter)
         # Reasoning passthrough for OpenAI-compat gateways is a follow-up.
