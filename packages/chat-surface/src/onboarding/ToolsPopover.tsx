@@ -30,7 +30,8 @@
 //   .ui-pop / .ui-pop__h / .ui-pop__h-meta   panel + header + `{n} on` meta
 //   .ui-pop__list                            the one scroll region (264px cap)
 //   .ui-pop__grp                             "Connected" / "Add a connector"
-//   .ui-pop-row + __lg/__m/__nm/__txt/__sb   every row (24px badge · name · sub)
+//   .ui-pop-row + __lg/__m/__nm/__txt/__sb   every row (24px badge · name; the
+//                                            `__sb` sub-line only on Web search)
 //   .ui-pop-row[data-off]                    a paused row dims, as in the design
 //   .ui-pop__div                             web-search ↔ connectors divider
 //   .ui-pop-row--pin                         the pinned "Custom MCP server" row
@@ -55,6 +56,27 @@
 // navigation callbacks, and inventing them would be a feature change, not a
 // restyle. Likewise the design's `.permc` "acts"/"reads" chips have no data
 // behind them here — `FirstRunConnectedConnector` carries no permission field.
+//
+// ── Single-line rows, with ONE exception ────────────────────────────────────
+// Every CONNECTOR row is one line — name only. The sub-lines this surface used
+// to render on them (a connector's scopes summary, a catalog entry's marketing
+// description, "paste a JSON config") are gone: catalog descriptions are full
+// sentences, so a 318px panel of two-line rows read as clutter, and the sub-line
+// was ALSO the panel's layout bug. `.ui-pop-row__sb` is rendered as a `<span>`
+// inside the block `.ui-pop-row__m`, and `overflow: hidden` / `text-overflow:
+// ellipsis` do not apply to an inline box — so `nowrap` grew the line past the
+// panel instead of clipping it, the list scrolled sideways (badge column scrolled
+// out of frame), and the overflowing sentence slid underneath the unfilled
+// `Connect` pill. Both halves are fixed in the recipe itself
+// (`.ui-pop-row__sb { display: block }`, `.ui-pop__list { overflow-x: hidden }`)
+// so no other popover can reproduce it; dropping the rows' sub-lines is the
+// product call on top.
+//
+// The EXCEPTION is Web search's "built-in" — kept deliberately. It is a two-word
+// provenance label, not prose: it is what tells you this row is the runtime's own
+// tool rather than one of your connectors, and no `Connect`/`Set up` pill says so
+// for it. The other surviving second line is the "Add a connector" GROUP note,
+// which discloses the approval semantics rather than describing a row.
 
 import {
   useEffect,
@@ -89,7 +111,6 @@ export const TOOLS_POPOVER_COPY = {
   connectLabel: "Connect",
   setupLabel: "Set up",
   customLabel: "Custom MCP server",
-  customHint: "paste a JSON config",
   emptyConnectors: "No connectors yet",
 } as const;
 
@@ -330,6 +351,7 @@ function WebSearchRow(props: {
             {TOOLS_POPOVER_COPY.webSearchLabel}
           </span>
         </span>
+        {/* The ONE surviving row sub-line — see the header note. */}
         <span className="ui-pop-row__sb">
           {TOOLS_POPOVER_COPY.webSearchHint}
         </span>
@@ -424,9 +446,6 @@ function PopoverBody(props: BodyProps): ReactNode {
                   <span className="ui-pop-row__nm">
                     <span className="ui-pop-row__txt">{row.displayName}</span>
                   </span>
-                  {row.scopesSummary ? (
-                    <span className="ui-pop-row__sb">{row.scopesSummary}</span>
-                  ) : null}
                 </span>
                 <ToggleGlyph on={active} />
               </button>
@@ -462,9 +481,6 @@ function PopoverBody(props: BodyProps): ReactNode {
                 <span className="ui-pop-row__nm">
                   <span className="ui-pop-row__txt">{entry.displayName}</span>
                 </span>
-                {entry.description ? (
-                  <span className="ui-pop-row__sb">{entry.description}</span>
-                ) : null}
               </span>
               <span style={connectPillStyle} aria-hidden="true">
                 {entry.requiresPreRegisteredClient
@@ -496,7 +512,6 @@ function CustomRow(props: { readonly onAddCustom: () => void }): ReactNode {
             {TOOLS_POPOVER_COPY.customLabel}
           </span>
         </span>
-        <span className="ui-pop-row__sb">{TOOLS_POPOVER_COPY.customHint}</span>
       </span>
     </button>
   );
