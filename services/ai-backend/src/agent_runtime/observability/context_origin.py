@@ -78,6 +78,18 @@ class ContextLifecycle(StrEnum):
     ON_DEMAND = "on_demand"
 
 
+LABEL_SEPARATOR: Final[str] = ":"
+MAX_OWNER_LENGTH: Final[int] = 200
+MAX_NAME_LENGTH: Final[int] = 200
+# Derived, never restated. Any contract that stores a rendered ``owner:name``
+# label must bound its column by THIS value rather than by a guessed literal.
+# Getting that wrong is not a cosmetic defect: a segment contract with a
+# narrower bound raises ``ValidationError`` on a perfectly legal declaration,
+# and it raises on the model-call path, where §6.4 forbids raising at all. That
+# is exactly the bug this constant exists to make unrepresentable.
+MAX_LABEL_LENGTH: Final[int] = MAX_OWNER_LENGTH + len(LABEL_SEPARATOR) + MAX_NAME_LENGTH
+
+
 class ContextOrigin(RuntimeContract):
     """One contributor's declaration of what it puts in front of the model.
 
@@ -99,11 +111,14 @@ class ContextOrigin(RuntimeContract):
         str,
         Field(
             min_length=1,
-            max_length=200,
+            max_length=MAX_OWNER_LENGTH,
             pattern=r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$",
         ),
     ]
-    name: Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[^\s:]+$")]
+    name: Annotated[
+        str,
+        Field(min_length=1, max_length=MAX_NAME_LENGTH, pattern=r"^[^\s:]+$"),
+    ]
     segment_class: ContextSegmentClass
     lifecycle: ContextLifecycle
     cache_eligibility: PromptCacheEligibility | None = None
@@ -113,7 +128,7 @@ class ContextOrigin(RuntimeContract):
     def label(self) -> str:
         """The globally unique ``owner:name`` label carried on every segment."""
 
-        return f"{self.owner}:{self.name}"
+        return f"{self.owner}{LABEL_SEPARATOR}{self.name}"
 
 
 class ContextOriginBinding:

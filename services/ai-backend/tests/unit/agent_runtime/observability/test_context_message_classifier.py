@@ -51,6 +51,9 @@ from agent_runtime.observability.context_message_classifier import (
 )
 from agent_runtime.observability.context_occupancy import ContextSegment
 from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
+from agent_runtime.observability.context_origin import (
     UNDECLARED_CONTEXT_LABEL,
     ContextLifecycle,
     ContextOrigin,
@@ -1076,15 +1079,23 @@ class TestClassifiedMessagePartContract(ContractBoundsMixin, MessageFixtureMixin
             )
 
     def test_label_and_detail_bounds_match_the_persisted_segment(self) -> None:
-        # A part exists to become a ``ContextSegment``. The bounds are restated
-        # rather than imported so that slicing strings does not drag the token
-        # counter (and litellm behind it) into the import graph — this is the
-        # pin that keeps the two copies honest. A part that validated under a
-        # wider bound would push the failure one step downstream, into the pass
-        # that can no longer fall back to an UNDECLARED row for it.
+        # A part exists to become a ``ContextSegment``, so the bounds must agree:
+        # a part validating under a wider bound would push the failure one step
+        # downstream, into the pass that can no longer fall back to an UNDECLARED
+        # row for it.
+        #
+        # This assertion earned its keep. All three label bounds were once
+        # restated literals reading 240, while a valid ContextOrigin can spell
+        # 401 — so measurement raised on a legal declaration, on the model-call
+        # path that §6.4 says must never fail a run. This test is what caught
+        # the first two being widened without the third. They now all import the
+        # bound from ``context_origin``, which owns the definition of a label
+        # and (contrary to the note that used to live here) pulls in neither the
+        # token counter nor litellm.
         assert ClassifiedMessagePart.MAX_LABEL_LENGTH == self.max_length_of(
             ContextSegment, "label"
         )
+        assert ClassifiedMessagePart.MAX_LABEL_LENGTH == MAX_CONTEXT_LABEL_LENGTH
         assert (
             ClassifiedMessagePart.MAX_DETAIL_LENGTH == ContextSegment.MAX_DETAIL_LENGTH
         )

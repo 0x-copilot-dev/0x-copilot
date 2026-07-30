@@ -1215,12 +1215,29 @@ def undeclared_context_contributors(source_root: Path) -> tuple[str, ...]:
 def context_origin_inventory(source_root: Path) -> tuple[str, ...]:
     """Inventory every context origin declared statically under ``source_root``.
 
-    Sorted ``owner:name`` labels, pinned to a literal tuple in
-    ``tests/unit/test_context_origin_gate.py`` exactly as
-    ``test_llm_seam_gate`` pins the canonical chat-model call sites. Adding a
-    contributor with a declaration still fails CI until the author adds its line
-    to that tuple, and that moment — not the declaration, not the merge — is
-    when they consciously accept the context cost.
+    Sorted rows, pinned to a literal tuple in
+    ``tests/unit/test_context_origin_gate.py`` exactly as ``test_llm_seam_gate``
+    pins the canonical chat-model call sites. Adding a contributor with a
+    declaration still fails CI until the author adds its line to that tuple, and
+    that moment — not the declaration, not the merge — is when they consciously
+    accept the context cost.
+
+    **A row is a declaration SITE, not necessarily a runtime label.** Rows read
+    ``owner:name``, but ``name`` is whatever is determinable *statically*. For a
+    tool injected as an adapter, ``ModelToolDeclaration.declared`` defaults the
+    origin name to the tool's own model-facing name, which exists only once the
+    tool is constructed; all this sweep can see is the identifier bound at the
+    append site. So the gated sandbox tool inventories as
+    ``agent_runtime.capabilities.sandbox:sandbox_execute_tool`` while an
+    occupancy report for the same tool will say
+    ``agent_runtime.capabilities.sandbox:run_in_sandbox``.
+
+    That divergence is acceptable *for this function's purpose* and must not be
+    mistaken for a lookup table. The inventory exists to detect drift in the set
+    of declaring sites and to force a conscious review when that set changes;
+    resolving runtime labels is the measurement path's job (§3.1), and the
+    runtime is where ``UNDECLARED`` is decided. A reader reconciling an occupancy
+    report against this tuple should match on ``owner``, not on the whole row.
     """
 
     return ContextOriginGate.evaluate(source_root).inventory

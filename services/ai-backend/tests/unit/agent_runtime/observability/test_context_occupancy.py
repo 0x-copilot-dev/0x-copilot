@@ -37,6 +37,11 @@ from agent_runtime.observability.context_occupancy import (
     SnapshotBuilder,
 )
 from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
+from agent_runtime.observability.context_origin import (
+    MAX_NAME_LENGTH,
+    MAX_OWNER_LENGTH,
     UNDECLARED_CONTEXT_LABEL,
     ContextLifecycle,
     ContextOrigin,
@@ -318,6 +323,43 @@ class TestContextSegmentDetailBounds(OccupancyFixtureMixin):
 
     def test_absent_detail_stays_absent(self) -> None:
         assert self.segment(estimated_tokens=1).detail is None
+
+
+class TestContextSegmentLabelBound(OccupancyFixtureMixin):
+    """The label bound must mirror ContextOrigin's, not guess at it (§6.4).
+
+    Regression cover for a live fail-open violation: this contract bounded
+    ``label`` at 240 while a valid ``ContextOrigin`` can spell 401, and
+    :meth:`ContextSegment.measure` passes ``origin.label`` straight through. A
+    long-but-legal declaration therefore raised ``ValidationError`` inside
+    measurement — on the model-call path, where §6.4 says a measurement concern
+    must never fail a run.
+    """
+
+    def test_the_bound_is_derived_from_the_origin_contract(self) -> None:
+        # The assertion that actually prevents the regression: not "== 401",
+        # which would drift the same way the literal did, but that the two
+        # bounds are the SAME object of truth.
+        assert ContextSegment.MAX_LABEL_LENGTH == MAX_CONTEXT_LABEL_LENGTH
+        assert MAX_CONTEXT_LABEL_LENGTH == MAX_OWNER_LENGTH + 1 + MAX_NAME_LENGTH
+
+    def test_the_widest_legal_declaration_measures_without_raising(self) -> None:
+        widest = ContextOrigin(
+            owner=("a" * (MAX_OWNER_LENGTH - 2)) + ".b",
+            name="n" * MAX_NAME_LENGTH,
+            segment_class=ContextSegmentClass.TOOLS,
+            lifecycle=ContextLifecycle.RESIDENT,
+        )
+        assert len(widest.label) == MAX_CONTEXT_LABEL_LENGTH
+
+        measured = ContextSegment.measure(
+            "some tool schema text",
+            counter=self.counter(),
+            model=self.MODEL,
+            origin=widest,
+        )
+
+        assert measured.label == widest.label
 
 
 class TestSegmentOrdering(OccupancyFixtureMixin):

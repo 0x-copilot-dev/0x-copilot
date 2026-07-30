@@ -51,6 +51,9 @@ from pydantic import (
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
+from agent_runtime.observability.context_origin import (
     UNDECLARED_CONTEXT_LABEL,
     ContextLifecycle,
     ContextOrigin,
@@ -125,9 +128,15 @@ class ContextSegment(RuntimeContract):
     """
 
     MAX_DETAIL_LENGTH: ClassVar[int] = 200
+    # Derived from ContextOrigin's own bounds, never restated. A narrower bound
+    # here was a live §6.4 violation: ``measure`` passes ``origin.label``
+    # straight through, so any declaration longer than the guessed literal
+    # raised ValidationError on the model-call path — an observability contract
+    # taking down a run, which is the one thing this design forbids outright.
+    MAX_LABEL_LENGTH: ClassVar[int] = MAX_CONTEXT_LABEL_LENGTH
 
     segment_class: ContextSegmentClass
-    label: Annotated[str, Field(min_length=1, max_length=240)]
+    label: Annotated[str, Field(min_length=1, max_length=MAX_LABEL_LENGTH)]
     lifecycle: ContextLifecycle
     third_party: bool = False
     detail: str | None = Field(default=None, max_length=MAX_DETAIL_LENGTH)

@@ -86,6 +86,9 @@ from agent_runtime.context.tool_result_admission import (
 )
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
+from agent_runtime.observability.context_origin import (
     UNDECLARED_CONTEXT_LABEL,
     ContextLifecycle,
     ContextOrigin,
@@ -250,16 +253,20 @@ class ClassifiedMessagePart(RuntimeContract):
     """
 
     MAX_DETAIL_LENGTH: ClassVar[int] = 200
-    MAX_LABEL_LENGTH: ClassVar[int] = 240
-    """Label bound, mirroring ``ContextSegment``'s rather than chosen here.
+    MAX_LABEL_LENGTH: ClassVar[int] = MAX_CONTEXT_LABEL_LENGTH
+    """Label bound, imported from the contract that defines what a label is.
 
     A part exists to become a segment, so the two bounds must agree: a part that
     validated under a wider bound than the record it feeds would push the
     failure one step downstream, into the pass that can no longer fall back to
-    an ``UNDECLARED`` row for it. The value is restated rather than imported
-    because ``context_occupancy`` pulls the token counter — and litellm behind
-    it — into the import graph, which an object that only slices strings should
-    not carry. Both are pinned together by a test.
+    an ``UNDECLARED`` row for it.
+
+    This used to be a restated literal, on the reasoning that importing it would
+    drag the token counter — and litellm — into the import graph of an object
+    that only slices strings. The reasoning was sound but aimed at the wrong
+    module: the bound belongs to ``context_origin``, which imports neither. The
+    restated copy then drifted from what a ``ContextOrigin`` can actually spell,
+    which is precisely the failure mode all three copies were meant to avoid.
     """
 
     ENCODING: ClassVar[str] = "utf-8"

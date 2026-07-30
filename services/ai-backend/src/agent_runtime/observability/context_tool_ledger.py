@@ -40,6 +40,10 @@ from pydantic import Field, NonNegativeInt
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
+from agent_runtime.observability.context_origin import (
+    MAX_OWNER_LENGTH,
     UNDECLARED_CONTEXT_LABEL,
     ContextLifecycle,
     ContextOrigin,
@@ -102,18 +106,20 @@ class ToolSchemaFootprint(RuntimeContract):
     bodies. Occupancy is exposed over an HTTP read API (§6.5), and ``tool_name``
     is the widest identifier that surface may carry.
 
-    ``MAX_LABEL_LENGTH`` is *derived*, not chosen: it is the widest label a
-    valid :class:`~agent_runtime.observability.context_origin.ContextOrigin` can
-    spell (``owner`` ≤ 200, ``:``, ``name`` ≤ 200). Any narrower bound would
-    make :meth:`ToolSchemaLedger.measure` raise on a declaration the origin
-    contract itself accepts — on the model-call path, where §6.4 says
-    measurement must never fail a run — and truncating instead would be worse
-    than raising: a clipped label no longer round-trips into ``owner`` and
-    ``name``, so two distinct owners could collapse into one row of the report.
+    The label bound is *derived*, not chosen: it is imported from
+    :mod:`~agent_runtime.observability.context_origin` as ``MAX_LABEL_LENGTH``,
+    the widest label a valid :class:`ContextOrigin` can spell. Restating it as a
+    literal here is what caused the original defect — the number drifted from
+    the contract it was supposed to mirror. Any narrower bound makes
+    :meth:`ToolSchemaLedger.measure` raise on a declaration the origin contract
+    itself accepts, on the model-call path, where §6.4 says measurement must
+    never fail a run. Truncating instead would be worse than raising: a clipped
+    label no longer round-trips into ``owner`` and ``name``, so two distinct
+    owners could collapse into one row of the report.
     """
 
-    MAX_TOOL_NAME_LENGTH: ClassVar[int] = 200
-    MAX_LABEL_LENGTH: ClassVar[int] = 401
+    MAX_TOOL_NAME_LENGTH: ClassVar[int] = MAX_OWNER_LENGTH
+    MAX_LABEL_LENGTH: ClassVar[int] = MAX_CONTEXT_LABEL_LENGTH
 
     tool_name: str = Field(max_length=MAX_TOOL_NAME_LENGTH)
     label: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
