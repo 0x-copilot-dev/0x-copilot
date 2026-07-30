@@ -436,7 +436,18 @@ async function bootstrapHostSession(
     "grants",
     "host_session_ref",
   ]);
-  expect(JSON.stringify(body)).not.toMatch(/root|path|wcp_|permit|prepared/u);
+  // NARROWED, not loosened. This single regex guarded four distinct leak
+  // classes; only the grant's own `root` is now permitted, and it is permitted
+  // only because the worker performs the read and must be able to allow-list an
+  // attached folder (see `BrokeredGrant` in capabilities/types.ts). The C2
+  // capability tokens and prepared-effect refs must STILL never appear, so they
+  // keep their own assertion rather than riding along in a relaxed one.
+  const serialized = JSON.stringify(body);
+  expect(serialized).not.toMatch(/wcp_|permit|prepared/u);
+  // `root` may appear ONLY as a grant field — never as a bare path elsewhere in
+  // the envelope, which is what the original `path` term was protecting.
+  const withoutGrants = JSON.stringify({ ...body, grants: undefined });
+  expect(withoutGrants).not.toMatch(/root|path/u);
   expect(typeof body.host_session_ref).toBe("string");
   return body.host_session_ref as string;
 }
