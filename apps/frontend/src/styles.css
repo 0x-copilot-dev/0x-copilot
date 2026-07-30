@@ -1472,15 +1472,26 @@ p {
 }
 
 .aui-composer {
-  --composer-padding: 0.5rem;
-  --composer-radius: 1.5rem;
-  /* Phase 9 composer redesign: base shell sized for a 3-row textarea
-   * (matches minRows={3} in AssistantComposer). Switched from fixed
-   * `height` to `min-height` so the container GROWS when the textarea
-   * auto-expands past 3 rows — previously the fixed height + overflow:
-   * hidden clipped the textarea and pushed the toolbar/hint past the
-   * workspace bottom (the "why do I need to scroll?" bug). */
-  --composer-shell-height: 11rem;
+  /* WEB FORK of the package SSOT, packages/chat-surface/src/composer/composer.css
+   * — composer.css is imported by the desktop host only (see ModelPill.tsx),
+   * so these three tokens have to track it by hand. They had NOT: the v3 pass
+   * updated the package and left this copy on its Phase-9 values, so the two
+   * hosts rendered different composers.
+   *
+   * `--composer-radius` / `--composer-padding` are inert either way — the shell's
+   * box model is authored INLINE by `containerStyle` in Composer.tsx (11px / 0),
+   * and an inline shorthand beats any stylesheet. They are corrected here so the
+   * fork stops advertising values it does not paint.
+   *
+   * `--composer-shell-height` is the one that bites, precisely BECAUSE it is the
+   * only box-model property NOT authored inline — it falls through to CSS, and
+   * this fork's `11rem` floor held the shell at 176px around ~104px of content
+   * (72px textarea + 32px action row), leaving ~72px of dead space under the
+   * toolbar. `auto` is the package's value: the v3 composer reserves no minimum
+   * and sizes to its content, growing as the textarea auto-expands. */
+  --composer-padding: 0;
+  --composer-radius: 11px;
+  --composer-shell-height: auto;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--composer-radius);
@@ -1507,9 +1518,13 @@ p {
 /* data-focused no longer needs a separate input-height — the textarea
  * auto-sizes via Composer.tsx's useLayoutEffect, and removing the
  * hint row (max-height:0 below) is what gives back visual breath when
- * the user is actively typing. */
+ * the user is actively typing.
+ *
+ * The topbar variant used to lift the floor 11rem → 13rem; with no floor left
+ * to lift it tracks the package SSOT at `auto`. A composer with a topbar is
+ * TALLER because it has one more row in it, not because it was told to be. */
 .aui-composer[data-has-topbar="true"] {
-  --composer-shell-height: 13rem;
+  --composer-shell-height: auto;
 }
 
 .aui-composer[data-focused="true"] .atlas-depth {
