@@ -27,6 +27,7 @@ from pydantic import (
     model_validator,
 )
 
+from agent_runtime.artifacts.errors import ArtifactErrorCode
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationRequestFactory,
@@ -56,9 +57,35 @@ class _Messages:
     TOO_LARGE = "Inline artifact content exceeds 1 MiB; use a sanctioned content_ref."
     FAILED = "The artifact could not be revised."
     STALE = (
-        "The artifact changed since that revision. Read the current revision "
-        "and try again from it."
+        "The artifact changed since that revision — the user may have edited it. "
+        "Read the artifact's current revision, re-apply your change on top of it, "
+        "and revise again from that revision number. Nothing was overwritten."
     )
+    SEALED = (
+        "That run has finished, so this revision could not be attributed to it. "
+        "Do not retry with the same run."
+    )
+
+    #: Failure codes this tool can turn into an instruction the model can act on.
+    #: Anything absent falls back to the gateway's generic summary, which is the
+    #: honest answer when there is no better move to suggest.
+    _BY_CODE = {
+        ArtifactErrorCode.CONFLICT.value: STALE,
+        ArtifactErrorCode.DIGEST_MISMATCH.value: STALE,
+        ArtifactErrorCode.SEALED_RUN.value: SEALED,
+    }
+
+    @classmethod
+    def for_failure(cls, code: str | None) -> str | None:
+        """Return actionable wording for a known failure code, else ``None``.
+
+        Deliberately a lookup over a closed vocabulary rather than substring
+        matching on a message: the mapping breaks loudly if a code is renamed,
+        where matching on prose would silently stop recognising the case and
+        quietly regress the model to "it failed".
+        """
+
+        return None if code is None else cls._BY_CODE.get(code)
 
 
 class ReviseArtifactInput(RuntimeContract):
@@ -169,7 +196,11 @@ class ReviseArtifactTool:
             disposition.outcome is not OperationOutcome.SUCCEEDED
             or not disposition.artifact_ids
         ):
-            return {"status": "failed", "message": disposition.agent_summary}
+            return {
+                "status": "failed",
+                "message": _Messages.for_failure(disposition.failure_code)
+                or disposition.agent_summary,
+            }
 
         return {
             "status": "revised",

@@ -15,7 +15,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.artifacts.errors import ArtifactConflictError
+from agent_runtime.artifacts.errors import (
+    ArtifactConflictError,
+    ArtifactNotFoundError,
+    ArtifactSealedRunError,
+)
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
@@ -23,6 +27,7 @@ from agent_runtime.capabilities.operations.gateway import OperationGateway
 from agent_runtime.capabilities.tools.builtin.revise_artifact import (
     ReviseArtifactInput,
     ReviseArtifactTool,
+    _Messages,
 )
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactIdCodec
 from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor
@@ -178,6 +183,51 @@ class TestReviseArtifactTool(BoundContextMixin):
         message = str(result["message"])
         assert "ArtifactConflictError" not in message
         assert "Traceback" not in message
+        # ...and it must be RECOVERABLE, not merely safe. A live run showed the
+        # model losing this CAS and being told only "Operation failed; no
+        # external change was made", which leaves it nothing to do. The whole
+        # point of the distinct reason is that re-reading and retrying is the
+        # move, so the instruction has to say so.
+        assert message == _Messages.STALE
+        assert "current revision" in message
+        assert "Nothing was overwritten" in message
+
+    @pytest.mark.asyncio
+    async def test_a_sealed_run_says_not_to_retry_the_same_run(self) -> None:
+        """The opposite advice: a sealed run is not fixed by trying again."""
+
+        service = RecordingArtifactService(error=ArtifactSealedRunError())
+        token = self.bind(artifact_service=service, mode=OperationGatewayMode.OFF)
+        try:
+            result = await self._tool().ainvoke(
+                {"artifact_id": ARTIFACT_ID, "parent_revision": 1, "content": "x"}
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert result["status"] == "failed"
+        assert str(result["message"]) == _Messages.SEALED
+        # Distinct from the stale case, because the recoverable action differs —
+        # one says retry from the current revision, the other says do not retry.
+        assert str(result["message"]) != _Messages.STALE
+
+    @pytest.mark.asyncio
+    async def test_an_unmapped_failure_keeps_the_generic_summary(self) -> None:
+        """No invented advice for a failure this tool cannot characterise."""
+
+        service = RecordingArtifactService(error=ArtifactNotFoundError())
+        token = self.bind(artifact_service=service, mode=OperationGatewayMode.OFF)
+        try:
+            result = await self._tool().ainvoke(
+                {"artifact_id": ARTIFACT_ID, "parent_revision": 1, "content": "x"}
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert result["status"] == "failed"
+        message = str(result["message"])
+        assert message not in {_Messages.STALE, _Messages.SEALED}
+        assert message == "Operation failed; no external change was made."
 
     @pytest.mark.asyncio
     async def test_invalid_input_never_reaches_the_repository(self) -> None:

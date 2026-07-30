@@ -343,6 +343,12 @@ class OperationGateway:
                 activity_ref=None,
                 agent_summary="Operation failed; no external change was made.",
                 retryable=retryable,
+                # The same code already going to the ledger and the metrics. The
+                # summary above stays deliberately generic — it is the fallback
+                # wording for a tool that has nothing better to say — but a tool
+                # that CAN act on a specific failure now has the code to branch
+                # on instead of parsing that sentence.
+                failure_code=failure_code,
             )
 
     @staticmethod
