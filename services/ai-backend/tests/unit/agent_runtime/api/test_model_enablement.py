@@ -85,13 +85,39 @@ class TestExplicitSelection:
 
 
 class TestUncurated:
-    def test_enables_the_whole_catalog(self) -> None:
+    def test_enables_the_derived_short_list_not_the_whole_catalog(self) -> None:
         result = ModelEnablementResolver.apply(
             _catalog(), enabled_models=None, default_model=None
         )
-        # No curation -> the curated product catalog is itself the short list,
-        # so every model is enabled (no release-date trimming).
-        assert _enabled_ids(result) == {item.id for item in _catalog()}
+        enabled = _enabled_ids(result)
+        # No curation -> the derived default short list (small + big per
+        # provider), NOT the whole catalog. `gpt-b` is the middle rung of a
+        # three-model provider and no provider here is keyed, so it is the one
+        # cloud model left out.
+        assert enabled == {"gpt-a", "gpt-c", "claude-a", "claude-b", "llama-3.3-70b"}
+        assert "gpt-b" not in enabled
+
+    def test_keyed_provider_contributes_all_three_tiers(self) -> None:
+        result = ModelEnablementResolver.apply(
+            _catalog(),
+            enabled_models=None,
+            default_model=None,
+            user_key_providers=frozenset({"openai"}),
+        )
+        # The keyed provider spans small/medium/big, so its middle rung returns.
+        assert {"gpt-a", "gpt-b", "gpt-c"} <= _enabled_ids(result)
+
+    def test_short_list_survives_records_without_family_metadata(self) -> None:
+        # The LiteLLM fallback carries no `family`, so the declared main lines
+        # match nothing. The ladder must fall back to cost ranking rather than
+        # collapsing the picker to just the default + local models.
+        enabled = _enabled_ids(
+            ModelEnablementResolver.apply(
+                _catalog(), enabled_models=None, default_model=None
+            )
+        )
+        assert len(enabled & {"gpt-a", "gpt-b", "gpt-c"}) >= 2
+        assert len(enabled & {"claude-a", "claude-b"}) >= 1
 
     def test_default_and_local_enabled_without_selection(self) -> None:
         result = ModelEnablementResolver.apply(
