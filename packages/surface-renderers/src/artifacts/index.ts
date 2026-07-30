@@ -57,14 +57,28 @@ export { ArtifactRenderer } from "./ArtifactRenderer";
 export { CodeArtifactRenderer } from "./CodeArtifactRenderer";
 export {
   DatasetArtifactRenderer,
+  datasetGrid,
   parseCsv,
   parseLosslessDelimited,
   serializeDelimitedPatch,
   serializeFormulaSafeDelimitedPatch,
   type DatasetEditorActions,
+  type DatasetGrid,
   type DatasetPatch,
   type LosslessDelimitedDataset,
 } from "./DatasetArtifactRenderer";
+// PRD-03 D4 — cell-level diff of a revised dataset. `DatasetRevisionChange` is
+// the payload a host attaches to the render state; the renderer mounts the
+// panel itself, so a host wires nothing beyond that field.
+export {
+  DatasetRevisionDiff,
+  datasetRevisionChangeFor,
+  diffDatasetGrids,
+  type DatasetDiffCell,
+  type DatasetDiffRow,
+  type DatasetRevisionCellDiff,
+  type DatasetRevisionChange,
+} from "./DatasetRevisionDiff";
 export { DocumentArtifactRenderer } from "./DocumentArtifactRenderer";
 export { FileArtifactRenderer } from "./FileArtifactRenderer";
 export { RawArtifactFallback } from "./RawArtifactFallback";

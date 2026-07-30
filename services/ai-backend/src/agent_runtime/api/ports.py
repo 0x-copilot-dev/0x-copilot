@@ -1244,7 +1244,12 @@ class EventStorePort(Protocol):
         returned ``sequence_no`` is monotonically increasing without gaps.
         When ``event.event_id`` is set, an identical retry MUST return the
         existing envelope and a different body MUST raise
-        ``RuntimeEventIdempotencyConflict``.
+        ``RuntimeEventIdempotencyConflict``. "Identical" excludes the delivery
+        annotations a ``LedgerAmendment`` stamps: those describe the append
+        attempt rather than the event, so they cannot be stable across a
+        redelivery. Implementations decide this through
+        ``runtime_adapters._event_idempotency.EventRedeliveryResolver`` so every
+        backend answers the same redelivery the same way.
         """
 
     async def append_events_batch(

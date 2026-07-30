@@ -99,6 +99,7 @@ from runtime_adapters.artifact_lifecycle import (
     ArtifactLifecycleJobs,
     ArtifactPhysicalCleanupOutcome,
 )
+from runtime_adapters._event_idempotency import EventRedeliveryResolver
 from runtime_adapters.postgres.artifact_hold_fence import (
     acquire_artifact_hold_fences,
     active_hold_for_conversation_predicate,
@@ -6093,12 +6094,9 @@ class PostgresRuntimeApiStore:
                     )
                     existing_row = await cur.fetchone()
                     if existing_row is not None:
-                        existing = self._event_envelope(existing_row)
-                        if event.matches_envelope(existing):
-                            return existing
-                        raise RuntimeEventIdempotencyConflict(
-                            run_id=event.run_id,
-                            event_id=event.event_id,
+                        return EventRedeliveryResolver.resolve(
+                            event=event,
+                            existing=self._event_envelope(existing_row),
                         )
                 materialization_fence = await self._assert_e2_legacy_materialization(
                     conn=conn,

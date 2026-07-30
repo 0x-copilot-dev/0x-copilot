@@ -45,6 +45,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import ClassVar
 
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -83,6 +84,22 @@ class LedgerAmendment:
     was knowable in time.
     """
 
+    class Keys:
+        """Metadata keys an amendment stamps onto the event it annotates."""
+
+        REASON = "ledger_amendment_reason"
+        AMENDS = "ledger_amends"
+
+    #: Every key :meth:`as_metadata` can add, named so the event store's
+    #: stable-id idempotency check can exclude them. Both describe the *append
+    #: attempt*, not the event: ``REASON`` differs between the lane that
+    #: publishes a fact causally and the recovery lane that republishes the same
+    #: content-addressed event after the seal, and ``AMENDS`` moves with the
+    #: run's sequence cursor between an attempt and its own retry. Neither can
+    #: be stable by construction, so an equality check that included them would
+    #: answer a redelivery of an already-durable event with a conflict.
+    METADATA_KEYS: ClassVar[frozenset[str]] = frozenset({Keys.REASON, Keys.AMENDS})
+
     reason: LedgerAmendmentReason
     #: Ledger id (``<run>·<seq>``) of the sealed fact this amends, when the
     #: amendment refers to a specific event. ``None`` when it amends the run's
@@ -97,9 +114,9 @@ class LedgerAmendment:
         without reconstructing append timing.
         """
 
-        metadata = {"ledger_amendment_reason": self.reason.value}
+        metadata = {self.Keys.REASON: self.reason.value}
         if self.amends is not None:
-            metadata["ledger_amends"] = self.amends
+            metadata[self.Keys.AMENDS] = self.amends
         return metadata
 
 
