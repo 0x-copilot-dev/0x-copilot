@@ -48,9 +48,20 @@ import { useActiveRunCount } from "./useActiveRunCount";
 // design. PRD-12 consumes this set and only adds "web passes settingsActive".
 const SUPPRESS_TOPBAR: ReadonlySet<ShellDestinationSlug> = new Set(["run"]);
 
-// `FULL_BLEED_DESTINATIONS` now governs ONLY the side columns (224px context
-// column + right rail): `chats` and `run` render without them, which is what the
-// mock shows. Chats gains a topbar AND no side columns — the design's exact split.
+// `FULL_BLEED_DESTINATIONS` names the destinations that own their full width
+// outright — `chats` and `run` — so no side column is even considered for them.
+//
+// It is NOT the whole story any more, and deliberately so. The side columns
+// (224px context column + right rail) are now CONTENT-GATED: the shell reserves
+// a column only when someone actually put something in it. This set was the
+// only gate before, which meant every destination outside it got a 224px column
+// whether or not it had content — and no host has ever passed `contextPanel`,
+// so Projects / Activity / Tools / Skills each shipped a permanent, hardcoded
+// "Nothing here yet." beside their content, plus an edge toggle that opened an
+// equally empty right rail. DESIGN-SPEC §1 describes the shell as rail + topbar
+// + main; there is no context column in the design at all. Content-gating fixes
+// that structurally rather than by growing this list: a destination that gains
+// a real panel gets its column back the moment it passes one.
 const FULL_BLEED_DESTINATIONS: ReadonlySet<ShellDestinationSlug> = new Set([
   "chats",
   "run",
@@ -118,11 +129,20 @@ export interface ChatShellProps<TRoute> {
   /**
    * Optional per-destination ContextPanel content. The host supplies it
    * — destination panels live next to the destination, not in the shell
-   * package. When omitted on non-full-bleed destinations, an empty
-   * panel labeled with the destination is rendered. Ignored entirely
-   * on full-bleed destinations (chats).
+   * package. OMITTING IT MEANS NO COLUMN: the shell used to fall back to an
+   * empty panel labeled with the destination, which is how four destinations
+   * shipped a permanent "Nothing here yet." next to their content. Ignored
+   * entirely on full-bleed destinations (chats, run).
    */
   readonly contextPanel?: ReactNode | ContextPanelProps;
+
+  /**
+   * Optional right-rail content. Same content gate as `contextPanel`: no
+   * content, no rail and no edge toggle. The rail was previously mounted
+   * unconditionally off full-bleed destinations with nothing in it, so the
+   * toggle's only outcome was revealing a 380px empty state.
+   */
+  readonly rightRail?: ReactNode;
 
   // NOTE: there is deliberately NO host prop for the rail Run-badge count
   // (PRD-12 D1). It is a server projection the shell owns end to end via
@@ -146,6 +166,7 @@ export function ChatShell<TRoute>({
   binding,
   destinations,
   contextPanel,
+  rightRail,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
   const profile = useOptionalDeploymentProfile();
@@ -177,6 +198,7 @@ export function ChatShell<TRoute>({
                 settingsActive={binding.settingsActive}
                 topbarLeaf={binding.topbarLeaf}
                 contextPanel={contextPanel}
+                rightRail={rightRail}
                 railIdentity={binding.railIdentity}
                 walletChip={binding.walletChip}
               >
@@ -199,6 +221,7 @@ interface ShellGridProps {
   readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
+  readonly rightRail?: ReactNode;
   // PRD-03 carries the raw display name; PRD-12's AppRail takes `{ displayName }`
   // and derives the glyph/title itself. `null` = neutral glyph.
   readonly railIdentity: { readonly displayName: string } | null;
@@ -215,6 +238,7 @@ function ShellGrid({
   settingsActive,
   topbarLeaf,
   contextPanel,
+  rightRail,
   railIdentity,
   walletChip,
   children,
@@ -223,10 +247,9 @@ function ShellGrid({
   // hook, fed to the rail's Run badge. No host passes it — deleting the prop
   // makes the desktop "badge never wired" gap structurally impossible.
   const activeRunCount = useActiveRunCount();
-  // Default to closed: the right rail has no destination-specific content
-  // wired yet (Activity / Approvals tabs are a Wave 5 thread-canvas job)
-  // so an open empty rail is visual noise. Users open it via the edge
-  // toggle when there's something to show.
+  // Right rail starts closed. It only exists at all when a host passed content
+  // for it (see `showRightRail`), so this is the first-open state of a real
+  // rail rather than the old "collapsed empty scaffolding".
   const [rightOpen, setRightOpen] = useState(false);
   // PRD-09 D5 — two independent decisions:
   //  * `suppressTopbar` — hide the shell topbar (run cockpit + Settings only).
@@ -238,6 +261,12 @@ function ShellGrid({
   const fullBleed =
     settingsActive || FULL_BLEED_DESTINATIONS.has(activeDestination);
 
+  // Content gate. A side column is chrome around content; with no content it is
+  // just a narrower main column and a label. `!fullBleed` still has the final
+  // say so chats/run/Settings stay full width even if a host passes something.
+  const showContextPanel = !fullBleed && contextPanel != null;
+  const showRightRail = !fullBleed && rightRail != null;
+
   // Profile-correct label for the active destination (e.g. "Tools"/"Skills"
   // in the solo view; the legacy label on web). `undefined` when the active
   // destination isn't in the rendered list — the Topbar then falls back to its
@@ -246,12 +275,16 @@ function ShellGrid({
     (d) => d.slug === activeDestination,
   )?.label;
 
-  const rightCol = rightOpen ? `${RIGHT_RAIL_WIDTH}px` : "0";
-  // Three vs four column layouts. Full-bleed surfaces get rail + main +
-  // right rail; everything else inserts the 224px context column between.
-  const gridTemplateColumns = fullBleed
-    ? `${APP_RAIL_WIDTH}px 1fr ${rightCol}`
-    : `${APP_RAIL_WIDTH}px ${CONTEXT_PANEL_WIDTH}px 1fr ${rightCol}`;
+  // Built from what is actually rendered, so an absent column costs no track.
+  // The old form always emitted four tracks (with a `0` right column when
+  // closed), which is why an unfed destination still lost 224px to a panel
+  // reading "Nothing here yet."
+  const gridTemplateColumns = [
+    `${APP_RAIL_WIDTH}px`,
+    ...(showContextPanel ? [`${CONTEXT_PANEL_WIDTH}px`] : []),
+    "1fr",
+    ...(showRightRail ? [rightOpen ? `${RIGHT_RAIL_WIDTH}px` : "0"] : []),
+  ].join(" ");
 
   const outerStyle: CSSProperties = {
     width: "100%",
@@ -286,7 +319,11 @@ function ShellGrid({
       // destination". A shipped web rule (`apps/frontend/src/styles.css`) selects
       // this root by the new name, updated in the same change.
       data-active-destination={activeDestination}
-      data-right-rail-open={rightOpen ? "open" : "closed"}
+      // Absent when there is no rail at all, so "closed" keeps meaning "there is
+      // a rail and it is collapsed" rather than doubling as "no rail exists".
+      data-right-rail-open={
+        showRightRail ? (rightOpen ? "open" : "closed") : undefined
+      }
       style={outerStyle}
     >
       <AppRail
@@ -300,13 +337,13 @@ function ShellGrid({
         identity={railIdentity ?? undefined}
         badges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
       />
-      {fullBleed ? null : (
+      {showContextPanel ? (
         <ContextPanelSlot
           activeDestination={activeDestination}
           destinationLabel={activeLabel ?? activeDestination}
           contextPanel={contextPanel}
         />
-      )}
+      ) : null}
       <div style={mainColumnStyle}>
         {suppressTopbar ? null : (
           <Topbar
@@ -323,12 +360,15 @@ function ShellGrid({
       </div>
       {/* Full-bleed surfaces own their right panel via the main content
           (ChatScreen's workspace pane; the Run cockpit's right rail), so the
-          shell RightRail — empty scaffolding until Activity/Approvals is wired
-          in the canvas wave — is suppressed there to avoid a duplicate,
-          un-obvious panel. */}
-      {fullBleed ? null : (
-        <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)} />
-      )}
+          shell RightRail is suppressed there to avoid a duplicate, un-obvious
+          panel — and everywhere else it now needs `rightRail` content to exist
+          at all. Mounting it unfed left an edge toggle whose only outcome was a
+          380px empty state. */}
+      {showRightRail ? (
+        <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)}>
+          {rightRail}
+        </RightRail>
+      ) : null}
     </div>
   );
 }
