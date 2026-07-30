@@ -23,7 +23,7 @@ describe("ChatToolsTrigger", () => {
         port={fakeConnectorsPort()}
         webSearchEnabled
         onToggleWebSearch={vi.fn()}
-        activeConnectorIds={[]}
+        pausedConnectorIds={[]}
         onToggleConnector={vi.fn()}
         onConnectCatalog={vi.fn()}
         onAddCustom={vi.fn()}

@@ -456,6 +456,33 @@ export function listModels(
   return httpGet<ModelCatalogResponse>("/v1/agent/models", identity);
 }
 
+/**
+ * Assemble `request_context` from the composer's per-run connector selections.
+ * One builder because both keys share the object: spreading two conditional
+ * `{ request_context: … }` literals would silently keep only the last.
+ */
+function requestContextFor(options: {
+  connectorScopes?: ConversationConnectorScopes;
+  pausedConnectorIds?: readonly string[];
+}): { request_context?: Record<string, unknown> } {
+  const requestContext: Record<string, unknown> = {};
+  if (
+    options.connectorScopes !== undefined &&
+    Object.keys(options.connectorScopes).length > 0
+  ) {
+    requestContext.connector_scopes = options.connectorScopes;
+  }
+  if (
+    options.pausedConnectorIds !== undefined &&
+    options.pausedConnectorIds.length > 0
+  ) {
+    requestContext.paused_connectors = options.pausedConnectorIds;
+  }
+  return Object.keys(requestContext).length > 0
+    ? { request_context: requestContext }
+    : {};
+}
+
 export function createRun(
   conversationId: string,
   userInput: string,
@@ -477,11 +504,18 @@ export function createRun(
      */
     webSearchEnabled?: boolean;
     /**
-     * Per-run active connector scopes (composer Tools popover). Threaded onto
+     * Per-run connector scopes. Threaded onto
      * `request_context.connector_scopes`. Omitted / empty → no connector-scope
      * payload (the wire stays back-compatible for callers that don't set it).
      */
     connectorScopes?: ConversationConnectorScopes;
+    /**
+     * Connectors the user paused for this run (composer Tools popover).
+     * Threaded onto `request_context.paused_connectors` — the one field the
+     * runtime's MCP gate reads for a per-run opt-out. Omitting an id from
+     * `connectorScopes` does NOT pause it.
+     */
+    pausedConnectorIds?: readonly string[];
     content?: CreateRunRequest["content"];
     attachments?: CreateRunRequest["attachments"];
     quote?: Record<string, unknown>;
@@ -503,12 +537,11 @@ export function createRun(
     ...(options.webSearchEnabled === false
       ? { web_search_enabled: false }
       : {}),
-    // Only send `request_context` when the composer activated connectors; an
-    // empty map is equivalent to "no scopes" and would just bloat the body.
-    ...(options.connectorScopes !== undefined &&
-    Object.keys(options.connectorScopes).length > 0
-      ? { request_context: { connector_scopes: options.connectorScopes } }
-      : {}),
+    // Only send `request_context` when there is something to say — an empty
+    // scope map / paused list would just bloat the body. Both keys live under
+    // the same object, so build it once rather than spreading twice (the second
+    // spread would win and drop the first).
+    ...requestContextFor(options),
     content: options.content,
     attachments: options.attachments,
     quote: options.quote,

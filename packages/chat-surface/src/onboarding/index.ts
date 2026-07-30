@@ -119,12 +119,19 @@ export type { ComposerToolsTriggerProps } from "./ComposerToolsTrigger";
 export {
   projectFirstRunConnectors,
   firstRunActiveToolCount,
+  isFirstRunConnectorActive,
 } from "./projectFirstRunConnectors";
 export type {
   FirstRunConnectorProjection,
   FirstRunConnectedConnector,
   FirstRunInstallableConnector,
 } from "./projectFirstRunConnectors";
+export { useConnectorPopoverData } from "./useConnectorPopoverData";
+export type {
+  ConnectorPopoverData,
+  ConnectorPopoverDataOptions,
+  ConnectorPopoverLoadState,
+} from "./useConnectorPopoverData";
 export type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 // === end First-Run onboarding (P4 — tools popover) ===
 // === First-Run onboarding (P4 — wallet chip) ===

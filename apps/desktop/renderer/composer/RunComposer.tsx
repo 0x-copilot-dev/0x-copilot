@@ -182,8 +182,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
   }, [providerKeysPort, refreshCatalog]);
 
   // The Tools pill (when a connectors port is injected) owns per-run web-search
-  // + active connector ids and yields the run-body values threaded on submit.
-  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+  // + the paused-connector opt-outs, and yields the run-body values threaded on
+  // submit.
+  const { toolsTrigger, webSearchEnabled, pausedConnectorIds } =
     useDesktopComposerTools({
       connectorsPort,
       onAddCustom: onShowConnectors,
@@ -228,15 +229,12 @@ export function RunComposer(props: RunComposerProps): ReactElement {
                 toRunAttachment,
               ) as unknown as RunStartRequest["attachments"])
             : undefined,
-        // Tools pill selections: web_search defaults on at the runtime, so
-        // only an explicit opt-OUT is meaningful; active connector ids become
-        // request_context.connector_scopes (buildRunCreateBody applies both).
+        // Tools pill selections: both are opt-OUTS, because both default to on
+        // at the runtime — web_search unless explicitly false, and every
+        // connected connector unless the user paused it. Paused ids become
+        // request_context.paused_connectors (buildRunCreateBody applies both).
         webSearchEnabled,
-        connectorScopes:
-          connectorScopes !== undefined &&
-          Object.keys(connectorScopes).length > 0
-            ? connectorScopes
-            : undefined,
+        pausedConnectorIds,
       };
       // Route through the cockpit's ONE dispatch (§D3): it starts the run AND
       // binds the live session, so this 2nd/Nth message streams exactly like the
@@ -252,7 +250,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       models,
       selectedModel,
       webSearchEnabled,
-      connectorScopes,
+      pausedConnectorIds,
     ],
   );
 

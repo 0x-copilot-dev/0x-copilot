@@ -16,6 +16,7 @@ export {
   DEFAULT_RAIL_WIDTH,
   MIN_RAIL_WIDTH,
   MAX_RAIL_WIDTH,
+  COLLAPSED_RAIL_WIDTH,
   type ThreadCanvasProps,
   type ThreadMode,
 } from "./ThreadCanvas";

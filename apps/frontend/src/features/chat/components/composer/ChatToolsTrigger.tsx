@@ -9,9 +9,12 @@ import { type ReactElement } from "react";
 
 export interface ChatToolsTriggerProps {
   readonly port: ComposerConnectorsPort;
+  /** Bump to refetch the connector list after a connect completes. */
+  readonly reloadToken?: number;
   readonly webSearchEnabled: boolean;
   readonly onToggleWebSearch: (next: boolean) => void;
-  readonly activeConnectorIds: readonly string[];
+  /** Ids paused for this run. Empty ⇒ every connected connector is live. */
+  readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
   readonly onAddCustom: () => void;
@@ -19,9 +22,10 @@ export interface ChatToolsTriggerProps {
 
 export function ChatToolsTrigger({
   port,
+  reloadToken,
   webSearchEnabled,
   onToggleWebSearch,
-  activeConnectorIds,
+  pausedConnectorIds,
   onToggleConnector,
   onConnectCatalog,
   onAddCustom,
@@ -29,9 +33,10 @@ export function ChatToolsTrigger({
   return (
     <ComposerToolsTrigger
       port={port}
+      reloadToken={reloadToken}
       webSearchEnabled={webSearchEnabled}
       onToggleWebSearch={onToggleWebSearch}
-      activeConnectorIds={activeConnectorIds}
+      pausedConnectorIds={pausedConnectorIds}
       onToggleConnector={onToggleConnector}
       onConnectCatalog={onConnectCatalog}
       onAddCustom={onAddCustom}

@@ -218,7 +218,11 @@ import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
+import {
+  useRunMode,
+  useRunPanelCollapsed,
+  useRunStudioRailCollapsed,
+} from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -943,6 +947,14 @@ export interface RunStartRequest {
   readonly webSearchEnabled?: boolean;
   /** Active connector scopes (Tools popover) → `request_context`. */
   readonly connectorScopes?: ConversationConnectorScopes;
+  /**
+   * Connectors the user paused in the Tools popover for THIS run →
+   * `request_context.paused_connectors`, the only signal the runtime's MCP gate
+   * (`McpPermissionPolicy.is_server_card_authorized`) reads for a per-run
+   * opt-out. Omitting an id from `connectorScopes` does NOT pause it, which is
+   * why a popover row toggled off used to stay callable.
+   */
+  readonly pausedConnectorIds?: readonly string[];
 }
 
 /**
@@ -1305,6 +1317,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     collapsed: focusPanelCollapsed,
     setCollapsed: setFocusPanelCollapsed,
   } = useRunPanelCollapsed({ conversationId });
+  // The Studio rail's fold, persisted per conversation on its own key: folding
+  // hands the rail's width to the surface column, so the generative surface can
+  // be worked with at full canvas width.
+  const {
+    collapsed: studioRailCollapsed,
+    setCollapsed: setStudioRailCollapsed,
+  } = useRunStudioRailCollapsed({ conversationId });
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
@@ -4032,6 +4051,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
       onPanelCollapsedChange={setFocusPanelCollapsed}
+      // Studio rail fold — the chevron in the tabset; same per-conversation
+      // persistence, its own key. The canvas below narrows the column to match.
+      studioCollapsed={studioRailCollapsed}
+      onStudioCollapsedChange={setStudioRailCollapsed}
       focusPlan={focusPlan}
       focusActivityLive={
         session.runStatus !== null &&
@@ -4111,6 +4134,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // Draggable, persisted Studio rail width (useRailWidth → KV).
       railWidth={railWidth}
       onRailWidthChange={setRailWidth}
+      // …and its folded state, so the grid narrows the rail column to the icon
+      // strip and the surface column takes the width back.
+      railCollapsed={studioRailCollapsed}
     />
   );
 
@@ -4418,11 +4444,23 @@ export function buildRunCreateBody(
   if (request.webSearchEnabled === false) {
     body.web_search_enabled = false;
   }
+  // Both live under `request_context`, so build it once — assigning twice would
+  // silently drop whichever came first.
+  const requestContext: Record<string, unknown> = {};
   if (
     request.connectorScopes !== undefined &&
     Object.keys(request.connectorScopes).length > 0
   ) {
-    body.request_context = { connector_scopes: request.connectorScopes };
+    requestContext.connector_scopes = request.connectorScopes;
+  }
+  if (
+    request.pausedConnectorIds !== undefined &&
+    request.pausedConnectorIds.length > 0
+  ) {
+    requestContext.paused_connectors = request.pausedConnectorIds;
+  }
+  if (Object.keys(requestContext).length > 0) {
+    body.request_context = requestContext;
   }
   return body;
 }

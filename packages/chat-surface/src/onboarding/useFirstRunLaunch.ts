@@ -27,7 +27,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
-  ConversationConnectorScopes,
   ModelSelectionRequest,
   RunAttachmentRequest,
 } from "@0x-copilot/api-types";
@@ -55,8 +54,8 @@ export interface FirstRunLaunchPayload {
    * true is owned by the surface). Threaded onto `createFirstRun`.
    */
   readonly webSearchEnabled: boolean;
-  /** P4 — active connector scopes for this run (omitted when none active). */
-  readonly connectorScopes?: ConversationConnectorScopes;
+  /** P4 — connectors paused for this run (omitted when none are paused). */
+  readonly pausedConnectorIds?: readonly string[];
 }
 
 export interface UseFirstRunLaunchOptions {
@@ -149,7 +148,7 @@ export function useFirstRunLaunch(
           model: modelRef.current,
           attachments: payload.attachments,
           webSearchEnabled: payload.webSearchEnabled,
-          connectorScopes: payload.connectorScopes,
+          pausedConnectorIds: payload.pausedConnectorIds,
         })
         .then((result) => {
           setPhase("handoff");

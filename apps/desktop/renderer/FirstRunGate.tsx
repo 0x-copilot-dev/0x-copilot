@@ -10,7 +10,6 @@ import {
 
 import {
   Acknowledgment,
-  BrandMark,
   FIRST_RUN_SUGGESTIONS,
   FirstRunLocalCard,
   FirstRunSurface,
@@ -39,7 +38,6 @@ import {
   type HashRouter,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
-import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import { DesktopAnchoredPlusMenu } from "./composer/DesktopAnchoredPlusMenu";
 import { DesktopComposerFilePicker } from "./composer/DesktopComposerFilePicker";
@@ -342,7 +340,7 @@ export function FirstRunSurfaceMount({
   // `onSentRef`) so `handleSubmit` reads the value live at send time and the
   // acknowledgment's tools line reflects the real toggle.
   const webSearchRef = useRef(true);
-  const connectorScopesRef = useRef<ConversationConnectorScopes | undefined>(
+  const pausedConnectorIdsRef = useRef<readonly string[] | undefined>(
     undefined,
   );
 
@@ -413,7 +411,7 @@ export function FirstRunSurfaceMount({
         text: payload.text,
         attachments: toReadableRunAttachments(payload.attachments),
         webSearchEnabled: webSearchRef.current,
-        connectorScopes: connectorScopesRef.current,
+        pausedConnectorIds: pausedConnectorIdsRef.current,
       });
     },
     [launchPhase, resetLaunch, startLaunch],
@@ -456,7 +454,7 @@ export function FirstRunSurfaceMount({
       // Capture the surface-owned Tools state for `handleSubmit` (live at send)
       // and the acknowledgment's tools line.
       webSearchRef.current = ctx.webSearchEnabled;
-      connectorScopesRef.current = ctx.connectorScopes;
+      pausedConnectorIdsRef.current = ctx.pausedConnectorIds;
       return (
         <OnboardingComposer
           connectors={{ servers: [], loading: false }}
@@ -609,57 +607,9 @@ export function FirstRunSurfaceMount({
   );
 }
 
-/**
- * P0 interim onboarding body — a minimal branded welcome with the two exits
- * (Get started / skip), both of which complete the gate. P1 replaces this with
- * the full 3-state FirstRunSurface (gate → composer → ack) rendered from the
- * shared chat-surface package via `renderFirstRun`.
- */
-export function FirstRunPlaceholder({
-  onComplete,
-}: {
-  readonly onComplete: () => void;
-}): ReactElement {
-  return (
-    <div className="fr" data-testid="first-run-surface">
-      <div className="fr-top">
-        <span className="fr-brand">
-          <BrandMark size={18} />
-          <span className="fr-brand__name">
-            <span className="fr-zx">0x</span>Copilot
-          </span>
-        </span>
-        <span className="fr-top__sp" />
-        <button
-          type="button"
-          className="fr-skip"
-          onClick={onComplete}
-          data-testid="first-run-skip"
-        >
-          skip — open the workspace →
-        </button>
-      </div>
-
-      <div className="fr-main">
-        <h1 className="fr-h1">Welcome to 0xCopilot</h1>
-        <p className="fr-sub">
-          Let&rsquo;s get you set up — pick a model and run your first task. The
-          full onboarding steps land next.
-        </p>
-        <button
-          type="button"
-          className="fr-cta"
-          onClick={onComplete}
-          data-testid="first-run-get-started"
-        >
-          Get started
-        </button>
-      </div>
-
-      <div className="fr-foot">
-        <span>v0.1.0 · local build</span>
-        <span>nothing leaves this machine</span>
-      </div>
-    </div>
-  );
-}
+// The P0 interim onboarding body (`FirstRunPlaceholder`) lived here until P1
+// replaced it with the shared 3-state `FirstRunSurface` mounted above. It was
+// exported but never rendered, and its `fr-*` chrome — duplicated in
+// firstrun.css under names the shared surface owns — is what shrink-wrapped the
+// real onboarding column. Removed with those styles; `renderFirstRun` is the
+// only onboarding body.

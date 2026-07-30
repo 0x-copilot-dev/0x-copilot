@@ -962,3 +962,251 @@ describe("RunWorkspaceRail — citations reach the v2 Sources panel", () => {
     expect(screen.queryByTestId("sources-v2-citations")).toBeNull();
   });
 });
+
+// ============================================================
+// Studio rail fold — the chevron + the icon strip
+// ============================================================
+
+describe("RunWorkspaceRail — Studio rail fold", () => {
+  it("renders a collapse chevron in the Studio tabset", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    const chevron = screen.getByTestId("run-rail-collapse");
+    expect(chevron).toHaveAttribute("aria-label", "Collapse workspace rail");
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("has no collapse chevron in Focus (that mode has its own panel control)", () => {
+    render(<RunWorkspaceRail mode="focus" chatSlot={chatSlot()} />);
+    expect(screen.queryByTestId("run-rail-collapse")).toBeNull();
+  });
+
+  it("folds to the icon strip when the chevron is clicked (uncontrolled)", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-studio-collapsed",
+      "true",
+    );
+    expect(screen.getByTestId("run-rail-strip")).toBeInTheDocument();
+    // The tabset and its chevron give way to the strip.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByTestId("run-rail-collapse")).toBeNull();
+  });
+
+  // The whole point of the fold: a folded rail must actually be narrow, or the
+  // surface column gets nothing back.
+  it("caps the folded rail at the icon-strip width", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(screen.getByTestId("run-workspace-rail")).toHaveStyle({
+      width: "46px",
+    });
+  });
+
+  // The contract that makes folding safe: `chatSlot` is hidden, never unmounted,
+  // so transcript scroll + composer draft survive a fold/unfold round trip.
+  it("keeps the injected chatSlot mounted (hidden) while folded", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />,
+    );
+    const before = screen.getByTestId("rail-chat-content");
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+
+    const chatPanel = screen.getByTestId("run-rail-panel-chat");
+    expect(chatPanel).toHaveStyle({ display: "none" });
+    expect(screen.getByTestId("rail-chat-content")).toBe(before);
+
+    rerender(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    fireEvent.click(screen.getByTestId("run-rail-expand"));
+    expect(screen.getByTestId("run-rail-panel-chat")).toHaveStyle({
+      display: "flex",
+    });
+    expect(screen.getByTestId("rail-chat-content")).toBe(before);
+  });
+
+  it("expands again from the strip's chevron", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    const expand = screen.getByTestId("run-rail-expand");
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(expand);
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-studio-collapsed",
+      "false",
+    );
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-rail-strip")).toBeNull();
+  });
+
+  // One click should always land on something visible — picking an icon selects
+  // that tab AND unfolds, rather than silently selecting behind the strip.
+  it("selects a tab and unfolds when a strip icon is picked", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source({ title: "Renewal terms" })])}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    fireEvent.click(screen.getByTestId("run-rail-strip-sources"));
+
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "sources",
+    );
+    expect(screen.getByTestId("run-rail-panel-sources")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-rail-strip")).toBeNull();
+  });
+
+  it("marks the tab the strip will restore", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(screen.getByTestId("run-rail-strip-agents")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    expect(screen.getByTestId("run-rail-strip-chat")).toHaveAttribute(
+      "data-active",
+      "false",
+    );
+  });
+
+  it("carries the Agents live count + Approvals pending count into the strip", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        subagents={subagentMap([
+          subagent({ task_id: "t1", status: "running" }),
+          subagent({ task_id: "t2", status: "completed" }),
+        ])}
+        approvalsQueue={approvalsQueue([approval()])}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(screen.getByTestId("run-rail-strip-agents-badge")).toHaveTextContent(
+      "1",
+    );
+    expect(
+      screen.getByTestId("run-rail-strip-approvals-badge"),
+    ).toHaveTextContent("1");
+  });
+
+  // FR-3.15 parity: you cannot approve a past state, so the folded rail must not
+  // offer an Approvals icon either.
+  it("drops the Approvals icon from the strip while scrubbed", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        scrubbed
+      />,
+    );
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(screen.queryByTestId("run-rail-strip-approvals")).toBeNull();
+    expect(screen.getByTestId("run-rail-strip-sources")).toBeInTheDocument();
+  });
+
+  it("is controlled when the host supplies studioCollapsed", () => {
+    const onStudioCollapsedChange = vi.fn();
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed={false}
+        onStudioCollapsedChange={onStudioCollapsedChange}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(onStudioCollapsedChange).toHaveBeenCalledWith(true);
+    // Controlled: the rail does not fold itself — the host's next value does.
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-studio-collapsed",
+      "false",
+    );
+  });
+
+  it("does not touch the Focus panel's collapse state", () => {
+    const onPanelCollapsedChange = vi.fn();
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        panelCollapsed={false}
+        onPanelCollapsedChange={onPanelCollapsedChange}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("run-rail-collapse"));
+    expect(onPanelCollapsedChange).not.toHaveBeenCalled();
+  });
+
+  // A citation chip / "N waiting" chip that selects a tab behind a folded rail
+  // reads as a dead click.
+  it("unfolds when a citation chip commands the Sources tab", () => {
+    const onStudioCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        onStudioCollapsedChange={onStudioCollapsedChange}
+        focusSourcesSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        onStudioCollapsedChange={onStudioCollapsedChange}
+        focusSourcesSignal={1}
+      />,
+    );
+    expect(onStudioCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("unfolds when the header chip commands the Approvals tab", () => {
+    const onStudioCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        onStudioCollapsedChange={onStudioCollapsedChange}
+        focusApprovalsSignal={0}
+      />,
+    );
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        onStudioCollapsedChange={onStudioCollapsedChange}
+        focusApprovalsSignal={1}
+      />,
+    );
+    expect(onStudioCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  // Mounting with a non-zero nonce (a remount mid-session) must not yank a
+  // deliberately-folded rail open.
+  it("does not unfold on a nonce that merely arrives non-zero", () => {
+    const onStudioCollapsedChange = vi.fn();
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        onStudioCollapsedChange={onStudioCollapsedChange}
+        focusApprovalsSignal={7}
+        focusSourcesSignal={7}
+      />,
+    );
+    expect(onStudioCollapsedChange).not.toHaveBeenCalled();
+  });
+});

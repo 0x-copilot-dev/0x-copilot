@@ -47,6 +47,11 @@ const RUN_MODE_KEY_SUFFIX = ".run_mode";
 // namespace + persistence discipline as the mode above — one suffix per
 // preference, "unknown ⇒ default (expanded)".
 const RUN_FOCUS_PANEL_KEY_SUFFIX = ".run_focus_panel_collapsed";
+// Studio's workspace-rail collapsed state. A SEPARATE key from the Focus panel
+// above, deliberately: the two rails are different sizes doing different jobs
+// (Studio's collapse hands the whole canvas to the surface; Focus's hands it to
+// the chat), so folding a rail in one mode must not fold the other.
+const RUN_STUDIO_RAIL_KEY_SUFFIX = ".run_studio_rail_collapsed";
 
 /** Per-conversation KeyValueStore key for the persisted Run mode. */
 export function runModeKey(conversationId: ConversationId): string {
@@ -58,6 +63,13 @@ export function runFocusPanelCollapsedKey(
   conversationId: ConversationId,
 ): string {
   return `${RUN_MODE_KEY_PREFIX}${conversationId}${RUN_FOCUS_PANEL_KEY_SUFFIX}`;
+}
+
+/** Per-conversation KeyValueStore key for the Studio workspace-rail collapse flag. */
+export function runStudioRailCollapsedKey(
+  conversationId: ConversationId,
+): string {
+  return `${RUN_MODE_KEY_PREFIX}${conversationId}${RUN_STUDIO_RAIL_KEY_SUFFIX}`;
 }
 
 /**
@@ -112,6 +124,33 @@ export function writeRunFocusPanelCollapsed(
   collapsed: boolean,
 ): void {
   store.set(runFocusPanelCollapsedKey(conversationId), collapsed ? "1" : "0");
+}
+
+/**
+ * Default Studio workspace-rail state when nothing is persisted: EXPANDED. The
+ * rail carries the chat, so a cockpit that opened folded would read as a
+ * missing composer, not as a roomy canvas.
+ */
+export const DEFAULT_RUN_STUDIO_RAIL_COLLAPSED = false;
+
+/**
+ * Read the persisted Studio workspace-rail collapse flag. Same "only `"1"` is
+ * collapsed, unknown ⇒ default (expanded)" shape as the Focus flag above.
+ */
+export function readRunStudioRailCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId,
+): boolean {
+  return store.get(runStudioRailCollapsedKey(conversationId)) === "1";
+}
+
+/** Persist the Studio workspace-rail collapse flag for a conversation. */
+export function writeRunStudioRailCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId,
+  collapsed: boolean,
+): void {
+  store.set(runStudioRailCollapsedKey(conversationId), collapsed ? "1" : "0");
 }
 
 export interface UseRunModeOptions {
@@ -241,7 +280,7 @@ export function useRunMode({
 }
 
 // ============================================================
-// Focus Run-details panel collapse (WS-F)
+// Rail collapse — Focus Run-details panel (WS-F) + Studio workspace rail
 // ============================================================
 
 export interface UseRunPanelCollapsedOptions {
@@ -250,7 +289,7 @@ export interface UseRunPanelCollapsedOptions {
 }
 
 export interface UseRunPanelCollapsedResult {
-  /** True when the Focus Run-details panel is collapsed to the icon rail. */
+  /** True when the rail is folded to its icon strip. */
   readonly collapsed: boolean;
   /** Set an explicit collapsed state; persists to the KeyValueStore. */
   readonly setCollapsed: (collapsed: boolean) => void;
@@ -259,29 +298,31 @@ export interface UseRunPanelCollapsedResult {
 }
 
 /**
- * KeyValueStore-backed owner of the Focus Run-details panel's collapsed state,
- * mirroring `useRunMode`: the *value* lives here (per-conversation, persisted),
- * `RunWorkspaceRail` stays a controlled presentation host. Re-hydrates when the
- * conversation (or store) changes so each run restores its last panel state.
+ * Shared owner of a per-conversation collapse flag: the *value* lives here
+ * (persisted under `key`), the rail stays a controlled presentation host.
+ * Re-hydrates when the key (i.e. the conversation) or the store changes, so
+ * each run restores its own last panel state.
+ *
+ * Both collapse hooks below delegate here — the Focus panel and the Studio rail
+ * differ only in which key they own, and a second copy of this body is exactly
+ * how the two would drift.
  */
-export function useRunPanelCollapsed({
-  conversationId,
-}: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
+function useCollapseFlag(key: string): UseRunPanelCollapsedResult {
   const store = useKeyValueStore();
-  const [collapsed, setCollapsedState] = useState<boolean>(() =>
-    readRunFocusPanelCollapsed(store, conversationId),
+  const [collapsed, setCollapsedState] = useState<boolean>(
+    () => store.get(key) === "1",
   );
 
   useEffect(() => {
-    setCollapsedState(readRunFocusPanelCollapsed(store, conversationId));
-  }, [store, conversationId]);
+    setCollapsedState(store.get(key) === "1");
+  }, [store, key]);
 
   const setCollapsed = useCallback(
     (next: boolean): void => {
-      writeRunFocusPanelCollapsed(store, conversationId, next);
+      store.set(key, next ? "1" : "0");
       setCollapsedState(next);
     },
-    [store, conversationId],
+    [store, key],
   );
 
   const collapsedRef = useRef(collapsed);
@@ -294,4 +335,27 @@ export function useRunPanelCollapsed({
   }, [setCollapsed]);
 
   return { collapsed, setCollapsed, toggle };
+}
+
+/**
+ * KeyValueStore-backed owner of the Focus Run-details panel's collapsed state,
+ * mirroring `useRunMode`: the *value* lives here (per-conversation, persisted),
+ * `RunWorkspaceRail` stays a controlled presentation host.
+ */
+export function useRunPanelCollapsed({
+  conversationId,
+}: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
+  return useCollapseFlag(runFocusPanelCollapsedKey(conversationId));
+}
+
+/**
+ * KeyValueStore-backed owner of the STUDIO workspace rail's collapsed state.
+ * Collapsing folds the rail to its icon strip and hands the reclaimed width to
+ * the surface column, so the generative surface can be worked with at full
+ * canvas width; expanding restores the tabset with its chat intact.
+ */
+export function useRunStudioRailCollapsed({
+  conversationId,
+}: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
+  return useCollapseFlag(runStudioRailCollapsedKey(conversationId));
 }

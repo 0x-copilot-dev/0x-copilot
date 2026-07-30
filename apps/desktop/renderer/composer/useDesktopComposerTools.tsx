@@ -3,6 +3,14 @@
 // The pill is intentionally independent of the `+` attachment menu. Its shared
 // trigger uses a body portal, so the 300px controls panel remains clickable
 // above the overflow-hidden desktop composer frame.
+//
+// State is the set of connectors the user PAUSED for this run — not the set they
+// activated. A connected connector is live by default, which is what Settings →
+// Tools already claims and what the runtime already does, and it means a
+// connector that just finished OAuth shows up on rather than silently off. The
+// paused ids ride the run body as `request_context.paused_connectors`, the field
+// the MCP gate actually reads; `connector_scopes` is left alone so the
+// conversation's persisted per-chat scope keeps applying.
 
 import {
   useCallback,
@@ -17,7 +25,6 @@ import {
   type ComposerConnectorsPort,
   type FirstRunInstallableConnector,
 } from "@0x-copilot/chat-surface";
-import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import { CONNECTOR_CHANNELS } from "../../main/connectors/channels";
 
@@ -33,8 +40,9 @@ export interface UseDesktopComposerToolsOptions {
    */
   readonly onConnectError?: (displayName: string, message: string) => void;
   /**
-   * Connector whose OAuth flow just completed. Seed it into the run-scoped
-   * active set once; subsequent manual toggles remain authoritative.
+   * Connector whose OAuth flow just completed. Connected connectors are live by
+   * default, so this only needs to clear a stale pause on that id and refresh
+   * the list — there is no activation to seed.
    */
   readonly autoActivateConnectorId?: string | null;
 }
@@ -43,7 +51,8 @@ export interface DesktopComposerTools {
   /** Tools pill + portal-safe popover, omitted when the adapter is unavailable. */
   readonly toolsTrigger: ReactNode | undefined;
   readonly webSearchEnabled: boolean;
-  readonly connectorScopes: ConversationConnectorScopes | undefined;
+  /** Ids the user paused for this run → `request_context.paused_connectors`. */
+  readonly pausedConnectorIds: readonly string[];
 }
 
 export function useDesktopComposerTools(
@@ -57,27 +66,33 @@ export function useDesktopComposerTools(
     autoActivateConnectorId = null,
   } = options;
   const [webOn, setWebOn] = useState(true);
-  const [activeConnectorIds, setActiveConnectorIds] = useState<
+  const [pausedConnectorIds, setPausedConnectorIds] = useState<
     readonly string[]
-  >(() => (autoActivateConnectorId === null ? [] : [autoActivateConnectorId]));
+  >([]);
+  // Bumped whenever durable connector state moves under us, so the pill's badge
+  // and the open panel both refetch instead of showing a pre-connect world.
+  const [reloadToken, setReloadToken] = useState(0);
 
-  useEffect(() => {
-    if (autoActivateConnectorId === null) return;
-    setActiveConnectorIds((current) =>
-      current.includes(autoActivateConnectorId)
-        ? current
-        : [...current, autoActivateConnectorId],
-    );
-  }, [autoActivateConnectorId]);
+  // A connector that just authorized must not stay paused from earlier in the
+  // session, and the list has to be re-read for it to appear at all. Derived
+  // during render rather than in an effect: an effect would paint one frame of
+  // the stale answer, which is the exact flicker this fix is about.
+  const effectivePausedIds = useMemo<readonly string[]>(
+    () =>
+      autoActivateConnectorId === null
+        ? pausedConnectorIds
+        : pausedConnectorIds.filter((id) => id !== autoActivateConnectorId),
+    [autoActivateConnectorId, pausedConnectorIds],
+  );
 
   const handleToggleConnector = useCallback(
     (serverId: string, active: boolean): void => {
-      setActiveConnectorIds((current) =>
+      setPausedConnectorIds((current) =>
         active
-          ? current.includes(serverId)
+          ? current.filter((id) => id !== serverId)
+          : current.includes(serverId)
             ? current
-            : [...current, serverId]
-          : current.filter((id) => id !== serverId),
+            : [...current, serverId],
       );
     },
     [],
@@ -111,6 +126,18 @@ export function useDesktopComposerTools(
             slug: entry.slug,
             serverId: server.server_id,
           });
+          // `connector.authorize` resolves only once the OAuth round-trip
+          // finishes (see `ConnectorService.authorize`), so this is the
+          // completion signal: refetch, and the row moves from "Add a
+          // connector" to "Connected" — already on — in place. A pause left
+          // over from an earlier turn would otherwise silently apply to a
+          // connector the user just chose to connect.
+          setPausedConnectorIds((current) =>
+            current.includes(server.server_id)
+              ? current.filter((id) => id !== server.server_id)
+              : current,
+          );
+          setReloadToken((n) => n + 1);
         } catch (error: unknown) {
           onConnectError?.(
             entry.displayName,
@@ -122,21 +149,22 @@ export function useDesktopComposerTools(
     [connectorsPort, onAddCustom, onConnectError],
   );
 
-  const connectorScopes = useMemo<
-    ConversationConnectorScopes | undefined
-  >(() => {
-    if (activeConnectorIds.length === 0) return undefined;
-    return Object.fromEntries(activeConnectorIds.map((id) => [id, []]));
-  }, [activeConnectorIds]);
+  // A host-observed completion (the consent card's OAuth return) is the other
+  // way the list moves; refetch on it too.
+  useEffect(() => {
+    if (autoActivateConnectorId === null) return;
+    setReloadToken((n) => n + 1);
+  }, [autoActivateConnectorId]);
 
   const toolsTrigger = useMemo<ReactNode | undefined>(() => {
     if (connectorsPort === undefined) return undefined;
     return (
       <ComposerToolsTrigger
         port={connectorsPort}
+        reloadToken={reloadToken}
         webSearchEnabled={webOn}
         onToggleWebSearch={setWebOn}
-        activeConnectorIds={activeConnectorIds}
+        pausedConnectorIds={effectivePausedIds}
         onToggleConnector={handleToggleConnector}
         onConnectCatalog={handleConnectCatalog}
         onAddCustom={() => onAddCustom?.()}
@@ -145,13 +173,18 @@ export function useDesktopComposerTools(
     );
   }, [
     connectorsPort,
+    reloadToken,
     webOn,
-    activeConnectorIds,
+    effectivePausedIds,
     handleToggleConnector,
     handleConnectCatalog,
     onAddCustom,
     disabled,
   ]);
 
-  return { toolsTrigger, webSearchEnabled: webOn, connectorScopes };
+  return {
+    toolsTrigger,
+    webSearchEnabled: webOn,
+    pausedConnectorIds: effectivePausedIds,
+  };
 }

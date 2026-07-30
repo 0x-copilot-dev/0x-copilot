@@ -41,7 +41,6 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 import { Button } from "@0x-copilot/design-system";
 
 import { BrandMark } from "../shell/BrandMark";
@@ -103,10 +102,11 @@ export interface FirstRunComposerCtx {
    */
   readonly webSearchEnabled: boolean;
   /**
-   * Active connector scopes for the run (active ids → scopes), or `undefined`
-   * when the user activated no connectors. Threaded into `createFirstRun`.
+   * Connectors the user PAUSED for the run, or `undefined` when none are —
+   * which is the default, because a connected connector is already callable.
+   * Threaded into `createFirstRun` as `request_context.paused_connectors`.
    */
-  readonly connectorScopes?: ConversationConnectorScopes;
+  readonly pausedConnectorIds?: readonly string[];
 }
 
 export interface FirstRunAckCtx {
@@ -149,7 +149,7 @@ export interface FirstRunSurfaceProps {
   readonly profilePort?: FirstRunProfilePort;
   /**
    * P4 — host-injected MCP connector surface for the composer Tools popover.
-   * When provided, the surface owns `webOn` + `activeConnectorIds` and mounts
+   * When provided, the surface owns `webOn` + `pausedConnectorIds` and mounts
    * the Tools pill beside the model selector. Absent ⇒ no per-run tools pill.
    */
   readonly connectorsPort?: FirstRunConnectorsPort;
@@ -317,21 +317,25 @@ export function FirstRunSurface({
   const [engine, setEngine] = useState<FirstRunEngine>(null);
   const [sent, setSent] = useState(false);
   // P4 — per-run Tools state owned by the surface (SPEC `webOn`, default true;
-  // `conn[]` held as active connector ids since the FTUE has no conversation
-  // to PATCH at toggle time).
+  // `conn[]` held as PAUSED connector ids since the FTUE has no conversation to
+  // PATCH at toggle time). Both default to on: a connected connector is one the
+  // runtime can already call, so the toggle is the opt-out, not the opt-in.
   const [webOn, setWebOn] = useState(true);
-  const [activeConnectorIds, setActiveConnectorIds] = useState<
+  const [pausedConnectorIds, setPausedConnectorIds] = useState<
     readonly string[]
   >([]);
+  // Bumped after a 1-click connect so the row moves from "Add a connector" to
+  // "Connected" — already on — without reopening the popover.
+  const [reloadToken, setReloadToken] = useState(0);
 
   const handleToggleConnector = useCallback(
     (serverId: string, active: boolean): void => {
-      setActiveConnectorIds((prev) =>
+      setPausedConnectorIds((prev) =>
         active
-          ? prev.includes(serverId)
+          ? prev.filter((id) => id !== serverId)
+          : prev.includes(serverId)
             ? prev
-            : [...prev, serverId]
-          : prev.filter((id) => id !== serverId),
+            : [...prev, serverId],
       );
     },
     [],
@@ -357,6 +361,7 @@ export function FirstRunSurface({
       void connectorsPort
         .installFromCatalog(entry.slug)
         .then((server) => connectorsPort.beginAuth(server.server_id))
+        .then(() => setReloadToken((n) => n + 1))
         .catch(() => {
           // The popover's "connect" is workspace-authorize only; a failed
           // install surfaces later via the run-time `mcp_auth_required` card,
@@ -370,21 +375,14 @@ export function FirstRunSurface({
     onAddCustom?.();
   }, [onAddCustom]);
 
-  // Active connector ids → the run's `request_context.connector_scopes` (active
-  // → `[]`, i.e. enabled with no extra scopes). Omitted entirely when nothing
-  // is active so a default run body carries no connector-scope payload.
-  const connectorScopes = useMemo<
-    ConversationConnectorScopes | undefined
-  >(() => {
-    if (activeConnectorIds.length === 0) {
-      return undefined;
-    }
-    const scopes: Record<string, readonly string[] | null> = {};
-    for (const id of activeConnectorIds) {
-      scopes[id] = [];
-    }
-    return scopes;
-  }, [activeConnectorIds]);
+  // Paused connector ids → the run's `request_context.paused_connectors`, the
+  // one field the runtime's MCP gate reads for a per-run opt-out. Omitted
+  // entirely when nothing is paused, so a default run body carries no connector
+  // payload and every connected connector stays available.
+  const pausedConnectors = useMemo<readonly string[] | undefined>(
+    () => (pausedConnectorIds.length === 0 ? undefined : pausedConnectorIds),
+    [pausedConnectorIds],
+  );
 
   const toolsTrigger = useMemo<ReactNode | undefined>(() => {
     if (connectorsPort === undefined) {
@@ -393,9 +391,10 @@ export function FirstRunSurface({
     return (
       <ComposerToolsTrigger
         port={connectorsPort}
+        reloadToken={reloadToken}
         webSearchEnabled={webOn}
         onToggleWebSearch={setWebOn}
-        activeConnectorIds={activeConnectorIds}
+        pausedConnectorIds={pausedConnectorIds}
         onToggleConnector={handleToggleConnector}
         onConnectCatalog={handleConnectCatalog}
         onAddCustom={handleAddCustom}
@@ -403,8 +402,9 @@ export function FirstRunSurface({
     );
   }, [
     connectorsPort,
+    reloadToken,
     webOn,
-    activeConnectorIds,
+    pausedConnectorIds,
     handleToggleConnector,
     handleConnectCatalog,
     handleAddCustom,
@@ -461,7 +461,7 @@ export function FirstRunSurface({
       onSent: () => setSent(true),
       toolsTrigger,
       webSearchEnabled: webOn,
-      connectorScopes,
+      pausedConnectorIds: pausedConnectors,
     }),
     [
       stage,
@@ -472,7 +472,7 @@ export function FirstRunSurface({
       localModelBlocked,
       toolsTrigger,
       webOn,
-      connectorScopes,
+      pausedConnectors,
     ],
   );
 

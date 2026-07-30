@@ -186,11 +186,13 @@ function renderRunBinder(
   props: {
     conversationId: ConversationId | null;
     onConversationCreated?: (id: ConversationId) => void;
+    /** Pass one in to assert on what the cockpit persisted. */
+    store?: KeyValueStore;
   },
 ): HTMLElement {
   const ui: ReactElement = (
     <TransportProvider transport={transport}>
-      <KeyValueStoreProvider store={fakeKeyValueStore()}>
+      <KeyValueStoreProvider store={props.store ?? fakeKeyValueStore()}>
         <RouterProvider router={fakeRouter()}>
           <RunBinder
             conversationId={props.conversationId}
@@ -333,6 +335,100 @@ describe("RunBinder — existing conversation", () => {
 // feed. Desktop REACHABILITY of the detail view (focusedProjectId + renderDetail)
 // is PRD-10 DoD 9, not this PRD — this test exercises the port directly.
 // ===========================================================================
+
+// ===========================================================================
+// Studio rail fold on DESKTOP.
+//
+// The fold lives in `RunDestination`/`ThreadCanvas`, which both hosts mount —
+// but "the shared package has it" is not evidence that the desktop binder,
+// with the desktop's own providers and its own KeyValueStore port, actually
+// renders and persists it. This drives the real desktop mount path.
+// ===========================================================================
+
+describe("RunBinder — Studio rail fold (desktop mount path)", () => {
+  async function mountBoundCockpit(store: KeyValueStore): Promise<HTMLElement> {
+    const recorder: Recorder = { calls: [] };
+    const container = renderRunBinder(
+      runTransport(recorder, { run_id: "run-fold" }),
+      { conversationId: "conv-fold" as ConversationId, store },
+    );
+    // The canvas (and therefore the rail) mounts once a run is bound.
+    await typeAndSend(container, "Draft the renewal email");
+    await waitFor(() => {
+      expect(
+        container.querySelector("[data-testid='run-workspace-rail']"),
+      ).not.toBeNull();
+    });
+    return container;
+  }
+
+  function chevron(container: HTMLElement): HTMLButtonElement {
+    const el = container.querySelector<HTMLButtonElement>(
+      "[data-testid='run-rail-collapse']",
+    );
+    if (el === null) throw new Error("collapse chevron not mounted on desktop");
+    return el;
+  }
+
+  it("folds the rail to its icon strip and hands the width to the surface", async () => {
+    const store = fakeKeyValueStore();
+    const container = await mountBoundCockpit(store);
+
+    const canvas = container.querySelector<HTMLElement>(
+      "[data-testid='thread-canvas']",
+    );
+    if (canvas === null) throw new Error("canvas not mounted");
+    expect(canvas.style.gridTemplateColumns).not.toContain("46px");
+
+    fireEvent.click(chevron(container));
+
+    expect(canvas).toHaveAttribute("data-rail-collapsed", "true");
+    expect(canvas.style.gridTemplateColumns).toContain("46px");
+    expect(
+      container.querySelector("[data-testid='run-rail-strip']"),
+    ).not.toBeNull();
+    // Folded, there is nothing to drag.
+    expect(
+      container.querySelector("[data-testid='tc-rail-resizer']"),
+    ).toBeNull();
+  });
+
+  it("persists the fold through the desktop KeyValueStore port", async () => {
+    const store = fakeKeyValueStore();
+    const container = await mountBoundCockpit(store);
+    fireEvent.click(chevron(container));
+
+    const key = store
+      .keys("chats.thread.")
+      .find((k) => k.endsWith(".run_studio_rail_collapsed"));
+    expect(key).toBeDefined();
+    expect(store.get(key as string)).toBe("1");
+  });
+
+  // Folding must not cost the composer its draft — the chat panel is hidden,
+  // never unmounted.
+  it("keeps the composer alive (with its draft) across a fold", async () => {
+    const store = fakeKeyValueStore();
+    const container = await mountBoundCockpit(store);
+    const ta = textarea(container) as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: "half-written thought" } });
+
+    fireEvent.click(chevron(container));
+    expect(textarea(container)).toBe(ta);
+    expect((textarea(container) as HTMLTextAreaElement).value).toBe(
+      "half-written thought",
+    );
+
+    const expand = container.querySelector<HTMLButtonElement>(
+      "[data-testid='run-rail-expand']",
+    );
+    if (expand === null) throw new Error("expand chevron not mounted");
+    fireEvent.click(expand);
+    expect((textarea(container) as HTMLTextAreaElement).value).toBe(
+      "half-written thought",
+    );
+  });
+});
 
 describe("createDesktopProjectDataPort — project-scoped chats (PRD-07 DoD 15)", () => {
   it("listProjectChats issues one filter[project_id]=<id> request and maps rows via toChatArchiveRow", async () => {

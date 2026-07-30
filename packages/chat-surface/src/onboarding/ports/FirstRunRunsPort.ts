@@ -11,7 +11,6 @@
 // first-run port only needs to CREATE the run, not stream it.
 
 import type {
-  ConversationConnectorScopes,
   ModelSelectionRequest,
   RunAttachmentRequest,
 } from "@0x-copilot/api-types";
@@ -36,13 +35,15 @@ export interface FirstRunCreateRunInput {
    */
   readonly webSearchEnabled: boolean;
   /**
-   * P4 — per-run connector activation from the Tools popover (active connector
-   * ids → scopes). The FTUE has no conversation at toggle time, so the host
-   * seeds these into the created run's `request_context.connector_scopes`
-   * rather than PATCHing a not-yet-existent conversation. Omitted when the user
-   * activated no connectors.
+   * P4 — per-run connector opt-OUTS from the Tools popover. Connected
+   * connectors are live by default (that is what the popover now renders), so
+   * this carries only the ones the user paused. The FTUE has no conversation at
+   * toggle time, so the host seeds them into the created run's
+   * `request_context.paused_connectors` — the field the runtime's MCP gate
+   * reads — rather than PATCHing a not-yet-existent conversation. Omitted when
+   * nothing is paused, which is the common case.
    */
-  readonly connectorScopes?: ConversationConnectorScopes;
+  readonly pausedConnectorIds?: readonly string[];
 }
 
 export interface FirstRunLaunchResult {

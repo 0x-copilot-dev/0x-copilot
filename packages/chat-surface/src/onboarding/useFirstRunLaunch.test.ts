@@ -81,7 +81,7 @@ describe("useFirstRunLaunch", () => {
         text: "no web",
         attachments: [],
         webSearchEnabled: false,
-        connectorScopes: { "seed:sheets": [] },
+        pausedConnectorIds: ["seed:sheets"],
       });
     });
 
@@ -90,7 +90,7 @@ describe("useFirstRunLaunch", () => {
       model: null,
       attachments: [],
       webSearchEnabled: false,
-      connectorScopes: { "seed:sheets": [] },
+      pausedConnectorIds: ["seed:sheets"],
     });
   });
 

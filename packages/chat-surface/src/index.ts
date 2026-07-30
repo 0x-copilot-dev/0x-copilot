@@ -1989,13 +1989,15 @@ export {
 // === First-Run onboarding (P4 — tools popover) ===
 // The connector-aware Tools popover that replaces the flat `ToolPicker` FOR the
 // FTUE: a built-in web-search toggle (default on), connected connectors with a
-// per-run active/paused toggle, curated 1-click "Connect" rows
-// (`requiresPreRegisteredClient` → host routes to the custom-config form), and
-// a Custom MCP entry. Data flows through the host-injected
-// `FirstRunConnectorsPort` (the existing `/v1/mcp/*` facade routes — NOT
-// rebuilt) and is classified by the pure `projectFirstRunConnectors` (a
-// chat-surface copy of the web app's `projectChatConnectors`, since `apps/*`
-// can't be imported). The composer `+` menu is the trigger.
+// per-run PAUSE toggle (connected ⇒ on; `pausedConnectorIds` is the opt-out),
+// curated 1-click "Connect" rows (`requiresPreRegisteredClient` → host routes to
+// the custom-config form), and a Custom MCP entry. Data flows through the
+// host-injected `FirstRunConnectorsPort` (the existing `/v1/mcp/*` facade routes
+// — NOT rebuilt) via `useConnectorPopoverData`, which the PANEL OWNER calls so
+// the pill badge and the rows count one projection; `projectFirstRunConnectors`
+// classifies it (a chat-surface copy of the web app's `projectChatConnectors`,
+// since `apps/*` can't be imported) and drops `access_mode: "off"` servers the
+// runtime would never see. Hosts bump `reloadToken` when a connect completes.
 // Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
 export {
   ToolsPopover,
@@ -2006,10 +2008,15 @@ export {
   ComposerToolsTrigger,
   projectFirstRunConnectors,
   firstRunActiveToolCount,
+  isFirstRunConnectorActive,
+  useConnectorPopoverData,
   type ToolsPopoverProps,
   type ToolsPopoverContentProps,
   type ComposerToolsButtonProps,
   type ComposerToolsTriggerProps,
+  type ConnectorPopoverData,
+  type ConnectorPopoverDataOptions,
+  type ConnectorPopoverLoadState,
   type FirstRunConnectorProjection,
   type FirstRunConnectedConnector,
   type FirstRunInstallableConnector,
