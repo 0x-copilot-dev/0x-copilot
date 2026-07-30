@@ -32,8 +32,12 @@ Three properties are structural rather than conventional:
 - **Unknown means serial.** :class:`ParallelAdmissionResolver` is the single
   place that turns a port's answer into a decision, and every path that is not
   *positively* a grant naming *this exact call* returns ``None``. No port, a
-  raising port, a port returning some other type, a grant for a different call,
-  and a grant whose width is one all land on the same serial answer.
+  raising port, a port returning some other type, and a grant for a different
+  call all land on the same serial answer. A grant whose width is *one* is not
+  one of them: it is honoured, and answered by a cohort semaphore of one, which
+  is the same width the exclusive lock would have given it. The difference is
+  who it waits behind — see :class:`ParallelAdmissionResolver`, where the
+  distinction is the whole reason a width-one grant exists.
 
 The port is deliberately synchronous. It is consulted on the hot path before any
 lock is taken, and a synchronous reader cannot await — so it cannot suspend
@@ -95,7 +99,13 @@ class ToolAdmissionRequest:
 
 @dataclass(frozen=True, slots=True)
 class ParallelAdmissionGrant:
-    """A positive, call-specific authority to overlap, bounded by F6's width.
+    """A positive, call-specific admission into a cohort, at F6's width.
+
+    Usually that width is an authority to overlap. It does not have to be: a
+    grant of width one authorizes no overlap at all and is still worth issuing,
+    because it also decides *what the call waits behind* — a cohort of its
+    planned siblings rather than every other tool call in the run. See
+    :class:`ParallelAdmissionResolver` for why that distinction is load-bearing.
 
     ``cohort_id`` names the set of calls this width applies *across* — for F6
     that is one segment of one durable batch plan, the scope whose members the
@@ -106,11 +116,23 @@ class ParallelAdmissionGrant:
 
     The admission never recomputes that width and never widens it. It only
     enforces it across the cohort, and only for calls a grant positively names.
+
+    ``width_enforced_by_grantor`` is the grantor stating that it applies this
+    width itself, downstream of the gate, so the gate's cohort slot is a
+    redundant second copy of a bound rather than the only one. It exists because
+    the gate's cohort table is finite: when the table cannot represent a cohort,
+    a grant that has no other enforcer must fall back to the exclusive lock,
+    while one that does may instead be admitted and bounded by its grantor. F6
+    sets it because its coordinator gates every child on a segment slot and a
+    run permit before the body runs, both strictly narrower than this width.
+    Default ``False``, so a grantor that makes no such claim is answered exactly
+    as it was before the field existed.
     """
 
     tool_call_id: str
     cohort_id: str
     max_parallelism: int
+    width_enforced_by_grantor: bool = False
 
     def __post_init__(self) -> None:
         if not self.tool_call_id.strip():
@@ -126,18 +148,6 @@ class ParallelAdmissionGrant:
             raise ValueError(ParallelAdmissionMessages.WIDTH_BELOW_ONE)
         if self.max_parallelism > ParallelAdmissionBounds.MAX_PARALLELISM:
             raise ValueError(ParallelAdmissionMessages.WIDTH_ABOVE_BOUND)
-
-    @property
-    def overlaps(self) -> bool:
-        """Return whether this grant authorizes any overlap at all.
-
-        A width of one is a grant that says "serial", and it is answered by the
-        same exclusive lock an ungranted call takes rather than by a semaphore
-        of one. The two are equivalent in width and not equivalent in coverage:
-        the exclusive lock is also what a *serial* sibling waits behind.
-        """
-
-        return self.max_parallelism > 1
 
     def authorizes(self, request: ToolAdmissionRequest) -> bool:
         """Return whether this grant was issued for exactly ``request``.
@@ -168,6 +178,17 @@ class ParallelAdmissionResolver:
     Every rejection lands here rather than being spread across the admission, so
     "anything not positively identified as F6-admitted is serial" is one
     reviewable function instead of a rule each call site is trusted to remember.
+
+    A grant of width **one** is honoured rather than discarded, and that is not a
+    widening — it is what stops a grantor's own barrier from deadlocking. A
+    grantor that orders calls behind a barrier (F6's segment cursor) can only
+    order the calls that have *arrived*, so every member of a planned group has
+    to reach the grantor concurrently. The exclusive lock admits one at a time,
+    so a member that arrives before an earlier-ordered sibling parks inside the
+    grantor holding the very lock that sibling needs, and neither moves until the
+    admission budget expires. Honouring a width-one grant routes such a call
+    through the cohort lane instead, where a semaphore of one still enforces the
+    width and the group's members no longer exclude each other.
     """
 
     @staticmethod
@@ -186,8 +207,6 @@ class ParallelAdmissionResolver:
         if not isinstance(grant, ParallelAdmissionGrant):
             return None
         if not grant.authorizes(request):
-            return None
-        if not grant.overlaps:
             return None
         return grant
 
