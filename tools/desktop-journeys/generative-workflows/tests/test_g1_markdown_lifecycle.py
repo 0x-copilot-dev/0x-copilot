@@ -12,6 +12,14 @@ from unittest.mock import patch
 
 
 WORKFLOWS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WORKFLOWS.parent))
+
+from _lib import (  # noqa: E402
+    EXIT_SKIPPED,
+    host_runtime_key,
+    staged_runtime_dir,
+)
+
 G1_PATH = WORKFLOWS / "g1_markdown_lifecycle.py"
 G1_SPEC = importlib.util.spec_from_file_location("g1_markdown_lifecycle", G1_PATH)
 assert G1_SPEC is not None and G1_SPEC.loader is not None
@@ -95,7 +103,7 @@ class UiSession:
 class G1MarkdownLifecycleTests(unittest.TestCase):
     def staged_runtime(self, root: Path) -> Path:
         home = root / "resources"
-        runtime = home / "runtime" / "darwin-arm64"
+        runtime = home / "runtime" / host_runtime_key()
         (runtime / "python" / "bin").mkdir(parents=True)
         (runtime / "postgres" / "bin").mkdir(parents=True)
         (runtime / "services" / "backend").mkdir(parents=True)
@@ -110,19 +118,37 @@ class G1MarkdownLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = self.staged_runtime(root)
-            with (
-                patch.dict(
-                    os.environ,
-                    {"COPILOT_DESKTOP_TEST_TARGET": g1.INSTALLED_PAYLOAD_TARGET},
-                    clear=True,
-                ),
-                patch.object(g1, "_copilot_home", return_value=home),
-                patch.object(g1, "_host_runtime_key", return_value="darwin-arm64"),
+            # Drive the real COPILOT_HOME resolution rather than mocking it out:
+            # the point of the check is WHICH staged runtime preflight inspects.
+            with patch.dict(
+                os.environ,
+                {
+                    "COPILOT_DESKTOP_TEST_TARGET": g1.INSTALLED_PAYLOAD_TARGET,
+                    "COPILOT_HOME": str(home),
+                },
+                clear=True,
             ):
                 g1._preflight_packaged_supervisor()
-                (home / "runtime" / "darwin-arm64" / "staging-manifest.json").unlink()
+                manifest = (
+                    home / "runtime" / host_runtime_key() / "staging-manifest.json"
+                )
+                manifest.unlink()
                 with self.assertRaisesRegex(g1.PreflightSkip, "staged runtime"):
                     g1._preflight_packaged_supervisor()
+
+    def test_preflight_defaults_to_the_installed_payload_home(self) -> None:
+        """G1 launches the installed payload, so it must gate on ~/.0xcopilot.
+
+        Falling back to the checkout's stage would let an "installed" journey
+        pass against source-tree services that are not the shipped artifact.
+        """
+        with patch.dict(
+            os.environ,
+            {"COPILOT_DESKTOP_TEST_TARGET": g1.INSTALLED_PAYLOAD_TARGET},
+            clear=True,
+        ):
+            resolved = staged_runtime_dir(target=g1.INSTALLED_PAYLOAD_TARGET)
+        self.assertEqual(resolved.parents[1], Path.home() / ".0xcopilot")
 
     def test_preflight_rejects_non_packaged_target_or_external_facade(self) -> None:
         with patch.dict(
@@ -157,7 +183,11 @@ class G1MarkdownLifecycleTests(unittest.TestCase):
         self,
     ) -> None:
         with patch.dict(os.environ, {}, clear=True), patch("builtins.print") as printed:
-            self.assertEqual(g1._prerequisite_result("staged runtime is absent"), 0)
+            code = g1._prerequisite_result("staged runtime is absent")
+        # A skip exits non-zero: `python3 g1_....py && echo ok` must not print
+        # ok for a journey that never ran.
+        self.assertEqual(code, EXIT_SKIPPED)
+        self.assertNotEqual(code, 0)
         result = json.loads(printed.call_args.args[0])
         self.assertEqual(result["journey"], "G1")
         self.assertEqual(result["outcome"], "skipped")
