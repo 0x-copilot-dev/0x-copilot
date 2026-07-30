@@ -47,7 +47,14 @@ jobs:
 
       - name: Verify requirements.txt is compiled from requirements.in
         run: |
-          python -m pip install pip-tools==7.5.3
+          # pip is pinned below 26.2 alongside pip-tools. pip 26.2 removed
+          # `pip._internal.utils.compat.stdlib_pkgs`, which pip-tools imports
+          # via piptools/sync.py while validating its config file — so
+          # `pip-compile` dies on import, not on resolution. Verified
+          # locally: 25.2-26.1 export it, 26.2 does not, and pip-tools 7.6.0
+          # imports it too, so bumping pip-tools does not help. The earlier
+          # step upgrades pip unpinned, which is how this reached main.
+          python -m pip install 'pip<26.2' pip-tools==7.5.3
           cd services/backend
           pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
           cd ../..
