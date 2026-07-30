@@ -22,6 +22,7 @@ Fakes throughout: no network, no live model, no store.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 from types import SimpleNamespace
@@ -71,6 +72,9 @@ from agent_runtime.observability import context_occupancy_recorder as recorder_m
 from agent_runtime.observability.context_occupancy import (
     ContextSegment,
     SnapshotBuilder,
+)
+from agent_runtime.observability.context_occupancy_binding import (
+    ContextOccupancyRuntimeBinding,
 )
 from agent_runtime.observability.context_occupancy_recorder import (
     ContextOccupancyRecorder,
@@ -517,6 +521,409 @@ class OccupancyMiddlewareMixin:
             ),
             plan.rendered_prompt,
         )
+
+
+class BlockingOccupancySink(OccupancySink):
+    """A sink that cannot complete until the test lets it.
+
+    The only way to tell a *deferred* write from a fast awaited one. If the
+    middleware awaited this sink, ``awrap_model_call`` would never return.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+        self.entered = asyncio.Event()
+
+    #: A write that never arrives means the seam did not schedule one. Bounded so
+    #: that regression surfaces as a failure rather than as a hung suite.
+    ARRIVAL_TIMEOUT_SECONDS: Final[float] = 5.0
+
+    async def append_context_occupancy(self, record: Any) -> bool:
+        self.entered.set()
+        await self.release.wait()
+        return await super().append_context_occupancy(record)
+
+    async def await_entry(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self.entered.wait(), timeout=self.ARRIVAL_TIMEOUT_SECONDS
+            )
+        except TimeoutError as error:  # pragma: no cover - regression guard
+            raise AssertionError(
+                "no context occupancy write was scheduled for this model call"
+            ) from error
+
+
+class UnjournaledOccupancyMixin(OccupancyMiddlewareMixin):
+    """Drive the seam the way a default deployment does: F10 absent."""
+
+    PROVIDER: Final[str] = "openai"
+    MODEL_FAMILY: Final[str] = "gpt-5"
+
+    def occupancy_binding(
+        self,
+        *,
+        sink: Any,
+        window: int | None = _WINDOW,
+    ) -> ContextOccupancyRuntimeBinding:
+        return ContextOccupancyRuntimeBinding(
+            sink=sink,
+            org_id=self.ORG_ID,
+            provider=self.PROVIDER,
+            model_family=self.MODEL_FAMILY,
+            context_window_tokens=window,
+        )
+
+    async def invoke_expecting_no_wait(
+        self,
+        *,
+        occupancy: ContextOccupancyRuntimeBinding,
+        sink: BlockingOccupancySink,
+        request: ModelRequest[Any],
+    ) -> ModelResponse[Any]:
+        """Dispatch against a still-blocked sink and require a prompt return.
+
+        Bounded rather than plainly awaited: an implementation that awaits the
+        durable write would block forever on a sink nobody has released yet, and
+        "measurement adds no latency" has to fail as an assertion rather than as a
+        hung suite.
+        """
+
+        try:
+            return await asyncio.wait_for(
+                self.invoke_without_f10(
+                    occupancy=occupancy, request=request, drain=False
+                ),
+                timeout=sink.ARRIVAL_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as error:  # pragma: no cover - regression guard
+            raise AssertionError(
+                "the model call waited for the occupancy write to be durable"
+            ) from error
+
+    async def invoke_without_f10(
+        self,
+        *,
+        occupancy: ContextOccupancyRuntimeBinding | None,
+        request: ModelRequest[Any],
+        handler: Any = None,
+        middleware: ModelInvocationMiddleware | None = None,
+        drain: bool = True,
+    ) -> ModelResponse[Any]:
+        """Bind a run, install occupancy only, and dispatch.
+
+        ``install_model_invocation_runtime`` is deliberately never called — that
+        absence *is* the condition under test, and it is the production default.
+        """
+
+        token = RunControlContext.bind_for_run(self.control())
+        try:
+            if occupancy is not None:
+                RunControlContext.install_context_occupancy_runtime(occupancy)
+            return await (middleware or self.middleware()).awrap_model_call(
+                request, handler or self.handler
+            )
+        finally:
+            # Drained in a ``finally`` because that is where the run handler
+            # drains it: a run that fails still has to flush what it measured.
+            if drain and occupancy is not None:
+                await occupancy.deferred.drain()
+            RunControlContext.unbind(token)
+
+
+class TestOccupancyWithF10Off(UnjournaledOccupancyMixin):
+    """The regression this file previously could not have caught.
+
+    Every test above installs an ``ModelInvocationRuntimeBinding``, which exists
+    only while F10 is ``SHADOW`` or ``ENFORCE``. ``FeatureModeSet.f10`` defaults
+    to ``OFF``, so on a default deployment ``awrap_model_call`` returned at
+    ``if binding is None`` and measured nothing at all.
+    """
+
+    async def test_a_call_with_no_f10_binding_still_writes_one_row(self) -> None:
+        sink = OccupancySink()
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=self.request(tools=[self.tool()]),
+        )
+
+        assert len(sink.records) == 1
+        row = sink.records[0]
+        assert row.org_id == self.ORG_ID
+        assert row.run_id == self.RUN_ID
+        assert row.conversation_id == self.CONVERSATION_ID
+        assert row.attempt_ordinal == 1
+        assert row.estimated_input_tokens > 0
+
+    async def test_the_window_and_model_come_from_the_installed_binding(self) -> None:
+        # With no route plan there is no ``ModelRouteEntry`` to read these from,
+        # and a fabricated window would make ``free_tokens`` a lie (§4.5).
+        sink = OccupancySink()
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=self.request(),
+        )
+
+        row = sink.records[0]
+        assert row.provider == self.PROVIDER
+        assert row.model_family == self.MODEL_FAMILY
+        assert row.context_window_tokens == _WINDOW
+
+    async def test_an_unknown_window_is_absent_rather_than_invented(self) -> None:
+        sink = OccupancySink()
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink, window=None),
+            request=self.request(),
+        )
+
+        assert sink.records[0].context_window_tokens is None
+
+    async def test_nothing_installed_measures_nothing(self) -> None:
+        # A deployment that has not wired a sink behaves exactly as before this
+        # lane existed: the middleware is inert and the recorder is never called.
+        recorder = ExplodingRecorder()
+        request = self.request()
+        seen: list[ModelRequest[Any]] = []
+
+        async def capturing(inner: ModelRequest[Any]) -> ModelResponse[Any]:
+            seen.append(inner)
+            return ModelResponse(result=[AIMessage(content="done")])
+
+        await self.invoke_without_f10(
+            occupancy=None,
+            request=request,
+            handler=capturing,
+            middleware=self.middleware(recorder),
+        )
+
+        assert seen == [request]
+        assert recorder.calls == []
+
+    async def test_the_provider_receives_the_identical_object(self) -> None:
+        # Stronger than the F10 path can assert. There is no routing and no
+        # callback attachment here, so the object identity itself is preserved —
+        # which is what makes the dispatched payload, its digest and prompt-cache
+        # identity provably untouched by measurement.
+        sink = OccupancySink()
+        request = self.request(tools=[self.tool()])
+        before = canonical_model_request_digest(request)
+        seen: list[ModelRequest[Any]] = []
+
+        async def capturing(inner: ModelRequest[Any]) -> ModelResponse[Any]:
+            seen.append(inner)
+            return await self.handler(inner)
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=request,
+            handler=capturing,
+        )
+
+        assert seen[0] is request
+        assert canonical_model_request_digest(request) == before
+        assert sink.records
+
+    async def test_the_provider_total_is_copied_from_the_response(self) -> None:
+        # The F10 path reads usage from its lifecycle callback; this path reads
+        # it off the response, which is what lets it leave the request alone.
+        sink = OccupancySink()
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=self.request(),
+        )
+
+        assert sink.records[0].provider_input_tokens == 900
+
+    async def test_a_provider_that_reports_nothing_leaves_the_total_absent(
+        self,
+    ) -> None:
+        # ``None`` is not zero: zero would claim the provider billed nothing and
+        # turn the estimate into a large negative residual (§6.1).
+        sink = OccupancySink()
+
+        async def silent(request: ModelRequest[Any]) -> ModelResponse[Any]:
+            del request
+            return ModelResponse(result=[AIMessage(content="done")])
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=self.request(),
+            handler=silent,
+        )
+
+        assert sink.records[0].provider_input_tokens is None
+        assert sink.records[0].unattributed_delta == 0
+
+    async def test_a_subagent_is_measured_in_its_own_window(self) -> None:
+        sink = OccupancySink()
+
+        await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=sink),
+            request=self.request(child="task-1"),
+        )
+
+        assert sink.records[0].graph_scope is RuntimeContextGraphScope.SUBAGENT
+
+    async def test_a_failed_call_still_records_what_was_sent(self) -> None:
+        # The attempt occupied a window, and the window is the measurement. The
+        # provider error must still reach the caller unchanged.
+        sink = OccupancySink()
+
+        async def failing(request: ModelRequest[Any]) -> ModelResponse[Any]:
+            del request
+            raise RuntimeError("provider refused")
+
+        with pytest.raises(RuntimeError, match="provider refused"):
+            await self.invoke_without_f10(
+                occupancy=self.occupancy_binding(sink=sink),
+                request=self.request(),
+                handler=failing,
+            )
+
+        assert len(sink.records) == 1
+        assert sink.records[0].provider_input_tokens is None
+
+
+class TestTheUnjournaledSeamIsFailOpen(UnjournaledOccupancyMixin):
+    """§6.4 on the path that now carries every default deployment's model calls."""
+
+    async def test_a_recorder_that_raises_on_every_method_costs_nothing(self) -> None:
+        recorder = ExplodingRecorder()
+
+        response = await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=OccupancySink()),
+            request=self.request(),
+            middleware=self.middleware(recorder),
+        )
+
+        assert response.result[0].content == "done"
+        assert recorder.calls == ["capture"]
+
+    async def test_a_reconciliation_that_explodes_never_discards_the_response(
+        self,
+    ) -> None:
+        recorder = PostResponseExplodingRecorder(inner=self.recorder())
+
+        response = await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=OccupancySink()),
+            request=self.request(),
+            middleware=self.middleware(recorder),
+        )
+
+        assert response.result[0].content == "done"
+        assert "finalize" in recorder.calls
+
+    async def test_a_sink_that_raises_never_reaches_the_caller(self) -> None:
+        class BrokenSink:
+            async def append_context_occupancy(self, record: Any) -> bool:
+                del record
+                raise RuntimeError("occupancy store is down")
+
+        response = await self.invoke_without_f10(
+            occupancy=self.occupancy_binding(sink=cast(Any, BrokenSink())),
+            request=self.request(),
+        )
+
+        assert response.result[0].content == "done"
+
+    async def test_a_sink_that_raises_does_not_fail_the_drain(self) -> None:
+        # The drain runs in the run handler's ``finally``; if it could raise, a
+        # degraded occupancy store would corrupt run teardown.
+        class BrokenSink:
+            async def append_context_occupancy(self, record: Any) -> bool:
+                del record
+                raise RuntimeError("occupancy store is down")
+
+        occupancy = self.occupancy_binding(sink=cast(Any, BrokenSink()))
+
+        await self.invoke_without_f10(
+            occupancy=occupancy, request=self.request(), drain=False
+        )
+        await occupancy.deferred.drain()  # must not raise
+
+    async def test_a_failed_call_with_a_broken_sink_still_raises_the_provider_error(
+        self,
+    ) -> None:
+        class BrokenSink:
+            async def append_context_occupancy(self, record: Any) -> bool:
+                del record
+                raise RuntimeError("occupancy store is down")
+
+        async def failing(request: ModelRequest[Any]) -> ModelResponse[Any]:
+            del request
+            raise RuntimeError("provider refused")
+
+        with pytest.raises(RuntimeError, match="provider refused"):
+            await self.invoke_without_f10(
+                occupancy=self.occupancy_binding(sink=cast(Any, BrokenSink())),
+                request=self.request(),
+                handler=failing,
+            )
+
+
+class TestTheWriteIsOffTheCriticalPath(UnjournaledOccupancyMixin):
+    """§6.4's second clause: measurement must not add latency to a model call.
+
+    This is the half a timeout cannot deliver. On the file store a persist is an
+    ``fsync`` under the global store lock, so awaiting it before returning the
+    provider's response spends the user's latency on observability — and this is
+    now the path every default deployment takes on every model call.
+    """
+
+    async def test_the_response_returns_before_the_write_completes(self) -> None:
+        sink = BlockingOccupancySink()
+        occupancy = self.occupancy_binding(sink=sink)
+
+        response = await self.invoke_expecting_no_wait(
+            occupancy=occupancy, sink=sink, request=self.request()
+        )
+
+        # Returned while the sink is still blocked: the write was deferred.
+        assert response.result[0].content == "done"
+        assert sink.records == []
+
+        sink.release.set()
+        await occupancy.deferred.drain()
+        assert len(sink.records) == 1
+
+    async def test_the_drain_is_what_makes_a_slow_write_land(self) -> None:
+        # Pins the drain rather than the scheduler's timing. Without a drain a
+        # slow write is simply lost when the run tears down, which is exactly
+        # what the run handler's ``finally`` exists to prevent.
+        sink = BlockingOccupancySink()
+        occupancy = self.occupancy_binding(sink=sink)
+
+        await self.invoke_expecting_no_wait(
+            occupancy=occupancy, sink=sink, request=self.request()
+        )
+        await sink.await_entry()
+        sink.release.set()
+
+        assert sink.records == []
+        await occupancy.deferred.drain()
+        assert len(sink.records) == 1
+
+    async def test_a_second_call_reusing_one_binding_writes_both_rows(self) -> None:
+        # The lane is run-scoped, so a run's later turns share it. A drain that
+        # only ever saw one task would silently drop the rest.
+        sink = OccupancySink()
+        occupancy = self.occupancy_binding(sink=sink)
+
+        await self.invoke_without_f10(
+            occupancy=occupancy, request=self.request(turn=1), drain=False
+        )
+        await self.invoke_without_f10(
+            occupancy=occupancy, request=self.request(turn=2), drain=False
+        )
+        await occupancy.deferred.drain()
+
+        assert len(sink.records) == 2
+        assert len({row.model_call_id for row in sink.records}) == 2
 
 
 class TestOccupancyCapture(OccupancyMiddlewareMixin):

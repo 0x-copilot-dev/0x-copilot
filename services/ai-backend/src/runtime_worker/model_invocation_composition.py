@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import logging
 
 from langchain_core.language_models import BaseChatModel
 
@@ -43,6 +44,9 @@ from agent_runtime.execution.model_invocation.runtime import (
     EphemeralRouteModelResolverPort,
     ModelInvocationRuntimeBinding,
 )
+from agent_runtime.observability.context_occupancy_binding import (
+    ContextOccupancyRuntimeBinding,
+)
 from agent_runtime.execution.provider_kwargs import (
     user_policy_model_kwargs,
     workspace_model_kwargs,
@@ -55,6 +59,9 @@ from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_api.schemas.runs import ModelCatalogItem
 from runtime_api.schemas.workspace_defaults import WorkspaceDefaultsRecord
 from runtime_worker.model_invocation_circuit import ProviderCircuitHealthRegistry
+
+
+_OCCUPANCY_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +286,48 @@ class ModelInvocationWorkerComposer:
                     retryable=False,
                     correlation_id=run.trace_id,
                 ) from exc
+            return None
+
+    def compose_context_occupancy(
+        self,
+        *,
+        run: RunRecord,
+        context: AgentRuntimeContext,
+    ) -> ContextOccupancyRuntimeBinding | None:
+        """Compose the occupancy sink for one run, independently of F10.
+
+        Deliberately a separate method from :meth:`compose`, taking no
+        ``RunControlBinding`` and reading no release decision. The Context
+        Occupancy Ledger shipped inert precisely because its sink was a field on
+        the F10 binding, and ``compose`` returns ``None`` before it reaches that
+        field whenever ``effective_f10_mode`` is ``OFF`` — the default. A method
+        that has no feature mode in scope cannot regress that way again.
+
+        It lives on this composer anyway, because this is where every other
+        durable port for a run is wired and ``self._persistence`` — which already
+        implements ``append_context_occupancy`` — is the sink.
+
+        ``None`` only if the profile cannot describe a model, which the run's own
+        validation makes unreachable; it is returned rather than raised because
+        an observability lane must not be able to refuse a run.
+        """
+
+        try:
+            profile = context.model_profile
+            return ContextOccupancyRuntimeBinding(
+                sink=self._persistence,
+                org_id=run.org_id,
+                provider=profile.provider,
+                model_family=profile.model_name,
+                context_window_tokens=profile.max_input_tokens,
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not compose the context occupancy binding for run %s; "
+                "this run will dispatch without measuring occupancy.",
+                run.run_id,
+                exc_info=True,
+            )
             return None
 
     def _missing(

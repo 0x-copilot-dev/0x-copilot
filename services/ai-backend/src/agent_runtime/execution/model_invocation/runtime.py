@@ -100,6 +100,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
         ContextOccupancyRecorder,
         ContextOccupancySink,
     )
+    from agent_runtime.observability.context_occupancy_binding import (
+        ContextOccupancyRuntimeBinding,
+    )
 
 
 _OCCUPANCY_LOGGER = logging.getLogger(__name__)
@@ -159,6 +162,20 @@ class _PendingCacheRetry:
     decision: ModelAttemptDecision
     request: ModelRequest[Any]
     signal: ProviderCacheFallbackSignal
+
+
+@dataclass(frozen=True, slots=True)
+class _UnjournaledOccupancy:
+    """One pre-dispatch snapshot plus the scope its durable row needs.
+
+    Held across the ``await handler(...)`` on the F10-OFF path so the deferred
+    write does not have to re-read a run context that the response has already
+    returned from.
+    """
+
+    identity: RuntimeModelCallIdentity
+    conversation_id: str
+    snapshot: ContextOccupancySnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,7 +505,13 @@ class ModelInvocationMiddleware(AgentMiddleware):
     ) -> ModelResponse[Any]:
         binding = RunControlContext.model_invocation_runtime()
         if binding is None:
-            return await handler(request)
+            # F10 OFF — its default, and therefore the path every default
+            # deployment takes. There is no journal, no authority and no route
+            # plan to dispatch through, but the request is just as materialized
+            # and just as measurable, so occupancy runs here on its own binding
+            # rather than being lost with the feature that happens to share this
+            # seam. See ``ContextOccupancyRuntimeBinding``.
+            return await self._measured_unjournaled_model_call(request, handler)
         control = RunControlContext.require_current()
         identity = RuntimeModelCallIdentity.from_current(
             execution_scope=self._execution_scope(request.runtime),
@@ -670,7 +693,9 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 request=attempt_request,
                 identity=identity,
                 attempt_ordinal=len(prior) + 1,
-                route=route,
+                provider=route.provider,
+                model_family=route.model_name,
+                context_window_tokens=route.max_input_tokens,
                 plan=occupancy_plan,
             )
             started = monotonic()
@@ -1530,7 +1555,9 @@ class ModelInvocationMiddleware(AgentMiddleware):
         request: ModelRequest[Any],
         identity: RuntimeModelCallIdentity,
         attempt_ordinal: int,
-        route: ModelRouteEntry,
+        provider: str,
+        model_family: str,
+        context_window_tokens: int | None,
         plan: PromptAssemblyPlan | None,
     ) -> ContextOccupancySnapshot | None:
         """Measure this attempt's materialized request, or return ``None``.
@@ -1541,15 +1568,19 @@ class ModelInvocationMiddleware(AgentMiddleware):
         an injected collaborator not to raise would have moved the fail-open
         contract outside the code that owns it.
 
-        ``context_window_tokens`` comes from the resolved route's
-        ``max_input_tokens`` — the deployment descriptor's own declared input
-        window, from the same catalog lane the pricing source reads. Taking it
-        here rather than re-looking-up a pricing row keeps the denominator
-        consistent with the route the attempt actually used, including on an
-        alternate-route retry to a differently-sized deployment.
+        ``provider`` / ``model_family`` / ``context_window_tokens`` describe the
+        deployment this attempt was dispatched to, and the caller supplies them
+        because the two callers know it differently. On the F10 path they come
+        from the resolved ``ModelRouteEntry`` — the deployment descriptor's own
+        declared input window, from the same catalog lane the pricing source
+        reads — which keeps the denominator consistent with the route the attempt
+        actually used, including on an alternate-route retry to a
+        differently-sized deployment. With F10 OFF there is no route plan and no
+        alternate to retry to, so they come from the run's verified model profile,
+        which is then the only model the call can reach.
 
-        Capture runs wherever the F10 binding is installed and a recorder was
-        built (see :meth:`_shared_occupancy_recorder`), while *persistence* is
+        Capture runs wherever a recorder was built (see
+        :meth:`_shared_occupancy_recorder`), while *persistence* is
         additionally gated on a wired store. That asymmetry is deliberate: the
         snapshot is the input to both the durable row (§5) and the streamed
         ``context_occupancy`` event (§7), so gating the measurement on a store
@@ -1567,9 +1598,9 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 identity=identity,
                 attempt_ordinal=attempt_ordinal,
                 graph_scope=self._graph_scope(identity.execution_scope),
-                provider=route.provider,
-                model_family=route.model_name,
-                context_window_tokens=route.max_input_tokens,
+                provider=provider,
+                model_family=model_family,
+                context_window_tokens=context_window_tokens,
                 plan=plan,
             )
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
@@ -1629,6 +1660,196 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 identity.model_call_id,
                 exc_info=True,
             )
+
+    async def _measured_unjournaled_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        """Dispatch with occupancy measured but nothing journaled.
+
+        The F10-OFF path, which is to say the production path. Three properties
+        make it safe to add measurement to a seam that previously did nothing
+        here at all:
+
+        - **The provider sees the identical object.** ``handler(request)`` is
+          called with the very request that was passed in — no ``override``, no
+          re-attached callbacks, no copy. Usage is read from the *response*
+          instead of from a lifecycle callback, so nothing about the dispatched
+          payload, its digest, or prompt-cache identity can shift.
+        - **Nothing here can fail the call.** Preparation is total and returns
+          ``None`` on any problem; the write is deferred through a lane that
+          collects its own exceptions.
+        - **Nothing here delays the call.** The durable write is scheduled, not
+          awaited, so the response returns at exactly the latency it would have
+          without measurement (§6.4).
+
+        A failed attempt is recorded too, with no provider total: it occupied a
+        window, and the window it occupied is the thing being measured.
+        """
+
+        occupancy = RunControlContext.context_occupancy_runtime()
+        prepared = self._prepare_unjournaled_occupancy(
+            request=request, occupancy=occupancy
+        )
+        if prepared is None or occupancy is None:
+            return await handler(request)
+        try:
+            response = await handler(request)
+        except Exception:
+            self._defer_unjournaled_occupancy(
+                occupancy=occupancy, prepared=prepared, usage=None
+            )
+            raise
+        self._defer_unjournaled_occupancy(
+            occupancy=occupancy,
+            prepared=prepared,
+            usage=self._reported_usage(response, provider=occupancy.provider),
+        )
+        return response
+
+    def _prepare_unjournaled_occupancy(
+        self,
+        *,
+        request: ModelRequest[Any],
+        occupancy: "ContextOccupancyRuntimeBinding | None",
+    ) -> _UnjournaledOccupancy | None:
+        """Measure before dispatch, or return ``None``. Never raises.
+
+        ``attempt_ordinal`` is always 1 here and that is a fact about the path
+        rather than a simplification: attempt admission, retry and
+        alternate-route recovery are all F10 machinery, so with F10 OFF a model
+        call is dispatched exactly once and a second ordinal cannot exist.
+        """
+
+        if occupancy is None or self._occupancy is None:
+            return None
+        try:
+            control = RunControlContext.current()
+            if control is None:
+                return None
+            identity = RuntimeModelCallIdentity.from_current(
+                execution_scope=self._execution_scope(request.runtime),
+                model_turn=max(self._model_turn(request.state), 1),
+            )
+            if identity is None:
+                return None
+            conversation_id = control.snapshot.conversation_id
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not establish occupancy identity for an unjournaled model "
+                "call; continuing without a snapshot.",
+                exc_info=True,
+            )
+            return None
+        snapshot = self._capture_occupancy(
+            request=request,
+            identity=identity,
+            attempt_ordinal=1,
+            provider=occupancy.provider,
+            model_family=occupancy.model_family,
+            context_window_tokens=occupancy.context_window_tokens,
+            plan=self._occupancy_assembly_plan(),
+        )
+        if snapshot is None:
+            return None
+        return _UnjournaledOccupancy(
+            identity=identity,
+            conversation_id=conversation_id,
+            snapshot=snapshot,
+        )
+
+    def _defer_unjournaled_occupancy(
+        self,
+        *,
+        occupancy: "ContextOccupancyRuntimeBinding",
+        prepared: _UnjournaledOccupancy,
+        usage: NormalizedTokenUsage | None,
+    ) -> None:
+        """Hand the durable write to the run's lane. Never raises."""
+
+        try:
+            occupancy.deferred.schedule(
+                self._write_unjournaled_occupancy(
+                    occupancy=occupancy, prepared=prepared, usage=usage
+                )
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not schedule the context occupancy write for model call "
+                "%s; dropping the measurement.",
+                prepared.identity.model_call_id,
+                exc_info=True,
+            )
+
+    async def _write_unjournaled_occupancy(
+        self,
+        *,
+        occupancy: "ContextOccupancyRuntimeBinding",
+        prepared: _UnjournaledOccupancy,
+        usage: NormalizedTokenUsage | None,
+    ) -> None:
+        """Reconcile and append one snapshot off the critical path; never raises.
+
+        ``finalize`` runs here rather than at the call site for the same reason
+        the append does: it is arithmetic the model call has no reason to wait
+        for, and a reconciliation that raises must land in this guard rather than
+        beside a response that has already been produced.
+        """
+
+        if self._occupancy is None:  # pragma: no cover - preparation proves this
+            return
+        try:
+            await self._occupancy.persist(
+                self._occupancy.finalize(prepared.snapshot, usage),
+                sink=occupancy.sink,
+                org_id=occupancy.org_id,
+                run_id=prepared.identity.run_id,
+                conversation_id=prepared.conversation_id,
+            )
+        except Exception:  # noqa: BLE001 — a dropped snapshot is the failure mode
+            _OCCUPANCY_LOGGER.warning(
+                "Context occupancy persistence failed for model call %s; "
+                "dropping the measurement.",
+                prepared.identity.model_call_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _reported_usage(
+        response: ModelResponse[Any], *, provider: str
+    ) -> NormalizedTokenUsage | None:
+        """Read the provider's own input total off the response it returned.
+
+        The F10 path gets this from ``_ProviderLifecycleCallback``, which exists
+        because that path needs the whole provider lifecycle — dispatch, stream,
+        terminal state — for admission and recovery. Occupancy needs one number,
+        and reading it from the response is what lets this path leave the
+        dispatched request untouched instead of copying the model to attach a
+        callback.
+
+        ``None`` when the provider reported nothing, which §6.1 requires be kept
+        distinct from a zero-token usage object: zero would claim the provider
+        billed nothing and turn every unreported call into a large negative
+        residual.
+        """
+
+        try:
+            extractor = TokenUsageExtractorRegistry.for_provider(provider)
+            merged: NormalizedTokenUsage | None = None
+            for message in response.result:
+                observed = extractor.extract(message)
+                if observed is None:
+                    continue
+                merged = observed if merged is None else merged.merge(observed)
+            return merged
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not read provider usage for occupancy reconciliation; "
+                "recording the snapshot without a provider total.",
+                exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _model_turn(state: object) -> int:

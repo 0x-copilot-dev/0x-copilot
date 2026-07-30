@@ -147,6 +147,9 @@ from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
 from agent_runtime.observability.attribution import Purpose
+from agent_runtime.observability.context_occupancy_binding import (
+    ContextOccupancyRuntimeBinding,
+)
 from agent_runtime.observability.usage_meter import (
     MeteredModelInvocation,
     UsageMeter,
@@ -603,6 +606,10 @@ class RuntimeRunHandler:
         run_control_token: object | None = None
         batch_admission_token: object | None = None
         live_admission_token: object | None = None
+        # Held across the try so the finally can drain the deferred occupancy
+        # writes on every exit path, including one that fails before the binding
+        # is composed.
+        context_occupancy: ContextOccupancyRuntimeBinding | None = None
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -622,6 +629,21 @@ class RuntimeRunHandler:
                     )
                     model_invocation_effect_tracker = (
                         composed_model_invocation.effect_tracker
+                    )
+                # Occupancy is installed unconditionally, and outside the
+                # ``composed_model_invocation is not None`` branch above on
+                # purpose: that branch is empty whenever F10 is OFF — its default
+                # — and measurement that only happens when an unrelated feature
+                # is enabled is measurement that never happens.
+                context_occupancy = (
+                    self._model_invocation_composer.compose_context_occupancy(
+                        run=run,
+                        context=hydrated_context,
+                    )
+                )
+                if context_occupancy is not None:
+                    RunControlContext.install_context_occupancy_runtime(
+                        context_occupancy
                     )
                 # F6 is installed here, immediately after ``bind_for_run``, for
                 # the reason ``install_parallel_admission`` states: the
@@ -924,6 +946,13 @@ class RuntimeRunHandler:
                 self._live_batch_admissions.release(live_admission_token)
             if batch_admission_token is not None:
                 RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
+            # Occupancy writes are deferred so they cost the model call no
+            # latency, which means the run owns the only point at which they are
+            # known to have landed. Drained before the context is unbound and
+            # before the store can go away, on every exit path — completion,
+            # failure, timeout, cancel. The lane collects its own exceptions.
+            if context_occupancy is not None:
+                await context_occupancy.deferred.drain()
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:

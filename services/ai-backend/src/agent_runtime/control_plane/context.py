@@ -49,6 +49,9 @@ from agent_runtime.control_plane.parallel_admission import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 if TYPE_CHECKING:
+    from agent_runtime.observability.context_occupancy_binding import (
+        ContextOccupancyRuntimeBinding,
+    )
     from agent_runtime.execution.model_invocation.runtime import (
         ModelInvocationRuntimeBinding,
     )
@@ -256,12 +259,32 @@ class _ModelInvocationRuntimeSlot:
     binding: ModelInvocationRuntimeBinding | None = None
 
 
+@dataclass(slots=True)
+class _ContextOccupancyRuntimeSlot:
+    """Run-lifetime occupancy slot, deliberately separate from the F10 one.
+
+    Occupancy is measured at the F10 middleware but is not an F10 concern, and
+    conflating the two is what made the Context Occupancy Ledger inert on every
+    default deployment: the sink lived on the F10 binding, and that binding does
+    not exist while ``f10`` is ``OFF`` — its default. A slot of its own is what
+    lets measurement be installed by a run whose feature modes are all closed.
+    """
+
+    binding: ContextOccupancyRuntimeBinding | None = None
+
+
 _CURRENT_PROMPT_RUNTIME: ContextVar[_PromptRuntimeSlot | None] = ContextVar(
     "agent_runtime_prompt_runtime_slot",
     default=None,
 )
 _CURRENT_MODEL_INVOCATION_RUNTIME: ContextVar[_ModelInvocationRuntimeSlot | None] = (
     ContextVar("agent_runtime_model_invocation_runtime_slot", default=None)
+)
+_CURRENT_CONTEXT_OCCUPANCY: ContextVar[_ContextOccupancyRuntimeSlot | None] = (
+    ContextVar(
+        "agent_runtime_context_occupancy_slot",
+        default=None,
+    )
 )
 
 
@@ -615,6 +638,7 @@ class _RunControlContextToken:
     task_policy: Token[TaskPolicyRuntimeBinding | None]
     prompt_runtime: Token[_PromptRuntimeSlot | None]
     model_invocation_runtime: Token[_ModelInvocationRuntimeSlot | None]
+    context_occupancy: Token[_ContextOccupancyRuntimeSlot | None]
 
 
 class RunControlContext:
@@ -638,6 +662,9 @@ class RunControlContext:
             prompt_runtime=_CURRENT_PROMPT_RUNTIME.set(_PromptRuntimeSlot()),
             model_invocation_runtime=_CURRENT_MODEL_INVOCATION_RUNTIME.set(
                 _ModelInvocationRuntimeSlot()
+            ),
+            context_occupancy=_CURRENT_CONTEXT_OCCUPANCY.set(
+                _ContextOccupancyRuntimeSlot()
             ),
         )
 
@@ -736,9 +763,36 @@ class RunControlContext:
         return None if slot is None else slot.binding
 
     @staticmethod
+    def install_context_occupancy_runtime(
+        binding: ContextOccupancyRuntimeBinding,
+    ) -> None:
+        """Install one run-scoped occupancy sink, whatever the feature modes say.
+
+        Deliberately takes no feature mode and consults none: the whole defect
+        this repairs was measurement reachable only through a binding that a
+        closed feature mode suppresses. The only precondition is a bound run,
+        because a snapshot has to name the run and conversation it describes.
+        """
+
+        slot = _CURRENT_CONTEXT_OCCUPANCY.get()
+        if slot is None:
+            raise RuntimeError("run control is not bound")
+        if slot.binding is not None and slot.binding is not binding:
+            raise RuntimeError("context occupancy binding is already installed")
+        slot.binding = binding
+
+    @staticmethod
+    def context_occupancy_runtime() -> ContextOccupancyRuntimeBinding | None:
+        """Return the occupancy sink inherited by supervisor and local children."""
+
+        slot = _CURRENT_CONTEXT_OCCUPANCY.get()
+        return None if slot is None else slot.binding
+
+    @staticmethod
     def unbind(token: _RunControlContextToken) -> None:
         """Restore the binding that preceded ``token``."""
 
+        _CURRENT_CONTEXT_OCCUPANCY.reset(token.context_occupancy)
         _CURRENT_MODEL_INVOCATION_RUNTIME.reset(token.model_invocation_runtime)
         _CURRENT_PROMPT_RUNTIME.reset(token.prompt_runtime)
         _CURRENT_TASK_POLICY.reset(token.task_policy)

@@ -100,6 +100,9 @@ from agent_runtime.persistence.records import (
     BatchTransitionOutcome,
     ToolBudgetRecord,
 )
+from agent_runtime.observability.context_occupancy_binding import (
+    ContextOccupancyRuntimeBinding,
+)
 from agent_runtime.observability.usage_recorder import (
     NullUsageRecorder,
     UsageRecorder,
@@ -532,6 +535,10 @@ class RuntimeApprovalHandler:
         run_control_token: object | None = None
         batch_admission_token: object | None = None
         live_admission_token: object | None = None
+        # Held across the try so the finally can drain the deferred occupancy
+        # writes on every exit path, including one that fails before the binding
+        # is composed.
+        context_occupancy: ContextOccupancyRuntimeBinding | None = None
         metrics = AssistantRunMetrics.from_run(running)
         try:
             if prepared_run_control is not None:
@@ -549,6 +556,19 @@ class RuntimeApprovalHandler:
                 if composed_model_invocation is not None:
                     RunControlContext.install_model_invocation_runtime(
                         composed_model_invocation.binding
+                    )
+                # A resumed run's remaining turns are model calls like any other,
+                # so they are measured like any other. Installed outside the
+                # branch above because that branch is empty whenever F10 is OFF.
+                context_occupancy = (
+                    self._model_invocation_composer.compose_context_occupancy(
+                        run=running,
+                        context=resume_context,
+                    )
+                )
+                if context_occupancy is not None:
+                    RunControlContext.install_context_occupancy_runtime(
+                        context_occupancy
                     )
                 # A resumed run is a run: its remaining turns emit tool calls
                 # through the same middleware, so it needs the same admission.
@@ -698,6 +718,10 @@ class RuntimeApprovalHandler:
                 self._live_batch_admissions.release(live_admission_token)
             if batch_admission_token is not None:
                 RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
+            # Drained before the context is unbound and before the store can go
+            # away, on every exit path. The lane collects its own exceptions.
+            if context_occupancy is not None:
+                await context_occupancy.deferred.drain()
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
