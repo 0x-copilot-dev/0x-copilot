@@ -144,3 +144,17 @@ describe("SourcesV2Tab — citationsSlot", () => {
     expect(screen.getByTestId("sources-v2-tab")).toBeInTheDocument();
   });
 });
+
+describe("SourcesV2Tab — fact rows use the citation card", () => {
+  it("renders v2 fact rows with the same .atlas-source-row card as citations", () => {
+    // One Sources rail, one row language. Before this the facts rendered as a
+    // compact list row while cited documents rendered as rich cards, so the two
+    // halves of the same panel looked like different products.
+    render(<SourcesV2Tab sources={sources} />);
+    const row = screen.getAllByTestId("sources-v2-row")[0];
+    expect(row).toHaveClass("atlas-source-row");
+    expect(row.querySelector(".atlas-source-row__title")).not.toBeNull();
+    // The metadata takes the footnote slot where a citation shows its snippet.
+    expect(row.querySelector(".atlas-source-row__footnote")).not.toBeNull();
+  });
+});

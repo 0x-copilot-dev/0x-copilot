@@ -8,10 +8,10 @@
 
 import type { ReactElement, ReactNode } from "react";
 
-import { Caption } from "@0x-copilot/design-system";
+import { Badge, Caption, Card } from "@0x-copilot/design-system";
 import type { SourcesProjectionV2 } from "@0x-copilot/api-types";
 
-import { Row, RowList } from "../destinations/_shared";
+import { RowList } from "../destinations/_shared";
 import {
   presentSourcesV2,
   type SourceRowPresentationV2,
@@ -140,27 +140,54 @@ function SourcePresentationRow({
   readonly onOpenSource?: (sourceId: string) => void;
 }): ReactElement {
   const canOpen = row.openable && onOpenSource !== undefined && !opening;
+  // The SAME card the cited-documents rows use (`.atlas-source-row` + design-
+  // system `Card`), so one Sources rail does not present two different row
+  // languages — a compact list row for facts and a rich card for citations.
+  //
+  // What it CANNOT show is the citation card's link and snippet: a fact carries
+  // no URL, title, or body by design (`SourceFactV2` is opaque provenance —
+  // "never authorization", nothing dereferenceable in the DOM). So the card
+  // shape is shared and the fields degrade honestly: glyph + safe title +
+  // connector badge, with the metadata line where the snippet would be. Do not
+  // "complete" this card by widening the fact contract.
   return (
-    <Row
+    <li
       data-testid="sources-v2-row"
-      className="atlas-sources-panel__row"
-      density="compact"
-      icon={row.iconText}
-      iconSize={30}
-      iconVariant="identity"
-      title={
-        <span className="atlas-sources-panel__row-title">{row.title}</span>
-      }
-      sub={opening ? "Opening artifact…" : row.metadata}
-      subFont="mono"
-      trailing={row.openable ? <OpenSourceIcon /> : undefined}
-      onActivate={
-        canOpen && onOpenSource !== undefined
-          ? () => onOpenSource(row.id)
-          : undefined
-      }
-      ariaLabel={canOpen ? `Open ${row.title}` : undefined}
-    />
+      data-source-id={row.id}
+      className="atlas-source-row"
+    >
+      <Card tone="default">
+        <div className="atlas-source-row__top">
+          <button
+            type="button"
+            className="atlas-source-row__head"
+            onClick={
+              canOpen && onOpenSource !== undefined
+                ? () => onOpenSource(row.id)
+                : undefined
+            }
+            disabled={!canOpen}
+            aria-label={canOpen ? `Open ${row.title}` : row.title}
+          >
+            <span
+              className="atlas-source-row__glyph-trigger"
+              aria-hidden="true"
+            >
+              <span className="atlas-source-row__glyph">{row.iconText}</span>
+            </span>
+            <span className="atlas-source-row__title">{row.title}</span>
+            {row.openable ? (
+              <Badge tone="neutral">
+                <OpenSourceIcon />
+              </Badge>
+            ) : null}
+          </button>
+        </div>
+        <p className="atlas-source-row__footnote">
+          {opening ? "Opening artifact…" : row.metadata}
+        </p>
+      </Card>
+    </li>
   );
 }
 
