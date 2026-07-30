@@ -145,20 +145,21 @@ describe("TcSwimlanes", () => {
     vi.useRealTimers();
   });
 
-  it("shows only the empty state (no transport controls) until beads arrive", () => {
+  it("renders nothing at all until beads arrive, but keeps listening", () => {
     const transport = makeTransport();
     const kv = makeKvStore();
     renderWith(transport, kv, <TcSwimlanes runId="run-1" />);
-    expect(screen.getByTestId("tc-swimlanes-empty")).toBeInTheDocument();
-    // Progressive disclosure: the toolbar is withheld, not disabled — dead
-    // `<`/`Play`/`>` chrome over an empty timeline reads as broken.
+    // No band, no status line, no toolbar — a beadless run costs zero vertical
+    // space. The old "Listening for run events…" line lived here.
+    expect(screen.queryByTestId("tc-swimlanes")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tc-swimlanes-empty")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tc-swimlanes-back")).not.toBeInTheDocument();
     expect(screen.queryByTestId("tc-swimlanes-play")).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("tc-swimlanes-forward"),
     ).not.toBeInTheDocument();
-    // Subscription is still live despite the collapsed toolbar, so the first
-    // bead will progressively reveal the controls.
+    // The render-time null must NOT cost us the subscription — it is what
+    // produces the first bead. This is the load-bearing half of the change.
     expect(transport.subscribePath).toBe("/v1/agent/runs/run-1/stream");
   });
 
@@ -216,7 +217,8 @@ describe("TcSwimlanes", () => {
       transport.emit(JSON.stringify({ event_id: "no-run-id" }));
     });
 
-    expect(screen.getByTestId("tc-swimlanes-empty")).toBeInTheDocument();
+    // Still beadless → still renders nothing.
+    expect(screen.queryByTestId("tc-swimlanes")).not.toBeInTheDocument();
   });
 
   it("clicking a bead moves the playhead off-now and calls onScrubChange", () => {

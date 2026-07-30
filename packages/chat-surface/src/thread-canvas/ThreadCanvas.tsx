@@ -429,15 +429,20 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // - Focus:  chat (with focus-tabs view) + mini-timeline; surface is hidden
   const showSurfaceColumn = mode === "studio";
   const showSwimlanes = mode === "studio" && runId !== null;
-  // Progressive disclosure (design review): when the Studio swimlanes band is
-  // mounted but has zero beads, the mini-timeline would stack a SECOND empty
-  // status line ("No activity yet") under the swimlanes' own "Listening for
-  // run events…" — two strings, one meaning. Withhold the mini strip until the
-  // first event lands; Focus (no swimlanes) keeps it always.
-  const timelineEmpty = projection.timeline.beads.length === 0;
-  const showMiniTimeline =
-    mode === "focus" ||
-    (mode === "studio" && !(showSwimlanes && timelineEmpty));
+  // The mini-timeline is PERMANENT chrome in both modes — never gate it.
+  //
+  // It used to be withheld in Studio whenever the swimlanes band was mounted
+  // with zero beads, to avoid stacking its "No activity yet" under the
+  // swimlanes' own "Listening for run events…" (two strings, one meaning).
+  // That gate had a nasty consequence: sending a message starts a NEW run, the
+  // projection resets to zero beads, and the strip — Live pill and all —
+  // unmounted mid-send, reappearing only once the first event landed. The bar
+  // blinking out at the exact moment the user acts reads as a crash.
+  //
+  // The duplicate-string problem is now solved at the source: the swimlanes'
+  // "Listening…" line is gone (TcSwimlanes renders nothing until its first
+  // bead), so the mini strip is the single empty-state voice and can simply
+  // always be here, updating in place as beads arrive.
   // A tab track with no tab is not neutral: it reserves a visibly empty band
   // below the run header. Only mount both the strip *and* its grid row when
   // there is a real surface to navigate to.
@@ -609,20 +614,18 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           </div>
         ) : null}
 
-        {showMiniTimeline ? (
-          <div
-            data-testid="tc-mini-timeline-slot"
-            style={miniTimelineSlotStyle}
-          >
-            <TcMiniTimeline
-              beads={projection.timeline.beads}
-              scrubbedTo={scrubbedSeq}
-              onScrub={handleScrub}
-              onSnapToNow={handleSnapToNow}
-              onExpand={mode === "focus" ? handleExpandToStudio : undefined}
-            />
-          </div>
-        ) : null}
+        {/* Unconditional — see the note above. This strip must survive a
+            send/run-start, so it is never behind a bead-count or run-state
+            condition. */}
+        <div data-testid="tc-mini-timeline-slot" style={miniTimelineSlotStyle}>
+          <TcMiniTimeline
+            beads={projection.timeline.beads}
+            scrubbedTo={scrubbedSeq}
+            onScrub={handleScrub}
+            onSnapToNow={handleSnapToNow}
+            onExpand={mode === "focus" ? handleExpandToStudio : undefined}
+          />
+        </div>
       </SwimlaneScrubProvider>
     </div>
   );
@@ -826,11 +829,13 @@ const railHandleHitStyle: CSSProperties = {
   cursor: "col-resize",
 };
 
+// A bare grid cell — no border, no background, no minHeight. TcSwimlanes
+// renders `null` until its first bead, and this slot must collapse to zero
+// with it; band chrome here would leave a 48px bordered gap under the surface
+// for every beadless run. The swimlanes card carries its own background,
+// border, and radius, so it needs no band behind it.
 const swimlanesSlotStyle: CSSProperties = {
   gridArea: "swimlanes",
-  borderTop: "1px solid var(--color-border, #22252e)",
-  background: "var(--color-bg, #0e1015)",
-  minHeight: 48,
 };
 
 const miniTimelineSlotStyle: CSSProperties = {

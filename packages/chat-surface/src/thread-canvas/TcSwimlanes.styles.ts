@@ -25,15 +25,6 @@ const containerStyle: CSSProperties = {
   outline: "none",
 };
 
-// Beadless band: drop the card chrome so the single "Listening…" line reads
-// as quiet status, not an empty interactive card (design review: three
-// hairlines + a bordered box around one line of 11px text).
-const containerEmptyStyle: CSSProperties = {
-  ...containerStyle,
-  background: "transparent",
-  border: "1px solid transparent",
-};
-
 const toolbarStyle: CSSProperties = {
   display: "flex",
   gap: 8,
@@ -60,16 +51,6 @@ const primaryButtonStyle: CSSProperties = {
   fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
-};
-
-// Progressive disclosure: with no beads the band is a quiet status line, not
-// an interactive transport bar — 2xs tier (the web composer hint-row tier),
-// tightened padding, dimmed.
-const emptyStateStyle: CSSProperties = {
-  color: PALETTE.textLo,
-  fontSize: "var(--font-size-2xs)",
-  padding: "6px 2px",
-  opacity: 0.75,
 };
 
 const lanesContainerStyle: CSSProperties = {
@@ -148,11 +129,9 @@ const playheadStyle = (leftPercent: number): CSSProperties => ({
 
 export const swimlaneStyles = {
   container: containerStyle,
-  containerEmpty: containerEmptyStyle,
   toolbar: toolbarStyle,
   button: buttonStyle,
   primaryButton: primaryButtonStyle,
-  emptyState: emptyStateStyle,
   lanesContainer: lanesContainerStyle,
   laneRow: laneRowStyle,
   laneLabel: laneLabelStyle,

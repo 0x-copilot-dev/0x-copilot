@@ -43,8 +43,10 @@ const RUNTIME_EVENT_NAME = "runtime_event";
 /**
  * Session lifecycle phase, independent of the run's own {@link AgentRunStatus}.
  * This is what the cockpit switches its per-pane loading / error chrome on
- * (FR-3.33): `connecting` is the "subscribed, no event yet" window that shows
- * "Loading messages…" / "Listening for run events…" before the first bead.
+ * (FR-3.33): `connecting` is the "subscribed, no event yet" window before the
+ * first bead. It shows "Loading messages…" in the chat column; the swimlanes
+ * band renders nothing at all until it has a bead (its old "Listening for run
+ * events…" line was removed), and the mini-timeline stays put throughout.
  */
 export type RunSessionStatus =
   | "idle" // nothing to show — no run resolved and none is being resolved
