@@ -29,7 +29,6 @@ import base64
 import hashlib
 import json
 import os
-import platform
 import re
 import subprocess
 import sys
@@ -45,7 +44,13 @@ from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _lib import DriverSession, load_env_key  # noqa: E402
+from _lib import (  # noqa: E402
+    INSTALLED_PAYLOAD_TARGET,
+    EXIT_BLOCKED,
+    DriverSession,
+    load_env_key,
+    staged_runtime_dir,
+)
 
 
 HERE: Final = Path(__file__).resolve().parent
@@ -54,7 +59,6 @@ FIXTURE_SERVER: Final = HERE / "local-fixture-connector" / "server.py"
 SCENARIO_PATH: Final = HERE / "scenarios" / "local-communications.json"
 FIXTURE_NAMESPACE: Final = "fixture://generative-workflows/launch-week"
 FIXTURE_WORKSPACE_ROOT: Final = "fixture://workspace/launch-week"
-INSTALLED_PAYLOAD_TARGET: Final = "installed-payload"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
@@ -230,21 +234,6 @@ def requested_modes(
     return (JourneyMode(parsed.mode),)
 
 
-def _host_runtime_key() -> str:
-    machine = platform.machine().lower()
-    arch = {
-        "arm64": "arm64",
-        "aarch64": "arm64",
-        "x86_64": "x64",
-        "amd64": "x64",
-    }.get(machine, machine)
-    return f"{sys.platform}-{arch}"
-
-
-def copilot_home() -> Path:
-    return Path(os.environ.get("COPILOT_HOME", Path.home() / ".0xcopilot"))
-
-
 def preflight_installed_supervisor(*, native_dialogs: bool = False) -> None:
     target = os.environ.get("COPILOT_DESKTOP_TEST_TARGET", INSTALLED_PAYLOAD_TARGET)
     if target != INSTALLED_PAYLOAD_TARGET:
@@ -266,7 +255,7 @@ def preflight_installed_supervisor(*, native_dialogs: bool = False) -> None:
             "only for the macOS installed Desktop payload"
         )
 
-    runtime = copilot_home() / "runtime" / _host_runtime_key()
+    runtime = staged_runtime_dir(target=INSTALLED_PAYLOAD_TARGET)
     manifest_path = runtime / "staging-manifest.json"
     if not manifest_path.is_file():
         raise JourneyBlocked(
@@ -412,14 +401,14 @@ def run_matrix(
             require_binary_docx_artifacts()
     except JourneyBlocked as exc:
         emit_result(journey_id, "blocked", reason=str(exc))
-        return 2
+        return EXIT_BLOCKED
 
     for mode in modes:
         try:
             config = build_pass_config(journey_id, slug, mode)
         except JourneyBlocked as exc:
             emit_result(journey_id, "blocked", mode=mode, reason=str(exc))
-            return 2
+            return EXIT_BLOCKED
         emit_result(
             journey_id,
             "running",
@@ -1183,9 +1172,7 @@ def _assert_scenario_identities_are_local(scenario: Mapping[str, Any]) -> None:
 
 def register_local_fixture(session: DriverSession) -> FixtureRegistration:
     runtime_python = (
-        copilot_home()
-        / "runtime"
-        / _host_runtime_key()
+        staged_runtime_dir(target=INSTALLED_PAYLOAD_TARGET)
         / "python"
         / "bin"
         / "python3.13"

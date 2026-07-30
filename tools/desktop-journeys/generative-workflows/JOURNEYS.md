@@ -79,11 +79,18 @@ serializes, names a screenshot after, or otherwise exposes the value.
 | UI leak guard                       | No `tc-chat-tool-*`, `tc-chat-fleet-*`, `tc-tabs`, `artifact-frame`, staged-write card/control, `receipt-v2-launch`, or canonical `receipt-v2-surface` test ID is present.                                                                                                                                                                                                                  |
 | Authenticated facade truth          | The bound `#/convo/<id>` has exactly one run; `GET /runs/{id}` and replay both report `completed`; replay contains exactly one `final_response`, no legacy tool activity/event, no v2 tool-execution event (`action.classified`, `read.executed`, `gate.opened`, `gate.resolved`), no artifact/effect or non-receipt surface; `/surfaces` contains at most the terminal audit-only receipt. |
 
-The only successful exit that is not a pass is a visibly reported `SKIP G0:` for
-a documented local prerequisite: no built desktop bundle, no host-executable
-staged runtime, or no OpenAI/Anthropic BYOK value in the ignored local `.env`.
-Boot, sign-in, BYOK, model catalog, run, UI, or facade assertion failures are
-hard failures. Screenshots and driver logs stay under the git-ignored
+Exit `0` means G0 ran and passed — nothing else does. A documented local
+prerequisite (no built desktop bundle, no host-executable staged runtime, or no
+OpenAI/Anthropic BYOK value in the ignored local `.env`) reports a visible
+`SKIP G0:` and exits `3`, so a skipped journey can never be mistaken for a pass
+by a shell or CI step. Boot, sign-in, BYOK, model catalog, run, UI, or facade
+assertion failures are hard failures.
+
+G0 is a **source**-target journey: it launches the checkout's `apps/desktop`, so
+its preflight requires the checkout's staged runtime (`apps/desktop/resources`,
+the `COPILOT_HOME` default for that target). G1/G2 and G3–G10 are
+`installed-payload` journeys and require `~/.0xcopilot` instead — see the
+[README](../README.md) for the full rule. Screenshots and driver logs stay under the git-ignored
 `tools/desktop-journeys/runs/generative-workflows-g0-plain-chat/` directory.
 
 ## G3–G10 executable status

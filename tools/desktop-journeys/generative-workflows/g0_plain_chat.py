@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import re
 import sys
 import time
@@ -37,7 +36,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _lib import DriverSession, REPO_ROOT, load_env_key  # noqa: E402
+from _lib import (  # noqa: E402
+    EXIT_SKIPPED,
+    REPO_ROOT,
+    SOURCE_TARGET,
+    DriverSession,
+    load_env_key,
+    staged_runtime_dir,
+)
 
 
 PROMPT = (
@@ -124,38 +130,17 @@ class PreflightSkip(RuntimeError):
 
 def _skip(reason: str) -> int:
     print(f"SKIP G0: {reason}")
-    return 0
-
-
-def _host_runtime_key() -> str:
-    platform_name = sys.platform
-    if platform_name == "darwin":
-        platform_name = "darwin"
-    elif platform_name == "win32":
-        platform_name = "win32"
-    else:
-        platform_name = sys.platform
-    machine = platform.machine().lower()
-    arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(
-        machine, machine
-    )
-    return f"{platform_name}-{arch}"
+    return EXIT_SKIPPED
 
 
 def _source_app_dir() -> Path:
     return Path(os.environ.get("APP_DIR", REPO_ROOT / "apps" / "desktop"))
 
 
-def _copilot_home() -> Path:
-    return Path(
-        os.environ.get("COPILOT_HOME", REPO_ROOT / "apps" / "desktop" / "resources")
-    )
-
-
 def _preflight_packaged_supervisor() -> None:
     """Permit SKIP only when an explicitly documented local prerequisite is absent."""
 
-    if os.environ.get("COPILOT_DESKTOP_TEST_TARGET", "source") != "source":
+    if os.environ.get("COPILOT_DESKTOP_TEST_TARGET", SOURCE_TARGET) != SOURCE_TARGET:
         raise AssertionError(
             "G0 requires the source packaged-supervisor target; installed-payload "
             "has its own release journey and cannot prove this worktree's build"
@@ -174,7 +159,7 @@ def _preflight_packaged_supervisor() -> None:
             "@0x-copilot/desktop` or `make desktop-supervised`)"
         )
 
-    runtime = _copilot_home() / "runtime" / _host_runtime_key()
+    runtime = staged_runtime_dir(target=SOURCE_TARGET)
     manifest_path = runtime / "staging-manifest.json"
     if not manifest_path.is_file():
         raise PreflightSkip(

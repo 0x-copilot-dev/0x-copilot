@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -58,6 +59,74 @@ CTL_PORT = int(os.environ.get("CTL_PORT", "8790"))
 BOOT_TIMEOUT_S = int(
     os.environ.get("BOOT_TIMEOUT_S", "260")
 )  # first boot = initdb + migrations
+
+# ── journey targets + exit codes ─────────────────────────────────────────────
+SOURCE_TARGET = "source"
+INSTALLED_PAYLOAD_TARGET = "installed-payload"
+
+# A preflight skip is NOT a pass: the journey never ran, so it must not be
+# indistinguishable from success to a shell, a CI step, or an agent. `2` is
+# already taken by the G3–G10 "blocked" contract (a declared capability is
+# absent), so an absent local prerequisite reports `3`. Assertion failures stay
+# `1` via the normal traceback.
+EXIT_SKIPPED = 3
+EXIT_BLOCKED = 2
+
+
+# ── staged runtime location ──────────────────────────────────────────────────
+def host_runtime_key() -> str:
+    """`<platform>-<arch>` — the staged runtime subdir for THIS host."""
+    machine = platform.machine().lower()
+    arch = {
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "x86_64": "x64",
+        "amd64": "x64",
+    }.get(machine, machine)
+    return f"{sys.platform}-{arch}"
+
+
+def resolve_copilot_home(
+    *, target: str = SOURCE_TARGET, override: str | None = None
+) -> Path:
+    """Resolve COPILOT_HOME (the staged-runtime root) for a journey target.
+
+    The default is target-dependent, and deliberately so — the two targets stage
+    to different places and are not interchangeable:
+
+    * ``source`` drives the checkout's ``apps/desktop`` build, whose supervisor
+      reads the repo-local stage at ``apps/desktop/resources``.
+    * ``installed-payload`` drives the globally installed ``@0x-copilot/cli``,
+      which stages to ``~/.0xcopilot``. Falling back to the checkout there would
+      make an "installed" journey prove the source tree instead of the shipped
+      artifact, so that fallback must never exist.
+
+    An explicit ``override`` (or ``COPILOT_HOME``) still wins for both — that is
+    how an isolated worktree reuses a stage owned by the primary checkout.
+
+    This is the single source of truth: ``DriverSession`` resolves the env it
+    launches with through here, so a journey's preflight and its session always
+    agree about which runtime is under test.
+    """
+    if override:
+        return Path(override)
+    from_env = os.environ.get("COPILOT_HOME")
+    if from_env:
+        return Path(from_env)
+    if target == INSTALLED_PAYLOAD_TARGET:
+        return Path.home() / ".0xcopilot"
+    return REPO_ROOT / "apps" / "desktop" / "resources"
+
+
+def staged_runtime_dir(
+    *, target: str = SOURCE_TARGET, override: str | None = None
+) -> Path:
+    """The host-specific staged runtime a journey's preflight must inspect."""
+    return (
+        resolve_copilot_home(target=target, override=override)
+        / "runtime"
+        / host_runtime_key()
+    )
 
 
 # ── secure key loading ───────────────────────────────────────────────────────
@@ -90,7 +159,9 @@ class DriverSession:
     env overrides (all optional):
       APP_DIR       – electron app dir (default: <repo>/apps/desktop). Point at a
                       worktree's apps/desktop to verify a branch build.
-      COPILOT_HOME  – staged runtime dir (default: <repo>/apps/desktop/resources).
+      COPILOT_HOME  – staged runtime dir. The default depends on the target:
+                      <repo>/apps/desktop/resources for `source`, ~/.0xcopilot
+                      for `installed-payload` (see `resolve_copilot_home`).
                       Frontend-only changes can reuse main's staged services.
       COPILOT_DESKTOP_TEST_TARGET=installed-payload – launch the globally installed
                       @0x-copilot/cli payload and its own Electron binary. This
@@ -117,34 +188,28 @@ class DriverSession:
         env["CTL_PORT"] = str(self.port)
         env["POSTURE"] = "prod"
         env["RUN_DIR"] = str(self.run_dir)
-        target = env.get("COPILOT_DESKTOP_TEST_TARGET", "source")
+        target = env.get("COPILOT_DESKTOP_TEST_TARGET", SOURCE_TARGET)
         if installed_payload:
-            target = "installed-payload"
+            target = INSTALLED_PAYLOAD_TARGET
         env["COPILOT_DESKTOP_TEST_TARGET"] = target
-        if target == "installed-payload":
+        if target == INSTALLED_PAYLOAD_TARGET:
             if app_dir is not None:
                 raise ValueError(
                     "app_dir cannot be used with installed_payload=True; "
                     "that journey must launch the installed npm payload"
                 )
-            # An installed CLI stages to ~/.0xcopilot by default. Keep an explicit
-            # COPILOT_HOME override for isolated installs, but never substitute the
-            # source checkout's resources — that would invalidate the artifact test.
-            env["COPILOT_HOME"] = (
-                copilot_home
-                or env.get("COPILOT_HOME")
-                or str(Path.home() / ".0xcopilot")
-            )
+            # An installed CLI stages to ~/.0xcopilot. `resolve_copilot_home`
+            # honours an explicit COPILOT_HOME for isolated installs but never
+            # substitutes the source checkout's resources — that would
+            # invalidate the artifact test.
             env.pop("APP_DIR", None)
         else:
             env["APP_DIR"] = (
                 app_dir or env.get("APP_DIR") or str(REPO_ROOT / "apps" / "desktop")
             )
-            env["COPILOT_HOME"] = (
-                copilot_home
-                or env.get("COPILOT_HOME")
-                or str(REPO_ROOT / "apps" / "desktop" / "resources")
-            )
+        env["COPILOT_HOME"] = str(
+            resolve_copilot_home(target=target, override=copilot_home)
+        )
         # A throwaway userData subdir ⇒ a fresh first-run every time.
         suffix = str(time.time_ns()) if fresh else "reuse"
         self.user_data_subdir = f"journey-{name}-{suffix}"
