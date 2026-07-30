@@ -2057,6 +2057,16 @@ class RuntimeEventPresentationProjector:
             "display_name",
             Keys.Field.TOOL_NAME,
             "risk_level",
+            # Filesystem approvals: the folder being asked about and whether it
+            # is a read or a write. Both are already implied by `message`, but
+            # a card that has to parse prose to find its own subject cannot
+            # style, truncate or localise it. Absent from this allow-list they
+            # arrived as None and the card fell back to the sentence — the same
+            # silent-strip that made `workspace_grant` undeliverable, where a
+            # correct producer and a correct parser had the field deleted
+            # between them.
+            "path",
+            "operation",
             Keys.Payload.MESSAGE,
             Keys.Field.REASON,
             Keys.Field.STATUS,

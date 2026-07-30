@@ -86,3 +86,29 @@ class TestFilesystemInterruptBecomesAnApproval:
             interrupt_id="i", interrupt_value=_interrupt(name, {})
         )
         assert all(p.get("approval_kind") != "filesystem_access" for p in payloads)
+
+
+class TestThePayloadSurvivesTheApiProjection:
+    """The producer being right is not enough — the projection must carry it.
+
+    `_approval_requested_payload` is an ALLOW-LIST. A field it does not name is
+    silently dropped, which is how `workspace_grant` was undeliverable earlier
+    in this program: correct producer, correct parser, field deleted between
+    them, and no test on either side could see it.
+    """
+
+    def test_path_and_operation_reach_the_client(self) -> None:
+        from runtime_api.schemas.events import RuntimeEventPresentationProjector
+
+        approval = StreamOrchestrator.native_tool_approval_payloads(
+            interrupt_id="int-1",
+            interrupt_value=_interrupt("ls", {"path": "/Users/ada/Downloads"}),
+        )[0]
+        projected = RuntimeEventPresentationProjector._approval_requested_payload(
+            approval
+        )
+        assert projected.get("path") == "/Users/ada/Downloads", (
+            "the card cannot name the folder it is asking about"
+        )
+        assert projected.get("operation") == "read"
+        assert projected.get("approval_kind") == "filesystem_access"
