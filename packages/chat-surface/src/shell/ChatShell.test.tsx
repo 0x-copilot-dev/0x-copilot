@@ -11,6 +11,7 @@ import type { ArtifactRoute, Router } from "../routing/router";
 import type { KeyValueStore } from "../storage/key-value-store";
 
 import { ChatShell } from "./ChatShell";
+import type { ContextPanelProps } from "./ContextPanel";
 import type { ShellDestinationSlug } from "./destinations";
 
 function staticRouter(): Router<ArtifactRoute> {
@@ -69,8 +70,9 @@ interface MountOptions {
   readonly walletChip?: React.ReactNode;
   /** Override the transport (e.g. one that answers /active_count). */
   readonly transport?: Transport;
-  /** Side-column content. Omitted = no column, which is now the default. */
-  readonly contextPanel?: React.ReactNode;
+  /** Side-column content. Omitted = no column, which is now the default.
+   *  Mirrors ChatShell's own union: a props bag OR a composed node. */
+  readonly contextPanel?: ContextPanelProps | React.ReactNode;
   readonly rightRail?: React.ReactNode;
   readonly children?: React.ReactNode;
 }
