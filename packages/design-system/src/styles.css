@@ -1378,22 +1378,35 @@ textarea {
   color: var(--color-text-subtle);
 }
 
+/* `position: relative` is LOAD-BEARING, not decoration — do not remove it.
+ *
+ * The visually-hidden `input` below is `position: absolute`. Without a
+ * positioned ancestor its containing block is the INITIAL containing block, and
+ * an abs-positioned box whose containing block sits outside a clipper is NOT
+ * clipped by that clipper's `overflow: hidden`. So the input escaped every
+ * scroll container between it and `<html>` — including the desktop app's
+ * `.desktop-window-frame` — and reported its static position in DOCUMENT
+ * coordinates as scrollable overflow on the root element.
+ *
+ * Shipped consequence: on any surface tall enough to push a switch below the
+ * fold (Settings → Model & behavior, whose Spend guardrail toggle is the last
+ * row of the tallest page), `<html>` gained hundreds of px of scrollable
+ * overflow in a window that must never scroll. Wheeling past the settings pane,
+ * trackpad overscroll, or tabbing to that off-screen input then lifted the
+ * ENTIRE app shell — rail, nav, content — out of the window, leaving dead
+ * background below and the rail/nav tops clipped off. Measured live: root
+ * scrollHeight 1239 vs clientHeight 800, shell top dragged from +32 to -407.
+ *
+ * Anchoring the switch makes the input's containing block the switch itself, so
+ * the frame clips it like every other descendant. The knob
+ * (`.ui-switch span::after`) is already anchored to the track and is unaffected.
+ */
 .ui-switch {
   align-items: center;
   color: var(--color-text);
   cursor: pointer;
   display: inline-flex;
   gap: var(--space-sm);
-  /* Containing block for the visually-hidden input below. Without it the
-     absolutely-positioned checkbox resolves its containing block all the way up
-     to the INITIAL containing block, and overflow clipping only applies to
-     descendants whose containing block is inside the clipper — so no scroll
-     container between here and the root can clip it. Each escaped checkbox then
-     grew the document's scrollable overflow region: measured live in the desktop
-     app, one Settings section (model & behavior) reported a 1239px document
-     against a 600px viewport, and the whole app window could be scrolled out of
-     its own frame. No visual effect — there are no offsets and z-index stays
-     auto, so nothing moves and no stacking context is created. */
   position: relative;
 }
 
@@ -2092,10 +2105,16 @@ textarea {
   color: var(--color-text-subtle);
 }
 
-/* Scrolling row region — the design's `.pop__list`. */
+/* Scrolling row region — the design's `.pop__list`. Vertical ONLY: a popover is
+ * a fixed-width panel whose rows truncate, so a horizontal scrollbar is always
+ * a layout bug, never an affordance. It used to be plain `overflow: auto`, and
+ * one row whose sub-line failed to truncate (see `.ui-pop-row__sb`) turned the
+ * whole Tools panel into a sideways-scrolling strip with the badge column
+ * scrolled out of view and overflowing text sliding under the trailing pill. */
 .ui-pop__list {
   max-height: 264px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0 5px 5px;
 }
 
@@ -2189,8 +2208,15 @@ button.ui-pop-row {
   white-space: nowrap;
 }
 
-/* Row sub-line — the design's `.pop-row .sb`. */
+/* Row sub-line — the design's `.pop-row .sb`. `display: block` is load-bearing,
+ * not cosmetic: every consumer renders this as a `<span>` directly inside the
+ * `.ui-pop-row__m` text column, and `overflow` / `text-overflow` DO NOT APPLY to
+ * a non-replaced inline box. Without it the `nowrap` line box simply grew past
+ * the panel — no ellipsis ever appeared — which is what made the Tools popover
+ * scroll horizontally. (The name line's `.ui-pop-row__txt` never had the bug: it
+ * is a flex child of `.ui-pop-row__nm`, so it is already blockified.) */
 .ui-pop-row__sb {
+  display: block;
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;

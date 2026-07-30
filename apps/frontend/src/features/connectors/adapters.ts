@@ -116,6 +116,11 @@ export function formatLastSync(
  *                                  fresh row when present; we patch it).
  * * `connector.error_threshold` → no list mutation — affects UI badge
  *                                  rendering only.
+ * * `connector.removed`         → DROP the row. Terminal, so it is handled
+ *                                  before the patch path below: the payload
+ *                                  describes a row that no longer exists and
+ *                                  patching it back in would resurrect a
+ *                                  deleted tool.
  * * `heartbeat`                 → no-op.
  *
  * When the envelope carries a `connector` payload, we trust it as the
@@ -135,6 +140,10 @@ export function applyConnectorEnvelope(
   const incoming = envelope.connector;
   if (incoming === undefined) {
     return items;
+  }
+  if (envelope.event_type === "connector.removed") {
+    const remaining = items.filter((c) => c.id !== incoming.id);
+    return remaining.length === items.length ? items : remaining;
   }
   const idx = items.findIndex((c) => c.id === incoming.id);
   if (idx === -1) {

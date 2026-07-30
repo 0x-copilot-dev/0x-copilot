@@ -1,66 +1,132 @@
-# shell-overflow — the desktop document must never scroll
+# shell-overflow — the app shell must never scroll the document
 
-**User story.** I make the 0xCopilot window short — half my screen height, or a
-small laptop display. Every surface stays where it belongs: the window frame
-never moves, and anything taller than the window scrolls _inside_ its own panel.
-Nothing is cut off, and I can never drag the whole app out of its own window.
+Live-smoke guard for one structural invariant of the desktop window: **the root
+element never gains scrollable overflow.**
 
-## Root cause (why this journey exists)
+`.desktop-window-frame` is `height: 100%` with `overflow: hidden`, and every
+scroll region lives _inside_ it (the settings content pane, the settings nav, the
+run transcript). If `<html>` itself becomes scrollable, the entire shell — rail,
+nav, content — can be lifted out of the window by a wheel event, trackpad
+overscroll, or a focus move onto an off-screen element, leaving dead background
+below and the rail/nav tops clipped off. The window looks broken; nothing is
+recoverable by scrolling back, because the user has no idea the _document_
+scrolled.
 
-The desktop window is a **fixed application frame**. `.desktop-window-frame` is
-`height: 100%; overflow: hidden`, and every scroll region lives inside it. Two
-invariants have to hold together, and each is only safe because of the other.
+Runnable: [`shell_document_overflow.py`](./shell_document_overflow.py). It signs
+in and completes the FTUE if the userData dir is fresh (key read from
+`services/ai-backend/.env` via `load_env_key`, never printed), then sweeps every
+settings section and every rail destination. Default provider `anthropic`;
+override with `SHELL_OVERFLOW_PROVIDER=openai`.
 
-### A. The document must never be scrollable
+Result vocabulary: **PASS** (invariant held) · **SKIP** (destination absent from
+this profile's rail) · **FAIL** (exit 1).
 
-`apps/desktop/renderer/desktop.css` reserves a 32px draggable titlebar strip
-(`#root { padding-top: var(--titlebar-inset) }`) because macOS
-`titleBarStyle: "hiddenInset"` paints the traffic lights over the content. If the
-**document** can scroll, that strip and the frame's border scroll away with it —
-the whole shell can be dragged out of its own window.
+---
 
-That is exactly what happened. `.ui-switch` in
-`packages/design-system/src/styles.css` hides its checkbox with
-`position: absolute`, but `.ui-switch` itself was not a positioned element, so
-the checkbox's containing block resolved past every wrapper up to the **initial
-containing block**. Overflow clipping only applies to descendants whose
-containing block is inside the clipper, so the frame's `overflow: hidden` did
-**not** clip it: each escaped checkbox grew the document's scrollable overflow
-region, and the window became scrollable.
+## The regression this exists for
 
-The fix is at the source — `.ui-switch` is now `position: relative`, so the
-checkbox's containing block is its own component. Measured live in the desktop
-app before that line: Settings → **Model & behavior** reported a **1239px**
-document against a 600px viewport (`input[data-testid=pause-at-cap-toggle]`,
-639px past the client box), with **Appearance** (`appearance-reduce-motion`) and
-**Privacy** (`privacy-memory-toggle`) escaping too. Destinations without
-switches were all clean, which is what pinned the cause to the toggle.
+Settings → Model & behavior shipped with the shell liftable out of the window.
 
-The second layer is the invariant this journey is named for. The web host had
-declared it all along — `apps/frontend/src/styles.css` has
-`body { margin: 0; overflow: hidden; }`. The desktop host only had
-`body { margin: 0 }`. **That asymmetry is why the same escaped element produced
-visible damage on desktop and none on web.** `desktop.css` now declares
-`overflow: hidden` too, so the _next_ escaped absolutely-positioned element
-degrades to an invisible layout artefact instead of a scrollable, broken window.
+The visually-hidden `input` inside `.ui-switch` was `position: absolute` while
+`.ui-switch` itself was `position: static`, so the input's containing block
+resolved to the **initial containing block**. An abs-positioned box whose
+containing block sits _outside_ a clipper is not clipped by that clipper's
+`overflow: hidden` — so the input escaped `.desktop-window-frame` entirely and
+reported its static position in **document** coordinates as root overflow.
 
-The two layers are not redundant, and neither is sufficient alone:
-`overflow: hidden` clips and removes the scrollbar, but the box **remains a
-scroll container** — `scrollHeight` still reports the full scrollable overflow
-region and a programmatic `scrollTop` write is still honoured. So the
-defense-in-depth layer stops the user-visible damage while the source fix is what
-actually keeps `scrollHeight === clientHeight`.
+Measured live in the packaged app at a 1200×800 window:
 
-### B. Therefore every full-window surface must own its own scroll
+| Probe                            | Broken | Fixed        |
+| -------------------------------- | ------ | ------------ |
+| `documentElement.scrollHeight`   | 1239   | 800          |
+| `documentElement.clientHeight`   | 800    | 800          |
+| `.desktop-window-frame` rect top | −407   | +32          |
+| escaped input `offsetParent`     | `body` | `.ui-switch` |
 
-Enforcing A is only safe if nothing leans on the document to scroll. Anything
-that sizes itself past the frame and relied on the document becomes
-**permanently unreachable** the moment A lands — a defense-in-depth fix that
-silently creates an unreachable-content bug.
+Fix: [`packages/design-system/src/styles.css`](../../../packages/design-system/src/styles.css)
+gives `.ui-switch` `position: relative`, so the input's containing block is the
+switch and the frame clips it like every other descendant. The comment there is
+load-bearing — read it before touching that rule.
 
-Two surfaces render before the shell and are full-window:
+Why unit tests could not catch it: **jsdom does not lay out.** There is no
+containing-block resolution, no `offsetParent`, no `scrollHeight`. The escape
+only exists in a real engine, which is exactly the class of bug this harness
+exists for.
 
-| Surface      | Root            | Stylesheet     | Before                                                         | Now                                                 |
+---
+
+## J1 — No settings section scrolls the document
+
+**User story:** I open Settings and click through every section. The window
+chrome stays put — the rail and the nav never slide out of the frame, no matter
+how tall the section is.
+
+| Step                                                      | Coverage                                                                          |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Reach the shell (sign-in / FTUE tolerated, both optional) | ASSERTED (`sign-in-button` → `first-run-add-key` → `button[aria-label=Settings]`) |
+| Open Settings, expand the collapsed **Advanced** group    | ASSERTED (`settings-surface`, `settings-group-toggle-advanced`)                   |
+| For every `[role=tab][data-slug]`: root overflow is 0px   | ASSERTED (`documentElement.scrollHeight - clientHeight === 0`)                    |
+| For every section: nothing escaped to the ICB             | ASSERTED (no laid-out `position:absolute` element has `offsetParent === body`)    |
+
+`model-behavior` is the section that regressed — it is the tallest page and its
+Spend guardrail toggle is the last row, so the escaped input landed furthest
+below the fold. It is swept like every other slug rather than special-cased.
+
+## J2 — No rail destination scrolls the document
+
+**User story:** I click through Run, Chats, Projects, Activity, Tools and Skills.
+Same invariant — the shell is a fixed frame everywhere, not just in Settings.
+
+| Step                                                | Coverage                                                      |
+| --------------------------------------------------- | ------------------------------------------------------------- |
+| Each solo-profile destination in the rail is opened | ASSERTED (`[aria-label=…][data-destination]`), SKIP if absent |
+| Root overflow is 0px on each                        | ASSERTED                                                      |
+| Nothing escaped to the ICB on each                  | ASSERTED                                                      |
+
+---
+
+## Why the ICB check, not just the overflow check
+
+The overflow check is the **symptom** and is window-height dependent: an escaped
+element whose static position happens to fall _above_ the fold inflates nothing
+today and becomes a live bug the moment the window shrinks or the page grows.
+When this regression was found, three of the four escaped switches
+(`appearance-reduce-motion`, `privacy-memory-toggle`, `web-access-toggle`) were
+reporting 0px of overflow purely because they sat inside the viewport — latent,
+not fixed.
+
+The ICB check is the **cause** and is height independent, so it fails the moment
+a new primitive absolutely-positions a child without anchoring its wrapper.
+Deliberate `position: fixed` overlays (the toast stack) report
+`offsetParent === null` and are correctly ignored, as are elements inside a
+`display: none` subtree (the hidden destination outlet).
+
+---
+
+## J3 — A short window makes nothing unreachable
+
+`short_window_surfaces.py`. J1/J2 sweep at the default 1200x800 window, where
+every surface fits. This journey resizes the **real** window short and checks the
+half that only breaks there.
+
+**User story:** I make the window short — half my screen, or a small laptop
+display. Nothing is cut off: anything taller than the window scrolls _inside_ its
+own panel, and the window frame still never moves.
+
+### Why enforcing the document invariant needed a second fix
+
+`desktop.css` only set `body { margin: 0 }`; it never declared that the document
+must not scroll. The web host has declared it all along
+(`apps/frontend/src/styles.css`: `body { margin: 0; overflow: hidden }`), and that
+asymmetry is why the escaped switch above produced visible damage on desktop and
+none on web. `desktop.css` now declares `overflow: hidden` too, so the _next_
+escape degrades to an invisible layout artefact instead of a scrollable window.
+
+That is only safe if nothing leans on the document to scroll — otherwise the
+defense-in-depth fix silently creates an **unreachable-content** bug. Both
+pre-shell full-window surfaces did lean on it:
+
+| Surface      | Root            | Stylesheet     | Was                                                            | Now                                                 |
 | ------------ | --------------- | -------------- | -------------------------------------------------------------- | --------------------------------------------------- |
 | Sign-in gate | `.loginx-shell` | `signin.css`   | `min-height: 100vh`, **no internal overflow**                  | `height: 100%` + `overflow: auto`, column direction |
 | FTUE         | `.fr`           | `firstrun.css` | `height: 100%; overflow: auto` + inherited `min-height: 100vh` | adds `min-height: 0` to drop the inherited `100vh`  |
@@ -68,112 +134,46 @@ Two surfaces render before the shell and are full-window:
 Two details matter beyond "add `overflow: auto`":
 
 - **`height: 100%`, not `min-height: 100vh`.** The frame's content box is one
-  titlebar inset _shorter_ than the viewport, so a `100vh` surface hangs 32px
-  past the frame and that tail is **clipped** by the frame — no amount of
-  internal scrolling reveals it. The FTUE `.fr` hit this via the shared
+  titlebar inset _shorter_ than the viewport (33px with its hairline borders), so
+  a `100vh` surface hangs past the frame and that tail is **clipped** by the
+  frame — and since min-height beats height, `height: 100%` alone does not save
+  it. `.fr` hit this via the shared
   `packages/chat-surface/src/onboarding/onboarding.css`, which sets
-  `min-height: 100vh` for web hosts where the document _does_ scroll;
-  `firstrun.css` neutralises it for the desktop frame with `min-height: 0`.
-- **Column flex direction on `.loginx-shell`.** Scrollable overflow never
-  extends above a scroll container's start edge. `.loginx-pane` centres the card
-  with `align-items: center`; as a **row** flex item it is stretched to the
-  container's height and a tall card overflows it symmetrically, so the card's
-  top would be cut off and unreachable even with `overflow: auto`. As a **column**
-  flex item its automatic minimum size keeps it at content height, so overflow
+  `min-height: 100vh` for web hosts where the document _does_ scroll. Measured:
+  33px of the FTUE surface, footer included, was unreachable at every height.
+- **Column flex direction on `.loginx-shell`.** Scrollable overflow never extends
+  above a scroll container's start edge. `.loginx-pane` centres the card with
+  `align-items: center`; as a **row** flex item it is stretched to container
+  height, so a tall card overflows symmetrically and its top lands above the
+  scrollable region — unreachable even _with_ `overflow: auto`. As a **column**
+  flex item its automatic minimum size holds it at content height, so overflow
   grows downward into the scrollable region.
 
-The desktop host needs **no** document-scroll escape hatch. The web host does
-have one (`html.login-html, body.login-body { overflow: auto !important }`) for a
-login screen that genuinely scrolls the page. Any new full-window desktop
-surface must scroll internally instead — do not re-open the document scroll.
-
-## The journey
-
-```bash
-python3 tools/desktop-journeys/shell-overflow/shell_document_overflow.py
-```
-
-Needs no provider key and starts no run — it is pure layout truth, so it is
-cheap enough to run on any renderer change.
-
-**Runs the whole walk at two short window heights.** At the 1200x800 default
-every surface fits and all checks pass trivially; invariant B only bites when the
-window is short. The journey uses `1200x600` (a user halving the window) and
-`1200x420`, and fails if the window manager refused the size, so a vacuous pass
-is not reported as green.
-
-What each size actually exercises, as measured: at 420 the sign-in card genuinely
-overflows and is reachable only by scrolling `.loginx-shell` internally
-(`overflows→scrolls internally, height=386`). The FTUE body still fits at 420 —
-its failure mode was the frame-clipping one, caught at **both** sizes (33px of
-`.fr`, its footer included, hung past the frame). Both surfaces are asserted to
-carry `overflow-y: auto` whether or not the current content needs it, so the
-contract is checked even when the content happens to fit.
-
-Window resizing goes through the driver's `resizeWindow` RPC
-(`tools/cli-testing/harness/driver.mjs`), which calls `setContentSize` on the
-**real** `BrowserWindow` — not a Playwright viewport override — so `vh` units,
-the titlebar inset, and internal scroll regions all behave as they do for a user
-dragging the window smaller.
-
-### What it asserts
-
-**Invariant A**, at every step — sign-in, FTUE, every rail destination, every
-Settings section:
-
-- `document.documentElement.scrollHeight === clientHeight` **and**
-  `scrollWidth === clientWidth` (a single-axis check can pass while the document
-  still scrolls in the other axis).
-- This is deliberately **stricter** than "the user cannot scroll the window".
-  Because `overflow: hidden` leaves the box a scroll container, asserting that a
-  wheel or a forced `scrollTop` does nothing would pass over a fully escaped
-  element and prove only that the defense-in-depth layer is present. Zero
-  scrollable overflow is the assertion that catches the escape itself.
-- On failure the journey prints the **culprits**: every element whose box extends
-  past the document's client box and which no ancestor actually clips, with its
-  tag, class, `data-testid`, `position`, and overflow in px. The bug class here is
-  always "which element escaped its clipping ancestor", so the report names it
-  rather than leaving a bare pixel delta. This is what identified
-  `input[data-testid=pause-at-cap-toggle] position:absolute` as the `.ui-switch`
-  checkbox.
-
-**Invariant B**, for `.loginx-shell` and `.fr`:
-
-- `overflow-y` is `auto`/`scroll` — the surface owns a scroll.
-- Its box sits inside the frame's content box: no part is clipped past the
-  frame's top or bottom (this is the `100vh`-past-the-frame check).
-- Content is reachable at **both** ends of its own scroll range: nothing above
-  its visible top at `scrollTop = 0` (the centred-overflow trap), and nothing
-  below its visible bottom when scrolled fully.
+The desktop host needs **no** document-scroll escape hatch. The web host has one
+(`html.login-html, body.login-body { overflow: auto !important }`) for a login
+screen that genuinely scrolls the page. Any new full-window desktop surface must
+scroll internally instead — do not re-open the document scroll.
 
 ### Coverage
 
-| Step | Surface                | Selector                                      |
-| ---- | ---------------------- | --------------------------------------------- |
-| 1    | Sign-in gate           | `[data-testid=sign-in-gate]`, `.loginx-shell` |
-| 2    | FTUE                   | `[data-testid=first-run-surface]`, `.fr`      |
-| 3    | Every rail destination | `button[data-destination]` (enumerated live)  |
-| 4    | Every Settings section | `[role=tab][data-slug]` (enumerated live)     |
+| Step                                                              | Coverage                                                                                  |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Resize the real window to 1200x600, then 1200x420                 | ASSERTED (`resizeWindow` RPC; FAILS if the size was refused)                              |
+| Sign-in gate + FTUE: surface owns `overflow-y: auto`              | ASSERTED (`.loginx-shell`, `.fr`)                                                         |
+| Neither surface is clipped past the frame's top or bottom         | ASSERTED (this is the `100vh`-past-the-frame check)                                       |
+| Content reachable at BOTH ends of each surface's own scroll range | ASSERTED (nothing above its visible top at `scrollTop=0`, none below when scrolled fully) |
+| Every destination + every settings section, at BOTH short sizes   | ASSERTED (root overflow 0px; enumerated live, so new ones are covered)                    |
 
-Destinations and Settings sections are **enumerated from the live DOM**, not
-hardcoded, so a newly added destination or settings section is covered
-automatically. Settings is the important half — its `.ui-switch` toggles are
-where the escaping absolutely-positioned element was found.
+Resizing goes through the driver's `resizeWindow` RPC, which calls
+`setContentSize` on the real `BrowserWindow` — not a Playwright viewport
+override — so `vh` units, the titlebar inset, and internal scroll regions behave
+as they do for a user dragging the window smaller.
 
-A regression in `.ui-switch` — or in any other component that absolutely
-positions a child without establishing a containing block — **does** fail this
-journey, because invariant A is asserted as zero scrollable overflow rather than
-as "the window doesn't move". The defense-in-depth layer keeps such a regression
-from being user-visible; the journey keeps it from being silent.
+### Why zero overflow, not "the window refuses to scroll"
 
-### Not covered
-
-- The boot screen (`.boot`, `height: 100vh`) is not asserted: it renders before
-  the frame mounts, is `overflow: hidden` with centred content, and has no
-  scrollable content of its own.
-- Destinations are visited but their _internal_ scroll regions are not walked —
-  only that reaching each one leaves the document unscrollable. Per-destination
-  scroll behaviour belongs with that destination's own journey.
-- The team-profile Settings sections (`workspace`, `members`, `billing`, `audit`)
-  never render under the desktop's `single_user_desktop` profile, so the 9
-  sections enumerated here are all of them for this host.
+`overflow: hidden` clips and drops the scrollbar, but the box **remains a scroll
+container**: `scrollHeight` still reports the full scrollable overflow region and
+a programmatic `scrollTop` write is still honoured. So asserting that a wheel or a
+forced `scrollTop` does nothing would pass over a fully escaped element and prove
+only that the defense-in-depth layer is present. Zero scrollable overflow is what
+catches the escape — the same reason J1/J2 assert the ICB cause directly.

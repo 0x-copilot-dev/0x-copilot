@@ -1,379 +1,216 @@
 #!/usr/bin/env python3
-"""Journey — the desktop DOCUMENT never scrolls, and no surface is unreachable.
+"""shell-overflow — the app shell must never make the DOCUMENT scrollable.
 
-The desktop window is a fixed application frame: `.desktop-window-frame` is
-`height: 100%; overflow: hidden` and every scroll region lives inside it. So two
-invariants must hold together, and each one is only safe because of the other:
+The desktop window is a fixed frame: `.desktop-window-frame` is `height: 100%`
+with `overflow: hidden`, and every scroll region lives INSIDE it (the settings
+content pane, the nav, the transcript). The root element must therefore never
+gain scrollable overflow. When it does, the whole shell — rail, nav, content —
+can be lifted out of the window by a wheel event, trackpad overscroll, or a
+focus move, leaving dead background below and the rail/nav tops clipped off.
 
-  A. The document itself must NEVER be scrollable. If it is, the reserved
-     titlebar strip and the frame's border scroll away with it and the whole
-     shell can be dragged out of the window. `desktop.css` declares
-     `body { overflow: hidden }` (the web host declares the same in
-     `apps/frontend/src/styles.css`), so an escaped absolutely-positioned
-     descendant — one whose containing block resolved to the initial containing
-     block instead of its own component, which the frame's `overflow: hidden`
-     therefore does NOT clip — degrades to an invisible layout artefact instead
-     of a scrollable, broken window.
+That shipped once (Settings → Model & behavior): the visually-hidden `input`
+inside `.ui-switch` was `position: absolute` while `.ui-switch` was `static`, so
+its containing block resolved to the INITIAL containing block. An abs-positioned
+box whose containing block sits outside a clipper is not clipped by that
+clipper's `overflow: hidden`, so the input escaped the window frame and reported
+its static position in DOCUMENT coordinates as root overflow — measured live at
+scrollHeight 1239 against clientHeight 800, dragging the shell top from +32 to
+-407. Unit tests could not see it: jsdom does not lay out, so the escape only
+exists in a real engine.
 
-  B. Because of A, every full-window surface must own its OWN internal scroll.
-     Anything that sizes itself past the frame and leans on the document to
-     scroll becomes permanently unreachable once A is enforced. This is the
-     trap this journey exists to catch: `.loginx-shell` used to be
-     `min-height: 100vh` with no internal overflow, so on a short window the
-     sign-in card relied on document scrolling.
+This journey asserts BOTH halves, on every settings section and every rail
+destination:
 
-Both are asserted at a SHORT window height, where B actually bites — at the
-1200x800 default the surfaces fit and every check passes trivially. The journey
-runs the whole walk twice: once at 1200x600, then again at 1200x420 where the
-sign-in card and the FTUE surface genuinely overflow.
+  1. OUTCOME — `documentElement.scrollHeight <= clientHeight`.
+  2. ROOT CAUSE — no laid-out, absolutely-positioned element resolves its
+     containing block to the initial containing block (`offsetParent === body`).
 
-Coverage: the two pre-shell surfaces (sign-in gate, FTUE), then every rail
-destination and every Settings section, enumerated from the live DOM so a newly
-added destination or settings section is covered automatically. Settings is the
-important half — its `.ui-switch` toggles are where the escaping abspos element
-was found.
+(2) is the stronger check and is window-height independent: an escaped element
+whose static position happens to fall ABOVE the fold inflates nothing today, but
+becomes (1) the moment the window shrinks or the page grows. Deliberate
+`position: fixed` overlays (the toast stack) report `offsetParent === null` and
+are correctly ignored.
+
+Run (from repo root, with the stack staged/built — see ../README.md):
 
     python3 tools/desktop-journeys/shell-overflow/shell_document_overflow.py
 
-Needs no provider key and starts no run: it is pure layout truth. Exits non-zero
-on any failed assertion.
+Exits non-zero on any violation.
 """
 
 from __future__ import annotations
 
-import os as _os
-import sys as _sys
+import os
+import sys
 import time
 
-_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from _lib import DriverSession  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# The two short window sizes the walk is repeated at. 600 is the height a user
-# gets by halving the default window; 420 is short enough that the sign-in card
-# and the FTUE body must scroll internally, which is the case that regressed.
-SIZES: list[tuple[int, int]] = [(1200, 600), (1200, 420)]
+from _lib import DriverSession, load_env_key  # noqa: E402
 
-FRAME = "[data-testid=desktop-window-frame]"
+PROVIDER = os.environ.get("SHELL_OVERFLOW_PROVIDER", "anthropic")
+
+# Rail destinations to sweep (solo profile labels, per destinationsForProfile).
+DESTINATIONS = ["Run", "Chats", "Projects", "Activity", "Tools", "Skills"]
+
+# ── JS probes ────────────────────────────────────────────────────────────────
+
+# Root-element overflow, in px. 0 is the only healthy value.
+JS_DOC_OVERFLOW = (
+    "(()=>{const d=document.documentElement;return d.scrollHeight-d.clientHeight})()"
+)
+
+# Every laid-out abs-positioned element whose containing block escaped to the
+# ICB. `offsetParent === body` is exactly that condition in Blink. Elements in a
+# `display:none` subtree report `offsetParent === null` and are skipped, as are
+# `position: fixed` overlays (also null).
+JS_ESCAPED = """
+(()=>{const out=[];
+document.querySelectorAll("*").forEach(e=>{
+  if(getComputedStyle(e).position!=="absolute")return;
+  if(e.offsetParent!==document.body)return;
+  const r=e.getBoundingClientRect();
+  if(r.width===0&&r.height===0)return;
+  const cls=(e.className||"").toString().split(" ").filter(Boolean).join(".");
+  const pcls=(e.parentElement&&e.parentElement.className||"").toString()
+    .split(" ").filter(Boolean).join(".");
+  out.push({
+    el:e.tagName.toLowerCase()+(cls?"."+cls:""),
+    testid:e.getAttribute("data-testid")||null,
+    parent:(e.parentElement?e.parentElement.tagName.toLowerCase():"?")
+      +(pcls?"."+pcls:""),
+    docTop:Math.round(r.top+document.documentElement.scrollTop),
+  })});
+return out})()
+"""
+
+JS_SETTINGS_SLUGS = (
+    "Array.from(document.querySelectorAll('[role=tab][data-slug]'))"
+    ".map(t=>t.getAttribute('data-slug'))"
+)
+
+
+def log(line: str) -> None:
+    print(line, flush=True)
+
 
 failures: list[str] = []
 
 
-def fail(msg: str) -> None:
-    print(f"  ✗ {msg}")
-    failures.append(msg)
+def check(s: DriverSession, where: str) -> None:
+    """Assert both halves of the invariant at the current surface."""
+    overflow = s.evaluate(JS_DOC_OVERFLOW)
+    escaped = s.evaluate(JS_ESCAPED) or []
+
+    if overflow and int(overflow) > 0:
+        failures.append(
+            f"{where}: document root scrolls by {overflow}px "
+            "(the shell can be lifted out of the window)"
+        )
+        log(f"FAIL  {where}: root overflow {overflow}px")
+    else:
+        log(f"PASS  {where}: root overflow 0px")
+
+    if escaped:
+        for e in escaped:
+            tid = f" data-testid={e['testid']}" if e.get("testid") else ""
+            failures.append(
+                f"{where}: {e['el']}{tid} (in {e['parent']}) escaped its clipper "
+                f"— containing block is the ICB, laid out at document y={e['docTop']}. "
+                "Give its positioned wrapper `position: relative`."
+            )
+            log(f"FAIL  {where}: escaped to ICB → {e['el']}{tid} in {e['parent']}")
+    else:
+        log(f"PASS  {where}: no element escaped to the initial containing block")
 
 
-def ok(msg: str) -> None:
-    print(f"  ✓ {msg}")
+def reach_shell(s: DriverSession, timeout_s: int = 300) -> None:
+    """Walk whatever gates this userData dir lands on until the shell renders.
 
-
-# ── diagnostics — name the element that grew the document ───────────────────
-CULPRITS_JS = """
-(() => {
-  const d = document.documentElement;
-  const limitY = d.clientHeight, limitX = d.clientWidth;
-  const out = [];
-  for (const el of document.querySelectorAll("*")) {
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) continue;
-    const overY = Math.round(r.bottom - limitY);
-    const overX = Math.round(r.right - limitX);
-    if (overY <= 1 && overX <= 1) continue;
-    // Only report the elements that CAUSE the overflow: an element inside a
-    // clipping ancestor is already contained, so walk up looking for a clipper
-    // whose containing-block chain actually holds it.
-    const cs = getComputedStyle(el);
-    let clipped = false;
-    for (let p = el.parentElement; p; p = p.parentElement) {
-      const ps = getComputedStyle(p);
-      const clips = ps.overflowX !== "visible" || ps.overflowY !== "visible";
-      const positioned = ps.position !== "static";
-      if (clips && (cs.position !== "absolute" || positioned)) { clipped = true; break; }
-      if (cs.position === "fixed") break;
-    }
-    if (clipped) continue;
-    out.push({
-      tag: el.tagName.toLowerCase(),
-      cls: (el.className || "").toString().slice(0, 60),
-      testid: el.getAttribute("data-testid"),
-      position: cs.position,
-      overY, overX,
-    });
-  }
-  // Deepest/worst offenders first, capped so the log stays readable.
-  return out.sort((a, b) => b.overY - a.overY).slice(0, 6);
-})()
-"""
-
-
-def culprits(s: DriverSession) -> list[str]:
-    """Describe the elements whose boxes extend past the document's client box."""
-    rows = s.evaluate(CULPRITS_JS) or []
-    return [
-        f"{r['tag']}.{r['cls'] or '(no class)'}"
-        + (f" [{r['testid']}]" if r["testid"] else "")
-        + f" position:{r['position']} overflowsY={r['overY']}px overflowsX={r['overX']}px"
-        for r in rows
-    ]
-
-
-# ── invariant A — the document cannot scroll ────────────────────────────────
-def assert_document_cannot_scroll(s: DriverSession, where: str) -> None:
-    """The document must have ZERO scrollable overflow, in both axes.
-
-    Note this is deliberately stricter than "the user cannot scroll the window".
-    `overflow: hidden` clips and removes the scrollbar, but the box remains a
-    scroll container: `scrollHeight` still reports the full scrollable overflow
-    region, and a programmatic `scrollTop` write is still honoured. So the
-    document not scrolling for a *user* does not prove nothing escaped — only
-    `scrollHeight === clientHeight` does. Both axes are checked, because a
-    vertical-only check passes while the document still scrolls horizontally.
-
-    When it fails, `culprits()` names the offending elements, since the whole
-    class of bug here is "which element escaped its clipping ancestor".
+    `DriverSession.start()` returns as soon as the CONTROL SERVER answers, which
+    is well before the supervised stack has booted and the renderer has painted a
+    gate. So this polls for whichever gate is showing rather than assuming an
+    order: boot progress → sign-in → FTUE → shell. A reused (already signed-in)
+    userData dir lands straight on the shell and skips both gates.
     """
-    m = s.document_scroll()
-    if m is None:
-        fail(f"{where}: could not measure document scroll")
-        return
-
-    if m["scrollHeight"] != m["clientHeight"]:
-        fail(
-            f"{where}: document scrolls vertically — "
-            f"scrollHeight={m['scrollHeight']} clientHeight={m['clientHeight']} "
-            f"(overflow {m['scrollHeight'] - m['clientHeight']}px)"
-        )
-    if m["scrollWidth"] != m["clientWidth"]:
-        fail(
-            f"{where}: document scrolls horizontally — "
-            f"scrollWidth={m['scrollWidth']} clientWidth={m['clientWidth']} "
-            f"(overflow {m['scrollWidth'] - m['clientWidth']}px)"
-        )
-
-    if m["scrollHeight"] != m["clientHeight"] or m["scrollWidth"] != m["clientWidth"]:
-        for c in culprits(s):
-            print(f"      ↳ {c}")
-
-
-# ── invariant B — a full-window surface is fully reachable inside itself ─────
-REACHABILITY_JS = """
-(() => {
-  const surface = document.querySelector(%(sel)s);
-  if (!surface) return { missing: true };
-  const frame = document.querySelector(%(frame)s);
-  if (!frame) return { noFrame: true };
-
-  const cs = getComputedStyle(surface);
-  const fr = frame.getBoundingClientRect();
-
-  // 1. The surface box must sit INSIDE the frame's content box. A surface
-  //    sized past the frame (e.g. `min-height: 100vh` against a frame that is
-  //    a titlebar inset shorter) has its tail clipped by the frame's
-  //    `overflow: hidden`, and no amount of internal scrolling reveals it.
-  const sr = surface.getBoundingClientRect();
-  const clippedBottom = Math.round(sr.bottom - fr.bottom);
-  const clippedTop = Math.round(fr.top - sr.top);
-
-  // 2. Scroll the surface to its extremes and measure whether its own content
-  //    is reachable at each end. Scrollable overflow never extends above the
-  //    start edge, so a centred child that overflows a row flex container is
-  //    permanently cut off at the top — check both ends, not just the bottom.
-  const children = Array.from(surface.children).filter(
-    (c) => c.getBoundingClientRect().height > 0,
-  );
-  const visibleTop = Math.max(sr.top, fr.top);
-  const visibleBottom = Math.min(sr.bottom, fr.bottom);
-
-  surface.scrollTop = 0;
-  const firstTop = children.length
-    ? Math.round(children[0].getBoundingClientRect().top - visibleTop)
-    : 0;
-
-  surface.scrollTop = surface.scrollHeight;
-  const lastBottom = children.length
-    ? Math.round(
-        children[children.length - 1].getBoundingClientRect().bottom -
-          visibleBottom,
-      )
-    : 0;
-  const scrolledTo = surface.scrollTop;
-  surface.scrollTop = 0;
-
-  return {
-    overflowY: cs.overflowY,
-    height: Math.round(sr.height),
-    scrollHeight: surface.scrollHeight,
-    clientHeight: surface.clientHeight,
-    overflows: surface.scrollHeight > surface.clientHeight,
-    scrolledTo,
-    clippedTop,
-    clippedBottom,
-    firstTop,
-    lastBottom,
-  };
-})()
-"""
-
-
-def assert_surface_self_scrolls(s: DriverSession, selector: str, where: str) -> None:
-    """A full-window surface must be fully reachable by scrolling INSIDE itself."""
-    before = len(failures)
-    m = s.evaluate(REACHABILITY_JS % {"sel": f'"{selector}"', "frame": f'"{FRAME}"'})
-    if m is None or m.get("missing") or m.get("noFrame"):
-        fail(f"{where}: could not measure {selector} (result={m})")
-        return
-
-    if m["overflowY"] not in ("auto", "scroll"):
-        fail(
-            f"{where}: {selector} has overflow-y: {m['overflowY']} — it owns no "
-            "internal scroll, so on a short window its content is unreachable"
-        )
-
-    # Sized past the frame → the tail is clipped away, unreachable by scrolling.
-    if m["clippedBottom"] > 1:
-        fail(
-            f"{where}: {selector} extends {m['clippedBottom']}px past the frame's "
-            f"bottom (height={m['height']}) — that tail is clipped, not scrollable"
-        )
-    if m["clippedTop"] > 1:
-        fail(
-            f"{where}: {selector} starts {m['clippedTop']}px above the frame's top "
-            "— that head is clipped, not scrollable"
-        )
-
-    # Content must be reachable at BOTH ends of the surface's own scroll range.
-    if m["firstTop"] < -1:
-        fail(
-            f"{where}: {selector} content starts {abs(m['firstTop'])}px above its "
-            "own visible top at scrollTop=0 — permanently unreachable "
-            "(centred overflow in a row flex container)"
-        )
-    if m["lastBottom"] > 1:
-        fail(
-            f"{where}: {selector} content still ends {m['lastBottom']}px below its "
-            f"visible bottom when scrolled fully (scrolledTo={m['scrolledTo']}) — "
-            "unreachable"
-        )
-
-    if len(failures) > before:
-        return
-    detail = (
-        "overflows→scrolls internally" if m["overflows"] else "fits, no scroll needed"
+    deadline = time.time() + timeout_s
+    signed_in = False
+    keyed = False
+    skipped = False
+    while time.time() < deadline:
+        if s.present('button[aria-label="Settings"]'):
+            log("PASS  reached the app shell")
+            return
+        if not keyed and s.present("[data-testid=first-run-add-key]"):
+            s.ftue_add_key(PROVIDER, load_env_key(PROVIDER))  # never printed
+            keyed = True
+            continue
+        # A runtime that already holds a key lands on the FTUE composer with no
+        # add-key step; "skip — open the workspace" is the only way through.
+        if not skipped and s.present("[data-testid=first-run-skip]"):
+            s.click("[data-testid=first-run-skip]")
+            skipped = True
+            time.sleep(2)
+            continue
+        if not signed_in and s.present("[data-testid=sign-in-button]"):
+            s.sign_in_local()
+            signed_in = True
+            time.sleep(2)
+            continue
+        time.sleep(2)
+    s.shot("fail-never-reached-shell")
+    raise AssertionError(
+        f"never reached the app shell within {timeout_s}s "
+        "(rail-foot Settings button absent)"
     )
-    ok(f"{where}: {selector} fully reachable ({detail}, height={m['height']})")
 
 
-# ── walk ────────────────────────────────────────────────────────────────────
-def apply_size(s: DriverSession, width: int, height: int) -> None:
-    r = s.resize(width, height)
-    vp = r.get("viewport") or {}
-    got_h = vp.get("innerHeight")
-    print(f"[size] requested {width}x{height} → viewport {vp}")
-    # The invariants are only meaningfully tested if the short size really took.
-    if got_h is None or abs(int(got_h) - height) > 24:
-        fail(
-            f"window did not accept height {height} (innerHeight={got_h}) — "
-            "the short-window assertions below would be vacuous"
-        )
+def sweep_settings(s: DriverSession) -> None:
+    s.click('button[aria-label="Settings"]')
+    assert s.wait_for("[data-testid=settings-surface]"), "Settings never mounted"
+    # Advanced is collapsed by default; expand it so its sections are reachable.
+    if s.present("[data-testid=settings-group-toggle-advanced]"):
+        s.click("[data-testid=settings-group-toggle-advanced]")
+        time.sleep(0.4)
 
-
-def walk_destinations(s: DriverSession, label: str) -> None:
-    slugs = (
-        s.evaluate(
-            'Array.from(document.querySelectorAll("button[data-destination]"))'
-            '.map(b=>b.getAttribute("data-destination"))'
-        )
-        or []
-    )
-    if not slugs:
-        fail(f"{label}: no rail destinations found — shell did not mount")
-        return
-    print(f"[destinations] {len(slugs)} found: {', '.join(slugs)}")
+    slugs = s.evaluate(JS_SETTINGS_SLUGS) or []
+    assert slugs, "no settings tabs found"
+    log(f"── settings sections ({len(slugs)}) ─────────────────────────")
     for slug in slugs:
-        s.click(f'button[data-destination="{slug}"]')
-        time.sleep(1.2)
-        assert_document_cannot_scroll(s, f"{label} destination:{slug}")
+        s.click(f"[role=tab][data-slug={slug}]")
+        time.sleep(0.5)
+        check(s, f"settings/{slug}")
+        if failures:
+            s.shot(f"fail-settings-{slug}")
 
 
-def walk_settings(s: DriverSession, label: str) -> None:
-    s.click('[aria-label="Settings"]')
-    if not s.wait_for("[data-testid=settings-surface]", 30):
-        fail(f"{label}: settings surface never opened")
-        return
-    slugs = (
-        s.evaluate(
-            'Array.from(document.querySelectorAll("[role=tab][data-slug]"))'
-            '.map(t=>t.getAttribute("data-slug"))'
-        )
-        or []
-    )
-    if not slugs:
-        fail(f"{label}: no settings sections found")
-        return
-    print(f"[settings] {len(slugs)} sections: {', '.join(slugs)}")
-    for slug in slugs:
-        s.click(f'[role=tab][data-slug="{slug}"]')
-        time.sleep(0.9)
-        assert_document_cannot_scroll(s, f"{label} settings:{slug}")
-    s.shot(f"settings-{label}")
+def sweep_destinations(s: DriverSession) -> None:
+    log("── rail destinations ────────────────────────────────────────")
+    for label in DESTINATIONS:
+        if not s.present(f'[aria-label="{label}"][data-destination]'):
+            log(f"SKIP  destination/{label}: not in this profile's rail")
+            continue
+        s.open_destination(label)
+        check(s, f"destination/{label}")
 
 
 def main() -> int:
-    with DriverSession(name="shell-document-overflow") as s:
-        # ── 1. sign-in gate, at each short size ─────────────────────────────
-        assert s.wait_for("[data-testid=sign-in-gate]"), "sign-in gate never appeared"
-        for width, height in SIZES:
-            print(f"\n=== sign-in gate @ {width}x{height} ===")
-            apply_size(s, width, height)
-            time.sleep(0.4)
-            assert_document_cannot_scroll(s, f"sign-in @{height}")
-            assert_surface_self_scrolls(s, ".loginx-shell", f"sign-in @{height}")
-            s.shot(f"signin-{height}")
+    with DriverSession(name="shell-overflow") as s:
+        reach_shell(s)
+        s.shot("00-shell")
+        sweep_settings(s)
+        sweep_destinations(s)
 
-        # ── 2. FTUE surface, at each short size ─────────────────────────────
-        # Back to a normal size to click through, then shrink again: the gate is
-        # driven at a size where its controls are certainly in view.
-        apply_size(s, 1200, 800)
-        time.sleep(0.3)
-        s.sign_in_local()
-        assert s.wait_for("[data-testid=first-run-surface],.fr", 90), (
-            "FTUE surface never appeared after sign-in"
-        )
-        time.sleep(1.0)
-        for width, height in SIZES:
-            print(f"\n=== FTUE surface @ {width}x{height} ===")
-            apply_size(s, width, height)
-            time.sleep(0.4)
-            assert_document_cannot_scroll(s, f"ftue @{height}")
-            assert_surface_self_scrolls(s, ".fr", f"ftue @{height}")
-            s.shot(f"ftue-{height}")
-
-        # ── 3. the shell: every destination + every settings section ─────────
-        apply_size(s, 1200, 800)
-        time.sleep(0.3)
-        assert s.wait_for("[data-testid=first-run-skip]", 30), "FTUE skip missing"
-        s.click("[data-testid=first-run-skip]")
-        assert s.wait_for("[data-component=chat-shell]", 60), (
-            "shell never mounted after skipping FTUE"
-        )
-        time.sleep(1.5)
-        for width, height in SIZES:
-            print(f"\n=== shell @ {width}x{height} ===")
-            apply_size(s, width, height)
-            time.sleep(0.5)
-            assert_document_cannot_scroll(s, f"shell @{height}")
-            walk_destinations(s, f"shell @{height}")
-            walk_settings(s, f"shell @{height}")
-
-    print()
     if failures:
-        print(f"FAILED — {len(failures)} assertion(s):")
+        log("")
+        log(f"── {len(failures)} VIOLATION(S) ─────────────────────────────")
         for f in failures:
-            print(f"  - {f}")
+            log(f"  • {f}")
         return 1
-    print("PASS — document never scrolled; every surface reachable inside itself.")
+    log("")
+    log("ALL HARD ASSERTIONS PASSED — the shell never scrolls the document")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

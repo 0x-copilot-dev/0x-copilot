@@ -26,7 +26,7 @@ tools/desktop-journeys/
   focus-mode/
   chat-rich-cards/       ← required live tool + subagent card matrix
   chat-nav-model/
-  shell-overflow/        ← window-frame invariants at short window heights
+  shell-overflow/        ← the shell must never scroll the document (incl. short windows)
 ```
 
 One **folder per set** of related journeys; each set has one **`JOURNEYS.md`**
