@@ -754,6 +754,63 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Remove — the row's Remove asks first, then removes over the ONE verb
+// `DELETE /v1/connectors/{id}`. The binder used to list /v1/mcp/servers and
+// guess which server backed the row; that guess failed outright once the
+// server was gone, and deleting the server never removed the row anyway.
+// ---------------------------------------------------------------------------
+
+describe("ConnectorsBinder — remove", () => {
+  it("confirms first, then DELETEs the connector (never /v1/mcp/servers)", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { getAllByTestId, getByTestId } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getAllByTestId("connector-remove")).toHaveLength(2);
+    });
+
+    fireEvent.click(getAllByTestId("connector-remove")[0]);
+    // The first click asks; nothing has been deleted.
+    expect(recorder.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+    expect(getByTestId("settings-modal")).toBeInTheDocument();
+
+    fireEvent.click(getByTestId("connector-remove-confirm"));
+
+    await waitFor(() => {
+      const deletes = recorder.calls.filter((c) => c.method === "DELETE");
+      expect(deletes).toHaveLength(1);
+      expect(deletes[0].path).toBe("/v1/connectors/conn_gmail");
+    });
+    expect(
+      recorder.calls.some((c) => c.path.startsWith("/v1/mcp/servers")),
+    ).toBe(false);
+  });
+
+  it("cancelling removes nothing", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { getAllByTestId, getByTestId, queryByTestId } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getAllByTestId("connector-remove")).toHaveLength(2);
+    });
+
+    fireEvent.click(getAllByTestId("connector-remove")[1]);
+    fireEvent.click(getByTestId("connector-remove-cancel"));
+
+    expect(queryByTestId("settings-modal")).toBeNull();
+    expect(recorder.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+  });
+});
+
 // ===========================================================================
 // ActivityBinder — PRD-08 D1/D1c: reads GET /v1/agent/runs (never /v1/audit),
 // renders the counter meta line, and (PRD-04 Seam C) forwards the row's

@@ -52,7 +52,7 @@ setup-python:
 	cd services/ai-backend && \
 		$(PYTHON) -m venv .venv && \
 		.venv/bin/python -m pip install --upgrade pip && \
-		.venv/bin/python -m pip install -r requirements.txt && \
+		.venv/bin/python -m pip install -r requirements-dev.txt && \
 		[ -f .env ] || cp env_example .env
 
 setup-hooks:

@@ -284,6 +284,8 @@ class ConnectorsStore(Protocol):
         self, mcp_input: McpUpsertInput
     ) -> ConnectorRecord: ...
 
+    def delete_connector(self, *, tenant_id: str, connector_id: str) -> bool: ...
+
     # -- audit --------------------------------------------------------
 
     def append_audit(self, record: ConnectorAuditRecord) -> ConnectorAuditRecord: ...
@@ -309,8 +311,10 @@ class InMemoryConnectorsStore:
 
     Mirrors the Postgres semantics where it matters: tenant scoping is a
     filter on every query; status transitions are recorded by replacing
-    the row (no soft-delete column — ``disconnected`` is a status value,
-    not a deletion). The audit log is append-only.
+    the row (there is no soft-delete column — ``disconnected`` is a status
+    value, not a deletion; user-initiated removal is the hard
+    ``delete_connector``). The audit log is append-only and survives the
+    row it describes.
     """
 
     connectors: dict[str, ConnectorRecord] = field(default_factory=dict)
@@ -459,6 +463,13 @@ class InMemoryConnectorsStore:
             )
         self.connectors[record.id] = record
         return record
+
+    def delete_connector(self, *, tenant_id: str, connector_id: str) -> bool:
+        record = self.connectors.get(connector_id)
+        if record is None or record.tenant_id != tenant_id:
+            return False
+        del self.connectors[connector_id]
+        return True
 
     # -- audit --------------------------------------------------------
 
@@ -790,6 +801,23 @@ class PostgresConnectorsStore:
                 }
             )
             return self.update_connector(record)
+
+    def delete_connector(self, *, tenant_id: str, connector_id: str) -> bool:
+        """Hard-delete the read-model row; report whether one was removed.
+
+        The ``tenant_id`` predicate is belt-and-braces beside the RLS
+        policy — the same shape every other write in this adapter uses.
+        ``connector_audit_events`` carries no FK to ``connectors`` (it is
+        append-only compliance evidence), so the audit trail for a removed
+        connector deliberately outlives the row.
+        """
+
+        with self._cursor(tenant_id=tenant_id) as cur:
+            cur.execute(
+                "DELETE FROM connectors WHERE tenant_id = %s AND id = %s",
+                (tenant_id, connector_id),
+            )
+            return bool(cur.rowcount)
 
     # -- audit --------------------------------------------------------
 
