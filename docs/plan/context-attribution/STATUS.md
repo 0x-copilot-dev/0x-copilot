@@ -32,6 +32,11 @@ logical; this order is what parallelises safely without two agents fighting over
 | API        | read routes + facade proxy **done**; SSE event contract ships but **has no producer**                             | **partial** — see below     |
 | Verify     | full-suite sweep + 3-lens adversarial review + mutation-verified confirmation                                     | **done** — 16 defects fixed |
 
+> **Read item 0 of "Known NOT done" first.** Everything below is true of the code,
+> and the ledger records nothing on a default deployment regardless, because its
+> capture point sits inside F10's middleware and F10 defaults to off. Found by
+> live-running the real graph after merge; no unit test could see it.
+
 ## Final verified state
 
 `ai-backend tests/unit` **8908 passed / 107 skipped**. `backend-facade tests`
@@ -47,6 +52,39 @@ in the round were retargeted tests replaced with stronger assertions, and every
 removed line was read.
 
 ## Known NOT done — read before building on this
+
+0. **THE LEDGER IS DARK ON A DEFAULT DEPLOYMENT.** Occupancy captures nothing
+   unless the **F10 model-reliability** feature is on, and `FeatureModeSet.f10`
+   defaults to `FeatureMode.OFF`
+   (`agent_runtime/control_plane/feature_modes.py:285`). The chain:
+   `ModelInvocationComposer.compose` returns `None` when
+   `release.effective_f10_mode is FeatureMode.OFF`
+   (`runtime_worker/model_invocation_composition.py:178`) → no binding is
+   installed → `ModelInvocationMiddleware.awrap_model_call` takes its
+   `if binding is None: return await handler(request)` early return before any
+   capture happens.
+
+   **Measured, not inferred.** A real run driven through the real worker, real
+   Deep Agents graph and real streaming executor (only the chat model faked, per
+   `tests/unit/runtime_worker/test_fake_model_run_stream.py`) persisted **zero**
+   occupancy rows. Instrumenting the middleware showed `awrap_model_call` was
+   called with `binding=None`, while the store did expose
+   `append_context_occupancy` — so the cause is the early return, not a missing
+   sink.
+
+   This was invisible to the whole test suite because every occupancy test
+   injects a binding or a sink directly. §3.1 chose that boundary for good
+   reasons (it is the only place the materialized request exists, and the AST
+   topology gate proves it is installed on root _and_ subagent graphs) — but it
+   did not account for the middleware body short-circuiting on an unrelated
+   feature flag.
+
+   The fix is a design decision, not a one-liner: occupancy needs the
+   materialized request (always present) and a store (today carried **on the F10
+   binding**), so either the middleware gets a store reference independent of
+   F10, or the composer emits a minimal occupancy-only binding when F10 is OFF.
+   Do not "fix" this by defaulting F10 on — it is an unrelated feature with real
+   behavioural weight.
 
 1. **The `context_occupancy` SSE event has no producer.** The event type, payload
    contract, projector branches and public TypeScript contract all ship; nothing
