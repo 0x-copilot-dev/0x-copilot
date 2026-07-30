@@ -46,6 +46,52 @@ per-caller free-text bucket.
 """
 
 
+class ContextTextWidth:
+    """The one definition of "how many bytes does this text occupy".
+
+    Every occupancy number is ultimately a width over the same untrusted string,
+    and three modules need it: the segment record's ``byte_count``, the
+    classifier's per-part ``byte_count``, and the digest the memoized counter
+    keys on. It lives here because this is the module all three already import
+    and it pulls in neither the token counter nor the message classifier.
+
+    **The encoding fallback is the whole reason this is a class and not a
+    ``len(text.encode())`` at each site.** ``"\\ud800"`` is a legal JSON string
+    escape, so a provider response or an MCP server can hand this runtime a
+    ``str`` holding an unpaired surrogate, and a plain ``.encode("utf-8")``
+    raises on one. Two of the three sites had the fallback and the third —
+    ``ContextSegment``, the one on the model-call path — did not, so a single
+    stray escape in one tool result raised out of measurement and the per-class
+    guard above it discarded **every message segment** for that call. The
+    snapshot then reported an ``estimated_input_tokens`` far below what was
+    sent, and the difference landed in ``unattributed_delta`` where it is
+    indistinguishable from tokenizer drift: the report was not merely
+    incomplete, it was confidently wrong. Restating a primitive is how the three
+    copies were allowed to disagree, so there is now one copy.
+
+    ``surrogatepass`` is the honest width: it encodes a lone surrogate in the
+    three bytes its UTF-8 form occupies, which is what a byte count is for.
+    """
+
+    ENCODING: Final[str] = "utf-8"
+    ENCODING_FALLBACK_ERRORS: Final[str] = "surrogatepass"
+
+    @classmethod
+    def utf8_bytes(cls, text: str) -> bytes:
+        """Encode ``text`` as the bytes that cross the wire, never raising."""
+
+        try:
+            return text.encode(cls.ENCODING)
+        except UnicodeEncodeError:
+            return text.encode(cls.ENCODING, cls.ENCODING_FALLBACK_ERRORS)
+
+    @classmethod
+    def utf8_byte_count(cls, text: str) -> int:
+        """UTF-8 length of ``text``, tolerating the lone surrogates JSON allows."""
+
+        return len(cls.utf8_bytes(text))
+
+
 class ContextSegmentClass(StrEnum):
     """The closed structural taxonomy of one provider request.
 
@@ -240,6 +286,7 @@ __all__ = (
     "ContextOrigin",
     "ContextOriginBinding",
     "ContextSegmentClass",
+    "ContextTextWidth",
     "context_origin_of",
     "declare_context_origin",
 )

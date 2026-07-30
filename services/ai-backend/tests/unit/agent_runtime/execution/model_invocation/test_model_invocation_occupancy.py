@@ -23,6 +23,7 @@ Fakes throughout: no network, no live model, no store.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 from typing import Any, Final, cast
 
@@ -66,6 +67,11 @@ from agent_runtime.execution.model_invocation.runtime import (
 from agent_runtime.execution.providers.model_failure_adapters import (
     ProviderFailureAdapterRegistry,
 )
+from agent_runtime.observability import context_occupancy_recorder as recorder_module
+from agent_runtime.observability.context_occupancy import (
+    ContextSegment,
+    SnapshotBuilder,
+)
 from agent_runtime.observability.context_occupancy_recorder import (
     ContextOccupancyRecorder,
     ThirdPartyPromptIndex,
@@ -80,6 +86,7 @@ from agent_runtime.observability.context_origin import (
 from agent_runtime.observability.context_token_counter import (
     ContextTokenCounter,
     DigestTokenCache,
+    TokenCounterSource,
 )
 from agent_runtime.persistence.records import RuntimeContextGraphScope
 from agent_runtime.prompts import (
@@ -97,6 +104,7 @@ from agent_runtime.prompts import (
     PromptTrustLabel,
     ProviderCacheRejectionAdapterRegistry,
 )
+from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayload
 
 
 _SHA: Final[str] = "0" * 64
@@ -948,3 +956,337 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         second = ModelInvocationMiddleware()
 
         assert first._occupancy is second._occupancy  # noqa: SLF001
+
+
+class OverlongProviderBuilder(SnapshotBuilder):
+    """A builder that trips a field bound the way the label-bound defect did.
+
+    The original fail-open hole was not a raising tokenizer or a hostile message
+    — it was ordinary Pydantic construction inside snapshot assembly, on a field
+    the measurement pass fills, in a method whose contract is "never raises".
+    Reproducing it by *value* rather than by monkeypatching a validator is what
+    makes this a regression test for the class of bug instead of for one bound:
+    any future field whose producer can outgrow it lands here.
+    """
+
+    OVERLONG_PROVIDER: Final[str] = "p" * 500
+
+    def build(self, **kwargs: Any) -> Any:
+        return super().build(**{**kwargs, "provider": self.OVERLONG_PROVIDER})
+
+
+class PoisonedToolDetailRecorder(ContextOccupancyRecorder):
+    """A recorder whose *tool* class alone fails segment validation.
+
+    ``ContextSegment`` fails closed on a content-shaped ``detail`` (§6.5), so
+    returning one from the sanitizer is the cheapest faithful way to make one
+    segment class raise while the others measure normally. It proves the guard in
+    ``_guarded`` is per class: a broken tool block must cost the tool block, not
+    turn the snapshot into a claim that the model was sent nothing.
+    """
+
+    POISON: Final[str] = "leaked\ntool result body"
+
+    @classmethod
+    def _segment_for_footprint(cls, footprint: Any, *, source: Any) -> Any:  # noqa: ANN401
+        del source
+        return ContextSegment(
+            segment_class=footprint.segment_class,
+            label=footprint.label,
+            lifecycle=footprint.lifecycle,
+            detail=cls.POISON,
+            byte_count=footprint.byte_count,
+            estimated_tokens=footprint.estimated_tokens,
+            counter_source=TokenCounterSource.TOKENIZER,
+        )
+
+
+class TestFailOpenAtEverySeam(OccupancyMiddlewareMixin):
+    """§6.4 as an executable claim, not a docstring.
+
+    Every test here runs the *real* seam twice against **one shared control
+    snapshot** and compares the full journal record-by-record, field-by-field.
+    Sharing the snapshot matters: ``RunControlSnapshot.create`` mints a fresh
+    ``snapshot_id`` per call and every downstream id and digest is derived from
+    it, so two runs under two snapshots differ for reasons that have nothing to
+    do with occupancy. ``created_at`` is the one field dropped — it is real
+    wall-clock on the record itself, not ``binding.now``.
+    """
+
+    VOLATILE_RECORD_FIELDS: Final[tuple[str, ...]] = ("created_at",)
+
+    MAX_WIDTH_ORIGIN: Final[ContextOrigin] = ContextOrigin(
+        owner=("a" * 199) + "z",
+        name="n" * 200,
+        segment_class=ContextSegmentClass.TOOLS,
+        lifecycle=ContextLifecycle.RESIDENT,
+    )
+    """A declaration at exactly the width ``ContextOrigin`` permits.
+
+    ``owner`` and ``name`` are each bounded at 200, so a legal label is 401
+    characters — the number three separate contracts once restated as 240. This
+    origin is the value that must survive measurement, persistence, and the read
+    projection, which is the only way to prove the bound is derived rather than
+    guessed all the way down.
+    """
+
+    def fingerprint(self, journal: Journal) -> str:
+        """Every F10 record this run appended, rendered comparably."""
+
+        rows: list[Any] = []
+        for item in journal.records:
+            row = item.record.model_dump(mode="json")
+            for field in self.VOLATILE_RECORD_FIELDS:
+                row.pop(field, None)
+            rows.append((item.sequence_no, row))
+        return json.dumps(rows, sort_keys=True)
+
+    async def run_once(
+        self,
+        *,
+        control: RunControlBinding,
+        middleware: ModelInvocationMiddleware | None = None,
+        sink: OccupancySink | None = None,
+        tools: Any = None,
+        request: ModelRequest[Any] | None = None,
+        handler: Any = None,
+        authority: AuthorityAdapter | None = None,
+        retry: bool = False,
+    ) -> tuple[Journal, ModelResponse[Any]]:
+        """Drive one model call under a caller-supplied control snapshot."""
+
+        journal = Journal()
+        binding = self.binding(
+            journal=journal,
+            authority=authority or AuthorityAdapter(),
+            sink=sink,
+            retry=retry,
+        )
+        dispatched = request or self.request(
+            tools=tools if tools is not None else [self.tool()]
+        )
+        token = RunControlContext.bind_for_run(control)
+        try:
+            RunControlContext.install_model_invocation_runtime(binding)
+            with PromptCacheFallbackContext.bind(None):
+                response = await (middleware or self.middleware()).awrap_model_call(
+                    dispatched,
+                    handler or self.handler,
+                )
+        finally:
+            RunControlContext.unbind(token)
+        return journal, response
+
+    async def test_a_recorder_raising_at_every_seam_leaves_the_journal_identical(
+        self,
+    ) -> None:
+        control = self.control()
+        baseline, _ = await self.run_once(control=control)
+        recorder = ExplodingRecorder()
+
+        exploding, response = await self.run_once(
+            control=control,
+            middleware=self.middleware(recorder),
+            sink=OccupancySink(),
+        )
+
+        assert response.result[0].content == "done"
+        assert recorder.calls == ["capture"]
+        assert self.fingerprint(exploding) == self.fingerprint(baseline)
+
+    async def test_the_retry_journal_is_identical_however_occupancy_behaves(
+        self,
+    ) -> None:
+        # The retry path is where occupancy actually *writes* inside the seam's
+        # most delicate block — between ``_record_failure`` and the admission
+        # decision that drives the next attempt. Three runs over one control
+        # snapshot: no store wired, a store that accepts, and a recorder that
+        # raises. Attempt admission, the recovery record, and every attempt
+        # record must be identical in all three.
+        control = self.control()
+        fingerprints: list[str] = []
+        for sink, middleware in (
+            (None, None),
+            (OccupancySink(), None),
+            (OccupancySink(), self.middleware(ExplodingRecorder())),
+        ):
+            calls = 0
+            failure = type("APIConnectionError", (Exception,), {"__module__": "openai"})
+
+            async def flaky(request: ModelRequest[Any]) -> ModelResponse[Any]:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise failure("message text is ignored")
+                return await self.handler(request)
+
+            journal, _ = await self.run_once(
+                control=control,
+                middleware=middleware,
+                sink=sink,
+                handler=flaky,
+                authority=AuthorityAdapter(
+                    budget=ModelInvocationBudget(
+                        max_attempts=2, max_same_deployment_attempts=2
+                    )
+                ),
+                retry=True,
+            )
+            assert calls == 2
+            fingerprints.append(self.fingerprint(journal))
+
+        # The recovery record proves the retry really went through admission,
+        # which is the decision occupancy must not be able to perturb.
+        assert "invocation_recovery" in journal.kinds
+        assert len(set(fingerprints)) == 1
+
+    async def test_a_validator_raising_in_snapshot_assembly_costs_nothing(
+        self,
+    ) -> None:
+        control = self.control()
+        baseline, _ = await self.run_once(control=control)
+        sink = OccupancySink()
+        recorder = ContextOccupancyRecorder(
+            counter=ContextTokenCounter(
+                tokenizer=LengthCounter(),
+                heuristic=LengthCounter(),
+                cache=DigestTokenCache(max_entries=64),
+            ),
+            third_party=ThirdPartyPromptIndex.disabled(),
+            builder=OverlongProviderBuilder(),
+        )
+
+        poisoned, response = await self.run_once(
+            control=control, middleware=self.middleware(recorder), sink=sink
+        )
+
+        assert response.result[0].content == "done"
+        # Nothing to reconcile, nothing to stream, nothing to persist — and the
+        # provider response is untouched.
+        assert sink.records == []
+        assert self.fingerprint(poisoned) == self.fingerprint(baseline)
+
+    async def test_a_validator_raising_in_one_class_keeps_the_other_classes(
+        self,
+    ) -> None:
+        sink = OccupancySink()
+        recorder = PoisonedToolDetailRecorder(
+            counter=ContextTokenCounter(
+                tokenizer=LengthCounter(),
+                heuristic=LengthCounter(),
+                cache=DigestTokenCache(max_entries=64),
+            ),
+            third_party=ThirdPartyPromptIndex.disabled(),
+        )
+
+        _, response = await self.run_once(
+            control=self.control(),
+            middleware=self.middleware(recorder),
+            sink=sink,
+        )
+
+        assert response.result[0].content == "done"
+        row = sink.records[0]
+        classes = {segment["segment_class"] for segment in row.segments}
+        # The tool block degraded; the system and message blocks did not, and the
+        # stored rollups still describe exactly the segments that survived.
+        assert "tools" not in classes
+        assert {"system", "messages"} <= classes
+        assert row.estimated_input_tokens == sum(
+            int(segment["estimated_tokens"]) for segment in row.segments
+        )
+
+    async def test_a_declaration_at_the_maximum_legal_width_survives_the_seam(
+        self,
+    ) -> None:
+        # The label-bound defect: a legal ``ContextOrigin`` label is 401 chars,
+        # and every contract between measurement and the read API must accept it.
+        sink = OccupancySink()
+        widest = self.tool(name="widest_tool", declared=False)
+        declare_context_origin(widest, self.MAX_WIDTH_ORIGIN)
+
+        _, response = await self.run_once(
+            control=self.control(),
+            middleware=self.middleware(),
+            sink=sink,
+            tools=[widest],
+        )
+
+        assert response.result[0].content == "done"
+        row = sink.records[0]
+        assert len(self.MAX_WIDTH_ORIGIN.label) == 401
+        assert self.MAX_WIDTH_ORIGIN.label in {
+            segment["label"] for segment in row.segments
+        }
+        # And it is still readable on the way out: a row that cannot be projected
+        # is a row the read API in §7 reports as an unreadable segment.
+        payload = ContextOccupancySnapshotPayload.from_record(row)
+        assert payload.unreadable_segment_count == 0
+        assert self.MAX_WIDTH_ORIGIN.label in {
+            segment.label for segment in payload.segments
+        }
+
+    async def test_a_recorder_that_cannot_be_built_disables_measurement_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # ``__init__`` runs at harness construction, inside the factory's
+        # ``except Exception -> AgentRuntimeError(RUNTIME_FACTORY_ERROR)``. An
+        # unguarded failure there would not degrade measurement, it would refuse
+        # to build the runtime — the §6.4 outcome this guard exists to prevent.
+        # The trigger is not hypothetical: the recorder import is deferred
+        # precisely because there is a live import cycle to dodge.
+        def exploding_recorder(*args: object, **kwargs: object) -> object:
+            del args, kwargs
+            raise ImportError("circular import while loading the recorder")
+
+        monkeypatch.setattr(
+            recorder_module, "ContextOccupancyRecorder", exploding_recorder
+        )
+        monkeypatch.setattr(
+            ModelInvocationMiddleware, "_SHARED_OCCUPANCY_RECORDER", None
+        )
+        control = self.control()
+        baseline, _ = await self.run_once(control=control)
+        sink = OccupancySink()
+
+        middleware = ModelInvocationMiddleware()
+        unmeasured, response = await self.run_once(
+            control=control, middleware=middleware, sink=sink
+        )
+
+        assert middleware._occupancy is None  # noqa: SLF001
+        assert response.result[0].content == "done"
+        assert sink.records == []
+        assert self.fingerprint(unmeasured) == self.fingerprint(baseline)
+
+    async def test_capture_never_swaps_the_object_the_provider_is_handed(
+        self,
+    ) -> None:
+        # Identity, not equality: the middleware chain below this seam was built
+        # around these exact tool and message objects, so measurement reading
+        # them must not produce copies or mutate them in place. Serializing a
+        # tool's ``args_schema`` and rendering a message's blocks are both reads
+        # that could plausibly cache into the object being measured.
+        tool = self.tool()
+        request = self.request(tools=[tool])
+        message = request.messages[0]
+        kwargs_before = dict(message.additional_kwargs)
+        digest_before = canonical_model_request_digest(request)
+        seen: list[ModelRequest[Any]] = []
+
+        async def capturing(inner: ModelRequest[Any]) -> ModelResponse[Any]:
+            seen.append(inner)
+            return await self.handler(inner)
+
+        await self.run_once(
+            control=self.control(),
+            sink=OccupancySink(),
+            request=request,
+            handler=capturing,
+        )
+
+        assert seen[0].tools[0] is tool
+        assert seen[0].messages[0] is message
+        assert dict(message.additional_kwargs) == kwargs_before
+        assert canonical_model_request_digest(request) == digest_before

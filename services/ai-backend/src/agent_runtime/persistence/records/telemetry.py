@@ -395,7 +395,17 @@ class CapabilitySnapshotRecord(RuntimeContract):
 # ``ContextOccupancySnapshot`` exactly, so no snapshot the observability lane
 # can build is unrepresentable here — a narrower persistence bound would turn a
 # legal measurement into a silently dropped row.
-_OccupancyIdentifier = Annotated[str, Field(min_length=1, max_length=200)]
+#
+# The widths live on ``RuntimeContextOccupancyRecord.Limits`` rather than as
+# literals here because the public read/stream contract in
+# ``runtime_api.schemas.context_occupancy`` has to bound the same three fields,
+# and a restated literal there is exactly how the label bound drifted once
+# already. One constant, two readers.
+_OCCUPANCY_IDENTIFIER_CHARS = 200
+_OCCUPANCY_PROVIDER_CHARS = 120
+_OccupancyIdentifier = Annotated[
+    str, Field(min_length=1, max_length=_OCCUPANCY_IDENTIFIER_CHARS)
+]
 
 
 class RuntimeContextGraphScope(StrEnum):
@@ -471,9 +481,16 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
     """
 
     class Keys:
-        """Canonical keys inside the ``segments_json`` envelope."""
+        """Canonical keys inside the ``segments_json`` envelope.
+
+        ``DETAIL`` is named here rather than matched inline because it is the
+        one segment field §6.5 singles out as the content vector, and the
+        validator below has to reach it by name to bound it separately from a
+        label (see :class:`Limits`).
+        """
 
         SEGMENTS = "segments"
+        DETAIL = "detail"
 
     class Limits:
         """Bounds that keep one row small and provably content-free.
@@ -481,15 +498,38 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
         ``MAX_SEGMENTS`` caps per-tool granularity (~25–40 segments on a
         realistic call) with headroom, so a runaway tool surface fails the
         contract instead of writing an unbounded JSONB document.
-        ``MAX_SEGMENT_TEXT_CHARS`` is the §6.5 guard: every legitimate segment
-        string is an identifier (``owner:name`` label, tool name,
-        ``fragment_id``, ordinal range, digest), none of which approaches this
-        bound, while any smuggled message or tool-result body exceeds it.
+
+        The two string bounds are deliberately different widths, and collapsing
+        them was a live §6.5 hole. ``MAX_SEGMENT_TEXT_CHARS`` is the structural
+        backstop applied to *every* string in the envelope, so it has to admit
+        the widest legal one — a rendered ``owner:name`` label, which
+        ``context_origin.MAX_LABEL_LENGTH`` allows to reach 401 characters.
+        A single uniform bound is therefore necessarily as loose as a label, and
+        ``detail`` — the field fed by an *untrusted* source (an MCP-registry tool
+        name) and the one §6.5 names — inherited that looseness: 512 characters
+        of arbitrary text could be written to a column that is served over an
+        HTTP read API. ``MAX_SEGMENT_DETAIL_CHARS`` closes that by bounding
+        ``detail`` at the width its only producer can actually emit.
+
+        ``MAX_SEGMENT_DETAIL_CHARS`` **mirrors**
+        ``agent_runtime.observability.context_occupancy.ContextSegment.MAX_DETAIL_LENGTH``
+        and is restated rather than imported for the same reason
+        :class:`RuntimeContextGraphScope` is: ``persistence.records`` is a leaf
+        that depends on nothing but ``execution.contracts``, and the
+        observability lane reaches into prompts, budgets, and the token counter.
+        The copy is *gated*, not trusted — the record's unit test asserts the two
+        values are identical, so widening one without the other fails CI.
         """
 
         MAX_SEGMENTS = 512
         MAX_SEGMENT_TEXT_CHARS = 512
+        MAX_SEGMENT_DETAIL_CHARS = 200
         MAX_SEGMENT_DEPTH = 4
+        #: Widths of the row's own identifier columns, published here so the
+        #: read/stream contract can bound the same fields without a second
+        #: literal. See ``_OccupancyIdentifier`` above.
+        MAX_IDENTIFIER_CHARS = _OCCUPANCY_IDENTIFIER_CHARS
+        MAX_PROVIDER_CHARS = _OCCUPANCY_PROVIDER_CHARS
 
     id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: _OccupancyIdentifier
@@ -497,9 +537,11 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
     conversation_id: _OccupancyIdentifier
     model_call_id: _OccupancyIdentifier
     attempt_ordinal: PositiveInt = 1
-    assembly_record_id: str | None = Field(default=None, max_length=200)
+    assembly_record_id: str | None = Field(
+        default=None, max_length=_OCCUPANCY_IDENTIFIER_CHARS
+    )
     graph_scope: RuntimeContextGraphScope = RuntimeContextGraphScope.ROOT
-    provider: Annotated[str, Field(min_length=1, max_length=120)]
+    provider: Annotated[str, Field(min_length=1, max_length=_OCCUPANCY_PROVIDER_CHARS)]
     model_family: _OccupancyIdentifier
     context_window_tokens: NonNegativeInt | None = None
     estimated_input_tokens: NonNegativeInt = 0
@@ -590,7 +632,37 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
             if not isinstance(segment, dict):
                 raise ValueError("each context occupancy segment must be an object")
             cls._assert_bounded_json(segment, depth=0)
+            cls._assert_detail_is_an_identifier(segment)
         return normalized
+
+    @classmethod
+    def _assert_detail_is_an_identifier(cls, segment: Mapping[str, object]) -> None:
+        """Bound the one segment field an untrusted source feeds (§6.5).
+
+        The structural sweep above has to admit the widest legal string in the
+        envelope, which is a 401-character ``owner:name`` label — so on its own it
+        lets ``detail`` carry 512 characters. That matters more for ``detail``
+        than for any sibling: a label is minted from our own declarations, while
+        ``detail`` carries an MCP-registry tool name, and MCP descriptors are
+        untrusted input. This is the narrow, named check that keeps the column an
+        identifier column, and it is deliberately the *only* place persistence
+        looks at a segment by field name — because ``detail`` is the field §6.5
+        names, not because persistence has started owning the vocabulary.
+
+        Absent, ``None``, and non-``str`` all pass: the shape belongs to the
+        observability lane, and this method's job is the bound, not the type.
+        """
+
+        detail = segment.get(cls.Keys.DETAIL)
+        if (
+            isinstance(detail, str)
+            and len(detail) > cls.Limits.MAX_SEGMENT_DETAIL_CHARS
+        ):
+            raise ValueError(
+                "context occupancy segment detail is an identifier; a value "
+                f"longer than {cls.Limits.MAX_SEGMENT_DETAIL_CHARS} characters "
+                "is content"
+            )
 
     @classmethod
     def _assert_bounded_json(cls, value: object, *, depth: int) -> None:
@@ -600,6 +672,18 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
         is owned by the observability lane, but "identifiers only" is a
         persistence-boundary invariant that must hold whatever that shape
         becomes.
+
+        Two structural rules, and the second is the sharp one. The length bound
+        is blunt — it has to admit a 401-character label, so it admits 512
+        characters of anything. The control-character rule is what a length bound
+        cannot express: **every** legitimate segment string is a single printable
+        token (a closed-vocabulary enum value, an ``owner:name`` label whose
+        pattern forbids whitespace outright, a sanitized tool name, ``msg[12]``),
+        while a smuggled message body or tool result is almost always multi-line.
+        ``ContextSegment`` already fails closed on exactly this for ``detail`` at
+        the measurement boundary; restating it here is what makes the record's
+        claim to enforce §6.5 *structurally* true for the whole envelope rather
+        than for one field of it — and a leak that reaches a column is permanent.
         """
 
         if depth > cls.Limits.MAX_SEGMENT_DEPTH:
@@ -610,6 +694,11 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
                     "context occupancy segments carry identifiers only; a value "
                     f"longer than {cls.Limits.MAX_SEGMENT_TEXT_CHARS} characters "
                     "is content"
+                )
+            if any(character < " " or character == "\x7f" for character in value):
+                raise ValueError(
+                    "context occupancy segments carry identifiers only; a value "
+                    "containing control characters is content"
                 )
             return
         if isinstance(value, (bytes, bytearray)):
@@ -633,6 +722,17 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
         and is better surfaced at the write than persisted as a plausible lie.
         The write path is already fail-open (§6.4), so a raise here degrades to
         a dropped snapshot, never to a failed run.
+
+        The unreported branch below checks the cache subsets *before* it returns,
+        which is the non-obvious half. It would be easy to read "no provider
+        total" as "nothing to compare the subsets against, so skip them", but the
+        subsets are defined as subsets **of** that total: with no total, the only
+        self-consistent pair is ``(0, 0)``, and a non-zero one is more
+        contradictory than an oversized one, not less. Every production path
+        already satisfies it — ``provider_input_tokens`` is ``None`` exactly when
+        the provider reported no usage block at all, so there is no cache
+        metadata to copy — which is precisely why the check belongs here rather
+        than being left to the one call site that happens to honour it.
         """
 
         if self.undeclared_tokens > self.estimated_input_tokens:
@@ -642,6 +742,11 @@ class RuntimeContextOccupancyRecord(RuntimeContract):
                 raise ValueError(
                     "unattributed delta requires a provider input total to "
                     "reconcile against"
+                )
+            if self.cached_input_tokens or self.cache_creation_input_tokens:
+                raise ValueError(
+                    "cache token subsets require a provider input total to be "
+                    "subsets of"
                 )
             return self
         if (

@@ -188,6 +188,30 @@ class TestContextOccupancyResiduals(ContextOccupancyRecordMixin):
         with pytest.raises(ValidationError, match="cache token subsets exceed"):
             self.record(cached_input_tokens=1_000, cache_creation_input_tokens=181)
 
+    def test_cache_subsets_require_a_total_to_be_subsets_of(self) -> None:
+        """The unreported branch must check the subsets, not skip them.
+
+        The validator returned early for ``provider_input_tokens is None`` after
+        checking only the delta, so a row could claim 800 cached input tokens
+        while reporting no provider input total at all — a self-contradiction the
+        surrounding branch refuses when a total *is* present. It read as "nothing
+        to compare against, so nothing to check"; in fact with no total the only
+        consistent pair is ``(0, 0)``, and §6.6's whole purpose is that a reader
+        can trust "large but cached" — which requires the cached figure to be a
+        subset of something real.
+
+        Unreachable from the capture seam by construction (``usage is None``
+        yields both a ``None`` total and zero subsets), which is exactly why it
+        was worth closing rather than leaving to a caller's good manners.
+        """
+
+        unreported = self.record(provider_input_tokens=None).model_dump(mode="json")
+
+        assert unreported["cached_input_tokens"] == 0
+        for field in ("cached_input_tokens", "cache_creation_input_tokens"):
+            with pytest.raises(ValidationError, match="require a provider input total"):
+                RuntimeContextOccupancyRecord.model_validate({**unreported, field: 800})
+
     def test_free_tokens_is_none_when_the_model_is_absent_from_pricing(self) -> None:
         assert self.record(context_window_tokens=None).free_tokens is None
         assert self.record().free_tokens == self.Values.WINDOW - 1_180

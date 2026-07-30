@@ -25,13 +25,27 @@ char/4 heuristic → last-resort char/4. This module reuses
 inventing a parallel protocol, so a single fake satisfies both call sites in
 tests and a future counter implementation lands in one place.
 
-**Known bias, deliberately not corrected.** ``TokenCounterPort`` counts a
-*message list*, so a segment is wrapped in one synthetic message and inherits
-that provider's per-message envelope (roughly 3–4 tokens). Summed across ~30
-segments that biases ``estimated_input_tokens`` slightly high, which shows up as
-a small negative ``unattributed_delta``. That is the correct outcome: §3.3
-forbids scaling segments to match the provider total, and the delta field exists
-precisely so drift of this kind stays visible instead of being smeared away.
+**Known bias, deliberately not corrected — and larger than "slightly".**
+``TokenCounterPort`` counts a *message list*, so a segment is wrapped in one
+synthetic message and inherits litellm's per-message envelope. Measured against
+the installed litellm, that envelope is **7 tokens per segment**, and a request
+shaped like the design's own reference measurements (11 system fragments, 30
+tool schemas, 40 message parts = 81 segments) therefore over-counts by **610
+tokens, +5.9%**, against counting the identical text once. Two consequences a
+reader has to know:
+
+1. ``unattributed_delta`` is expected *negative* in steady state, and its
+   magnitude scales with **segment count**, not with drift. A call that splits
+   into more segments has a larger residual for no other reason.
+2. That structural bias alone exceeds the ±5% reconciliation tolerance the
+   design's §9 test plan proposes, so the tolerance cannot be read as a
+   statement about tokenizer accuracy until the envelope is netted out.
+
+It is left uncorrected because §3.3 forbids scaling segments toward the provider
+total and because the correction would change what every injected counter fake
+means. ``test_context_token_counter`` pins the measured bias so it cannot grow
+silently, which is the honest middle ground: a known, bounded, checked artifact
+beats an unknown one.
 """
 
 from __future__ import annotations
@@ -39,6 +53,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
+import logging
 from threading import RLock
 from typing import ClassVar, Final
 
@@ -52,14 +67,30 @@ from agent_runtime.budgets.token_counter import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class TokenCounterSource(StrEnum):
     """Which tier of the fallback chain produced a segment's token count.
 
-    Persisted on every :class:`ContextSegment` so a reader can tell an
-    authoritative tokenizer count from a degraded approximation rather than
-    treating all estimates as equally trustworthy. ``PROXY`` on a segment is the
-    §6.4 fail-open signature — something in the counting chain misbehaved and the
-    ledger chose a worse number over a failed run.
+    Persisted on every :class:`ContextSegment` so a reader can tell a real BPE
+    count from a character-division guess rather than treating all estimates as
+    equally trustworthy. ``PROXY`` on a segment is the §6.4 fail-open signature —
+    something in the counting chain misbehaved and the ledger chose a worse
+    number over a failed run.
+
+    **``TOKENIZER`` does not mean "the provider's own tokenizer".** It means the
+    count came through ``litellm.token_counter``, which this service calls under
+    :func:`~agent_runtime.pricing.litellm_runtime.apply_offline_litellm_config`
+    so counting is deterministic and network-free. That guardrail disables the
+    HuggingFace tokenizer downloads, and the measured consequence is that
+    ``gpt-4o-mini``, ``claude-sonnet-4-5``, ``claude-3-5-sonnet`` and
+    ``gemini-2.0-flash`` all return the *same* count for the same text: one
+    offline tiktoken encoder serves every provider. The tier is therefore
+    "token-shaped and stable", which is far better than ``len // 4`` and is not
+    provider-authoritative. ``provider_input_tokens`` is the only authoritative
+    number in this ledger, and ``unattributed_delta`` is where the difference
+    between the two is meant to stay visible (§3.3).
     """
 
     TOKENIZER = "tokenizer"
@@ -70,10 +101,13 @@ class TokenCounterSource(StrEnum):
 class DigestTokenCacheKey(RuntimeContract):
     """Identity of a memoized count: the bytes, and the model that counted them.
 
-    ``model`` is part of the key because tokenizers genuinely disagree — the same
-    tool description is a different number of tokens under o200k_base than under
-    Anthropic's tokenizer, and collapsing them would silently mis-attribute
-    occupancy on any deployment that routes more than one model.
+    ``model`` is part of the key so a count is never served across models. Under
+    today's offline guardrail the two would in fact agree — one tiktoken encoder
+    serves every provider slug, see :class:`TokenCounterSource` — so this is
+    forward-safety rather than a correction: the moment a deployment injects a
+    tokenizer that *is* provider-specific, a model-agnostic key would start
+    serving one provider's count for another's request, silently and with no
+    signal on the segment. Keying on it costs one dict entry per model.
 
     ``digest`` is supplied by the caller, not computed here. That is the point of
     §3.4: system fragments already carry ``content_digest`` and the tool block
@@ -208,9 +242,13 @@ class ContextTokenCounter:
 
     Tiers, in order, each used only when the previous yields no usable count:
 
-    1. :class:`LitellmTokenCounter` — the provider's real tokenizer where litellm
-       bundles one (openai / anthropic / gemini), an offline tiktoken
-       approximation otherwise. Reported as ``TOKENIZER``.
+    1. :class:`LitellmTokenCounter` — ``litellm.token_counter``, which this
+       service calls under ``apply_offline_litellm_config``. Reported as
+       ``TOKENIZER``. **Not** the provider's own tokenizer: the offline guardrail
+       disables litellm's HuggingFace downloads, so one tiktoken encoder serves
+       every provider slug and openai / anthropic / gemini models return the same
+       count for the same text. See :class:`TokenCounterSource`, which documents
+       the measured evidence, and ``test_context_token_counter``, which pins it.
     2. :class:`CharHeuristicTokenCounter` — ``len // 4`` over the same text.
        Reported as ``HEURISTIC``.
     3. Inline ``len(text) // 4`` computed here. Reported as ``PROXY``, which is
@@ -296,8 +334,9 @@ class ContextTokenCounter:
         beyond its own occupancy row, and the alternative (re-hashing every
         segment on every model call) is the cost §3.4 exists to avoid.
 
-        A blank digest degrades to an uncached :meth:`count` rather than keying
-        every distinct segment under the same empty string.
+        A blank digest — or any ``(model, digest)`` pair that cannot form a memo
+        key — degrades to an uncached :meth:`count` rather than keying every
+        distinct segment under the same empty string. See :meth:`_cache_key`.
 
         The tokenizer runs *outside* the cache lock, so two threads racing a cold
         key may both compute. That is deliberate: duplicate work on a cold key is
@@ -305,20 +344,82 @@ class ContextTokenCounter:
         slow tokenizer call, and the results are identical.
         """
 
-        if not digest:
+        key = self._cache_key(model=model, digest=digest)
+        if key is None:
             return self.count(text, model=model)
 
-        key = DigestTokenCacheKey(model=model, digest=digest)
         cached = self._cache.get(key)
         if cached is not None:
             return cached.estimated_tokens, cached.counter_source
 
         tokens, source = self.count(text, model=model)
-        self._cache.put(
-            key,
-            DigestTokenCount(estimated_tokens=tokens, counter_source=source),
-        )
+        self._memoize(key, tokens=tokens, source=source)
         return tokens, source
+
+    @staticmethod
+    def _cache_key(*, model: str, digest: str) -> DigestTokenCacheKey | None:
+        """Build the memo key for these inputs, or ``None`` when none is possible.
+
+        **A memoization key must never be able to raise.** This is Pydantic
+        construction, and it runs on the model-call path from
+        ``ContextSegment.measure`` — inside the recorder's *per-class* guard,
+        which means a ``ValidationError`` here does not degrade one segment, it
+        discards every system, message and response-format segment for that call
+        while the tool block survives (``ToolSchemaLedger._count`` has a fallback
+        of its own). The snapshot then reports an ``estimated_input_tokens`` far
+        below what was sent and buries the shortfall in ``unattributed_delta``,
+        where it is indistinguishable from tokenizer drift. That is the same
+        confidently-wrong failure the restated label bound produced, from the
+        same cause: a bound restated instead of derived.
+
+        The bound in question is :class:`DigestTokenCacheKey`'s ``max_length=200``
+        on ``model``, which today holds only because ``ModelRouteEntry.model_name``
+        happens to be ``max_length=200`` as well — the one identifier in that
+        contract that is not 255. Nothing links the two literals, so a widened
+        route field would silently arm this path. Guarding is the fix rather than
+        re-deriving the literal, because an unmemoized count is a *correct*
+        answer that costs one tokenizer call, while a raise is not an answer at
+        all: the cache exists to save work, and it must never be able to cost
+        correctness.
+        """
+
+        if not digest:
+            return None
+        try:
+            return DigestTokenCacheKey(model=model, digest=digest)
+        except Exception:  # noqa: BLE001 — an unkeyable count is simply uncached
+            _LOGGER.debug(
+                "Could not build a digest token-cache key; counting this "
+                "segment without memoization.",
+                exc_info=True,
+            )
+            return None
+
+    def _memoize(
+        self,
+        key: DigestTokenCacheKey,
+        *,
+        tokens: int,
+        source: TokenCounterSource,
+    ) -> None:
+        """Store one count, treating an unstorable one as merely uncached.
+
+        Guarded for the same reason :meth:`_cache_key` is: :class:`DigestTokenCount`
+        is Pydantic construction on the model-call path, and the whole value of
+        this cache is saving work — never at the price of the count already in
+        hand, which the caller returns either way.
+        """
+
+        try:
+            self._cache.put(
+                key,
+                DigestTokenCount(estimated_tokens=tokens, counter_source=source),
+            )
+        except Exception:  # noqa: BLE001 — an unstorable count is simply uncached
+            _LOGGER.debug(
+                "Could not memoize a segment token count; the count itself stands.",
+                exc_info=True,
+            )
 
     def _as_messages(self, text: str) -> Sequence[Mapping[str, str]]:
         """Wrap raw segment text in the single message shape the port expects."""

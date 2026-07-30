@@ -28,10 +28,22 @@ drift from the values actually stored.
 
 **Nothing here carries content (§6.5).** Segments are counts plus bounded
 identifiers: an ``owner:name`` label, a tool name, a ``fragment_id``, a message
-ordinal range. That invariant is enforced at the durability boundary by
-:class:`RuntimeContextOccupancyRecord`, and the bounds below are taken from that
-same boundary so the read contract accepts exactly what the write contract
-allowed to be stored — no more, and never less.
+ordinal range.
+
+The bounds below mirror the **producer's** — ``ContextSegment`` in the
+observability lane, the one object that can put a segment on this wire — rather
+than the durability envelope's coarse structural backstop. That distinction was
+a live hole. The envelope applies one uniform width to every string in a
+segment, so it has to admit the widest legal one (a 401-character ``owner:name``
+label); reading ``detail`` under that same width meant this contract published
+512 characters of arbitrary text, newlines included, for a field whose only
+producer clips it to 200 printable characters and whose content comes from an
+*untrusted* MCP-registry tool name. A read contract wider than its writer is not
+defence in depth, it is the gap. So the rule is: **this module accepts exactly
+what a measurement can emit** — no more (a wider row is a leak, and is dropped)
+and no less (a narrower bound would make a legitimately-written segment
+unreadable). The two halves are gated against drift in
+``tests/unit/runtime_api/test_context_occupancy_schemas.py``.
 
 **Reading is fail-open, exactly like measuring (§6.4).** A stored segment this
 build cannot parse — written by a newer writer, or by a schema the reader has
@@ -50,9 +62,18 @@ from datetime import datetime
 import logging
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import Field, NonNegativeInt, PositiveInt, ValidationError
+from pydantic import (
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    ValidationError,
+    field_validator,
+)
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
 from agent_runtime.observability.context_origin import (
     ContextLifecycle,
     ContextSegmentClass,
@@ -94,28 +115,62 @@ class ContextOccupancySegment(RuntimeContract):
     """
 
     class Limits:
-        """Wire bounds, taken from the durability boundary rather than re-picked.
+        """Wire bounds, taken from the producer rather than re-picked.
 
-        :class:`RuntimeContextOccupancyRecord` is where §6.5's "identifiers only,
-        never content" is structurally enforced, because a leak that reaches a
-        column is permanent. Deriving the read bounds from that same class means
-        the read contract accepts exactly what the write contract allowed to be
-        stored: a segment can never be written and then be unreadable because the
-        two sides disagreed on a length.
+        Each is single-sourced from the object that decides it, so no literal
+        here can drift from what a measurement can actually emit:
+
+        ``MAX_LABEL``
+            ``context_origin.MAX_LABEL_LENGTH`` — the exact width a rendered
+            ``owner:name`` declaration can reach. Restating it as a literal is
+            what broke the label bound once already.
+        ``MAX_DETAIL``
+            ``ContextSegment.MAX_DETAIL_LENGTH``, mirrored on the durability
+            boundary as ``MAX_SEGMENT_DETAIL_CHARS``. Read from the persistence
+            constant so the column and the wire cannot disagree about what a
+            stored ``detail`` is allowed to be.
         """
 
-        MAX_TEXT = RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_TEXT_CHARS
+        MAX_LABEL = MAX_CONTEXT_LABEL_LENGTH
+        MAX_DETAIL = RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_DETAIL_CHARS
 
     segment_class: ContextSegmentClass
-    label: Annotated[str, Field(min_length=1, max_length=Limits.MAX_TEXT)]
+    label: Annotated[str, Field(min_length=1, max_length=Limits.MAX_LABEL)]
     lifecycle: ContextLifecycle
     third_party: bool = False
-    detail: str | None = Field(default=None, max_length=Limits.MAX_TEXT)
+    detail: str | None = Field(default=None, max_length=Limits.MAX_DETAIL)
     byte_count: NonNegativeInt = 0
     estimated_tokens: NonNegativeInt = 0
     item_count: NonNegativeInt = 1
     cache_eligibility: PromptCacheEligibility | None = None
     counter_source: TokenCounterSource
+
+    @field_validator("detail")
+    @classmethod
+    def _reject_content_shaped_detail(cls, value: str | None) -> str | None:
+        """Refuse a stored ``detail`` that reads as content rather than a name.
+
+        The same closed check ``ContextSegment`` applies when the segment is
+        *measured*, restated where the segment is *published*. The length bound
+        above is the blunt half; this is the sharp one, and a length bound cannot
+        express it: every detail this runtime produces is a single printable
+        token (``publish_artifact``, ``msg[12]``, ``system[unattributed]``) while
+        a smuggled message or tool-result body is almost always multi-line.
+
+        Restated here rather than inherited because the read path and the write
+        path are different objects by design (see the module docstring), and this
+        is the boundary a client is actually served from. A row that trips it is
+        counted into ``unreadable_segment_count`` and dropped — the totals stay
+        exact, and the caller is told the decomposition was incomplete rather
+        than handed something this contract cannot vouch for.
+        """
+
+        if value is None:
+            return None
+        if any(character < " " or character == "\x7f" for character in value):
+            msg = "detail must not contain control characters"
+            raise ValueError(msg)
+        return value
 
     @classmethod
     def from_stored(cls, stored: Mapping[str, object]) -> "ContextOccupancySegment":
@@ -173,13 +228,31 @@ class ContextOccupancySnapshotPayload(RuntimeContract):
 
     SCHEMA_VERSION: ClassVar[int] = 1
 
+    class Limits:
+        """Identifier widths, mirroring the columns these fields are read from.
+
+        Load-bearing for more than tidiness. This contract is also the *inbound*
+        validator for the ``context_occupancy`` stream payload — the projector in
+        ``runtime_api.schemas.events`` validates-and-re-dumps rather than
+        allow-listing keys, on the stated reasoning that "the shape already *is*
+        the allow-list". That reasoning only holds if the shape is bounded, and
+        three of these fields were bare ``str``: an unbounded identifier on an
+        event payload is a text channel through a §6.5 surface, no matter how
+        strict the fields around it are.
+        """
+
+        MAX_IDENTIFIER = RuntimeContextOccupancyRecord.Limits.MAX_IDENTIFIER_CHARS
+        MAX_PROVIDER = RuntimeContextOccupancyRecord.Limits.MAX_PROVIDER_CHARS
+
     schema_version: Literal[1] = 1
-    model_call_id: str
+    model_call_id: Annotated[str, Field(min_length=1, max_length=Limits.MAX_IDENTIFIER)]
     attempt_ordinal: PositiveInt = 1
-    assembly_record_id: str | None = None
+    assembly_record_id: str | None = Field(
+        default=None, max_length=Limits.MAX_IDENTIFIER
+    )
     graph_scope: RuntimeContextGraphScope
-    provider: str
-    model_family: str
+    provider: Annotated[str, Field(min_length=1, max_length=Limits.MAX_PROVIDER)]
+    model_family: Annotated[str, Field(min_length=1, max_length=Limits.MAX_IDENTIFIER)]
     measured_at: datetime
     context_window_tokens: NonNegativeInt | None = None
     estimated_input_tokens: NonNegativeInt = 0

@@ -58,6 +58,7 @@ from agent_runtime.observability.context_origin import (
     ContextLifecycle,
     ContextOrigin,
     ContextSegmentClass,
+    ContextTextWidth,
 )
 from agent_runtime.observability.context_token_counter import (
     ContextTokenCounter,
@@ -293,10 +294,19 @@ class ContextSegment(RuntimeContract):
     ) -> ContextSegment:
         """Shared counting body behind both public constructors.
 
-        Owns the one definition of ``byte_count`` so callers cannot disagree
-        about it: UTF-8 bytes of the materialized text, which is what actually
-        crosses the wire. ``len(str)`` would undercount every non-ASCII segment
-        and badly undercount base64 file content (audit item R).
+        ``byte_count`` is UTF-8 bytes of the materialized text, which is what
+        actually crosses the wire. ``len(str)`` would undercount every non-ASCII
+        segment and badly undercount base64 file content (audit item R).
+
+        The width comes from :class:`ContextTextWidth` rather than an inline
+        ``.encode("utf-8")``, and that is a correctness requirement, not tidiness.
+        The inline form raises ``UnicodeEncodeError`` on the lone surrogate a JSON
+        escape can legally carry, and this line runs on the model-call path
+        *inside* the recorder's per-class guard: a single stray escape in one
+        tool result therefore discarded every message segment for that call, and
+        the missing bytes reappeared inside ``unattributed_delta`` where they are
+        indistinguishable from tokenizer drift. Losing the row was survivable;
+        reporting a total that looked plausible was not.
 
         Non-``str`` input degrades to empty rather than raising, for the same
         fail-open reason the counter itself never raises (§6.4).
@@ -317,7 +327,7 @@ class ContextSegment(RuntimeContract):
             lifecycle=lifecycle,
             third_party=third_party,
             detail=detail,
-            byte_count=len(material.encode("utf-8")),
+            byte_count=ContextTextWidth.utf8_byte_count(material),
             estimated_tokens=estimated_tokens,
             item_count=item_count,
             cache_eligibility=cache_eligibility,

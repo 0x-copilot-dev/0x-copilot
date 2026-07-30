@@ -238,6 +238,90 @@ class TestRealCounterChain(CounterBuilderMixin):
         )
 
 
+class TestMeasuredCountingBias(CounterBuilderMixin):
+    """The design's §9 "reconciliation bound", which was never written down.
+
+    §9 proposes asserting ``|unattributed_delta| / provider_input_tokens < 0.05``
+    per provider. No such test shipped, so nothing bounded how far
+    ``estimated_input_tokens`` could sit from the truth — and the answer turned
+    out to be *further than the proposed tolerance*, for a reason that has
+    nothing to do with tokenizer accuracy. These tests pin the two measured facts
+    behind that, so neither can move without a failing assertion.
+    """
+
+    # 11 system fragments + 30 tool schemas + 40 message parts, the shape of the
+    # design's own §11 reference measurements.
+    SEGMENT_COUNT = 81
+    MAX_ENVELOPE_TOKENS_PER_SEGMENT = 8
+
+    PROVIDER_SLUGS = (
+        "gpt-4o-mini",
+        "claude-sonnet-4-5-20250929",
+        "claude-3-5-sonnet-20241022",
+        "gemini/gemini-2.0-flash",
+    )
+
+    def segments(self) -> tuple[str, ...]:
+        return (
+            *(f"system fragment {i}: " + ("policy text. " * 60) for i in range(11)),
+            *(
+                f'{{"name":"tool_{i}","description":"' + ("does a thing. " * 40) + '"}'
+                for i in range(30)
+            ),
+            *(f"message part {i}: " + ("conversation text. " * 25) for i in range(40)),
+        )
+
+    def test_the_per_segment_envelope_bias_stays_bounded(self) -> None:
+        """Σ per-segment must exceed a one-shot count by no more than the envelope.
+
+        Every segment is wrapped in its own synthetic message, so each pays
+        litellm's per-message envelope. The bias is therefore proportional to
+        *segment count*, not to tokenizer error: on this 81-segment request it is
+        roughly +6%, which already exceeds §9's ±5% tolerance before any real
+        drift. Pinning it keeps a future change that adds segments (or stops
+        rolling the assembly joiners up) from quietly doubling the residual.
+        """
+
+        segments = self.segments()
+        assert len(segments) == self.SEGMENT_COUNT
+        counter = ContextTokenCounter(cache=self.isolated_cache(max_entries=256))
+
+        per_segment = sum(
+            counter.count(text, model=self.PROVIDER_SLUGS[0])[0] for text in segments
+        )
+        one_shot, _ = counter.count("".join(segments), model=self.PROVIDER_SLUGS[0])
+
+        overcount = per_segment - one_shot
+        assert overcount > 0, "the envelope biases high, not low"
+        assert overcount <= self.SEGMENT_COUNT * self.MAX_ENVELOPE_TOKENS_PER_SEGMENT
+
+    def test_the_offline_chain_is_one_encoder_for_every_provider(self) -> None:
+        """``TOKENIZER`` is not a per-provider claim, and the enum says so.
+
+        The offline guardrail disables the HuggingFace tokenizer downloads so
+        counting is deterministic and network-free, which means every provider
+        slug resolves to the same tiktoken encoder. Asserting the equality keeps
+        the documentation honest in both directions: if a future litellm bump
+        *does* bundle provider tokenizers, this fails and the enum's docstring —
+        plus ``DigestTokenCacheKey``'s justification for keying on model — has to
+        be revisited rather than silently becoming true.
+        """
+
+        counter = ContextTokenCounter(cache=self.isolated_cache(max_entries=64))
+        text = "The publish_artifact description charges rent on every call."
+
+        counts = {
+            model: counter.count(text, model=model) for model in self.PROVIDER_SLUGS
+        }
+
+        assert {tokens for tokens, _ in counts.values()} == {
+            counts[self.PROVIDER_SLUGS[0]][0]
+        }, f"per-provider tokenizers would disagree: {counts}"
+        assert all(
+            source is TokenCounterSource.TOKENIZER for _, source in counts.values()
+        )
+
+
 class TestDigestMemoization(CounterBuilderMixin):
     def test_second_call_with_the_same_digest_is_a_cache_hit(self) -> None:
         cache = self.isolated_cache()
@@ -418,3 +502,83 @@ class TestSharedCache(CounterBuilderMixin):
         DigestTokenCache.reset_shared()
 
         assert DigestTokenCache.shared() is not original
+
+
+class TestTheMemoKeyCanNeverRaise(CounterBuilderMixin):
+    """A memoization key must not be able to cost a count (design §6.4).
+
+    ``count_digested`` builds a :class:`DigestTokenCacheKey`, and that is
+    Pydantic construction on the model-call path. The bound it enforces on
+    ``model`` (200) holds today only because ``ModelRouteEntry.model_name``
+    happens to carry the same literal — the one identifier in that contract that
+    is not 255 — and nothing links the two. If the key were ever to raise, the
+    failure would not degrade one segment: ``ContextSegment.measure`` sits inside
+    the recorder's *per-class* guard, so every system, message and
+    response-format segment for that call would be discarded while the tool block
+    survived on its own fallback, and the shortfall would land in
+    ``unattributed_delta`` looking exactly like tokenizer drift.
+
+    An unmemoized count is a correct answer that costs one tokenizer call. That
+    is the required degradation, and these tests are what stop the guard being
+    removed as "dead".
+    """
+
+    ILLEGAL_KEY_INPUTS: tuple[tuple[str, str], ...] = (
+        ("", "a" * 64),
+        ("m" * 201, "a" * 64),
+        ("gpt-5", "a" * 201),
+    )
+
+    @pytest.mark.parametrize(("model", "digest"), ILLEGAL_KEY_INPUTS)
+    def test_an_unkeyable_pair_still_returns_a_count(
+        self, model: str, digest: str
+    ) -> None:
+        tokenizer = FakeCounter(answer=11)
+        counter = self.counter(tokenizer=tokenizer)
+
+        assert counter.count_digested(self.TEXT, model=model, digest=digest) == (
+            11,
+            TokenCounterSource.TOKENIZER,
+        )
+
+    @pytest.mark.parametrize(("model", "digest"), ILLEGAL_KEY_INPUTS)
+    def test_an_unkeyable_pair_is_counted_uncached_rather_than_stored(
+        self, model: str, digest: str
+    ) -> None:
+        tokenizer = FakeCounter(answer=11)
+        cache = self.isolated_cache()
+        counter = self.counter(tokenizer=tokenizer, cache=cache)
+
+        counter.count_digested(self.TEXT, model=model, digest=digest)
+        counter.count_digested(self.TEXT, model=model, digest=digest)
+
+        # Both calls reached the tokenizer, and nothing unkeyable was stored.
+        assert len(tokenizer.calls) == 2
+        assert cache.stats().current_size == 0
+
+    def test_a_legal_pair_is_still_memoized_alongside_illegal_ones(self) -> None:
+        tokenizer = FakeCounter(answer=7)
+        cache = self.isolated_cache()
+        counter = self.counter(tokenizer=tokenizer, cache=cache)
+
+        counter.count_digested(self.TEXT, model="", digest="a" * 64)
+        counter.count_digested(self.TEXT, model=self.MODEL, digest="a" * 64)
+        counter.count_digested(self.TEXT, model=self.MODEL, digest="a" * 64)
+
+        assert cache.stats().current_size == 1
+        assert cache.stats().hits == 1
+
+    def test_a_cache_that_refuses_to_store_never_costs_the_count(self) -> None:
+        class RefusingCache(DigestTokenCache):
+            def put(self, key: object, value: object) -> None:  # type: ignore[override]
+                del key, value
+                raise RuntimeError("cache backend unavailable")
+
+        counter = self.counter(
+            tokenizer=FakeCounter(answer=5), cache=RefusingCache(max_entries=4)
+        )
+
+        assert counter.count_digested(self.TEXT, model=self.MODEL, digest="d") == (
+            5,
+            TokenCounterSource.TOKENIZER,
+        )

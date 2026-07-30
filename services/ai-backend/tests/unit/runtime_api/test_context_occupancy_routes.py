@@ -423,6 +423,48 @@ class TestRunOccupancyGraphScopeFilter(ContextOccupancyFixtureMixin):
         assert body["graph_scope"] == scope
         assert [row["graph_scope"] for row in body["snapshots"]] == [scope]
 
+    def test_two_scopes_that_would_overflow_if_summed_each_report_their_own(
+        self,
+    ) -> None:
+        """§6.2, arithmetically: a delegating run never reports >100% utilization.
+
+        The two windows below occupy 70% each. Summing them — the mistake the
+        scope split exists to prevent — reads as 140% of a window no model ever
+        saw. The assertion is on the numbers rather than on the ``graph_scope``
+        labels, because a future rollup that *did* sum would keep the labels
+        correct while making the utilization fictional.
+        """
+
+        client, store = self.client()
+        base = datetime.now(timezone.utc)
+        window = 200_000
+        occupied = 140_000
+        self.seed_conversation(store)
+        self.seed_run(store)
+        for ordinal, scope in enumerate(
+            (RuntimeContextGraphScope.ROOT, RuntimeContextGraphScope.SUBAGENT)
+        ):
+            self.seed_snapshot(
+                store,
+                model_call_id=f"{scope.value}_call",
+                created_at=base + timedelta(seconds=ordinal),
+                graph_scope=scope,
+                context_window_tokens=window,
+                estimated_input_tokens=occupied - 500,
+                provider_input_tokens=occupied,
+            )
+
+        body = client.get(self.run_path(self.RUN_ID), params=self.run_params()).json()
+
+        assert len(body["snapshots"]) == 2
+        for row in body["snapshots"]:
+            assert row["provider_input_tokens"] == occupied
+            assert row["free_tokens"] == window - occupied
+            assert row["free_tokens"] > 0
+        # The response carries no aggregate at all, which is the point: there is
+        # no field a client can read as "this run's utilization" across scopes.
+        assert set(body) == {"run_id", "graph_scope", "snapshots"}
+
     def test_unknown_graph_scope_is_rejected_at_the_edge(self) -> None:
         """A typo is refused rather than silently widened to an all-scopes read.
 

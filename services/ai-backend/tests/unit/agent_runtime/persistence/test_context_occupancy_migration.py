@@ -3,16 +3,22 @@
 Four properties are worth pinning in SQL rather than only in the adapter,
 because they are the ones an adapter cannot restore once a row exists: the
 attempt-level uniqueness that makes the append idempotent, the cascade that
-lets the ledger declare no retention class of its own, the immutability of an
-observation row, and the fact that ``unattributed_delta`` is allowed to be
-negative.
+keeps a row from outliving either parent, the immutability of an observation
+row, and the fact that ``unattributed_delta`` is allowed to be negative.
+
+A fifth property is pinned on the migration's *comment*, which is unusual and
+deliberate: the comment is the artifact a compliance reviewer reads, and this
+file previously asserted the DDL while the prose beside it claimed a retention
+control the schema does not deliver. A cascade that no path can currently
+trigger is not a retention policy, and the test named for that claim is what
+made the overstatement look verified.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from agent_runtime.persistence.records import RuntimeContextGraphScope
+from agent_runtime.persistence.records import RetentionKind, RuntimeContextGraphScope
 from agent_runtime.persistence.schema.migrate import MigrationRunner
 from agent_runtime.persistence.schema.postgres import (
     POSTGRES_AGENT_RUNTIME_MIGRATION_SQL,
@@ -47,9 +53,7 @@ class TestContextOccupancyMigration(MigrationStatementsMixin):
         )
         assert f"CONSTRAINT {_TABLE}_pkey PRIMARY KEY (id)" in _FORWARD
 
-    def test_rows_leave_with_their_parents_so_retention_needs_no_new_class(
-        self,
-    ) -> None:
+    def test_a_row_can_never_outlive_either_of_its_parents(self) -> None:
         # The composite run key carries tenancy AND the account-merge re-key,
         # exactly as runtime_usage_attribution_edges does for its parent.
         statements = self.statements(_FORWARD)
@@ -61,6 +65,41 @@ class TestContextOccupancyMigration(MigrationStatementsMixin):
         # it describes.
         assert statements.count("ON DELETE CASCADE") == 2
         assert "ON UPDATE CASCADE" in statements
+
+    def test_the_cascade_is_not_documented_as_a_retention_control(self) -> None:
+        """The cascade is correct; calling it retention was the defect.
+
+        This assertion is about the comment block on purpose, because the comment
+        is what a compliance reviewer reads. The earlier text said retention
+        "needs no new class" since occupancy "is erased by exactly the deletion
+        paths that already erase events and usage" — and neither half held:
+        nothing hard-deletes an ``agent_conversations`` or ``agent_runs`` row on
+        Postgres (``PersistencePort`` exposes only ``soft_delete_conversation``,
+        and ``agent_messages`` / ``agent_runs`` / ``runtime_events`` /
+        ``runtime_run_usage`` / ``runtime_model_call_usage`` all hold NO ACTION
+        references to the conversation, so a hard delete would raise before any
+        cascade fired), and ``runtime_events`` is erased by an explicit
+        ``RetentionKind``, not by a cascade. A schema that documents an inherited
+        control it does not have is worse than one that documents the gap.
+        """
+
+        assert "needs no new class" not in _FORWARD
+        assert "currently unreachable" in _FORWARD
+        assert "RetentionKind.EVENTS" in _FORWARD
+        # ... and the file-native store, which does have a hard purge, is named
+        # so the two backends' different obligations are traceable from here.
+        assert "_erase_context_occupancy" in _FORWARD
+
+    def test_no_retention_kind_claims_to_sweep_this_relation(self) -> None:
+        """Pins the honest posture: erasure is by cascade/purge, never by sweep.
+
+        The day someone adds an occupancy retention kind, this test fails and
+        points at the migration comment and the port docstring that both have to
+        stop saying "no sweep" — which is exactly the review prompt that should
+        accompany a new retention class.
+        """
+
+        assert not [kind for kind in RetentionKind if "occupancy" in kind.value]
 
     def test_the_conversation_cascade_can_use_an_index(self) -> None:
         # A cascading delete without a usable index sequentially scans a table

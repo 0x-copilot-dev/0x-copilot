@@ -93,6 +93,7 @@ from agent_runtime.observability.context_origin import (
     ContextLifecycle,
     ContextOrigin,
     ContextSegmentClass,
+    ContextTextWidth,
 )
 from agent_runtime.observability.redactor import Sensitive, SensitiveCategory
 
@@ -269,9 +270,6 @@ class ClassifiedMessagePart(RuntimeContract):
     which is precisely the failure mode all three copies were meant to avoid.
     """
 
-    ENCODING: ClassVar[str] = "utf-8"
-    ENCODING_FALLBACK_ERRORS: ClassVar[str] = "surrogatepass"
-
     UNDECLARED_LIFECYCLE: ClassVar[ContextLifecycle] = ContextLifecycle.PER_TURN
     """Structural lifecycle for bytes no declaration covered.
 
@@ -338,29 +336,24 @@ class ClassifiedMessagePart(RuntimeContract):
     def utf8_byte_count(cls, text: str) -> int:
         """UTF-8 length of ``text``, tolerating the lone surrogates JSON allows.
 
-        ``"\\ud800"`` is a legal JSON string escape, so a provider response or an
-        MCP server can hand this runtime a Python ``str`` holding an unpaired
-        surrogate. A plain ``.encode("utf-8")`` raises on one, and every
-        construction site here is inside the classifier's fail-open guard — so
-        without this fallback an ordinary tool result carrying one stray escape
-        would be recorded as a zero-byte ``UNDECLARED`` part.
+        Delegates to :class:`~agent_runtime.observability.context_origin.ContextTextWidth`,
+        which is the one definition of this width shared with
+        :class:`~agent_runtime.observability.context_occupancy.ContextSegment` and
+        with the recorder's digest. Keeping a second implementation here is what
+        let the segment record's copy drift into a bare ``.encode("utf-8")``: the
+        classifier tolerated an unpaired surrogate, the record it feeds did not,
+        and the mismatch raised on the model-call path.
 
-        That failure mode is worse than it looks, and it is why this is a
-        correctness fix rather than a nicety. ``undeclared_tokens`` is defined
-        (§4.4) as *measured bytes matching no declaration*, expected to be **0**,
-        with any non-zero value actionable as a contract bug — and §9 pins that
-        with a hermetic run asserting it stays 0. Letting untrusted content
-        decide whether that alarm fires would make the one field that flags real
-        declaration breaches fire on text nobody declared wrong.
-
-        ``surrogatepass`` is the honest width: it encodes the surrogate in the
-        three bytes its UTF-8 form occupies, which is what the byte count is for.
+        Why the tolerance matters at all: ``"\\ud800"`` is a legal JSON string
+        escape, so a provider response or an MCP server can hand this runtime a
+        Python ``str`` holding an unpaired surrogate. ``undeclared_tokens`` is
+        defined (§4.4) as *measured bytes matching no declaration*, expected to be
+        **0**, with any non-zero value actionable as a contract bug. Letting
+        untrusted content decide whether that alarm fires would make the one field
+        that flags real declaration breaches fire on text nobody declared wrong.
         """
 
-        try:
-            return len(text.encode(cls.ENCODING))
-        except UnicodeEncodeError:
-            return len(text.encode(cls.ENCODING, cls.ENCODING_FALLBACK_ERRORS))
+        return ContextTextWidth.utf8_byte_count(text)
 
     @classmethod
     def declared(
@@ -571,6 +564,19 @@ class ContextMessageClassifier:
             {"thinking", "redacted_thinking", "reasoning"}
         )
         TEXT_BLOCK_TYPE: Final[str] = "text"
+
+        # Content-block types that *are* the request's tool calls rather than
+        # answer text: Anthropic's ``tool_use``, the OpenAI Responses
+        # ``function_call``, and the LangChain-standard block pair. Every one of
+        # these is also parsed into ``AIMessage.tool_calls`` /
+        # ``invalid_tool_calls`` by its provider adapter, which is exactly why
+        # the set has to exist — see :meth:`ContextMessageClassifier._assistant_parts`.
+        # Deliberately excludes ``server_tool_use``: a server-side tool call is
+        # *not* reflected in ``tool_calls``, so treating it as one would drop its
+        # bytes from the count entirely.
+        TOOL_CALL_BLOCK_TYPES: Final[frozenset[str]] = frozenset(
+            {"tool_use", "function_call", "tool_call", "invalid_tool_call"}
+        )
 
     DETAIL_TEMPLATE: Final[str] = "msg[{ordinal}]"
     """Bounded identifier for a part: the message's index in the request.
@@ -823,6 +829,31 @@ class ContextMessageClassifier:
         billed for visibly. Tool-call arguments are the ``write_file`` payloads
         that compaction truncates first. Answer text is the part a reader
         expects to dominate and usually does not.
+
+        **Where the tool-call bytes are read from decides whether the number is
+        true.** A provider tells this runtime about a tool call twice: once as a
+        content block and once in the parsed ``tool_calls`` field. Which of the
+        two is populated is provider-shaped, and both shapes are live here:
+
+        - ``langchain_anthropic`` builds ``AIMessage(content=<raw blocks>,
+          tool_calls=extract_tool_calls(content))`` — the ``tool_use`` block
+          **stays in ``content``** and is also parsed out. Rendering
+          ``tool_calls`` while leaving the block inside the answer-text selection
+          counted the arguments **twice**: measured at 1.92× for a single
+          400-byte ``write_file`` call, on the repository's primary provider, in
+          the one segment the design names as the largest bucket. It also handed
+          those bytes to ``assistant_text``, so the row a reader trims was the
+          wrong row.
+        - ``langchain_openai`` (chat completions) leaves ``content`` a plain
+          string and carries the calls only in ``tool_calls``. Here the parsed
+          render is the *only* evidence of bytes that genuinely cross the wire,
+          so dropping it would under-count by exactly the same payload.
+
+        So the source is chosen from the shape rather than fixed: when the blocks
+        carry the calls, the block bytes are the tool-call part and are excluded
+        from answer text — which also makes the parts of one message sum
+        byte-for-byte back to it, the same property the note split relies on.
+        When they do not, the parsed render stands in, unchanged.
         """
 
         message = materialized.message
@@ -831,6 +862,7 @@ class ContextMessageClassifier:
         detail = materialized.detail
         blocks = materialized.blocks
         reasoning_count = sum(1 for block in blocks if cls._is_reasoning_block(block))
+        call_block_count = sum(1 for block in blocks if cls._is_tool_call_block(block))
         tool_calls = cls._tool_calls(message)
         parts: list[ClassifiedMessagePart] = []
         if reasoning_count:
@@ -842,7 +874,16 @@ class ContextMessageClassifier:
                     item_count=reasoning_count,
                 )
             )
-        if tool_calls:
+        if call_block_count:
+            parts.append(
+                ClassifiedMessagePart.declared(
+                    MessageContextOrigins.ASSISTANT_TOOL_CALLS,
+                    text=materialized.text_where(cls._is_tool_call_block),
+                    detail=detail,
+                    item_count=max(len(tool_calls), call_block_count),
+                )
+            )
+        elif tool_calls:
             parts.append(
                 ClassifiedMessagePart.declared(
                     MessageContextOrigins.ASSISTANT_TOOL_CALLS,
@@ -855,7 +896,10 @@ class ContextMessageClassifier:
             materialized.text
             if not blocks
             else materialized.text_where(
-                lambda block: not cls._is_reasoning_block(block)
+                lambda block: (
+                    not cls._is_reasoning_block(block)
+                    and not cls._is_tool_call_block(block)
+                )
             )
         )
         if text or not parts:
@@ -1033,6 +1077,22 @@ class ContextMessageClassifier:
         return (
             isinstance(block, Mapping)
             and block.get(cls.Keys.TYPE) in cls.Markers.REASONING_BLOCK_TYPES
+        )
+
+    @classmethod
+    def _is_tool_call_block(cls, block: object) -> bool:
+        """Whether one content block *is* a tool call the model requested.
+
+        The probe that keeps the tool-call payload from being counted once as a
+        block and again from the parsed ``tool_calls`` field. Matched on the
+        block's declared ``type`` only, so a server-side tool call — which the
+        provider does not parse into ``tool_calls`` — stays in answer text and
+        keeps its bytes rather than vanishing from both parts.
+        """
+
+        return (
+            isinstance(block, Mapping)
+            and block.get(cls.Keys.TYPE) in cls.Markers.TOOL_CALL_BLOCK_TYPES
         )
 
     @classmethod

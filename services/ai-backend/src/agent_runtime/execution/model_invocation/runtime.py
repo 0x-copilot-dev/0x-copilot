@@ -426,7 +426,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
         self._occupancy = occupancy_recorder or self._shared_occupancy_recorder()
 
     @classmethod
-    def _shared_occupancy_recorder(cls) -> "ContextOccupancyRecorder":
+    def _shared_occupancy_recorder(cls) -> "ContextOccupancyRecorder | None":
         """Return the process-wide recorder, constructing it on first use.
 
         Shared rather than per-instance because a fresh middleware is built for
@@ -434,16 +434,41 @@ class ModelInvocationMiddleware(AgentMiddleware):
         caches that make §3.4's cost model work: the digest-keyed token cache and
         the one-time ``deepagents`` constant sweep. Rebuilding them per graph
         would pay the memoization cost without ever collecting the benefit.
+
+        ``None`` when the recorder cannot be built, and the guard is the whole
+        point. This runs from ``__init__``, and ``__init__`` runs at harness
+        construction — ``factory._build_harness`` both instantiates this class
+        and hands it to ``build_deep_agent`` as a universal child-graph factory,
+        inside a ``try`` that converts *any* exception into
+        ``AgentRuntimeError(RUNTIME_FACTORY_ERROR)``. So an unguarded failure
+        here does not degrade measurement, it fails the run with "The agent
+        runtime could not be constructed", which is precisely what §6.4 forbids.
+        The failure is not hypothetical: the import below is deferred *because*
+        there is a live import cycle through ``agent_runtime.capabilities``
+        (see the module's ``TYPE_CHECKING`` block), and a cycle re-entered from a
+        new call order raises ``ImportError`` rather than returning a module.
+
+        A ``None`` recorder is the correct degradation and not a special case
+        downstream: capture and persist both check for it, and the seam then
+        behaves exactly as a deployment with no occupancy store wired.
         """
 
-        from agent_runtime.observability.context_occupancy_recorder import (  # noqa: PLC0415 — break import cycle
-            ContextOccupancyRecorder,
-        )
+        try:
+            from agent_runtime.observability.context_occupancy_recorder import (  # noqa: PLC0415 — break import cycle
+                ContextOccupancyRecorder,
+            )
 
-        with cls._OCCUPANCY_RECORDER_GUARD:
-            if cls._SHARED_OCCUPANCY_RECORDER is None:
-                cls._SHARED_OCCUPANCY_RECORDER = ContextOccupancyRecorder()
-            return cls._SHARED_OCCUPANCY_RECORDER
+            with cls._OCCUPANCY_RECORDER_GUARD:
+                if cls._SHARED_OCCUPANCY_RECORDER is None:
+                    cls._SHARED_OCCUPANCY_RECORDER = ContextOccupancyRecorder()
+                return cls._SHARED_OCCUPANCY_RECORDER
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _OCCUPANCY_LOGGER.warning(
+                "Could not construct the context occupancy recorder; this "
+                "process will dispatch model calls without measuring occupancy.",
+                exc_info=True,
+            )
+            return None
 
     def wrap_model_call(
         self,
@@ -665,20 +690,6 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     observer.observe_cache_rejection()
                 duration_ms = max(0, int((monotonic() - started) * 1000))
                 try:
-                    # A failed attempt still occupied a window, and its snapshot
-                    # is what makes "two attempts, two snapshots" true (§6.3).
-                    # Placed inside this ``try`` so a ``BaseException`` escaping
-                    # a persistence call is handled exactly as one escaping the
-                    # journal append below already is — the occupancy write must
-                    # not introduce a second, differently-shaped failure mode on
-                    # the seam's most delicate path.
-                    await self._persist_occupancy(
-                        binding=binding,
-                        control=control,
-                        identity=identity,
-                        snapshot=occupancy,
-                        observer=observer,
-                    )
                     prior, records = await self._record_failure(
                         binding=binding,
                         invocation=invocation,
@@ -687,6 +698,27 @@ class ModelInvocationMiddleware(AgentMiddleware):
                         prior=prior,
                         records=records,
                         duration_ms=duration_ms,
+                    )
+                    # A failed attempt still occupied a window, and its snapshot
+                    # is what makes "two attempts, two snapshots" true (§6.3).
+                    # Strictly *after* the failure record, never before it: the
+                    # occupancy sink is an external store with no timeout, and
+                    # sequencing it ahead of the journal append would let a
+                    # degraded observability store delay the record that drives
+                    # retry admission and terminal failure. Occupancy is
+                    # subordinate to the journal on this path exactly as it is on
+                    # the success path below. Inside this ``try`` so a
+                    # ``BaseException`` escaping a persistence call is handled
+                    # exactly as one escaping the journal append is — the
+                    # occupancy write must not introduce a second,
+                    # differently-shaped failure mode on the seam's most delicate
+                    # path.
+                    await self._persist_occupancy(
+                        binding=binding,
+                        control=control,
+                        identity=identity,
+                        snapshot=occupancy,
+                        observer=observer,
                     )
                     failure = prior[-1].failure_class
                     assert failure is not None
@@ -1516,9 +1548,10 @@ class ModelInvocationMiddleware(AgentMiddleware):
         consistent with the route the attempt actually used, including on an
         alternate-route retry to a differently-sized deployment.
 
-        Capture is unconditional wherever the F10 binding is installed, while
-        *persistence* is gated on a wired store. That asymmetry is deliberate:
-        the snapshot is the input to both the durable row (§5) and the streamed
+        Capture runs wherever the F10 binding is installed and a recorder was
+        built (see :meth:`_shared_occupancy_recorder`), while *persistence* is
+        additionally gated on a wired store. That asymmetry is deliberate: the
+        snapshot is the input to both the durable row (§5) and the streamed
         ``context_occupancy`` event (§7), so gating the measurement on a store
         would make a streaming surface depend on persistence being configured.
         The cost of measuring is bounded by §3.4's digest memoization — a
@@ -1526,6 +1559,8 @@ class ModelInvocationMiddleware(AgentMiddleware):
         the fact that nothing here can fail a run.
         """
 
+        if self._occupancy is None:
+            return None
         try:
             return self._occupancy.capture(
                 request,
@@ -1555,7 +1590,15 @@ class ModelInvocationMiddleware(AgentMiddleware):
         snapshot: ContextOccupancySnapshot | None,
         observer: _ProviderLifecycleCallback,
     ) -> None:
-        """Reconcile and append one attempt's snapshot; never raises.
+        """Reconcile and append one attempt's snapshot; never raises an ``Exception``.
+
+        The precision matters, because "never raises" is the claim that lets
+        callers stop checking. A ``BaseException`` — a task cancellation, an
+        interpreter shutdown — deliberately still propagates: swallowing a
+        cancellation to finish an observability write would keep a torn-down run
+        alive, which is worse than losing the snapshot. Every failure mode this
+        seam is actually meant to absorb (a store that is down, an unprojectable
+        snapshot, a raising adapter) is an ``Exception`` and is absorbed here.
 
         ``usage`` is passed as ``None`` when the provider reported nothing,
         which is *not* the same as a zero-token usage object: the former leaves
@@ -1564,7 +1607,11 @@ class ModelInvocationMiddleware(AgentMiddleware):
         whole estimate into a large negative residual on every unreported call.
         """
 
-        if snapshot is None or binding.context_occupancy_store is None:
+        if (
+            snapshot is None
+            or self._occupancy is None
+            or binding.context_occupancy_store is None
+        ):
             return
         try:
             usage, reported = observer.usage

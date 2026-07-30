@@ -69,6 +69,7 @@ from agent_runtime.observability.context_origin import (
     ContextLifecycle,
     ContextOrigin,
     ContextSegmentClass,
+    ContextTextWidth,
 )
 from agent_runtime.observability.context_third_party import ThirdPartyContextOrigins
 from agent_runtime.observability.context_token_counter import (
@@ -761,7 +762,7 @@ class ContextOccupancyRecorder:
         context_window_tokens: NonNegativeInt | None,
         plan: PromptAssemblyPlan | None = None,
         assembly_record_id: str | None = None,
-    ) -> ContextOccupancySnapshot:
+    ) -> ContextOccupancySnapshot | None:
         """Decompose one materialized request into a pre-dispatch snapshot.
 
         ``identity`` is the run's
@@ -783,6 +784,8 @@ class ContextOccupancyRecorder:
         Never raises. Every failure path yields a snapshot — possibly with no
         segments at all — because a missing row reads as "this call had no
         context", while an empty row reads as "we failed to measure this call".
+        ``None`` is the last resort, for the one case where not even an empty
+        snapshot can be assembled; see :meth:`_assembled`.
         """
 
         try:
@@ -817,7 +820,7 @@ class ContextOccupancyRecorder:
                     ),
                 ),
             )
-        return self._build(
+        return self._assembled(
             model_call_id=self._model_call_id(identity),
             attempt_ordinal=attempt_ordinal,
             graph_scope=graph_scope,
@@ -826,7 +829,6 @@ class ContextOccupancyRecorder:
             context_window_tokens=context_window_tokens,
             assembly_record_id=assembly_record_id,
             segments=segments,
-            usage=None,
         )
 
     def finalize(
@@ -891,6 +893,10 @@ class ContextOccupancyRecorder:
         The three identity arguments are the columns the snapshot has no opinion
         about: *where* the measurement happened, supplied by the run the capture
         seam is already inside.
+
+        The decomposition is bounded to what the row accepts (see
+        :meth:`_persistable_segments`); every rollup total is passed through
+        unchanged.
         """
 
         return RuntimeContextOccupancyRecord.from_measurement(
@@ -909,10 +915,59 @@ class ContextOccupancyRecorder:
             cached_input_tokens=snapshot.cached_input_tokens,
             cache_creation_input_tokens=snapshot.cache_creation_input_tokens,
             undeclared_tokens=snapshot.undeclared_tokens,
-            segments=tuple(
-                segment.model_dump(mode="json") for segment in snapshot.segments
-            ),
+            segments=self._persistable_segments(snapshot.segments),
         )
+
+    @classmethod
+    def _persistable_segments(
+        cls,
+        segments: Sequence[ContextSegment],
+    ) -> tuple[dict[str, object], ...]:
+        """Render the decomposition, bounded to what one row may carry.
+
+        ``RuntimeContextOccupancyRecord.Limits.MAX_SEGMENTS`` was sized against
+        the *tool* block — "~25–40 segments on a realistic call" — to stop a
+        runaway tool surface writing an unbounded JSONB document. PRD-07 then
+        made messages a segment source too, at one to three segments *per
+        message*, so the producer outgrew the bound: a ~100-turn conversation
+        measures past 512 segments, the row refuses to validate, and the
+        fail-open guard in :meth:`persist` drops it. The result was that
+        occupancy went dark on exactly the long conversations it exists to
+        diagnose — a silent total loss dressed as fail-open.
+
+        Bounding here rather than widening the column, because the producer is
+        genuinely unbounded and a wider literal only moves the cliff. The
+        segments kept are the largest by ``estimated_tokens``, which are the ones
+        a reader acts on, then restored to canonical order so two rows still
+        diff cleanly.
+
+        Nothing is fabricated and no total moves: ``estimated_input_tokens``,
+        ``undeclared_tokens`` and ``unattributed_delta`` are computed on the
+        snapshot and stored as columns, so they stay exact whatever this list
+        holds — which is also why a reader can *detect* an elision, as the gap
+        between the segment sum and ``estimated_input_tokens``. That is the same
+        posture the read API already takes for a segment it cannot parse
+        (``unreadable_segment_count``): exact totals with an incomplete
+        decomposition beats no answer at all.
+        """
+
+        limit = RuntimeContextOccupancyRecord.Limits.MAX_SEGMENTS
+        bounded = tuple(segments)
+        if len(bounded) > limit:
+            _LOGGER.warning(
+                "Context occupancy measured %d segments, above the %d a row may "
+                "carry; persisting the largest %d. The snapshot totals remain "
+                "exact.",
+                len(bounded),
+                limit,
+                limit,
+            )
+            largest = sorted(
+                bounded,
+                key=lambda segment: (-segment.estimated_tokens, segment.sort_key),
+            )[:limit]
+            bounded = tuple(sorted(largest, key=lambda segment: segment.sort_key))
+        return tuple(segment.model_dump(mode="json") for segment in bounded)
 
     async def persist(
         self,
@@ -1017,17 +1072,15 @@ class ContextOccupancyRecorder:
         where the system already holds a digest (a fragment's ``content_digest``)
         it is passed through instead of recomputed.
 
-        Lone surrogates are tolerated for the same reason
-        ``ClassifiedMessagePart.utf8_byte_count`` tolerates them: untrusted
-        content can legally carry one, and a raise here would turn ordinary tool
-        output into an unmeasurable segment.
+        The encoding comes from :class:`ContextTextWidth`, the one definition
+        shared with ``ContextSegment.byte_count`` and the classifier's per-part
+        width. Lone surrogates are tolerated because untrusted content can
+        legally carry one and a raise here would turn ordinary tool output into
+        an unmeasurable segment — the same reason the width tolerates them, which
+        is precisely why the two must not be separate implementations.
         """
 
-        try:
-            encoded = text.encode("utf-8")
-        except UnicodeEncodeError:
-            encoded = text.encode("utf-8", "surrogatepass")
-        return hashlib.sha256(encoded).hexdigest()
+        return hashlib.sha256(ContextTextWidth.utf8_bytes(text)).hexdigest()
 
     @classmethod
     def render_json(cls, value: object) -> str:
@@ -1137,7 +1190,7 @@ class ContextOccupancyRecorder:
             return ()
         bridge = _ToolSchemaCounterBridge(counter=self._counter, model=model)
         footprints = ToolSchemaLedger.measure(materialized.tools, counter=bridge)
-        sources = bridge.sources_for(len(footprints))
+        sources = bridge.sources_for(footprints)
         return tuple(
             self._segment_for_footprint(footprint, source=source)
             for footprint, source in zip(footprints, sources, strict=True)
@@ -1282,6 +1335,58 @@ class ContextOccupancyRecorder:
 
     # --- assembly ------------------------------------------------------------
 
+    def _assembled(
+        self,
+        *,
+        model_call_id: str,
+        attempt_ordinal: PositiveInt,
+        graph_scope: GraphScope,
+        provider: str,
+        model_family: str,
+        context_window_tokens: NonNegativeInt | None,
+        assembly_record_id: str | None,
+        segments: Sequence[ContextSegment],
+    ) -> ContextOccupancySnapshot | None:
+        """Assemble the captured snapshot, degrading to ``None`` on a raise.
+
+        The one guard :meth:`capture` was missing. Every per-class measurement
+        already runs inside :meth:`_guarded`, but the snapshot *record* is built
+        after all four of them, outside every guard — and building it is Pydantic
+        construction, which is exactly how the label-bound defect escaped: a
+        validator on a field the measurement pass fills raised, on the
+        model-call path, out of a method whose contract is "never raises"
+        (§6.4).
+
+        Two independent guards in the middleware do not excuse an unguarded
+        construction here, because the middleware's own comment names the reason
+        its guard exists — "the recorder is already total" — and a caller that
+        believes a false claim is how the first fail-open hole reached
+        production. The honest degradation is ``None``: not even an empty
+        snapshot could be assembled, so there is nothing to reconcile, nothing
+        to stream, and nothing to persist for this attempt.
+        """
+
+        try:
+            return self._build(
+                model_call_id=model_call_id,
+                attempt_ordinal=attempt_ordinal,
+                graph_scope=graph_scope,
+                provider=provider,
+                model_family=model_family,
+                context_window_tokens=context_window_tokens,
+                assembly_record_id=assembly_record_id,
+                segments=segments,
+                usage=None,
+            )
+        except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
+            _LOGGER.warning(
+                "Could not assemble a context occupancy snapshot for model call "
+                "%s; dropping the measurement for this attempt.",
+                model_call_id,
+                exc_info=True,
+            )
+            return None
+
     def _build(
         self,
         *,
@@ -1297,6 +1402,7 @@ class ContextOccupancyRecorder:
     ) -> ContextOccupancySnapshot:
         """Hand the segments and the provider's totals to the reconciling builder."""
 
+        cached, cache_creation = self._cache_subsets(usage)
         return self._builder.build(
             model_call_id=model_call_id,
             graph_scope=graph_scope,
@@ -1307,11 +1413,62 @@ class ContextOccupancyRecorder:
             attempt_ordinal=attempt_ordinal,
             context_window_tokens=context_window_tokens,
             provider_input_tokens=(None if usage is None else usage.input_tokens),
-            cached_input_tokens=(0 if usage is None else usage.cached_input_tokens),
-            cache_creation_input_tokens=(
-                0 if usage is None else usage.cache_creation_input_tokens
-            ),
+            cached_input_tokens=cached,
+            cache_creation_input_tokens=cache_creation,
         )
+
+    @staticmethod
+    def _cache_subsets(usage: NormalizedTokenUsage | None) -> tuple[int, int]:
+        """Copy the cache subsets, fitted to the total they are subsets *of*.
+
+        ``NormalizedTokenUsage`` documents ``input_tokens`` as the **gross**
+        figure and the two cache numbers as subsets of it, and
+        :class:`~agent_runtime.persistence.records.RuntimeContextOccupancyRecord`
+        enforces that at the durability boundary. Provider usage blocks are model
+        output, which this service treats as untrusted, and they do not always
+        honour it: a LangChain-normalized ``usage_metadata`` that carries
+        ``input_token_details.cache_read`` while ``input_tokens`` is ``0`` makes
+        ``OpenAIProviderTokenUsageExtractor`` emit ``cached > input``, and
+        ``merge``'s field-wise max cannot repair it because the maximum of two
+        zeros is zero.
+
+        Copied verbatim, such a block *deleted the measurement*: the row refused
+        to validate and ``persist``'s fail-open guard dropped it. So the one
+        field §6.6 exists for — "large but cached" versus "large and re-billed" —
+        was also the field that could take the whole snapshot away, on the
+        provider this product routes by default.
+
+        The anchor is left exactly as reported. ``provider_input_tokens`` is
+        §6.1's read-side copy of the number the ``UsageMeter`` bills on, so
+        raising it to make the arithmetic work would put two different provider
+        totals for one call on two surfaces — a worse failure than an imprecise
+        subset. The subsets are decorations on that anchor, so they are the half
+        that yields: cache reads keep their value first (that is the number §6.6
+        is read for) and cache creation takes what is left. Nothing is invented
+        and no total moves; an inconsistent block simply reports less cache
+        detail than it claimed, and says so in the log.
+        """
+
+        if usage is None:
+            return 0, 0
+        total = usage.input_tokens
+        cached = min(usage.cached_input_tokens, total)
+        cache_creation = min(usage.cache_creation_input_tokens, total - cached)
+        if (
+            cached != usage.cached_input_tokens
+            or cache_creation != usage.cache_creation_input_tokens
+        ):
+            _LOGGER.warning(
+                "Provider usage reported cache subsets (%d cached, %d created) "
+                "larger than its own %d input tokens; recording %d and %d so the "
+                "occupancy row still reconciles.",
+                usage.cached_input_tokens,
+                usage.cache_creation_input_tokens,
+                total,
+                cached,
+                cache_creation,
+            )
+        return cached, cache_creation
 
     @staticmethod
     def _model_call_id(identity: object) -> str:
@@ -1349,12 +1506,22 @@ class _ToolSchemaCounterBridge:
     degraded approximation — so this bridge records the tier alongside each
     count as the ledger walks the tools.
 
-    Alignment is positional and checked rather than assumed. The ledger calls
-    this exactly once per tool *unless* a tool's schema failed to serialize, in
-    which case it records a zero footprint without counting. Rather than guess
-    which tool that was, a short read is reported as ``PROXY`` for the tools it
-    cannot account for — the marker that already means "the counting path
-    degraded", which is exactly what happened.
+    **Alignment is reconstructed from the footprints, not assumed positional.**
+    The ledger calls this exactly once per tool *unless* that tool's schema
+    failed to serialize, in which case it records a zero footprint without
+    counting at all. Padding a short read at the *end* of the list therefore
+    shifted every tier past the failure by one: a tool that could not be
+    measured inherited a later tool's ``TOKENIZER``, so its zero footprint read
+    as an authoritative "this tool is free", while a tool the real tokenizer
+    counted was labelled ``PROXY``. That inverts the one field §6.4 gives a
+    reader to tell a trustworthy number from a degraded one.
+
+    A failed footprint is identifiable without guessing: ``schema_entry`` always
+    renders at least ``{"args_schema":null,"description":"","name":""}``, so a
+    non-zero ``byte_count`` is exactly the set of tools that reached the counter.
+    Zipping the recorded tiers onto those tools puts every tier back on the tool
+    that produced it, and the tools that never reached the counter get ``PROXY``
+    — which is what actually happened to them.
     """
 
     def __init__(self, *, counter: ContextTokenCounter, model: str) -> None:
@@ -1373,13 +1540,19 @@ class _ToolSchemaCounterBridge:
         self._sources.append(source)
         return tokens
 
-    def sources_for(self, count: int) -> tuple[TokenCounterSource, ...]:
-        """Return exactly ``count`` tiers, padding a short read with ``PROXY``."""
+    def sources_for(
+        self,
+        footprints: Sequence[ToolSchemaFootprint],
+    ) -> tuple[TokenCounterSource, ...]:
+        """Return one tier per footprint, realigned around unmeasured tools."""
 
-        if len(self._sources) == count:
-            return tuple(self._sources)
-        padding = (TokenCounterSource.PROXY,) * max(count - len(self._sources), 0)
-        return (*self._sources[:count], *padding)
+        recorded = iter(self._sources)
+        return tuple(
+            next(recorded, TokenCounterSource.PROXY)
+            if footprint.byte_count
+            else TokenCounterSource.PROXY
+            for footprint in footprints
+        )
 
 
 __all__ = (

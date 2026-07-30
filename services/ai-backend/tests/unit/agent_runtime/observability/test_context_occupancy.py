@@ -52,6 +52,10 @@ from agent_runtime.observability.context_token_counter import (
     DigestTokenCache,
     TokenCounterSource,
 )
+from agent_runtime.persistence.records import (
+    RuntimeContextGraphScope,
+    RuntimeContextOccupancyRecord,
+)
 from agent_runtime.prompts.assembly import PromptCacheEligibility
 
 
@@ -292,6 +296,53 @@ class TestContextSegmentMeasurement(OccupancyFixtureMixin):
 
         assert segment.item_count == 7
 
+    def test_em_dashes_and_curly_quotes_are_measured_as_wire_bytes(self) -> None:
+        # The real system prompts and user turns carry these; a character count
+        # would silently under-report every one of them.
+        text = "em—dash and “curly” quotes"
+
+        segment = ContextSegment.measure(
+            text,
+            counter=self.counter(),
+            model=self.MODEL,
+            origin=self.SYSTEM_ORIGIN,
+        )
+
+        assert len(text) == 26
+        assert segment.byte_count == 32
+
+    @pytest.mark.parametrize(
+        "text",
+        ['{"x":"lone \ud800 surrogate"}', "\udfff", "before\ud800after"],
+    )
+    def test_a_lone_surrogate_is_measured_rather_than_fatal(self, text: str) -> None:
+        # A lone surrogate is a legal JSON string escape, so untrusted tool and
+        # model output can carry one. A bare ``.encode("utf-8")`` here raised
+        # ``UnicodeEncodeError`` on the model-call path, and the recorder's
+        # per-class guard turned that into *zero message segments* for the whole
+        # call — the bytes then reappeared inside ``unattributed_delta``, where
+        # they are indistinguishable from tokenizer drift. Losing the row was
+        # survivable; reporting a plausible-looking total was not.
+        segment = ContextSegment.measure(
+            text,
+            counter=self.counter(),
+            model=self.MODEL,
+            origin=self.SYSTEM_ORIGIN,
+        )
+
+        assert segment.byte_count == len(text.encode("utf-8", "surrogatepass"))
+
+    def test_a_lone_surrogate_is_measured_on_the_undeclared_path_too(self) -> None:
+        segment = ContextSegment.measure_undeclared(
+            "unattributed \ud800 bytes",
+            counter=self.counter(),
+            model=self.MODEL,
+            segment_class=ContextSegmentClass.MESSAGES,
+            lifecycle=ContextLifecycle.PER_TURN,
+        )
+
+        assert segment.byte_count > 0
+
 
 class TestContextSegmentDetailBounds(OccupancyFixtureMixin):
     def test_detail_at_the_bound_is_accepted(self) -> None:
@@ -360,6 +411,156 @@ class TestContextSegmentLabelBound(OccupancyFixtureMixin):
         )
 
         assert measured.label == widest.label
+
+
+class TestSnapshotIdentifierBounds(OccupancyFixtureMixin):
+    """The snapshot's four identifier widths must equal the row's, and be gated.
+
+    Same failure class as :class:`TestContextSegmentLabelBound`, one contract
+    over. ``RuntimeContextOccupancyRecord`` publishes these widths on
+    ``Limits`` precisely so "one constant, two readers" holds — the column and
+    the public read/stream contract both derive from it. But the *producer*,
+    :class:`ContextOccupancySnapshot`, still spells all four as bare literals,
+    so there are three readers and only two of them are linked.
+
+    Either direction of drift loses data silently, on the model-call path, and
+    neither logs anything a reader would connect to a width:
+
+    * snapshot narrower than the row — ``SnapshotBuilder.build`` raises,
+      ``ContextOccupancyRecorder._assembled`` catches it, and the attempt yields
+      no snapshot at all: no row, no stream payload, nothing to reconcile.
+    * snapshot wider than the row — capture succeeds and ``project`` raises
+      instead, so ``persist``'s fail-open guard drops a measurement that was
+      taken correctly.
+
+    Both are invisible in aggregate: occupancy simply stops existing for
+    whichever tenant or model spells a long identifier. Asserting equality with
+    the published ``Limits`` rather than against ``200``/``120`` is the point —
+    a literal would drift exactly the way the one under test can.
+    """
+
+    IDENTIFIER_FIELDS: Final[tuple[str, ...]] = (
+        "model_call_id",
+        "model_family",
+        "assembly_record_id",
+    )
+
+    def _max_length(self, field_name: str) -> int:
+        """The bound pydantic actually enforces, read off the built contract.
+
+        Taken from the compiled field rather than from a constant, so this gate
+        fails on a change to the annotation itself and not merely to a name that
+        happens to be imported here.
+        """
+
+        widest: int | None = None
+        for candidate in ContextOccupancySnapshot.model_fields[field_name].metadata:
+            limit = getattr(candidate, "max_length", None)
+            if isinstance(limit, int):
+                widest = limit
+        if widest is not None:
+            return widest
+        # ``str | None`` fields carry their constraint inside the union member,
+        # so probe the enforced boundary instead of the metadata.
+        return self._probed_max_length(field_name)
+
+    def _built_with(self, **overrides: object) -> ContextOccupancySnapshot:
+        """Build a snapshot with any identifier replaced, bypassing the mixin.
+
+        The shared ``build`` helper supplies ``model_call_id`` / ``provider`` /
+        ``model_family`` itself, so a test that varies one of them has to reach
+        the builder directly rather than pass a colliding keyword.
+        """
+
+        values: dict[str, object] = {
+            "model_call_id": self.CALL_ID,
+            "graph_scope": GraphScope.ROOT,
+            "provider": self.PROVIDER,
+            "model_family": self.MODEL_FAMILY,
+        }
+        values.update(overrides)
+        return SnapshotBuilder().build(**values)  # type: ignore[arg-type]
+
+    def _probed_max_length(self, field_name: str) -> int:
+        """Binary-search the accepted width for a field whose metadata is nested."""
+
+        low, high = 0, 4096
+        while low < high:
+            middle = (low + high + 1) // 2
+            try:
+                self._built_with(**{field_name: "x" * middle})
+            except ContextOccupancyError:
+                high = middle - 1
+            else:
+                low = middle
+        return low
+
+    @pytest.mark.parametrize("field_name", IDENTIFIER_FIELDS)
+    def test_identifier_width_equals_the_rows_published_limit(
+        self,
+        field_name: str,
+    ) -> None:
+        assert (
+            self._max_length(field_name)
+            == RuntimeContextOccupancyRecord.Limits.MAX_IDENTIFIER_CHARS
+        )
+
+    def test_provider_width_equals_the_rows_published_limit(self) -> None:
+        assert (
+            self._max_length("provider")
+            == RuntimeContextOccupancyRecord.Limits.MAX_PROVIDER_CHARS
+        )
+
+    def test_the_widest_row_legal_identifiers_still_build_a_snapshot(self) -> None:
+        """Nothing the row would accept may be unmeasurable (the §6.4 direction)."""
+
+        limits = RuntimeContextOccupancyRecord.Limits
+
+        snapshot = self._built_with(
+            model_call_id="c" * limits.MAX_IDENTIFIER_CHARS,
+            model_family="m" * limits.MAX_IDENTIFIER_CHARS,
+            assembly_record_id="a" * limits.MAX_IDENTIFIER_CHARS,
+            provider="p" * limits.MAX_PROVIDER_CHARS,
+        )
+
+        assert len(snapshot.model_call_id) == limits.MAX_IDENTIFIER_CHARS
+        assert len(snapshot.provider) == limits.MAX_PROVIDER_CHARS
+
+    def test_the_widest_snapshot_identifiers_still_project_to_a_row(self) -> None:
+        """...and the reverse: nothing measurable may be unstorable."""
+
+        limits = RuntimeContextOccupancyRecord.Limits
+        snapshot = self._built_with(
+            model_call_id="c" * limits.MAX_IDENTIFIER_CHARS,
+            model_family="m" * limits.MAX_IDENTIFIER_CHARS,
+            assembly_record_id="a" * limits.MAX_IDENTIFIER_CHARS,
+            provider="p" * limits.MAX_PROVIDER_CHARS,
+            segments=(self.segment(estimated_tokens=7),),
+        )
+
+        record = RuntimeContextOccupancyRecord.from_measurement(
+            org_id="org-1",
+            run_id="run-1",
+            conversation_id="conv-1",
+            model_call_id=snapshot.model_call_id,
+            attempt_ordinal=snapshot.attempt_ordinal,
+            assembly_record_id=snapshot.assembly_record_id,
+            graph_scope=RuntimeContextGraphScope(snapshot.graph_scope.value),
+            provider=snapshot.provider,
+            model_family=snapshot.model_family,
+            context_window_tokens=snapshot.context_window_tokens,
+            estimated_input_tokens=snapshot.estimated_input_tokens,
+            provider_input_tokens=snapshot.provider_input_tokens,
+            cached_input_tokens=snapshot.cached_input_tokens,
+            cache_creation_input_tokens=snapshot.cache_creation_input_tokens,
+            undeclared_tokens=snapshot.undeclared_tokens,
+            segments=tuple(
+                segment.model_dump(mode="json") for segment in snapshot.segments
+            ),
+        )
+
+        assert record.model_call_id == snapshot.model_call_id
+        assert record.provider == snapshot.provider
 
 
 class TestSegmentOrdering(OccupancyFixtureMixin):

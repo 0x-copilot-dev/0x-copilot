@@ -182,8 +182,15 @@ class SnapshotProjectionMixin:
             attempt_ordinal=attempt_ordinal,
             context_window_tokens=context_window_tokens,
             provider_input_tokens=provider_input_tokens,
-            cached_input_tokens=300,
-            cache_creation_input_tokens=100,
+            # Mirrors ``ContextOccupancyRecorder._cache_subsets``: the two cache
+            # figures are subsets *of* the provider total, so a call the provider
+            # never reported usage for carries neither. Hard-coding them here
+            # regardless of the total built a snapshot the capture seam cannot
+            # produce (``usage is None`` yields a ``None`` total AND zero
+            # subsets), which is the shape that let the durability boundary skip
+            # checking them.
+            cached_input_tokens=0 if provider_input_tokens is None else 300,
+            cache_creation_input_tokens=0 if provider_input_tokens is None else 100,
         )
 
     def project(
@@ -389,10 +396,23 @@ class TestEveryLegalSnapshotIsPersistable(SnapshotProjectionMixin):
         assert record.graph_scope is RuntimeContextGraphScope.SUBAGENT
 
     def test_a_snapshot_beyond_the_row_bound_fails_at_the_write(self) -> None:
-        # The one place a legal snapshot is not persistable. It is a bound worth
-        # keeping (a runaway tool surface must not write an unbounded document),
-        # so the contract fails loudly at the write instead of truncating —
-        # a half-written breakdown would read as a shrinking tool surface.
+        """The record refuses; eliding is the *recorder's* job, one layer up.
+
+        This asserts the durability bound only, reached by handing
+        ``from_measurement`` an oversized decomposition directly. The bound is
+        worth keeping — a runaway tool surface must not write an unbounded JSONB
+        document — and this contract has no way to choose which segments matter,
+        so refusing is the only honest answer it can give.
+
+        It is explicitly **not** a claim that an over-long conversation loses its
+        occupancy row. Left as one, it read that way, and the reading was wrong:
+        ``ContextOccupancyRecorder.project`` bounds the decomposition to the
+        largest ``MAX_SEGMENTS`` before it ever reaches this validator, keeping
+        every rollup total exact. That is where the policy lives, and
+        ``test_context_occupancy_recorder.py::TestLongConversationsStillProduceARow``
+        is where it is pinned.
+        """
+
         oversized = tuple(
             ContextSegment(
                 segment_class=ContextSegmentClass.TOOLS,

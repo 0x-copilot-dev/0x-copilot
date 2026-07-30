@@ -135,9 +135,19 @@ class ContextOccupancyStorePort(Protocol):
     Both methods are **read/append only**. An occupancy measurement describes a
     request that has already been sent, so there is no correcting write — which
     is why the append is idempotent rather than an upsert, and why no update or
-    delete method exists on this surface. Rows leave only with their parent run
-    or conversation, through the same cascade that erases events and usage; the
-    ledger introduces no retention class of its own (§5).
+    delete method exists on this surface.
+
+    **Erasure is the adapter's job, and it is not uniform.** Rows leave only with
+    their parent run or conversation, and each backend owes that differently:
+    Postgres declares ``ON DELETE CASCADE`` on both parent keys, while the
+    file-native store erases them inside its conversation purge. Neither is a
+    *retention* control, and design §5's "no new retention class" should not be
+    read as one — on Postgres today no path hard-deletes a conversation or a run,
+    so those cascades are correct but unreachable, and no retention kind sweeps
+    this relation. Migration ``0026`` states the full posture. A deployment that
+    owes a customer a bounded retention window on occupancy needs a sweep; this
+    port deliberately does not pretend to provide one, because a delete method
+    here would also hand the model-call path a way to mutate an observation.
     """
 
     async def append_context_occupancy(

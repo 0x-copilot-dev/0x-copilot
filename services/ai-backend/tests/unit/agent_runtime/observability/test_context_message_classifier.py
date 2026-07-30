@@ -717,6 +717,172 @@ class TestAssistantMessages(MessageFixtureMixin):
         assert parts[0].byte_count == 0
 
 
+class TestToolCallBytesAreCountedOnce(MessageFixtureMixin):
+    """The Anthropic turn shape, which is counted twice if read from both halves.
+
+    ``langchain_anthropic._format_output`` builds
+    ``AIMessage(content=<raw blocks>, tool_calls=extract_tool_calls(content))``:
+    the ``tool_use`` block **stays in ``content``** and is *also* parsed into
+    ``tool_calls``. Rendering ``tool_calls`` into its own part while leaving the
+    block inside the answer-text selection counted the arguments twice — 1.92× on
+    a single 400-byte ``write_file`` call, on this repository's primary provider,
+    in the segment class the design names as the largest bucket.
+
+    The rest of the suite's assistant fixtures build ``content=[thinking, text]``
+    with a *separate* ``tool_calls`` list, a shape no provider adapter produces,
+    which is why the arithmetic error was invisible. These tests use the real
+    shape and assert the sum property directly rather than the labels.
+    """
+
+    ANSWER: Final[str] = "Writing the report now."
+    PAYLOAD: Final[str] = "x" * 400
+
+    @classmethod
+    def anthropic_turn(cls) -> AIMessage:
+        """An assistant turn shaped the way ``langchain_anthropic`` builds one."""
+
+        arguments = {"file_path": "/workspace/report.md", "content": cls.PAYLOAD}
+        return AIMessage(
+            content=[
+                {"type": "text", "text": cls.ANSWER},
+                {
+                    "type": "tool_use",
+                    "id": cls.CALL_ID,
+                    "name": "write_file",
+                    "input": arguments,
+                },
+            ],
+            tool_calls=[
+                {
+                    "name": "write_file",
+                    "args": arguments,
+                    "id": cls.CALL_ID,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+    @staticmethod
+    def materialized_bytes(message: object) -> int:
+        """UTF-8 width of the message as the classifier itself renders it."""
+
+        return ClassifiedMessagePart.utf8_byte_count(
+            ContextMessageClassifier._materialize(message, detail="msg[0]").text  # noqa: SLF001
+        )
+
+    def test_the_parts_sum_back_to_the_message_exactly(self) -> None:
+        message = self.anthropic_turn()
+
+        parts = self.classify(message)
+
+        assert sum(part.byte_count for part in parts) == self.materialized_bytes(
+            message
+        ), "a tool_use block counted as both a tool call and answer text"
+
+    def test_the_payload_appears_in_exactly_one_part(self) -> None:
+        parts = self.classify(self.anthropic_turn())
+
+        carrying = [part for part in parts if self.PAYLOAD in part.text]
+
+        assert len(carrying) == 1
+        assert carrying[0].label == MessageContextOrigins.ASSISTANT_TOOL_CALLS.label
+
+    def test_answer_text_keeps_only_the_answer(self) -> None:
+        parts = self.classify(self.anthropic_turn())
+
+        answer = next(
+            part
+            for part in parts
+            if part.label == MessageContextOrigins.ASSISTANT_TEXT.label
+        )
+        assert answer.text == self.ANSWER
+
+    def test_a_turn_that_is_only_a_tool_use_block_reports_no_text_part(self) -> None:
+        message = AIMessage(
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": self.CALL_ID,
+                    "name": "read_file",
+                    "input": {"file_path": "/a.md"},
+                }
+            ],
+            tool_calls=[
+                {
+                    "name": "read_file",
+                    "args": {"file_path": "/a.md"},
+                    "id": self.CALL_ID,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+        parts = self.classify(message)
+
+        assert self.labels(parts) == (MessageContextOrigins.ASSISTANT_TOOL_CALLS.label,)
+        assert parts[0].byte_count == self.materialized_bytes(message)
+
+    def test_the_string_content_shape_still_reports_the_parsed_calls(self) -> None:
+        # ``langchain_openai`` chat completions leave ``content`` a plain string
+        # and carry the calls only in ``tool_calls``, so the parsed render is the
+        # only evidence of bytes that genuinely cross the wire. Excluding it
+        # would under-count by exactly the payload the other shape double-counted.
+        parts = self.classify(self.read_file_call("/workspace/report.md"))
+
+        assert self.labels(parts) == (MessageContextOrigins.ASSISTANT_TOOL_CALLS.label,)
+        assert "/workspace/report.md" in parts[0].text
+
+    def test_a_server_side_tool_call_keeps_its_bytes(self) -> None:
+        # ``server_tool_use`` is *not* parsed into ``tool_calls``, so treating it
+        # as a tool-call block would drop its bytes from every part rather than
+        # move them. Deliberately excluded from the block-type set.
+        message = AIMessage(
+            content=[
+                {"type": "server_tool_use", "id": "srv-1", "name": "web_search"},
+                {"type": "text", "text": self.ANSWER},
+            ]
+        )
+
+        parts = self.classify(message)
+
+        assert self.labels(parts) == (MessageContextOrigins.ASSISTANT_TEXT.label,)
+        assert parts[0].byte_count == self.materialized_bytes(message)
+
+    def test_thinking_tool_use_and_text_stay_three_disjoint_parts(self) -> None:
+        arguments = {"file_path": "/a.md", "content": self.PAYLOAD}
+        message = AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "deciding what to write"},
+                {"type": "text", "text": self.ANSWER},
+                {
+                    "type": "tool_use",
+                    "id": self.CALL_ID,
+                    "name": "write_file",
+                    "input": arguments,
+                },
+            ],
+            tool_calls=[
+                {
+                    "name": "write_file",
+                    "args": arguments,
+                    "id": self.CALL_ID,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+        parts = self.classify(message)
+
+        assert self.labels(parts) == (
+            MessageContextOrigins.ASSISTANT_THINKING.label,
+            MessageContextOrigins.ASSISTANT_TOOL_CALLS.label,
+            MessageContextOrigins.ASSISTANT_TEXT.label,
+        )
+        assert sum(part.byte_count for part in parts) == self.materialized_bytes(
+            message
+        )
+
+
 class TestUnmatchedAndMalformedShapes(MessageFixtureMixin):
     """No silent catch-all, and no failure path that reaches the model call."""
 

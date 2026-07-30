@@ -41,10 +41,14 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 import pytest
 
+from agent_runtime.observability.context_message_classifier import (
+    ContextMessageClassifier,
+)
 from agent_runtime.observability.context_occupancy import (
     ContextOccupancySnapshot,
     ContextSegment,
     GraphScope,
+    SnapshotBuilder,
 )
 from agent_runtime.observability.context_occupancy_recorder import (
     ContextOccupancyRecorder,
@@ -67,7 +71,10 @@ from agent_runtime.observability.context_token_counter import (
     TokenCounterSource,
 )
 from agent_runtime.observability.token_usage import NormalizedTokenUsage
-from agent_runtime.persistence.records import RuntimeContextGraphScope
+from agent_runtime.persistence.records import (
+    RuntimeContextGraphScope,
+    RuntimeContextOccupancyRecord,
+)
 from agent_runtime.prompts.assembly import (
     PromptAssembler,
     PromptAssemblyContext,
@@ -748,6 +755,45 @@ class TestToolBlockMeasurement(RecorderFixtureMixin):
             self.of_class(self.capture(self.request()), ContextSegmentClass.TOOLS) == ()
         )
 
+    def test_an_unmeasurable_tool_does_not_steal_its_neighbours_tier(self) -> None:
+        # ``counter_source`` is the §6.4 signal that separates an authoritative
+        # number from a degraded one. The ledger skips the counter entirely for a
+        # tool whose schema will not serialize, so padding the recorded tiers at
+        # the *end* shifted every later tool by one: the zero footprint claimed
+        # ``TOKENIZER`` — reading as "this tool genuinely costs nothing" — while a
+        # real tokenizer count was labelled ``PROXY``.
+        snapshot = self.capture(
+            self.request(
+                tools=[
+                    self.exploding_tool(),
+                    self.tool(name="alpha"),
+                    self.tool(name="beta"),
+                ]
+            )
+        )
+        tiers = {
+            segment.detail: (segment.counter_source, segment.byte_count)
+            for segment in self.of_class(snapshot, ContextSegmentClass.TOOLS)
+        }
+
+        assert tiers["boom"] == (TokenCounterSource.PROXY, 0)
+        assert tiers["alpha"][0] is TokenCounterSource.TOKENIZER
+        assert tiers["beta"][0] is TokenCounterSource.TOKENIZER
+
+    def test_a_trailing_unmeasurable_tool_is_still_marked_degraded(self) -> None:
+        snapshot = self.capture(
+            self.request(tools=[self.tool(name="alpha"), self.exploding_tool()])
+        )
+        tiers = {
+            segment.detail: segment.counter_source
+            for segment in self.of_class(snapshot, ContextSegmentClass.TOOLS)
+        }
+
+        assert tiers == {
+            "alpha": TokenCounterSource.TOKENIZER,
+            "boom": TokenCounterSource.PROXY,
+        }
+
 
 class TestMessageMeasurement(RecorderFixtureMixin):
     def messages(self) -> tuple[object, ...]:
@@ -806,6 +852,114 @@ class TestMessageMeasurement(RecorderFixtureMixin):
         )
 
         assert materialized.messages == ()
+
+    def test_one_surrogate_bearing_result_does_not_erase_the_message_class(
+        self,
+    ) -> None:
+        # A lone surrogate is a legal JSON escape, so an MCP server or a provider
+        # can put one in a tool result. It used to raise out of
+        # ``ContextSegment`` measurement, and the per-class guard then reported
+        # *no message segments at all* — the whole conversation measured as free,
+        # with the missing bytes surfacing inside ``unattributed_delta`` where a
+        # reader cannot tell them from tokenizer drift.
+        messages = (
+            HumanMessage(content="what is the weather in Bengaluru"),
+            ToolMessage(content='{"t":"34 \ud800 degrees"}', tool_call_id="call-1"),
+        )
+
+        snapshot = self.capture(self.request(messages=messages))
+        measured = self.of_class(snapshot, ContextSegmentClass.MESSAGES)
+
+        assert {segment.label for segment in measured} == {
+            "agent_runtime.conversation:user",
+            "agent_runtime.conversation:tool_result",
+        }
+        assert snapshot.estimated_input_tokens > 0
+
+    def test_an_anthropic_tool_use_turn_is_not_counted_twice(self) -> None:
+        # ``langchain_anthropic`` leaves the ``tool_use`` block in ``content``
+        # *and* parses it into ``tool_calls``. Measuring both put the arguments
+        # in two segments, inflating ``estimated_input_tokens`` and driving
+        # ``unattributed_delta`` negative against the provider's own total.
+        payload = "y" * 400
+        arguments = {"file_path": "/workspace/report.md", "content": payload}
+        message = AIMessage(
+            content=[
+                {"type": "text", "text": "writing it now"},
+                {
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "write_file",
+                    "input": arguments,
+                },
+            ],
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "write_file",
+                    "args": arguments,
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+        snapshot = self.capture(self.request(messages=(message,)))
+        measured = self.of_class(snapshot, ContextSegmentClass.MESSAGES)
+
+        carrying = [
+            segment for segment in measured if segment.byte_count > len(payload)
+        ]
+        assert len(carrying) == 1
+        assert carrying[0].label == "agent_runtime.conversation:assistant_tool_calls", (
+            "the payload must be attributed to the tool-call row, not answer text"
+        )
+
+    def test_a_block_shaped_conversation_conserves_its_bytes(self) -> None:
+        # The strongest form of "nothing counted twice, nothing lost", stated for
+        # the shape where it is checkable: when every message's content is a
+        # block list, the message segments sum to exactly the bytes those blocks
+        # render to. The string-content shape legitimately adds the parsed
+        # tool-call render on top (those bytes are real and are not in
+        # ``content``), so conservation is asserted here rather than globally.
+        arguments = {"file_path": "/a.md", "content": "z" * 200}
+        messages = (
+            HumanMessage(content=[{"type": "text", "text": "please write /a.md"}]),
+            AIMessage(
+                content=[
+                    {"type": "thinking", "thinking": "deciding the contents"},
+                    {"type": "text", "text": "on it"},
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "write_file",
+                        "input": arguments,
+                    },
+                ],
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "name": "write_file",
+                        "args": arguments,
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            ToolMessage(content="wrote 200 bytes", tool_call_id="call-1"),
+        )
+        expected = sum(
+            len(
+                ContextMessageClassifier._materialize(  # noqa: SLF001
+                    message, detail="msg[0]"
+                ).text.encode("utf-8")
+            )
+            for message in messages
+        )
+
+        snapshot = self.capture(self.request(messages=messages))
+        measured = self.of_class(snapshot, ContextSegmentClass.MESSAGES)
+
+        assert sum(segment.byte_count for segment in measured) == expected
+        assert snapshot.undeclared_tokens == 0
 
 
 class TestResponseFormatMeasurement(RecorderFixtureMixin):
@@ -937,6 +1091,52 @@ class TestReconciliation(RecorderFixtureMixin):
         final = self.recorder().finalize(captured, cast(Any, HostileRequest()))
 
         assert final is captured
+
+    def test_an_over_counted_call_reports_a_negative_delta_on_the_measured_path(
+        self,
+    ) -> None:
+        # §3.3 says the residual is signed, and the per-segment message envelope
+        # documented on the token counter biases our estimate *high* — so
+        # negative is the expected steady state on a real call, not an anomaly.
+        # The builder's own arithmetic is unit-tested; this asserts the sign
+        # survives the whole capture-then-finalize path, where a clamp or an
+        # ``abs()`` would be invisible to a hand-built snapshot.
+        captured = self.snapshot()
+        assert captured.estimated_input_tokens > 1
+
+        final = self.recorder().finalize(
+            captured,
+            NormalizedTokenUsage(input_tokens=captured.estimated_input_tokens - 1),
+        )
+
+        assert final.unattributed_delta == -1
+        assert final.estimated_input_tokens == captured.estimated_input_tokens
+        assert final.undeclared_tokens == captured.undeclared_tokens
+
+    def test_the_two_residuals_are_never_folded_into_each_other(self) -> None:
+        # §4.4: ``undeclared_tokens`` is a contract defect and
+        # ``unattributed_delta`` is drift. They are computed from different
+        # inputs and neither absorbs the other, so an undeclared contributor
+        # cannot be laundered into "tokenizer noise".
+        plan = self.plan()
+        captured = self.capture(
+            self.request(
+                system_text=plan.rendered_prompt,
+                tools=[self.tool(name="rogue", declared=False)],
+            ),
+            plan=plan,
+        )
+        assert captured.undeclared_tokens > 0
+
+        final = self.recorder().finalize(
+            captured, NormalizedTokenUsage(input_tokens=captured.estimated_input_tokens)
+        )
+
+        # The delta closes to zero while the declaration breach stays lit.
+        assert final.unattributed_delta == 0
+        assert final.undeclared_tokens == captured.undeclared_tokens
+        # And the breach is *inside* the estimate rather than carved out of it.
+        assert final.undeclared_tokens <= final.estimated_input_tokens
 
 
 class TestFailOpen(RecorderFixtureMixin):
@@ -1122,6 +1322,126 @@ class TestPersistence(RecorderFixtureMixin):
         assert row.free_tokens == snapshot.free_tokens
 
 
+class TestLongConversationsStillProduceARow(RecorderFixtureMixin):
+    """A measurement past the row's segment bound elides, it does not vanish.
+
+    ``RuntimeContextOccupancyRecord.Limits.MAX_SEGMENTS`` was sized against the
+    *tool* block ("~25-40 segments on a realistic call"), then PRD-07 made
+    messages a segment source at one to three segments per message. The producer
+    therefore outgrew the bound: past ~512 segments the row refuses to validate
+    and ``persist``'s fail-open guard drops it, so occupancy went dark on exactly
+    the long conversations it exists to diagnose — a total loss dressed as
+    fail-open.
+
+    ``project`` now bounds the decomposition instead. These tests pin the two
+    halves that make the elision honest rather than merely quiet: the rollup
+    columns stay exact (so no reader is misled about the total), and the segments
+    kept are the largest (so the rows a reader would act on are the ones that
+    survive). Untested before this pass, while
+    ``test_context_occupancy_projection.py`` documented the record-level bound
+    with the opposite rationale — the record still refuses, which is why the
+    recorder has to elide before reaching it.
+    """
+
+    LIMIT: Final[int] = RuntimeContextOccupancyRecord.Limits.MAX_SEGMENTS
+    OVERSHOOT: Final[int] = 40
+
+    def oversized_snapshot(self) -> ContextOccupancySnapshot:
+        """A snapshot whose message decomposition exceeds what one row may hold.
+
+        Token estimates ascend with the ordinal so "keep the largest" is
+        observable rather than merely asserted.
+        """
+
+        segments = tuple(
+            ContextSegment(
+                segment_class=ContextSegmentClass.MESSAGES,
+                label="agent_runtime.conversation:user",
+                lifecycle=ContextLifecycle.PER_TURN,
+                detail=f"msg[{index}]",
+                byte_count=index * 4,
+                estimated_tokens=index,
+                counter_source=TokenCounterSource.TOKENIZER,
+            )
+            for index in range(self.LIMIT + self.OVERSHOOT)
+        )
+        return SnapshotBuilder().build(
+            model_call_id=self.CALL_ID,
+            graph_scope=GraphScope.ROOT,
+            provider=self.PROVIDER,
+            model_family=self.MODEL_FAMILY,
+            segments=segments,
+            context_window_tokens=200_000,
+            provider_input_tokens=sum(range(self.LIMIT + self.OVERSHOOT)) + 500,
+        )
+
+    def projected(self) -> RuntimeContextOccupancyRecord:
+        return self.recorder().project(
+            self.oversized_snapshot(),
+            org_id=self.ORG_ID,
+            run_id=self.RUN_ID,
+            conversation_id=self.CONVERSATION_ID,
+        )
+
+    def test_the_row_is_written_rather_than_dropped(self) -> None:
+        row = self.projected()
+
+        assert row.segment_count == self.LIMIT
+        assert len(row.segments) == self.LIMIT
+
+    def test_every_rollup_total_stays_exact(self) -> None:
+        """The elision must not move a single number a reader reconciles on."""
+
+        snapshot = self.oversized_snapshot()
+        row = self.recorder().project(
+            snapshot,
+            org_id=self.ORG_ID,
+            run_id=self.RUN_ID,
+            conversation_id=self.CONVERSATION_ID,
+        )
+
+        assert row.estimated_input_tokens == snapshot.estimated_input_tokens
+        assert row.provider_input_tokens == snapshot.provider_input_tokens
+        assert row.unattributed_delta == snapshot.unattributed_delta
+        assert row.undeclared_tokens == snapshot.undeclared_tokens
+        assert row.free_tokens == snapshot.free_tokens
+
+    def test_the_elision_is_detectable_and_keeps_the_largest_segments(self) -> None:
+        row = self.projected()
+
+        kept = tuple(int(segment["estimated_tokens"]) for segment in row.segments)
+        # The dropped segments are the cheapest ones, so the gap between the
+        # stored decomposition and the exact column is what tells a reader the
+        # breakdown is partial — the same posture the read API takes for a
+        # segment it cannot parse (``unreadable_segment_count``).
+        assert min(kept) == self.OVERSHOOT
+        assert row.estimated_input_tokens - sum(kept) == sum(range(self.OVERSHOOT))
+
+    def test_the_kept_segments_stay_in_canonical_order(self) -> None:
+        """Two rows must still diff cleanly after an elision."""
+
+        details = [str(segment["detail"]) for segment in self.projected().segments]
+
+        assert details == sorted(details)
+
+    async def test_the_bounded_row_actually_reaches_the_sink(self) -> None:
+        """End to end: the guard in ``persist`` no longer has anything to swallow."""
+
+        sink = RecordingSink()
+
+        appended = await self.recorder().persist(
+            self.oversized_snapshot(),
+            sink=sink,
+            org_id=self.ORG_ID,
+            run_id=self.RUN_ID,
+            conversation_id=self.CONVERSATION_ID,
+        )
+
+        assert appended is True
+        assert len(sink.records) == 1
+        assert sink.records[0].segment_count == self.LIMIT
+
+
 class TestNoContentLeakage(RecorderFixtureMixin):
     SECRET: Final[str] = "the-user-said-something-private-and-quotable"
 
@@ -1209,3 +1529,116 @@ class TestDigestMemoization(RecorderFixtureMixin):
         # Untrusted content can legally carry one; raising here would make an
         # ordinary tool result unmeasurable.
         assert ContextOccupancyRecorder.digest_of("\ud800") != ""
+
+
+class TestSelfContradictoryProviderUsage(RecorderFixtureMixin):
+    """A usage block that contradicts itself must not delete the measurement.
+
+    Provider usage is model output, which this service treats as untrusted, and
+    ``NormalizedTokenUsage``'s contract — ``input_tokens`` is GROSS, the two cache
+    numbers are subsets of it — is a contract the *wire* does not enforce. The
+    durability boundary does enforce it, so a verbatim copy of a contradictory
+    block made the row refuse to validate and ``persist``'s fail-open guard drop
+    it. The field §6.6 exists for was the field that could take the snapshot away.
+
+    Reachability is asserted here rather than assumed, from the real extractor
+    for the provider this product routes by default.
+    """
+
+    CONTRADICTORY_CHUNK: Final[Mapping[str, object]] = {
+        "input_tokens": 0,
+        "output_tokens": 42,
+        "total_tokens": 42,
+        "input_token_details": {"cache_read": 800},
+    }
+
+    def empty_request(self) -> object:
+        """A request with nothing in it, so only the usage copy is under test."""
+
+        return SimpleNamespace(
+            system_message=None, tools=(), messages=(), response_format=None
+        )
+
+    async def persisted(
+        self,
+        usage: NormalizedTokenUsage,
+        *,
+        recorder: ContextOccupancyRecorder | None = None,
+    ) -> tuple[bool, Any]:
+        used = recorder or self.recorder()
+        snapshot = self.capture(self.empty_request(), recorder=used)
+        sink = RecordingSink()
+        written = await used.persist(
+            used.finalize(snapshot, usage),
+            sink=sink,
+            org_id=self.ORG_ID,
+            run_id=self.RUN_ID,
+            conversation_id=self.CONVERSATION_ID,
+        )
+        return written, (sink.records[0] if sink.records else None)
+
+    def test_the_real_openai_extractor_can_emit_the_contradiction(self) -> None:
+        from agent_runtime.observability.token_usage import (
+            OpenAIProviderTokenUsageExtractor,
+        )
+
+        usage = OpenAIProviderTokenUsageExtractor().extract(
+            AIMessage(content="", usage_metadata=cast(Any, self.CONTRADICTORY_CHUNK))
+        )
+
+        assert usage is not None
+        assert usage.cached_input_tokens > usage.input_tokens
+        # ``merge``'s field-wise max cannot repair it: max(0, 0) is still 0.
+        assert usage.merge(usage).cached_input_tokens > usage.merge(usage).input_tokens
+
+    async def test_a_contradictory_block_still_produces_a_row(self) -> None:
+        written, row = await self.persisted(
+            NormalizedTokenUsage(
+                input_tokens=0, output_tokens=42, cached_input_tokens=800
+            )
+        )
+
+        assert written is True
+        assert row is not None
+
+    async def test_the_billed_total_is_never_moved_to_make_it_fit(self) -> None:
+        # ``provider_input_tokens`` is §6.1's read-side copy of the number the
+        # ``UsageMeter`` bills on. Raising it would put two different provider
+        # totals for one call on two surfaces.
+        _, row = await self.persisted(
+            NormalizedTokenUsage(
+                input_tokens=100,
+                output_tokens=1,
+                cached_input_tokens=90,
+                cache_creation_input_tokens=90,
+            )
+        )
+
+        assert row.provider_input_tokens == 100
+        assert row.cached_input_tokens == 90
+        assert row.cache_creation_input_tokens == 10
+
+    async def test_a_consistent_block_is_copied_untouched(self) -> None:
+        _, row = await self.persisted(
+            NormalizedTokenUsage(
+                input_tokens=1_000,
+                output_tokens=1,
+                cached_input_tokens=900,
+                cache_creation_input_tokens=50,
+            )
+        )
+
+        assert (
+            row.provider_input_tokens,
+            row.cached_input_tokens,
+            row.cache_creation_input_tokens,
+        ) == (1_000, 900, 50)
+
+    def test_absent_usage_reports_no_cache_detail_at_all(self) -> None:
+        snapshot = self.capture(self.empty_request())
+
+        reconciled = self.recorder().finalize(snapshot, None)
+
+        assert reconciled.provider_input_tokens is None
+        assert reconciled.cached_input_tokens == 0
+        assert reconciled.cache_creation_input_tokens == 0

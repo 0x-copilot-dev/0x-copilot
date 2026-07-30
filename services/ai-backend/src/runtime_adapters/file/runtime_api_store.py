@@ -2944,6 +2944,7 @@ class FileRuntimeApiStore:
             self._session_eraser.erase(planned_dirs)
             for conversation in deletable:
                 self._drop_conversation_state(conversation, victim_runs=victim_runs)
+            self._erase_context_occupancy(conv_ids)
 
             # 5) GC objects that became unreferenced (survivors recomputed from
             #    the JSONL that remains on disk). Content-addressed sharing keeps
@@ -2982,6 +2983,44 @@ class FileRuntimeApiStore:
             trigger=trigger,
         )
         return outcome
+
+    def _erase_context_occupancy(self, conversation_ids: set[str]) -> None:
+        """Physically erase the purged conversations' occupancy rows.
+
+        The Postgres relation gets this from ``ON DELETE CASCADE`` on both of its
+        parent keys, and the design's §5 promise — "occupancy rows are deleted by
+        the same conversation-deletion cascade, no new retention class" — has to
+        hold on the file-native store too, which is the desktop default. Nothing
+        gave it to us here: :meth:`_drop_conversation_state` folds conversations,
+        messages, runs, events and the index, but occupancy lives in a shared
+        back-office ledger rather than in the per-session directories the eraser
+        removes, so a purged chat left one row per model call behind forever.
+
+        Keyed on ``conversation_id`` rather than on ``victim_runs``, because a row
+        whose run record was already folded away would otherwise be unreachable
+        and therefore permanent — and "unreadable" is not "erased".
+
+        The ledger is **rewritten** with the survivors instead of taking a
+        ``delete`` tombstone. Two reasons, and the first is the one that matters:
+        a tombstone leaves the original ``put`` line, with everything it carried,
+        on disk — which is the opposite of what an erasure request asks for. The
+        second is mechanical: the occupancy loader folds by natural key through
+        ``load_puts``, so a keyed delete op would be ignored on the next boot and
+        the row would reappear. A purge already erases directories and rescans
+        object reachability, so one compaction of this ledger is proportionate.
+        """
+
+        survivors = {
+            key: record
+            for key, record in self.context_occupancy.items()
+            if record.conversation_id not in conversation_ids
+        }
+        if len(survivors) == len(self.context_occupancy):
+            return
+        self.context_occupancy = survivors
+        self._ledger(_Tables.CONTEXT_OCCUPANCY).rewrite(
+            record.model_dump(mode="json") for record in survivors.values()
+        )
 
     def _conversation_event_count(self, conversation_id: str) -> int:
         """Count persisted events across every run of one conversation."""

@@ -14,6 +14,10 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from agent_runtime.observability.context_occupancy import ContextSegment
+from agent_runtime.observability.context_origin import (
+    MAX_LABEL_LENGTH as MAX_CONTEXT_LABEL_LENGTH,
+)
 from agent_runtime.persistence.records import (
     RuntimeContextGraphScope,
     RuntimeContextOccupancyRecord,
@@ -195,18 +199,32 @@ class TestSegmentParsingIsFailOpen(OccupancyRecordMixin):
 
 
 class TestSegmentContract(OccupancyRecordMixin):
-    """The wire bounds are the durability bounds, so nothing readable is unwritable."""
+    """The wire bounds mirror the producer's, so the read is never wider (§6.5).
 
-    def test_bounds_are_inherited_from_the_persistence_boundary(self) -> None:
+    The invariant these used to assert was "the wire bound equals the durability
+    bound", which sounded conservative and was the hole: the durability envelope
+    applies one width to every string in a segment, so it has to admit a
+    401-character ``owner:name`` label — and reading ``detail`` under that same
+    width published 512 characters of arbitrary text for a field whose only
+    producer clips it to 200 printable characters from an untrusted MCP tool name.
+    """
+
+    def test_label_bound_is_exactly_what_a_declaration_can_spell(self) -> None:
+        assert ContextOccupancySegment.Limits.MAX_LABEL == MAX_CONTEXT_LABEL_LENGTH
+
+    def test_detail_bound_is_exactly_what_a_measurement_can_emit(self) -> None:
+        """Producer, column, and wire agree on one width, or one of them leaks."""
+
         assert (
-            ContextOccupancySegment.Limits.MAX_TEXT
-            == RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_TEXT_CHARS
+            ContextOccupancySegment.Limits.MAX_DETAIL
+            == ContextSegment.MAX_DETAIL_LENGTH
+            == RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_DETAIL_CHARS
         )
 
-    def test_a_detail_at_the_stored_bound_round_trips(self) -> None:
-        """A value the write path accepted must never be unreadable."""
+    def test_a_detail_at_the_producer_bound_round_trips(self) -> None:
+        """A value the measurement path can emit must never be unreadable."""
 
-        longest = "a" * RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_TEXT_CHARS
+        longest = "a" * ContextSegment.MAX_DETAIL_LENGTH
 
         segment = ContextOccupancySegment.from_stored(
             {**self.SEGMENT, "detail": longest}
@@ -214,15 +232,64 @@ class TestSegmentContract(OccupancyRecordMixin):
 
         assert segment.detail == longest
 
-    def test_a_detail_beyond_the_stored_bound_is_refused(self) -> None:
-        """Past the persistence bound it is content, and no row could hold it."""
+    def test_a_detail_beyond_the_producer_bound_is_refused(self) -> None:
+        """Past the bound no measurement produced it, so it reads as content."""
 
-        too_long = "a" * (
-            RuntimeContextOccupancyRecord.Limits.MAX_SEGMENT_TEXT_CHARS + 1
-        )
+        too_long = "a" * (ContextSegment.MAX_DETAIL_LENGTH + 1)
 
         with pytest.raises(ValidationError):
             ContextOccupancySegment.from_stored({**self.SEGMENT, "detail": too_long})
+
+    @pytest.mark.parametrize(
+        "smuggled",
+        [
+            pytest.param("tool\nSSN 123-45-6789", id="newline"),
+            pytest.param("tool\r\nrow 2", id="crlf"),
+            pytest.param("tool\tcolumn", id="tab"),
+            pytest.param("tool\x00null", id="nul"),
+            pytest.param("tool\x7fdel", id="delete"),
+        ],
+    )
+    def test_a_multi_line_detail_is_refused_even_within_the_bound(
+        self,
+        smuggled: str,
+    ) -> None:
+        """The sharp half of §6.5: a length bound cannot express "one token".
+
+        Every detail this runtime produces is a single printable token. Content
+        pasted into the field is short enough to pass a length check and still be
+        content, so the wire contract restates the closed check ``ContextSegment``
+        applies at measurement time.
+        """
+
+        with pytest.raises(ValidationError):
+            ContextOccupancySegment.from_stored({**self.SEGMENT, "detail": smuggled})
+
+    def test_identifier_fields_are_bounded_not_bare_strings(self) -> None:
+        """This contract is also the stream payload's allow-list — so it must bound.
+
+        ``events.RuntimeEventPresentationProjector`` validates-and-re-dumps a
+        ``context_occupancy`` payload instead of allow-listing keys, on the
+        reasoning that the shape *is* the allow-list. An unbounded ``str`` field
+        would make that reasoning false: it is a text channel through a §6.5
+        surface no matter how strict its neighbours are.
+        """
+
+        over = "x" * (ContextOccupancySnapshotPayload.Limits.MAX_IDENTIFIER + 1)
+        for field, value in (
+            ("model_call_id", over),
+            ("model_family", over),
+            ("assembly_record_id", over),
+            (
+                "provider",
+                "y" * (ContextOccupancySnapshotPayload.Limits.MAX_PROVIDER + 1),
+            ),
+        ):
+            base = ContextOccupancySnapshotPayload.from_record(self.record())
+            values = base.model_dump(mode="json")
+            values[field] = value
+            with pytest.raises(ValidationError):
+                ContextOccupancySnapshotPayload.model_validate(values)
 
     def test_missing_counter_source_is_refused(self) -> None:
         """A tokenizer count and a fail-open proxy are not interchangeable."""

@@ -20,13 +20,32 @@
 -- row rather than overwriting the first; rollups deduplicate on model_call_id
 -- and take the last attempt for utilization.
 --
--- Retention needs no new class. The composite parent key cascades the row out
--- with its run, and the conversation key cascades it out with its
--- conversation, so occupancy is erased by exactly the deletion paths that
--- already erase events and usage. `runtime_events` predates this convention
--- and is swept by an explicit retention kind instead; occupancy deliberately
--- takes the stricter of the two behaviours, because a row that survives its
--- parent is the failure mode that matters here.
+-- Retention: both parent keys cascade, and that is the whole of it. The
+-- composite run key takes the row out with `agent_runs`, and the conversation
+-- key takes it out with `agent_conversations`, so a row can never outlive the
+-- run or the conversation it describes.
+--
+-- Be precise about what that does and does not buy, because the design's §5
+-- claim that occupancy therefore "needs no new retention class" is stronger
+-- than this schema delivers, and a compliance reviewer must not read it as a
+-- retention control:
+--
+--   * On Postgres, NOTHING currently hard-deletes an `agent_conversations` or
+--     an `agent_runs` row. Conversations are soft-deleted (`deleted_at`), and
+--     `agent_messages`, `agent_runs`, `runtime_events`, `runtime_run_usage` and
+--     `runtime_model_call_usage` all hold NO ACTION references to
+--     `agent_conversations (id)` — so a hard conversation delete would raise a
+--     foreign-key violation long before reaching this cascade. These cascades
+--     are therefore correct but currently unreachable.
+--   * `runtime_events` is not erased by a conversation cascade either. It is
+--     swept by an explicit `RetentionKind.EVENTS` policy, which occupancy does
+--     not join, and the application role below holds no DELETE privilege here.
+--
+-- Net: on Postgres an occupancy row is retained until a parent-deleting path
+-- exists or a retention kind is added. That is a deliberate, documented state,
+-- not an inherited control. The file-native (desktop) store DOES have a real
+-- hard-purge path, and its adapter erases these rows explicitly there
+-- (`FileRuntimeApiStore._erase_context_occupancy`).
 --
 -- The composite (org_id, run_id) foreign key also carries ON UPDATE CASCADE,
 -- so an approved account re-key moves these rows with `agent_runs` and no
