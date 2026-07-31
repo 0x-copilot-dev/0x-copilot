@@ -188,6 +188,82 @@ describe("GrantStore", () => {
     expect(raw.toString("utf-8")).toContain("ATLASCAPv1:plaintext:");
   });
 
+  it("re-attaching the same folder supersedes rather than accumulates", async () => {
+    // Two live grants over one tree are indistinguishable to every surface
+    // that lists them, so "stop sharing" on one leaves the folder readable
+    // through the other — a dismissed pill that does not remove access.
+    const store = makeStore();
+    const root = "/Users/x/projects/atlas";
+    const first = await store.create({
+      root,
+      mode: "read_only",
+      label: "atlas",
+    });
+    const second = await store.create({
+      root,
+      mode: "read_write",
+      label: "atlas",
+    });
+
+    const active = await store.listActive();
+    expect(active).toHaveLength(1);
+    expect(active[0].grantId).toBe(second.grantId);
+    expect(active[0].mode).toBe("read_write");
+
+    // Retired, not erased: the trail keeps both rows.
+    const all = await store.list();
+    expect(all.map((g) => [g.grantId, g.status])).toEqual([
+      [first.grantId, "revoked"],
+      [second.grantId, "active"],
+    ]);
+
+    // ...and revoking the one remaining pill really does end the sharing.
+    await store.revoke(second.grantId);
+    expect(await store.listActive()).toHaveLength(0);
+  });
+
+  it("a different folder is still ADDED, never swapped", async () => {
+    const store = makeStore();
+    await store.create({ root: "/data/a", mode: "read_only", label: "a" });
+    await store.create({ root: "/data/b", mode: "read_only", label: "b" });
+    await store.create({ root: "/data/c", mode: "read_only", label: "c" });
+
+    expect((await store.listActive()).map((g) => g.root)).toEqual([
+      "/data/a",
+      "/data/b",
+      "/data/c",
+    ]);
+  });
+
+  it("an expired grant reports as revoked everywhere, not just in active views", async () => {
+    // `listActive`/`snapshotActive` already dropped it, but `list` reported the
+    // stored literal — so the renderer (which filters on `status`) kept showing
+    // a pill for a folder whose every read now answers `grant_required`.
+    let now = 1000;
+    const store = new GrantStore({
+      userDataDir: tmp,
+      safeStorage: makeFakeSafeStorage(true),
+      uuid: seqUuid,
+      clock: () => now,
+      grantTtlMs: 500,
+    });
+    const grant = await store.create({
+      root: "/data/reports",
+      mode: "read_only",
+      label: "reports",
+    });
+    expect((await store.list())[0].status).toBe("active");
+
+    now = 1_501;
+
+    const all = await store.list();
+    expect(all).toHaveLength(1);
+    expect(all[0].status).toBe("revoked");
+    expect(all[0].expiresAt).toBe(1_500); // expiry is still distinguishable
+    expect((await store.get(grant.grantId))?.status).toBe("revoked");
+    expect(await store.listActive()).toHaveLength(0);
+  });
+
   it("snapshots are immutable and carry a fresh id each time", async () => {
     const store = makeStore();
     await store.create({ root: "/data/a", mode: "read_only", label: "a" });

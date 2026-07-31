@@ -131,6 +131,52 @@ describe("CapabilityService", () => {
     expect(after[0].status).toBe("revoked");
   });
 
+  it("does not offer the renderer a folder that has expired", async () => {
+    // The renderer decides what to show by `status` alone (it has no path and
+    // no expiry). An expired grant that still reports "active" is a folder pill
+    // for a folder whose every read answers `grant_required`, with nothing on
+    // screen to explain it — while `snapshotActive`, the projection reads are
+    // actually authorized against, had already dropped it.
+    let now = 1_000;
+    const store = new GrantStore({
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      clock: () => now,
+      grantTtlMs: 500,
+    });
+    const picker = new FolderPicker({
+      showOpenDialog: async () => ({
+        canceled: false,
+        filePaths: ["/data/reports"],
+      }),
+      realpath: async () => "/data/reports",
+      stat: async () => ({ isDirectory: () => true }),
+    });
+    const workspaceAuthority = new LocalWorkspaceAuthority({
+      grants: store,
+      native: new UnavailableNativeWorkspaceAuthority(),
+      journal: new InMemoryWorkspaceJournalStore(),
+      attestation: {
+        workspaceWriteIsolation: "unavailable",
+        nativeWorkspacePrimitives: "unavailable",
+      },
+      production: true,
+      deviceId: "test-device",
+    });
+    const service = new CapabilityService({
+      store,
+      picker,
+      broker: new CapabilityBroker({ grants: store, workspaceAuthority }),
+      workspaceAuthority,
+    });
+    await service.requestFolderGrant({ mode: "read_only" });
+    expect((await service.listGrants())[0].status).toBe("active");
+
+    now = 1_501;
+
+    expect((await service.listGrants())[0].status).toBe("revoked");
+  });
+
   it("revokeGrant returns null for an unknown id", async () => {
     const { service } = makeService(
       async () => ({ canceled: true, filePaths: [] }),

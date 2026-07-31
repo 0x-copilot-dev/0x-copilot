@@ -372,19 +372,27 @@ class RecordingBroker:
         return fs.move(body["from"], body["to"])
 
     def _snapshot(self) -> dict[str, object]:
-        """Build the ``/v1/grants/snapshot`` body (path-free ``BrokerGrant``s)."""
+        """Build the ``/v1/grants/snapshot`` body, mirroring the shipping broker.
+
+        ``root`` is emitted only when a test's ``grant_meta`` supplies one. The
+        real broker sends it for every active grant (that is what lets the
+        worker turn an attached folder into an ``allow`` rule instead of asking
+        again), and omitting it is the older-broker shape the client must still
+        tolerate — so both are reachable from here.
+        """
         grants: list[dict[str, object]] = []
         for grant_id in self.grants:
             meta = self.grant_meta.get(grant_id, {})
-            grants.append(
-                {
-                    "grantId": grant_id,
-                    "mode": meta.get("mode", "read_only"),
-                    "label": meta.get("label", grant_id),
-                    "status": meta.get("status", "active"),
-                    "mount": meta.get("mount", f"mnt_{grant_id}"),
-                }
-            )
+            grant: dict[str, object] = {
+                "grantId": grant_id,
+                "mode": meta.get("mode", "read_only"),
+                "label": meta.get("label", grant_id),
+                "status": meta.get("status", "active"),
+                "mount": meta.get("mount", f"mnt_{grant_id}"),
+            }
+            if meta.get("root"):
+                grant["root"] = meta["root"]
+            grants.append(grant)
         return {"snapshotId": "snap-fake", "capturedAt": 1000, "grants": grants}
 
     def add_grant(
