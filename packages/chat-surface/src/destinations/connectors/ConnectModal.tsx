@@ -88,6 +88,12 @@ export const CONNECT_PERMISSION_OPTIONS: ReadonlyArray<ConnectPermissionOption> 
 export interface ConnectModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
+  /**
+   * Abort the authorization in flight (the OAuth step's Cancel). Absent ⇒ the
+   * host cannot really stop its flow, and Cancel only closes the dialog — which
+   * is what this used to do unconditionally, while main kept running.
+   */
+  readonly onCancelAuthorize?: () => void;
   /** Generic-SaaS-first catalog of slugs available to connect (FR-4.24). */
   readonly catalog: readonly ConnectorCatalogEntry[];
   /**
@@ -157,6 +163,7 @@ const PHASE_STEP: Record<ConnectPhase, number> = {
 export function ConnectModal({
   open,
   onClose,
+  onCancelAuthorize,
   catalog,
   onSelectEntry,
   onConnect,
@@ -252,6 +259,16 @@ export function ConnectModal({
     if (selected !== null) onConnect(selected.slug, permission);
   }, [selected, permission, onConnect]);
 
+  // Cancel during the OAuth step has to ABORT, not just close. Closing alone
+  // left main's loopback armed for its full timeout, so a user who cancelled
+  // and then approved anyway in the still-open browser tab ended up connected —
+  // the opposite of what the button told them. Closing after is still right:
+  // the dialog has nothing left to show.
+  const cancelAuthorization = useCallback(() => {
+    onCancelAuthorize?.();
+    onClose();
+  }, [onCancelAuthorize, onClose]);
+
   const footer = (
     <>
       <StepDots total={3} current={PHASE_STEP[phase]} />
@@ -286,7 +303,7 @@ export function ConnectModal({
         {phase === "oauth" && error === null ? (
           <Button
             variant="ghost"
-            onClick={onClose}
+            onClick={cancelAuthorization}
             data-testid="connect-cancel"
           >
             Cancel

@@ -459,7 +459,33 @@ describe("ConnectorsDestination — connect feedback", () => {
     },
   ];
 
-  it("marks only the connecting row pending", () => {
+  it("marks only the connecting row pending, and blocks starting another", () => {
+    const onCancelConnect = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={CATALOG}
+        connectingSlug={"atlassian" as ConnectorSlug}
+        onConnectEntry={vi.fn()}
+        onCancelConnect={onCancelConnect}
+      />,
+    );
+    // The connecting row is no longer a disabled Connect button: it says what
+    // is happening AND offers a way out, instead of only greying out.
+    expect(
+      screen.queryByTestId("connector-available-connect-atlassian"),
+    ).toBeNull();
+    const cancel = screen.getByTestId("connector-available-cancel-atlassian");
+    fireEvent.click(cancel);
+    expect(onCancelConnect).toHaveBeenCalledTimes(1);
+
+    // Main holds ONE pending connect, so starting another would abort this one.
+    const other = screen.getByTestId("connector-available-connect-linear");
+    expect(other).toHaveTextContent("Connect");
+    expect(other).toBeDisabled();
+  });
+
+  it("offers no Cancel when the host cannot abort", () => {
     render(
       <ConnectorsDestination
         items={EMPTY}
@@ -468,12 +494,9 @@ describe("ConnectorsDestination — connect feedback", () => {
         onConnectEntry={vi.fn()}
       />,
     );
-    const pending = screen.getByTestId("connector-available-connect-atlassian");
-    expect(pending).toHaveTextContent("Connecting…");
-    expect(pending).toBeDisabled();
-    const other = screen.getByTestId("connector-available-connect-linear");
-    expect(other).toHaveTextContent("Connect");
-    expect(other).not.toBeDisabled();
+    expect(
+      screen.queryByTestId("connector-available-cancel-atlassian"),
+    ).toBeNull();
   });
 
   // Before this, `flow.error` was rendered ONLY inside <ConnectModal>, which a
