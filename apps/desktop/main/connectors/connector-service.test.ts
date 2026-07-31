@@ -21,7 +21,13 @@ import { ConnectorService } from "./connector-service";
  */
 function makeService(
   profileSlugs: string[],
-  options: { readonly installStatus?: number } = {},
+  options: {
+    readonly installStatus?: number;
+    /** Rows that already exist in `mcp_servers` for this user. */
+    readonly existingServerIds?: readonly string[];
+    /** Fail the server listing, to pin the degradation path. */
+    readonly listServersFails?: boolean;
+  } = {},
 ): {
   service: ConnectorService;
   connect: ReturnType<typeof vi.fn>;
@@ -45,6 +51,19 @@ function makeService(
         // Mirrors the backend: a catalog install mints `seed:<slug>` and is
         // idempotent, returning the existing row on repeat.
         return { ok: true, json: async () => ({ server_id: `seed:${slug}` }) };
+      }
+      if (url.endsWith("/v1/mcp/servers")) {
+        if (options.listServersFails === true) {
+          return { ok: false, status: 503 };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            servers: (options.existingServerIds ?? []).map((id) => ({
+              server_id: id,
+            })),
+          }),
+        };
       }
       catalogFetches += 1;
       return {
@@ -110,15 +129,70 @@ describe("ConnectorService.authorize", () => {
   it("installs the catalog seed before authorizing it", async () => {
     // The row does not exist until install mints it. Authorizing `seed:linear`
     // straight off a discovery suggestion answers "MCP server was not found for
-    // this scope" — suggesting a connector never installed it. Install is
-    // idempotent on slug, so this runs unconditionally rather than behind a
-    // lookup.
+    // this scope" — suggesting a connector never installed it.
     const { service, connectMcpServer, installed } = makeService(["gmail"]);
 
     await service.authorize({ slug: "linear", serverId: "seed:linear" });
 
     expect(installed()).toEqual(["linear"]);
     expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("does NOT re-install a server row that already exists", async () => {
+    // The composer's Connect installs first and hands `authorize` the id it
+    // just minted. Installing again was a second POST for a row we were
+    // already holding the id of — 2×200 per connect in the desktop logs.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["seed:linear"],
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual([]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("does NOT install a CUSTOM server's slug — the phantom 404", async () => {
+    // A custom server added by URL has a real row and no catalog entry, so
+    // "installing its slug" asked for a seed that does not exist and answered
+    // 404. Twice per connect, at warning level, in the one path where a real
+    // failure has to stand out.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["custom:abc123"],
+    });
+
+    await service.authorize({ slug: "my-server", serverId: "custom:abc123" });
+
+    expect(installed()).toEqual([]);
+    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+  });
+
+  it("still installs when the id is known but its row does not exist", async () => {
+    // `seed:<slug>` is the catalog IDENTITY, not proof of a row. A discovery
+    // suggestion carries one for a connector that was never installed, so
+    // confirming absence has to send it to install rather than authorize a
+    // row that is not there.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["seed:notion"],
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual(["linear"]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("degrades to installing when the server listing cannot be read", async () => {
+    // An unreadable listing is not evidence either way, so it falls back to
+    // the previous behaviour rather than to a guess: claiming "exists" would
+    // authorize a row that may never have been minted.
+    const { service, installed } = makeService(["gmail"], {
+      listServersFails: true,
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual(["linear"]);
   });
 
   it("authorizes the id the INSTALL returned, not the one passed in", async () => {

@@ -34,6 +34,8 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientError,
     McpConnectionError,
     McpLeaseError,
+    McpNotFoundError,
+    McpRequestRejectedError,
     McpTimeoutError,
     aclose_mcp_client_safely,
 )
@@ -96,6 +98,25 @@ _CONNECTOR_UNAVAILABLE = "The connector is unavailable; no external change was m
 _CONNECTOR_TIMEOUT = "The connector timed out; no external change was made."
 _CONNECTOR_PROTOCOL_ERROR = (
     "The connector reported an error; no external change was made."
+)
+# The three below exist because "the connector is unavailable" was being used
+# for auth expiry, a missing connector, and a malformed request alike. Only one
+# of those is a wait-and-retry situation, and none of them is the same
+# instruction to the user, so they no longer share a sentence.
+_CONNECTOR_AUTH_EXPIRED = (
+    "The connector's authentication is no longer valid; reconnect it to "
+    "continue. No external change was made, and retrying without "
+    "reconnecting will fail the same way."
+)
+_CONNECTOR_NOT_FOUND = (
+    "The connector could not be found — it may not be installed or may have "
+    "been removed. No external change was made. This is not a temporary "
+    "outage and retrying will not change it."
+)
+_CONNECTOR_REQUEST_REJECTED = (
+    "The connector rejected the request as invalid. It replied, so this is "
+    "not an outage and not temporary: the same call returns the same error. "
+    "No external change was made."
 )
 _RETRYABLE_ACQUISITION_LEASE_CODES = frozenset({"pool_saturated", "server_unavailable"})
 
@@ -453,6 +474,22 @@ class McpOperationAdapter(OperationAdapter):
                 _CONNECTOR_UNAVAILABLE,
                 retryable=False,
             ) from exc
+        # A 4xx is caught before the connection family: the connector answered
+        # and refused, so "unavailable" is the wrong word and a retry is the
+        # wrong advice. ``McpNotFoundError`` narrows to the missing-connector
+        # case, which the user CAN act on by connecting the tool.
+        except McpNotFoundError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_NOT_FOUND,
+                retryable=False,
+            ) from exc
+        except McpRequestRejectedError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_REQUEST_REJECTED,
+                retryable=False,
+            ) from exc
         except McpAuthError as exc:
             # A connector can revoke credentials between the pre-dispatch gate
             # and this read.  Re-enter the same auth gate; a rejected resume
@@ -464,9 +501,12 @@ class McpOperationAdapter(OperationAdapter):
                     arguments=self._arguments,
                     state=GateAuthState.EXPIRED,
                 )
+            # Auth is the one failure class here the user can actually fix, and
+            # calling it "unavailable" hid the only useful instruction —
+            # reconnect — behind a word that suggests waiting.
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
-                _CONNECTOR_UNAVAILABLE,
+                _CONNECTOR_AUTH_EXPIRED,
                 retryable=False,
             ) from exc
         except (PermissionError, McpConnectionError, ConnectionError) as exc:
