@@ -313,7 +313,11 @@
 .aui-composer-stack {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /* 2px, not 6. The rendered distance is this PLUS the frame's own top
+     padding, so the measured bar-bottom-to-frame-top was 14px at gap:6 —
+     roughly double what the bar should sit at. Halving the measured result
+     means halving this, not the total. */
+  gap: 2px;
   min-width: 0;
   width: 100%;
 }
