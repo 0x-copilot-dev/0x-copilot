@@ -297,24 +297,52 @@ class TestWhatTheToolSurfaceActuallyDelivers:
     necessary but not sufficient: a shape ``validate_path`` rejects or rewrites
     never reaches this package in the form the user typed.
 
-    These tests pin the CURRENT, measured behavior of that validator rather than
-    assuming it. They are the evidence for the Windows gap: the classifier handles
-    ``C:\Users\...`` correctly and is never given the chance to, because the tool
-    surface refuses drive-absolute paths first. If upstream ever accepts them, these
-    tests fail and the classifier is already ready.
+    These tests pin the CURRENT, measured behavior of that validator. They used
+    to be the evidence for the Windows gap — "the classifier handles
+    ``C:\Users\...`` correctly and is never given the chance to". Upstream still
+    refuses those paths; what changed is that the model no longer hands them to
+    upstream. ``HostPathToolMiddleware`` rewrites a host path into
+    ``ClassifiedPath.canonical`` while the model's response is still in flight,
+    so the string these tests describe is now an INPUT to that translation rather
+    than the last word on it. Kept, and re-pointed at the two upstream facts the
+    canonical encoding is built around, because if either changes the encoding
+    has to change with it:
+
+    * drive-absolute paths are rejected — the reason a canonical spelling exists;
+    * UNC paths are rewritten to a ``//`` root — the reason it must never be
+      spelled that way (see ``test_host_tool_paths.py`` for what a ``//`` root
+      does to the consent gate).
     """
 
     @pytest.mark.parametrize(
         "path",
         [r"C:\Users\p\Downloads", "C:/Users/p/Downloads", r"D:\data"],
     )
-    def test_windows_drive_paths_never_reach_any_backend(self, path: str) -> None:
+    def test_windows_drive_paths_are_still_refused_in_their_native_spelling(
+        self, path: str
+    ) -> None:
         from deepagents.backends.utils import validate_path
 
         with pytest.raises(
             ValueError, match="Windows absolute paths are not supported"
         ):
             validate_path(path)
+
+    @pytest.mark.parametrize(
+        "path",
+        [r"C:\Users\p\Downloads", "C:/Users/p/Downloads", r"D:\data"],
+    )
+    def test_but_their_canonical_spelling_now_passes_unchanged(self, path: str) -> None:
+        """The translation's whole purpose, judged by upstream's own validator."""
+
+        from deepagents.backends.utils import validate_path
+
+        from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
+
+        canonical = HostPathClassifier.classify(path).canonical
+
+        assert canonical
+        assert validate_path(canonical) == canonical
 
     def test_posix_host_paths_do_reach_the_backend_unchanged(self) -> None:
         # This is why the macOS defect was reachable at all, and why the guard
@@ -333,18 +361,40 @@ class TestWhatTheToolSurfaceActuallyDelivers:
     def test_unc_and_extended_paths_arrive_rewritten_not_verbatim(
         self, path: str, rewritten: str
     ) -> None:
-        # They pass validation but lose their Windows spelling, so the classifier
-        # reads them as POSIX. Naming a folder the host does not have is wrong, but
-        # it is wrong out loud — a grant request the user declines, never an empty
-        # listing. Recorded so the rewrite is a known quantity, not a surprise.
+        # They pass validation, but into a ``//`` root — which is not
+        # ``PurePosixPath.is_relative_to("/")`` and therefore overlaps no
+        # interrupt anchor, so the consent gate for ls/glob/grep never fires for
+        # them. Recorded because the canonical encoding exists to keep every
+        # host path OFF this shape.
         from deepagents.backends.utils import validate_path
 
         assert validate_path(path) == rewritten
 
+    @pytest.mark.parametrize(
+        ("path", "rewritten"),
+        [
+            (r"\\server\share\rep", "//server/share/rep"),
+            ("//Users/p/Downloads", "//Users/p/Downloads"),
+        ],
+    )
+    def test_a_double_rooted_path_overlaps_nothing_which_is_why_it_bypassed(
+        self, path: str, rewritten: str
+    ) -> None:
+        from deepagents.backends.utils import _paths_overlap, validate_path
+
+        normalized = validate_path(path)
+
+        assert normalized == rewritten
+        assert _paths_overlap(normalized, "/") is False
+        # ...whereas the single-rooted form the translation produces does.
+        assert _paths_overlap(f"/{normalized.lstrip('/')}", "/") is True
+
     @pytest.mark.parametrize("path", ["~/Downloads", "/Users/p/../etc"])
     def test_traversal_and_home_are_refused_upstream_too(self, path: str) -> None:
         # Belt and braces: the classifier fails these closed as well, so the two
-        # layers agree rather than relying on either alone.
+        # layers agree rather than relying on either alone. This agreement is
+        # also what lets a refused shape stay untranslated without becoming a
+        # consent request — upstream declines to interrupt on it.
         from deepagents.backends.utils import validate_path
 
         with pytest.raises(ValueError, match="Path traversal not allowed"):

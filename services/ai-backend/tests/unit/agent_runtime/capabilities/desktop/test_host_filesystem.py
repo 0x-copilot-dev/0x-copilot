@@ -139,6 +139,83 @@ class TestGrantedRootValidation:
             GrantedRoot(path="/Users/ada/../ada/Projects")
 
 
+class TestGrantsInEitherPlatformsGrammar(RuleSetMixin):
+    r"""A grant has to be spelled the way a tool call is, or it buys nothing.
+
+    `__post_init__` demands a POSIX-absolute path. A grant lane that handed it
+    `C:\Users\ada\Projects` would raise; one that stripped the drive letter
+    would produce a rule matching a DIFFERENT folder. `from_host_path` is the
+    single conversion, and these pin that the rule it produces matches what the
+    tool layer actually asks about.
+    """
+
+    WINDOWS = "C:\\Users\\ada\\Projects"
+
+    def test_a_windows_grant_stops_the_windows_folder_from_asking(self) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        # The spelling a tool call carries once the translator has run.
+        assert self.verdict("/C:/Users/ada/Projects", roots=roots) == "allow"
+        assert self.verdict("/C:/Users/ada/Projects/notes.md", roots=roots) == "allow"
+
+    def test_a_windows_grant_does_not_open_its_siblings(self) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        assert self.verdict("/C:/Users/ada/Downloads", roots=roots) == "interrupt"
+        assert (
+            self.verdict("/C:/Users/ada/ProjectsSecret/x", roots=roots) == "interrupt"
+        )
+
+    def test_a_windows_grant_does_not_open_the_posix_path_of_the_same_name(
+        self,
+    ) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        assert self.verdict("/Users/ada/Projects/notes.md", roots=roots) == "interrupt"
+
+    def test_a_unc_grant_is_spelled_single_rooted(self) -> None:
+        root = GrantedRoot.from_host_path("\\\\server\\share\\reports")
+        assert root.path == "/UNC:/server/share/reports"
+        assert not root.path.startswith("//")
+        assert self.verdict(f"{root.path}/q4.csv", roots=(root,)) == "allow"
+
+    def test_a_posix_grant_is_unchanged_by_the_conversion(self) -> None:
+        assert GrantedRoot.from_host_path(GRANTED) == GrantedRoot(path=GRANTED)
+
+    def test_the_scratch_directory_lands_inside_a_windows_grant(self) -> None:
+        root = GrantedRoot.from_host_path(self.WINDOWS)
+        assert root.scratch_path == f"/C:/Users/ada/Projects/{SCRATCH_DIR_NAME}"
+        assert (
+            self.verdict(
+                f"{root.scratch_path}/notes.json", operation="write", roots=(root,)
+            )
+            == "allow"
+        )
+        # ...and granting still does not open a direct write path to user content.
+        assert (
+            self.verdict(
+                "/C:/Users/ada/Projects/out.csv", operation="write", roots=(root,)
+            )
+            == "deny"
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "C:\\Users\\ada\\..\\etc",
+            "\\\\.\\PhysicalDrive0",
+            "C:\\Users\\ada\\NUL",
+            "C:relative",
+            "~/Projects",
+            "\\\\server",
+            "/memories",
+            "relative/dir",
+        ],
+    )
+    def test_a_path_that_names_no_host_folder_is_never_granted(self, path: str) -> None:
+        """An unusable grant must degrade to "still asks", never to a wider rule."""
+
+        with pytest.raises(ValueError, match="not a host folder"):
+            GrantedRoot.from_host_path(path)
+
+
 class TestAttachedFolderStopsAsking(RuleSetMixin):
     """The user's question: once granted, does it still ask? It must not.
 

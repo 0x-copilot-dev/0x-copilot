@@ -153,6 +153,26 @@ class TestSilentFallthroughRegression:
         assert isinstance(backend, BrokeredWorkspaceBackend)
         return backend
 
+    @staticmethod
+    def _host_backend(composite: object) -> object:
+        """The object that actually touches the disk, past any path adapter.
+
+        The composite's default is wrapped by `NativeHostPathBackend`, which
+        undoes the canonical POSIX encoding the tool layer applies so a Windows
+        path is opened in Windows grammar. Unwrapping HERE rather than loosening
+        the assertions keeps this file's question intact: what answers a host
+        path must be a real filesystem, never agent memory.
+        """
+
+        from agent_runtime.capabilities.desktop.host_tool_paths import (
+            NativeHostPathBackend,
+        )
+
+        default = getattr(composite, "default", None)
+        while isinstance(default, NativeHostPathBackend):
+            default = default.inner
+        return default
+
     async def test_a_host_path_is_never_answered_by_agent_memory(self) -> None:
         """The defect, pinned at the level where it was actually caused.
 
@@ -176,12 +196,13 @@ class TestSilentFallthroughRegression:
         backend = await self._workspace_backend(broker, consent)
         composite = _composed_deep_backend(None, workspace_backend=backend)
         assert composite is not None
-        assert not isinstance(composite.default, StateBackend), (
+        host_backend = self._host_backend(composite)
+        assert not isinstance(host_backend, StateBackend), (
             "a host-absolute path would fall through to agent memory, which "
             "answers it with an empty listing and a green tick"
         )
-        assert isinstance(composite.default, FilesystemBackend)
-        assert composite.default.virtual_mode is False, (
+        assert isinstance(host_backend, FilesystemBackend)
+        assert host_backend.virtual_mode is False, (
             "virtual_mode=True anchors absolute paths under root_dir, so a host "
             "path would resolve somewhere else entirely rather than be read"
         )
@@ -194,6 +215,11 @@ class TestSilentFallthroughRegression:
         the permission rules are applied in the tool layer before it runs. If a
         refactor ever installs the backend without the rules, the model gets
         the user's disk, and no other test in this file would notice.
+
+        This used to `return` early when the default was not a `FilesystemBackend`
+        — which meant wrapping the default in an adapter would have SKIPPED the
+        whole check silently. It now fails instead: on the desktop path a real
+        filesystem is exactly what must be there.
         """
 
         from deepagents.backends.filesystem import FilesystemBackend
@@ -206,9 +232,10 @@ class TestSilentFallthroughRegression:
         backend = await self._workspace_backend(broker, consent)
         composite = _composed_deep_backend(None, workspace_backend=backend)
         assert composite is not None
-
-        if not isinstance(composite.default, FilesystemBackend):
-            return  # No real disk exposed; nothing to guard.
+        assert isinstance(self._host_backend(composite), FilesystemBackend), (
+            "the desktop composition no longer reaches a real filesystem — "
+            "either the capability was dropped or this test stopped finding it"
+        )
 
         rules = list(_host_filesystem_permissions(backend))
         assert rules, "a real filesystem is exposed with NO permission rules"
@@ -216,6 +243,55 @@ class TestSilentFallthroughRegression:
         assert _check_fs_permission(rules, "read", _DOWNLOADS) == "interrupt"
         # ...and no filesystem interrupt may ever authorize a host mutation (D7).
         assert _check_fs_permission(rules, "write", f"{_DOWNLOADS}/x") == "deny"
+
+    async def test_the_translator_ships_with_the_disk_it_makes_reachable(
+        self,
+    ) -> None:
+        r"""The other combination that must never exist: disk without translation.
+
+        The canonical encoding is applied by `HostPathToolMiddleware` and undone
+        by `NativeHostPathBackend`. Installing the backend adapter without the
+        middleware would leave `/C:/Users/...` unproduced (no Windows path could
+        reach the rules); installing the middleware without the adapter would
+        hand Windows a path it cannot open. They are gated on one signal, and
+        this pins that they stay that way.
+        """
+
+        from agent_runtime.capabilities.desktop.host_tool_paths import (
+            HostPathToolMiddleware,
+            NativeHostPathBackend,
+        )
+        from agent_runtime.execution.factory import (
+            _host_path_tool_middleware,
+            _host_path_tool_middleware_factories,
+        )
+
+        broker = RecordingBroker(grants={})
+        consent = RecordingConsent(resume={"decision": "rejected"})
+        backend = await self._workspace_backend(broker, consent)
+        composite = _composed_deep_backend(None, workspace_backend=backend)
+        assert composite is not None
+
+        assert isinstance(composite.default, NativeHostPathBackend)
+        installed = _host_path_tool_middleware(backend)
+        assert [type(middleware) for middleware in installed] == [
+            HostPathToolMiddleware
+        ]
+        # Subagents inherit the parent's rules, so they need the same door.
+        assert list(_host_path_tool_middleware_factories(backend)) == [
+            HostPathToolMiddleware
+        ]
+
+    async def test_no_translator_off_the_desktop_path(self) -> None:
+        """A hosted image composes byte-identically to before this existed."""
+
+        from agent_runtime.execution.factory import (
+            _host_path_tool_middleware,
+            _host_path_tool_middleware_factories,
+        )
+
+        assert _host_path_tool_middleware(None) == ()
+        assert _host_path_tool_middleware_factories(None) == ()
 
     async def test_non_desktop_composition_is_unchanged(self) -> None:
         # With no workspace backend the default must stay the bare StateBackend,

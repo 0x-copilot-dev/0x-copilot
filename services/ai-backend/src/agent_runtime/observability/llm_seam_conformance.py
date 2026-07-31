@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Final
 
 
 CANONICAL_MODEL_FUNNEL = Path("agent_runtime/execution/deep_agent_builder.py")
@@ -96,6 +97,68 @@ def canonical_model_funnel_present(source_root: Path) -> bool:
     return names == _INIT_FUNCTIONS
 
 
+class _ReviewedMiddleware:
+    """The middleware sequence the runtime factory is allowed to compose.
+
+    The gate names the members explicitly, in order, rather than counting them:
+    a graph-wide control that is silently dropped is a policy and
+    result-admission bypass, and one that is silently ADDED is an unreviewed
+    interception point on every tool call.
+
+    ``HostPathToolMiddleware`` is conditional — it is installed only when the
+    desktop host filesystem rules are, so it appears in the source as a starred
+    call to the factory helper that returns it or an empty tuple. That helper's
+    NAME is what is pinned here, so the condition stays visible in this gate
+    instead of hiding behind a runtime branch.
+    """
+
+    #: Unconditional root middleware, in composition order.
+    ROOT: Final[tuple[str, ...]] = (
+        "RuntimeControlMiddleware",
+        "ModelInvocationMiddleware",
+    )
+    #: Unconditional child factories, in composition order.
+    CHILD: Final[tuple[str, ...]] = ROOT
+    #: Factory helpers whose starred result may follow the unconditional members.
+    ROOT_OPTIONAL: Final[tuple[str, ...]] = ("_host_path_tool_middleware",)
+    CHILD_OPTIONAL: Final[tuple[str, ...]] = ("_host_path_tool_middleware_factories",)
+
+
+def _sequence_matches(
+    elements: list[ast.expr],
+    *,
+    required: tuple[str, ...],
+    optional: tuple[str, ...],
+    constructed: bool,
+) -> bool:
+    """Whether ``elements`` is ``required`` followed by a prefix of ``optional``.
+
+    ``constructed`` selects how a required member is spelled: the root sequence
+    instantiates (``RuntimeControlMiddleware()``) while the child sequence names
+    the class itself. An optional member is always a starred call to the named
+    factory helper, so an unreviewed value cannot ride in behind one.
+    """
+
+    if len(elements) < len(required) or len(elements) > len(required) + len(optional):
+        return False
+    for element, name in zip(elements[: len(required)], required, strict=True):
+        if constructed:
+            if (
+                not isinstance(element, ast.Call)
+                or _callable_name(element.func) != name
+            ):
+                return False
+        elif _callable_name(element) != name:
+            return False
+    for element, name in zip(elements[len(required) :], optional, strict=False):
+        if not isinstance(element, ast.Starred):
+            return False
+        value = element.value
+        if not isinstance(value, ast.Call) or _callable_name(value.func) != name:
+            return False
+    return True
+
+
 def canonical_agent_topology_present(source_root: Path) -> bool:
     """Return whether the graph funnel installs the reviewed root/child seam."""
 
@@ -169,18 +232,16 @@ def canonical_agent_topology_present(source_root: Path) -> bool:
         return False
     if not isinstance(child_middleware_keyword, (ast.Tuple, ast.List)):
         return False
-    root_middleware = tuple(
-        _callable_name(item.func)
-        for item in root_middleware_keyword.elts
-        if isinstance(item, ast.Call)
-    )
-    child_factories = tuple(
-        _callable_name(item) for item in child_middleware_keyword.elts
-    )
-    return (
-        len(root_middleware) == len(root_middleware_keyword.elts)
-        and root_middleware == ("RuntimeControlMiddleware", "ModelInvocationMiddleware")
-        and child_factories == ("RuntimeControlMiddleware", "ModelInvocationMiddleware")
+    return _sequence_matches(
+        root_middleware_keyword.elts,
+        required=_ReviewedMiddleware.ROOT,
+        optional=_ReviewedMiddleware.ROOT_OPTIONAL,
+        constructed=True,
+    ) and _sequence_matches(
+        child_middleware_keyword.elts,
+        required=_ReviewedMiddleware.CHILD,
+        optional=_ReviewedMiddleware.CHILD_OPTIONAL,
+        constructed=False,
     )
 
 
