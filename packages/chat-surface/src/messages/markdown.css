@@ -1,16 +1,41 @@
-/* Assistant / reasoning markdown prose styling — SINGLE SOURCE OF TRUTH.
+/* Message prose styling — SINGLE SOURCE OF TRUTH.
  *
  * MarkdownText / Reasoning (this package) emit `.assistant-markdown` and
- * `.reasoning-markdown` plus streamdown `[data-streamdown="…"]` hooks. These
- * rules (code-block card + language header + copy actions + scroll + max-height,
- * blockquote accent bar, inline-code chip, links/references, headings, lists,
- * hr, tables) used to live only in `apps/frontend/src/styles.css`, so the
- * desktop bundle rendered raw <pre>/<code> with no card, no chip, no scroll.
+ * `.reasoning-markdown` plus streamdown `[data-streamdown="…"]` hooks; PlainText
+ * emits `.aui-plain-text`. These rules (code-block card + language header + copy
+ * actions + scroll + max-height, blockquote accent bar, inline-code chip,
+ * links/references, headings, lists, hr, tables) used to live only in
+ * `apps/frontend/src/styles.css`, so the desktop bundle rendered raw
+ * <pre>/<code> with no card, no chip, no scroll.
  *
  * Imported by BOTH hosts (web `apps/frontend/src/app/App.tsx`, desktop
  * `apps/desktop/renderer/bootstrap.tsx`) exactly like composer.css /
  * workspace.css / onboarding.css. All var(--…) tokens are provided by
  * `@0x-copilot/design-system/styles.css`, which both hosts load first. */
+
+/* User-typed message text (`PlainText.tsx` — user turns stay literal, so they
+ * never reach the markdown path above).
+ *
+ * `pre-wrap` keeps the line breaks the person actually typed. This rule used to
+ * live ONLY in the web host's styles.css, which desktop never imports, so on
+ * desktop a multi-line prompt collapsed onto one line.
+ *
+ * `overflow-wrap: anywhere` is what stops a long unbreakable token — a
+ * filesystem path, a URL, a hash — from overflowing the bubble. `break-word`
+ * (what `.assistant-markdown` uses) is NOT interchangeable here: it breaks the
+ * token for painting but leaves the element's MIN-CONTENT width at the whole
+ * token, and this bubble is a shrink-to-fit flex item sized from min-content —
+ * so it stayed over-wide and the transcript (`overflowX: hidden`, TcChat
+ * `messageListStyle`) clipped the tail with no way to scroll to it. Measured in
+ * the Run cockpit's Studio rail: 199px of the message unreachable at the 300px
+ * minimum rail width, 94px at 420px. The assistant block keeps `break-word`
+ * because its width is imposed by the column, not derived from min-content. */
+.aui-plain-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .assistant-markdown {
   color: var(--color-text);
   line-height: 1.58;
