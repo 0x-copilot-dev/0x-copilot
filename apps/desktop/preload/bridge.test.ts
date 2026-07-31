@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS, type WindowBridge } from "@0x-copilot/chat-transport";
 
 import { CAPABILITY_CHANNELS } from "../main/capabilities/channels";
+import { WINDOW_CHROME_STATE_CHANNEL } from "../main/window-channels";
 // The runtime bridge accepts any string channel (it validates internally);
 // this local contract types `invoke` with `string`, so capability channels —
 // which are intentionally NOT part of chat-transport's ChannelName union —
@@ -179,5 +180,59 @@ describe("preload bridge capability-channel allowlist", () => {
       }),
     ).rejects.toThrow(/not in allowlist/u);
     expect(electron.ipcRenderer.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("preload bridge window chrome", () => {
+  let bridge: LocalWindowBridge;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electron.listeners.clear();
+    electron.exposed.bridge = undefined;
+    electron.contextBridge.exposeInMainWorld.mockClear();
+    electron.ipcRenderer.invoke.mockClear();
+    electron.ipcRenderer.on.mockClear();
+    electron.ipcRenderer.removeListener.mockClear();
+
+    await import("./bridge");
+    bridge = electron.exposed.bridge as LocalWindowBridge;
+  });
+
+  it("replays the native window snapshot and streams later fullscreen changes", () => {
+    emit(WINDOW_CHROME_STATE_CHANNEL, {
+      isFullScreen: false,
+      hasNativeTrafficLights: true,
+    });
+
+    const handler = vi.fn();
+    const unsubscribe = bridge.windowChrome?.subscribe(handler);
+    expect(handler).toHaveBeenLastCalledWith({
+      isFullScreen: false,
+      hasNativeTrafficLights: true,
+    });
+
+    emit(WINDOW_CHROME_STATE_CHANNEL, {
+      isFullScreen: true,
+      hasNativeTrafficLights: true,
+    });
+    expect(handler).toHaveBeenLastCalledWith({
+      isFullScreen: true,
+      hasNativeTrafficLights: true,
+    });
+
+    unsubscribe?.();
+    emit(WINDOW_CHROME_STATE_CHANNEL, {
+      isFullScreen: false,
+      hasNativeTrafficLights: true,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops malformed native window snapshots", () => {
+    const handler = vi.fn();
+    bridge.windowChrome?.subscribe(handler);
+    emit(WINDOW_CHROME_STATE_CHANNEL, { isFullScreen: "yes" });
+    expect(handler).not.toHaveBeenCalled();
   });
 });
