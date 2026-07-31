@@ -46,7 +46,9 @@ describe("<SuggestionChips>", () => {
   it("renders 3 chips and fires onPick with the full suggestion", () => {
     const onPick = vi.fn();
     render(<SuggestionChips onPick={onPick} />);
-    const chips = screen.getByTestId("first-run-chips").querySelectorAll(".fr-chip");
+    const chips = screen
+      .getByTestId("first-run-chips")
+      .querySelectorAll(".fr-chip");
     expect(chips).toHaveLength(3);
 
     fireEvent.click(screen.getByTestId("first-run-chip-explain-csv"));

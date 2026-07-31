@@ -52,6 +52,7 @@ Pick by the ROLE the text plays, not by how big it looks.
 | An **accent-tinted chip** (skills, citations)                    | `.ui-chip--accent` (+ `.ui-chip--inline` for prose flow)                          | —                           | accent 12% fill / 40% border · rounded-full                                                              |
 | A **status / metadata chip** — the design `.chip` (canonical)    | `.ui-badge` (+ `--success/--warning/--danger/--accent/--muted`, `.ui-badge__dot`) | `<Badge tone dot>`          | `--font-size-mono-10-5` · mono · medium · hairline border, NO fill · lowercase label · dot only for live |
 | A **code / config editing surface** (JSON, YAML)                 | `.ui-code-editor` (+ `[aria-invalid="true"]`)                                     | `<CodeEditor>`              | mono · `--font-size-sm` (13px) · recessed muted ground · `white-space: pre` + x-scroll · `tab-size: 2`   |
+| An **indeterminate activity spinner** (in-flight work)           | `.ui-spinner` (+ `--ui-spinner-size` / `--ui-spinner-stroke`)                     | `<Spinner size stroke>`     | accent ring on a 35% accent track · 0.8s linear · decorative (`aria-hidden`)                             |
 
 ## Composer chrome + popovers (v3 parity family)
 

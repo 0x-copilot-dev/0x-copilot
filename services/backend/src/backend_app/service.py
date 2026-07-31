@@ -1473,15 +1473,35 @@ class McpRegistryService:
                         transport, request.payload, fence
                     ),
                 )
-                self._observe_proxied_descriptor_page(
-                    lease_token=request.lease,
-                    owner=owner,
-                    request_payload=request.payload,
-                    response=payload,
-                    credential_subject=(
-                        token.connection_id if token is not None else None
-                    ),
-                )
+                # Bookkeeping, and it runs AFTER the connector already
+                # answered. Letting it raise turned a *succeeded* round-trip
+                # into a failed one: a row-projection bug in the revision
+                # store raised ``ValidationError`` here — a ``ValueError``,
+                # which the route maps to ``400`` — and killed
+                # ``load_mcp_server`` at ``resources/list`` for every
+                # connector on Postgres, after its 52 tools had been
+                # discovered successfully. Same log-and-continue discipline
+                # as the connectors write-through: a projection that fails
+                # must degrade descriptor-revision tracking (it reconverges
+                # on the next observation), never discard a good result.
+                try:
+                    self._observe_proxied_descriptor_page(
+                        lease_token=request.lease,
+                        owner=owner,
+                        request_payload=request.payload,
+                        response=payload,
+                        credential_subject=(
+                            token.connection_id if token is not None else None
+                        ),
+                    )
+                except Exception:  # noqa: BLE001 — see discipline note above.
+                    _logger.exception(
+                        "MCP descriptor observation failed "
+                        "(server_id=%s method=%s); descriptor-revision "
+                        "tracking will lag until the next observation",
+                        server_id,
+                        method,
+                    )
         except McpSessionPoolRejected as exc:
             self._forget_lease(request.lease)
             raise InternalMcpLeaseFailureError(

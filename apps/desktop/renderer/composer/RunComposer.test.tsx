@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import {
+  COMPOSER_MODEL_PREFERENCE_KEY,
+  KeyValueStoreProvider,
   TransportProvider,
   type ComposerConnectorsPort,
   type CompleteAttachment,
+  type KeyValueStore,
   type RunStartRequest,
 } from "@0x-copilot/chat-surface";
 import type {
@@ -127,12 +130,40 @@ function payloadFor(path: string): Record<string, unknown> {
   return {};
 }
 
+// The substrate half of the model pill's memory. ChatShell mounts the real
+// store around the destinations in production; a composer rendered without a
+// provider silently gets the no-op default, so tests that care about the pick
+// surviving a remount must supply one.
+class MemoryKeyValueStore implements KeyValueStore {
+  readonly map = new Map<string, string>();
+
+  get(key: string): string | null {
+    return this.map.get(key) ?? null;
+  }
+
+  set(key: string, value: string | null): void {
+    if (value === null) {
+      this.map.delete(key);
+      return;
+    }
+    this.map.set(key, value);
+  }
+
+  keys(prefix?: string): readonly string[] {
+    return [...this.map.keys()].filter(
+      (key) => prefix === undefined || key.startsWith(prefix),
+    );
+  }
+}
+
 function renderComposer(
   props: Partial<React.ComponentProps<typeof RunComposer>> = {},
+  store: KeyValueStore = new MemoryKeyValueStore(),
 ): {
   recorder: Recorder;
   container: HTMLElement;
   dispatch: ReturnType<typeof vi.fn>;
+  store: KeyValueStore;
 } {
   const recorder: Recorder = { calls: [] };
   // Default dispatch resolves (a successful send); tests override it to reject.
@@ -141,16 +172,43 @@ function renderComposer(
   );
   const ui: ReactElement = (
     <TransportProvider transport={fakeTransport(recorder)}>
-      <RunComposer
-        dispatch={dispatch}
-        disabled={false}
-        placeholder="Send a message…"
-        {...props}
-      />
+      <KeyValueStoreProvider store={store}>
+        <RunComposer
+          dispatch={dispatch}
+          disabled={false}
+          placeholder="Send a message…"
+          {...props}
+        />
+      </KeyValueStoreProvider>
     </TransportProvider>
   );
   const { container } = render(ui);
-  return { recorder, container, dispatch };
+  return { recorder, container, dispatch, store };
+}
+
+/** The model pill's open trigger, whichever model it currently announces. */
+function modelPill(container: HTMLElement): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>(
+    "button[aria-label^='Model: ']",
+  );
+}
+
+/** A model row inside the (portalled) popover, matched by its visible name. */
+function modelRow(name: string): HTMLButtonElement {
+  const rows = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      "button[role='menuitemradio']",
+    ),
+  ];
+  const row = rows.find((r) => r.textContent?.includes(name));
+  if (row === undefined) {
+    throw new Error(
+      `model row ${name} not in popover (saw: ${rows
+        .map((r) => r.textContent)
+        .join(" | ")})`,
+    );
+  }
+  return row;
 }
 
 function textarea(container: HTMLElement): HTMLTextAreaElement | null {
@@ -255,6 +313,107 @@ describe("RunComposer", () => {
     });
     // gpt-4o is outside the curated set → appended as a synthetic entry and
     // selected, so the model pill announces it.
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Model: gpt-4o"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  // The reported bug: pick a model, leave the destination, come back — the
+  // binder had remounted and recomputed the auto-default, so the pick was gone.
+  // The pill's own header promises "this chat", so the memory is per
+  // conversation, with the last-used model covering a chat that has no pick.
+  it("remembers the model picked in a chat across a remount", async () => {
+    const store = new MemoryKeyValueStore();
+    const first = renderComposer({ conversationId: "conv-1" }, store);
+    // Mounts on the persisted workspace default (gpt-4o) until the user picks.
+    await waitFor(() => {
+      expect(
+        first.container.querySelector('[aria-label="Model: gpt-4o"]'),
+      ).not.toBeNull();
+    });
+
+    fireEvent.click(modelPill(first.container) as HTMLButtonElement);
+    fireEvent.click(modelRow("GPT-5.4 Mini"));
+    await waitFor(() => {
+      expect(
+        first.container.querySelector('[aria-label="Model: GPT-5.4 Mini"]'),
+      ).not.toBeNull();
+    });
+
+    // Leave the destination and come back — a fresh binder over the same store.
+    cleanup();
+    const second = renderComposer({ conversationId: "conv-1" }, store);
+    await waitFor(() => {
+      expect(
+        second.container.querySelector('[aria-label="Model: GPT-5.4 Mini"]'),
+      ).not.toBeNull();
+    });
+    // The remembered pick outranks the workspace default, which would otherwise
+    // seed gpt-4o all over again.
+    expect(
+      second.container.querySelector('[aria-label="Model: gpt-4o"]'),
+    ).toBeNull();
+  });
+
+  it("opens a chat with no pick of its own on the last-used model", async () => {
+    const store = new MemoryKeyValueStore();
+    store.set(
+      COMPOSER_MODEL_PREFERENCE_KEY,
+      JSON.stringify({ last: "gpt-5.4-mini", chats: [] }),
+    );
+    const { container } = renderComposer({ conversationId: "conv-2" }, store);
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Model: GPT-5.4 Mini"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  // Server truth, handed down from the cockpit: a chat opened on a machine that
+  // has never stored a pick still opens on the model its transcript came from.
+  it("seeds the pill from the model the chat last ran with", async () => {
+    const { container } = renderComposer({
+      conversationId: "conv-4",
+      conversationModel: "gpt-5.4-mini",
+    });
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Model: GPT-5.4 Mini"]'),
+      ).not.toBeNull();
+    });
+    // …in preference to the workspace default, which would seed gpt-4o.
+    expect(container.querySelector('[aria-label="Model: gpt-4o"]')).toBeNull();
+  });
+
+  it("prefers this chat's remembered pick over what it last ran with", async () => {
+    const store = new MemoryKeyValueStore();
+    store.set(
+      COMPOSER_MODEL_PREFERENCE_KEY,
+      JSON.stringify({ last: null, chats: [["conv-5", "gpt-4o"]] }),
+    );
+    // The user's explicit pick in this chat is newer than the last run's model.
+    const { container } = renderComposer(
+      { conversationId: "conv-5", conversationModel: "gpt-5.4-mini" },
+      store,
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Model: gpt-4o"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  it("ignores a remembered model the catalog can no longer run", async () => {
+    const store = new MemoryKeyValueStore();
+    // A model removed from the catalog (or whose provider key was deleted): the
+    // seed must fall through, never select something run-create would reject.
+    store.set(
+      COMPOSER_MODEL_PREFERENCE_KEY,
+      JSON.stringify({ last: "gone-4", chats: [["conv-3", "gone-4"]] }),
+    );
+    const { container } = renderComposer({ conversationId: "conv-3" }, store);
     await waitFor(() => {
       expect(
         container.querySelector('[aria-label="Model: gpt-4o"]'),

@@ -102,6 +102,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { Spinner } from "@0x-copilot/design-system";
+
 import { Icon } from "../icons/Icon";
 import { providerInitials } from "../icons/providerMarks";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
@@ -125,6 +127,8 @@ export const TOOLS_POPOVER_COPY = {
   installableHeader: "Add a connector",
   installableNote: "1-click connect · you approve first use",
   connectLabel: "Connect",
+  connectingLabel: "Connecting…",
+  cancelLabel: "Cancel",
   setupLabel: "Set up",
   customLabel: "Custom MCP server",
   emptyConnectors: "No connectors yet",
@@ -152,6 +156,18 @@ export interface ToolsPopoverProps {
    * custom-config form; else installFromCatalog → beginAuth.
    */
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  /**
+   * Catalog slug whose OAuth is in flight, or null. Its row shows a spinner and
+   * a Cancel; every other connect row disables, because main holds ONE pending
+   * connect and a second click would abort the first.
+   */
+  readonly connectingSlug?: string | null;
+  /**
+   * Abort the in-flight connect. Absent ⇒ the host cannot cancel (web, whose
+   * redirect unloads the document), and no Cancel affordance renders — the
+   * capability is expressed rather than assumed.
+   */
+  readonly onCancelConnect?: () => void;
   /** Open the host's custom-MCP form. */
   readonly onAddCustom: () => void;
   /** Host-owned portal root — the package has no `document`. */
@@ -171,6 +187,18 @@ export interface ToolsPopoverContentProps {
   readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  /**
+   * Catalog slug whose OAuth is in flight, or null. Its row shows a spinner and
+   * a Cancel; every other connect row disables, because main holds ONE pending
+   * connect and a second click would abort the first.
+   */
+  readonly connectingSlug?: string | null;
+  /**
+   * Abort the in-flight connect. Absent ⇒ the host cannot cancel (web, whose
+   * redirect unloads the document), and no Cancel affordance renders — the
+   * capability is expressed rather than assumed.
+   */
+  readonly onCancelConnect?: () => void;
   readonly onAddCustom: () => void;
   /** Return to a parent menu when this content is used as a drill-down. */
   readonly onBack?: () => void;
@@ -232,6 +260,8 @@ export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
           pausedConnectorIds={props.pausedConnectorIds}
           onToggleConnector={props.onToggleConnector}
           onConnectCatalog={props.onConnectCatalog}
+          connectingSlug={props.connectingSlug}
+          onCancelConnect={props.onCancelConnect}
           onAddCustom={props.onAddCustom}
           onClose={onClose}
         />
@@ -255,6 +285,8 @@ export function ToolsPopoverContent(
     pausedConnectorIds,
     onToggleConnector,
     onConnectCatalog,
+    connectingSlug = null,
+    onCancelConnect,
     onAddCustom,
     onBack,
     onClose,
@@ -305,6 +337,8 @@ export function ToolsPopoverContent(
           pausedConnectorIds={pausedConnectorIds}
           onToggleConnector={onToggleConnector}
           onConnectCatalog={onConnectCatalog}
+          connectingSlug={connectingSlug}
+          onCancelConnect={onCancelConnect}
         />
       </div>
 
@@ -354,6 +388,8 @@ interface BodyProps {
   readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  readonly connectingSlug: string | null;
+  readonly onCancelConnect?: () => void;
 }
 
 function PopoverBody(props: BodyProps): ReactNode {
@@ -364,6 +400,8 @@ function PopoverBody(props: BodyProps): ReactNode {
     pausedConnectorIds,
     onToggleConnector,
     onConnectCatalog,
+    connectingSlug,
+    onCancelConnect,
   } = props;
 
   if (state.status === "loading" || state.status === "idle") {
@@ -450,29 +488,83 @@ function PopoverBody(props: BodyProps): ReactNode {
           >
             {TOOLS_POPOVER_COPY.installableNote}
           </div>
-          {installable.map((entry) => (
-            <button
-              key={entry.slug}
-              type="button"
-              onClick={() => onConnectCatalog(entry)}
-              className="ui-pop-row"
-              data-testid={`first-run-tools-connect-${entry.slug}`}
-            >
-              <span className="ui-pop-row__lg">
-                {providerInitials(entry.displayName)}
-              </span>
-              <span className="ui-pop-row__m">
-                <span className="ui-pop-row__nm">
-                  <span className="ui-pop-row__txt">{entry.displayName}</span>
+          {installable.map((entry) => {
+            const connecting = connectingSlug === entry.slug;
+            // Main holds ONE pending connect, so a second click would abort the
+            // first. The UI says so rather than letting the user discover it.
+            const blocked = connectingSlug !== null && !connecting;
+            const label = entry.requiresPreRegisteredClient
+              ? TOOLS_POPOVER_COPY.setupLabel
+              : TOOLS_POPOVER_COPY.connectLabel;
+
+            // A connecting row is NOT a button. It holds one (Cancel), and a
+            // button inside a button is invalid HTML that browsers reparent —
+            // which is why the row changes element rather than gaining a
+            // nested control. `.ui-pop-row` styles both; only the interactive
+            // rules are scoped to `button.ui-pop-row`.
+            if (connecting) {
+              return (
+                <div
+                  key={entry.slug}
+                  className="ui-pop-row"
+                  role="status"
+                  data-testid={`first-run-tools-connecting-${entry.slug}`}
+                >
+                  <span className="ui-pop-row__lg">
+                    {providerInitials(entry.displayName)}
+                  </span>
+                  <span className="ui-pop-row__m">
+                    <span className="ui-pop-row__nm">
+                      <span className="ui-pop-row__txt">
+                        {entry.displayName}
+                      </span>
+                    </span>
+                  </span>
+                  <span style={connectingWrapStyle}>
+                    {/* The row owns `role="status"`; the ring is decorative. */}
+                    <Spinner />
+                    <span style={connectingTextStyle}>
+                      {TOOLS_POPOVER_COPY.connectingLabel}
+                    </span>
+                    {onCancelConnect === undefined ? null : (
+                      <button
+                        type="button"
+                        onClick={onCancelConnect}
+                        style={cancelPillStyle}
+                        data-testid={`first-run-tools-cancel-${entry.slug}`}
+                      >
+                        {TOOLS_POPOVER_COPY.cancelLabel}
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            }
+
+            return (
+              <button
+                key={entry.slug}
+                type="button"
+                onClick={() => onConnectCatalog(entry)}
+                disabled={blocked}
+                className="ui-pop-row"
+                data-off={blocked ? "true" : undefined}
+                data-testid={`first-run-tools-connect-${entry.slug}`}
+              >
+                <span className="ui-pop-row__lg">
+                  {providerInitials(entry.displayName)}
                 </span>
-              </span>
-              <span style={connectPillStyle} aria-hidden="true">
-                {entry.requiresPreRegisteredClient
-                  ? TOOLS_POPOVER_COPY.setupLabel
-                  : TOOLS_POPOVER_COPY.connectLabel}
-              </span>
-            </button>
-          ))}
+                <span className="ui-pop-row__m">
+                  <span className="ui-pop-row__nm">
+                    <span className="ui-pop-row__txt">{entry.displayName}</span>
+                  </span>
+                </span>
+                <span style={connectPillStyle} aria-hidden="true">
+                  {label}
+                </span>
+              </button>
+            );
+          })}
         </section>
       ) : null}
     </>
@@ -585,6 +677,43 @@ const connectPillStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-mono-9-5)",
   whiteSpace: "nowrap",
+};
+
+/** Tail of a connecting row: spinner · "Connecting…" · Cancel. */
+const connectingWrapStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  flex: "none",
+  // Matches `.ui-pop-row`'s own 9px rhythm rather than inventing a spacing.
+  gap: 6,
+};
+
+/** Same mono metadata register as the Connect pill, in the quiet tone. */
+const connectingTextStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  whiteSpace: "nowrap",
+};
+
+/**
+ * Cancel keeps the Connect pill's exact geometry so the control reads as one
+ * thing in three states rather than three different controls. Neutral rather
+ * than accent: the accent ring belongs to the action the user is being offered,
+ * and here that action is "stop".
+ */
+const cancelPillStyle: CSSProperties = {
+  flex: "none",
+  padding: "1px 6px",
+  border: "1px solid var(--color-border-strong)",
+  borderRadius: "var(--radius-full)",
+  background: "transparent",
+  color: "var(--color-text-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  lineHeight: "inherit",
+  whiteSpace: "nowrap",
+  cursor: "pointer",
 };
 
 const toggleTrackStyle: CSSProperties = {

@@ -2040,7 +2040,14 @@ export {
 // the pill badge and the rows count one projection; `projectFirstRunConnectors`
 // classifies it (a chat-surface copy of the web app's `projectChatConnectors`,
 // since `apps/*` can't be imported) and drops `access_mode: "off"` servers the
-// runtime would never see. Hosts bump `reloadToken` when a connect completes.
+// runtime would never see.
+//
+// `useConnectorTools` is the SSOT state machine behind the pill — web-search,
+// paused ids, the reload token and the connect lifecycle. Both Run composers and
+// the FTUE mount it and bind only `ConnectorToolsHostPort.connect`, whose one
+// hard rule is that it resolves when the round-trip COMPLETED (not when the
+// browser opened). This replaced three hand-maintained copies of the same
+// machine, whose drift is why the FTUE shipped with no refetch-on-connect.
 // Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
 export {
   ToolsPopover,
@@ -2053,6 +2060,11 @@ export {
   firstRunActiveToolCount,
   isFirstRunConnectorActive,
   useConnectorPopoverData,
+  useConnectorTools,
+  type ConnectorTools,
+  type UseConnectorToolsOptions,
+  type ConnectorToolsHostPort,
+  type ConnectorConnectOutcome,
   type ToolsPopoverProps,
   type ToolsPopoverContentProps,
   type ComposerToolsButtonProps,
@@ -2168,3 +2180,21 @@ export {
   type WorkspaceGrantCardStates,
 } from "./destinations/run";
 // === end Workspace folder grants ===
+// === Model-pill memory — the pick survives a remount ===
+// The composer's model pill promises "Model — this chat", but the selection
+// lived in host React state alone: leaving the Run destination (or switching
+// chats) unmounted the binder and the next mount recomputed the auto-default,
+// dropping the user's pick. This is the memory behind it — a `KeyValueStore`
+// document holding the per-conversation picks plus a last-used fallback for a
+// chat that has none (a brand-new one). The pill stays presentational; the HOST
+// binder reads a remembered id when resolving its initial selection and writes
+// back on every pick. A remembered id is a HINT: the binder resolves it against
+// the live catalog and ignores one whose model is gone or unkeyed.
+export {
+  createComposerModelPreference,
+  COMPOSER_MODEL_PREFERENCE_KEY,
+  COMPOSER_MODEL_PREFERENCE_CHAT_LIMIT,
+  type ComposerModelPreference,
+  type ComposerModelPreferenceOptions,
+} from "./composer";
+// === end Model-pill memory ===

@@ -116,3 +116,16 @@ export {
   type FilesystemBypassState,
 } from "./filesystemBypass";
 // === end Filesystem bypass ===
+// === Model-pill memory — the pick survives a remount ===
+// `KeyValueStore`-backed memory of the model the user picked (per chat + a
+// last-used fallback). The pill itself stays presentational: the HOST binder
+// reads a remembered id when resolving its initial selection and writes back on
+// every pick. Substrate-free — the port is the only storage touchpoint.
+export {
+  createComposerModelPreference,
+  COMPOSER_MODEL_PREFERENCE_KEY,
+  COMPOSER_MODEL_PREFERENCE_CHAT_LIMIT,
+  type ComposerModelPreference,
+  type ComposerModelPreferenceOptions,
+} from "./modelPreference";
+// === end Model-pill memory ===

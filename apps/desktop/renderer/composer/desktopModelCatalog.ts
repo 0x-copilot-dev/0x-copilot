@@ -61,23 +61,80 @@ const PROVIDER_PRIORITY: readonly string[] = [
 ];
 
 /**
+ * Which size rung an AUTO-selected model should land on, best first.
+ *
+ * `tier` is the backend's rung within a provider's general-purpose ladder
+ * (`agent_runtime/api/model_tiers.py`): `medium` is the everyday model,
+ * `small` the cheap one, `big` the flagship. A row with NO tier is off that
+ * ladder — the specialty and max-reasoning lines (`claude-fable`, `gpt-pro`),
+ * which are the DEAREST rows a provider publishes — so it ranks last and can
+ * only be auto-selected when nothing else is usable.
+ *
+ * The bug this fixes: the pick was `usableForProvider[0]`, i.e. catalog order,
+ * which for an Anthropic-only user meant "Claude Fable 5" — the most expensive
+ * model in the list — silently reselected on every fresh mount. A default
+ * should cost the user the least surprise, not the most money; an explicit pick
+ * (remembered per chat) is how anyone gets the flagship.
+ */
+const AUTO_SELECT_TIER_ORDER: readonly NonNullable<CatalogModel["tier"]>[] = [
+  "medium",
+  "small",
+  "big",
+];
+
+/** Rank of a model's tier for auto-selection; off-ladder rows sort last. */
+function tierRank(model: CatalogModel): number {
+  const tier = model.tier ?? null;
+  const index = tier === null ? -1 : AUTO_SELECT_TIER_ORDER.indexOf(tier);
+  return index === -1 ? AUTO_SELECT_TIER_ORDER.length : index;
+}
+
+/**
+ * The best auto-pick from an already-filtered (usable) list: cheapest rung
+ * first, then lower output cost, then catalog order. Cost is the tiebreak
+ * WITHIN a rung, and an unpriced row (the offline LiteLLM fallback publishes no
+ * costs) sorts after a priced one — so a catalog with no tier or cost data at
+ * all degrades to the previous behaviour, first-usable-in-catalog-order.
+ */
+function bestAutoSelect(
+  models: readonly CatalogModel[],
+): CatalogModel | undefined {
+  let best: CatalogModel | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (const model of models) {
+    const rank = tierRank(model);
+    const cost = model.output_cost_per_mtok ?? Number.POSITIVE_INFINITY;
+    if (rank < bestRank || (rank === bestRank && cost < bestCost)) {
+      best = model;
+      bestRank = rank;
+      bestCost = cost;
+    }
+  }
+  return best;
+}
+
+/**
  * Pick the default model id. Priority — provider-aware auto-select so that
  * "add a key → the matching model is picked and usable" holds instead of
  * leaving a keyless or wrong-provider default selected:
- *   1. `preferProvider` — the first usable model of a just-added provider
- *      (BYOK: an OpenAI key → an OpenAI model, an Anthropic key → a Claude
- *      model, an OpenRouter key → an OpenRouter model).
+ *   1. `preferProvider` — a just-added provider's model (BYOK: an OpenAI key →
+ *      an OpenAI model, an Anthropic key → a Claude model, an OpenRouter key →
+ *      an OpenRouter model).
  *   2. PROVIDER_PRIORITY (OpenAI > Anthropic > OpenRouter > Gemini): the first
  *      provider with a usable model wins — preferring `defaultModelId` when it
- *      belongs to that provider, else that provider's first usable model. This
- *      is what stops the OpenAI default from being preselected when the user has
- *      no OpenAI key.
- *   3. the first usable (configured, non-disabled) model of ANY provider (covers
+ *      belongs to that provider, else that provider's best auto-pick. This is
+ *      what stops the OpenAI default from being preselected when the user has no
+ *      OpenAI key.
+ *   3. the best usable (configured, non-disabled) model of ANY provider (covers
  *      local/ollama and any provider outside the priority list).
  *   4. "" — nothing usable yet. NEVER an unusable entry: returning a keyless
  *      `models[0]` is exactly the bug this replaces; the run-start gate is the
  *      backstop for an empty selection.
- * "Usable" = configured AND not disabled.
+ * "Usable" = configured AND not disabled. "Best" is {@link bestAutoSelect} —
+ * the mid rung before the cheap one before the flagship, never an off-ladder
+ * specialty row; this is a DEFAULT, so it must not open on the priciest model a
+ * provider sells.
  */
 export function defaultSelectedModelId(
   models: readonly CatalogModel[],
@@ -89,8 +146,8 @@ export function defaultSelectedModelId(
   const usable = (m: CatalogModel): boolean =>
     m.configured === true && m.disabled !== true;
   if (opts?.preferProvider) {
-    const byProvider = models.find(
-      (m) => m.provider === opts.preferProvider && usable(m),
+    const byProvider = bestAutoSelect(
+      models.filter((m) => m.provider === opts.preferProvider && usable(m)),
     );
     if (byProvider) return byProvider.id;
   }
@@ -106,12 +163,15 @@ export function defaultSelectedModelId(
       );
       if (byDefault) return byDefault.id;
     }
-    return usableForProvider[0].id;
+    // Always resolves — the list is non-empty by the guard above. Falling
+    // through rather than asserting keeps a surprise here degrading to the next
+    // provider instead of a crash.
+    const best = bestAutoSelect(usableForProvider);
+    if (best !== undefined) return best.id;
   }
-  // No priority provider is configured — fall back to the first usable model of
+  // No priority provider is configured — fall back to the best usable model of
   // any provider (local/ollama/other). Never an unusable entry.
-  const firstUsable = models.find(usable);
-  return firstUsable?.id ?? "";
+  return bestAutoSelect(models.filter(usable))?.id ?? "";
 }
 
 /** Wire `model` selection for a run-create body, resolved from the picked id. */

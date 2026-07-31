@@ -39,7 +39,13 @@ import type {
 import { DESKTOP_CONNECTOR_DEEP_LINK_URI } from "@0x-copilot/api-types";
 
 import type { ConnectCallbackMode } from "./useConnectFlow";
-import { AppIcon, Button, Field, TextInput } from "@0x-copilot/design-system";
+import {
+  AppIcon,
+  Button,
+  Field,
+  Spinner,
+  TextInput,
+} from "@0x-copilot/design-system";
 
 import { Modal, StepDots } from "../../settings/Modal";
 
@@ -82,6 +88,12 @@ export const CONNECT_PERMISSION_OPTIONS: ReadonlyArray<ConnectPermissionOption> 
 export interface ConnectModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
+  /**
+   * Abort the authorization in flight (the OAuth step's Cancel). Absent ⇒ the
+   * host cannot really stop its flow, and Cancel only closes the dialog — which
+   * is what this used to do unconditionally, while main kept running.
+   */
+  readonly onCancelAuthorize?: () => void;
   /** Generic-SaaS-first catalog of slugs available to connect (FR-4.24). */
   readonly catalog: readonly ConnectorCatalogEntry[];
   /**
@@ -151,6 +163,7 @@ const PHASE_STEP: Record<ConnectPhase, number> = {
 export function ConnectModal({
   open,
   onClose,
+  onCancelAuthorize,
   catalog,
   onSelectEntry,
   onConnect,
@@ -246,6 +259,16 @@ export function ConnectModal({
     if (selected !== null) onConnect(selected.slug, permission);
   }, [selected, permission, onConnect]);
 
+  // Cancel during the OAuth step has to ABORT, not just close. Closing alone
+  // left main's loopback armed for its full timeout, so a user who cancelled
+  // and then approved anyway in the still-open browser tab ended up connected —
+  // the opposite of what the button told them. Closing after is still right:
+  // the dialog has nothing left to show.
+  const cancelAuthorization = useCallback(() => {
+    onCancelAuthorize?.();
+    onClose();
+  }, [onCancelAuthorize, onClose]);
+
   const footer = (
     <>
       <StepDots total={3} current={PHASE_STEP[phase]} />
@@ -280,7 +303,7 @@ export function ConnectModal({
         {phase === "oauth" && error === null ? (
           <Button
             variant="ghost"
-            onClick={onClose}
+            onClick={cancelAuthorization}
             data-testid="connect-cancel"
           >
             Cancel
@@ -658,8 +681,8 @@ function OAuthStep({
   }
   return (
     <div style={centerColStyle} role="status" data-testid="connect-oauth">
-      <style>{spinnerKeyframes}</style>
-      <span className="cm-spinner" aria-hidden="true" style={spinnerStyle} />
+      {/* The wrapper owns `role="status"`, so the ring stays decorative. */}
+      <Spinner size={24} stroke={2} />
       <p style={mutedNoteStyle}>
         Authorizing with {name}… approve in the window that opened.
       </p>
@@ -847,18 +870,6 @@ const centerColStyle: CSSProperties = {
   padding: "var(--space-lg) 0",
   textAlign: "center",
 };
-
-const spinnerStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  borderRadius: "var(--radius-full)",
-  border: "2px solid var(--color-border)",
-  borderTopColor: "var(--color-accent)",
-  boxSizing: "border-box",
-};
-
-const spinnerKeyframes = `@keyframes cm-spin { to { transform: rotate(360deg); } }
-.cm-spinner { animation: cm-spin 0.8s linear infinite; }`;
 
 const mutedNoteStyle: CSSProperties = {
   margin: 0,

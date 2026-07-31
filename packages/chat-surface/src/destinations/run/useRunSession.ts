@@ -93,6 +93,13 @@ export interface RunSession {
   readonly runId: string | null;
   /** All runs resolved for the conversation (for the multi-run selector). */
   readonly runs: readonly RunListItem[];
+  /**
+   * The model this conversation last actually ran with (`model_name`), or
+   * `null` when it has never run. Server truth, so it survives a cleared
+   * client store and reads the same on a second machine — the composer seeds
+   * its model pill from it when the user has no local pick for this chat.
+   */
+  readonly conversationModel: string | null;
   /** Session lifecycle status (see {@link RunSessionStatus}). */
   readonly status: RunSessionStatus;
   /**
@@ -172,6 +179,36 @@ function parseRuns(payload: RunListPayload): readonly RunListItem[] {
     });
   }
   return out;
+}
+
+/**
+ * The model the conversation last ran with: the bound run's, else the newest
+ * run that names one.
+ *
+ * Ordered by `startedAt` rather than trusting the run-list's array order, which
+ * is not a documented contract — ISO-8601 timestamps compare lexically, and a
+ * run with no timestamp sorts oldest instead of accidentally winning.
+ */
+function conversationModelName(
+  runs: readonly RunListItem[],
+  boundRunId: string | null,
+): string | null {
+  if (boundRunId !== null) {
+    const bound = runs.find((run) => run.runId === boundRunId);
+    if (bound?.modelName != null) {
+      return bound.modelName;
+    }
+  }
+  let newest: RunListItem | null = null;
+  for (const run of runs) {
+    if (run.modelName === null) {
+      continue;
+    }
+    if (newest === null || (run.startedAt ?? "") > (newest.startedAt ?? "")) {
+      newest = run;
+    }
+  }
+  return newest?.modelName ?? null;
 }
 
 export function useRunSession(options: UseRunSessionOptions): RunSession {
@@ -422,10 +459,18 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     setBoundRunId(next);
   }, []);
 
+  // Derived, not fetched: the run list already carries each run's model, so the
+  // composer's "what did this chat run with" seed costs no extra request.
+  const conversationModel = useMemo(
+    () => conversationModelName(runs, activeRunId),
+    [runs, activeRunId],
+  );
+
   return {
     conversationId,
     runId: activeRunId,
     runs,
+    conversationModel,
     status,
     runStatus,
     events,

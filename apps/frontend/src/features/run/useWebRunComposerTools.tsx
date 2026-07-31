@@ -16,23 +16,17 @@
 // connectors port + provider-keys port). No `@0x-copilot/chat-surface` internals,
 // no `apps/desktop` import, no raw fetch.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactElement,
-} from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 
 import {
+  useConnectorTools,
   type ComposerConnectorsPort,
-  type FirstRunInstallableConnector,
+  type ConnectorToolsHostPort,
   type ProviderKeysPort,
   type RunStartRequest,
 } from "@0x-copilot/chat-surface";
 
 import type { RequestIdentity } from "../../api/config";
-import { ChatToolsTrigger } from "../chat/components/composer/ChatToolsTrigger";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import { toReadableRunAttachments } from "../onboarding/firstRunAttachments";
@@ -54,7 +48,7 @@ export interface WebRunComposerTools {
   /** Host provider-keys port — the model pill's inline "Add a provider key" form. */
   readonly providerKeysPort: ProviderKeysPort;
   /** Run-scoped Tools pill + anchored popover. */
-  readonly toolsTrigger: ReactElement;
+  readonly toolsTrigger: ReactNode;
   /**
    * Build the run-start body from the composer submit (goal + resolved model +
    * attachments + web-search + connector scopes). The ONE place both web
@@ -78,35 +72,6 @@ export function useWebRunComposerTools(
     modelName: null,
   });
 
-  // Tools pill state. Both knobs are opt-OUTS: web search defaults on, and every
-  // connected connector is live unless the user paused it for this run. The old
-  // opt-in `activeConnectorIds` started empty and nothing seeded it from the
-  // server list, so a connected connector rendered disabled in the composer
-  // while Settings → Tools reported it connected.
-  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [pausedConnectorIds, setPausedConnectorIds] = useState<
-    readonly string[]
-  >([]);
-  // Bumped when durable connector state moves (an OAuth return), so the pill
-  // badge and the open panel refetch rather than showing a pre-connect world.
-  const [reloadToken, setReloadToken] = useState(0);
-
-  useEffect(() => {
-    if (autoActivateConnectorId === null) return;
-    setReloadToken((n) => n + 1);
-  }, [autoActivateConnectorId]);
-
-  // A connector that just came back from OAuth must not stay paused from
-  // earlier in the session. Derived, not an effect — an effect would paint one
-  // frame of the stale answer.
-  const effectivePausedIds = useMemo<readonly string[]>(
-    () =>
-      autoActivateConnectorId === null
-        ? pausedConnectorIds
-        : pausedConnectorIds.filter((id) => id !== autoActivateConnectorId),
-    [autoActivateConnectorId, pausedConnectorIds],
-  );
-
   const connectorsPort = useMemo<ComposerConnectorsPort>(
     () => createComposerConnectorsPort(identity),
     [identity],
@@ -116,59 +81,38 @@ export function useWebRunComposerTools(
     [],
   );
 
-  const onToggleConnector = useCallback(
-    (serverId: string, active: boolean): void => {
-      setPausedConnectorIds((prev) =>
-        active
-          ? prev.filter((id) => id !== serverId)
-          : prev.includes(serverId)
-            ? prev
-            : [...prev, serverId],
-      );
-    },
-    [],
-  );
-
-  const onConnectCatalog = useCallback(
-    (entry: FirstRunInstallableConnector): void => {
-      if (entry.requiresPreRegisteredClient) {
-        // No custom-config overlay in the run cockpit; pre-registered vendors
-        // connect from Settings → Tools.
-        return;
-      }
-      void connectorsPort
-        .installFromCatalog(entry.slug)
-        .then((server) => connectorsPort.beginAuth(server.server_id))
-        .catch(() => {
-          // Workspace-authorize only; a failed install surfaces at run time via
-          // the mcp_auth_required card.
-        });
-    },
+  // Tools state comes from the shared machine (web-search, paused ids, reload
+  // token, connect lifecycle) — the same one the FTUE and the desktop composer
+  // mount. Web binds only the connect verb.
+  //
+  // `beginAuth` here is a full-page redirect (`location.href = auth_url`), so
+  // this promise never really resolves — the document unloads. That is fine and
+  // is why the port allows it: nothing stays mounted to show a stale list, and
+  // the remount on return re-reads everything. There is no cancel for the same
+  // reason, so the host supplies none and the popover shows no Cancel.
+  const host = useMemo<ConnectorToolsHostPort>(
+    () => ({
+      async connect(entry) {
+        const server = await connectorsPort.installFromCatalog(entry.slug);
+        await connectorsPort.beginAuth(server.server_id);
+        return { serverId: server.server_id };
+      },
+    }),
     [connectorsPort],
   );
 
-  const toolsTrigger = useMemo(
-    () => (
-      <ChatToolsTrigger
-        port={connectorsPort}
-        reloadToken={reloadToken}
-        webSearchEnabled={webSearchEnabled}
-        onToggleWebSearch={setWebSearchEnabled}
-        pausedConnectorIds={effectivePausedIds}
-        onToggleConnector={onToggleConnector}
-        onConnectCatalog={onConnectCatalog}
-        onAddCustom={noop}
-      />
-    ),
-    [
-      connectorsPort,
-      reloadToken,
-      webSearchEnabled,
-      effectivePausedIds,
-      onToggleConnector,
-      onConnectCatalog,
-    ],
-  );
+  const {
+    toolsTrigger,
+    webSearchEnabled,
+    pausedConnectorIds: effectivePausedIds,
+  } = useConnectorTools({
+    port: connectorsPort,
+    host,
+    autoActivateConnectorId,
+    // No custom-config overlay in the run cockpit; pre-registered vendors
+    // connect from Settings → Tools.
+    onAddCustom: noop,
+  });
 
   const buildRunStartRequest = useCallback(
     (input: {

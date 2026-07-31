@@ -20,7 +20,7 @@
 // signal (web: an SSE `connector.created` envelope; desktop: the connect IPC
 // resolving), which clears `pending` so the modal auto-advances.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type {
   ConnectorAccessMode,
@@ -81,6 +81,16 @@ export interface UseConnectFlowOptions {
     slug: ConnectorSlug,
     permission: ConnectorAccessMode,
   ) => Promise<void>;
+  /**
+   * Abort the authorization in flight. Optional: a host that cannot really stop
+   * its flow omits it, and no Cancel affordance is offered.
+   *
+   * This exists because the modal's Cancel used to only close the dialog. Main
+   * kept the loopback armed for its full timeout, so a user who cancelled and
+   * then approved anyway in the still-open tab ended up connected — having been
+   * told the opposite.
+   */
+  readonly cancelAuthorize?: () => Promise<void>;
 }
 
 export interface ConnectFlow {
@@ -125,6 +135,13 @@ export interface ConnectFlow {
   readonly initialEntrySlug: ConnectorSlug | null;
   /** Close + fully reset the flow. */
   readonly closeConnect: () => void;
+  /**
+   * Abort the authorization in flight and return the surface to its idle state.
+   * `undefined` when the host supplied no `cancelAuthorize` — the capability is
+   * expressed rather than assumed, so a surface can hide its Cancel instead of
+   * offering one that does nothing.
+   */
+  readonly cancelConnect: (() => void) | undefined;
   /** A catalog entry was picked — start the OAuth round-trip. */
   readonly onSelectEntry: (slug: ConnectorSlug) => void;
   /** Terminal Connect — persist the chosen permission. */
@@ -147,7 +164,7 @@ function toMessage(error: unknown, fallback: string): string {
 }
 
 export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
-  const { authorize, onConnect } = options;
+  const { authorize, onConnect, cancelAuthorize } = options;
 
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
@@ -164,6 +181,9 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
   // Which slug the OAuth round-trip is authorizing — a ref so a host completion
   // signal always sees the latest value without re-rendering the caller.
   const connectingSlugRef = useRef<ConnectorSlug | null>(null);
+  // Set while the user's own Cancel is the reason the attempt will reject, so
+  // the resulting rejection is not then shown to them as a failure.
+  const cancelledRef = useRef(false);
 
   const reset = useCallback((): void => {
     connectingSlugRef.current = null;
@@ -205,6 +225,7 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
       callbackMode?: ConnectCallbackMode,
     ): void => {
       connectingSlugRef.current = slug;
+      cancelledRef.current = false;
       setError(null);
       setPending(true);
       setConnectingSlug(slug);
@@ -222,6 +243,12 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
         // slug and the modal asks for it instead of showing a dead error.
         if (err instanceof ConnectOAuthClientRequiredError) {
           setClientRequiredSlug(slug);
+          setError(null);
+          return;
+        }
+        // The user's own Cancel is why this rejected; showing them an error for
+        // the thing they just asked for would be noise.
+        if (cancelledRef.current) {
           setError(null);
           return;
         }
@@ -267,6 +294,20 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
     [onConnect, closeConnect],
   );
 
+  // `undefined` when the host cannot abort, so a surface can hide its Cancel
+  // rather than render one that only tidies the dialog.
+  const cancelConnect = useMemo<(() => void) | undefined>(() => {
+    if (cancelAuthorize === undefined) return undefined;
+    return () => {
+      if (connectingSlugRef.current === null) return;
+      cancelledRef.current = true;
+      void cancelAuthorize().catch(() => {
+        // Either the flow already finished (its own result governs) or the
+        // host is gone; the attempt's rejection resets the surface either way.
+      });
+    };
+  }, [cancelAuthorize]);
+
   const markConnected = useCallback((slug?: ConnectorSlug): void => {
     const connecting = connectingSlugRef.current;
     if (connecting === null) return;
@@ -288,6 +329,7 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
     connectEntry,
     initialEntrySlug,
     closeConnect,
+    cancelConnect,
     onSelectEntry,
     onConnect: handleConnect,
     markConnected,

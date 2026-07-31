@@ -25,6 +25,8 @@ import {
 } from "react";
 
 import {
+  createComposerModelPreference,
+  useKeyValueStore,
   useTransport,
   type AssistantComposerPlusMenuSlotArgs,
 } from "@0x-copilot/chat-surface";
@@ -115,13 +117,35 @@ export interface RunComposerBindings {
 /**
  * Load + own the shared desktop Run composer data (skills, MCP servers, model
  * catalog + selection, `+`-menu). The one writer for selection resolution keeps
- * the workspace-default seed and the keep-valid fallback from racing each
- * other's stale closures (identical to the pre-extraction `RunComposer`).
+ * the remembered-pick seed, the workspace-default seed and the keep-valid
+ * fallback from racing each other's stale closures.
+ *
+ * `conversationId` scopes the remembered model pick. The outlet re-keys (and so
+ * remounts) this binder per conversation, which is precisely why the pick has to
+ * be persisted rather than held in state: without it, every navigation back into
+ * a chat recomputed the auto-default and threw the user's choice away. `null` =
+ * a brand-new chat, which has no id yet and therefore opens on the last-used
+ * model instead of a per-chat one.
+ *
+ * `conversationModel` is the model this chat LAST RAN with, handed down from the
+ * cockpit (server truth, derived from the run list it already fetched). It backs
+ * the local memory: a chat opened on a second machine, or after the client store
+ * was cleared, still opens on the model its transcript was actually produced
+ * with instead of a generic default.
  */
 export function useRunComposerBindings(
   catalogRefreshKey = 0,
+  conversationId: string | null = null,
+  conversationModel: string | null = null,
 ): RunComposerBindings {
   const transport = useTransport();
+  const keyValueStore = useKeyValueStore();
+  // The pill's memory. Stable per store, so the selection effect below can
+  // depend on it without re-running on every render.
+  const modelPreference = useMemo(
+    () => createComposerModelPreference(keyValueStore),
+    [keyValueStore],
+  );
 
   // --- Skills ---
   const [skills, setSkills] = useState<readonly Skill[]>([]);
@@ -336,16 +360,28 @@ export function useRunComposerBindings(
     return merged;
   }, [cloudModels, localModelNames, customModels, workspaceDefault]);
 
-  // Selection resolution — ONE writer so the workspace-default seed and the
-  // keep-valid fallback cannot race each other's stale closures:
+  // Selection resolution — ONE writer so the seeds and the keep-valid fallback
+  // cannot race each other's stale closures:
   //   0. a provider key was JUST added (`preferProviderRef`) → jump to that
   //      provider's model, overriding a stale keyless / wrong-provider pick;
-  //   1. seed the persisted workspace default exactly once, when present+usable;
-  //   2. otherwise keep a valid current pick;
-  //   3. otherwise fall back to the provider-aware default (backend
-  //      `default_model_id` when usable, else the first usable model) — NOT a
+  //   1. seed exactly once, most-specific first:
+  //        a. this chat's remembered pick — an explicit choice made IN it;
+  //        b. `conversationModel` — what this chat actually RAN with (server
+  //           truth, so it works on a machine that never stored a pick);
+  //        c. the last model picked in any chat — the sticky default.
+  //      All three outrank the workspace default because each is a newer and
+  //      more specific signal: Settings answers "what should a fresh install
+  //      open on", these answer "what is this chat running".
+  //   2. else seed the persisted workspace default exactly once, when
+  //      present+usable;
+  //   3. otherwise keep a valid current pick;
+  //   4. otherwise fall back to the provider-aware default (backend
+  //      `default_model_id` when usable, else the provider's best rung) — NOT a
   //      bare first-in-list pick, so the fallback matches the pill and is a model
   //      the run-create gate will accept.
+  // Every seed is validated against the live catalog first: a remembered model
+  // that was curated out, uninstalled, or lost its key falls through to the next
+  // step rather than selecting something the run-create gate would reject.
   useEffect(() => {
     const prefer = preferProviderRef.current;
     if (prefer !== null) {
@@ -367,33 +403,61 @@ export function useRunComposerBindings(
       return;
     }
     setSelectedModel((current) => {
-      if (
-        !userPickedRef.current &&
-        !seededDefaultRef.current &&
-        workspaceDefault !== null
-      ) {
-        const dm = models.find(
-          (m) =>
-            m.provider === workspaceDefault.provider &&
-            m.model_name === workspaceDefault.model_name,
-        );
-        // An unusable default (key removed since) stays unseeded so a later
-        // configured flip can still seed it; the fallback keeps things honest.
-        if (dm && dm.configured && dm.disabled !== true) {
+      if (!userPickedRef.current && !seededDefaultRef.current) {
+        const usable = (id: string | null): string | null => {
+          if (id === null) return null;
+          // A remembered pick is a catalog id; `conversationModel` is a wire
+          // `model_name` off a run row. Match either, since for most rows they
+          // are the same string and for the rest only one of them can hit.
+          const row = models.find((m) => m.id === id || m.model_name === id);
+          return row && row.configured && row.disabled !== true ? row.id : null;
+        };
+        const remembered =
+          usable(modelPreference.forConversation(conversationId)) ??
+          usable(conversationModel) ??
+          usable(modelPreference.lastUsed());
+        if (remembered !== null) {
           seededDefaultRef.current = true;
-          return dm.id;
+          return remembered;
+        }
+        if (workspaceDefault !== null) {
+          const dm = models.find(
+            (m) =>
+              m.provider === workspaceDefault.provider &&
+              m.model_name === workspaceDefault.model_name,
+          );
+          // An unusable default (key removed since) stays unseeded so a later
+          // configured flip can still seed it; the fallback keeps things honest.
+          if (dm && dm.configured && dm.disabled !== true) {
+            seededDefaultRef.current = true;
+            return dm.id;
+          }
         }
       }
       return current !== "" && models.some((m) => m.id === current)
         ? current
         : defaultSelectedModelId(models, { defaultModelId });
     });
-  }, [models, workspaceDefault, defaultModelId]);
+  }, [
+    models,
+    workspaceDefault,
+    defaultModelId,
+    modelPreference,
+    conversationId,
+    conversationModel,
+  ]);
 
-  const onModelChange = useCallback((id: string): void => {
-    userPickedRef.current = true;
-    setSelectedModel(id);
-  }, []);
+  const onModelChange = useCallback(
+    (id: string): void => {
+      userPickedRef.current = true;
+      setSelectedModel(id);
+      // Persist immediately, not on send: the pick is the user's answer to
+      // "what should this chat run on", and a pick they never send still has to
+      // survive walking away from the destination.
+      modelPreference.remember(id, conversationId);
+    },
+    [modelPreference, conversationId],
+  );
 
   const onAddCustomModel = useCallback((slug: string): void => {
     const trimmed = slug.trim();

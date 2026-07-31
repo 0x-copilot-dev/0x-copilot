@@ -1564,6 +1564,20 @@ def create_app(
                 exc.status_code, exc.failure.model_dump(mode="json")
             ) from exc
         except ValueError as exc:
+            # A ``ValueError`` here is almost never the caller's fault — the
+            # caller is ai-backend sending a JSON-RPC envelope it just built.
+            # It is our own internal failure wearing a client-error status,
+            # and unlogged it is invisible: a Pydantic ``ValidationError`` in
+            # the revision store reached the runtime as a bare ``400``, which
+            # the runtime reported as "the MCP server could not be reached",
+            # leaving neither service a single line naming the real cause.
+            # Log it here, where the exception object still exists.
+            logger.exception(
+                "internal MCP RPC failed (server_id=%s method=%s); "
+                "returning 400 to the runtime",
+                server_id,
+                payload.payload.get("method"),
+            )
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     @app.post(

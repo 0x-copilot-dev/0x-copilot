@@ -28,6 +28,21 @@ export const CONNECTOR_CHANNELS = {
    * a new connector needs no renderer change at all.
    */
   authorize: "connector.authorize",
+  /**
+   * Renderer → main: abort the connect currently awaiting a redirect.
+   *
+   * Mirrors `auth.cancel-sign-in`, deliberately: one pending slot, newest wins,
+   * no argument. There is no attempt id because there is at most one connect in
+   * flight — every surface disables its other rows while one is running, the
+   * same way the sign-in screen does.
+   *
+   * This has to reach MAIN to mean anything. A renderer-only "cancel" would
+   * leave the loopback armed for its full five-minute timeout, so a user who
+   * cancelled and then approved anyway in the still-open browser tab would find
+   * the connector silently connected. Closing the loopback here rejects the
+   * pending `authorize`, which is what actually stops the flow.
+   */
+  cancelAuthorize: "connector.cancel-authorize",
 } as const;
 
 /**

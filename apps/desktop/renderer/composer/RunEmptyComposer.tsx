@@ -77,6 +77,21 @@ export interface RunEmptyComposerProps {
    * Host-owned navigation; omitted ⇒ the link is not rendered.
    */
   readonly onGetLocalModels?: () => void;
+  /**
+   * The conversation this composer starts a run in — scopes the REMEMBERED
+   * model pick so it survives leaving and re-entering the destination. Usually
+   * `null` here (the empty state is normally a brand-new chat), which opens on
+   * the last-used model; a conversation whose runs were all cleared still gets
+   * its own pick back.
+   */
+  readonly conversationId?: string | null;
+  /**
+   * What this chat last RAN with (`model_name`), from `ctx.conversationModel`.
+   * Normally `null` in the empty state — a chat with no run has no model — but
+   * a conversation whose runs are all finished and cleared from view still
+   * seeds honestly.
+   */
+  readonly conversationModel?: string | null;
 }
 
 export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
@@ -88,6 +103,8 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     providerKeysPort,
     catalogRefreshKey,
     onGetLocalModels,
+    conversationId = null,
+    conversationModel = null,
   } = props;
 
   const {
@@ -107,7 +124,11 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
-  } = useRunComposerBindings(catalogRefreshKey);
+  } = useRunComposerBindings(
+    catalogRefreshKey,
+    conversationId,
+    conversationModel,
+  );
 
   // Provider-key writes must re-drive the composer's model catalog. The inline
   // "Add a provider key" form in the model popover calls this port's `save`, so

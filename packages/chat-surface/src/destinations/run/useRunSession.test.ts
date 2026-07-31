@@ -437,6 +437,87 @@ describe("useRunSession — multi-run selection (FR-3.26)", () => {
     expect(result.current.runs[0].modelName).toBe("gpt-5.4");
   });
 
+  // `conversationModel` is what a host composer seeds its model pill from when
+  // the user has no locally-remembered pick for the chat — server truth, so it
+  // reads the same on a machine that has never opened this conversation.
+  it("reports the bound run's model as the conversation model", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.endsWith("/runs")
+        ? {
+            runs: [
+              {
+                run_id: "run-a",
+                status: "completed",
+                model_name: "claude-sonnet-5",
+                created_at: "2026-05-17T10:00:00.000Z",
+              },
+              {
+                run_id: "run-b",
+                status: "completed",
+                model_name: "claude-haiku-4-5",
+                created_at: "2026-05-17T09:00:00.000Z",
+              },
+            ],
+          }
+        : { latest_run_id: "run-a" };
+
+    const { result } = renderRunSession(transport, {
+      conversationId: "conv-1",
+    });
+
+    await waitFor(() =>
+      expect(result.current.conversationModel).toBe("claude-sonnet-5"),
+    );
+  });
+
+  it("falls back to the newest run by timestamp, not array order, when nothing is bound", async () => {
+    const transport = new FakeTransport();
+    // Head resolves nothing (a conversation whose runs are all gone from the
+    // head projection) and the list arrives oldest-first — array order must not
+    // decide which model wins.
+    transport.requestHandler = async (req) =>
+      req.path.endsWith("/runs")
+        ? {
+            runs: [
+              {
+                run_id: "run-old",
+                status: "completed",
+                model_name: "claude-haiku-4-5",
+                created_at: "2026-05-17T09:00:00.000Z",
+              },
+              {
+                run_id: "run-new",
+                status: "completed",
+                model_name: "claude-sonnet-5",
+                created_at: "2026-05-17T10:00:00.000Z",
+              },
+            ],
+          }
+        : {};
+
+    const { result } = renderRunSession(transport, {
+      conversationId: "conv-1",
+    });
+
+    await waitFor(() =>
+      expect(result.current.conversationModel).toBe("claude-sonnet-5"),
+    );
+  });
+
+  it("reports no conversation model for a chat that has never run", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.endsWith("/runs") ? { runs: [] } : {};
+
+    const { result } = renderRunSession(transport, {
+      conversationId: "conv-1",
+    });
+
+    await waitFor(() => expect(result.current.runs).toEqual([]));
+    expect(result.current.conversationModel).toBeNull();
+  });
+
   it("rebinds the stream to the selected run and resets accumulated events", async () => {
     const transport = new FakeTransport();
     // The head binds run-a; a manual `selectRun` then rebinds to another run id
