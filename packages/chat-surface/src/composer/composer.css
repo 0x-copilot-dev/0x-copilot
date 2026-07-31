@@ -310,7 +310,11 @@
   align-items: center;
   display: flex;
   gap: 4px;
-  margin: var(--space-sm) auto 0;
+  /* Sits ON the composer's frame, so it hugs it: the reference (Claude Code's
+     Local / repo / branch row) reads as one unit with the input, not as a
+     floating caption above it. A roomy gap made it look like unrelated page
+     furniture. */
+  margin: 0 auto var(--space-2xs);
   max-width: var(--chat-content-width);
   min-width: 0;
   padding: 0 2px;
@@ -322,8 +326,12 @@
  * the folder name reads as a fact about this chat rather than a heading. */
 .aui-folder-bar__attach {
   align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
+  /* A RESTING background, not hover-only. With both transparent it read as
+     floating label text and nobody could tell it was clickable — the whole
+     point of moving the folder out of the + menu was to make the affordance
+     visible without a hover. Same chip treatment as the reference row. */
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
   border-radius: 7px;
   color: var(--color-text-muted);
   cursor: pointer;
@@ -341,8 +349,8 @@
 
 .aui-folder-bar__attach:hover:not([disabled]),
 .aui-folder-bar__attach[data-busy] {
-  background: var(--color-surface-muted);
-  border-color: var(--color-border);
+  background: var(--color-surface-elevated, var(--color-surface));
+  border-color: var(--color-border-strong);
   color: var(--color-text);
 }
 
