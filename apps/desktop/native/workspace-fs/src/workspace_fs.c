@@ -219,6 +219,24 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
 #define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
 #endif
 
+/* InitializeObjectAttributes lives in the WDK's ntdef.h; whether the userland
+ * winternl.h re-exports it has varied across Windows SDK versions. Every other
+ * NT type this file uses (UNICODE_STRING, OBJECT_ATTRIBUTES, IO_STATUS_BLOCK)
+ * does come from winternl.h, so the guard below is the difference between a
+ * portable build and a one-line compile error on whichever SDK the runner has.
+ * It is a no-op when the SDK provides the macro. */
+#ifndef InitializeObjectAttributes
+#define InitializeObjectAttributes(p, n, a, r, s) \
+  do {                                           \
+    (p)->Length = sizeof(OBJECT_ATTRIBUTES);      \
+    (p)->RootDirectory = (r);                     \
+    (p)->Attributes = (a);                        \
+    (p)->ObjectName = (n);                        \
+    (p)->SecurityDescriptor = (s);                \
+    (p)->SecurityQualityOfService = NULL;         \
+  } while (0)
+#endif
+
 typedef NTSTATUS(NTAPI *PFN_NtCreateFile)(
     PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, PLARGE_INTEGER,
     ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);

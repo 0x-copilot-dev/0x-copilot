@@ -30,7 +30,6 @@ import base64
 import hashlib
 import json
 import os
-import platform
 import re
 import subprocess
 import sys
@@ -44,13 +43,18 @@ from typing import Any, Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _lib import DriverSession, load_env_key  # noqa: E402
+from _lib import (  # noqa: E402
+    INSTALLED_PAYLOAD_TARGET,
+    EXIT_SKIPPED,
+    DriverSession,
+    load_env_key,
+    staged_runtime_dir,
+)
 
 
 JOURNEY_ID: Final = "G1"
 ARTIFACT_NAME: Final = "brief.md"
 APP_PROCESS_NAME: Final = "0xCopilot"
-INSTALLED_PAYLOAD_TARGET: Final = "installed-payload"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
@@ -195,7 +199,7 @@ def _structured_result(outcome: str, *, reason: str | None = None) -> None:
 
 def _skip(reason: str) -> int:
     _structured_result("skipped", reason=reason)
-    return 0
+    return EXIT_SKIPPED
 
 
 def _is_release_runner(env: Mapping[str, str] | None = None) -> bool:
@@ -213,22 +217,6 @@ def _prerequisite_result(reason: str) -> int:
         _structured_result("failed", reason=f"unmet prerequisite: {reason}")
         return 2
     return _skip(reason)
-
-
-def _host_runtime_key() -> str:
-    platform_name = sys.platform
-    machine = platform.machine().lower()
-    arch = {
-        "arm64": "arm64",
-        "aarch64": "arm64",
-        "x86_64": "x64",
-        "amd64": "x64",
-    }.get(machine, machine)
-    return f"{platform_name}-{arch}"
-
-
-def _copilot_home() -> Path:
-    return Path(os.environ.get("COPILOT_HOME", Path.home() / ".0xcopilot"))
 
 
 def _preflight_packaged_supervisor() -> None:
@@ -251,7 +239,7 @@ def _preflight_packaged_supervisor() -> None:
             "supervised facade"
         )
 
-    runtime = _copilot_home() / "runtime" / _host_runtime_key()
+    runtime = staged_runtime_dir(target=INSTALLED_PAYLOAD_TARGET)
     manifest_path = runtime / "staging-manifest.json"
     if not manifest_path.is_file():
         raise PreflightSkip(

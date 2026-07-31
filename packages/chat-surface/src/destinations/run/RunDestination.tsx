@@ -202,7 +202,9 @@ import {
 // POST. Optional — hosts that have not wired a launcher pass nothing and the card
 // degrades to an inert (but visible) gate.
 import type { McpAuthPort } from "./mcpAuthPort";
+import type { WorkspaceGrantPort } from "../../ports/WorkspaceGrantPort";
 import { useConnectorConsentStates } from "./useConnectorConsentStates";
+import { useWorkspaceGrantCardStates } from "./useWorkspaceGrantCardStates";
 import { muteConnectorSuggestion } from "./muteConnectorSuggestion";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
@@ -1103,6 +1105,16 @@ export interface RunDestinationProps {
    */
   readonly mcpAuthPort?: McpAuthPort;
   /**
+   * Host folder-grant capability for the mid-run "let the agent read this
+   * folder?" ask. When an interrupt carries a `workspace_grant` block the
+   * in-chat card renders Grant / Deny wired to THIS port — an OS dialog — and
+   * the run is resumed only after a grant actually exists. Omitted (web, which
+   * has no such capability) → the ask still renders, and still names the folder,
+   * but its buttons are inert: an unanswerable question is better than a read
+   * that quietly returns nothing. See `ports/WorkspaceGrantPort`.
+   */
+  readonly workspaceGrantPort?: WorkspaceGrantPort | null;
+  /**
    * A connector the host just observed finish OAuth, or `null`. Web supplies
    * `completedMcpAuthAction.serverId`: `beginAuth` full-page-redirects, so the
    * cockpit is torn down mid-flow and cannot see the return itself — without
@@ -1190,6 +1202,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     renderComposer,
     renderEmptyComposer,
     mcpAuthPort,
+    workspaceGrantPort,
     connectedConnectorServerId = null,
     failedConnector = null,
     markdownComponents,
@@ -3316,6 +3329,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [consentPort],
   );
 
+  // The folder-grant card's states, and the SEQUENCING that makes the ask mean
+  // something: the run resumes only after the grant exists. `onGranted` fires
+  // on a real `granted` outcome, so a cancelled or failed dialog leaves the run
+  // paused on a card that says why — never an approve that lets a read proceed
+  // against a folder the agent still cannot see. Deny resolves the interrupt the
+  // ordinary way; the run continues without the folder.
+  const workspaceGrants = useWorkspaceGrantCardStates(workspaceGrantPort, {
+    onGranted: (approvalId) => handleApprove(approvalId),
+    onDenied: (approvalId) => handleReject(approvalId),
+  });
+
   // Denying an unsolicited CATALOG suggestion mutes it for good. Fire-and-
   // forget: the card has already moved to `denied`, and a failed PATCH is not
   // worth interrupting a live run over — the mute is reversible in Settings,
@@ -3972,6 +3996,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         connectedConnectorReceipt={connectedConnectorReceipt}
         onConnectorConsentCancel={connectorConsent.markPending}
         onConnectorMute={handleConnectorMute}
+        // The mid-run folder ask. `onWorkspaceGrant` is passed only when a port
+        // exists, because it is what the card reads to decide whether it can be
+        // answered — on web the ask renders inert rather than offering a button
+        // that opens nothing.
+        workspaceGrantStates={workspaceGrants.states}
+        workspaceGrantFailures={workspaceGrants.failures}
+        {...(workspaceGrantPort != null
+          ? { onWorkspaceGrant: workspaceGrants.grant }
+          : {})}
+        onWorkspaceGrantDeny={workspaceGrants.deny}
+        onWorkspaceGrantCancel={workspaceGrants.cancel}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}

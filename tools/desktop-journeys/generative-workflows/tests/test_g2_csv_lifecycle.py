@@ -14,6 +14,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 WORKFLOWS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(WORKFLOWS.parent))
+
+from _lib import (  # noqa: E402
+    EXIT_SKIPPED,
+    INSTALLED_PAYLOAD_TARGET,
+    REPO_ROOT,
+    SOURCE_TARGET,
+    host_runtime_key,
+    staged_runtime_dir,
+)
+
 RUNNER = WORKFLOWS / "g2_csv_lifecycle.py"
 
 G2_SPEC = importlib.util.spec_from_file_location("g2_csv_lifecycle", RUNNER)
@@ -80,15 +91,52 @@ class G2CsvLifecycleTests(unittest.TestCase):
     def test_preflight_skips_only_missing_staged_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             with (
-                patch.object(g2, "_copilot_home", return_value=Path(root)),
                 patch.dict(
                     os.environ,
-                    {"COPILOT_DESKTOP_TEST_TARGET": "installed-payload"},
+                    {
+                        "COPILOT_DESKTOP_TEST_TARGET": "installed-payload",
+                        "COPILOT_HOME": root,
+                    },
                     clear=True,
                 ),
                 self.assertRaisesRegex(g2.PreflightSkip, "staged runtime"),
             ):
                 g2._preflight_packaged_supervisor()
+
+    def test_preflight_target_selects_the_staged_runtime_under_test(self) -> None:
+        """The preflight must inspect the stage its DriverSession will launch.
+
+        Regression: G2A–G2D are source-target journeys (they assert
+        ``status["target"] == "source"`` and pass no ``installed_payload``) but
+        reused G2's preflight, which resolved ``~/.0xcopilot``. With a perfectly
+        good checkout stage present they reported ``"outcome": "skipped"``, and
+        a stray ``~/.0xcopilot`` would have been worse: a green run gated on a
+        runtime that was never under test.
+        """
+        checkout_resources = REPO_ROOT / "apps" / "desktop" / "resources"
+        with patch.dict(os.environ, {}, clear=True):
+            source = staged_runtime_dir(target=SOURCE_TARGET)
+            installed = staged_runtime_dir(target=INSTALLED_PAYLOAD_TARGET)
+        self.assertEqual(source.parents[1], checkout_resources)
+        self.assertEqual(installed.parents[1], Path.home() / ".0xcopilot")
+        self.assertNotEqual(source, installed)
+
+    def test_source_target_preflight_accepts_the_checkout_stage(self) -> None:
+        """A staged checkout runtime must satisfy the G2A–G2D preflight."""
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "resources"
+            runtime = home / "runtime" / host_runtime_key()
+            for relative in ("python/bin", "postgres/bin", "services"):
+                (runtime / relative).mkdir(parents=True, exist_ok=True)
+            (runtime / "python" / "bin" / "python3.13").write_text("")
+            (runtime / "postgres" / "bin" / "postgres").write_text("")
+            for service in ("backend", "ai-backend", "backend-facade"):
+                (runtime / "services" / service).mkdir(parents=True, exist_ok=True)
+            (runtime / "staging-manifest.json").write_text(
+                json.dumps({"host_exec": True})
+            )
+            with patch.dict(os.environ, {"COPILOT_HOME": str(home)}, clear=True):
+                g2._preflight_staged_runtime(target=SOURCE_TARGET)
 
     def test_preflight_rejects_external_facade_and_non_packaged_target(self) -> None:
         with patch.dict(
@@ -115,7 +163,10 @@ class G2CsvLifecycleTests(unittest.TestCase):
                 g2._byok_provider()
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            self.assertEqual(g2._skip("staged runtime is absent"), 0)
+            code = g2._skip("staged runtime is absent")
+        # A skip exits non-zero: it is not distinguishable from a pass otherwise.
+        self.assertEqual(code, EXIT_SKIPPED)
+        self.assertNotEqual(code, 0)
         result = json.loads(output.getvalue())
         self.assertEqual(result["journey"], "G2")
         self.assertEqual(result["outcome"], "skipped")

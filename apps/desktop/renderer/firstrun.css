@@ -1,136 +1,45 @@
-/* First-run (FTUE) surface — P0 interim chrome.
+/* First-run (FTUE) — desktop-substrate deltas ONLY.
  *
- * Token-mapped to the design-system SSOT (packages/design-system/src/styles.css):
- * the design mock's --ink/--panel/--tx/--accent map 1:1 onto --color-bg/
- * -surface/-text/-accent. P1 extends this file with the full gate/composer/ack
- * parity styles; the shell here (top bar · centered main · footer) already
- * matches the mock's .fr layout so P1 only fills the body. */
+ * The FTUE surface itself is the shared `FirstRunSurface`
+ * (packages/chat-surface/src/onboarding/onboarding.css), imported once in
+ * bootstrap.tsx. This file is loaded AFTER it (FirstRunGate.tsx imports it), so
+ * anything declared here WINS the cascade — every rule below must therefore be a
+ * deliberate desktop-only override, never a second copy of a shared rule.
+ *
+ * This file used to carry a full duplicate of the P0 placeholder chrome
+ * (`.fr-top`, `.fr-brand`, `.fr-main`, `.fr-h1`, `.fr-sub`, `.fr-cta`,
+ * `.fr-foot`). Those names are owned by the shared surface, so the stale copies
+ * silently overrode it: `.fr-main { align-items: flex-start }` shrink-wrapped the
+ * onboarding column, and the first-run composer rendered 408px wide inside its
+ * 640px column while the identical composer on the Run cockpit's "New chat"
+ * front door rendered at the full 640px. Only the two overrides below are real.
+ */
 
-/* `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
- * (packages/chat-surface/src/onboarding/onboarding.css) sizes `.fr` with
- * `min-height: 100vh`, which is right for a web host whose DOCUMENT scrolls. The
- * desktop document never scrolls (desktop.css invariant 3) and this surface sits
- * inside `.desktop-window-frame`, whose content box is one titlebar inset — 33px
- * with the frame's hairline borders — SHORTER than the viewport. A `100vh` box
- * therefore hangs past the frame and has that tail CLIPPED by the frame's
- * `overflow: hidden`; because min-height beats height, `height: 100%` alone does
- * not save it, and internal `overflow: auto` cannot scroll a tail that was never
- * inside the scrollport. Measured live at 1200x600 and 1200x420: exactly 33px of
- * the surface, including its footer, was unreachable before this line. */
+/* shadow-ok: the shared sheet's `.fr` sizes the surface for a scrolling web
+ * document; the desktop window frame is one titlebar inset SHORTER than the
+ * viewport, so the shared height must be re-based here. Substrate delta, not a
+ * second copy of the shared chrome — see below and
+ * tools/check_css_selector_shadowing.py.
+ *
+ * `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
+ * sizes `.fr` with `min-height: 100vh`, which is right for a web host whose
+ * DOCUMENT scrolls. The desktop document never scrolls (desktop.css invariant 3)
+ * and this surface sits inside `.desktop-window-frame`, whose content box is one
+ * titlebar inset — 33px with the frame's hairline borders — SHORTER than the
+ * viewport. A `100vh` box therefore hangs past the frame and has that tail
+ * CLIPPED by the frame's `overflow: hidden`; because min-height beats height,
+ * `height: 100%` alone does not save it, and internal `overflow: auto` cannot
+ * scroll a tail that was never inside the scrollport. Measured live at 1200x600
+ * and 1200x420: exactly 33px of the surface, including its footer, was
+ * unreachable before this line. Everything else about `.fr` (flex column,
+ * overflow, ground, type) comes from the shared sheet — do not restate it. */
 .fr {
   height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-  background: var(--color-bg);
-  color: var(--color-text);
-  font-family: var(--font-sans);
 }
 
-.fr-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 18px;
-  flex: none;
-}
-
-.fr-brand {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-family: var(--font-display);
-  font-size: 12.5px;
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text);
-}
-
-.fr-zx {
-  color: var(--color-accent);
-}
-
-.fr-top__sp {
-  flex: 1;
-}
-
-.fr-skip {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--color-text-subtle);
-  border: 0;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-.fr-skip:hover {
-  color: var(--color-text);
-}
-
-.fr-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 12px;
-  width: min(640px, 92%);
-  margin: 0 auto;
-  padding: 6px 0 22px;
-}
-
-.fr-h1 {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 23px;
-  line-height: var(--line-height-tight);
-  letter-spacing: -0.015em;
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text);
-}
-
-.fr-sub {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: var(--line-height-body);
-  color: var(--color-text-muted);
-  max-width: 46ch;
-}
-
-.fr-cta {
-  margin-top: 4px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-accent-contrast);
-  border-radius: var(--radius-md);
-  padding: 8px 15px;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  transition: filter var(--duration-fast) var(--ease-standard);
-}
-
-.fr-cta:hover {
-  background: var(--color-accent-strong);
-  border-color: var(--color-accent-strong);
-}
-
-.fr-foot {
-  flex: none;
-  display: flex;
-  justify-content: space-between;
-  padding: 0 18px 12px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  color: var(--color-text-subtle);
-}
-
-/* Loading — while the completion flag is read over IPC. */
+/* Loading — while the completion flag is read over IPC. Desktop-only: the gate
+ * is a host component (FirstRunGate), so the shared sheet has no `.fr-boot`. */
 .fr-boot {
   height: 100%;
   display: grid;

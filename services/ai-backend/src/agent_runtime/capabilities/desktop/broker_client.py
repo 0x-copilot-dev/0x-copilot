@@ -361,14 +361,36 @@ class FsGrepResult(_BrokerModel):
 
 
 class BrokerGrant(_BrokerModel):
-    """One host-folder grant from ``/v1/grants/snapshot`` (path-free projection).
+    """One host-folder grant from ``/v1/grants/snapshot``.
 
     ``mount`` is an OPAQUE, per-boot id the broker derives from the grant's host
     root (an HMAC under a per-boot salt): stable within a boot (two grants on
-    one tree share a mount) yet non-reversible, so it never becomes a host-path
-    oracle. ``label`` is the broker's sanitized display name (folder basename or
-    a renderer hint). No host-absolute path is ever present. Every op still keys
-    off ``grant_id`` — ``mount`` is presentation-only.
+    one tree share a mount) yet non-reversible. ``label`` is the broker's
+    sanitized display name (folder basename or a renderer hint). Every op still
+    keys off ``grant_id`` — ``mount`` is presentation-only.
+
+    ``root`` — the DELIBERATE REVERSAL of this model's original path-free rule
+    ---------------------------------------------------------------------------
+    This projection used to carry no host-absolute path at all, so that a
+    compromised ai-backend could not learn where a grant pointed. That property
+    stopped buying anything the moment host reads moved to deepagents'
+    ``FilesystemBackend``: this process now resolves and reads real host paths
+    itself, so it necessarily holds them. Withholding the root only hid it from
+    the one component that needs it, with this consequence — a granted folder
+    could not be turned into an ``allow`` rule, so EVERY read of a folder the
+    user had explicitly attached still interrupted and asked again. "Attach a
+    folder" bought the user nothing.
+
+    ``root`` is therefore the grant's real host root, and it is what
+    ``HostFilesystemRules`` turns into the ``allow`` rule that stops the asking.
+    It stays OPTIONAL: an older broker that does not send it yields ``None``,
+    and such a grant simply keeps prompting rather than failing — degraded, not
+    broken.
+
+    What did NOT change: the RENDERER projection is still path-free
+    (``WorkspaceGrantPort`` / ``type PathFree<T>``), because the UI has no need
+    for a host path and is a far likelier exfiltration surface. The reversal is
+    scoped to the service that performs the read.
     """
 
     grant_id: str = Field(alias="grantId")
@@ -376,6 +398,7 @@ class BrokerGrant(_BrokerModel):
     label: str = ""
     status: Literal["active", "revoked"] = "active"
     mount: str
+    root: str | None = None
 
 
 class BrokerGrantSnapshot(_BrokerModel):

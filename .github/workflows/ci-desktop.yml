@@ -80,9 +80,70 @@ jobs:
       - name: Typecheck desktop
         run: npm run typecheck --workspace @0x-copilot/desktop
 
-      # vitest.config.ts pins fileParallelism:false — the main/* lifecycle tests
-      # await a real async fs pipeline via fixed-tick polling and flake under
-      # parallel-file contention (worse on 2-core runners). Do not add -p/--pool
-      # overrides here that would re-enable file parallelism.
+      # The main/* lifecycle tests await a real async fs pipeline via fixed-tick
+      # polling and flake under parallel-file contention (worse on 2-core
+      # runners), so do not add -p/--pool overrides here that would increase file
+      # parallelism. NOTE: an earlier version of this comment claimed
+      # vitest.config.ts pins fileParallelism:false; it does not, and
+      # native-workspace-commit-helper.test.ts's "atomically admits exactly one of
+      # two helpers" case was observed failing on roughly one full-suite run in
+      # two locally, on unmodified code. That flake is not the addon's and is
+      # recorded here rather than left as a false claim.
+      #
+      # `test` also builds the workspace-fs addon and runs its node:test suite.
+      # That is deliberately BEST-EFFORT here (build.mjs warns and exits 0 without
+      # a toolchain, and openBeneath.test.mjs then skips with a stated reason), so
+      # this job never fails for a native-build reason. On a runner that does have
+      # the toolchain it is free coverage of the Linux openat2 branch. The
+      # platforms whose shipped read path depends on the addon are gated hard in
+      # the native-workspace-fs job below.
       - name: Run desktop tests
         run: npm run test --workspace @0x-copilot/desktop
+
+  # The addon this job builds was ORPHANED: no build script, no packaging entry,
+  # no CI. loadNativeWorkspaceFs() therefore never found a binary, and every
+  # confined read on Windows fell through to a post-open realpath recheck — the
+  # same denials, non-atomically, i.e. a TOCTOU window per read. macOS survived
+  # because its pure-Node open already carries O_NOFOLLOW_ANY.
+  #
+  # So this job exists to keep two claims true:
+  #   1. the addon still COMPILES on the platforms the app ships to, and
+  #   2. it still actually CONFINES — openBeneath.test.mjs drives a real temp
+  #      tree, a real junction/symlink and a real read on each runner.
+  # The Win32 NtCreateFile walk in src/workspace_fs.c had never been compiled by
+  # anything, let alone executed; the windows-latest leg is the only evidence
+  # that it works.
+  native-workspace-fs:
+    name: native workspace-fs (${{ matrix.os }})
+    strategy:
+      # Report both platforms; a Windows failure must not be masked by macOS.
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # --ignore-scripts skips electron's postinstall (a ~100 MB download this job
+      # has no use for). node-gyp is still installed, which is all the addon build
+      # needs. Node-API means the artifact is runtime-agnostic, so there is
+      # nothing to rebuild against Electron's ABI.
+      - name: Install Node dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # `:required` makes a toolchain failure, a missing binary, or a failed
+      # selfcheck a job failure. build.mjs finishes by running selfcheck.cjs
+      # against the emitted binary, so "compiled" alone is not accepted as
+      # success — the binary has to read real bytes and refuse a real escape.
+      - name: Build the workspace-fs addon
+        run: npm run build:workspace-fs:required --workspace @0x-copilot/desktop
+
+      - name: Test the workspace-fs addon
+        run: npm run test:native --workspace @0x-copilot/desktop

@@ -57,6 +57,12 @@ from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayloa
 # as plain, length-capped strings; the domain validator caps the source too.
 _ROWSET_TEXT_MAX = 200
 
+# Host-folder grant ask — mirrors the producer's own bounds on
+# ``WorkspaceGrantRequest`` (capabilities/desktop/workspace_grant.py) so the
+# projection cannot admit a longer string than the domain accepted.
+_WORKSPACE_GRANT_PATH_MAX = 1024
+_WORKSPACE_GRANT_TEXT_MAX = 255
+
 
 class _Fields:
     """Field name constants for presentation model validators and key references."""
@@ -64,6 +70,15 @@ class _Fields:
     TITLE = "title"
     SUBTITLE = "subtitle"
     PRESENTATION = "presentation"
+    # Host-folder grant ask. ``WORKSPACE_GRANT`` is the client contract —
+    # packages/chat-surface exports the same string as
+    # ``WORKSPACE_GRANT_PAYLOAD_KEY`` and keys its Grant card on the block's
+    # presence; ``PATH`` is REQUIRED by its parser.
+    WORKSPACE_GRANT = "workspace_grant"
+    PATH = "path"
+    FOLDER_NAME = "folder_name"
+    PLATFORM = "platform"
+    MODE = "mode"
     URL = "url"
     BADGE = "badge"
     SUMMARY = "summary"
@@ -2042,6 +2057,16 @@ class RuntimeEventPresentationProjector:
             "display_name",
             Keys.Field.TOOL_NAME,
             "risk_level",
+            # Filesystem approvals: the folder being asked about and whether it
+            # is a read or a write. Both are already implied by `message`, but
+            # a card that has to parse prose to find its own subject cannot
+            # style, truncate or localise it. Absent from this allow-list they
+            # arrived as None and the card fell back to the sentence — the same
+            # silent-strip that made `workspace_grant` undeliverable, where a
+            # correct producer and a correct parser had the field deleted
+            # between them.
+            "path",
+            "operation",
             Keys.Payload.MESSAGE,
             Keys.Field.REASON,
             Keys.Field.STATUS,
@@ -2078,6 +2103,16 @@ class RuntimeEventPresentationProjector:
         # contract on the way out as it did on the way in. A malformed block is
         # dropped and the card falls back to its params frame — never rendered
         # half-built.
+        # A host-folder ask. The client keys its Grant card on this block's
+        # PRESENCE (``WORKSPACE_GRANT_PAYLOAD_KEY`` in packages/chat-surface),
+        # and its parser requires ``path`` — so without this projection the
+        # block is stripped, no card renders, and the run parks with a generic
+        # approval the user cannot answer with a folder.
+        workspace_grant = cls._workspace_grant_payload(
+            payload.get(_Fields.WORKSPACE_GRANT)
+        )
+        if workspace_grant is not None:
+            safe_payload[_Fields.WORKSPACE_GRANT] = workspace_grant
         presentation = payload.get(_Fields.PRESENTATION)
         if isinstance(presentation, dict):
             # Lazy import for the same circularity reason documented at the top
@@ -2094,6 +2129,35 @@ class RuntimeEventPresentationProjector:
             except ValidationError:
                 pass
         return safe_payload
+
+    @classmethod
+    def _workspace_grant_payload(cls, value: object) -> JsonObject | None:
+        """Project the ``workspace_grant`` block, or ``None`` to drop it.
+
+        Re-validated key by key rather than passed through as a dict, for the
+        reason the ``presentation`` block is: this reaches the client and drives
+        what the user reads before granting a folder. ``path`` is required and
+        bounded — it is the one host-absolute string on this card, and it is the
+        SUBJECT of the ask, never a value any read is served from. A block
+        without it is dropped, so a half-built card is never rendered.
+        """
+
+        if not isinstance(value, dict):
+            return None
+        path = cls._text(value.get(_Fields.PATH))
+        if path is None:
+            return None
+        block: JsonObject = {_Fields.PATH: path[:_WORKSPACE_GRANT_PATH_MAX]}
+        for key in (
+            _Fields.FOLDER_NAME,
+            _Fields.PLATFORM,
+            _Fields.MODE,
+            Keys.Field.REASON,
+        ):
+            text_value = cls._text(value.get(key))
+            if text_value is not None:
+                block[key] = text_value[:_WORKSPACE_GRANT_TEXT_MAX]
+        return block
 
     @classmethod
     def _approval_forwarded_payload(cls, payload: JsonObject) -> JsonObject:

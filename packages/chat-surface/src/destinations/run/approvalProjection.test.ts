@@ -332,3 +332,60 @@ describe("projectApprovals — ask_a_question", () => {
     expect(projection.approvals[0]?.question?.question).toBe("Which channel?");
   });
 });
+
+describe("projectApprovals — workspace folder grant", () => {
+  it("parses the folder ask off any interrupt carrying the block", () => {
+    const projection = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "fs-1",
+          // Deliberately an ORDINARY kind: the block is the contract, so a
+          // backend raises this card without a new kind for hosts to learn.
+          approval_kind: "tool_action",
+          display_name: "List Downloads",
+          workspace_grant: {
+            path: "/Users/parthpahwa/Downloads",
+            mode: "read_only",
+            reason: "to see what you downloaded today",
+          },
+        },
+      }),
+    ]);
+    expect(projection.approvals[0]?.workspaceGrant).toEqual({
+      path: "/Users/parthpahwa/Downloads",
+      folderName: "Downloads",
+      mode: "read_only",
+      reason: "to see what you downloaded today",
+    });
+  });
+
+  it("leaves a plain approval's grant null", () => {
+    const projection = projectApprovals([requested("appr-1")]);
+    expect(projection.approvals[0]?.workspaceGrant).toBeNull();
+  });
+
+  it("keeps the ask through a redelivered frame that omits the block", () => {
+    // Same rule as `presentation`/`question`, and the stakes are higher here: a
+    // replayed frame that dropped the block would turn a folder question into
+    // an Approve/Reject for an action nobody was asked about.
+    const projection = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "fs-2",
+          approval_kind: "tool_action",
+          workspace_grant: { path: "/Users/ada/notes", mode: "read_write" },
+        },
+      }),
+      envelope({
+        event_type: "approval_requested",
+        payload: { approval_id: "fs-2", approval_kind: "tool_action" },
+      }),
+    ]);
+    expect(projection.approvals[0]?.workspaceGrant?.path).toBe(
+      "/Users/ada/notes",
+    );
+    expect(projection.approvals[0]?.workspaceGrant?.mode).toBe("read_write");
+  });
+});
