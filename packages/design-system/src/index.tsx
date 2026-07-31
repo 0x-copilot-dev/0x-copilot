@@ -625,6 +625,50 @@ export function AppIcon({
   );
 }
 
+/**
+ * Indeterminate activity spinner — the one spinner in the system.
+ *
+ * `size` and `stroke` drive the recipe's custom properties, so the same
+ * component covers an inline row glyph and a dialog-sized spinner without a
+ * second implementation. Purely decorative: it carries `aria-hidden`, because
+ * the STATUS belongs on the region that owns it (`role="status"` on the row or
+ * dialog), not on the ring. Announcing both makes a screen reader say it twice.
+ */
+export function Spinner({
+  size,
+  stroke,
+  className,
+  style,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & {
+  /** Any CSS length. Defaults to the recipe's 0.65rem inline size. */
+  size?: string | number;
+  /** Ring thickness. Defaults to 1.5px. */
+  stroke?: string | number;
+}): ReactElement {
+  return (
+    <span
+      className={classNames("ui-spinner", className)}
+      aria-hidden="true"
+      style={{
+        ...(size !== undefined
+          ? { "--ui-spinner-size": toCssLength(size) }
+          : {}),
+        ...(stroke !== undefined
+          ? { "--ui-spinner-stroke": toCssLength(stroke) }
+          : {}),
+        ...style,
+      }}
+      {...props}
+    />
+  );
+}
+
+/** Numbers mean px (the React inline-style convention); strings pass through. */
+function toCssLength(value: string | number): string {
+  return typeof value === "number" ? `${value}px` : value;
+}
+
 export type HarnessRowStatus = "running" | "done" | "error";
 
 /**
@@ -661,11 +705,7 @@ export function HarnessRow({
       {...props}
     >
       <span className="ui-harness-row__glyph" aria-hidden="true">
-        {status === "running" ? (
-          <span className="ui-harness-row__spinner" />
-        ) : (
-          glyph
-        )}
+        {status === "running" ? <Spinner /> : glyph}
       </span>
       <span className="ui-harness-row__tool">{tool}</span>
       {args !== undefined && args !== null && args !== "" ? (

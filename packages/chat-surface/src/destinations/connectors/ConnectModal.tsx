@@ -39,7 +39,13 @@ import type {
 import { DESKTOP_CONNECTOR_DEEP_LINK_URI } from "@0x-copilot/api-types";
 
 import type { ConnectCallbackMode } from "./useConnectFlow";
-import { AppIcon, Button, Field, TextInput } from "@0x-copilot/design-system";
+import {
+  AppIcon,
+  Button,
+  Field,
+  Spinner,
+  TextInput,
+} from "@0x-copilot/design-system";
 
 import { Modal, StepDots } from "../../settings/Modal";
 
@@ -658,8 +664,8 @@ function OAuthStep({
   }
   return (
     <div style={centerColStyle} role="status" data-testid="connect-oauth">
-      <style>{spinnerKeyframes}</style>
-      <span className="cm-spinner" aria-hidden="true" style={spinnerStyle} />
+      {/* The wrapper owns `role="status"`, so the ring stays decorative. */}
+      <Spinner size={24} stroke={2} />
       <p style={mutedNoteStyle}>
         Authorizing with {name}… approve in the window that opened.
       </p>
@@ -847,18 +853,6 @@ const centerColStyle: CSSProperties = {
   padding: "var(--space-lg) 0",
   textAlign: "center",
 };
-
-const spinnerStyle: CSSProperties = {
-  width: 24,
-  height: 24,
-  borderRadius: "var(--radius-full)",
-  border: "2px solid var(--color-border)",
-  borderTopColor: "var(--color-accent)",
-  boxSizing: "border-box",
-};
-
-const spinnerKeyframes = `@keyframes cm-spin { to { transform: rotate(360deg); } }
-.cm-spinner { animation: cm-spin 0.8s linear infinite; }`;
 
 const mutedNoteStyle: CSSProperties = {
   margin: 0,

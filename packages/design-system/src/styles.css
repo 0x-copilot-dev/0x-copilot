@@ -1759,15 +1759,35 @@ textarea {
 .ui-harness-row[data-status="error"] .ui-harness-row__glyph {
   color: var(--color-danger);
 }
-.ui-harness-row__spinner {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+/* Indeterminate activity spinner — THE spinner recipe.
+ *
+ * Size and stroke are custom properties because one rule has to serve two very
+ * different roles: a ~10px glyph sitting inline in a row, and a ~24px spinner
+ * centred in a dialog. Two hand-rolled copies existed before this (a 24px one
+ * inlined in chat-surface's ConnectModal with its own `@keyframes`, and the
+ * 0.65rem harness-row one right here) — they had different sizes, strokes,
+ * durations AND track colours, which is exactly the fork SKILL.md forbids.
+ *
+ * The track is an accent color-mix rather than `--color-border`: the hairline
+ * token is 6%-alpha white, which at 1.5px on a 10px circle is invisible. One
+ * accent, two opacities reads correctly at both ends of the size range.
+ *
+ * Reduced motion needs no rule here — the global `[data-reduce-motion]` blocks
+ * near the top of this file already neutralise every animation with
+ * `!important`, which leaves a static ring. */
+.ui-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: var(--ui-spinner-size, 0.65rem);
+  height: var(--ui-spinner-size, 0.65rem);
+  border-radius: var(--radius-full);
+  border: var(--ui-spinner-stroke, 1.5px) solid
+    color-mix(in srgb, var(--color-accent) 35%, transparent);
   border-top-color: var(--color-accent);
-  animation: ui-harness-spin 0.9s linear infinite;
+  animation: ui-spin 0.8s linear infinite;
 }
-@keyframes ui-harness-spin {
+@keyframes ui-spin {
   to {
     transform: rotate(360deg);
   }
