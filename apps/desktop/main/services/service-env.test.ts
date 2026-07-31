@@ -720,3 +720,27 @@ describe("passthrough allowlist", () => {
     expect(ENV_PASSTHROUGH_ALLOWLIST).toContain("PATH");
   });
 });
+
+describe("COPILOT_HOME reaches the supervised services", () => {
+  // The FS-F live journey provisioned `.tmp/<conversation_id>/` under
+  // ~/.0xcopilot even though the app was launched with an explicit
+  // COPILOT_HOME. Cause: the variable was never in the passthrough allowlist,
+  // so `agent_scratch.copilot_home()` always took its ~/.0xcopilot default —
+  // the tree the caller asked for stayed empty while a second one filled up.
+  //
+  // Asserted through the real buildServiceEnv, not by inspecting the allowlist
+  // constant: a test that reads the list would pass on a list nothing consults,
+  // which is the shape that hid this.
+  it("forwards an explicitly set COPILOT_HOME", () => {
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({ COPILOT_HOME: "/tmp/probe-home" }),
+    );
+    expect(env.COPILOT_HOME).toBe("/tmp/probe-home");
+  });
+
+  it("omits it when unset, so the Python default still applies", () => {
+    const env = buildServiceEnv("ai-backend", inputs({}));
+    expect(env.COPILOT_HOME).toBeUndefined();
+  });
+});
