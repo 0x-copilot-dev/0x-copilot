@@ -75,6 +75,12 @@ class _Fields:
     # ``WORKSPACE_GRANT_PAYLOAD_KEY`` and keys its Grant card on the block's
     # presence; ``PATH`` is REQUIRED by its parser.
     WORKSPACE_GRANT = "workspace_grant"
+    # The folder an ``allow_always`` grant option would attach, named on the
+    # card. Same block shape as ``WORKSPACE_GRANT`` and validated by the same
+    # helper, under a different key on purpose: this one ADDS a control to the
+    # ordinary approve/reject card, where ``workspace_grant`` REPLACES the card
+    # (and with it the allow-once path). See ``_FilesystemApproval.GRANT_SCOPE``.
+    GRANT_SCOPE = "grant_scope"
     PATH = "path"
     FOLDER_NAME = "folder_name"
     PLATFORM = "platform"
@@ -2113,6 +2119,16 @@ class RuntimeEventPresentationProjector:
         )
         if workspace_grant is not None:
             safe_payload[_Fields.WORKSPACE_GRANT] = workspace_grant
+        # The folder ``grant_options: [..., "allow_always"]` refers to. Projected
+        # under the same key-by-key re-validation as the block above, and for the
+        # same reason: it is the SUBJECT of a durable decision, so a client that
+        # cannot read it here cannot name what it is about to attach — and
+        # "allow_always" with nothing to scope it is exactly the silent widening
+        # this card must never allow. Advertising the option without shipping its
+        # scope would be that bug, and this allow-list is where it would happen.
+        grant_scope = cls._workspace_grant_payload(payload.get(_Fields.GRANT_SCOPE))
+        if grant_scope is not None:
+            safe_payload[_Fields.GRANT_SCOPE] = grant_scope
         presentation = payload.get(_Fields.PRESENTATION)
         if isinstance(presentation, dict):
             # Lazy import for the same circularity reason documented at the top

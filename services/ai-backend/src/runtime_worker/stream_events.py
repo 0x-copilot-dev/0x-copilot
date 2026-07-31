@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.persistence.records import (
@@ -70,6 +71,10 @@ class _Fields:
     READ_ONLY = "read_only"
     RISK_LEVEL = "risk_level"
     GRANT_OPTIONS = "grant_options"
+    # The folder a durable "always allow" would cover, named on the card. Its
+    # own block rather than reusing ``workspace_grant`` deliberately — see
+    # ``_FilesystemApproval.GRANT_SCOPE``.
+    GRANT_SCOPE = "grant_scope"
     ACTION_INDEX = "action_index"
     ACTION_COUNT = "action_count"
     # PR #43 — ApprovalBatch projection. Each ``approval_requested`` event
@@ -98,6 +103,28 @@ class _FilesystemApproval:
     contract, same ids, same status vocabulary) so the existing approval batch,
     card and resume machinery applies unchanged. Nothing downstream needs to
     learn a new shape.
+
+    ONCE vs ALWAYS
+    --------------
+    Approving used to be one-shot in the only sense that matters to a person:
+    the same folder asked again on the next run, because nothing durable was
+    written. The card can now offer both, and the difference is stated in
+    ``grant_options``:
+
+    * ``allow_once``  — resolve this interrupt. Nothing is persisted.
+    * ``allow_always`` — ALSO attach the folder, as an ordinary revocable grant
+      in the same store the "Attach folder" flow writes to.
+
+    A plain approve stays ``allow_once``. Turning one click into durable access
+    the user did not ask for is exactly the escalation this card exists to stop,
+    so ``allow_always`` is advertised as a SEPARATE choice and is never the
+    default. Nothing in this module persists anything either way — it advertises
+    the option and names the folder; the durable act belongs to the process that
+    owns the grant store.
+
+    ``allow_always`` is offered only where a durable grant is actually meaningful
+    and safe (see :meth:`_grant_scope`): a READ, over a real host folder, that is
+    not a volume root.
     """
 
     #: deepagents' built-in filesystem tools, mapped to the operation a rule is
@@ -128,6 +155,39 @@ class _FilesystemApproval:
         }
     )
 
+    #: Tools whose path argument names a FILE. A grant covers a folder, so for
+    #: these the durable scope is the containing directory — the same
+    #: path-vs-container split ``workspace_backend._GrantScope`` already makes.
+    #: Everything else in :attr:`_PATH_ARGS` names a directory, which IS the
+    #: scope. This mapping is the only place a folder is derived, so it is the
+    #: only place a widening could be introduced.
+    _FILE_PATH_TOOLS: Final[frozenset[str]] = frozenset(
+        {"read_file", "write_file", "edit_file"}
+    )
+
+    #: What ``grant_options`` may contain. ``allow_once`` is unconditional (it is
+    #: what a plain approve already does); ``allow_always`` is added only when a
+    #: grant scope could be derived.
+    ALLOW_ONCE: Final = "allow_once"
+    ALLOW_ALWAYS: Final = "allow_always"
+
+    #: The block naming the folder ``allow_always`` would attach.
+    #:
+    #: NOT spelled ``workspace_grant`` on purpose. That key is the client's
+    #: switch for the dedicated folder card (``parseWorkspaceGrantRequest``
+    #: keys on its presence), and that card replaces the generic approve/reject
+    #: controls with Grant/Deny and routes the decision to ``WorkspaceGrantPort``
+    #: instead of the ``/decision`` POST. Stamping it here would therefore DELETE
+    #: the allow-once path — the requirement this block exists to serve — and
+    #: park every read the user only wanted to permit once. A separate key adds a
+    #: control; a shared one would have silently removed one.
+    GRANT_SCOPE: Final = "grant_scope"
+
+    #: The access a durable folder grant asks for. Read-only, always: this lane
+    #: only ever widens READS (host writes stay on the staged C3 → ledger → C2
+    #: lane), so a card raised by a read must not mint write authority.
+    _GRANT_MODE: Final = "read_only"
+
     _MAX_PATH_CHARS: Final = 512
 
     @classmethod
@@ -154,7 +214,12 @@ class _FilesystemApproval:
         folder = display.rstrip("/").rsplit("/", 1)[-1] or display
         approval_id = f"{interrupt_id}:{index}"
         read_only = operation == "read"
-        return {
+        # A WRITE never offers a durable grant. Rule 5 denies host writes
+        # outright, so a write cannot legitimately park here at all; and if one
+        # ever did, minting read authority off it would be answering a question
+        # nobody asked. Host mutation stays on the staged C3 → ledger → C2 lane.
+        grant_scope = cls._grant_scope(action_name, path) if read_only else None
+        payload: dict[str, object] = {
             "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
             "event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
             Keys.Field.APPROVAL_ID: approval_id,
@@ -182,7 +247,67 @@ class _FilesystemApproval:
             _Fields.RISK_LEVEL: "low" if read_only else "high",
             Keys.Field.STATUS: "pending",
             _Fields.ALLOWED_DECISIONS: list(allowed_decisions),
-            _Fields.GRANT_OPTIONS: ["allow_once"],
+            _Fields.GRANT_OPTIONS: (
+                [cls.ALLOW_ONCE, cls.ALLOW_ALWAYS]
+                if grant_scope is not None
+                else [cls.ALLOW_ONCE]
+            ),
+        }
+        if grant_scope is not None:
+            payload[_Fields.GRANT_SCOPE] = grant_scope
+        return payload
+
+    @classmethod
+    def _grant_scope(cls, action_name: str, path: str) -> dict[str, object] | None:
+        """The folder ``allow_always`` would attach, or ``None`` to offer once only.
+
+        ``None`` is the safe answer and every branch below returns it rather than
+        guessing. The card can always be approved once; what is withheld is the
+        DURABLE option, and withholding it costs a re-ask while offering it
+        wrongly hands over a folder the user was never shown.
+
+        Refused cases, each for its own reason:
+
+        * **no path** — the pathless bulk call (``grep`` with no ``path``), which
+          deepagents fires unconditionally because it could touch anything. The
+          card says "anywhere on this computer"; there is no folder to attach.
+        * **not a host path** — a virtual namespace or an unsafe/ambiguous shape.
+          :class:`HostPathClassifier` decides, so this cannot drift from the
+          classification the rest of the desktop lane uses.
+        * **a volume root** — ``ls("/")``, or ``read_file("/etc")`` whose
+          container is ``/``. ``ClassifiedPath.parent`` already refuses to walk
+          up into one, which is what stops "read this one file" becoming "attach
+          the whole drive".
+        * **longer than the card can print** — past :attr:`_MAX_PATH_CHARS` the
+          card's own ``path`` is TRUNCATED, so the string the user reads and the
+          string a grant would attach are no longer the same string. Consent to
+          an ellipsis is not consent, so the durable option is withheld and the
+          folder simply keeps asking.
+
+        The derivation itself is the anti-widening rule: a directory-shaped call
+        scopes to THE PATH ON THE CARD, and a file-shaped call scopes to its
+        immediate container and no further. There is no branch that walks up
+        more than one level, so an ask about ``/a/b/reports`` cannot become a
+        grant on ``/a/b``.
+        """
+
+        if not path or len(path) > cls._MAX_PATH_CHARS:
+            return None
+        classified = HostPathClassifier.classify(path)
+        if not classified.is_host:
+            return None
+        folder = (
+            classified.parent() if action_name in cls._FILE_PATH_TOOLS else classified
+        )
+        # A volume root is not a grantable folder (``parent`` returns a typed
+        # refusal for one, and a bare ``/`` classifies with no segments).
+        if not folder.is_host or not folder.segments:
+            return None
+        return {
+            "path": folder.display,
+            "folder_name": folder.folder_name,
+            "platform": folder.flavour.value,
+            "mode": cls._GRANT_MODE,
         }
 
 

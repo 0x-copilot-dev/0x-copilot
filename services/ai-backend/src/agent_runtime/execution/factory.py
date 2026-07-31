@@ -2000,6 +2000,9 @@ def _host_default_backend(
     from deepagents.backends.state import StateBackend  # noqa: PLC0415
 
     from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
+    from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
+        HostScratchDirectory,
+    )
     from agent_runtime.capabilities.desktop.host_floor import (  # noqa: PLC0415
         HostFilesystemFloor,
     )
@@ -2013,6 +2016,18 @@ def _host_default_backend(
         # Not desktop, or rules unavailable (version skew). Either way: do NOT
         # expose a real filesystem. Compose exactly as before.
         return guarded_default(StateBackend(), workspace_backend)
+    # ONE resolution, used three times: the rules were built from it above, the
+    # floor is handed it below, and the scratch directory is created under it.
+    # Resolving twice is how a folder ends up allowed by the rules and refused
+    # by the floor.
+    roots = _granted_host_roots(workspace_backend, resolved=granted_host_roots)
+    # Binding the grants is also the moment the agent's one permitted host write
+    # location becomes real. Rule 2 and the floor both ALLOW `<root>/.copilot`,
+    # but nothing created it, so `ls` of the agent's own scratch answered
+    # `path_not_found` until something happened to write into it. Writable grants
+    # only, and a failure here is a warning rather than a dead run (see
+    # ``HostScratchDirectory``).
+    HostScratchDirectory.ensure(roots)  # type: ignore[arg-type]
     # Order is load-bearing. The floor is OUTERMOST because it judges the path
     # the tool layer produced — the canonical POSIX spelling — against roots
     # recorded in that same spelling; decoding to `C:\...` first would hand it a
@@ -2021,11 +2036,7 @@ def _host_default_backend(
     # the real backend, undoing the encoding in the last inch before the disk.
     return HostFilesystemFloor(
         NativeHostPathBackend(FilesystemBackend(virtual_mode=False)),
-        # The SAME resolution the rules were built from, so the floor can never
-        # refuse a folder the rules allow.
-        roots=_granted_host_roots(  # type: ignore[arg-type]
-            workspace_backend, resolved=granted_host_roots
-        ),
+        roots=roots,  # type: ignore[arg-type]
     )
 
 

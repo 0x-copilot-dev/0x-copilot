@@ -39,14 +39,45 @@ export class CapabilityService {
   }
 
   /**
-   * Open the native picker and, if the user selects a folder, mint a grant.
-   * Returns null when the user cancels. The renderer-supplied label is only a
-   * display hint (sanitized); the authoritative path is the picker's realpath
-   * and never leaves main.
+   * Mint a grant for a folder — chosen in the native picker, or NAMED by the
+   * caller for the mid-run "always allow" ask.
+   *
+   * Returns null when the user cancels the picker. The authoritative path is
+   * always a realpath resolved here and never leaves main.
+   *
+   * THE NAMED-PATH BRANCH is the durable half of a filesystem approval: the
+   * backend raised a card naming one folder, the user chose to attach it, and
+   * the grant must cover THAT folder — not a parent they might have picked by
+   * accident, and not a wider tree. It is deliberately more constrained than
+   * the picker branch on both axes a caller could otherwise abuse:
+   *
+   * * **read_only, always.** The named-path lane is reachable only from a
+   *   filesystem READ approval, and a filesystem interrupt must never authorize
+   *   a mutation — host writes go through the staged/attested workspace
+   *   protocol, not through a grant minted off a read card. So the requested
+   *   mode is ignored here rather than trusted.
+   * * **main derives the label.** A caller-supplied label WINS over the
+   *   basename, so honouring it would let a pill read "Downloads" over a grant
+   *   on Documents — a wrong claim of access, which is the defect rather than
+   *   the fix.
+   *
+   * `GrantStore.create` still applies `assertGrantableRoot` to the resolved
+   * root, so the filesystem root, the home directory, the app's own userData
+   * tree and every well-known credential directory are refused on this path
+   * exactly as they are on the picker's.
    */
   async requestFolderGrant(
     params: RequestFolderGrantParams,
   ): Promise<RendererGrant | null> {
+    if (params.path !== undefined) {
+      const named = await this.#picker.resolve(params.path);
+      const grant = await this.#store.create({
+        root: named.root,
+        mode: "read_only",
+        label: named.label,
+      });
+      return toRendererGrant(grant);
+    }
     const picked = await this.#picker.pick();
     if (picked === null) return null;
     const label =

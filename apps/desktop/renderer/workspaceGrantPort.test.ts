@@ -115,15 +115,18 @@ describe("requestGrant", () => {
     expect(outcome.status).toBe("granted");
   });
 
-  it("never sends the asked-for PATH (or the reason) across IPC", async () => {
+  it("sends the asked-for PATH, because that is the folder being agreed to", async () => {
     // The property `capabilities/desktop/workspace_backend.py` states — only
     // mount names and root-relative paths cross to the broker — is a property of
-    // the READ path, and a grant request is the one place a host-absolute path
-    // legitimately appears. It still does not travel through this channel: main
-    // owns the folder selection, so the payload stays `{ mode }` and the picker
-    // is the consent. (`RequestFolderGrantParamsSchema` is `.strict()`, so a
-    // smuggled key would be rejected by main anyway — this pins that we don't
-    // try.)
+    // the READ path. A grant request is the one place a host-absolute path
+    // legitimately appears, and it travels in exactly one direction: toward
+    // consent, never toward bytes.
+    //
+    // It used to be dropped here, which sent "always allow" to a free picker:
+    // the user was asked to find the folder again and could land on its parent,
+    // and the pill would then claim access to a tree nobody agreed to. Main
+    // re-resolves the path, forces read_only and still runs
+    // `assertGrantableRoot`, so naming a folder cannot widen what it will grant.
     const h = harness({
       [CAPABILITY_CHANNELS.requestFolderGrant]: rendererGrant(),
     });
@@ -133,9 +136,27 @@ describe("requestGrant", () => {
       reason: "the user asked me to read their downloads",
     });
     const payload = payloadOf(h, CAPABILITY_CHANNELS.requestFolderGrant);
-    expect(payload).toEqual({ mode: "read_only" });
-    expect(JSON.stringify(payload)).not.toContain("Downloads");
-    expect(JSON.stringify(payload)).not.toContain("/Users");
+    // `reason` has no home on the channel, and a `label` would WIN over the
+    // basename main derives — making a pill read "Downloads" over a grant on
+    // Documents. Neither is forwarded.
+    expect(payload).toEqual({
+      mode: "read_only",
+      path: "/Users/ada/Downloads",
+    });
+  });
+
+  it("still opens the picker when the ask named no folder", async () => {
+    // The composer's "attach a folder" button has nothing to name.
+    const h = harness({
+      [CAPABILITY_CHANNELS.requestFolderGrant]: rendererGrant(),
+    });
+    await createDesktopWorkspaceGrantPort(h.bridge).requestGrant({
+      path: null,
+      mode: "read_only",
+    });
+    expect(payloadOf(h, CAPABILITY_CHANNELS.requestFolderGrant)).toEqual({
+      mode: "read_only",
+    });
   });
 
   it("reports a dismissed dialog as cancelled — a decision, not a failure", async () => {

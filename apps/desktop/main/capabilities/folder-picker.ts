@@ -84,6 +84,44 @@ export class FolderPicker {
 
     return { root: canonical, label: sanitizeLabel(basename(canonical)) };
   }
+
+  /**
+   * Resolve ONE named folder, with no dialog — the mid-run "always allow" path.
+   *
+   * The consent already happened: the backend raised a card naming this exact
+   * folder and the user chose to attach it. Re-opening a picker there would ask
+   * them to find it again and would let the answer land somewhere else, which is
+   * the silent widening the card exists to prevent.
+   *
+   * Everything else is identical to {@link pick} — same realpath (so a symlink
+   * cannot later be re-pointed at a different tree under a live grant), same
+   * directory check, same sanitized basename label — because the value returned
+   * feeds the same `GrantStore.create`, which applies the same
+   * `assertGrantableRoot` gate. This method deliberately does NOT decide whether
+   * the folder is grantable; that decision has exactly one home.
+   */
+  async resolve(path: string): Promise<PickedFolder> {
+    if (typeof path !== "string" || path.length === 0) {
+      throw new FolderPickerError("no folder was named");
+    }
+    let canonical: string;
+    try {
+      canonical = await this.#realpath(path);
+    } catch {
+      // Gone, or a broken symlink. Never echo the path.
+      throw new FolderPickerError("that folder could not be resolved");
+    }
+    let info: { isDirectory(): boolean };
+    try {
+      info = await this.#stat(canonical);
+    } catch {
+      throw new FolderPickerError("that folder could not be inspected");
+    }
+    if (!info.isDirectory()) {
+      throw new FolderPickerError("that path is not a folder");
+    }
+    return { root: canonical, label: sanitizeLabel(basename(canonical)) };
+  }
 }
 
 /**

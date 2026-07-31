@@ -15,13 +15,30 @@ export const GrantModeSchema = z.enum([
 ]);
 
 // capability.request-folder-grant — the renderer picks a mode and may suggest
-// a display label. It NEVER submits a path; main owns the folder selection.
+// a display label.
+//
+// `path` is the ONE case where a folder is named rather than chosen, and it is
+// narrow on purpose. It exists for the mid-run ask: the agent hit a folder it
+// has no grant for, the backend raised a card NAMING THAT FOLDER, the user read
+// it and chose "always allow". Sending them to a free picker at that point is
+// the widening this whole subsystem exists to prevent — they could land on the
+// parent, and the pill would then claim access to a tree nobody agreed to.
+//
+// It does not weaken main's ownership of authority. Main re-resolves the path
+// (realpath, must be a directory), re-derives the label from the resolved
+// basename, forces `read_only`, and still runs `assertGrantableRoot` — so a
+// renderer naming `/`, `~`, the app's own userData, or a credential directory
+// is refused exactly as a bypassed picker would be. See
+// `CapabilityService.requestFolderGrant`.
 export const RequestFolderGrantParamsSchema = z
   .object({
     mode: GrantModeSchema,
     // Optional display hint. Omit → main derives a sanitized label from the
-    // chosen folder's basename. Sanitized again in main regardless.
+    // chosen folder's basename. Sanitized again in main regardless, and
+    // IGNORED entirely when `path` is present (see the service).
     label: z.string().min(1).max(120).optional(),
+    // Optional exact folder. Omit → the native picker, unchanged.
+    path: z.string().min(1).max(1024).optional(),
   })
   .strict();
 export type RequestFolderGrantParams = z.infer<

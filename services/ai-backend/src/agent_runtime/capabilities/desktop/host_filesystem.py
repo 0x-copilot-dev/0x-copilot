@@ -54,15 +54,30 @@ Because rule 4 exists, the agent needs a real place to keep working files.
 `.copilot` inside a granted root is that place (write access assumed, per
 product decision), which is what lets the composite's default stop being a
 promiscuous catch-all.
+
+Rule 2 grants it and `HostFilesystemFloor` admits it, but nothing ever CREATED
+it, so until `HostScratchDirectory` below the agent's own working area did not
+exist. The failure is not the obvious one: deepagents' `FilesystemBackend.write`
+runs `parent.mkdir(parents=True)`, so a WRITE conjures the directory as a side
+effect. Reading does not — `ls("<root>/.copilot")` answered `path_not_found`, so
+the agent could not look at its own scratch until it had guessed a filename to
+write into it. That is this subsystem's own defect turned inward: a real place,
+reported absent.
+
+It went unnoticed because every scratch test ran `mkdir(parents=True)` in its
+fixture first, proving the PERMISSION and never the DIRECTORY.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
+
+_LOGGER = logging.getLogger("agent_runtime.desktop.host_filesystem")
 
 #: Prefixes the agent owns inside its own virtual filesystem. These are routed
 #: by `CompositeBackend` to real backends (memory, drafts, subagent artifacts),
@@ -156,6 +171,89 @@ class GrantedRoot:
         """Match the root itself and everything beneath it."""
 
         return str(PurePosixPath(self.path) / "**")
+
+
+class HostScratchDirectory:
+    """Creates `<granted root>/.copilot` for the grants that may hold one.
+
+    Called once while a run's backend is composed (``factory._host_default_backend``),
+    because a grant is bound exactly there and nowhere earlier — the folder set is
+    per run, and a folder attached mid-run arrives on the next composition.
+
+    Three rules, and each one is a refusal the caller must not talk it out of:
+
+    * **read-only grants get nothing.** Creating a directory is a WRITE. A user
+      who attached a folder read-only did not authorise one, and rule 3 +
+      :meth:`HostFilesystemFloor.permits_write` both agree the agent could never
+      use it anyway. Materialising it would be a mutation performed purely so a
+      log line could say it happened.
+    * **one level, never ``parents=True``.** The scratch dir goes INSIDE a granted
+      root; its ancestors are not granted. If the root itself is gone (unmounted
+      volume, folder deleted since it was attached) the ``mkdir`` must fail, not
+      helpfully rebuild a path the user never handed over.
+    * **failure is not fatal.** A read-only filesystem, a permissions refusal, a
+      race with another process — none of that is a reason to kill a run whose
+      actual work may not touch scratch at all. Every ``OSError`` degrades to a
+      warning and the run proceeds; the agent's own write, if it makes one, gets
+      the honest error from the backend.
+
+    Nothing here is logged with a path in it — a granted root is user data, and
+    this module's whole neighbourhood keeps host paths out of logs.
+
+    ONE DECODE, IN THE LAST INCH. :attr:`GrantedRoot.scratch_path` is spelled in
+    the canonical POSIX encoding the rules and the floor match against, and on
+    Windows that spelling (``/C:/Users/p/.copilot``) is not a path the operating
+    system can create. ``mkdir`` is the only thing here that touches a real
+    filesystem, so it is the only thing that decodes — the same placement, and
+    the same reason, as ``NativeHostPathBackend`` sitting directly on the real
+    backend in ``factory._host_default_backend``.
+    """
+
+    #: Owner-only. Agent working files sit inside a user's own folder; there is no
+    #: reason for them to be group- or world-readable. Subject to the process
+    #: umask like any ``mkdir``, which can only make it narrower.
+    _MODE: Final = 0o700
+
+    @classmethod
+    def native_scratch_path(cls, root: GrantedRoot) -> str:
+        r"""``root``'s scratch directory in the HOST's own spelling.
+
+        Identity on POSIX; ``/C:/Users/p/.copilot`` → ``C:\Users\p\.copilot`` on
+        Windows. Split out from :meth:`ensure` so the decode is assertable
+        without creating a directory, which is the only way a POSIX test run can
+        prove the Windows behaviour at all.
+        """
+
+        return HostPathClassifier.native(root.scratch_path)
+
+    @classmethod
+    def ensure(cls, roots: tuple[GrantedRoot, ...]) -> tuple[str, ...]:
+        """Create the scratch dir of every WRITABLE root; return the usable ones.
+
+        The return value is the set that now exists (already-present counts), in
+        the canonical spelling every other caller in this module speaks — the
+        native form exists only for the duration of the ``mkdir``. It is
+        deliberately not an error channel: a root missing from it simply has no
+        scratch, which the floor already treats as "that write is refused".
+        """
+
+        usable: list[str] = []
+        for root in roots:
+            if not root.writable:
+                continue
+            try:
+                Path(cls.native_scratch_path(root)).mkdir(mode=cls._MODE, exist_ok=True)
+            except OSError as error:
+                # Never the path: a granted root is user data. The error's TYPE
+                # is enough to tell a read-only volume from a vanished folder.
+                _LOGGER.warning(
+                    "host_filesystem.scratch_unavailable error=%s "
+                    "(the agent has no scratch directory in one attached folder)",
+                    type(error).__name__,
+                )
+                continue
+            usable.append(root.scratch_path)
+        return tuple(usable)
 
 
 class HostFilesystemRules:
@@ -257,4 +355,5 @@ __all__ = (
     "VIRTUAL_NAMESPACES",
     "GrantedRoot",
     "HostFilesystemRules",
+    "HostScratchDirectory",
 )
