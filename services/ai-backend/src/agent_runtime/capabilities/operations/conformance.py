@@ -184,6 +184,11 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("builtin", "load_skill", "execution.factory._model_visible_tools"),
         ("builtin", "load_prior_tool_result", "execution.factory._model_visible_tools"),
         ("builtin", "ask_a_question", "execution.factory._model_visible_tools"),
+        (
+            "builtin",
+            "list_connected_servers",
+            "execution.factory._model_visible_tools",
+        ),
         ("builtin", "suggest_mcp_connector", "execution.factory._model_visible_tools"),
         # F3 capability-discovery bridge tools. They are registered by the same
         # factory function as their neighbours, through

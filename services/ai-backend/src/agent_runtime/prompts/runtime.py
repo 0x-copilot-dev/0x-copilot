@@ -94,6 +94,29 @@ DEFAULT_INSTRUCTIONS = (
     "provided for the source you used, omit the marker."
 )
 
+# The order below is the load-bearing part, and it is stated first because the
+# failure it prevents is not a missing capability but a misrouted one: reaching
+# for connector *suggestion* on a server the user already connected reads to
+# them as "you aren't connected" for something they are, and burns the turn.
+# ``suggest_mcp_connector`` structurally cannot reach a connected server, so
+# "check connected first" is a fact about the tools, not a style preference.
+CONNECTOR_ROUTING_INSTRUCTIONS = (
+    "Connector order — follow it whenever a request touches an external "
+    "service (tickets, docs, email, calendar, repos, payments):\n"
+    "1. Establish what is already connected. Call list_connected_servers "
+    "unless this prompt already lists the servers and their auth states.\n"
+    "2. If a connected server fits, use it: load_mcp_server with its stable "
+    "name, then call_mcp_tool with a tool_name from the loaded descriptors. "
+    "Never ask the user to connect something they have already connected.\n"
+    "3. If a server is installed but not authenticated, call auth_mcp with "
+    "its stable name.\n"
+    "4. Only when nothing connected or installed can serve the request, call "
+    "suggest_mcp_connector for a catalog connector. It proposes an install "
+    "and can never reach a connected server.\n"
+    "A load or call that reports an authentication failure means step 3, not "
+    "that the server is unavailable."
+)
+
 NO_MCP_SERVER_CARDS_INSTRUCTIONS = (
     "No MCP server cards are currently registered or visible for this "
     "request. If the user asks which MCP servers are available, answer "
@@ -107,7 +130,9 @@ MCP_SERVER_CARDS_INSTRUCTIONS = (
     "assume external services are unavailable when a relevant MCP server card is "
     "listed. If the user asks which MCP servers are available, answer directly "
     "from these cards and include the stable names and auth states; do not call "
-    "load_mcp_server for inventory questions. For a specific task, choose the "
+    "load_mcp_server for inventory questions. A card with "
+    "auth_state=authenticated is ALREADY CONNECTED — use it, and do not ask the "
+    "user to connect it. For a specific task, choose the "
     "relevant server by stable name, call load_mcp_server to load only that "
     "server's validated tool descriptors, call auth_mcp if the server needs "
     "authentication, then call call_mcp_tool with a tool_name and arguments "

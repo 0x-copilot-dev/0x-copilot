@@ -72,6 +72,10 @@ from agent_runtime.capabilities.tools.builtin.publish_artifact import (
 from agent_runtime.capabilities.tools.builtin.revise_artifact import (
     ReviseArtifactInput,
 )
+from agent_runtime.capabilities.tools.builtin.list_connected_servers import (
+    ListConnectedServersInput,
+    ListConnectedServersTool,
+)
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
     SuggestMcpConnectorTool,
@@ -92,6 +96,7 @@ from agent_runtime.control_plane.context import (
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
     CAPABILITY_DISCOVERY_INSTRUCTIONS,
+    CONNECTOR_ROUTING_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -616,6 +621,25 @@ def _model_visible_tools(
                 AskAQuestionInput,
             ),
             owner=ModelToolOwner.TOOLS,
+        )
+    )
+    # Ordered before ``suggest_mcp_connector`` because that is the protocol
+    # order: use what is already connected, and only propose an install when
+    # nothing connected can serve the request. The two are complementary, not
+    # alternatives — suggestion never sees an installed server, so removing this
+    # listing would leave the ``deferred`` posture (where the MCP card block is
+    # suppressed) with no model-visible route to a connected server at all.
+    model_tools.append(
+        ModelToolDeclaration.declared(
+            _structured_tool(
+                ListConnectedServersTool(
+                    registry=mcp_registry,
+                    runtime_context=runtime_context,
+                    loader=loader,
+                ),
+                ListConnectedServersInput,
+            ),
+            owner=ModelToolOwner.DISCOVERY,
         )
     )
     model_tools.append(
@@ -1375,6 +1399,7 @@ def _local_tool_names(
     if include_skill_loader:
         names.add("load_skill")
     names.add(Values.Tool.ASK_A_QUESTION)
+    names.add(Values.Tool.LIST_CONNECTED_SERVERS)
     if include_mcp_discovery:
         names.add(Values.Tool.SUGGEST_MCP_CONNECTOR)
     return frozenset(names)
@@ -1492,6 +1517,11 @@ def _instructions_with_mcp_cards(
             instructions,
             MCP_SERVER_CARDS_INSTRUCTIONS,
             "\n".join(card_lines),
+            # Ordered after the cards on purpose: the routing rules refer to
+            # auth states the model has just read, and the step it most often
+            # gets wrong — suggesting a connector that is already listed above
+            # as authenticated — is the one stated last.
+            CONNECTOR_ROUTING_INSTRUCTIONS,
         )
     )
 
@@ -1521,7 +1551,18 @@ def _instructions_with_capability_discovery(
 
     if not capability_bridge_tools:
         return instructions
-    return "\n\n".join((instructions, CAPABILITY_DISCOVERY_INSTRUCTIONS))
+    return "\n\n".join(
+        (
+            instructions,
+            CAPABILITY_DISCOVERY_INSTRUCTIONS,
+            # The routing rules are needed *more* here than under the cards.
+            # Suppression removes the enumeration that told the model which
+            # servers are authenticated, so without an explicit "check what is
+            # connected first" step its cheapest-looking move is to suggest a
+            # connector for something already connected.
+            CONNECTOR_ROUTING_INSTRUCTIONS,
+        )
+    )
 
 
 async def _skill_cards(
@@ -1567,18 +1608,24 @@ def _instructions_with_suggested_connectors(
             (
                 "## Suggestable integrations the user has not yet connected\n\n"
                 "The capabilities below are available in the workspace "
-                "catalog but are NOT installed for the current user.\n\n"
-                "**When the user's request mentions or implies one of these "
-                'slugs (e.g. "check my Linear tasks", "any new Notion '
-                'pages?", "connect Asana"), you MUST:**\n'
-                "1. Immediately call ``suggest_mcp_connector(slug, reason, "
+                "catalog but are NOT installed for the current user. This "
+                "list never contains a connector the user has already "
+                "connected — anything connected is reached through "
+                "``load_mcp_server``, not through suggestion.\n\n"
+                "**When a request maps to one of these slugs AND nothing "
+                "already connected can serve it, you MUST:**\n"
+                "1. Call ``suggest_mcp_connector(slug, reason, "
                 "expected_value)`` with the matching slug. This emits a "
                 "Connect/Skip card the user can click — no extra "
                 "confirmation from you needed.\n"
                 "2. Then write a single short line to the user pointing at "
-                "the card (e.g. \"Linear isn't connected yet — tap "
+                "the card (e.g. \"Asana isn't connected yet — tap "
                 'Connect above to set it up.").\n\n'
                 "**Do NOT:**\n"
+                "- Suggest a connector before checking what is already "
+                "connected. A request naming a service you are already "
+                "connected to is served by that connection, not by a "
+                "Connect card.\n"
                 "- Ask the user which option they want or list numbered "
                 "alternatives. The Connect/Skip card is the one and only "
                 "next step.\n"

@@ -41,12 +41,16 @@ class _Messages:
 
 
 SUGGEST_MCP_CONNECTOR_DESCRIPTION = (
-    "Suggest a Connect/Skip card for an MCP server you noticed would improve "
-    "the answer but isn't authenticated yet. Non-blocking — the run keeps "
-    "streaming while the user decides. Call once per server per run; "
-    "subsequent calls for the same server return ``already_suggested``. "
-    "Use the blocking ``auth_mcp`` tool only when the run cannot proceed "
-    "without the connector.\n\n"
+    "Propose a connector the user has NOT connected yet, as a Connect/Skip "
+    "card. This tool is only for setting something up — it can never reach a "
+    "server that is already connected. Call ``list_connected_servers`` FIRST; "
+    "only reach for this when nothing already connected can serve the "
+    "request. A server that is already connected returns "
+    "``already_authenticated`` and emits no card — use ``load_mcp_server`` on "
+    "it instead. Non-blocking — the run keeps streaming while the user "
+    "decides. Call once per server per run; subsequent calls for the same "
+    "server return ``already_suggested``. Use the blocking ``auth_mcp`` tool "
+    "only when the run cannot proceed without the connector.\n\n"
     "Args:\n"
     "  server_id: Stable id of the MCP server (e.g. ``linear``).\n"
     "  reason: Short, user-facing reason — what the connector would help "
