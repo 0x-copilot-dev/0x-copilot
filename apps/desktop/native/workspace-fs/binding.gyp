@@ -1,12 +1,19 @@
 {
     # node-gyp build config for the workspace-fs Node-API addon.
     #
-    # Node-API ONLY (src/workspace_fs.c includes node_api.h and nothing else),
-    # so ONE binary is ABI-stable across Node and Electron: build.mjs builds it
-    # with the plain Node headers and the SAME .node loads in the Electron main
-    # process (verified: Node 25 / modules=141 build loaded under Electron 43 /
-    # modules=148). Do not add a V8 / nan / node.h dependency — that would make
-    # the artifact per-runtime and force an electron-rebuild step.
+    # Node-API, so ONE binary is ABI-stable across Node and Electron: build.mjs
+    # builds it with the plain Node headers and the SAME .node loads in the
+    # Electron main process (verified: Node 25 / modules=141 build loaded under
+    # Electron 43 / modules=148). Do not add a V8 / nan / node.h dependency —
+    # that would make the artifact per-runtime and force an electron-rebuild
+    # step.
+    #
+    # One deliberate exception, Windows-only: uv_open_osfhandle. Windows keeps
+    # the fd table per CRT instance and this addon does not share a CRT with the
+    # host, so a CRT fd minted here is meaningless to node:fs (EBADF on first
+    # use). libuv's entry point does the conversion on the host's side. It is a
+    # plain C symbol both node.exe and Electron export, so the single-binary
+    # property above is unaffected; it is not a V8/node.h dependency.
     "targets": [
         {
             "target_name": "workspace_fs",
@@ -44,11 +51,28 @@
                                 # line: "error D8016: '/std:c++20' and
                                 # '/std:c11' ... are incompatible". The C
                                 # standard goes through the MSBuild property
-                                # below instead, which REPLACES rather than
-                                # appends and so cannot collide. If gyp does not
-                                # recognise that property it is dropped with a
-                                # warning and MSVC compiles this .c file in its
-                                # default C mode — which still builds.
+                                # below instead.
+                                #
+                                # That property alone was NOT enough, and the
+                                # first windows-latest run failed on exactly the
+                                # D8016 above. The reason is which half of
+                                # common.gypi applies: its VCCLCompilerTool
+                                # block sets the LanguageStandard *property*
+                                # only under `clang==1`, and on the MSVC leg
+                                # takes the other branch, which appends the raw
+                                # flag "-std:c++20" to AdditionalOptions. A
+                                # property cannot override a raw flag — both
+                                # reach cl, and D8016 fires. So the inherited
+                                # flag has to be removed, not overridden; the
+                                # exclusion below is gyp's mechanism for that
+                                # (the same "key!" form common.gypi itself uses
+                                # to drop inherited -Werror), it matches the
+                                # exact string, and gyp's list-filter pass
+                                # recurses into msvs_settings and runs after
+                                # target defaults are merged, so the flag is
+                                # present to be filtered. /Zc:__cplusplus and
+                                # /Zm2000 are inherited from the same list and
+                                # are deliberately left in place.
                                 #
                                 # /guard:cf is passed as a raw flag, not via the
                                 # named "ControlFlowGuard" setting: the first
@@ -63,13 +87,30 @@
                                     "/utf-8",
                                     "/guard:cf",
                                 ],
+                                # Drops common.gypi's inherited C++ standard for
+                                # this C-only target. Exact-string match on the
+                                # spelling common.gypi uses.
+                                "AdditionalOptions!": ["-std:c++20"],
                                 "LanguageStandard_C": "stdc11",
                                 "BufferSecurityCheck": "true",
                             },
                             "VCLinkerTool": {
                                 "RandomizedBaseAddress": "2",
                                 "DataExecutionPrevention": "2",
-                                "ImageHasSafeExceptionHandlers": "true",
+                                # NO "ImageHasSafeExceptionHandlers" HERE. It
+                                # emits /SAFESEH, and the linker rejects that
+                                # outright on this target: "LNK1246: '/SAFESEH'
+                                # not compatible with 'x64' target machine".
+                                # SafeSEH is an x86-32 mitigation — it exists
+                                # because 32-bit exception handler chains live
+                                # on the stack and can be overwritten. x64
+                                # instead carries unwind and handler data in the
+                                # PE's .pdata/.xdata, out of reach of a stack
+                                # overwrite, so the property is not "off" here,
+                                # it is structurally unnecessary. Restore it
+                                # only behind an x86-32 condition, if this addon
+                                # is ever built for that architecture.
+                                #
                                 # CFG needs the linker half too; a /guard:cf
                                 # compile alone does not produce a guarded image.
                                 "AdditionalOptions": ["/guard:cf"],

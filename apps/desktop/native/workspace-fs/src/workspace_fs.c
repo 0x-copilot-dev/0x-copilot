@@ -22,8 +22,11 @@
  *               parent handle with FILE_OPEN_REPARSE_POINT, refusing any
  *               intermediate reparse point (junction / symlink). RootDirectory-
  *               relative names cannot contain separators or "..", so the walk
- *               cannot escape. The final handle is converted to a CRT fd so the
- *               Node side can fstat/read/close it like any other descriptor.
+ *               cannot escape. The final handle is converted to an fd through
+ *               uv_open_osfhandle — not the CRT's _open_osfhandle, which mints
+ *               the fd in the addon's own CRT table rather than the host's — so
+ *               the Node side can fstat/read/close it like any other
+ *               descriptor.
  *
  * The single exported primitive is:
  *   openBeneath(root: string, rel: string, directory: bool, write: bool) -> fd
@@ -198,6 +201,9 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
 #include <windows.h>
 #include <io.h>
 #include <fcntl.h>
+/* Windows only, and only for uv_open_osfhandle. See the handover comment at the
+ * end of the walk for why the CRT's own _open_osfhandle cannot be used here. */
+#include <uv.h>
 #include <winternl.h>
 
 #ifndef FILE_OPEN
@@ -272,10 +278,20 @@ static NTSTATUS open_component(PFN_NtCreateFile NtCreateFile_, HANDLE parent,
                            : FILE_GENERIC_READ;
   ULONG opts = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT |
                (as_dir ? FILE_DIRECTORY_FILE : 0);
+  /* FILE_SHARE_DELETE matters as much as the other two. Windows refuses to
+   * unlink or rename a file while any handle omits it, so leaving it out makes
+   * every path this walk touches briefly undeletable by the user — and a
+   * directory component stays locked for as long as the walk holds it. POSIX,
+   * which the other two backends implement, always permits unlink-while-open;
+   * this keeps the Windows backend on the same semantics instead of exporting
+   * a platform quirk into the confined-read contract. Sharing is not a
+   * loosening of the confinement: what may be opened is decided by the
+   * component walk above, not by the share mask. */
   NTSTATUS st = NtCreateFile_(&h, access | SYNCHRONIZE, &oa, &iosb, NULL,
                               FILE_ATTRIBUTE_NORMAL,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
-                              opts, NULL, 0);
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              FILE_OPEN, opts, NULL, 0);
   if (st != STATUS_SUCCESS) return st;
 
   /* Refuse a reparse point anywhere along the path (junction / symlink). */
@@ -315,7 +331,8 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
 
   HANDLE parent =
       CreateFileW(rootw, FILE_LIST_DIRECTORY | GENERIC_READ,
-                  FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                  OPEN_EXISTING,
                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                   NULL);
   free(rootw);
@@ -330,7 +347,16 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
   const char *result_code = NULL;
   int fd = -1;
   HANDLE cur = parent;
-  if (relw[0] != L'\0') {
+  /* "" and "." both name the root itself, and neither may enter the walk. The
+   * NT object namespace has no notion of "." — a RootDirectory-relative name is
+   * matched literally, so NtCreateFile looks for a child actually called "."
+   * and answers STATUS_OBJECT_NAME_NOT_FOUND. POSIX openat(fd, ".") resolves
+   * because "." is a real directory entry there, which is why only this backend
+   * needs the special case. Returning the already-open root handle is also
+   * strictly cheaper than re-opening it. */
+  int rel_names_the_root =
+      (relw[0] == L'\0') || (relw[0] == L'.' && relw[1] == L'\0');
+  if (!rel_names_the_root) {
     wchar_t *save = NULL;
     /* Tokenize on both separators, though host-fs sends POSIX '/'. */
     for (wchar_t *tok = wcstok_s(relw, L"/\\", &save); tok != NULL;
@@ -352,8 +378,39 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
   free(relw);
 
   if (cur != NULL) {
-    /* Hand the final HANDLE to the CRT as an fd node:fs can use. */
-    fd = _open_osfhandle((intptr_t)cur, write ? 0 : _O_RDONLY);
+    /* Hand the final HANDLE over as an fd node:fs can use.
+     *
+     * This MUST go through libuv rather than the CRT's _open_osfhandle. On
+     * Windows the fd-to-HANDLE table is per-CRT-instance, and this addon does
+     * not share a CRT with the host: node.exe links its own, while the addon
+     * gets ucrtbase. An fd minted by _open_osfhandle here is therefore a valid
+     * index in the ADDON's table and meaningless in the host's, so the very
+     * first fs.readSync/fs.closeSync on it fails with EBADF — which is exactly
+     * how the first Windows selfcheck failed. uv_open_osfhandle performs the
+     * same conversion from inside libuv, so the fd lands in the table node:fs
+     * actually consults. (nodejs/node#6369, nodejs/abi-stable-node#318;
+     * libuv >= 1.23.0.)
+     *
+     * This is the one non-Node-API host symbol in this file, and it is worth
+     * being precise about what that costs: uv_open_osfhandle is a plain C
+     * entry point exported by both node.exe and Electron (checked against the
+     * Node 25 and Electron 43 headers), so the single-binary property the
+     * build depends on still holds. It is not covered by the Node-API ABI
+     * guarantee the way napi_* is, but it has been stable since 2018 and there
+     * is no Node-API equivalent — the alternative is returning a path for the
+     * JS side to open, which would reintroduce the TOCTOU window this whole
+     * primitive exists to close.
+     *
+     * Ownership transfers on success, same as _open_osfhandle: do not
+     * CloseHandle(cur) afterwards, the fd owns it.
+     *
+     * uv_open_osfhandle takes no mode flags, so the _O_RDONLY the CRT call
+     * used to receive for read opens is gone. That marker was CRT bookkeeping
+     * only; what a caller may actually do with the fd is fixed by the
+     * ACCESS_MASK this walk opened the handle with (FILE_GENERIC_READ unless
+     * `write` was requested on the final component), and the kernel enforces
+     * that regardless of what the CRT recorded. So no access is widened. */
+    fd = uv_open_osfhandle((uv_os_fd_t)cur);
     if (fd < 0) {
       CloseHandle(cur);
       *code = "EIO";
