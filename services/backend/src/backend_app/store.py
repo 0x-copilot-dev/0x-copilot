@@ -16,7 +16,9 @@ from backend_app.contracts import (
     AuditEventRecord,
     DeployAuditEventRecord,
     McpAuthSessionRecord,
+    McpConfiguredValue,
     McpOAuthClientConfig,
+    McpStdioConfig,
     McpServerRecord,
     SkillAuditEventRecord,
     SkillRecord,
@@ -439,7 +441,7 @@ class PostgresMcpStore:
                     """
                     INSERT INTO mcp_servers (
                       server_id, org_id, user_id, connector_slug, name,
-                      display_name, url,
+                      display_name, url, headers, stdio,
                       transport, auth_mode, auth_state, health, enabled,
                       required_scopes, last_discovery, oauth_client,
                       logo_url, brand_color, scopes_summary,
@@ -448,7 +450,8 @@ class PostgresMcpStore:
                     ) VALUES (
                       %(server_id)s, %(org_id)s, %(user_id)s,
                       %(connector_slug)s, %(name)s,
-                      %(display_name)s, %(url)s, %(transport)s, %(auth_mode)s,
+                      %(display_name)s, %(url)s, %(headers)s, %(stdio)s,
+                      %(transport)s, %(auth_mode)s,
                       %(auth_state)s, %(health)s, %(enabled)s,
                       %(required_scopes)s, %(last_discovery)s, %(oauth_client)s,
                       %(logo_url)s, %(brand_color)s, %(scopes_summary)s,
@@ -471,6 +474,8 @@ class PostgresMcpStore:
                     SET name = %(name)s,
                         display_name = %(display_name)s,
                         url = %(url)s,
+                        headers = %(headers)s,
+                        stdio = %(stdio)s,
                         transport = %(transport)s,
                         auth_mode = %(auth_mode)s,
                         auth_state = %(auth_state)s,
@@ -792,6 +797,10 @@ class PostgresMcpStore:
             "name": record.name,
             "display_name": record.display_name,
             "url": record.url,
+            "headers": json.dumps([h.model_dump() for h in record.headers]),
+            "stdio": json.dumps(record.stdio.model_dump())
+            if record.stdio is not None
+            else None,
             "transport": record.transport.value,
             "auth_mode": record.auth_mode.value,
             "auth_state": record.auth_state.value,
@@ -821,7 +830,19 @@ class PostgresMcpStore:
             connector_slug=cls._optional_str(row.get("connector_slug")),
             name=str(row["name"]),
             display_name=str(row["display_name"]),
-            url=str(row["url"]),
+            # NULL for a stdio server, which is addressed by its launch config
+            # rather than an endpoint. `str(None)` would have stored the text
+            # "None" and then failed URL validation on read.
+            url=cls._optional_str(row.get("url")),
+            headers=tuple(
+                McpConfiguredValue(**item)
+                for item in cls._json_object_list(row.get("headers"))
+            ),
+            stdio=(
+                McpStdioConfig(**stdio_raw)
+                if (stdio_raw := cls._json_object(row.get("stdio")))
+                else None
+            ),
             transport=str(row["transport"]),
             auth_mode=str(row["auth_mode"]),
             auth_state=str(row["auth_state"]),
@@ -864,6 +885,23 @@ class PostgresMcpStore:
             decoded = json.loads(value)
             return decoded if isinstance(decoded, dict) else {}
         return {}
+
+    @classmethod
+    def _json_object_list(cls, value: object) -> list[dict[str, object]]:
+        """Decode a jsonb array of objects, dropping anything that is not one.
+
+        ``_json_list`` stringifies its members, which is right for a list of
+        scopes and wrong for a list of configured headers. A non-object member
+        is dropped rather than coerced: a malformed row should lose the bad
+        entry, not turn it into the string ``"{'name': ...}"`` and then fail
+        validation with an error pointing nowhere near the cause.
+        """
+
+        if isinstance(value, str):
+            value = json.loads(value)
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
 
     @classmethod
     def _datetime(cls, value: object) -> datetime:

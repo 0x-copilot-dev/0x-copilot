@@ -6,8 +6,10 @@ import type {
   LabelHTMLAttributes,
   ReactElement,
   ReactNode,
+  Ref,
   RefObject,
   SelectHTMLAttributes,
+  TextareaHTMLAttributes,
 } from "react";
 import {
   createContext,
@@ -218,6 +220,38 @@ export function Select({
   ...props
 }: SelectHTMLAttributes<HTMLSelectElement>): ReactElement {
   return <select className={classNames("ui-select", className)} {...props} />;
+}
+
+/**
+ * A monospaced editing surface for structured text (`.ui-code-editor`).
+ *
+ * Presentational only — it does not parse, validate, or highlight. Callers own
+ * the meaning of the content and pass `aria-invalid` when it is not valid, so
+ * one recipe serves JSON, YAML, or anything else without the design system
+ * growing an opinion about syntax.
+ *
+ * Spellcheck and autocorrect are off by default because every editor in this
+ * class wants them off; a caller can still override either.
+ */
+export function CodeEditor({
+  className,
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  // React 19 passes `ref` as an ordinary prop, so no forwardRef is needed —
+  // but it still has to be declared, and a modal that focuses its editor on
+  // open needs to be able to hand one in.
+  ref?: Ref<HTMLTextAreaElement>;
+}): ReactElement {
+  return (
+    <textarea
+      className={classNames("ui-code-editor", className)}
+      spellCheck={false}
+      autoCapitalize="off"
+      autoComplete="off"
+      autoCorrect="off"
+      {...props}
+    />
+  );
 }
 
 export function Switch({

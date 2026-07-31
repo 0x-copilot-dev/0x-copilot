@@ -31,6 +31,7 @@ import {
   ChatsArchive,
   ConnectModal,
   ConnectorsDestination,
+  ManageMcpModal,
   ProjectDetailView,
   ProjectEditor,
   ProjectsDestination,
@@ -43,10 +44,14 @@ import {
   toChatArchiveRow,
   useChatsArchive,
   useConnectFlow,
+  useMcpConfig,
   useNotify,
   useTransport,
   type ConnectorAccessPort,
   type CustomServerInput,
+  type McpConfigDocumentPayload,
+  type McpConfigPort,
+  type McpConfigWritePayload,
   type ProjectDataPort,
   type ProjectDetail,
   type ProjectDetailProfile,
@@ -452,6 +457,33 @@ export function ConnectorsBinder({
   });
   markConnectedRef.current = flow.markConnected;
 
+  // "Manage MCP" — the config document, read and written through the facade.
+  // `retry()` after a save is what makes the JSON and the connector list agree:
+  // a server added or removed in the document has to appear or disappear in
+  // the Tools list without a reload, which is the whole point of editing it
+  // here rather than in a file on disk.
+  const mcpConfigPort = useMemo<McpConfigPort>(
+    () => ({
+      readConfig: () =>
+        transport.request<McpConfigDocumentPayload>({
+          method: "GET",
+          path: "/v1/mcp/config",
+        }),
+      writeConfig: (request) =>
+        transport.request<McpConfigWritePayload>({
+          method: "PUT",
+          path: "/v1/mcp/config",
+          body: request,
+        }),
+    }),
+    [transport],
+  );
+  const mcpConfig = useMcpConfig({ port: mcpConfigPort, onSaved: retry });
+  const openMcpConfig = useCallback((): void => {
+    flow.closeConnect();
+    mcpConfig.openConfig();
+  }, [flow, mcpConfig]);
+
   // Connect (or reconnect) a broken connector.
   //
   // This used to pick the OAuth route itself — resolve the row to an MCP server
@@ -556,8 +588,22 @@ export function ConnectorsBinder({
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
         onAddCustomServer={flow.onAddCustomServer}
+        onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}
+      />
+      {/* "Manage MCP" — the whole config as one document. Replaces the single
+          Server-URL form, which could express exactly one kind of server
+          (remote, no credential, no headers) while the row that opened it
+          advertised a JSON config for stdio or remote. */}
+      <ManageMcpModal
+        open={mcpConfig.open}
+        onClose={mcpConfig.closeConfig}
+        document={mcpConfig.document}
+        onSave={mcpConfig.save}
+        pending={mcpConfig.pending}
+        error={mcpConfig.error}
+        result={mcpConfig.result}
       />
     </>
   );

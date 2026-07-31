@@ -315,6 +315,34 @@ def create_app(
             identity=identity,
         )
 
+    # "Manage MCP" — the whole configuration as one editable document.
+    @app.get("/v1/mcp/config")
+    async def read_mcp_config(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/mcp/config",
+            target="backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.put("/v1/mcp/config")
+    async def write_mcp_config(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "PUT",
+            "/v1/mcp/config",
+            target="backend",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
     @app.post("/v1/mcp/servers/install")
     async def install_mcp_server(
         request: Request, payload: dict[str, object]

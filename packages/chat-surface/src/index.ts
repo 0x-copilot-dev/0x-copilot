@@ -706,9 +706,18 @@ export {
   WebhookDetailView, // orphan-destination-waiver: owner=DEAD-1 — folded IA (webhook detail is unmounted while `webhooks` is folded; disposition owned by the DEAD-1 IA-fold audit).
   WebhookCreateWizard,
   WEBHOOK_VERIFICATION_SNIPPET,
+  ManageMcpModal,
+  useMcpConfig,
 } from "./destinations/connectors";
 export type {
   ConnectorsDestinationProps,
+  ManageMcpModalProps,
+  ManageMcpSaveRequest,
+  McpConfigDocumentPayload,
+  McpConfigPort,
+  McpConfigWritePayload,
+  UseMcpConfigOptions,
+  UseMcpConfigResult,
   RemoveConnectorDialogProps,
   ConnectorAccessPort,
   ConnectFlow,
