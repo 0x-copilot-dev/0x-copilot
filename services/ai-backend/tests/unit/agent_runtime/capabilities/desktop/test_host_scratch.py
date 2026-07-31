@@ -253,6 +253,85 @@ class TestUsableScratchReport:
         assert usable == (f"{ok}/{SCRATCH_DIR_NAME}",)
 
 
+class TestTheScratchDirectoryIsCreatedWhereTheHostCanOpenIt:
+    """The one place in this class that touches a real filesystem must decode.
+
+    Neither lane could see this. `GrantedRoot.path` holds the CANONICAL POSIX
+    spelling (`/C:/Users/p`) because that is what the tool layer produces and
+    what the rules and the floor match against — a Windows lane decision. The
+    scratch directory is a Windows-lane-unaware `mkdir` on
+    :attr:`GrantedRoot.scratch_path`, which is that same encoded spelling. On
+    Windows `/C:/Users/p/.copilot` is not a path the operating system can
+    create, so the whole feature would have been a warning line on that
+    platform: authorised, reported working, and absent.
+
+    A POSIX test run cannot prove this by creating anything, so the decode is
+    split out and asserted directly, and the `mkdir` target is captured to prove
+    ``ensure`` actually uses it.
+    """
+
+    def test_a_windows_root_decodes_to_the_hosts_own_spelling(self) -> None:
+        """FAILS before the fix: the mkdir target was `/C:/Users/p/.copilot`."""
+
+        root = GrantedRoot.from_host_path(r"C:\Users\p\Downloads")
+
+        assert (
+            HostScratchDirectory.native_scratch_path(root)
+            == rf"C:\Users\p\Downloads\{SCRATCH_DIR_NAME}"
+        )
+
+    def test_a_posix_root_is_unchanged(self, tmp_path: Path) -> None:
+        """The decode is the identity everywhere else — no POSIX behaviour moves."""
+
+        root = GrantedRoot.from_host_path(str(tmp_path / "Reports"))
+
+        assert HostScratchDirectory.native_scratch_path(root) == str(
+            tmp_path / "Reports" / SCRATCH_DIR_NAME
+        )
+
+    def test_ensure_creates_at_the_decoded_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """And `ensure` uses it, rather than merely being able to compute it."""
+
+        attempted: list[str] = []
+
+        def record(self: Path, **_: object) -> None:
+            attempted.append(str(self))
+
+        monkeypatch.setattr(Path, "mkdir", record)
+
+        HostScratchDirectory.ensure(
+            (
+                GrantedRoot.from_host_path(r"C:\Users\p\Downloads"),
+                GrantedRoot.from_host_path("/Users/p/Reports"),
+            )
+        )
+
+        assert attempted == [
+            rf"C:\Users\p\Downloads\{SCRATCH_DIR_NAME}",
+            f"/Users/p/Reports/{SCRATCH_DIR_NAME}",
+        ]
+
+    def test_what_is_reported_stays_in_the_canonical_spelling(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The native form lives for the duration of one `mkdir` and no longer.
+
+        Every other consumer in this neighbourhood — the rules, the floor —
+        speaks the canonical POSIX encoding, so leaking the decoded form out of
+        `ensure` would hand them a string their comparisons cannot read.
+        """
+
+        monkeypatch.setattr(Path, "mkdir", lambda self, **_: None)
+
+        usable = HostScratchDirectory.ensure(
+            (GrantedRoot.from_host_path(r"C:\Users\p\Downloads"),)
+        )
+
+        assert usable == (f"/C:/Users/p/Downloads/{SCRATCH_DIR_NAME}",)
+
+
 class TestNonDesktopRunsAreUntouched(DesktopCompositionMixin):
     """No workspace backend means no host lane, and therefore no host write."""
 
