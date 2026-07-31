@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   Connector,
+  ConnectorCatalogEntry,
   ConnectorId,
   ConnectorSlug,
   SectionResult,
@@ -337,5 +338,168 @@ describe("ConnectorsDestination — remove confirmation", () => {
 
     expect(onRemove).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("ConnectorsDestination — catalog row availability", () => {
+  const EMPTY: Items = {
+    status: "ok",
+    data: { connectors: [], available: [] },
+  };
+
+  function catalogEntry(
+    over: Partial<ConnectorCatalogEntry> & Pick<ConnectorCatalogEntry, "slug">,
+  ): ConnectorCatalogEntry {
+    return {
+      display_name: "Atlassian",
+      description: "Jira issues and Confluence pages.",
+      ...over,
+    };
+  }
+
+  it("offers Connect only for an available entry", () => {
+    const onConnectEntry = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={[
+          catalogEntry({
+            slug: "atlassian" as ConnectorSlug,
+            availability: "available",
+          }),
+        ]}
+        onConnectEntry={onConnectEntry}
+      />,
+    );
+    fireEvent.click(
+      screen.getByTestId("connector-available-connect-atlassian"),
+    );
+    expect(onConnectEntry).toHaveBeenCalledWith("atlassian");
+  });
+
+  // The regression this whole change exists for: a preview / admin-setup /
+  // coming-soon row used to render an identical Connect that the backend
+  // refuses before a browser ever opens.
+  it.each([
+    ["preview", "Preview"],
+    ["admin_setup_required", "Admin setup"],
+    ["coming_soon", "Coming soon"],
+  ] as const)(
+    "renders a %s row as a chip with no Connect button",
+    (availability, label) => {
+      const onConnectEntry = vi.fn();
+      render(
+        <ConnectorsDestination
+          items={EMPTY}
+          catalog={[
+            catalogEntry({ slug: "gmail" as ConnectorSlug, availability }),
+          ]}
+          onConnectEntry={onConnectEntry}
+        />,
+      );
+      const row = screen.getByTestId("connector-available-row");
+      expect(within(row).queryByRole("button")).toBeNull();
+      expect(within(row).getByTestId("status-pill")).toHaveTextContent(label);
+    },
+  );
+
+  it("keeps an entry with no availability field connectable", () => {
+    // Older/web payloads omit `availability`. Missing evidence must not be
+    // read as "unavailable".
+    const onConnectEntry = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={[catalogEntry({ slug: "linear" as ConnectorSlug })]}
+        onConnectEntry={onConnectEntry}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("connector-available-connect-linear"));
+    expect(onConnectEntry).toHaveBeenCalledWith("linear");
+  });
+
+  it("shows the server's availability_reason in the sub-line", () => {
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={[
+          catalogEntry({
+            slug: "slack" as ConnectorSlug,
+            description: "Channels, DMs, and threads.",
+            availability: "coming_soon",
+            availability_reason: "Not yet available.",
+          }),
+        ]}
+        onConnectEntry={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("connector-available-row")).toHaveTextContent(
+      "Channels, DMs, and threads. — Not yet available.",
+    );
+  });
+});
+
+describe("ConnectorsDestination — connect feedback", () => {
+  const EMPTY: Items = {
+    status: "ok",
+    data: { connectors: [], available: [] },
+  };
+  const CATALOG: ReadonlyArray<ConnectorCatalogEntry> = [
+    {
+      slug: "atlassian" as ConnectorSlug,
+      display_name: "Atlassian",
+      description: "Jira issues and Confluence pages.",
+      availability: "available",
+    },
+    {
+      slug: "linear" as ConnectorSlug,
+      display_name: "Linear",
+      description: "Issues, projects, and cycles.",
+      availability: "available",
+    },
+  ];
+
+  it("marks only the connecting row pending", () => {
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={CATALOG}
+        connectingSlug={"atlassian" as ConnectorSlug}
+        onConnectEntry={vi.fn()}
+      />,
+    );
+    const pending = screen.getByTestId("connector-available-connect-atlassian");
+    expect(pending).toHaveTextContent("Connecting…");
+    expect(pending).toBeDisabled();
+    const other = screen.getByTestId("connector-available-connect-linear");
+    expect(other).toHaveTextContent("Connect");
+    expect(other).not.toBeDisabled();
+  });
+
+  // Before this, `flow.error` was rendered ONLY inside <ConnectModal>, which a
+  // row-initiated connect never opens — so the failure was invisible.
+  it("renders a connect failure as an inline alert", () => {
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={CATALOG}
+        connectError="This connector isn’t set up for sign-in yet."
+        onConnectEntry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This connector isn’t set up for sign-in yet.",
+    );
+  });
+
+  it("renders no alert when there is no error", () => {
+    render(
+      <ConnectorsDestination
+        items={EMPTY}
+        catalog={CATALOG}
+        onConnectEntry={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("connectors-connect-error")).toBeNull();
   });
 });

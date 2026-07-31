@@ -46,6 +46,7 @@ import {
   useConnectFlow,
   useMcpConfig,
   useNotify,
+  ConnectOAuthClientRequiredError,
   useTransport,
   type ConnectorAccessPort,
   type CustomServerInput,
@@ -69,6 +70,7 @@ import type {
   ConnectorId,
   ConnectorListResponse,
   ConnectorSlug,
+  McpOAuthClientConfigRequest,
   SetConnectorAccessModeResponse,
   ConversationId,
   ConversationListResponse,
@@ -325,11 +327,24 @@ async function loadConnectors(
   ]);
   const connected = response?.connectors ?? [];
   const connectedSlugs = new Set(connected.map((c) => c.slug));
-  // Prefer the reconciled desktop catalog when available; drop slugs already
-  // connected so the Available tab only shows what can still be installed.
-  const available = (desktopCatalog ?? response?.available ?? []).filter(
-    (entry) => !connectedSlugs.has(entry.slug),
-  );
+  // MERGE the two catalogs; do not let one replace the other.
+  //
+  // The desktop catalog is profile-backed and richer (release stage, real
+  // availability, per-tool capabilities) but it is also SMALLER — three slugs
+  // against the registry's fifteen. Preferring it wholesale meant the surface
+  // literally named Tools advertised three connectors while the composer's
+  // tool popover offered all fifteen, so Linear, Notion, GitHub and the rest
+  // were installable, reachable elsewhere, and invisible here. That is the
+  // same two-lists-disagreeing bug the connector registry was built to end.
+  //
+  // Desktop rows win on slug collision because they carry strictly more
+  // evidence about the same connector.
+  const bySlug = new Map<string, ConnectorCatalogEntry>();
+  for (const entry of response?.available ?? []) bySlug.set(entry.slug, entry);
+  for (const entry of desktopCatalog ?? []) bySlug.set(entry.slug, entry);
+  const available = [...bySlug.values()]
+    .filter((entry) => !connectedSlugs.has(entry.slug))
+    .sort((a, b) => a.display_name.localeCompare(b.display_name));
   return {
     status: "ok",
     data: { connectors: connected, available },
@@ -392,6 +407,8 @@ export function ConnectorsBinder({
       slug?: ConnectorSlug;
       serverId?: string;
       url?: string;
+      oauthClient?: McpOAuthClientConfigRequest;
+      callbackMode?: "loopback" | "deep_link";
     }): Promise<void> => {
       if (request.slug === undefined && request.serverId === undefined) {
         throw new Error(
@@ -408,13 +425,31 @@ export function ConnectorsBinder({
           ...(request.serverId !== undefined
             ? { serverId: request.serverId }
             : {}),
+          ...(request.oauthClient !== undefined
+            ? { oauthClient: request.oauthClient }
+            : {}),
+          ...(request.callbackMode !== undefined
+            ? { callbackMode: request.callbackMode }
+            : {}),
         });
       } catch (error: unknown) {
         const raw = error instanceof Error ? error.message : String(error);
+        // The one failure the user can resolve gets a typed error, so the flow
+        // can open its client form instead of printing a sentence at them.
+        if (
+          raw.includes("connector_oauth_client_required") &&
+          request.slug !== undefined
+        ) {
+          throw new ConnectOAuthClientRequiredError(request.slug);
+        }
         throw new Error(
           raw.includes("connector_oauth_setup_required")
             ? "This connector isn’t set up for sign-in yet."
-            : messageFromError(error),
+            : raw.includes("connector_preview_disabled")
+              ? "Preview connectors are off in this deployment."
+              : raw.includes("connector_admin_setup_required")
+                ? "A workspace admin has to set this one up."
+                : messageFromError(error),
         );
       }
       // The main-brokered connect resolves on completion → refetch so the row
@@ -574,7 +609,9 @@ export function ConnectorsBinder({
         items={result}
         onConnect={flow.openConnect}
         catalog={catalog}
-        onConnectEntry={(slug) => flow.onSelectEntry(slug)}
+        onConnectEntry={(slug) => flow.connectEntry(slug)}
+        connectingSlug={flow.connectingSlug}
+        connectError={flow.error}
         onReconnect={handleReconnect}
         onRemove={handleRemove}
         accessPort={accessPort}
@@ -591,6 +628,9 @@ export function ConnectorsBinder({
         onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}
+        initialEntrySlug={flow.initialEntrySlug}
+        clientRequiredSlug={flow.clientRequiredSlug}
+        onSubmitOAuthClient={flow.submitOAuthClient}
       />
       {/* "Manage MCP" — the whole config as one document. Replaces the single
           Server-URL form, which could express exactly one kind of server

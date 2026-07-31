@@ -45,7 +45,10 @@ class TestProfileValidation:
         resolved = catalog.reconcile()
 
         slugs = {row.profile.connector_slug for row in resolved}
-        assert {"gmail", "gdrive", "outlook", "atlassian"} <= slugs
+        assert {"gmail", "gdrive", "atlassian"} <= slugs
+        # `outlook` was removed: Microsoft Work IQ needs an M365 Copilot licence
+        # and a tenant admin, so no personal account could complete it.
+        assert "outlook" not in slugs
 
     def test_atlassian_reuses_existing_seed_id(self) -> None:
         catalog = DesktopProfileCatalog.load()
@@ -136,10 +139,14 @@ class TestReconciliation:
         assert default["gmail"].availability is ConnectorAvailability.PREVIEW
         # Atlassian is stable: available regardless.
         assert default["atlassian"].availability is ConnectorAvailability.AVAILABLE
-        # Outlook has a tenant template → admin setup even when preview enabled.
-        assert (
-            enabled["outlook"].availability
-            is ConnectorAvailability.ADMIN_SETUP_REQUIRED
+        # The tenant-template → admin-setup rule is pinned against a synthetic
+        # profile in test_desktop_oauth.py; no SHIPPED profile exercises it now
+        # that Outlook is gone, and asserting it here would only re-test the
+        # data. What matters here is that no shipped profile silently needs an
+        # admin the user does not have.
+        assert all(
+            row.availability is not ConnectorAvailability.ADMIN_SETUP_REQUIRED
+            for row in enabled.values()
         )
         # Gmail becomes available once preview is enabled.
         assert enabled["gmail"].availability is ConnectorAvailability.AVAILABLE

@@ -39,6 +39,7 @@ class Keys:
     class OAuth:
         ACCESS_TOKEN = "access_token"
         AUTHORIZATION_ENDPOINT = "authorization_endpoint"
+        AUTHORIZE_PARAMS = "authorize_params"
         AUTHORIZATION_SERVER_METADATA = "authorization_server_metadata"
         AUTHORIZATION_SERVERS = "authorization_servers"
         CLIENT_ID = "client_id"
@@ -137,7 +138,16 @@ class RemoteMcpOAuthClient:
         client = self._client(discovery)
         auth_endpoint = self._required_url(discovery, Keys.OAuth.AUTHORIZATION_ENDPOINT)
         scopes = self._required_scopes(discovery)
-        query = {
+        # Provider-specific authorization parameters (e.g. Google's
+        # `access_type=offline` for a refresh token, `prompt=consent`,
+        # `include_granted_scopes=true` for incremental authorization).
+        #
+        # Applied as a BASE that the computed query overwrites, never the other
+        # way round: `state`, `code_challenge`, `redirect_uri`, `client_id` and
+        # `response_type` are the security-bearing parameters of this flow, and
+        # config must not be able to reach them.
+        query: dict[str, str] = {
+            **self._authorize_params(discovery),
             Keys.OAuth.CLIENT_ID: str(client[Keys.OAuth.CLIENT_ID]),
             Keys.OAuth.REDIRECT_URI: redirect_uri,
             Keys.OAuth.RESPONSE_TYPE: Values.OAuth.CODE,
@@ -191,9 +201,19 @@ class RemoteMcpOAuthClient:
         return self._token_request(discovery, body)
 
     def discover(self, record: McpServerRecord) -> dict[str, Any]:
+        # Apply the configured client FIRST. A server carrying explicit
+        # endpoints + client (the documented path for a provider with no
+        # RFC 7591 dynamic registration — Google, Atlassian, Microsoft) is fully
+        # described already, and discovery has nothing to add. This used to test
+        # the RAW cache, so a freshly created record with a complete
+        # configuration still went out to the network for metadata it already
+        # had, and failed there for any provider that publishes none.
+        configured = self._apply_configured_oauth_client(
+            dict(record.last_discovery), record
+        )
+        if self._has_required_metadata(configured):
+            return configured
         cached = record.last_discovery
-        if self._has_required_metadata(cached):
-            return self._apply_configured_oauth_client(dict(cached), record)
 
         resource_metadata = self._fetch_first_json(
             self._protected_resource_metadata_urls(record.url)
@@ -287,6 +307,12 @@ class RemoteMcpOAuthClient:
             )
 
         merged = {**discovery, Keys.OAuth.OAUTH_CLIENT: client_record}
+        # `McpOAuthClientConfig.scope` has always existed and was never read, so
+        # a server configured with explicit scopes still authorized with the
+        # generic "mcp" fallback — which for Google means a consent screen that
+        # grants nothing the connector needs.
+        if configured.scope is not None:
+            merged[Keys.OAuth.REQUIRED_SCOPES] = configured.scope.split()
         if configured.authorization_endpoint is not None:
             merged[Keys.OAuth.AUTHORIZATION_ENDPOINT] = (
                 configured.authorization_endpoint
@@ -370,6 +396,15 @@ class RemoteMcpOAuthClient:
         if not isinstance(client, dict) or not client.get(Keys.OAuth.CLIENT_ID):
             raise McpOAuthError("MCP OAuth client registration is missing")
         return client
+
+    @staticmethod
+    def _authorize_params(discovery: dict[str, Any]) -> dict[str, str]:
+        """Provider-specific extra query parameters, if the server declares any."""
+
+        params = discovery.get(Keys.OAuth.AUTHORIZE_PARAMS)
+        if not isinstance(params, dict):
+            return {}
+        return {str(k): str(v) for k, v in params.items() if v is not None}
 
     @classmethod
     def _required_scopes(cls, discovery: dict[str, Any]) -> tuple[str, ...]:

@@ -980,6 +980,36 @@ class McpRegistryService:
             )
         return deleted
 
+    def set_provider_discovery(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        discovery: dict[str, object],
+    ) -> None:
+        """Merge known-provider OAuth facts into a server's discovery blob.
+
+        For a provider that publishes no RFC 8414 metadata, what discovery
+        *would* have fetched is instead stated up front (endpoints on the
+        client config, extra authorization parameters here). This is the write
+        path for the latter.
+
+        Merges rather than replaces, and is a no-op when nothing changes, so it
+        is safe to call on every authorization attempt. It deliberately does NOT
+        invalidate revisions or emit an audit row: it records what the provider
+        requires, not a change to what the user granted.
+        """
+
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        merged = {**dict(record.last_discovery), **discovery}
+        if merged == dict(record.last_discovery):
+            return
+        with self.store.transaction(org_id=org_id) as conn:
+            self._update_record(record, conn=conn, last_discovery=merged)
+
     def update_server(
         self,
         *,

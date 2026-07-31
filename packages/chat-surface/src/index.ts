@@ -696,6 +696,10 @@ export {
   // hand-rolling a second remove dialog.
   RemoveConnectorDialog,
   useConnectFlow,
+  // Hosts THROW this from their `authorize` to say "this connector needs a
+  // pre-registered OAuth client" — the one connect failure the user can fix,
+  // which the flow turns into a form instead of an error string.
+  ConnectOAuthClientRequiredError,
   RevealOnce,
   ConnectorDetailView,
   ScopeReviewTab,
