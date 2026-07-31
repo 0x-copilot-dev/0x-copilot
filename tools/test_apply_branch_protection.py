@@ -127,6 +127,67 @@ def _desired(name: str = "main-branch-protection") -> dict[str, Any]:
     }
 
 
+def test_every_required_check_comes_from_an_unconditional_workflow() -> None:
+    """A required status check must run on every PR, or it blocks every PR.
+
+    GitHub reports a required check that never starts as *pending*, not as
+    skipped, so a path-filtered required check silently wedges any PR whose
+    diff misses its paths -- mergeStateStatus BLOCKED, waiting on a job that
+    will never begin. This is not theoretical: repo-gates shipped with a paths
+    filter and blocked the very next PR, whose files the filter did not list.
+
+    So: for each required context, find the workflow that defines that job and
+    assert its `pull_request` trigger carries no `paths`/`paths-ignore`.
+    """
+
+    import re
+
+    workflows_dir = REPO_ROOT / ".github/workflows"
+
+    def job_names(text: str) -> set[str]:
+        body = re.search(r"^jobs:\n(.*)", text, re.M | re.S)
+        if not body:
+            return set()
+        names = set(re.findall(r"^  ([a-zA-Z0-9_-]+):$", body.group(1), re.M))
+        # A job may rename its check via `name:`; capture those too.
+        names |= set(re.findall(r"^    name:\s*(.+)$", body.group(1), re.M))
+        return {name.strip().strip("\"'") for name in names}
+
+    def pull_request_is_filtered(text: str) -> bool:
+        block = re.search(r"^  pull_request:\n((?:\s{4,}.*\n|\n)*)", text, re.M)
+        return bool(block) and bool(
+            re.search(r"^\s+paths(-ignore)?:", block.group(1), re.M)
+        )
+
+    required: set[str] = set()
+    for ruleset in RulesetPlanner.load_desired(CONFIG_PATH):
+        for rule in ruleset.get("rules", []):
+            if rule.get("type") != "required_status_checks":
+                continue
+            for check in rule["parameters"]["required_status_checks"]:
+                required.add(check["context"])
+
+    assert required, "no required status checks declared; this test would be vacuous"
+
+    problems: list[str] = []
+    for context in sorted(required):
+        owners = [
+            path
+            for path in sorted(workflows_dir.glob("*.yml"))
+            if context in job_names(path.read_text())
+        ]
+        if not owners:
+            problems.append(f"{context}: no workflow defines this job")
+            continue
+        for path in owners:
+            if pull_request_is_filtered(path.read_text()):
+                problems.append(
+                    f"{context}: {path.name} filters pull_request by path, "
+                    "so the check will not run on every PR"
+                )
+    assert not problems, "required checks must be unconditional: " + "; ".join(problems)
+
+
 def test_the_repository_config_loads_and_declares_main_and_dev() -> None:
     rulesets = RulesetPlanner.load_desired(CONFIG_PATH)
     names = {ruleset["name"] for ruleset in rulesets}
