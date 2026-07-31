@@ -272,10 +272,20 @@ static NTSTATUS open_component(PFN_NtCreateFile NtCreateFile_, HANDLE parent,
                            : FILE_GENERIC_READ;
   ULONG opts = FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT |
                (as_dir ? FILE_DIRECTORY_FILE : 0);
+  /* FILE_SHARE_DELETE matters as much as the other two. Windows refuses to
+   * unlink or rename a file while any handle omits it, so leaving it out makes
+   * every path this walk touches briefly undeletable by the user — and a
+   * directory component stays locked for as long as the walk holds it. POSIX,
+   * which the other two backends implement, always permits unlink-while-open;
+   * this keeps the Windows backend on the same semantics instead of exporting
+   * a platform quirk into the confined-read contract. Sharing is not a
+   * loosening of the confinement: what may be opened is decided by the
+   * component walk above, not by the share mask. */
   NTSTATUS st = NtCreateFile_(&h, access | SYNCHRONIZE, &oa, &iosb, NULL,
                               FILE_ATTRIBUTE_NORMAL,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
-                              opts, NULL, 0);
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              FILE_OPEN, opts, NULL, 0);
   if (st != STATUS_SUCCESS) return st;
 
   /* Refuse a reparse point anywhere along the path (junction / symlink). */
@@ -315,7 +325,8 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
 
   HANDLE parent =
       CreateFileW(rootw, FILE_LIST_DIRECTORY | GENERIC_READ,
-                  FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                  FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                  OPEN_EXISTING,
                   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                   NULL);
   free(rootw);
