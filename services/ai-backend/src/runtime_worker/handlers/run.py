@@ -182,6 +182,7 @@ from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
     compose_capability_discovery,
 )
+from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -1686,6 +1687,15 @@ class RuntimeRunHandler:
         # granted, so those paths stay on the default `StateBackend`.
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
+        # PRD-FS-12 D3/D5 — create `$COPILOT_HOME/.tmp/<conversation_id>/` (and
+        # this run's tier) with its `meta.json` before the graph runs, so the
+        # agent's own working area exists the first time it writes. Gated on the
+        # same desktop signal as the host filesystem rules; a `None` workspace
+        # backend provisions nothing. Never raises.
+        AgentScratchWorkerWiring(workspace_backend=workspace_backend).provision(
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+        )
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.

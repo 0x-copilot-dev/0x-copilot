@@ -29,6 +29,7 @@ Unmatched-means-allow is a footgun for us, so the rule list always ends with a
 catch-all `deny`. First match wins, so the ordering below is load-bearing:
 
     1. the agent's own virtual namespaces      -> allow  (memories, drafts, ...)
+    1b. the agent's own scratch on disk        -> allow  ($COPILOT_HOME/.tmp)
     2. every granted host root                 -> allow  (read + write)
     3. everything else                         -> interrupt  (ask the user)
     4. nothing reaches here                    -> deny  (the floor)
@@ -51,16 +52,24 @@ backend by `factory._host_default_backend`.
 Scratch memory
 --------------
 Because rule 4 exists, the agent needs a real place to keep working files.
-`.copilot` inside a granted root is that place (write access assumed, per
-product decision), which is what lets the composite's default stop being a
-promiscuous catch-all.
+That place is `$COPILOT_HOME/.tmp`, supplied by
+`agent_scratch.AgentScratchRoot` — NOT `.copilot` inside a granted root, which
+this module used to site (PRD-FS-12 D7 dropped it). Writing into the folder the
+user attached was wrong twice over: it put agent bookkeeping inside the user's
+own content, and it made a read-only grant a special case that had to be
+re-implemented in `host_floor` because `.copilot` is a hidden segment the
+matcher cannot see. The scratch is now somewhere that is ours, so no grant's
+writability affects it and nothing is ever written into a shared folder.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Final
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
 
 #: Prefixes the agent owns inside its own virtual filesystem. These are routed
 #: by `CompositeBackend` to real backends (memory, drafts, subagent artifacts),
@@ -85,9 +94,6 @@ VIRTUAL_NAMESPACES: Final[tuple[str, ...]] = (
     "/workspace/",
 )
 
-#: The agent's durable scratch directory inside a granted root.
-SCRATCH_DIR_NAME: Final = ".copilot"
-
 #: Deep Agents filesystem operations we write rules for. Kept explicit rather
 #: than imported so a deepagents change surfaces as a failing test here rather
 #: than as a silently narrower rule set.
@@ -106,8 +112,9 @@ class _Mode:
 class GrantedRoot:
     """One host folder the user has actually granted.
 
-    ``path`` is a real host-absolute path. It is used to build allow rules and
-    to site the scratch directory; it is never handed to the model as a value.
+    ``path`` is a real host-absolute path. It is used to build allow rules; it
+    is never handed to the model as a value, and — since PRD-FS-12 D7 — nothing
+    is ever written inside it by the agent.
     """
 
     path: str
@@ -121,12 +128,6 @@ class GrantedRoot:
             raise ValueError(f"granted root must be POSIX-absolute: {self.path!r}")
         if ".." in PurePosixPath(self.path).parts:
             raise ValueError(f"granted root must not contain '..': {self.path!r}")
-
-    @property
-    def scratch_path(self) -> str:
-        """Where this root's agent scratch directory lives."""
-
-        return str(PurePosixPath(self.path) / SCRATCH_DIR_NAME)
 
     def glob(self) -> str:
         """Match the root itself and everything beneath it."""
@@ -144,7 +145,11 @@ class HostFilesystemRules:
     """
 
     @staticmethod
-    def build(roots: tuple[GrantedRoot, ...]) -> tuple[dict[str, object], ...]:
+    def build(
+        roots: tuple[GrantedRoot, ...],
+        *,
+        scratch: AgentScratchRoot | None = None,
+    ) -> tuple[dict[str, object], ...]:
         rules: list[dict[str, object]] = []
 
         # 1. The agent's own namespaces. Without these, an ordinary
@@ -158,21 +163,19 @@ class HostFilesystemRules:
             }
         )
 
-        # 2. The agent's scratch directory inside each granted root. This is the
-        #    ONE host location the agent may write directly, because it holds
-        #    the agent's own working files rather than the user's content. It
-        #    must precede rule 3, which is read-only.
-        writable_scratch = [
-            f"{root.scratch_path}/**" for root in roots if root.writable
-        ] + [root.scratch_path for root in roots if root.writable]
-        if writable_scratch:
-            rules.append(
-                {
-                    "operations": list(_ALL_OPERATIONS),
-                    "paths": writable_scratch,
-                    "mode": _Mode.ALLOW,
-                }
-            )
+        # 2. The agent's own scratch on disk — ``$COPILOT_HOME/.tmp`` and
+        #    nothing above it. This is the ONE host location the agent may write
+        #    directly, because it holds the agent's own working files rather
+        #    than the user's content, and it lives somewhere that is OURS: no
+        #    grant is required for it, and a read-only grant is no longer a
+        #    special case (PRD-FS-12 D7).
+        #
+        #    The rule comes from ``AgentScratchRoot`` rather than being spelled
+        #    here, because ``.tmp`` is a dotted segment and a glob cannot see it
+        #    — see that module's header for the trap and the pinning test. It
+        #    must precede rule 5, which denies every other host write.
+        if scratch is not None:
+            rules.extend(scratch.allow_rules())
 
         # 3. Granted roots — READ only, deliberately. Granting a folder makes it
         #    readable without prompting; it does not make it directly writable.
@@ -229,7 +232,6 @@ class HostFilesystemRules:
 
 
 __all__ = (
-    "SCRATCH_DIR_NAME",
     "VIRTUAL_NAMESPACES",
     "GrantedRoot",
     "HostFilesystemRules",

@@ -1722,9 +1722,34 @@ def _host_filesystem_permissions(
     return tuple(
         FilesystemPermission(**rule)
         for rule in HostFilesystemRules.build(
-            roots=_granted_host_roots(workspace_backend)
+            roots=_granted_host_roots(workspace_backend),
+            scratch=_agent_scratch_root(),
         )
     )
+
+
+def _agent_scratch_root() -> object | None:
+    """The agent's own writable area, ``$COPILOT_HOME/.tmp`` (PRD-FS-12 D3).
+
+    Single-sourced for the same reason ``_granted_host_roots`` is: the rule set
+    and :class:`HostFilesystemFloor` must admit exactly the same scratch, and
+    two independent resolutions could drift into a floor that refuses the
+    directory the rules allow.
+
+    Resolution cannot fail (it is an env read with a home-relative default) but
+    is guarded anyway: an unusable scratch must degrade to "the agent has no
+    place to write", never to a broken run or a widened rule.
+    """
+
+    from agent_runtime.capabilities.desktop.agent_scratch import (  # noqa: PLC0415
+        agent_scratch_root,
+    )
+
+    try:
+        return agent_scratch_root()
+    except (OSError, RuntimeError):  # pragma: no cover — Path.home() with no HOME
+        _LOGGER.warning("agent_scratch.root_unavailable")
+        return None
 
 
 def _granted_host_roots(workspace_backend: object | None) -> tuple[object, ...]:
@@ -1895,6 +1920,7 @@ def _host_default_backend(workspace_backend: object | None) -> object:
     return HostFilesystemFloor(
         FilesystemBackend(virtual_mode=False),
         roots=_granted_host_roots(workspace_backend),  # type: ignore[arg-type]
+        scratch=_agent_scratch_root(),  # type: ignore[arg-type]
     )
 
 

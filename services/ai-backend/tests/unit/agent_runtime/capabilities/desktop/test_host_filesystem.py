@@ -9,34 +9,51 @@ packaged app answered `ls ~/Downloads` with an empty listing.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from deepagents.middleware.filesystem import (
     FilesystemPermission,
     _check_fs_permission,
 )
 
+from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
 from agent_runtime.capabilities.desktop.host_filesystem import (
-    SCRATCH_DIR_NAME,
     GrantedRoot,
     HostFilesystemRules,
 )
 
 GRANTED = "/Users/ada/Projects"
 UNGRANTED = "/Users/ada/Downloads"
+#: The `.copilot` scratch PRD-FS-12 D7 removed. Named here (rather than imported
+#: from the module, which no longer defines it) so the tests below can prove it
+#: is gone without keeping the constant alive.
+DROPPED_SCRATCH_DIR = ".copilot"
 
 
 class RuleSetMixin:
     """Builds real `FilesystemPermission` objects from our plain dicts."""
 
     @staticmethod
-    def rules(*roots: GrantedRoot) -> list[FilesystemPermission]:
+    def rules(
+        *roots: GrantedRoot, scratch: AgentScratchRoot | None = None
+    ) -> list[FilesystemPermission]:
         return [
             FilesystemPermission(**rule)  # type: ignore[arg-type]
-            for rule in HostFilesystemRules.build(roots)
+            for rule in HostFilesystemRules.build(roots, scratch=scratch)
         ]
 
-    def verdict(self, path: str, *, operation: str = "read", roots: tuple = ()) -> str:
-        return _check_fs_permission(self.rules(*roots), operation, path)
+    def verdict(
+        self,
+        path: str,
+        *,
+        operation: str = "read",
+        roots: tuple = (),
+        scratch: AgentScratchRoot | None = None,
+    ) -> str:
+        return _check_fs_permission(
+            self.rules(*roots, scratch=scratch), operation, path
+        )
 
 
 class TestTheDefectThisReplaces(RuleSetMixin):
@@ -97,16 +114,20 @@ class TestGrantedRoots(RuleSetMixin):
         assert self.verdict(UNGRANTED, roots=roots) == "interrupt"
         assert self.verdict("/Users/ada/ProjectsSecret/x", roots=roots) == "interrupt"
 
-    def test_the_scratch_dir_lives_inside_the_granted_root(self) -> None:
-        root = GrantedRoot(path=GRANTED)
-        assert root.scratch_path == f"{GRANTED}/{SCRATCH_DIR_NAME}"
-        assert (
-            self.verdict(
-                f"{root.scratch_path}/notes.json",
-                operation="write",
-                roots=(root,),
-            )
-            == "allow"
+    def test_a_granted_root_no_longer_sites_a_scratch_directory(self) -> None:
+        """D7: nothing is written into the folder the user attached.
+
+        `GrantedRoot` used to expose `scratch_path` and the rule set used to
+        emit a write allow for `<root>/.copilot`. Both are gone: the agent's
+        working area moved to `$COPILOT_HOME/.tmp`, which is ours.
+        """
+
+        root = GrantedRoot(path=GRANTED, writable=True)
+        assert not hasattr(root, "scratch_path")
+        assert not any(
+            DROPPED_SCRATCH_DIR in path
+            for rule in HostFilesystemRules.build((root,))
+            for path in rule["paths"]  # type: ignore[union-attr]
         )
 
 
@@ -204,12 +225,15 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
         assert (
             self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots) == "deny"
         )
-        # The one exception: the agent's own scratch, which holds no user content.
+        # Since D7 there is no exception inside a granted folder at all. The one
+        # writable host location is `$COPILOT_HOME/.tmp`, which is not here.
+        scratch = AgentScratchRoot(Path("/Users/ada/.0xcopilot/.tmp"))
         assert (
             self.verdict(
-                f"{GRANTED}/{SCRATCH_DIR_NAME}/notes.json",
+                f"{GRANTED}/subdir/out.csv",
                 operation="write",
                 roots=roots,
+                scratch=scratch,
             )
-            == "allow"
+            == "deny"
         )
