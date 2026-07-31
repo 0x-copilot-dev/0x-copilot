@@ -58,7 +58,7 @@ grant), `.copilot` creation, Windows.
 ├────────────────────────────────────────────┤
 │ Do anything                                │
 │                                            │
-│ +   ⏱ Manual ▾            🎙  ▣ 5.4 Sonnet │   ← control row (reordered)
+│ +   Tools 1   Manual ▾        ▣ 5.4 Sonnet  🎙 │  ← control row (reordered)
 └────────────────────────────────────────────┘
 ```
 
@@ -89,10 +89,12 @@ its message inline. Collapsing those two is the defect (already pinned in
 
 | Before                                   | After                                                        |
 | ---------------------------------------- | ------------------------------------------------------------ |
-| `+` · Tools · **model** · … · mic · send | `+` · Tools · **bypass/manual** · … · mic · **model** · send |
+| `+` · Tools · **model** · … · mic · send | `+` · Tools · **bypass/manual** · … · **model** · mic · send |
 
-Model moves right, immediately **before** the mic. The bypass pill takes the
-slot the model pill vacated.
+Model moves right but stays **to the LEFT of the mic** — order is
+`… · model · mic · send`. The mic and send stay adjacent as the trailing
+action pair; dropping the model pill between them would split a group that
+reads as one. The bypass pill takes the slot the model pill vacated.
 
 ### 4.3 Bypass pill
 
