@@ -30,7 +30,9 @@ from __future__ import annotations
 
 import pytest
 
+import agent_runtime.capabilities.desktop.agent_scratch as agent_scratch_module
 from agent_runtime.capabilities.desktop.agent_scratch import agent_scratch_root
+from agent_runtime.capabilities.desktop.host_filesystem import GrantedRoot
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     VerifiedOperationIdentity,
@@ -502,3 +504,45 @@ class TestTheScratchReachesTheRulesTheFactoryHandsDeepagents:
             any(agent_scratch_root().posix in path for path in rule.paths or ())
             for rule in rules
         )
+
+    async def test_one_composition_resolves_the_scratch_exactly_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        """The invariant, counted rather than reasoned about.
+
+        `_agent_scratch_root` is reached from five places while a run composes —
+        the rule set, the floor, the two middleware gates and the entry point —
+        and the whole design is that only the entry point RESOLVES while the
+        rest are handed the answer. Reading the code cannot tell you that;
+        counting the env reads can, and a future refactor that drops a
+        `resolved=` will make this number climb before it can make the rules and
+        the floor disagree.
+        """
+
+        reads = 0
+        real = agent_scratch_module.agent_scratch_root
+
+        def _counting(env: object | None = None) -> object:
+            nonlocal reads
+            reads += 1
+            return real(env)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(agent_scratch_module, "agent_scratch_root", _counting)
+
+        class _Backend:
+            granted_roots = (GrantedRoot(path=ATTACHED),)
+
+        await acreate_agent_runtime(
+            context=_context(),
+            dependencies=fake_dependencies.model_copy(
+                update={
+                    "workspace_backend": _Backend(),
+                    "granted_host_roots": (GrantedRoot(path=ATTACHED),),
+                }
+            ),
+            agent_builder=CapturingAgentBuilder(),
+        )
+
+        assert reads == 1
