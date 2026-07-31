@@ -181,13 +181,29 @@ describe("<ConnectModal>", () => {
       expect(option.textContent).not.toContain("◆");
     });
 
-    it("the escape hatch is the design's 'Custom MCP server' copy, not '◆'/'＋'", () => {
+    it("the escape hatch is the 'Manage MCP' row, not '◆'/'＋'", () => {
+      // Renamed from "Custom MCP server": the row opens the whole config as
+      // one editable document now, so "custom server" understated it — and the
+      // old sub-copy ("paste a JSON config") described a form that only ever
+      // took a URL.
       renderModal({ onAddCustomServer: vi.fn() });
       const custom = screen.getByTestId("connect-catalog-custom");
-      expect(custom).toHaveTextContent("Custom MCP server");
-      expect(custom).toHaveTextContent(/paste a JSON config/i);
+      expect(custom).toHaveTextContent("Manage MCP");
+      expect(custom).toHaveTextContent(/edit the JSON config/i);
       // Pinned, not dashed (PRD-11 D7).
       expect(custom.style.position).toBe("sticky");
+    });
+
+    it("hands the pinned row to onManageMcp instead of the built-in URL form", () => {
+      // The precedence that makes the rename true: with a host claiming the
+      // row, clicking it must NOT fall into the internal custom-server step.
+      const onManageMcp = vi.fn();
+      renderModal({ onAddCustomServer: vi.fn(), onManageMcp });
+
+      fireEvent.click(screen.getByTestId("connect-catalog-custom"));
+
+      expect(onManageMcp).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("connect-custom-form")).toBeNull();
     });
   });
 
