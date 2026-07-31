@@ -1248,9 +1248,13 @@ const chatPanelStyle = (mode: RunMode, visible: boolean): CSSProperties =>
         display: "flex",
         flexDirection: "column",
         flex: 1,
+        boxSizing: "border-box",
         minHeight: 0,
         minWidth: 0,
         overflow: "hidden",
+        // Keep the active Focus composer visibly clear of the mini-timeline and
+        // native window edge. Studio owns a denser rail and remains unchanged.
+        paddingBottom: 16,
       }
     : {
         display: visible ? "flex" : "none",

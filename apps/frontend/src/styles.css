@@ -44,11 +44,9 @@ p {
   --secondary: var(--color-surface-muted);
   --secondary-foreground: var(--color-text);
   --radius: var(--radius-md);
-  /* Single source of truth for chat surface content width (thread
-   * viewport, message bodies, footer, planning indicator, welcome
-   * card). Bump cautiously: too wide hurts readability of long
-   * paragraphs. */
-  --chat-content-width: 56rem;
+  /* Mirror the shared design-system reading rail for legacy frontend-only
+   * selectors that still resolve this alias locally. */
+  --chat-content-width: 68rem;
 }
 
 /* Layout only — type comes from the shared .ui-eyebrow recipe (design-system).

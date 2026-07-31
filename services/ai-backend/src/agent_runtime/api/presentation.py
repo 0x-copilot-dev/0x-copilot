@@ -174,10 +174,10 @@ class PresentationGenerator:
         over a synthesised template (or a missing one); never wins over an
         author-written template.
 
-        Read order: ``payload.args._display_title`` and
-        ``payload.args._display_summary`` (same shape for regular tools
-        and the ``call_mcp_tool`` dispatcher — see
-        :func:`agent_display_from_payload` for the exact contract).
+        Both the model-facing alias keys (``_display_title`` /
+        ``_display_summary``) and Pydantic's validated field names are accepted
+        for regular tools and the ``call_mcp_tool`` dispatcher; see
+        :func:`agent_display_from_payload` for the exact contract.
         """
 
         if template is not None and not template.synthetic:

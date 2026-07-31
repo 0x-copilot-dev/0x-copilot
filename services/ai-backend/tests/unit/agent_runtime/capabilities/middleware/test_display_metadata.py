@@ -609,6 +609,29 @@ def test_agent_display_from_payload_reads_args_keys() -> None:
     assert summary == "Recent launch documents"
 
 
+def test_agent_display_from_payload_reads_validated_field_names() -> None:
+    """LangChain can serialise Pydantic's field names rather than the
+    model-facing aliases. The live stream uses this shape, so the LLM-authored
+    card copy must survive it."""
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        agent_display_from_payload,
+    )
+
+    title, summary = agent_display_from_payload(
+        {
+            "tool_name": "web_search",
+            "args": {
+                "query": "site:docs.python.org math.isqrt",
+                "display_title": "Python isqrt docs",
+                "display_summary": "Find the official Python documentation",
+            },
+        }
+    )
+    assert title == "Python isqrt docs"
+    assert summary == "Find the official Python documentation"
+
+
 def test_agent_display_from_payload_returns_none_when_args_missing() -> None:
     from agent_runtime.capabilities.middleware.display_metadata import (
         agent_display_from_payload,

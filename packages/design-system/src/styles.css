@@ -163,6 +163,12 @@
   --space-grid-gap: 0.625rem;
   --space-section: var(--space-xl);
   --line-height-body: 1.55;
+
+  /* Conversation reading rail. 68rem = 1088px at the default root size,
+     deliberately inside the requested 1040–1120px range. Consumers constrain
+     transcript content and the composer to this token while their scroll
+     containers remain full width. */
+  --chat-content-width: 68rem;
 }
 
 /* PR 4.1 — Compact density. */
@@ -486,22 +492,21 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  /* v2 "quiet" neutral-grey light ladder (replaces the old warm cream). */
-  --color-bg: #f4f4f6;
-  --color-bg-elevated: #ececef;
+  /* Paper-white light ladder. Neutral grays keep the canvas from picking up
+     the cool/lavender cast that made the previous light theme feel cloudy. */
+  --color-bg: #ffffff;
+  --color-bg-elevated: #ffffff;
   --color-surface: #ffffff;
-  --color-surface-muted: #f6f6f8;
+  --color-surface-muted: #f4f4f4;
   /* Hairline borders on the light ground. */
-  --color-border: rgba(10, 10, 14, 0.07);
-  --color-border-strong: rgba(10, 10, 14, 0.12);
-  --color-text: #141419;
-  /* Neutral-grey secondary/tertiary text (was warm-brown to match the old
-     cream bg; re-derived for the neutral ground). */
-  --color-text-muted: #56565d;
-  --color-text-subtle: #86868d;
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-border-strong: rgba(0, 0, 0, 0.14);
+  --color-text: #202124;
+  --color-text-muted: #5f6368;
+  --color-text-subtle: #858585;
   /* ACCENT — DERIVED tier (sole writer; see the ACCENT SEED TIER contract).
-     The seeds are tuned for a near-black ground and sit at ~2:1 on #f4f4f6 /
-     #ffffff, which is why this block previously hard-coded a single darkened
+     The seeds are tuned for a near-black ground and sit at ~2:1 on the light
+     background/surface, which is why this block previously hard-coded a darkened
      sky (#1f6fb0) — legible, but it also silently discarded the user's swatch.
      Instead of one hand-tuned hex we darken the SEED toward near-black in
      oklab (perceptual lightness), so every swatch keeps its hue AND clears the
@@ -526,12 +531,12 @@
   --color-warning: #9a6400;
   --color-warning-bg: #fff4d8;
   /* Frontend parity v3 (PRD-B) — light counterparts. */
-  --color-surface-elevated: #ebebee;
-  --color-border-stronger: rgba(10, 10, 14, 0.22);
-  --color-text-strong: #2a2a31;
+  --color-surface-elevated: #f1f1f1;
+  --color-border-stronger: rgba(0, 0, 0, 0.22);
+  --color-text-strong: #303134;
   /* Popover lift, softened for the light ground (the design's
      `[data-theme="light"] .pop` override). */
-  --shadow-md: 0 18px 50px -12px rgb(20 20 30 / 0.28);
+  --shadow-md: 0 18px 50px -12px rgb(0 0 0 / 0.2);
 }
 
 :root[data-theme="slate"] {

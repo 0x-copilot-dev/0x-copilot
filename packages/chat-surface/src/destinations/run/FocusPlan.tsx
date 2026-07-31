@@ -34,6 +34,7 @@ export function projectFocusPlan(
 
     if (
       event.event_type !== "tool_call_started" &&
+      event.event_type !== "tool_call_delta" &&
       event.event_type !== "tool_result"
     ) {
       continue;
@@ -42,7 +43,8 @@ export function projectFocusPlan(
     const payload = recordValue(event.payload);
     const callId = stringValue(payload?.call_id) ?? event.event_id;
     const existing = steps.get(callId);
-    const label = existing?.label ?? toolLabel(event, payload);
+    const label =
+      agentToolTitle(payload) ?? existing?.label ?? toolLabel(event, payload);
     const completed = event.event_type === "tool_result";
     steps.set(callId, {
       id: callId,
@@ -160,6 +162,10 @@ function toolLabel(
   event: RuntimeEventEnvelope,
   payload: Record<string, unknown> | null,
 ): string {
+  const agentTitle = agentToolTitle(payload);
+  if (agentTitle !== null) return agentTitle;
+  const presentationTitle = stringValue(event.presentation?.title);
+  if (presentationTitle !== null) return presentationTitle;
   const title = stringValue(event.display_title);
   if (title !== null) return title;
   const toolName = stringValue(payload?.tool_name);
@@ -167,6 +173,13 @@ function toolLabel(
   return toolName
     .replace(/[._-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function agentToolTitle(
+  payload: Record<string, unknown> | null,
+): string | null {
+  const args = recordValue(payload?.args);
+  return stringValue(args?.display_title) ?? stringValue(args?._display_title);
 }
 
 const rootStyle: CSSProperties = {

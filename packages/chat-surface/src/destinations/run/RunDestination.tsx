@@ -222,6 +222,7 @@ import {
   useRunMode,
   useRunPanelCollapsed,
   useRunStudioRailCollapsed,
+  type RunMode,
 } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
@@ -4270,7 +4271,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           renderEmptyComposer !== undefined ? (
             <div
               data-testid="run-empty-composer"
-              style={emptyComposerOuterStyle}
+              style={emptyComposerOuterStyle(mode)}
             >
               {/* Readiness is NOT a standing notice here: the rich composer
                   stays live with no model configured, and a send answers in the
@@ -4600,14 +4601,19 @@ function RunCockpitScopeStyles(): ReactElement {
 // (mirrors the design's `.fr-main`; self-contained inline styles so the frame
 // never depends on onboarding.css being loaded, while the injected composer's
 // own `.fr-*` internals do).
-const emptyComposerOuterStyle: CSSProperties = {
+const emptyComposerOuterStyle = (mode: RunMode): CSSProperties => ({
+  boxSizing: "border-box",
   height: "100%",
   width: "100%",
   minHeight: 0,
   overflow: "auto",
   display: "flex",
   flexDirection: "column",
-};
+  // Focus is intentionally calmer than Studio: reserve a little space below
+  // the centered first-run block so the composer sits 32px above the exact
+  // vertical midpoint instead of feeling anchored to the lower half.
+  paddingBottom: mode === "focus" ? 64 : 0,
+});
 
 const emptyComposerColumnStyle: CSSProperties = {
   flex: "1 1 auto",

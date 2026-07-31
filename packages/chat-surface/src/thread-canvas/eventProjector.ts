@@ -916,13 +916,23 @@ function reduceToolStarted(
     key,
     toolName:
       pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
-    title: event.display_title ?? prior?.title ?? null,
+    title:
+      agentToolDisplayValue(event, "display_title", "_display_title") ??
+      event.presentation?.title ??
+      event.display_title ??
+      prior?.title ??
+      null,
     // A result may (on an out-of-order replay) have landed first — keep it.
     status: prior?.status ?? "running",
     args: readRecord(event.payload?.["args"]) ?? prior?.args,
     result: prior?.result,
     summary:
-      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+      agentToolDisplayValue(event, "display_summary", "_display_summary") ??
+      event.summary ??
+      event.presentation?.summary ??
+      pickString(event.payload, "summary") ??
+      prior?.summary ??
+      undefined,
     errorMessage: prior?.errorMessage,
     provenance:
       readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
@@ -953,14 +963,24 @@ function reduceToolDelta(
     key,
     toolName:
       pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
-    title: event.display_title ?? prior?.title ?? null,
+    title:
+      agentToolDisplayValue(event, "display_title", "_display_title") ??
+      prior?.title ??
+      event.presentation?.title ??
+      event.display_title ??
+      null,
     // Deltas can race with terminal frames on reconnect; argument updates must
     // never turn a completed/failed card back into a running one.
     status: prior?.status ?? "running",
     args: updatedToolArgs(event, prior?.args),
     result: prior?.result,
     summary:
-      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+      agentToolDisplayValue(event, "display_summary", "_display_summary") ??
+      event.summary ??
+      event.presentation?.summary ??
+      pickString(event.payload, "summary") ??
+      prior?.summary ??
+      undefined,
     errorMessage: prior?.errorMessage,
     provenance:
       readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
@@ -983,6 +1003,7 @@ function reduceToolResult(
 ): void {
   const key = toolCallKey(event);
   const prior = byCall.get(key);
+  const structuredError = readStructuredToolError(event.payload?.["output"]);
   if (prior === undefined) {
     order.push(key);
   }
@@ -990,15 +1011,32 @@ function reduceToolResult(
     key,
     toolName:
       pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
-    title: event.display_title ?? prior?.title ?? null,
-    status: mapResultStatus(event, prior?.status),
+    title:
+      prior?.title ??
+      agentToolDisplayValue(event, "display_title", "_display_title") ??
+      event.presentation?.title ??
+      event.display_title ??
+      null,
+    status: mapResultStatus(
+      event,
+      prior?.status,
+      structuredError !== undefined,
+    ),
     args: prior?.args,
-    result: readRecord(event.payload?.["output"]) ?? prior?.result,
+    result:
+      structuredError?.output ??
+      readRecord(event.payload?.["output"]) ??
+      prior?.result,
     summary:
-      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+      event.summary ??
+      event.presentation?.summary ??
+      pickString(event.payload, "summary") ??
+      prior?.summary ??
+      undefined,
     errorMessage:
       pickString(event.payload, "error_message") ??
       pickString(event.payload, "safe_message") ??
+      structuredError?.safeMessage ??
       prior?.errorMessage,
     provenance:
       readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
@@ -1035,14 +1073,33 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
   };
 }
 
+function agentToolDisplayValue(
+  event: RuntimeEventEnvelope,
+  fieldName: "display_title" | "display_summary",
+  alias: "_display_title" | "_display_summary",
+): string | undefined {
+  const args = readRecord(event.payload?.["args"]);
+  return args === undefined
+    ? undefined
+    : (pickString(args, fieldName) ?? pickString(args, alias) ?? undefined);
+}
+
 /** A completed result frame flips the card to `complete`; anything else (failed,
  *  timed_out, abandoned, cancelled, …) reads as `error`. The mere presence of a
  *  result frame with no status means the tool returned — treat as complete. */
 function mapResultStatus(
   event: RuntimeEventEnvelope,
   priorStatus: MutableToolCall["status"] | undefined,
+  hasStructuredError = false,
 ): "complete" | "error" {
-  const raw = pickString(event.payload, "status") ?? event.status ?? null;
+  if (hasStructuredError) {
+    return "error";
+  }
+  const raw =
+    pickString(event.payload, "status") ??
+    event.status ??
+    event.presentation?.status_label ??
+    null;
   if (raw === null) {
     // A follow-up `tool_call_completed` can be a bare lifecycle receipt. It
     // must not hide the explicit error on the preceding `tool_result`.
@@ -1052,11 +1109,12 @@ function mapResultStatus(
     return "complete";
   }
   if (
-    raw === "completed" ||
-    raw === "complete" ||
-    raw === "success" ||
-    raw === "succeeded" ||
-    raw === "ok"
+    raw.toLowerCase() === "completed" ||
+    raw.toLowerCase() === "complete" ||
+    raw.toLowerCase() === "success" ||
+    raw.toLowerCase() === "succeeded" ||
+    raw.toLowerCase() === "ok" ||
+    raw.toLowerCase() === "done"
   ) {
     return "complete";
   }
@@ -1112,6 +1170,63 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     return value as Record<string, unknown>;
   }
   return undefined;
+}
+
+const EMBEDDED_TOOL_RESULT_PARSE_CAP = 64 * 1024;
+
+/**
+ * Some LangChain tools return a typed `{error: ...}` object normally. The
+ * framework serialises that object into `ToolMessage.content` and still marks
+ * the message as `success`, so older persisted events can contain a real
+ * failure inside `payload.output.content`. Parse only that bounded, explicit
+ * error envelope; arbitrary successful tool strings stay untouched.
+ */
+function readStructuredToolError(value: unknown):
+  | {
+      readonly output: Record<string, unknown>;
+      readonly safeMessage?: string;
+    }
+  | undefined {
+  const output = readRecord(value);
+  if (output === undefined) return undefined;
+
+  const directError = readRecord(output["error"]);
+  if (directError !== undefined) {
+    const safeMessage = toolErrorMessage(directError);
+    return {
+      output,
+      ...(safeMessage !== undefined ? { safeMessage } : {}),
+    };
+  }
+
+  const content = output["content"];
+  if (
+    typeof content !== "string" ||
+    content.length === 0 ||
+    content.length > EMBEDDED_TOOL_RESULT_PARSE_CAP
+  ) {
+    return undefined;
+  }
+  try {
+    const parsed = readRecord(JSON.parse(content));
+    const error = readRecord(parsed?.["error"]);
+    if (parsed === undefined || error === undefined) return undefined;
+    const safeMessage = toolErrorMessage(error);
+    return {
+      output: parsed,
+      ...(safeMessage !== undefined ? { safeMessage } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function toolErrorMessage(error: Record<string, unknown>): string | undefined {
+  return (
+    pickString(error, "safe_message") ??
+    pickString(error, "message") ??
+    undefined
+  );
 }
 
 function readToolProvenance(value: unknown): ToolCallProvenance | undefined {
