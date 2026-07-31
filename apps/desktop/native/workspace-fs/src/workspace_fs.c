@@ -347,7 +347,16 @@ static int wfs_open_beneath(const char *root, const char *rel, int directory,
   const char *result_code = NULL;
   int fd = -1;
   HANDLE cur = parent;
-  if (relw[0] != L'\0') {
+  /* "" and "." both name the root itself, and neither may enter the walk. The
+   * NT object namespace has no notion of "." — a RootDirectory-relative name is
+   * matched literally, so NtCreateFile looks for a child actually called "."
+   * and answers STATUS_OBJECT_NAME_NOT_FOUND. POSIX openat(fd, ".") resolves
+   * because "." is a real directory entry there, which is why only this backend
+   * needs the special case. Returning the already-open root handle is also
+   * strictly cheaper than re-opening it. */
+  int rel_names_the_root =
+      (relw[0] == L'\0') || (relw[0] == L'.' && relw[1] == L'\0');
+  if (!rel_names_the_root) {
     wchar_t *save = NULL;
     /* Tokenize on both separators, though host-fs sends POSIX '/'. */
     for (wchar_t *tok = wcstok_s(relw, L"/\\", &save); tok != NULL;
