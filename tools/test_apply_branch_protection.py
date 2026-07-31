@@ -184,3 +184,60 @@ def test_server_metadata_alone_never_counts_as_drift() -> None:
     desired = _desired()
     noisy = {**desired, "id": 7, "node_id": "x", "updated_at": "now", "source": "repo"}
     assert RulesetPlanner.diff(noisy, desired) == ""
+
+
+def _with_pr_rule(params: dict[str, Any]) -> dict[str, Any]:
+    return {**_desired(), "rules": [{"type": "pull_request", "parameters": params}]}
+
+
+def test_a_server_materialised_default_is_not_drift() -> None:
+    """GitHub adds `required_reviewers: []`; the config never does.
+
+    Observed live against this repository. Left unnormalised the reconciler
+    reported a change on every run, so "no drift" stopped meaning anything.
+    """
+    desired = _with_pr_rule({"required_approving_review_count": 2})
+    from_server = _with_pr_rule(
+        {"required_approving_review_count": 2, "required_reviewers": []}
+    )
+    assert RulesetPlanner.diff(from_server, desired) == ""
+
+
+def test_reordered_bypass_actors_are_not_drift() -> None:
+    """The API returns bypass_actors in its own order, not the config's."""
+    actors = [
+        {"actor_id": 306191580, "actor_type": "User", "bypass_mode": "always"},
+        {"actor_id": 114860912, "actor_type": "User", "bypass_mode": "always"},
+    ]
+    desired = {**_desired(), "bypass_actors": actors}
+    from_server = {**_desired(), "bypass_actors": list(reversed(actors))}
+    assert RulesetPlanner.diff(from_server, desired) == ""
+
+
+def test_a_removed_bypass_actor_is_still_drift() -> None:
+    """Normalising must not blunt the check it exists to keep honest."""
+    both = [
+        {"actor_id": 306191580, "actor_type": "User", "bypass_mode": "always"},
+        {"actor_id": 114860912, "actor_type": "User", "bypass_mode": "always"},
+    ]
+    desired = {**_desired(), "bypass_actors": both}
+    from_server = {**_desired(), "bypass_actors": both[:1]}
+    assert RulesetPlanner.diff(from_server, desired) != ""
+
+
+def test_a_weakened_review_count_is_still_drift() -> None:
+    desired = _with_pr_rule({"required_approving_review_count": 2})
+    from_server = _with_pr_rule(
+        {"required_approving_review_count": 1, "required_reviewers": []}
+    )
+    assert RulesetPlanner.diff(from_server, desired) != ""
+
+
+def test_a_dropped_rule_is_still_drift() -> None:
+    """Rules are sorted for comparison; a missing one must survive that."""
+    desired = {
+        **_desired(),
+        "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}],
+    }
+    from_server = {**_desired(), "rules": [{"type": "deletion"}]}
+    assert RulesetPlanner.diff(from_server, desired) != ""

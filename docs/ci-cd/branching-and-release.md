@@ -37,10 +37,40 @@ Reviews:
 GitHub has no per-author review count; bypass actors are the only mechanism that
 expresses "no review for these two, full review for everyone else".
 
+## What each branch actually enforces
+
+|                            | `main`   | `dev`                                            |
+| -------------------------- | -------- | ------------------------------------------------ |
+| deletion / force-push      | blocked  | blocked                                          |
+| linear history             | required | —                                                |
+| pull request + 2 approvals | —        | required                                         |
+| status checks              | —        | `lint-and-secrets`, `tenants-lint`, `repo-gates` |
+
+**`main` deliberately carries fewer rules than `dev`**, which reads backwards
+until you try the alternative. Review and checks live on `dev`, and `main` only
+ever receives commits that already passed them — so repeating the rules on `main`
+adds nothing and breaks the promotion path, because the two workflows that
+legitimately move `main` cannot satisfy them:
+
+- a `pull_request` rule blocks `promote-to-main.yml`'s fast-forward outright;
+- `required_status_checks` blocks `release-cli.yml`'s version-bump commit, which
+  is new and so has no checks of its own.
+
+The usual escape is a GitHub Actions bypass actor. It is **unavailable here** —
+the API rejects it with _"Actor GitHub Actions integration must be part of the
+ruleset source or owner organization"_. Integration bypass actors require an
+organization, and this repo is owned by a user. Same root cause as the CODEOWNERS
+teams problem.
+
+So `main`'s quality gate is `promote-to-main.yml`, not the ruleset. The residual
+risk is worth naming plainly: **a collaborator can still push directly to `main`.**
+Nothing prevents that except the two-person collaborator list. Moving the repo
+into an organization would restore the bypass actor and let the stricter rules
+come back.
+
 ## Why so few required status checks
 
-`main` and `dev` require only `lint-and-secrets`, `tenants-lint` and
-`repo-gates`.
+`dev` requires only `lint-and-secrets`, `tenants-lint` and `repo-gates`.
 
 That is deliberate. **Every other workflow is path-filtered, and GitHub treats a
 required check that never runs as pending** — requiring `ci-desktop` would block
@@ -115,7 +145,7 @@ cannot silently force a bump.
 3. Refuses if that version already exists on npm.
 4. Builds the payload (`desktop` + `frontend`, then `assemble`, then
    `check:packed`) — the same sequence `ci-cli.yml` proves on every PR.
-5. Publishes to npm with `--provenance`.
+5. Publishes to npm as the trusted publisher (provenance is automatic).
 6. **Then** commits the version bump and changelog, tags `cli-v<version>`, pushes.
 7. Creates a GitHub Release with the changelog entry as its body.
 8. Back-merges the release commit into `dev`.
@@ -132,15 +162,28 @@ shipped in the tarball), the GitHub Release body, and the workflow run summary.
 
 ## Applying branch protection
 
-`deploy/branch-protection.json` is the source of truth. Apply it with
-`apply-branch-protection.yml` — dry run first:
+`deploy/branch-protection.json` is the source of truth; the reconciler is
+`tools/apply_branch_protection.py`. It is idempotent — a second run against an
+unchanged repo prints `No-op` — so any diff it shows is real drift. That property
+is load-bearing and tested: GitHub materializes defaults it was never sent
+(`required_reviewers: []`) and reorders `bypass_actors`, and without normalizing
+both the tool claimed drift on every run, which is the same as reporting nothing.
+
+**Applying needs a credential `GITHUB_TOKEN` cannot have.** Repository
+administration is not a delegable Actions permission, so ruleset writes require a
+fine-grained PAT with _Administration: read and write_. Two ways to run it —
+locally as a repo admin, with no PAT to create or rotate:
+
+```bash
+GITHUB_REPOSITORY=0x-copilot-dev/0x-copilot PYTHONPATH=tools python tools/apply_branch_protection.py --dry-run
+```
+
+then `--apply`. Or through the workflow, which needs a `REPO_ADMIN_TOKEN` secret
+to apply but can always dry-run without one:
 
 ```bash
 gh workflow run apply-branch-protection.yml -f dry_run=true
 ```
-
-Then `dry_run=false` to apply. The reconciler is `tools/apply_branch_protection.py`,
-covered by `tools/test_apply_branch_protection.py`.
 
 > The previous version of that logic lived in a YAML heredoc, carried a
 > module-level `return`, and raised `SyntaxError` on every dispatch — so the
