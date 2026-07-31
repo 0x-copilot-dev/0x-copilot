@@ -32,6 +32,8 @@ from agent_runtime.capabilities.mcp.client import (
     McpClient,
     McpClientError,
     McpConnectionError,
+    McpNotFoundError,
+    McpRequestRejectedError,
     McpResourceDiscoveryPage,
     McpTimeoutError,
     McpToolDiscoveryPage,
@@ -215,6 +217,27 @@ class McpLoader:
             return McpLoadResult.fail(
                 McpLoadErrorCode.AUTH_FAILURE,
                 Messages.Loader.AUTH_FAILED,
+                retryable=False,
+                server_name=card.name,
+                correlation_id=runtime_context.trace_id,
+            )
+        # Both 4xx classes are caught BEFORE the connection family and are
+        # never ``retryable``. They are not connection failures at all — the
+        # peer answered and refused — so describing them as "could not be
+        # reached" is what produced the "temporary connection issue, try again
+        # in a moment" copy for a deterministic 400.
+        except McpNotFoundError:
+            return McpLoadResult.fail(
+                McpLoadErrorCode.UNKNOWN_SERVER,
+                Messages.Loader.SERVER_NOT_FOUND,
+                retryable=False,
+                server_name=card.name,
+                correlation_id=runtime_context.trace_id,
+            )
+        except McpRequestRejectedError:
+            return McpLoadResult.fail(
+                McpLoadErrorCode.MCP_PROTOCOL_ERROR,
+                Messages.Loader.REQUEST_REJECTED,
                 retryable=False,
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,

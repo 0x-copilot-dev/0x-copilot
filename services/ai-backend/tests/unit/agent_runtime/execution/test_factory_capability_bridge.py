@@ -67,6 +67,7 @@ _PRE_F3_SURFACE = (
     "load_skill",
     "load_prior_tool_result",
     "ask_a_question",
+    "list_connected_servers",
     "suggest_mcp_connector",
     "run_code_mode",
     "run_in_sandbox",
@@ -386,6 +387,7 @@ class TestFeatureOffParity:
         request = builder.calls[0]
         assert tuple(str(getattr(tool, "name", "")) for tool in request.tools) == (
             "ask_a_question",
+            "list_connected_servers",
             "suggest_mcp_connector",
         )
         assert [type(item) for item in request.middleware] == [
@@ -551,6 +553,7 @@ class TestDeferredBridgeRegistration:
         by_name = {str(getattr(tool, "name", "")): tool for tool in request.tools}
         assert tuple(by_name) == (
             "ask_a_question",
+            "list_connected_servers",
             "suggest_mcp_connector",
             CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
             CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,

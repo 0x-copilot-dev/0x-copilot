@@ -115,6 +115,22 @@
   {
     "descriptor": {
       "capability": "builtin",
+      "op": "list_connected_servers",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 8192
+    },
+    "descriptor_version": "2026-07-30.1",
+    "display_name": "connected servers",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
       "op": "suggest_mcp_connector",
       "executor": "builtin",
       "effect_class": "none",

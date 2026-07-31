@@ -80,6 +80,18 @@ jobs:
       - name: Install workspace dependencies
         run: npm ci
 
+      # tools/desktop-runtime ships inside the CLI tarball, and until now nothing
+      # ran its node:test files at all — `grep -rn -- --test .github/workflows/`
+      # matched only the CLI's own suite. They cover the staging modules this job
+      # then packs, so this is their natural home.
+      - name: Test desktop-runtime staging modules
+        # Glob UNQUOTED so bash expands it. This job runs Node 20, where
+        # `node --test` does not expand glob patterns itself — quoting it made
+        # node look for a literal file named "*.test.mjs" and fail with
+        # "Could not find". The desktop workflow gets away with the quoted form
+        # only because it runs Node 22.
+        run: node --test tools/desktop-runtime/*.test.mjs
+
       - name: Build payload inputs
         run: |
           npm run build --workspace @0x-copilot/desktop

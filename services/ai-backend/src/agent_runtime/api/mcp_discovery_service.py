@@ -221,9 +221,16 @@ class McpDiscoveryService:
             # Already useful — no card needed; the agent should just
             # use the server. Skip audit + event to keep the suggestion
             # surface tight.
+            #
+            # The status alone left the model to guess what to do next, and a
+            # guess that re-suggests or gives up reads to the user as "you
+            # aren't connected" for a connector they already connected. Name
+            # the route explicitly: this tool is install-only, and a connected
+            # server is reached through the loader.
             return {
                 "status": _Results.ALREADY_AUTHENTICATED,
                 "server_id": normalized_id,
+                Keys.Field.NEXT_STEP: Messages.Discovery.ALREADY_CONNECTED_NEXT_STEP,
             }
 
         approval_id = self._approval_id(normalized_id)

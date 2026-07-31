@@ -296,14 +296,21 @@
 /* Design `.cmp-row{display:flex;align-items:center;gap:5px;padding:6px 8px 8px}`.
  * The inset lives here because the shell is padding-free (see `.aui-composer`).
  * No `justify-content` — the right cluster's own `margin-left:auto` does the
- * pushing, exactly as the design's `.cmp-hint{margin-left:auto}` used to. */
+ * pushing, exactly as the design's `.cmp-hint{margin-left:auto}` used to.
+ *
+ * `flex-wrap: wrap` is the outer safety valve for the narrow Run rail (300px
+ * minimum). It is inert at every width the design was drawn at — the left
+ * cluster wraps internally long before this row runs out — but it guarantees
+ * that no control is ever pushed out of the composer. */
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
   padding: 6px 8px 8px;
   position: relative;
+  row-gap: 4px;
 }
 
 /* The static hint row is gone (owner ruling), and with it the `margin-left:auto`
@@ -348,22 +355,34 @@
 
 /* Left cluster: [+] → connectors → tools → model → depth, at the design's
  * single 5px rhythm (`.cmp-row{gap:5px}`) with no divider — the eye groups
- * these by shape, not by a hairline. */
+ * these by shape, not by a hairline.
+ *
+ * WRAPS, never clips (real bug). This was `flex-wrap: nowrap` + `overflow:
+ * hidden`. In the Run cockpit's Studio rail — draggable down to a 300px minimum
+ * — that combination hid the trailing controls two ways: the model pill is the
+ * only item here with `min-width: 0` (the `+` is `flex: none` and the Tools
+ * pill's wrapper span has no `min-width: 0`), so it absorbed 100% of the squeeze
+ * alone — measured at rail 300, its name box collapsed to 34px, rendering
+ * "GPT-5.4 mini" as "GPT…" — and anything still over-wide after that was cut off
+ * by the `overflow: hidden` with nothing to indicate it was there.
+ *
+ * The clipping protected nothing: BOTH popovers this cluster anchors (the `+`
+ * menu and the Tools panel) render through a portal to document.body, so neither
+ * was ever inside this box to be clipped.
+ *
+ * Wrapping costs one 26px line at the narrowest widths and keeps every control
+ * at full size. Inert at the widths the design was drawn at — verified
+ * unchanged, single-line, at rail 340/420/584. */
 .aui-composer-tools {
   align-items: center;
   display: flex;
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
-  overflow: hidden;
+  row-gap: 4px;
 }
 
-/* The Tool picker opens upward from the action row. Its panel and its fixed
- * click-out scrim are siblings, so clipping this cluster leaves only the scrim
- * target in the viewport — a mounted but unusable popover. Other cramped
- * control groups keep their historical clipping; only a supplied Tools
- * popover opts out. */
 .aui-plus-menu-root {
   display: inline-flex;
   position: relative;
@@ -786,6 +805,14 @@
 .aui-attachment-pill small {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
+}
+
+/* A folder grant that could not be read, made, or revoked. It sits in the pill
+   row rather than replacing it, because the pills that ARE known stay true. */
+.aui-composer-folder-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  align-self: center;
 }
 
 .aui-skill-pill {

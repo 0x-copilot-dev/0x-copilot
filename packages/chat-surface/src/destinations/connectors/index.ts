@@ -31,6 +31,20 @@ export type {
 export { RevealOnce } from "./RevealOnce";
 export type { RevealOnceProps } from "./RevealOnce";
 
+export { ManageMcpModal } from "./ManageMcpModal";
+export type {
+  ManageMcpModalProps,
+  ManageMcpSaveRequest,
+} from "./ManageMcpModal";
+export { useMcpConfig } from "./useMcpConfig";
+export type {
+  McpConfigDocumentPayload,
+  McpConfigPort,
+  McpConfigWritePayload,
+  UseMcpConfigOptions,
+  UseMcpConfigResult,
+} from "./useMcpConfig";
+
 export { ConnectorDetailView } from "./ConnectorDetailView";
 export type {
   ConnectorDetailViewProps,

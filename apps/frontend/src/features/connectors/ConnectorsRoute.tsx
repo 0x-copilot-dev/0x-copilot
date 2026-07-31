@@ -29,7 +29,10 @@ import {
 import {
   ConnectModal,
   ConnectorsDestination,
+  ManageMcpModal,
   useConnectFlow,
+  useMcpConfig,
+  type McpConfigPort,
   type ConnectorAccessPort,
   type CustomServerInput,
 } from "@0x-copilot/chat-surface";
@@ -55,7 +58,9 @@ import {
 import {
   createMcpServer,
   installMcpServer,
+  readMcpConfig,
   startMcpAuth,
+  writeMcpConfig,
 } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
 import { applyConnectorEnvelope } from "./adapters";
@@ -236,6 +241,27 @@ export function ConnectorsRoute({
     addCustomServer,
     onConnect: persistConnect,
   });
+
+  // "Manage MCP" — the config document, read and written through the facade.
+  // Refetching after a save is what makes the JSON and the connector list
+  // agree: a server added or removed in the document has to appear or vanish
+  // in Tools without a reload, which is the point of editing it here rather
+  // than in a file on disk.
+  const mcpConfigPort = useMemo<McpConfigPort>(
+    () => ({
+      readConfig: () => readMcpConfig(identity),
+      writeConfig: (request) => writeMcpConfig(request, identity),
+    }),
+    [identity],
+  );
+  const mcpConfig = useMcpConfig({
+    port: mcpConfigPort,
+    onSaved: () => setReloadToken((t) => t + 1),
+  });
+  const openMcpConfig = useCallback((): void => {
+    flow.closeConnect();
+    mcpConfig.openConfig();
+  }, [flow, mcpConfig]);
 
   // ---- SSE subscription with exponential-backoff reconnect -----------
   const backoffRef = useRef(RECONNECT_BACKOFF_MIN_MS);
@@ -465,9 +491,19 @@ export function ConnectorsRoute({
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
         onAddCustomServer={flow.onAddCustomServer}
+        onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}
         initialEntrySlug={flow.initialEntrySlug}
+      />
+      <ManageMcpModal
+        open={mcpConfig.open}
+        onClose={mcpConfig.closeConfig}
+        document={mcpConfig.document}
+        onSave={mcpConfig.save}
+        pending={mcpConfig.pending}
+        error={mcpConfig.error}
+        result={mcpConfig.result}
       />
     </section>
   );

@@ -60,9 +60,12 @@ work: one clear, policy-aware selector across desktop and web.
   not the transparent scrim.
 - Tab order is trigger → controls in visual order → close. Every switch has a
   visible label, keyboard toggle semantics, and `aria-checked`.
-- Use the shared `.ui-pop-scrim` / `.ui-pop` contract (70/71) and the
-  `aui-composer-tools--tools-popover` host layer. Do not add global document
-  listeners or a second menu dismiss primitive.
+- Use the shared `.ui-pop-scrim` / `.ui-pop` contract (70/71). Do not add global
+  document listeners or a second menu dismiss primitive. (The panel escapes the
+  composer via the design-system `Menu` portal; the `.aui-composer-tools--tools-popover`
+  host layer this once called for was never emitted and is gone — the
+  `overflow: hidden` it existed to opt out of was itself removed, because it was
+  clipping the composer's own controls in the narrow Run rail.)
 - Support reduced motion, 320px-wide layouts, keyboard-only operation, high
   contrast tokens, and long provider/tool names without hiding the control.
 

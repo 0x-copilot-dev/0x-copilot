@@ -93,8 +93,21 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       # esbuild bundles main (CJS) + preload (CJS) + renderer (ESM, with
-      # chat-surface/chat-transport/surface-renderers inlined) into out/.
+      # chat-surface/chat-transport/surface-renderers inlined) into out/, and
+      # `compile` first builds both native helpers for THIS runner's
+      # platform/arch — which is why the matrix has one native runner per target.
+      #
+      # COPILOT_REQUIRE_NATIVE_WORKSPACE_FS=1 makes a missing or non-confining
+      # workspace-fs addon FAIL the release instead of warning. A published
+      # Windows build without it would serve every confined read through the
+      # non-atomic realpath recheck, and the user has no toolchain to fix that
+      # after the fact. Set for darwin too: the binary is redundant there (the
+      # pure-Node open is already atomic via O_NOFOLLOW_ANY), but a macOS build
+      # that cannot compile it is evidence the toolchain is broken on this runner,
+      # which the Windows leg would hit too.
       - name: Build desktop bundle
+        env:
+          COPILOT_REQUIRE_NATIVE_WORKSPACE_FS: "1"
         run: npm run build --workspace @0x-copilot/desktop
 
       # Stages python + postgres + the three backend services (with wheels for

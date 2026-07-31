@@ -142,6 +142,17 @@ export interface ConnectModalProps {
     client: McpOAuthClientConfigRequest,
     callbackMode?: ConnectCallbackMode,
   ) => void;
+  /**
+   * Hand the pinned escape-hatch row to the host instead of the built-in URL
+   * form. Both apps pass this and open "Manage MCP" — the whole configuration
+   * as one editable document — because the URL form could express exactly one
+   * kind of server (remote, no credential, no headers) while the row opening
+   * it advertised "paste a JSON config — stdio or remote".
+   *
+   * Takes precedence over `onAddCustomServer`, which reaches the internal form
+   * only when no host claims the row.
+   */
+  readonly onManageMcp?: () => void;
 }
 
 type ConnectPhase = "catalog" | "custom" | "oauth" | "client" | "permission";
@@ -172,6 +183,7 @@ export function ConnectModal({
   clientRequiredSlug = null,
   initialEntrySlug = null,
   onSubmitOAuthClient,
+  onManageMcp,
 }: ConnectModalProps): ReactElement | null {
   const [phase, setPhase] = useState<ConnectPhase>("catalog");
   const [selected, setSelected] = useState<ConnectorCatalogEntry | null>(null);
@@ -391,7 +403,9 @@ export function ConnectModal({
         <CatalogStep
           catalog={catalog}
           onPick={handlePick}
-          onAddCustom={onAddCustomServer ? openCustomForm : undefined}
+          onAddCustom={
+            onManageMcp ?? (onAddCustomServer ? openCustomForm : undefined)
+          }
         />
       ) : null}
       {phase === "custom" ? <CustomServerStep onSubmit={submitCustom} /> : null}
@@ -448,9 +462,9 @@ function CatalogStep({
             {"{ }"}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={pickNameStyle}>Custom MCP server</span>
+            <span style={pickNameStyle}>Manage MCP</span>
             <span style={pickSubStyle}>
-              paste a JSON config — stdio or remote
+              edit the JSON config — stdio or remote
             </span>
           </span>
           <span aria-hidden="true" style={chevronStyle}>

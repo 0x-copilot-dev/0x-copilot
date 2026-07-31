@@ -18,7 +18,6 @@ import hashlib
 import io
 import json
 import os
-import platform
 import re
 import subprocess
 import sys
@@ -32,12 +31,17 @@ from typing import Any, Final
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from _lib import DriverSession, load_env_key  # noqa: E402
+from _lib import (  # noqa: E402
+    INSTALLED_PAYLOAD_TARGET,
+    EXIT_SKIPPED,
+    DriverSession,
+    load_env_key,
+    staged_runtime_dir,
+)
 
 
 JOURNEY_ID: Final = "G2"
 ARTIFACT_NAME: Final = "forecast.csv"
-INSTALLED_PAYLOAD_TARGET: Final = "installed-payload"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
@@ -161,22 +165,7 @@ def _structured_result(outcome: str, *, reason: str | None = None) -> None:
 
 def _skip(reason: str) -> int:
     _structured_result("skipped", reason=reason)
-    return 0
-
-
-def _host_runtime_key() -> str:
-    machine = platform.machine().lower()
-    arch = {
-        "arm64": "arm64",
-        "aarch64": "arm64",
-        "x86_64": "x64",
-        "amd64": "x64",
-    }.get(machine, machine)
-    return f"{sys.platform}-{arch}"
-
-
-def _copilot_home() -> Path:
-    return Path(os.environ.get("COPILOT_HOME", Path.home() / ".0xcopilot"))
+    return EXIT_SKIPPED
 
 
 def _preflight_packaged_supervisor() -> None:
@@ -198,13 +187,20 @@ def _preflight_packaged_supervisor() -> None:
             "G2 must not use COPILOT_FACADE_URL; it requires the embedded "
             "supervised facade"
         )
-    _preflight_staged_runtime()
+    _preflight_staged_runtime(target=INSTALLED_PAYLOAD_TARGET)
 
 
-def _preflight_staged_runtime() -> None:
-    """Require the real supervised services without constraining the shell build."""
+def _preflight_staged_runtime(*, target: str = INSTALLED_PAYLOAD_TARGET) -> None:
+    """Require the real supervised services without constraining the shell build.
 
-    runtime = _copilot_home() / "runtime" / _host_runtime_key()
+    ``target`` selects WHICH stage to require, and must match the target the
+    caller's ``DriverSession`` will launch: G2 itself runs the installed
+    payload, while the artifact-only G2A–G2D reuse this check against the
+    source checkout's stage. Gating on the other one would skip on a perfectly
+    good stage — or, worse, green-light a stage that is not under test.
+    """
+
+    runtime = staged_runtime_dir(target=target)
     manifest_path = runtime / "staging-manifest.json"
     if not manifest_path.is_file():
         raise PreflightSkip(

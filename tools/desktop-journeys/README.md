@@ -49,9 +49,27 @@ make desktop-supervised            # add ARGS="--skip-stage" to reuse a prior st
 ```
 
 Either way this produces the staged runtime at
-`apps/desktop/resources/runtime/<platform>-<arch>/` (the Python services + Postgres)
-and the desktop bundle at `apps/desktop/out/`. The journeys point `COPILOT_HOME` at
-`apps/desktop/resources` by default.
+`<COPILOT_HOME>/runtime/<platform>-<arch>/` (the Python services + Postgres) and the
+desktop bundle at `apps/desktop/out/`.
+
+**Where `COPILOT_HOME` defaults to depends on the journey's target**, because the two
+targets stage to different places and are not interchangeable:
+
+| Target                                          | Default `COPILOT_HOME`   | Staged by                 |
+| ----------------------------------------------- | ------------------------ | ------------------------- |
+| `source` (most journeys)                        | `apps/desktop/resources` | `make desktop-supervised` |
+| `installed-payload` (G1, G2, G3–G10, the smoke) | `~/.0xcopilot`           | `make desktop-install`    |
+
+Set `COPILOT_HOME` explicitly to override either — that is how an isolated worktree
+reuses a stage owned by the primary checkout (see the branch-build recipe below).
+Note that pointing an `installed-payload` journey at `apps/desktop/resources` defeats
+its purpose: it would prove the source tree rather than the shipped npm artifact, so
+there is deliberately no fallback in that direction.
+
+`tools/desktop-journeys/_lib.py` owns this rule for both the preflight checks and
+`DriverSession` (`resolve_copilot_home` / `staged_runtime_dir`), so a journey always
+inspects the same staged runtime it launches. If you add a journey, take its target
+from there rather than re-deriving a default.
 
 > **Re-stage after backend changes.** `apps/desktop/resources/runtime/**` is a
 > _snapshot_ of the Python services. If you changed `services/*`, re-stage
@@ -100,7 +118,27 @@ python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py
 
 Each script spawns its own driver on `CTL_PORT` (default 8790), runs hermetically in
 a throwaway userData subdir (fresh first-run), writes screenshots + a `driver.log`
-under `runs/<name>/`, exits non-zero on failure, and cleans up the app.
+under `runs/<name>/`, exits non-zero unless it passed, and cleans up the app.
+
+### Exit codes — only `0` means the journey ran and passed
+
+| Code | Meaning                                                                                                    |
+| ---- | ---------------------------------------------------------------------------------------------------------- |
+| `0`  | **Passed.** The journey ran end-to-end and every assertion held.                                           |
+| `1`  | **Failed.** An assertion failed (traceback + screenshots under `runs/`).                                   |
+| `2`  | **Blocked.** A declared product/harness capability is absent (G3–G10).                                     |
+| `3`  | **Skipped.** A local prerequisite is absent — no staged runtime, no desktop bundle, no BYOK key in `.env`. |
+
+A skip is **not** a pass: the journey never ran, so it exits non-zero and cannot be
+mistaken for success by `&&`, `set -e`, or a CI step. The reason is also printed as
+structured JSON (`{"journey": "...", "outcome": "skipped", "reason": "..."}`), so a
+caller that legitimately wants to tolerate a skip can match on the code or the
+`outcome` field rather than on silence:
+
+```bash
+python3 tools/desktop-journeys/generative-workflows/g2a_csv_artifact_surface.py; code=$?
+[ "$code" -eq 0 ] || [ "$code" -eq 3 ] || exit "$code"
+```
 
 ### Verifying the globally installed npm payload
 

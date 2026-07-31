@@ -53,7 +53,12 @@ class TestToolBehaviour:
     def test_tool_metadata_matches_catalog_constant(self) -> None:
         tool = SuggestMcpConnectorTool()
         assert tool.name == Values.Tool.SUGGEST_MCP_CONNECTOR
-        assert "Suggest a Connect/Skip card" in tool.description
+        assert "Connect/Skip card" in tool.description
+        # Install-only, and it says so: the description is the only place the
+        # model learns that this tool cannot reach a connected server, and that
+        # the listing tool runs first.
+        assert "NOT connected yet" in tool.description
+        assert "list_connected_servers" in tool.description
 
     def test_returns_discovery_disabled_when_unbound(self) -> None:
         # No worker bound — the tool returns a non-emitting status so

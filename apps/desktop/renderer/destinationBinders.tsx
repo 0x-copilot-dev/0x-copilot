@@ -31,6 +31,7 @@ import {
   ChatsArchive,
   ConnectModal,
   ConnectorsDestination,
+  ManageMcpModal,
   ProjectDetailView,
   ProjectEditor,
   ProjectsDestination,
@@ -43,11 +44,15 @@ import {
   toChatArchiveRow,
   useChatsArchive,
   useConnectFlow,
+  useMcpConfig,
   useNotify,
   ConnectOAuthClientRequiredError,
   useTransport,
   type ConnectorAccessPort,
   type CustomServerInput,
+  type McpConfigDocumentPayload,
+  type McpConfigPort,
+  type McpConfigWritePayload,
   type ProjectDataPort,
   type ProjectDetail,
   type ProjectDetailProfile,
@@ -103,6 +108,7 @@ import {
   bridgeMcpAuthDeps,
   createDesktopMcpAuthPort,
 } from "./desktopMcpAuthPort";
+import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -486,6 +492,33 @@ export function ConnectorsBinder({
   });
   markConnectedRef.current = flow.markConnected;
 
+  // "Manage MCP" — the config document, read and written through the facade.
+  // `retry()` after a save is what makes the JSON and the connector list agree:
+  // a server added or removed in the document has to appear or disappear in
+  // the Tools list without a reload, which is the whole point of editing it
+  // here rather than in a file on disk.
+  const mcpConfigPort = useMemo<McpConfigPort>(
+    () => ({
+      readConfig: () =>
+        transport.request<McpConfigDocumentPayload>({
+          method: "GET",
+          path: "/v1/mcp/config",
+        }),
+      writeConfig: (request) =>
+        transport.request<McpConfigWritePayload>({
+          method: "PUT",
+          path: "/v1/mcp/config",
+          body: request,
+        }),
+    }),
+    [transport],
+  );
+  const mcpConfig = useMcpConfig({ port: mcpConfigPort, onSaved: retry });
+  const openMcpConfig = useCallback((): void => {
+    flow.closeConnect();
+    mcpConfig.openConfig();
+  }, [flow, mcpConfig]);
+
   // Connect (or reconnect) a broken connector.
   //
   // This used to pick the OAuth route itself — resolve the row to an MCP server
@@ -592,11 +625,25 @@ export function ConnectorsBinder({
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
         onAddCustomServer={flow.onAddCustomServer}
+        onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}
         initialEntrySlug={flow.initialEntrySlug}
         clientRequiredSlug={flow.clientRequiredSlug}
         onSubmitOAuthClient={flow.submitOAuthClient}
+      />
+      {/* "Manage MCP" — the whole config as one document. Replaces the single
+          Server-URL form, which could express exactly one kind of server
+          (remote, no credential, no headers) while the row that opened it
+          advertised a JSON config for stdio or remote. */}
+      <ManageMcpModal
+        open={mcpConfig.open}
+        onClose={mcpConfig.closeConfig}
+        document={mcpConfig.document}
+        onSave={mcpConfig.save}
+        pending={mcpConfig.pending}
+        error={mcpConfig.error}
+        result={mcpConfig.result}
       />
     </>
   );
@@ -1083,6 +1130,18 @@ export function RunBinder({
     return deps === undefined ? undefined : createDesktopMcpAuthPort(deps);
   }, [notify, transport]);
 
+  // The mid-run folder ask. Same port object the composer's folder row uses
+  // (`bridgeWorkspaceGrantPort` memoizes per bridge), because the two are one
+  // capability seen from two places: a grant taken here shows up as a pill
+  // there, and revoking that pill takes this run's access away too.
+  //
+  // The cockpit needs it in its own right: when the agent hits a path outside
+  // granted scope the run pauses on a `WorkspaceGrantCard`, and this port is what
+  // that card reads to decide it can be ANSWERED. Without it the ask renders
+  // inert — which is how a refusal turns back into a dead end — and the run only
+  // resumes after a real grant, never on an approve alone.
+  const workspaceGrantPort = bridgeWorkspaceGrantPort();
+
   // Composer chrome ports: the inline Tools popover's MCP surface (the shared
   // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
   // surface. Both are stable per transport, so memoize.
@@ -1299,6 +1358,8 @@ export function RunBinder({
       // RESOLVES here, so the connected state is reported directly rather than
       // recovered from a callback route.
       mcpAuthPort={mcpAuthPort}
+      // Real host folders, granted not assumed — see the binding above.
+      workspaceGrantPort={workspaceGrantPort}
       connectedConnectorServerId={connectedConnectorServerId}
       failedConnector={failedConnector}
       // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron

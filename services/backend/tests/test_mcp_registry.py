@@ -3,9 +3,13 @@ from __future__ import annotations
 from backend_app.contracts import (
     CreateMcpServerRequest,
     McpAuthCallbackRequest,
+    McpAuthMode,
     McpAuthStartRequest,
+    McpConfiguredValueRequest,
     McpServerHealth,
     McpAuthState,
+    McpStdioRequest,
+    McpTransport,
     OAuthTokenRequest,
     UpdateMcpServerRequest,
 )
@@ -448,3 +452,180 @@ def test_managed_token_vault_fails_closed_when_adapter_missing(monkeypatch) -> N
         assert "MCP_TOKEN_VAULT_PROVIDER=managed is no longer accepted" in str(exc)
     else:
         raise AssertionError("legacy managed provider must fail closed")
+
+
+# ---------------------------------------------------------------------------
+# Local servers (loopback URLs + stdio) and configured header/env secrets
+# ---------------------------------------------------------------------------
+#
+# The local-endpoint rule moved: the contract layer now accepts a loopback URL
+# because it cannot see the deployment profile and the desktop legitimately
+# needs one, which makes ``McpRegistryService`` the ONLY place the restriction
+# exists. These pin it there, in both directions — a rule that is only ever
+# tested in its refusing direction can be satisfied by refusing everything.
+
+
+def _desktop_profile(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_DEPLOYMENT_PROFILE", "single_user_desktop")
+    monkeypatch.delenv("BACKEND_ENVIRONMENT", raising=False)
+
+
+def _hosted_profile(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_DEPLOYMENT_PROFILE", "saas_multi_tenant")
+    monkeypatch.delenv("BACKEND_ENVIRONMENT", raising=False)
+
+
+def test_local_url_allowed_on_desktop(monkeypatch) -> None:
+    _desktop_profile(monkeypatch)
+    service = McpRegistryService(store=InMemoryMcpStore())
+
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="http://127.0.0.1:9000/mcp",
+        )
+    )
+
+    assert created.url == "http://127.0.0.1:9000/mcp"
+
+
+def test_private_network_url_rejected_when_hosted(monkeypatch) -> None:
+    # The SSRF case that matters: a hosted deployment must not be talked into
+    # registering the cloud metadata endpoint as an "MCP server".
+    _hosted_profile(monkeypatch)
+    service = McpRegistryService(store=InMemoryMcpStore())
+
+    try:
+        service.create_server(
+            CreateMcpServerRequest(
+                org_id="org_123",
+                user_id="user_123",
+                url="http://169.254.169.254/latest/meta-data/",
+            )
+        )
+    except ValueError as exc:
+        assert "private or reserved" in str(exc) or "https" in str(exc)
+    else:
+        raise AssertionError("a link-local MCP URL must be rejected when hosted")
+
+
+def test_stdio_server_rejected_when_hosted(monkeypatch) -> None:
+    # A stdio server is arbitrary command execution on the host, requested
+    # through an ordinary product API. Never available off the desktop.
+    _hosted_profile(monkeypatch)
+    service = McpRegistryService(store=InMemoryMcpStore())
+
+    try:
+        service.create_server(
+            CreateMcpServerRequest(
+                org_id="org_123",
+                user_id="user_123",
+                transport=McpTransport.STDIO,
+                auth_mode=McpAuthMode.NONE,
+                stdio=McpStdioRequest(
+                    command="npx",
+                    args=("-y", "@modelcontextprotocol/server-filesystem", "/tmp"),
+                ),
+            )
+        )
+    except ValueError as exc:
+        assert "not permitted" in str(exc)
+    else:
+        raise AssertionError("a stdio MCP server must be rejected when hosted")
+
+
+def test_stdio_server_created_on_desktop(monkeypatch) -> None:
+    _desktop_profile(monkeypatch)
+    service = McpRegistryService(store=InMemoryMcpStore())
+
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            transport=McpTransport.STDIO,
+            auth_mode=McpAuthMode.NONE,
+            stdio=McpStdioRequest(
+                command="npx",
+                args=("-y", "@modelcontextprotocol/server-filesystem", "/tmp"),
+            ),
+        )
+    )
+
+    assert created.url is None
+    assert created.stdio is not None
+    assert created.stdio.command == "npx"
+    # Named after the package rather than `npx`, which every npm-delivered
+    # server would otherwise collide on.
+    assert created.display_name == "@modelcontextprotocol/server-filesystem"
+    # `auth_mode=none` means there is nothing to authorize.
+    assert created.auth_state is McpAuthState.AUTHENTICATED
+
+
+def test_header_secret_is_encrypted_and_never_returned() -> None:
+    vault = LocalTokenVault(secret="unit-test-secret-value-at-least-32-chars")
+    store = InMemoryMcpStore()
+    service = McpRegistryService(store=store, token_vault=vault)
+
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            url="https://api.githubcopilot.com/mcp/",
+            auth_mode=McpAuthMode.API_KEY,
+            headers=(
+                McpConfiguredValueRequest(
+                    name="Authorization", value="ghp_supersecret_value"
+                ),
+                McpConfiguredValueRequest(name="X-Api-Version", value="2"),
+            ),
+        )
+    )
+
+    # The response says "configured" and nothing else — never the token, and
+    # never a masked prefix of it either.
+    secret_header = next(h for h in created.headers if h.name == "Authorization")
+    assert secret_header.secret_set is True
+    assert secret_header.value is None
+    assert "ghp_supersecret_value" not in created.model_dump_json()
+
+    # The literal round-trips verbatim: it is not a secret, and the config
+    # editor has to be able to show what it will save back.
+    literal = next(h for h in created.headers if h.name == "X-Api-Version")
+    assert literal.value == "2"
+    assert literal.secret_set is False
+
+    # At rest it is ciphertext, and it decrypts back to the original.
+    stored = store.get_server(org_id="org_123", server_id=created.server_id)
+    assert stored is not None
+    at_rest = next(h for h in stored.headers if h.name == "Authorization")
+    assert at_rest.encrypted_value is not None
+    assert at_rest.encrypted_value != "ghp_supersecret_value"
+    assert vault.decrypt(at_rest.encrypted_value) == "ghp_supersecret_value"
+
+
+def test_stdio_env_secret_is_encrypted(monkeypatch) -> None:
+    _desktop_profile(monkeypatch)
+    vault = LocalTokenVault(secret="unit-test-secret-value-at-least-32-chars")
+    store = InMemoryMcpStore()
+    service = McpRegistryService(store=store, token_vault=vault)
+
+    created = service.create_server(
+        CreateMcpServerRequest(
+            org_id="org_123",
+            user_id="user_123",
+            transport=McpTransport.STDIO,
+            auth_mode=McpAuthMode.NONE,
+            stdio=McpStdioRequest(
+                command="npx",
+                args=("-y", "@some/server"),
+                env=(McpConfiguredValueRequest(name="API_TOKEN", value="s3cr3t"),),
+            ),
+        )
+    )
+
+    assert created.stdio is not None
+    assert "s3cr3t" not in created.model_dump_json()
+    stored = store.get_server(org_id="org_123", server_id=created.server_id)
+    assert stored is not None and stored.stdio is not None
+    assert vault.decrypt(stored.stdio.env[0].encrypted_value) == "s3cr3t"

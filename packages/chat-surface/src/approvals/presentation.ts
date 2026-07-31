@@ -1,7 +1,7 @@
-// The consent card's SHAPE and the connector card's TRUST LINE, parsed off the
-// run stream.
+// The consent card's SHAPE, the connector card's TRUST LINE, and the folder-grant
+// card's ASK — all parsed off the run stream.
 //
-// Two separate concerns deliberately kept apart:
+// Three separate concerns deliberately kept apart:
 //
 //   `ApprovalPresentation` is narrative — what is about to happen. The backend
 //   projects it from the real tool-call arguments (`ApprovalPresentationProjector`),
@@ -15,8 +15,19 @@
 //   back. A missing field here means "we don't know", and the card must drop that
 //   clause rather than substitute a plausible one.
 //
-// Both parsers are total: anything unrecognised degrades to the neutral value so
-// a malformed payload costs a decoration, never the card.
+//   `WorkspaceGrantRequest` is a REQUEST for a capability — one folder, and the
+//   access being asked for. The path is the subject of the ask (see
+//   `ports/WorkspaceGrantPort`), so it is the one string on that card the user
+//   must be able to read in full and recognise.
+//
+// The first two parsers are total: anything unrecognised degrades to the neutral
+// value so a malformed payload costs a decoration, never the card. The grant
+// parser deliberately is NOT, and that asymmetry is the point — a decoration may
+// degrade, a capability may not. No folder named → no card (null). No access mode
+// named → the card renders but cannot be granted from there, because "Read-only"
+// over an unknown mode is the same lie `accessLabel` refuses to tell.
+
+import type { WorkspaceGrantMode } from "../ports/WorkspaceGrantPort";
 
 /** Which of the design's three approval shapes to draw. */
 export type ApprovalLayout = "params" | "rows" | "preview";
@@ -53,6 +64,27 @@ export interface ApprovalPresentation {
   readonly preview: ApprovalPreview | null;
 }
 
+/**
+ * A mid-run ask for one host folder, parsed off an interrupt's
+ * `payload.workspace_grant` block.
+ *
+ * Keyed on a DEDICATED block rather than a `path` field or an approval kind: a
+ * kind would have to be added to the queue's union (which the hosts declare
+ * their own copy of), and a bare `path` collides with the many tool payloads
+ * that carry one in `arguments`. A backend raises this card by stamping this one
+ * block on whatever interrupt it already emits — that is the whole contract.
+ */
+export interface WorkspaceGrantRequest {
+  /** Host-absolute folder being asked for, verbatim — macOS or Windows. */
+  readonly path: string;
+  /** Last path segment ("Downloads") — the short name a sentence can use. */
+  readonly folderName: string;
+  /** Access asked for; null when the payload named none (see the header). */
+  readonly mode: WorkspaceGrantMode | null;
+  /** Why, in the model's words; null when it gave no reason. */
+  readonly reason: string | null;
+}
+
 /** Server-derived clauses for the connector consent card's trust line. */
 export interface ConnectorTrust {
   /** Scope being granted; null when the surface has no connector row to read. */
@@ -63,7 +95,19 @@ export interface ConnectorTrust {
   readonly sourceTool: string | null;
 }
 
+/**
+ * The payload block that turns any interrupt into a folder ask. Exported so the
+ * one string the backend has to stamp is readable from the client contract, and
+ * so a wiring test can assert against it rather than a literal.
+ */
+export const WORKSPACE_GRANT_PAYLOAD_KEY = "workspace_grant";
+
 const LAYOUTS: readonly ApprovalLayout[] = ["params", "rows", "preview"];
+const GRANT_MODES: readonly WorkspaceGrantMode[] = [
+  "read_only",
+  "read_write_no_delete",
+  "read_write",
+];
 const ROW_STATUSES: readonly ApprovalRowStatus[] = [
   "pending",
   "approved",
@@ -144,6 +188,77 @@ export function accessLabel(trust: ConnectorTrust): string | null {
     return "Read & act";
   }
   return null;
+}
+
+/**
+ * Parse the folder ask off an interrupt payload, or null when there is none.
+ *
+ * Null is the ONLY refusal: no `workspace_grant` block, or a block naming no
+ * folder, means this interrupt is not a folder ask and the caller renders
+ * whatever it rendered before. An unknown `mode` still yields a card — the user
+ * gets told which folder is being asked for, and the card withholds the grant
+ * button instead of guessing the access (see `grantAccessLabel`).
+ */
+export function parseWorkspaceGrantRequest(
+  payload: unknown,
+): WorkspaceGrantRequest | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const block = payload[WORKSPACE_GRANT_PAYLOAD_KEY];
+  if (!isRecord(block)) {
+    return null;
+  }
+  const path = text(block.path);
+  if (path === null) {
+    return null;
+  }
+  const mode = text(block.mode);
+  return {
+    path,
+    folderName: folderNameOf(path),
+    mode:
+      mode !== null && (GRANT_MODES as readonly string[]).includes(mode)
+        ? (mode as WorkspaceGrantMode)
+        : null,
+    reason: text(block.reason),
+  };
+}
+
+/**
+ * The human sentence for a requested access mode, or null when unknown.
+ *
+ * Same rule as {@link accessLabel}, for the same reason: a card that prints
+ * "Read-only" over an access it cannot read is the lie this whole path exists to
+ * prevent. `read_write_no_delete` keeps its "can't delete" clause rather than
+ * flattening to "read & write" — the difference is the user's whole risk model.
+ */
+export function grantAccessLabel(
+  mode: WorkspaceGrantMode | null,
+): string | null {
+  switch (mode) {
+    case "read_only":
+      return "Read-only";
+    case "read_write_no_delete":
+      return "Read & write, no deleting";
+    case "read_write":
+      return "Read & write";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Last segment of a host-absolute path, on either OS.
+ *
+ * Splits on BOTH separators because the string arrives from whichever host the
+ * user is on — `/Users/ada/Downloads` and `C:\Users\ada\Downloads` must both
+ * yield `Downloads`. Falls back to the whole path (a drive root, `C:\`, has no
+ * segment to take) so the caller always has something honest to print.
+ */
+function folderNameOf(path: string): string {
+  const segments = path.split(/[/\\]+/).filter((part) => part.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1]! : path;
 }
 
 function parseLayout(value: unknown): ApprovalLayout {

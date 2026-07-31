@@ -931,7 +931,12 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     expect(onReject).toHaveBeenCalledWith("appr-1");
   });
 
-  it("collapses a resolved approval to a receipt (approved / rejected)", () => {
+  it("does not pin a resolved approval above the composer", () => {
+    // A resolved approval is HISTORY, not a live decision. Once approved, the
+    // run continues and its result is already in the transcript, so a
+    // "✓ Approved · <name>" line pinned above the input adds nothing and pushes
+    // the conversation up. The record is not lost — the Approvals tab projects
+    // every decision from the same event stream.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const { rerender } = render(
       withTransport(
@@ -943,10 +948,8 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    expect(
-      screen.getByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toHaveAttribute("data-decision", "approved");
-    // No pending card once resolved.
+    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
+    // ...and no pending card either: it is resolved.
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
 
     rerender(
@@ -959,9 +962,7 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    expect(
-      screen.getByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toHaveAttribute("data-decision", "rejected");
+    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
   });
 
   it("renders a pending approval as a `.conf-card` in Focus mode", () => {
