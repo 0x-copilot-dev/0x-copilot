@@ -533,11 +533,20 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     def granted_roots(self) -> tuple[object, ...]:
         """Host roots the user has granted, as ``HostFilesystemRules`` input.
 
-        Read by the runtime factory through ``getattr`` rather than an
-        ``isinstance`` check, so any workspace lane can supply it by exposing
-        this one property. That is not incidental: gating on a concrete class is
-        exactly how ``guarded_default`` silently opted out in ENFORCE mode,
-        where the workspace object is a different type entirely.
+        Read through ``getattr`` rather than an ``isinstance`` check, so any
+        workspace lane CAN supply it by exposing this one property. But a lane
+        that cannot is no longer a lane where grants are inert: ``getattr``
+        widened who may answer and did not make anyone able to, and the ENFORCE
+        lane's C3 backends still cannot — their host-session projection is
+        path-free by design. The worker therefore resolves the roots off the
+        broker's active-grant snapshot
+        (``WorkspaceBackendWorkerWiring.granted_host_roots``) and hands them to
+        the factory directly.
+
+        This property survives as the compatibility lane's shortcut: this
+        backend was BUILT from that same snapshot through the same
+        ``WorkspaceMountTable`` mapping, so reading it here saves a second,
+        independently-timed read of one broker fact.
         """
 
         return WorkspaceMountTable.granted_roots(self.mounts)

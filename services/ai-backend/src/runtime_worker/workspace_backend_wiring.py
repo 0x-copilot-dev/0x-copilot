@@ -25,6 +25,23 @@ request instead of falling through to a virtual backend that would answer
 ``ls /Users/<name>/Downloads`` with an empty listing and a green tick. Nothing is
 readable until the user grants it — the affordance exists, the access does not.
 
+Two things come off the broker here, and only one of them is the backend
+------------------------------------------------------------------------
+:meth:`WorkspaceBackendWorkerWiring.workspace_backend` builds the ``/workspace/``
+route. :meth:`WorkspaceBackendWorkerWiring.granted_host_roots` answers a
+different and narrower question — *which host folders has the user attached* —
+for the deepagents ``FilesystemPermission`` rules and
+:class:`~agent_runtime.capabilities.desktop.host_floor.HostFilesystemFloor`.
+
+They are separate because the second question has a lane-independent answer.
+``workspace_effect_mode=enforce`` replaces the ``/workspace/`` object with C3's
+gateway/tombstone backend, and neither can name a host root (their host-session
+projection is path-free by design, and it is C2's private WRITE bootstrap — not
+a channel to widen). Reading the roots off that object therefore yielded nothing
+and left every attached folder prompting on every read. Asking the broker
+instead makes the rule set depend on what the USER granted rather than on which
+backend a write-staging mode happened to select.
+
 Kept in its own module (mirroring :class:`runtime_worker.file_store_wiring.FileStoreWorkerWiring`)
 so the run path constructs the workspace backend exactly once, per run, without
 leaking desktop-only concerns into the run handler. The desktop capability
@@ -41,7 +58,9 @@ import httpx
 
 if TYPE_CHECKING:
     from agent_runtime.api.events import RuntimeEventProducer
+    from agent_runtime.capabilities.desktop.broker_client import DesktopBrokerClient
     from agent_runtime.capabilities.desktop.workspace_backend import (
+        WorkspaceBackendConfig,
         WorkspaceMutationSnapshot,
     )
 
@@ -91,9 +110,7 @@ class WorkspaceBackendWorkerWiring:
         # Lazy import: the desktop capability package must not load on the
         # web / postgres / in-memory worker images.
         from agent_runtime.capabilities.desktop import (  # noqa: PLC0415
-            BrokerClientConfig,
             BrokerError,
-            DesktopBrokerClient,
             WorkspaceBackendConfig,
             WorkspaceGrantGate,
             WorkspaceMountTable,
@@ -114,17 +131,7 @@ class WorkspaceBackendWorkerWiring:
                 bool(config.broker_token),
             )
             return None
-        client = DesktopBrokerClient(
-            BrokerClientConfig(
-                base_url=config.broker_base_url,
-                token=config.broker_token,
-                service_identity=config.service_identity,
-                broker_audience=config.broker_audience,
-                protocol_version=config.protocol_version,
-                timeout_seconds=config.timeout_seconds,
-            ),
-            http_client=self._http_client,
-        )
+        client = self._broker_client(config)
         try:
             snapshot = await client.grants_snapshot()
         except BrokerError as exc:
@@ -154,6 +161,82 @@ class WorkspaceBackendWorkerWiring:
             )
         )
         return build_workspace_backend(scoped, client=client, grant_gate=gate)
+
+    async def granted_host_roots(self) -> tuple[object, ...]:
+        """The host roots the user attached, as ``GrantedRoot`` rule/floor input.
+
+        WHICH FOLDERS THE USER ATTACHED IS A BROKER FACT. It is not a property of
+        whichever ``/workspace/`` backend object the run's ``workspace_effect_mode``
+        happened to select, and reading it off that object is what made attached
+        folders inert in the ENFORCE lane: there, ``RunHandler`` builds a
+        ``WorkspaceGatewayBackend`` / ``WorkspaceTombstoneBackend``, neither of
+        which exposes ``granted_roots``, and their host-session projection is
+        deliberately path-free — so ``_granted_host_roots`` found nothing, no
+        ``allow`` rule was built, and every read of a folder the user had
+        explicitly attached interrupted and asked again. The effect mode decides
+        how workspace WRITES are staged; it has no business deciding which
+        folders are readable.
+
+        So this asks the broker directly, over the SAME ``/v1/grants/snapshot``
+        projection and the SAME :class:`WorkspaceMountTable` mapping the default
+        lane's backend is built from — one source of truth for the roots, reached
+        from any lane. ``root`` crosses only for ACTIVE grants (the broker's own
+        rule), and the RENDERER projection stays path-free; this is the worker
+        audience, which already resolves and reads real host paths itself.
+
+        Every failure degrades toward "that folder still ASKS", never toward
+        "now open": no broker config (non-desktop, or the filesystem capability
+        opted out) yields ``()`` silently, and an unreachable broker yields ``()``
+        with a warning, because "your grants do nothing this run" must be
+        discoverable from a packaged log.
+        """
+
+        # Lazy import: the desktop capability package must not load on the
+        # web / postgres / in-memory worker images.
+        from agent_runtime.capabilities.desktop import (  # noqa: PLC0415
+            BrokerError,
+            WorkspaceBackendConfig,
+            WorkspaceMountTable,
+        )
+
+        config = WorkspaceBackendConfig.from_env(env=self._env)
+        if not config.broker_base_url or not config.broker_token:
+            # Not a desktop image (or the capability is off). Silent on purpose:
+            # `workspace_backend()` already logs the absent-config line once per
+            # run, and a second copy would say nothing new.
+            return ()
+        try:
+            snapshot = await self._broker_client(config).grants_snapshot()
+        except BrokerError as exc:
+            logger.warning(
+                "workspace_backend.granted_roots_unavailable error_class=%s "
+                "(attached folders will keep asking on every read)",
+                type(exc).__name__,
+            )
+            return ()
+        return WorkspaceMountTable.granted_roots(
+            WorkspaceMountTable.from_broker_grants(snapshot.grants)
+        )
+
+    def _broker_client(self, config: WorkspaceBackendConfig) -> DesktopBrokerClient:
+        """One broker client shape for both the backend and the roots lane."""
+
+        from agent_runtime.capabilities.desktop import (  # noqa: PLC0415
+            BrokerClientConfig,
+            DesktopBrokerClient,
+        )
+
+        return DesktopBrokerClient(
+            BrokerClientConfig(
+                base_url=config.broker_base_url or "",
+                token=config.broker_token or "",
+                service_identity=config.service_identity,
+                broker_audience=config.broker_audience,
+                protocol_version=config.protocol_version,
+                timeout_seconds=config.timeout_seconds,
+            ),
+            http_client=self._http_client,
+        )
 
     @staticmethod
     async def release_backend(backend: object | None) -> None:
