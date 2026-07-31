@@ -26,8 +26,8 @@ from deepagents.middleware.filesystem import (
     _check_fs_permission,
 )
 
+from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
 from agent_runtime.capabilities.desktop.host_filesystem import (
-    SCRATCH_DIR_NAME,
     GrantedRoot,
     HostFilesystemRules,
 )
@@ -36,26 +36,34 @@ from agent_runtime.capabilities.desktop.host_floor import (
     HostFloorMessages,
 )
 
+#: The `.copilot` scratch PRD-FS-12 D7 removed. Spelled here so the tests can
+#: prove it is gone without keeping a production constant alive for them.
+DROPPED_SCRATCH_DIR = ".copilot"
+
 
 class ProductionStackMixin:
     """Composes rules + real filesystem + floor and drives the real tools."""
 
     @staticmethod
-    def rules(roots: tuple[GrantedRoot, ...]) -> list[FilesystemPermission]:
+    def rules(
+        roots: tuple[GrantedRoot, ...], scratch: AgentScratchRoot | None = None
+    ) -> list[FilesystemPermission]:
         return [
             FilesystemPermission(**rule)  # type: ignore[arg-type]
-            for rule in HostFilesystemRules.build(roots)
+            for rule in HostFilesystemRules.build(roots, scratch=scratch)
         ]
 
     @classmethod
-    def middleware(cls, *roots: GrantedRoot) -> FilesystemMiddleware:
+    def middleware(
+        cls, *roots: GrantedRoot, scratch: AgentScratchRoot | None = None
+    ) -> FilesystemMiddleware:
         """The desktop composition: the floor wrapping the real disk backend."""
 
         return FilesystemMiddleware(
             backend=HostFilesystemFloor(
-                FilesystemBackend(virtual_mode=False), roots=roots
+                FilesystemBackend(virtual_mode=False), roots=roots, scratch=scratch
             ),
-            _permissions=cls.rules(roots),
+            _permissions=cls.rules(roots, scratch),
         )
 
     @classmethod
@@ -198,39 +206,25 @@ class TestAttachedFoldersKeepWorking(ProductionStackMixin):
 
         assert "plain content" in content
 
-    def test_the_scratch_dir_of_a_writable_grant_still_writes(
-        self, tmp_path: Path
+    @pytest.mark.parametrize("writable", [True, False])
+    def test_a_granted_folder_is_never_written_into_at_all(
+        self, tmp_path: Path, writable: bool
     ) -> None:
-        root = tmp_path / "Projects"
-        (root / SCRATCH_DIR_NAME).mkdir(parents=True)
-        target = root / SCRATCH_DIR_NAME / "notes.json"
+        """D7: `.copilot` inside a granted root is gone, for BOTH grant modes.
 
-        content = self.call(
-            self.middleware(GrantedRoot(path=str(root), writable=True)),
-            "write_file",
-            file_path=str(target),
-            content="{}",
-        )
-
-        assert HostFloorMessages.HOST_WRITE not in content
-        assert target.read_text() == "{}"
-
-    def test_the_scratch_dir_of_a_READ_ONLY_grant_does_not(
-        self, tmp_path: Path
-    ) -> None:
-        """`.copilot` is hidden, so the read-only case fell through to allow.
-
-        Rule 2 is only emitted for a WRITABLE root — but the rule set never got
-        to decide, because no pattern matches a hidden segment. A read-only
-        grant was therefore writable inside its own scratch dir.
+        This used to be two tests with two answers — writable grants wrote,
+        read-only grants were refused — and the difference had to be re-decided
+        in the floor because `.copilot` is hidden and the rule set could not see
+        it. One answer now: nothing is written into the user's folder, whatever
+        the grant said.
         """
 
         root = tmp_path / "Projects"
-        (root / SCRATCH_DIR_NAME).mkdir(parents=True)
-        target = root / SCRATCH_DIR_NAME / "notes.json"
+        (root / DROPPED_SCRATCH_DIR).mkdir(parents=True)
+        target = root / DROPPED_SCRATCH_DIR / "notes.json"
 
         content = self.call(
-            self.middleware(GrantedRoot(path=str(root), writable=False)),
+            self.middleware(GrantedRoot(path=str(root), writable=writable)),
             "write_file",
             file_path=str(target),
             content="{}",
@@ -238,6 +232,59 @@ class TestAttachedFoldersKeepWorking(ProductionStackMixin):
 
         assert HostFloorMessages.HOST_WRITE in content
         assert not target.exists()
+
+    def test_the_agent_scratch_writes_and_reads_back_through_the_real_stack(
+        self, tmp_path: Path
+    ) -> None:
+        """D3 + §5, end to end, with ZERO grants.
+
+        The whole point of moving the scratch: the agent has a place to work
+        that does not depend on the user having attached anything. The path is
+        doubly hidden (`.0xcopilot/.tmp`), so this passes only if the literal
+        rule matches AND the floor admits the subtree — the two halves the
+        dotted-segment trap breaks independently.
+        """
+
+        scratch = AgentScratchRoot(tmp_path / ".0xcopilot" / ".tmp")
+        target = scratch.path / "conv-1" / "run-1" / "tool-results" / "out.txt"
+        target.parent.mkdir(parents=True)
+
+        written = self.call(
+            self.middleware(scratch=scratch),
+            "write_file",
+            file_path=str(target),
+            content="offloaded",
+        )
+        assert HostFloorMessages.HOST_WRITE not in written
+        assert target.read_text() == "offloaded"
+
+        read_back = self.call(
+            self.middleware(scratch=scratch), "read_file", file_path=str(target)
+        )
+        assert "offloaded" in read_back
+
+    def test_the_scratch_allow_does_not_reach_its_parent(self, tmp_path: Path) -> None:
+        """§5: scoped to `$COPILOT_HOME/.tmp` and NOTHING above it.
+
+        `COPILOT_HOME` also holds the staged runtime, the version marker and the
+        download cache. A rule anchored one segment too high would hand the
+        model the app's own installation.
+        """
+
+        home = tmp_path / ".0xcopilot"
+        scratch = AgentScratchRoot(home / ".tmp")
+        scratch.path.mkdir(parents=True)
+        sibling = home / "marker.json"
+
+        content = self.call(
+            self.middleware(scratch=scratch),
+            "write_file",
+            file_path=str(sibling),
+            content="{}",
+        )
+
+        assert HostFloorMessages.HOST_WRITE in content
+        assert not sibling.exists()
 
 
 class TestBulkOpsAreDelegatedBecauseConsentAlreadyFires:
@@ -277,10 +324,13 @@ class TestFloorVerdicts:
     """The verdict surface on its own, including the shapes disk tests can't hit."""
 
     ROOT = "/Users/ada/Projects"
+    SCRATCH = AgentScratchRoot(Path("/Users/ada/.0xcopilot/.tmp"))
 
     @classmethod
-    def floor(cls, *roots: GrantedRoot) -> HostFilesystemFloor:
-        return HostFilesystemFloor(object(), roots=roots)
+    def floor(
+        cls, *roots: GrantedRoot, scratch: AgentScratchRoot | None = None
+    ) -> HostFilesystemFloor:
+        return HostFilesystemFloor(object(), roots=roots, scratch=scratch)
 
     @pytest.mark.parametrize(
         ("path", "blind"),
@@ -307,10 +357,12 @@ class TestFloorVerdicts:
     def test_a_traversal_segment_is_never_admitted(self) -> None:
         """Lexical parent-walking cannot be trusted through a symlink."""
 
-        floor = self.floor(GrantedRoot(path=self.ROOT, writable=True))
+        floor = self.floor(
+            GrantedRoot(path=self.ROOT, writable=True), scratch=self.SCRATCH
+        )
 
         assert floor.permits_read(f"{self.ROOT}/sub/../../.ssh/id_rsa") is False
-        assert floor.permits_write(f"{self.ROOT}/{SCRATCH_DIR_NAME}/../../x") is False
+        assert floor.permits_write(f"{self.SCRATCH.posix}/conv/../../../x") is False
 
     def test_the_agents_own_namespaces_are_none_of_the_floors_business(self) -> None:
         floor = self.floor()
@@ -319,13 +371,48 @@ class TestFloorVerdicts:
             assert floor.permits_read(path) is True
             assert floor.permits_write(path) is True
 
-    def test_every_host_write_outside_a_writable_scratch_is_refused(self) -> None:
-        floor = self.floor(GrantedRoot(path=self.ROOT, writable=True))
+    def test_every_host_write_outside_the_agent_scratch_is_refused(self) -> None:
+        floor = self.floor(
+            GrantedRoot(path=self.ROOT, writable=True), scratch=self.SCRATCH
+        )
 
-        assert floor.permits_write(f"{self.ROOT}/{SCRATCH_DIR_NAME}/n.json") is True
+        assert floor.permits_write(f"{self.SCRATCH.posix}/conv/run/x.json") is True
+        assert floor.permits_write(self.SCRATCH.posix) is True
+        # A WRITABLE grant buys no direct write, and neither does its old
+        # `.copilot` (D7). Host mutations stay on the staged/ledgered lane.
         assert floor.permits_write(f"{self.ROOT}/notes.md") is False
+        assert floor.permits_write(f"{self.ROOT}/{DROPPED_SCRATCH_DIR}/n.json") is False
         assert floor.permits_write("/tmp/anything.txt") is False
         assert floor.permits_write("/Users/ada/Downloads/x") is False
+        # ...and a sibling that merely starts with the same characters is not
+        # inside it — `_within` compares SEGMENTS, not string prefixes.
+        assert floor.permits_write("/Users/ada/.0xcopilot/.tmp-evil/x") is False
+        assert floor.permits_write("/Users/ada/.0xcopilot/secrets.json") is False
+
+    def test_a_run_with_no_scratch_can_write_nowhere_on_the_host(self) -> None:
+        """An unusable scratch degrades to "no host write", never to "open"."""
+
+        floor = self.floor(GrantedRoot(path=self.ROOT, writable=True), scratch=None)
+
+        assert floor.permits_write(f"{self.SCRATCH.posix}/conv/x.json") is False
+        assert floor.permits_write(f"{self.ROOT}/notes.md") is False
+
+    def test_a_hidden_segment_beneath_the_scratch_is_still_admitted(self) -> None:
+        """The half the LITERAL rule cannot cover, and why the floor is here.
+
+        `<scratch>/**` is invisible to a path carrying a further dotted segment
+        (no DOTGLOB), so `_check_fs_permission` has no opinion and falls through
+        to allow-by-default. The floor is what actually decides, and it must
+        decide YES — the agent's own subtree — rather than inheriting the
+        hidden-path refusal meant for `~/.ssh`.
+        """
+
+        floor = self.floor(scratch=self.SCRATCH)
+        nested = f"{self.SCRATCH.posix}/conv/.cache/x"
+
+        assert HostFilesystemFloor.is_matcher_blind(nested) is True
+        assert floor.permits_read(nested) is True
+        assert floor.permits_write(nested) is True
 
     def test_batch_downloads_refuse_per_path_rather_than_wholesale(self) -> None:
         """Skills / memory / summarization read through this op, not `read`."""

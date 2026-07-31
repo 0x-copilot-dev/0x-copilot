@@ -1692,6 +1692,7 @@ class FileRuntimeApiStore:
                     conversation_id=conversation_id,
                     deleted_at=updated.deleted_at or now,
                 )
+            self._delete_agent_scratch(conversation_id)
             return updated
 
     async def restore_conversation(
@@ -3070,6 +3071,38 @@ class FileRuntimeApiStore:
                 self._run_idempotency_fingerprint.pop(key, None)
         self._conversation_locks.pop(conversation_id, None)
         self._index.delete_conversation_cascade(conversation_id)
+        self._delete_agent_scratch(conversation_id)
+
+    @staticmethod
+    def _delete_agent_scratch(conversation_id: str) -> None:
+        """Remove this chat's ``$COPILOT_HOME/.tmp`` directory (PRD-FS-12 D6).
+
+        Called from BOTH deletion sites, and the reason is worth stating.
+
+        * ``soft_delete_conversation`` is the USER'S act — "delete this chat" —
+          and D6 says deleting a chat deletes its ``.tmp`` directory. Doing it
+          here is what makes the promise true at the moment the user makes it,
+          rather than whenever a retention sweep eventually runs.
+        * ``_forget_conversation_state`` is the hard purge. It repeats the call
+          so a scratch created between the two (or a removal that failed the
+          first time) is still collected. ``delete`` is idempotent.
+
+        The cost, recorded rather than hidden: a soft delete is reversible via
+        ``restore_conversation``, and the scratch is NOT restored with it. That
+        is the right trade for a working area — PRD §4 classifies
+        ``tool-results/`` as cache and the ledger keeps the durable reference —
+        but it is a real loss for ``drafts/`` and ``subagents/``, and reversing
+        it means moving this call to the hard-purge site alone.
+
+        D8: this is the ONLY thing that removes from ``.tmp``. There is no
+        timer, no TTL and no size cap.
+        """
+
+        from agent_runtime.capabilities.desktop.agent_scratch import (  # noqa: PLC0415
+            delete_conversation_scratch,
+        )
+
+        delete_conversation_scratch(conversation_id)
 
     async def _record_deletion_audit(
         self,

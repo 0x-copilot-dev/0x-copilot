@@ -182,6 +182,7 @@ from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
     compose_capability_discovery,
 )
+from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -1755,6 +1756,22 @@ class RuntimeRunHandler:
         # reading the workspace object.
         if granted_host_roots is not None:
             update["granted_host_roots"] = granted_host_roots
+        # PRD-FS-12 D3/D5 — create `$COPILOT_HOME/.tmp/<conversation_id>/` (and
+        # this run's tier) with its `meta.json` before the graph runs, so the
+        # agent's own working area exists the first time it writes. Gated on the
+        # same desktop signal as the host filesystem rules; a `None` workspace
+        # backend provisions nothing. Never raises.
+        #
+        # Not part of `update`, and deliberately: the granted roots above are a
+        # VALUE the composition reads, while this is an EFFECT on disk. The
+        # scratch the rules and floor are keyed on comes from
+        # `factory._agent_scratch_root`, which resolves the same
+        # `$COPILOT_HOME/.tmp` from the installation — so this call makes the
+        # directory real without becoming a second opinion about where it is.
+        AgentScratchWorkerWiring(workspace_backend=workspace_backend).provision(
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+        )
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.

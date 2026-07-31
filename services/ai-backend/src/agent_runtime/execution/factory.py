@@ -277,12 +277,20 @@ async def _assemble_harness(
     # effect mode chooses that object, and in ENFORCE it chooses one that cannot
     # name a host root — which silently made every attached folder ask again.
     granted_host_roots = runtime_dependencies.granted_host_roots
+    # And the agent's own writable area, resolved ONCE here for the same reason.
+    # Rules, floor and the middleware gate all read THIS object; see
+    # `_agent_scratch_root`. Unlike the roots it needs no dependency — it is a
+    # property of the installation, not of the run — but it is threaded rather
+    # than re-read so "the run's scratch" is a single value with a single
+    # lifetime, not a phrase that means whatever the env said at each call.
+    agent_scratch = _agent_scratch_root()
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
         large_tool_results_backend=runtime_dependencies.large_tool_results_backend,
         workspace_backend=workspace_backend,
         granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
         memory_routes=_file_memory_routes(memory_backend),
     )
 
@@ -462,7 +470,9 @@ async def _assemble_harness(
                 # this, such a path fell through to the StateBackend default and
                 # was answered with an empty listing and a green tick.
                 permissions=_host_filesystem_permissions(
-                    workspace_backend, granted_host_roots=granted_host_roots
+                    workspace_backend,
+                    granted_host_roots=granted_host_roots,
+                    agent_scratch=agent_scratch,
                 ),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
@@ -470,14 +480,18 @@ async def _assemble_harness(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
                     *_host_path_tool_middleware(
-                        workspace_backend, granted_host_roots=granted_host_roots
+                        workspace_backend,
+                        granted_host_roots=granted_host_roots,
+                        agent_scratch=agent_scratch,
                     ),
                 ),
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
                     *_host_path_tool_middleware_factories(
-                        workspace_backend, granted_host_roots=granted_host_roots
+                        workspace_backend,
+                        granted_host_roots=granted_host_roots,
+                        agent_scratch=agent_scratch,
                     ),
                 ),
             )
@@ -1707,6 +1721,7 @@ def _host_filesystem_permissions(
     workspace_backend: object | None = None,
     *,
     granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
 ) -> tuple[object, ...]:
     """Deep Agents ``FilesystemPermission`` rules for host paths — DESKTOP only.
 
@@ -1719,6 +1734,12 @@ def _host_filesystem_permissions(
     ``granted_host_roots`` is the run's resolved attach set (see
     :func:`_granted_host_roots`). ``None`` means nobody resolved one, not "there
     are none".
+
+    ``agent_scratch`` is the run's resolved ``$COPILOT_HOME/.tmp`` root (see
+    :func:`_agent_scratch_root`), and carries the same meaning: ``None`` is
+    "nobody resolved one", which falls back to resolving it here. The fallback
+    is the SAME function the caller would have used, so a caller that forgets to
+    thread it cannot produce a second answer — only a second call.
 
     Returns an empty tuple if deepagents' permission type cannot be imported,
     so a version skew degrades to today's behaviour instead of failing the run.
@@ -1742,9 +1763,46 @@ def _host_filesystem_permissions(
     return tuple(
         FilesystemPermission(**rule)
         for rule in HostFilesystemRules.build(
-            roots=_granted_host_roots(workspace_backend, resolved=granted_host_roots)
+            roots=_granted_host_roots(workspace_backend, resolved=granted_host_roots),
+            scratch=_agent_scratch_root(resolved=agent_scratch),
         )
     )
+
+
+def _agent_scratch_root(*, resolved: object | None = None) -> object | None:
+    """The agent's own writable area, ``$COPILOT_HOME/.tmp`` (PRD-FS-12 D3).
+
+    Single-sourced for the same reason ``_granted_host_roots`` is: the rule set
+    and :class:`HostFilesystemFloor` must admit exactly the same scratch, and
+    two independent resolutions could drift into a floor that refuses the
+    directory the rules allow.
+
+    ``resolved`` is that one answer, threaded down from the composition entry
+    point exactly as ``granted_host_roots`` is, so a run resolves its scratch
+    ONCE and the rules, the floor and the middleware gate all read that value.
+    Unlike the roots, though, the fallback here is not a different mechanism —
+    it is this same function's own env read. That is why a caller may omit it
+    (every test that composes a backend directly does) without opening the
+    divergence: forgetting to thread the value costs a second CALL, never a
+    second ANSWER.
+
+    Resolution cannot fail (it is an env read with a home-relative default) but
+    is guarded anyway: an unusable scratch must degrade to "the agent has no
+    place to write", never to a broken run or a widened rule.
+    """
+
+    if resolved is not None:
+        return resolved
+
+    from agent_runtime.capabilities.desktop.agent_scratch import (  # noqa: PLC0415
+        agent_scratch_root,
+    )
+
+    try:
+        return agent_scratch_root()
+    except (OSError, RuntimeError):  # pragma: no cover — Path.home() with no HOME
+        _LOGGER.warning("agent_scratch.root_unavailable")
+        return None
 
 
 def _granted_host_roots(
@@ -1803,6 +1861,7 @@ def _host_path_tool_middleware(
     workspace_backend: object | None,
     *,
     granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
 ) -> tuple[object, ...]:
     r"""The tool-layer host path translator — DESKTOP only, same gate as the rules.
 
@@ -1826,10 +1885,15 @@ def _host_path_tool_middleware(
     the backend capability instead would log
     ``host_filesystem.granted_roots_unavailable`` on every ENFORCE-mode run,
     which is precisely the alarm that now means "root resolution was skipped".
+    ``agent_scratch`` rides along for the same reason and with even less effect
+    on the answer — the gate asks only "is the tuple non-empty", and rules 1, 3,
+    4 and 5 exist with no grants and no scratch.
     """
 
     if not _host_filesystem_permissions(
-        workspace_backend, granted_host_roots=granted_host_roots
+        workspace_backend,
+        granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
     ):
         return ()
     from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
@@ -1843,6 +1907,7 @@ def _host_path_tool_middleware_factories(
     workspace_backend: object | None,
     *,
     granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
 ) -> tuple[object, ...]:
     """Same translator, as a factory for every locally compiled subagent.
 
@@ -1854,7 +1919,9 @@ def _host_path_tool_middleware_factories(
     """
 
     if not _host_filesystem_permissions(
-        workspace_backend, granted_host_roots=granted_host_roots
+        workspace_backend,
+        granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
     ):
         return ()
     from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
@@ -1871,6 +1938,7 @@ def _composed_deep_backend(
     large_tool_results_backend: object | None = None,
     workspace_backend: object | None = None,
     granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
     memory_routes: Mapping[str, object] | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
@@ -1941,7 +2009,9 @@ def _composed_deep_backend(
     # every non-desktop run composes byte-for-byte as before.
     return CompositeBackend(
         default=_host_default_backend(
-            workspace_backend, granted_host_roots=granted_host_roots
+            workspace_backend,
+            granted_host_roots=granted_host_roots,
+            agent_scratch=agent_scratch,
         ),
         routes=routes,
     )
@@ -1951,6 +2021,7 @@ def _host_default_backend(
     workspace_backend: object | None,
     *,
     granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
 ) -> object:
     """The backend for every path no route claims — including host paths.
 
@@ -1978,6 +2049,12 @@ def _host_default_backend(
     else — see its module header), so the tool layer stays the boundary for
     every path the matcher can actually see.
 
+    The floor is also where the agent's own scratch (``$COPILOT_HOME/.tmp``) is
+    admitted, and it is handed the SAME ``AgentScratchRoot`` the rule set was
+    built from. That pairing is not decoration: ``.tmp`` is a dotted segment, so
+    on the default configuration the matcher cannot see it at all and the floor
+    is the only layer that genuinely decides there (PRD-FS-12 §5).
+
     ``root_dir`` is the process working directory, which only affects RELATIVE
     path resolution; absolute paths ignore it entirely.
 
@@ -2000,9 +2077,6 @@ def _host_default_backend(
     from deepagents.backends.state import StateBackend  # noqa: PLC0415
 
     from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
-    from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
-        HostScratchDirectory,
-    )
     from agent_runtime.capabilities.desktop.host_floor import (  # noqa: PLC0415
         HostFilesystemFloor,
     )
@@ -2010,24 +2084,26 @@ def _host_default_backend(
         NativeHostPathBackend,
     )
 
+    # The gate stays FIRST and reads the threaded values, never a fresh
+    # resolution: `_granted_host_roots(None)` logs `granted_roots_unavailable`,
+    # and that log line is an alarm meaning "a desktop run skipped resolution".
+    # Firing it on every web image would retire the alarm.
     if not _host_filesystem_permissions(
-        workspace_backend, granted_host_roots=granted_host_roots
+        workspace_backend,
+        granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
     ):
         # Not desktop, or rules unavailable (version skew). Either way: do NOT
         # expose a real filesystem. Compose exactly as before.
         return guarded_default(StateBackend(), workspace_backend)
-    # ONE resolution, used three times: the rules were built from it above, the
-    # floor is handed it below, and the scratch directory is created under it.
-    # Resolving twice is how a folder ends up allowed by the rules and refused
-    # by the floor.
+    # ONE resolution of each fact, and everything downstream reads THOSE values:
+    # the rules were built from the same pair at the composition entry point,
+    # and the floor is handed them below. Resolving twice is how a folder ends
+    # up allowed by the rules and refused by the floor — and the scratch is held
+    # to the same discipline, because a floor that admits a different `.tmp`
+    # from the one the rules allow is the identical failure wearing a hat.
     roots = _granted_host_roots(workspace_backend, resolved=granted_host_roots)
-    # Binding the grants is also the moment the agent's one permitted host write
-    # location becomes real. Rule 2 and the floor both ALLOW `<root>/.copilot`,
-    # but nothing created it, so `ls` of the agent's own scratch answered
-    # `path_not_found` until something happened to write into it. Writable grants
-    # only, and a failure here is a warning rather than a dead run (see
-    # ``HostScratchDirectory``).
-    HostScratchDirectory.ensure(roots)  # type: ignore[arg-type]
+    scratch = _agent_scratch_root(resolved=agent_scratch)
     # Order is load-bearing. The floor is OUTERMOST because it judges the path
     # the tool layer produced — the canonical POSIX spelling — against roots
     # recorded in that same spelling; decoding to `C:\...` first would hand it a
@@ -2037,6 +2113,7 @@ def _host_default_backend(
     return HostFilesystemFloor(
         NativeHostPathBackend(FilesystemBackend(virtual_mode=False)),
         roots=roots,  # type: ignore[arg-type]
+        scratch=scratch,  # type: ignore[arg-type]
     )
 
 

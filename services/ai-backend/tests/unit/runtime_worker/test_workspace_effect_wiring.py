@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from agent_runtime.capabilities.desktop.agent_scratch import agent_scratch_root
 from agent_runtime.capabilities.desktop.host_floor import HostFilesystemFloor
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.workspace.contracts import (
@@ -597,10 +598,22 @@ class TestEnforceLaneGrantedRoots:
         assert floor.permits_write(f"{_ATTACHED}/.copilot/scratch.md") is False
         assert floor.permits_write(f"{_ATTACHED}/notes.md") is False
 
-    async def test_a_writable_grant_gets_scratch_and_nothing_more(
+    async def test_a_writable_grant_gets_no_direct_host_write_at_all(
         self, monkeypatch: pytest.MonkeyPatch, fake_dependencies: RuntimeDependencies
     ) -> None:
-        """The one direct host write there is, and its exact extent."""
+        """The writable half of D7 — and it says the same thing as the read-only half.
+
+        This test used to assert the opposite: that `read_write` bought the
+        agent one direct write location, `<attached>/.copilot`. PRD-FS-12 D7
+        moved the scratch to `$COPILOT_HOME/.tmp`, so the grant's MODE now
+        decides nothing about writes at all. Read-only and read-write compose
+        the same host-write posture, which is the point — "attaching a folder
+        widens reads" is finally true without a footnote.
+
+        Both layers are asserted because they answer different halves: rule 5
+        denies what the matcher can see, and `.copilot` (hidden) it cannot, so
+        only the floor can refuse that one.
+        """
 
         from deepagents.middleware.filesystem import _check_fs_permission
 
@@ -622,14 +635,20 @@ class TestEnforceLaneGrantedRoots:
         rules = list(builder.calls[0].permissions)
         floor = builder.calls[0].memory_backend.default
 
-        assert (
-            _check_fs_permission(rules, "write", f"{_ATTACHED}/.copilot/notes.md")
-            == "allow"
-        )
-        assert floor.permits_write(f"{_ATTACHED}/.copilot/notes.md") is True
-        # The user's own content stays on the staged lane even here.
+        # Nothing is written inside the folder the user attached — not their
+        # content, and not the scratch that used to be sited there.
         assert _check_fs_permission(rules, "write", f"{_ATTACHED}/notes.md") == "deny"
         assert floor.permits_write(f"{_ATTACHED}/notes.md") is False
+        assert floor.permits_write(f"{_ATTACHED}/.copilot/notes.md") is False
+        # No rule names the dropped location either, so it is gone from the
+        # policy and not merely overruled by the floor.
+        assert not any(
+            ".copilot" in path for rule in rules for path in (rule.paths or ())
+        )
+        # The agent is not left with nowhere to write: its own scratch, which
+        # needs no grant, is the location the floor does admit.
+        scratch = agent_scratch_root()
+        assert floor.permits_write(f"{scratch.posix}/conv/run/tool-results/a.txt")
 
     async def test_a_rollout_denied_run_still_reads_what_the_user_attached(
         self, monkeypatch: pytest.MonkeyPatch
