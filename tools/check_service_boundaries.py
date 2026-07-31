@@ -80,6 +80,7 @@ _DESKTOP_MAIN_IPC_CONTRACTS = (
     "apps/desktop/main/connectors/channels.ts",
     "apps/desktop/main/services/first-run-channels.ts",
     "apps/desktop/main/services/secure-storage-channels.ts",
+    "apps/desktop/main/window-channels.ts",
 )
 
 

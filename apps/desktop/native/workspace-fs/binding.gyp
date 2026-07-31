@@ -44,11 +44,28 @@
                                 # line: "error D8016: '/std:c++20' and
                                 # '/std:c11' ... are incompatible". The C
                                 # standard goes through the MSBuild property
-                                # below instead, which REPLACES rather than
-                                # appends and so cannot collide. If gyp does not
-                                # recognise that property it is dropped with a
-                                # warning and MSVC compiles this .c file in its
-                                # default C mode — which still builds.
+                                # below instead.
+                                #
+                                # That property alone was NOT enough, and the
+                                # first windows-latest run failed on exactly the
+                                # D8016 above. The reason is which half of
+                                # common.gypi applies: its VCCLCompilerTool
+                                # block sets the LanguageStandard *property*
+                                # only under `clang==1`, and on the MSVC leg
+                                # takes the other branch, which appends the raw
+                                # flag "-std:c++20" to AdditionalOptions. A
+                                # property cannot override a raw flag — both
+                                # reach cl, and D8016 fires. So the inherited
+                                # flag has to be removed, not overridden; the
+                                # exclusion below is gyp's mechanism for that
+                                # (the same "key!" form common.gypi itself uses
+                                # to drop inherited -Werror), it matches the
+                                # exact string, and gyp's list-filter pass
+                                # recurses into msvs_settings and runs after
+                                # target defaults are merged, so the flag is
+                                # present to be filtered. /Zc:__cplusplus and
+                                # /Zm2000 are inherited from the same list and
+                                # are deliberately left in place.
                                 #
                                 # /guard:cf is passed as a raw flag, not via the
                                 # named "ControlFlowGuard" setting: the first
@@ -63,6 +80,10 @@
                                     "/utf-8",
                                     "/guard:cf",
                                 ],
+                                # Drops common.gypi's inherited C++ standard for
+                                # this C-only target. Exact-string match on the
+                                # spelling common.gypi uses.
+                                "AdditionalOptions!": ["-std:c++20"],
                                 "LanguageStandard_C": "stdc11",
                                 "BufferSecurityCheck": "true",
                             },
