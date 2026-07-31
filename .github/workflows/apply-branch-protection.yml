@@ -24,11 +24,24 @@ on:
         type: boolean
         default: true
 
+# There is deliberately no `administration: write` here. It is NOT a valid
+# GITHUB_TOKEN permission: adding it makes the whole workflow unparseable
+# ("Unexpected value 'administration'") and every dispatch fails with HTTP 422
+# before a single step runs -- which is exactly what happened the first time this
+# was dispatched. Repository administration is not delegable to GITHUB_TOKEN at
+# all, so writing rulesets needs a fine-grained PAT carrying the repository
+# "Administration: read and write" permission, stored as REPO_ADMIN_TOKEN.
+#
+# Without that secret this workflow still DRY RUNS, which is the half that
+# matters in review. To apply without creating a PAT, a repo admin runs the same
+# code path locally:
+#
+#   GITHUB_REPOSITORY=0x-copilot-dev/0x-copilot \
+#     PYTHONPATH=tools python tools/apply_branch_protection.py --dry-run
+#
+# then --apply. Only the credential differs.
 permissions:
   contents: read
-  # Ruleset management is a repository-administration API. Without this the run
-  # fails with 403 on the first `gh api .../rulesets` call.
-  administration: write
 
 concurrency:
   group: apply-branch-protection
@@ -54,11 +67,20 @@ jobs:
 
       - name: Reconcile rulesets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # REPO_ADMIN_TOKEN when present; GITHUB_TOKEN otherwise, which can read
+          # and diff but will 403 on a write.
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN || secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
+          HAS_ADMIN_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN != '' }}
         run: |
           if [ "${DRY_RUN}" = "true" ]; then
             python tools/apply_branch_protection.py --dry-run
-          else
-            python tools/apply_branch_protection.py --apply
+            exit 0
           fi
+          # Say why, rather than surfacing a bare 403 from the API.
+          if [ "${HAS_ADMIN_TOKEN}" != "true" ]; then
+            echo "::error::Applying needs REPO_ADMIN_TOKEN (fine-grained PAT, repository Administration: read and write)."
+            echo "::error::GITHUB_TOKEN cannot be granted repository administration. Add that secret, or run the script locally as this workflow's header documents."
+            exit 1
+          fi
+          python tools/apply_branch_protection.py --apply

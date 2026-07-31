@@ -117,12 +117,56 @@ class RulesetPlanner:
         """Drop ``$``-prefixed documentation keys the API would reject."""
         return {key: value for key, value in ruleset.items() if not key.startswith("$")}
 
-    @staticmethod
-    def comparable(ruleset: dict[str, Any]) -> dict[str, Any]:
-        """Return ``ruleset`` without server-managed fields, for diffing."""
-        return {
+    @classmethod
+    def comparable(cls, ruleset: dict[str, Any]) -> dict[str, Any]:
+        """Return ``ruleset`` reduced to a form that compares stably.
+
+        Without this the reconciler reports drift on every single run, because
+        the API does not echo back what you sent:
+
+        * It materializes defaults the config never set (``required_reviewers:
+          []`` inside ``pull_request``).
+        * It returns ``bypass_actors`` in its own order, not the config's.
+
+        Both are normalized SYMMETRICALLY -- the same transformation runs over
+        the desired side too -- so a genuine difference still shows. Empty lists
+        are dropped from both sides rather than special-cased by key, which
+        covers the next server-materialized default without another patch here.
+
+        This matters more than it looks: a reconciler that always claims drift
+        is one nobody reads, and then a real change goes through unnoticed.
+        """
+        stripped = {
             key: value for key, value in ruleset.items() if key not in _SERVER_ONLY_KEYS
         }
+        return cls._normalize(stripped)
+
+    @classmethod
+    def _normalize(cls, value: Any) -> Any:
+        """Recursively drop empty lists and order the collections GitHub reorders."""
+        if isinstance(value, dict):
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                reduced = cls._normalize(item)
+                if reduced == []:
+                    continue
+                normalized[key] = reduced
+            if isinstance(normalized.get("bypass_actors"), list):
+                normalized["bypass_actors"] = sorted(
+                    normalized["bypass_actors"],
+                    key=lambda actor: (
+                        str(actor.get("actor_type", "")),
+                        int(actor.get("actor_id", 0) or 0),
+                    ),
+                )
+            if isinstance(normalized.get("rules"), list):
+                normalized["rules"] = sorted(
+                    normalized["rules"], key=lambda rule: str(rule.get("type", ""))
+                )
+            return normalized
+        if isinstance(value, list):
+            return [cls._normalize(item) for item in value]
+        return value
 
     @classmethod
     def diff(cls, current: dict[str, Any], desired: dict[str, Any]) -> str:

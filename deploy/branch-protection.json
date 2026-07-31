@@ -1,11 +1,12 @@
 {
-  "$schema_note": "Source of truth for the GitHub repository rulesets. Apply via .github/workflows/apply-branch-protection.yml. Schema follows the GitHub REST API: POST /repos/{owner}/{repo}/rulesets. This file holds a LIST of rulesets under `rulesets`; the workflow reconciles each one by name.",
+  "$schema_note": "Source of truth for the GitHub repository rulesets. Apply via .github/workflows/apply-branch-protection.yml, or by running tools/apply_branch_protection.py directly. Schema follows the GitHub REST API: POST /repos/{owner}/{repo}/rulesets. This file holds a LIST of rulesets under `rulesets`; the reconciler handles each one by name.",
 
   "$model": [
     "Branching: feature -> dev (PR) -> main (promotion workflow only).",
     "dev is the integration branch: every merge lands there first and CI runs on it.",
     "main is the released branch. It moves only via .github/workflows/promote-to-main.yml,",
-    "which fast-forwards it to a dev commit that has already gone green.",
+    "which fast-forwards it to a dev commit that has already gone green, plus the",
+    "version-bump commit release-cli.yml writes.",
     "",
     "MERGE RIGHTS. Merging a PR requires write access, and write is granted to exactly two",
     "collaborators: 0x-copilot-dev and parthpahwa1. Anyone may fork and open a PR; nobody",
@@ -36,13 +37,45 @@
     "`gh api repos/OWNER/REPO/commits --jq '.[].commit.verification.verified'`), so enabling",
     "it blocks all work. Turn it on only as part of a deliberate signing rollout.",
     "",
-    "BYPASS ACTOR 15368 is the GitHub Actions app. release-cli.yml pushes the version-bump",
-    "commit and tag, and promote-to-main.yml fast-forwards main; both are blocked by these",
-    "rules without it. The tradeoff is real and worth stating: it means ANY workflow in this",
-    "repository can write to main and dev. That is acceptable only because .github/ is",
-    "CODEOWNER-gated and workflow changes go through review like everything else. The",
-    "tighter alternative is a fine-grained PAT held as a secret and used only by those two",
-    "workflows, which narrows the blast radius at the cost of a token to rotate."
+    "WHY main CARRIES FEWER RULES THAN dev. This looks backwards until you try the",
+    "alternative. Review and checks live on dev, and main only ever receives commits that",
+    "already passed them -- so repeating the rules on main adds nothing and breaks the",
+    "promotion path, because the two workflows that legitimately move main cannot satisfy",
+    "them:",
+    "",
+    "  * A `pull_request` rule blocks promote-to-main.yml's fast-forward outright.",
+    "  * `required_status_checks` blocks release-cli.yml's version-bump commit, which is new",
+    "    and therefore has no checks of its own.",
+    "",
+    "The usual escape is a GitHub Actions bypass actor (actor_type Integration, id 15368).",
+    "That is UNAVAILABLE here: the API rejects it with \"Actor GitHub Actions integration",
+    "must be part of the ruleset source or owner organization\" -- Integration bypass actors",
+    "require an ORG, and this repo is owned by a user. Same root cause as the CODEOWNERS",
+    "teams problem.",
+    "",
+    "required_linear_history is ABSENT from main for the same family of reason, found the",
+    "same way -- by running the promotion for real. It forbids merge commits, and every PR",
+    "merged into dev creates one, which promotion then fast-forwards onto main:",
+    "",
+    "  remote: - This branch must not contain merge commits.",
+    "  remote:   Found 1 violation: e9fe1436 (Merge pull request #474)",
+    "",
+    "The rule is structurally incompatible with this branching model. The alternative --",
+    "squash-only merges into dev -- would make dev linear and satisfy it, but it would also",
+    "collapse each PR to a single commit, and tools/cli_release.py builds the changelog from",
+    "the individual Conventional Commits inside a PR (it already skips merge commits with",
+    "--no-merges). Squashing would coarsen every release note to one line per PR. main also",
+    "already contains merge commits throughout its history, so the rule was aspirational,",
+    "never enforced.",
+    "",
+    "So main keeps the rules that protect it without blocking its own workflows -- no",
+    "deletion, no force-push -- and its QUALITY gate is promote-to-main.yml,",
+    "which refuses to promote a dev commit whose checks are not all green and not all",
+    "finished. That evaluates the whole commit rather than one diff, which is the stronger",
+    "check anyway. The residual risk is honest and worth naming: a collaborator CAN still",
+    "push directly to main. Nothing here prevents that; only the two-person collaborator",
+    "list does. Moving the repo into an organization would restore the bypass actor and let",
+    "the stricter rules come back."
   ],
 
   "rulesets": [
@@ -66,41 +99,9 @@
           "actor_id": 114860912,
           "actor_type": "User",
           "bypass_mode": "always"
-        },
-        {
-          "actor_id": 15368,
-          "actor_type": "Integration",
-          "bypass_mode": "always"
         }
       ],
-      "rules": [
-        { "type": "deletion" },
-        { "type": "non_fast_forward" },
-        { "type": "required_linear_history" },
-        {
-          "type": "pull_request",
-          "parameters": {
-            "required_approving_review_count": 2,
-            "dismiss_stale_reviews_on_push": true,
-            "require_code_owner_review": true,
-            "require_last_push_approval": true,
-            "required_review_thread_resolution": true,
-            "allowed_merge_methods": ["merge", "squash"]
-          }
-        },
-        {
-          "type": "required_status_checks",
-          "parameters": {
-            "strict_required_status_checks_policy": true,
-            "do_not_enforce_on_create": false,
-            "required_status_checks": [
-              { "context": "lint-and-secrets" },
-              { "context": "tenants-lint" },
-              { "context": "repo-gates" }
-            ]
-          }
-        }
-      ]
+      "rules": [{ "type": "deletion" }, { "type": "non_fast_forward" }]
     },
 
     {
@@ -122,11 +123,6 @@
         {
           "actor_id": 114860912,
           "actor_type": "User",
-          "bypass_mode": "always"
-        },
-        {
-          "actor_id": 15368,
-          "actor_type": "Integration",
           "bypass_mode": "always"
         }
       ],
