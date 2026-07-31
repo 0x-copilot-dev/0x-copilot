@@ -41,6 +41,10 @@ import type { FilePickerPort } from "../../ports/FilePickerPort";
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
+import {
+  bypassSelectionForSend,
+  MANUAL_BYPASS_STATE,
+} from "../../composer/filesystemBypass";
 import { RunDestination, buildRunCreateBody } from "./RunDestination";
 import { runModeKey } from "./useRunMode";
 
@@ -2174,6 +2178,32 @@ describe("buildRunCreateBody", () => {
     expect(
       buildRunCreateBody(CONV, { goal: "x" }).web_search_enabled,
     ).toBeUndefined();
+  });
+
+  it("only sends filesystem_bypass when the composer actually selected one", () => {
+    // PRD-FS-10 §4.3. A host that never surfaces the pill must produce the
+    // byte-identical body it produced before bypass existed — the whole reason
+    // `bypassSelectionForSend` returns undefined for the default posture.
+    expect(
+      buildRunCreateBody(CONV, { goal: "x" }).filesystem_bypass,
+    ).toBeUndefined();
+    expect(
+      buildRunCreateBody(CONV, {
+        goal: "x",
+        filesystemBypass: bypassSelectionForSend(MANUAL_BYPASS_STATE, {
+          masterEnabled: true,
+        }),
+      }).filesystem_bypass,
+    ).toBeUndefined();
+    expect(
+      buildRunCreateBody(CONV, {
+        goal: "x",
+        filesystemBypass: bypassSelectionForSend(
+          { mode: "bypass", scope: "run" },
+          { masterEnabled: true },
+        ),
+      }).filesystem_bypass,
+    ).toEqual({ run: "bypass" });
   });
 
   it("nests active connector scopes under request_context, omitting an empty map", () => {

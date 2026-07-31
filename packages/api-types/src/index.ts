@@ -1301,6 +1301,41 @@ export interface WorkspaceBehaviorOverrides {
    */
   default_local_model?: string | null;
   training_data_opt_out?: boolean;
+  /**
+   * PRD-FS-10 §4.3 tier 1 — the filesystem-bypass MASTER switch.
+   *
+   * `false` / omitted (the default) means the composer must not OFFER a
+   * run/message bypass at all: the pill renders disabled Manual and its menu
+   * is not mounted. It is not merely a client hint — the runtime folds this
+   * server-side at run-create, so a client that sends a bypass selection while
+   * this is off gets `manual` regardless.
+   *
+   * Turning it ON only makes the control available; it never puts a run into
+   * bypass by itself, and it never widens a grant. Additive + optional (JSONB
+   * blob, no migration).
+   */
+  filesystem_bypass_enabled?: boolean;
+}
+
+/** PRD-FS-10 §4.3 — composer execution mode. Mirrors the runtime StrEnum. */
+export type FilesystemBypassMode = "manual" | "bypass";
+
+/**
+ * PRD-FS-10 §4.3 — the composer's bypass selection on `POST /v1/agent/runs`.
+ *
+ * Two named slots, because the field name IS the scope: a payload cannot carry
+ * two selections for the same scope or a `scope` that contradicts where it was
+ * filed. An omitted slot means "not selected", which is NOT the same as
+ * `"manual"` — an explicit per-message Manual has to be able to override a
+ * sticky run bypass.
+ *
+ * ADVISORY. The runtime folds it against the workspace master switch and
+ * re-checks the grant bound (granted + writable + reversible) before any
+ * approval pause is skipped.
+ */
+export interface FilesystemBypassSelection {
+  run?: FilesystemBypassMode;
+  message?: FilesystemBypassMode;
 }
 
 /** PR 4.3 — kind of retention TTL (mirrors `RetentionKind` server-side). */
@@ -2332,6 +2367,14 @@ export interface CreateRunRequest {
    * `false` omits the built-in `web_search` tool for this run only.
    */
   web_search_enabled?: boolean;
+  /**
+   * PRD-FS-10 §4.3 — composer bypass-pill selection for this send. Omitted
+   * when the master switch is off or the composer is in its default Manual
+   * posture, so a host that never surfaces the pill sends the body it always
+   * sent. See {@link FilesystemBypassSelection} for why this cannot grant
+   * anything on its own.
+   */
+  filesystem_bypass?: FilesystemBypassSelection | null;
   content?: RunContentPart[];
   attachments?: RunAttachmentRequest[];
   quote?: RunQuoteMetadata | null;

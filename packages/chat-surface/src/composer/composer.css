@@ -1011,3 +1011,128 @@
   justify-content: flex-end;
   gap: var(--space-sm);
 }
+
+/* ---------------------------------------------------------------------------
+ * Bypass pill (PRD-FS-10 §4.3) — execution mode: Manual · Bypass.
+ *
+ * Deliberately NO new tokens and NO new shape: it composes the shared
+ * `.ui-cpill` recipe that `.atlas-model-pill` also uses, and only adds what is
+ * genuinely different — the `data-mode="bypass"` state, which has to be
+ * legible at a glance because it is the one posture where a host write does
+ * not stop for the user.
+ *
+ * These rules live in the PACKAGE stylesheet, which both hosts import, not in
+ * `apps/frontend/src/styles.css`. A host sheet that re-declares a
+ * package-owned class name wins the cascade and silently restyles one surface
+ * (see PR #459); the approval card's stranded rules are the standing example.
+ * ------------------------------------------------------------------------ */
+.atlas-bypass-pill__root {
+  flex: 0 1 auto;
+  min-width: 0;
+  position: relative;
+}
+
+/* Rest state is the same transparent-on-transparent chrome as the model pill;
+ * `.ui-cpill` (design-system) supplies the shared box, and this file adds only
+ * the states that recipe leaves open. */
+.atlas-bypass-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 26px;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-normal);
+  white-space: nowrap;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.atlas-bypass-pill:hover:not([disabled]),
+.atlas-bypass-pill[data-open],
+.atlas-bypass-pill[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+/* Bypass on. Warning ink, not the accent: the accent means "this is the
+ * primary action", and an auto-applying write is a posture to notice rather
+ * than a thing to reach for. Matches the Run cockpit's `PostureChip`, which
+ * says the same thing in the same colour on the other surface. */
+.atlas-bypass-pill[data-mode="bypass"] {
+  color: var(--color-warning-text, var(--color-text));
+  border-color: var(--color-warning-border, var(--color-border));
+  background: var(--color-warning-surface, transparent);
+}
+
+.atlas-bypass-pill:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* The master-switch-off state. Reads as unavailable rather than broken; the
+ * trigger's tooltip says where to turn it on. */
+.atlas-bypass-pill[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.atlas-bypass-pill__name {
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atlas-bypass-pill svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+
+/* Same 300px pin and the same reason as `.atlas-model-pill__menu`: `Menu`
+ * writes an inline `min-width` from the anchor, which no class can beat, and
+ * the trigger is far narrower than the frame. */
+.atlas-bypass-pill__menu {
+  width: 300px;
+  min-width: 0;
+  padding: 0;
+}
+
+.atlas-bypass-pill__col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The standing-rule clarifier. Sits in the pinned footer slot and is styled as
+ * information, not as a row: no hover, no pointer, nothing that suggests it
+ * can be chosen. */
+.atlas-bypass-pill__note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: default;
+}
+
+.atlas-bypass-pill__note-lead {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  color: var(--color-text);
+}
+
+.atlas-bypass-pill__note-sub {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  color: var(--color-text-subtle);
+}

@@ -57,8 +57,15 @@ from agent_runtime.effects.contracts import (
 )
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassBound,
+    FilesystemBypassDecision,
+    FilesystemBypassTarget,
+)
 from agent_runtime.surfaces_v2.entities import EffectTarget, OperationDisposition
 from agent_runtime.surfaces_v2.ledger_models import (
+    EffectActor,
     EffectClass,
     EffectDecisionKind,
     EffectExecutorKind,
@@ -75,6 +82,13 @@ from agent_runtime.capabilities.tools.permissions import (
 
 _WORKSPACE_MEDIA_TYPE = "application/vnd.0xcopilot.workspace-change-set+json"
 _STAGED_SUMMARY = "Workspace change staged for review; the host was not modified."
+# Bypass wording is deliberately NOT "written" / "saved". At this point the
+# change is approved and queued for the C2 commit executor, which is still the
+# only thing that touches the disk. Saying it is already on disk would be the
+# same lie the empty-listing defect told, in the other direction.
+_BYPASS_APPROVED_SUMMARY = (
+    "Workspace change approved automatically (bypass) and queued to apply."
+)
 _NO_GRANT = "Workspace access is required; no host change was made."
 _READ_ONLY = "This workspace grant is read-only; no host change was made."
 _DELETE_FORBIDDEN = (
@@ -129,6 +143,11 @@ class WorkspaceGatewayServices:
     actor: EffectActorIdentity
     proposals: WorkspaceProposalStorePort
     grants: tuple[WorkspaceGrantBinding, ...]
+    #: The run's sealed filesystem-bypass decision (PRD-FS-10 §4.3), resolved
+    #: once at run-create and read from the persisted ``runtime_context``. The
+    #: default is the fail-closed one, so every existing composition — and any
+    #: lane that cannot supply it — keeps asking exactly as before.
+    bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS
 
     def grant_for_path(self, virtual_path: str) -> WorkspaceGrantBinding | None:
         mount = mount_id_for_path(virtual_path)
@@ -415,10 +434,20 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 f"workspace-projection-bind:{request.operation_id}:{revision.revision}"
             ),
         )
+        # Strictly after the projection is bound: A4 refuses to approve a stage
+        # whose exact revision has no projection row, so ordering this earlier
+        # would produce a bypass that reliably failed and silently fell back to
+        # asking.
+        approved = await self._auto_approve_bypassed(
+            request=request,
+            state=state,
+            effect_class=effect_class,
+            grant=grant,
+        )
         return GatewayProposedEffect(
             stage_id=state.stage_id,
             proposal_ref=revision.proposal_ref,
-            safe_summary=_STAGED_SUMMARY,
+            safe_summary=(_BYPASS_APPROVED_SUMMARY if approved else _STAGED_SUMMARY),
             activity_ref=revision.proposal_ref,
             artifact_source_ref=(
                 entries[0].content_ref
@@ -602,8 +631,44 @@ class WorkspaceOperationAdapter(OperationAdapter):
             # decision remains protected by A5's exact decision/revision fold.
             return
 
-    @staticmethod
+    def _bypass_target(
+        self,
+        *,
+        effect_class: EffectClass,
+        grant: WorkspaceGrantBinding,
+    ) -> FilesystemBypassTarget:
+        """Restate this mutation as the three facts the bypass bound needs.
+
+        Built from the SAME grant binding the gate resolved, so the bound is a
+        second, independent statement of the rule rather than a paraphrase of
+        the gate's control flow. Today the gate already refuses an ungranted or
+        read-only target, which makes two of these facts true whenever we get
+        here; that redundancy is the point. If the gate is ever loosened, the
+        bound still holds, and the test that pins it fails on the gate change
+        instead of on a production incident.
+        """
+
+        return FilesystemBypassTarget(
+            granted=grant.status == "active",
+            writable=grant.mode != "read_only",
+            reversible=effect_class is EffectClass.EXTERNAL_REVERSIBLE,
+        )
+
+    def _bypass_permits(
+        self,
+        *,
+        effect_class: EffectClass,
+        grant: WorkspaceGrantBinding,
+    ) -> bool:
+        """Whether this run's bypass decision covers THIS mutation."""
+
+        return FilesystemBypassBound.permits(
+            self._services.bypass,
+            self._bypass_target(effect_class=effect_class, grant=grant),
+        )
+
     def _policy_snapshot(
+        self,
         *,
         request: OperationRequest,
         effect_class: EffectClass,
@@ -622,6 +687,14 @@ class WorkspaceOperationAdapter(OperationAdapter):
             ToolUsePolicyMode.REQUIRE: EffectPolicy.REQUIRE,
             ToolUsePolicyMode.BLOCK: EffectPolicy.BLOCK,
         }[mode]
+        # Bypass is the SECOND way this stage can carry ``allow_always``, and it
+        # rides the identical A4 lane as the first (an explicit user AUTO write
+        # policy): same snapshot field, same eligibility test in
+        # ``EffectStagePolicyResolver``, same recorded reason. It adds no new
+        # authority — a BLOCK / REQUIRE / ASK policy still wins the
+        # most-restrictive fold, because ``allow_always`` only ever competes,
+        # it never overrides.
+        bypassed = self._bypass_permits(effect_class=effect_class, grant=grant)
         return EffectPolicySnapshot(
             snapshot_ref=(
                 f"policy://runs/{request.run_id}/workspace/{request.operation_id}"
@@ -632,12 +705,86 @@ class WorkspaceOperationAdapter(OperationAdapter):
             # posture: leaving this unset allows only an explicit reversible
             # user AUTO policy to take A4's tightly-scoped allow-always lane.
             grant_policy=None,
-            user_policy=mapped,
+            # Bypass suspends the ASK *posture* for this run. Mapping it onto
+            # the user axis (rather than leaving ASK and relying on
+            # allow_always alone) is required: the resolver adds an explicit
+            # ``external_reversible_default`` ASK candidate for a non-eligible
+            # proposal, and the fold takes the most restrictive candidate.
+            user_policy=(
+                EffectPolicy.AUTO
+                if bypassed and mode is ToolUsePolicyMode.ASK
+                else mapped
+            ),
             allow_always=(
-                mode is ToolUsePolicyMode.AUTO
-                and effect_class is EffectClass.EXTERNAL_REVERSIBLE
+                bypassed
+                or (
+                    mode is ToolUsePolicyMode.AUTO
+                    and effect_class is EffectClass.EXTERNAL_REVERSIBLE
+                )
             ),
         )
+
+    async def _auto_approve_bypassed(
+        self,
+        *,
+        request: OperationRequest,
+        state: EffectStageState,
+        effect_class: EffectClass,
+        grant: WorkspaceGrantBinding,
+    ) -> bool:
+        """Record the POLICY approval that removes the pause. Returns success.
+
+        This is the whole of "bypass". It does NOT write anything, does not
+        touch the host, and does not shortcut a step: it appends the SAME
+        ``effect.decision`` ledger row a human click appends, authored by
+        ``EffectActor.POLICY``, and lets ``EffectStager.decide`` enqueue the
+        SAME C2 commit command. One lane, one ledger, one executor — the only
+        difference is who signed.
+
+        A4 re-checks the decision independently: ``EffectStager.decide``
+        refuses a POLICY actor unless the folded stage policy is ``AUTO``. So a
+        bug in this class's bound cannot approve a held stage; the worst it can
+        do is ask when it should not have.
+
+        Failure degrades toward asking. If the decision cannot be recorded the
+        stage stays approvable by a human, which is the safe direction, so this
+        returns ``False`` and the caller reports the ordinary staged summary.
+        """
+
+        if not self._bypass_permits(effect_class=effect_class, grant=grant):
+            return False
+        revision = state.current_revision
+        try:
+            await self._services.stager.decide(
+                scope=self._services.scope,
+                stage_id=state.stage_id,
+                revision=revision.revision,
+                decision=EffectDecisionKind.APPROVE,
+                proposal_digest=revision.proposal_digest,
+                target_digest=state.target_digest,
+                actor=EffectActorIdentity(
+                    actor=EffectActor.POLICY,
+                    principal_ref=self._services.scope.owner_ref,
+                ),
+                idempotency_key=(
+                    f"workspace-bypass-approve:{request.operation_id}"
+                    f":{revision.revision}"
+                ),
+            )
+        except Exception:
+            _LOGGER.warning(
+                "workspace.bypass_auto_approve_failed",
+                extra={
+                    "metadata": {
+                        "operation_id": request.operation_id,
+                        "stage_id": state.stage_id,
+                        "revision": revision.revision,
+                    }
+                },
+                exc_info=True,
+            )
+            return False
+        return True
 
 
 def _request_arguments(request: OperationRequest) -> dict[str, object]:

@@ -51,7 +51,9 @@ import {
   createProviderKeysPort,
   createSpendGuardrailPort,
   createToolUsePolicyPort,
+  filesystemBypassPatch,
   localModelInstalledTag,
+  withFilesystemBypass,
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
   type ApprovalPolicyValue,
@@ -777,12 +779,34 @@ export function SettingsMount({
     };
   }, [toolUsePolicyPort]);
 
+  // PRD-FS-10 §4.3 tier 1 — the card also carries the filesystem-bypass master
+  // switch, which lives in the workspace blob rather than the per-user policy.
+  // Seeded here so the toggle reflects what is actually persisted; without this
+  // it would read off after every reload no matter what was saved.
+  const bypassEnabled =
+    workspaceDefaults?.behavior_overrides?.filesystem_bypass_enabled === true;
+  useEffect(() => {
+    setApprovalPolicy((prev) => withFilesystemBypass(prev, bypassEnabled));
+  }, [bypassEnabled]);
+
   const persistApprovalPolicy = async (
     next: ApprovalPolicyValue,
     toast: (message: string) => void,
   ): Promise<void> => {
     const previous = approvalPolicy;
     setApprovalPolicy(next); // optimistic
+    // Two stores, so two saves. The bypass patch is null unless the switch
+    // actually moved, so an ordinary axis edit still writes exactly once.
+    const bypassPatch = filesystemBypassPatch(previous, next);
+    if (bypassPatch !== null) {
+      void persistBehaviorOverride(
+        bypassPatch,
+        toast,
+        bypassPatch.filesystem_bypass_enabled
+          ? "Bypass can now be turned on per run."
+          : "File changes always ask again.",
+      );
+    }
     try {
       await toolUsePolicyPort.save(next);
       toast("Approval policy saved.");

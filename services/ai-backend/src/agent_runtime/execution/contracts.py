@@ -21,6 +21,10 @@ from pydantic import (
     model_validator,
 )
 
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+)
 from agent_runtime.execution.ports import (
     McpRegistry,
     MemoryBackendFactory,
@@ -382,6 +386,18 @@ class AgentRuntimeContext(RuntimeContract):
     # turn the ``WebSearchToolRegistry`` omits the ``web_search`` tool for that
     # run only. Purely a capability filter; nothing else keys off it.
     web_search_enabled: bool = True
+    # Sealed filesystem-bypass decision for this run (PRD-FS-10 §4.3). Folded
+    # ONCE at run-create from the workspace master switch plus the composer's
+    # run/message selection, then persisted verbatim in ``agent_runs`` so a
+    # worker re-claim or an approval resume reads the same answer rather than
+    # re-deriving it from state that may have moved. The default is the
+    # fail-closed one: master off, manual, nothing offered — which is what every
+    # non-desktop run and every run created before this field existed resolves
+    # to. It only ever removes the approval PAUSE on the staged C3 -> ledger ->
+    # C2 lane; it can neither widen a grant nor authorize a direct host write.
+    filesystem_bypass: FilesystemBypassDecision = Field(
+        default_factory=lambda: MANUAL_FILESYSTEM_BYPASS
+    )
     # Workspace-level policy knobs (e.g. training opt-out, behavior overrides)
     # resolved at run-create and persisted verbatim in ``agent_runs``. Stored as
     # a generic ``JsonObject`` rather than a typed model to avoid importing

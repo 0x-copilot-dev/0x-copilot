@@ -124,6 +124,17 @@ export interface AssistantComposerProps {
    * above the overflow-hidden composer frame.
    */
   toolsTrigger?: ReactNode;
+  /**
+   * Execution-mode pill (`<BypassPill>`) and its popover — PRD-FS-10 §4.2
+   * puts it in the slot the model pill vacates, immediately right of Tools,
+   * because execution mode is the decision a user re-makes per task while
+   * model choice is set-and-forget.
+   *
+   * A SLOT rather than data props: the host owns the master switch (Settings)
+   * and the selection state, and this core must not learn to fetch either.
+   * Omitted → nothing renders, which is the correct web/test degradation.
+   */
+  bypassTrigger?: ReactNode;
   /** PR 8.0.1 — display name of the active model, surfaced in the
    *  composer footer hint row. */
   activeModelLabel?: string;
@@ -253,6 +264,7 @@ export const AssistantComposer = forwardRef<
     onClearSkills,
     connectorsTrigger,
     toolsTrigger,
+    bypassTrigger,
     // activeModelLabel is still typed on the prop surface (callers haven't
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
@@ -573,6 +585,11 @@ export const AssistantComposer = forwardRef<
             </div>
             {connectorsTrigger ?? null}
             {toolsTrigger ?? null}
+            {/* PRD-FS-10 §4.2 — execution mode sits between Tools and the
+                model pill. Placed here rather than after the model so the
+                order is already the target one whether or not the §4.2
+                model-pill move has landed. */}
+            {bypassTrigger ?? null}
             {models && selectedModel !== undefined && onModelChange ? (
               <ModelPill
                 models={models}

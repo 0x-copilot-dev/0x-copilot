@@ -8,6 +8,7 @@ API-layer concerns.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from starlette import status
@@ -36,6 +37,11 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.filesystem_bypass import (
+    FilesystemBypassDecision,
+    FilesystemBypassResolver,
+    FilesystemBypassSource,
+)
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.settings import RuntimeSettings
@@ -53,6 +59,8 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
     RunRecord,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RunCoordinator:
@@ -684,12 +692,48 @@ class RunCoordinator:
                 if request.web_search_enabled is not None
                 else True
             ),
+            filesystem_bypass=self._seal_filesystem_bypass(
+                request=request,
+                workspace_behavior_overrides=workspace_behavior_overrides,
+            ),
             workspace_behavior_overrides=workspace_behavior_overrides or {},
             user_policies_json=user_policies_json or {},
             provider_keys=provider_keys or {},
             provider_endpoints=provider_endpoints or {},
         )
         return request.model_copy(update={"runtime_context": runtime_context})
+
+    def _seal_filesystem_bypass(
+        self,
+        *,
+        request: CreateRunRequest,
+        workspace_behavior_overrides: dict[str, object] | None,
+    ) -> FilesystemBypassDecision:
+        """Fold the master switch and the composer selection into one decision.
+
+        Sealed HERE, once, and persisted with the run. The master switch is
+        read from the workspace-defaults blob the coordinator already resolved
+        — never from the request — so a client cannot opt itself in by
+        asserting a tier it does not control. A selection that arrives while
+        the switch is off is refused and the refusal is logged, because the
+        product rule is "not offered", and a client that offered it anyway is
+        either stale or hostile and both are worth seeing.
+        """
+
+        master_enabled = bool(
+            (workspace_behavior_overrides or {}).get("filesystem_bypass_enabled")
+            is True
+        )
+        decision = FilesystemBypassResolver.resolve(
+            master_enabled=master_enabled,
+            selection=request.filesystem_bypass,
+        )
+        if decision.source is FilesystemBypassSource.MASTER_OFF:
+            _LOGGER.warning(
+                "filesystem_bypass.selection_refused_master_off org_id=%s",
+                request.org_id,
+            )
+        return decision
 
     async def _prior_run_ids_for_chain(
         self,
