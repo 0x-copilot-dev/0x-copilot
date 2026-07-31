@@ -90,7 +90,20 @@
                             "VCLinkerTool": {
                                 "RandomizedBaseAddress": "2",
                                 "DataExecutionPrevention": "2",
-                                "ImageHasSafeExceptionHandlers": "true",
+                                # NO "ImageHasSafeExceptionHandlers" HERE. It
+                                # emits /SAFESEH, and the linker rejects that
+                                # outright on this target: "LNK1246: '/SAFESEH'
+                                # not compatible with 'x64' target machine".
+                                # SafeSEH is an x86-32 mitigation — it exists
+                                # because 32-bit exception handler chains live
+                                # on the stack and can be overwritten. x64
+                                # instead carries unwind and handler data in the
+                                # PE's .pdata/.xdata, out of reach of a stack
+                                # overwrite, so the property is not "off" here,
+                                # it is structurally unnecessary. Restore it
+                                # only behind an x86-32 condition, if this addon
+                                # is ever built for that architecture.
+                                #
                                 # CFG needs the linker half too; a /guard:cf
                                 # compile alone does not produce a guarded image.
                                 "AdditionalOptions": ["/guard:cf"],
