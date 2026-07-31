@@ -164,10 +164,11 @@ body {
 
 /* The frame owns the desktop window boundary. RunDestination also carries a
    standalone/web card boundary, which would otherwise create a second inset
-   border and shrink the real window bar by two pixels. Keep that standalone
-   treatment outside the desktop host; the frame is the single source of the
-   native-style chrome here. */
-.desktop-window-frame > [data-testid="destination-outlet"] > .run-destination {
+   border and shrink the real window bar by two pixels. The outlet is nested
+   inside ChatShell in the production DOM, so this must be a descendant match
+   from the frame (not a direct-child match). Keep the standalone treatment
+   outside the desktop host; the frame is the single source of native chrome. */
+.desktop-window-frame [data-testid="destination-outlet"] > .run-destination {
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;

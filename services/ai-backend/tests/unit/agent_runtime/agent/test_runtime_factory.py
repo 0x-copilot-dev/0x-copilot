@@ -506,6 +506,31 @@ async def test_factory_typed_plan_is_byte_identical_to_legacy_prompt_order(
     assert builder.calls[0].system_prompt == expected
 
 
+def test_capability_prompt_does_not_mislabel_filesystem_tools_as_shell() -> None:
+    prompt = _instructions_with_capability_tools(
+        instructions="Base.",
+        code_mode_active=False,
+        sandbox_execute_active=False,
+    )
+
+    assert "bounded file APIs" in prompt
+    assert "no shell/terminal command tool" in prompt
+    assert "run arbitrary commands" in prompt
+
+
+def test_capability_prompt_claims_shell_only_when_sandbox_tool_is_active() -> None:
+    prompt = _instructions_with_capability_tools(
+        instructions="Base.",
+        code_mode_active=False,
+        sandbox_execute_active=True,
+    )
+
+    assert "`run_in_sandbox`" in prompt
+    assert "single shell command" in prompt
+    assert "no shell/terminal command tool" not in prompt
+    assert "CANNOT see the user's files" in prompt
+
+
 class FakeMcpProvider:
     async def list_server_cards(self) -> tuple[McpServerCard, ...]:
         return (

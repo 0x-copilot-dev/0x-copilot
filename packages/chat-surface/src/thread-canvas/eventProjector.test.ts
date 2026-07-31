@@ -546,6 +546,50 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entry.createdAtMs).toBe(1700000000000);
   });
 
+  it("keeps the agent-authored presentation title through terminal lifecycle labels", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        display_title: "web_search started",
+        presentation: {
+          title: "Web search running",
+          summary: "Running a web search",
+          status_label: "Running",
+          kind: "progress",
+        },
+        payload: {
+          call_id: "call-human-title",
+          tool_name: "web_search",
+          args: {
+            display_title: "PEP 8 documentation",
+            display_summary: "Find the official Python style guide",
+            query: "official PEP 8 documentation",
+          },
+        },
+      }),
+      makeEnvelope("tool_result", {
+        display_title: "web_search completed",
+        presentation: {
+          title: "Web search completed",
+          status_label: "Done",
+          kind: "result",
+        },
+        payload: {
+          call_id: "call-human-title",
+          tool_name: "web_search",
+          status: "completed",
+          output: { hits: 1 },
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      title: "PEP 8 documentation",
+      status: "complete",
+    });
+  });
+
   it("keeps a started-only call in the running state", () => {
     nextSeq = 0;
     const entries = projectToolCalls([
@@ -670,6 +714,50 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].status).toBe("error");
     expect(entries[0].errorMessage).toBe("connector timed out");
+  });
+
+  it("repairs a legacy JSON-encoded typed error mislabeled as completed", () => {
+    nextSeq = 0;
+    const embedded = {
+      error: {
+        code: "connection_failed",
+        safe_message: "The MCP server could not be reached.",
+        retryable: true,
+      },
+    };
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        presentation: {
+          title: "Load Linear tools",
+          summary: "Connecting to Linear",
+          status_label: "Running",
+          kind: "progress",
+        },
+        payload: {
+          call_id: "call-legacy-error",
+          tool_name: "load_mcp_server",
+        },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-legacy-error",
+          tool_name: "load_mcp_server",
+          // This is the old worker bug: LangChain called a returned error data
+          // object successful and the worker trusted that lifecycle status.
+          status: "completed",
+          output: { content: JSON.stringify(embedded) },
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      title: "Load Linear tools",
+      summary: "Connecting to Linear",
+      status: "error",
+      errorMessage: "The MCP server could not be reached.",
+      result: embedded,
+    });
   });
 
   it("keeps an earlier terminal failure when its completion receipt has no status", () => {

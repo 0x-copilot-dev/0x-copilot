@@ -16,10 +16,9 @@
  *   connect → the same page with <ConnectModal open> on its first phase
  *             ("catalog"), the live analog of the design's ConnectModal phase
  *             "pick" (design-kit/app-v3/copilot-flows.jsx:186-268). Props
- *             mirror the web binder exactly, including `onAddCustomServer`
- *             (ConnectorsRoute.tsx:611-613) — which is what makes the live
- *             "Add a custom server" row (ConnectModal.tsx:347-370) the analog
- *             of the design's `.mrow--dash.mrow--pin` Custom-MCP-server row.
+ *             mirror the web binder exactly, including `onManageMcp` — which
+ *             is what makes the live pinned "Manage MCP" row the analog of the
+ *             design's `.mrow--dash.mrow--pin` Custom-MCP-server row.
  *
  * Fixtures mirror the design fixtures 1:1 in shape: 6 connected rows with the
  * design's names/subs and the same permission mix (5 × read_act, 1 × read —
@@ -286,7 +285,7 @@ it("renders the live Connect-a-tool modal (state: connect)", () => {
         catalog={CATALOG}
         onSelectEntry={noop}
         onConnect={noop}
-        onAddCustomServer={noop}
+        onManageMcp={noop}
         pending={false}
         error={null}
       />

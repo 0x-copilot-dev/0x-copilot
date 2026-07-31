@@ -16,12 +16,10 @@ vi.mock("../../api/mcpApi", () => ({
   listMcpServers: vi.fn(),
   listMcpCatalog: vi.fn(),
   installMcpServer: vi.fn(),
-  createMcpServer: vi.fn(),
   startMcpAuth: vi.fn(),
 }));
 
 import {
-  createMcpServer,
   installMcpServer,
   listMcpCatalog,
   listMcpServers,
@@ -47,7 +45,6 @@ describe("createComposerConnectorsPort", () => {
     vi.mocked(listMcpServers).mockReset();
     vi.mocked(listMcpCatalog).mockReset();
     vi.mocked(installMcpServer).mockReset();
-    vi.mocked(createMcpServer).mockReset();
     vi.mocked(startMcpAuth).mockReset();
   });
 
@@ -72,17 +69,6 @@ describe("createComposerConnectorsPort", () => {
     await port.installFromCatalog("github");
     expect(installMcpServer).toHaveBeenCalledWith(
       "github",
-      IDENTITY,
-      undefined,
-    );
-  });
-
-  it("addCustomServer delegates by url with identity", async () => {
-    vi.mocked(createMcpServer).mockResolvedValue(SERVER);
-    const port = createComposerConnectorsPort(IDENTITY);
-    await port.addCustomServer("https://mcp.example.com");
-    expect(createMcpServer).toHaveBeenCalledWith(
-      "https://mcp.example.com",
       IDENTITY,
       undefined,
     );

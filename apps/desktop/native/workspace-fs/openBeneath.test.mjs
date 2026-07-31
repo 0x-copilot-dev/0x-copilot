@@ -320,6 +320,17 @@ test("the packaged extraResources layout resolves and reads", options, () => {
       }
     });
   } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
+    // This test require()s the staged .node, and Windows will not let a loaded
+    // native module be deleted — the loader holds the image open and Node has
+    // no way to unload an addon. That lock is inherent to what the test proves,
+    // not a defect, and every assertion above has already run by this point.
+    // The stage lives in the OS temp directory, so leaving it is harmless.
+    // Narrow on purpose: any other cleanup failure, and every failure on every
+    // other platform, still fails the test.
+    try {
+      fs.rmSync(stage, { recursive: true, force: true });
+    } catch (error) {
+      if (process.platform !== "win32" || error.code !== "EPERM") throw error;
+    }
   }
 });

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -56,5 +59,19 @@ describe("DesktopWindowFrame", () => {
 
     mounted.unmount();
     expect(handlers).toHaveLength(0);
+  });
+
+  it("owns the only rounded frame when RunDestination is nested in ChatShell", () => {
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    expect(desktopCss).toMatch(
+      /\.desktop-window-frame\s+\[data-testid="destination-outlet"\]\s*>\s*\.run-destination\s*\{/,
+    );
+    expect(desktopCss).not.toMatch(
+      /\.desktop-window-frame\s*>\s*\[data-testid="destination-outlet"\]\s*>\s*\.run-destination/,
+    );
   });
 });

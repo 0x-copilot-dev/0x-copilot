@@ -11,7 +11,7 @@ on:
       - "tools/e2-performance/**"
       - ".github/workflows/ci-e2-performance.yml"
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "services/ai-backend/src/agent_runtime/surfaces_v2/**"
       - "services/ai-backend/tests/performance/e2/**"

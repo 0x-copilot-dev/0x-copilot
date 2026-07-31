@@ -11,6 +11,8 @@
       - network.client: outbound HTTPS to the product APIs + model providers.
       - network.server: the embedded postgres + the loopback facade listen on
         127.0.0.1.
+      - device.audio-input: composer dictation records only while the user has
+        explicitly toggled Voice input.
       - disable-library-validation: the bundled interpreter dlopen()s many
         third-party .so/.dylib files (python extensions, postgres libs) that
         are not all signed by our Team ID; without this, hardened runtime
@@ -21,6 +23,8 @@
   <key>com.apple.security.network.client</key>
   <true/>
   <key>com.apple.security.network.server</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
   <true/>
 </dict>
 </plist>

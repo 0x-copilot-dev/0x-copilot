@@ -29,6 +29,8 @@ from agent_runtime.execution.provider_kwargs import (
 )
 from agent_runtime.execution.deep_agent_builder import (
     CODE_MODE_GUIDANCE,
+    FILESYSTEM_IS_NOT_SHELL_GUIDANCE,
+    NO_SHELL_EXECUTE_GUIDANCE,
     SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
     WORKSPACE_STAGED_WRITE_GUIDANCE,
@@ -1952,21 +1954,20 @@ def _instructions_with_capability_tools(
     code_mode_active: bool,
     sandbox_execute_active: bool,
 ) -> str:
-    """Append gated Wave-1 capability-tool guidance blocks when their tools exist.
+    """Append the exact capability boundary for this run.
 
-    Each block is gated on the tool actually being present for the run (the
-    worker built it because its flag+desktop gate held). Off those paths the
-    tools are absent, both flags are ``False``, and the prompt is returned
-    unchanged so non-desktop / disabled runs pay no token tax.
+    Positive guidance remains gated on a tool actually being present. The
+    filesystem-vs-shell distinction is always stated because the built-in file
+    APIs otherwise tempt models to claim terminal execution they do not have.
     """
 
-    blocks = [instructions]
+    blocks = [instructions, FILESYSTEM_IS_NOT_SHELL_GUIDANCE]
     if code_mode_active:
         blocks.append(CODE_MODE_GUIDANCE)
     if sandbox_execute_active:
         blocks.append(SANDBOX_EXECUTE_GUIDANCE)
-    if len(blocks) == 1:
-        return instructions
+    else:
+        blocks.append(NO_SHELL_EXECUTE_GUIDANCE)
     return "\n\n".join(blocks)
 
 

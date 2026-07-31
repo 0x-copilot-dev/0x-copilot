@@ -14,7 +14,7 @@
 // Metrics (sizes, radii, colours) are CSS and are verified by the parity
 // harness, not here — these assert the DOM contract the CSS hangs off.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -29,6 +29,7 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
+import type { DictationCallbacks, DictationPort } from "../ports/DictationPort";
 import type { FilePickerPort } from "../ports/FilePickerPort";
 import {
   AssistantComposer,
@@ -136,6 +137,33 @@ describe("AssistantComposer bottom row (v3 parity)", () => {
     const model = screen.getByRole("button", { name: /Model: GPT-5\.4/ });
     expect(left?.contains(plus)).toBe(true);
     expect(left?.contains(model)).toBe(true);
+  });
+
+  it("wires the host dictation port into the microphone control", () => {
+    let callbacks: DictationCallbacks | null = null;
+    const stop = vi.fn();
+    const dictationPort: DictationPort = {
+      start: vi.fn((next) => {
+        callbacks = next;
+        return { stop, cancel: vi.fn() };
+      }),
+    };
+    renderComposer({ dictationPort });
+
+    const mic = screen.getByRole("button", { name: "Voice input" });
+    expect(mic).not.toBeDisabled();
+    fireEvent.click(mic);
+    expect(dictationPort.start).toHaveBeenCalledTimes(1);
+    act(() => callbacks?.onStart());
+    expect(
+      screen.getByRole("button", { name: "Stop voice input" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByTestId("assistant-composer-dictation-status"),
+    ).toHaveTextContent("Listening");
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice input" }));
+    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   // The row's outermost controls align their tooltips inward. A centred

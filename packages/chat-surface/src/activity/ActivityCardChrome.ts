@@ -89,7 +89,7 @@ export const activityCardChevronStyle: CSSProperties = {
 };
 
 export const activityCardDetailStyle: CSSProperties = {
-  background: "var(--color-bg-elevated)",
+  background: "var(--color-surface-muted)",
   borderTop: "1px solid var(--color-border)",
   padding: "10px 12px",
 };
