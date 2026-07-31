@@ -136,6 +136,29 @@ def test_gate_fails_when_graph_and_runtime_builders_are_aliased(
     )
 
 
+class _TopologyFixtureMixin:
+    """Writes the two files ``canonical_agent_topology_present`` reads."""
+
+    @staticmethod
+    def write_topology(root_dir: Path, *, root: str, child: str) -> None:
+        builder = root_dir / "agent_runtime" / "execution" / "deep_agent_builder.py"
+        builder.parent.mkdir(parents=True, exist_ok=True)
+        builder.write_text(
+            "def build_deep_agent(request):\n"
+            "    model = build_chat_model(request.model_config)\n"
+            "    return create_deep_agent(model=model)\n",
+            encoding="utf-8",
+        )
+        factory = root_dir / "agent_runtime" / "execution" / "factory.py"
+        factory.write_text(
+            "request = DeepAgentBuildRequest(\n"
+            f"    middleware=({root}),\n"
+            f"    universal_middleware_factories=({child}),\n"
+            ")\n",
+            encoding="utf-8",
+        )
+
+
 def test_agent_topology_requires_exact_root_and_child_controller(
     tmp_path: Path,
 ) -> None:
@@ -206,3 +229,78 @@ def test_agent_topology_requires_exact_root_and_child_controller(
     )
 
     assert canonical_agent_topology_present(tmp_path) is False
+
+
+class TestTheConditionalDesktopMiddlewareIsNamedNotWaved(_TopologyFixtureMixin):
+    """The host path translator is reviewed BY NAME, not admitted by counting.
+
+    It is installed only when the desktop host filesystem rules are, so it
+    appears as a starred call to the factory helper that returns it or an empty
+    tuple. The gate pins that helper's name: adding an unreviewed middleware —
+    or smuggling one in behind a different starred call — must still fail, or
+    this gate would have stopped being a gate the moment the sequence became
+    variable-length.
+    """
+
+    def test_the_reviewed_starred_helpers_are_accepted(self, tmp_path: Path) -> None:
+        self.write_topology(
+            tmp_path,
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
+            "*_host_path_tool_middleware(workspace_backend)",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware, "
+            "*_host_path_tool_middleware_factories(workspace_backend)",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is True
+
+    def test_an_unreviewed_starred_helper_is_refused(self, tmp_path: Path) -> None:
+        self.write_topology(
+            tmp_path,
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
+            "*_whatever_middleware(workspace_backend)",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware, "
+            "*_host_path_tool_middleware_factories(workspace_backend)",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is False
+
+    def test_an_extra_constructed_middleware_is_refused(self, tmp_path: Path) -> None:
+        self.write_topology(
+            tmp_path,
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
+            "SomethingElseMiddleware()",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is False
+
+    def test_more_starred_helpers_than_reviewed_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        self.write_topology(
+            tmp_path,
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
+            "*_host_path_tool_middleware(workspace_backend), *_extra()",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is False
+
+    def test_dropping_a_required_member_is_still_refused(self, tmp_path: Path) -> None:
+        self.write_topology(
+            tmp_path,
+            root="RuntimeControlMiddleware(), "
+            "*_host_path_tool_middleware(workspace_backend)",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is False
+
+    def test_reordering_the_required_members_is_refused(self, tmp_path: Path) -> None:
+        self.write_topology(
+            tmp_path,
+            root="ModelInvocationMiddleware(), RuntimeControlMiddleware()",
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware",
+        )
+
+        assert canonical_agent_topology_present(tmp_path) is False

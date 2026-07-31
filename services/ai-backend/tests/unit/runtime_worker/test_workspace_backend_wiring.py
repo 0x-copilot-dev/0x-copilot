@@ -155,6 +155,41 @@ class TestSilentFallthroughRegression:
         assert isinstance(backend, BrokeredWorkspaceBackend)
         return backend
 
+    @staticmethod
+    def _host_backend(composite: object) -> object:
+        """The object that actually touches the disk, past every adapter.
+
+        Two wrappers now sit between the composite default and the real
+        filesystem, and neither is optional:
+
+        * `HostFilesystemFloor` supplies the verdicts deepagents' dot-blind
+          glob matcher structurally cannot reach.
+        * `NativeHostPathBackend` undoes the canonical POSIX encoding the tool
+          layer applies, so a Windows path is opened in Windows grammar.
+
+        Unwrapping BOTH here rather than loosening the assertions keeps this
+        file's question intact: what answers a host path must be a real
+        filesystem, never agent memory. The composition ORDER is asserted
+        separately (see `test_a_host_path_is_never_answered_by_agent_memory`),
+        because it is exactly what a careless re-wrap would get wrong.
+        """
+
+        from agent_runtime.capabilities.desktop.host_floor import (
+            HostFilesystemFloor,
+        )
+        from agent_runtime.capabilities.desktop.host_tool_paths import (
+            NativeHostPathBackend,
+        )
+
+        default = getattr(composite, "default", None)
+        while isinstance(default, HostFilesystemFloor | NativeHostPathBackend):
+            default = (
+                default.backend
+                if isinstance(default, HostFilesystemFloor)
+                else default.inner
+            )
+        return default
+
     async def test_a_host_path_is_never_answered_by_agent_memory(self) -> None:
         """The defect, pinned at the level where it was actually caused.
 
@@ -182,18 +217,29 @@ class TestSilentFallthroughRegression:
         backend = await self._workspace_backend(broker, consent)
         composite = _composed_deep_backend(None, workspace_backend=backend)
         assert composite is not None
-        assert not isinstance(composite.default, StateBackend), (
+        host_backend = self._host_backend(composite)
+        assert not isinstance(host_backend, StateBackend), (
             "a host-absolute path would fall through to agent memory, which "
             "answers it with an empty listing and a green tick"
         )
-        # The real disk now sits BEHIND the hidden-path floor (the rule set
-        # cannot see a dot segment, so `~/.ssh/id_rsa` was read- and writable
-        # with no grant and no prompt). Unwrap it and make the same assertions
-        # about the object that actually touches the disk.
+        # The real disk now sits BEHIND two wrappers, and their ORDER is the
+        # thing to pin. The floor (which closes the dot-segment hole the rule
+        # set cannot see) compares paths against granted roots using POSIX
+        # semantics, so it MUST judge the canonical spelling the tool layer
+        # produced. `NativeHostPathBackend` decodes that spelling into the
+        # host's own grammar, so it must sit strictly beneath the floor: swap
+        # them and every Windows hidden path walks straight past the floor.
         assert isinstance(composite.default, HostFilesystemFloor)
-        real = composite.default.backend
-        assert isinstance(real, FilesystemBackend)
-        assert real.virtual_mode is False, (
+        from agent_runtime.capabilities.desktop.host_tool_paths import (
+            NativeHostPathBackend,
+        )
+
+        assert isinstance(composite.default.backend, NativeHostPathBackend), (
+            "the canonical->native decode must happen BENEATH the floor, or the "
+            "floor is handed a path its PurePosixPath comparisons cannot read"
+        )
+        assert isinstance(host_backend, FilesystemBackend)
+        assert host_backend.virtual_mode is False, (
             "virtual_mode=True anchors absolute paths under root_dir, so a host "
             "path would resolve somewhere else entirely rather than be read"
         )
@@ -209,10 +255,11 @@ class TestSilentFallthroughRegression:
 
         This used to bail out early when the default was not a
         `FilesystemBackend`, which silently turned the whole assertion into a
-        no-op the moment the disk moved behind the hidden-path floor. It now
-        FAILS instead: an exposed disk with no rules is the condition this test
-        exists to catch, and "I could not find the disk" is not evidence that
-        there isn't one.
+        no-op the moment ANY wrapper appeared over the disk — and two have since
+        (the hidden-path floor, and the native-path adapter). It now FAILS
+        instead: an exposed disk with no rules is the condition this test exists
+        to catch, and "I could not find the disk" is not evidence that there
+        isn't one.
         """
 
         from deepagents.backends.filesystem import FilesystemBackend
@@ -231,7 +278,10 @@ class TestSilentFallthroughRegression:
 
         default = composite.default
         assert isinstance(default, HostFilesystemFloor)
-        assert isinstance(default.backend, FilesystemBackend)
+        assert isinstance(self._host_backend(composite), FilesystemBackend), (
+            "the desktop composition no longer reaches a real filesystem — "
+            "either the capability was dropped or this test stopped finding it"
+        )
 
         rules = list(_host_filesystem_permissions(backend))
         assert rules, "a real filesystem is exposed with NO permission rules"
@@ -311,6 +361,70 @@ class TestSilentFallthroughRegression:
         with caplog.at_level(logging.WARNING):
             assert _granted_host_roots(EnforceLaneBackend(), resolved=()) == ()
         assert caplog.text == ""
+
+    async def test_the_translator_ships_with_the_disk_it_makes_reachable(
+        self,
+    ) -> None:
+        r"""The other combination that must never exist: disk without translation.
+
+        The canonical encoding is applied by `HostPathToolMiddleware` and undone
+        by `NativeHostPathBackend`. Installing the backend adapter without the
+        middleware would leave `/C:/Users/...` unproduced (no Windows path could
+        reach the rules); installing the middleware without the adapter would
+        hand Windows a path it cannot open. They are gated on one signal, and
+        this pins that they stay that way.
+
+        The adapter is asserted at its POSITION rather than at the composite
+        default, because the hidden-path floor now sits above it. "Somewhere in
+        the chain" would be too weak: the decode has to be the LAST thing before
+        the disk, or a layer above it inherits a path in the wrong grammar.
+        """
+
+        from deepagents.backends.filesystem import FilesystemBackend
+
+        from agent_runtime.capabilities.desktop.host_tool_paths import (
+            HostPathToolMiddleware,
+            NativeHostPathBackend,
+        )
+        from agent_runtime.execution.factory import (
+            _host_path_tool_middleware,
+            _host_path_tool_middleware_factories,
+        )
+
+        broker = RecordingBroker(grants={})
+        consent = RecordingConsent(resume={"decision": "rejected"})
+        backend = await self._workspace_backend(broker, consent)
+        composite = _composed_deep_backend(None, workspace_backend=backend)
+        assert composite is not None
+
+        adapter = composite.default.backend
+        assert isinstance(adapter, NativeHostPathBackend), (
+            "the desktop composition reaches the disk without the native-path "
+            "decode — a Windows host path would be opened in a spelling that "
+            "does not exist"
+        )
+        assert isinstance(adapter.inner, FilesystemBackend), (
+            "the decode must be the last layer before the real filesystem"
+        )
+        installed = _host_path_tool_middleware(backend)
+        assert [type(middleware) for middleware in installed] == [
+            HostPathToolMiddleware
+        ]
+        # Subagents inherit the parent's rules, so they need the same door.
+        assert list(_host_path_tool_middleware_factories(backend)) == [
+            HostPathToolMiddleware
+        ]
+
+    async def test_no_translator_off_the_desktop_path(self) -> None:
+        """A hosted image composes byte-identically to before this existed."""
+
+        from agent_runtime.execution.factory import (
+            _host_path_tool_middleware,
+            _host_path_tool_middleware_factories,
+        )
+
+        assert _host_path_tool_middleware(None) == ()
+        assert _host_path_tool_middleware_factories(None) == ()
 
     async def test_non_desktop_composition_is_unchanged(self) -> None:
         # With no workspace backend the default must stay the bare StateBackend,

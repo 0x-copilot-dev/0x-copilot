@@ -40,6 +40,18 @@ Everything that is not a resolvable folder fails CLOSED (:attr:`HostPathKind.UNS
 grant request is for a folder the user could legitimately grant, never a way to
 launder a traversal, a device path, or a path whose meaning depends on host state
 this process cannot see.
+
+One spelling per folder, at the tool surface
+--------------------------------------------
+Recognising a Windows path is necessary but not sufficient: Deep Agents' tool
+layer validates the model's argument with ``validate_path`` BEFORE any backend
+or permission rule is consulted, and that validator rejects drive-absolute paths
+outright. :attr:`ClassifiedPath.canonical` is therefore the POSIX-shaped
+spelling every host path is rewritten to on the way in — the one form the rules
+match and the backend receives — and :meth:`HostPathClassifier.native` is its
+exact inverse, applied at the backend so the host is addressed in its own
+grammar. See :class:`_CanonicalRoot` for the encoding and the two upstream facts
+it is built around.
 """
 
 from __future__ import annotations
@@ -189,6 +201,44 @@ class _WinPrefix:
     EXTENDED_UNC: Final = f"UNC{_Sep.WINDOWS}"
 
 
+class _CanonicalRoot:
+    r"""How a Windows volume root is spelled inside a POSIX-shaped tool path.
+
+    Deep Agents validates every filesystem tool argument with
+    ``deepagents.backends.utils.validate_path`` BEFORE any backend or permission
+    rule is consulted, and that validator rejects drive-absolute paths outright
+    (``C:\Users\p`` → ``ValueError``). So a Windows path has to reach the tool
+    surface wearing a POSIX spelling, and this class defines that spelling::
+
+        C:\Users\p\Downloads      ->  /C:/Users/p/Downloads
+        \\server\share\reports    ->  /UNC:/server/share/reports
+
+    Two properties are load-bearing, and both were measured rather than assumed:
+
+    * ``validate_path`` returns these strings UNCHANGED, so the permission rules
+      and the backend see exactly what was produced here.
+    * they carry exactly ONE leading slash. Upstream's own rewrite of a UNC path
+      (``\\server\share`` → ``//server/share``) does not, and a ``//``-rooted
+      path is not ``is_relative_to("/")`` for :class:`pathlib.PurePosixPath` —
+      which is what deepagents' bulk-tool interrupt predicate compares against.
+      A ``//``-rooted path therefore SKIPS the consent interrupt for
+      ``ls`` / ``glob`` / ``grep`` while still being read from the real disk.
+      Every canonical form here is single-rooted so that cannot happen.
+
+    The ``:`` in both markers is what keeps the encoding unambiguous: a POSIX
+    directory literally named ``C:`` or ``UNC:`` at the volume root does not
+    occur in practice, and deepagents already accepts the same class of
+    trade-off in ``to_posix_path``.
+    """
+
+    #: First segment marking a canonical UNC share.
+    UNC: Final = "UNC:"
+    #: ``UNC:`` + server + share — the shortest canonical UNC path.
+    UNC_SEGMENTS: Final = 3
+    #: First segment marking a canonical drive root (``C:``).
+    DRIVE: Final = re.compile(r"^[A-Za-z]:$")
+
+
 @dataclass(frozen=True)
 class ClassifiedPath:
     """A path the agent supplied, classified and normalised.
@@ -238,6 +288,46 @@ class ClassifiedPath:
         """The last segment — what a consent card names — or the root itself."""
 
         return self.segments[-1] if self.segments else self.root
+
+    @property
+    def canonical(self) -> str:
+        r"""The POSIX-shaped spelling Deep Agents' tool surface accepts.
+
+        This is what a filesystem tool argument is rewritten to before
+        ``validate_path`` sees it, so the permission rules and the backend both
+        judge one spelling per folder no matter which platform's grammar the
+        model wrote. See :class:`_CanonicalRoot` for the encoding and why it is
+        always single-rooted.
+
+        Defined for :attr:`HostPathKind.VIRTUAL` and
+        :attr:`HostPathKind.HOST_ABSOLUTE`; a refusal carries no path to render
+        and yields ``""``. POSIX-shaped paths render to themselves apart from
+        the cleaning every classification does anyway (duplicate separators,
+        ``.`` segments, a trailing separator), which is the same normalisation
+        ``os.path.normpath`` performs inside ``validate_path``.
+        """
+
+        body = _Sep.POSIX.join(self.segments)
+        if self.flavour is HostPathFlavour.WINDOWS:
+            root = self._canonical_windows_root()
+            if not root:
+                return ""
+            return f"{root}{_Sep.POSIX}{body}" if body else root
+        if not self.root:
+            # A rootless remainder is addressed relative to the current backend
+            # route; making it absolute here would re-point it at the host.
+            return body
+        return f"{_Sep.POSIX}{body}" if body else _Sep.POSIX
+
+    def _canonical_windows_root(self) -> str:
+        r"""``C:\`` → ``/C:``; ``\\server\share`` → ``/UNC:/server/share``."""
+
+        if not self.root:
+            return ""
+        if self.root.startswith(_WinPrefix.UNC):
+            share = self.root[len(_WinPrefix.UNC) :].replace(_Sep.WINDOWS, _Sep.POSIX)
+            return f"{_Sep.POSIX}{_CanonicalRoot.UNC}{_Sep.POSIX}{share}"
+        return f"{_Sep.POSIX}{self.root.rstrip(_Sep.WINDOWS)}"
 
     @property
     def root_key(self) -> str:
@@ -368,6 +458,37 @@ class HostPathClassifier:
         if cls._DRIVE.match(text) or text.startswith(_Sep.WINDOWS):
             return HostPathFlavour.WINDOWS
         return HostPathFlavour.POSIX
+
+    @classmethod
+    def native(cls, path: str | None) -> str:
+        r"""Inverse of :attr:`ClassifiedPath.canonical` — the host's own spelling.
+
+        The backend beneath the tool layer opens real files, so the canonical
+        POSIX encoding has to be undone before it runs: ``/C:/Users/p`` is not a
+        path Windows can open, ``C:\Users\p`` is.
+
+        Shape-driven and total, like everything else here — it never consults
+        the running platform, so a Windows-shaped input is decoded identically
+        in a macOS test run, and a POSIX path (whose first segment cannot be a
+        drive or the UNC marker) is returned byte-for-byte unchanged. That
+        identity on POSIX is what makes wrapping the host backend a no-op
+        everywhere except where a Windows path is genuinely in play.
+        """
+
+        text = path or ""
+        segments = [segment for segment in text.split(_Sep.POSIX) if segment]
+        if not segments:
+            return text
+        head, tail = segments[0], segments[1:]
+        if head.casefold() == _CanonicalRoot.UNC.casefold():
+            if len(segments) < _CanonicalRoot.UNC_SEGMENTS:
+                # A marker with no server AND share names no share; leaving it
+                # alone keeps this function from inventing a UNC root.
+                return text
+            return f"{_WinPrefix.UNC}{_Sep.WINDOWS.join(tail)}"
+        if _CanonicalRoot.DRIVE.match(head):
+            return f"{head}{_Sep.WINDOWS}{_Sep.WINDOWS.join(tail)}"
+        return text
 
     @classmethod
     def is_host_shaped(cls, path: str | None) -> bool:

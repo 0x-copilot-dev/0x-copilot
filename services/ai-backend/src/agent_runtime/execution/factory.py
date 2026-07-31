@@ -469,10 +469,16 @@ async def _assemble_harness(
                 middleware=(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
+                    *_host_path_tool_middleware(
+                        workspace_backend, granted_host_roots=granted_host_roots
+                    ),
                 ),
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
+                    *_host_path_tool_middleware_factories(
+                        workspace_backend, granted_host_roots=granted_host_roots
+                    ),
                 ),
             )
         )
@@ -1793,6 +1799,71 @@ def _granted_host_roots(
     return roots
 
 
+def _host_path_tool_middleware(
+    workspace_backend: object | None,
+    *,
+    granted_host_roots: tuple[object, ...] | None = None,
+) -> tuple[object, ...]:
+    r"""The tool-layer host path translator — DESKTOP only, same gate as the rules.
+
+    Deep Agents validates a filesystem tool's path argument BEFORE the
+    permission rules or the backend are consulted, and that validator rejects
+    drive-absolute paths (``C:\Users\p`` → ``ValueError``) and rewrites UNC
+    paths to a ``//``-rooted form whose consent interrupt then never fires for
+    ``ls`` / ``glob`` / ``grep``. This middleware rewrites host paths into the
+    single-rooted POSIX spelling both of those layers can judge, and refuses the
+    shapes that must never resolve, before deepagents sees them.
+
+    Gated on the rules rather than merely alongside them: the translation is
+    only meaningful when a rule set exists to judge the result, and installing
+    it on a hosted image would rewrite paths for a ``StateBackend`` that stores
+    them verbatim. Off the desktop this returns ``()``, so the middleware
+    sequence is byte-identical to before it existed.
+
+    ``granted_host_roots`` is threaded through purely so this gate builds the
+    SAME rule set the harness does. The gate itself only asks "is the tuple
+    non-empty", and that answer never depends on the attach set — but reading
+    the backend capability instead would log
+    ``host_filesystem.granted_roots_unavailable`` on every ENFORCE-mode run,
+    which is precisely the alarm that now means "root resolution was skipped".
+    """
+
+    if not _host_filesystem_permissions(
+        workspace_backend, granted_host_roots=granted_host_roots
+    ):
+        return ()
+    from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
+        HostPathToolMiddleware,
+    )
+
+    return (HostPathToolMiddleware(),)
+
+
+def _host_path_tool_middleware_factories(
+    workspace_backend: object | None,
+    *,
+    granted_host_roots: tuple[object, ...] | None = None,
+) -> tuple[object, ...]:
+    """Same translator, as a factory for every locally compiled subagent.
+
+    A subagent inherits the parent's ``FilesystemPermission`` rules (see
+    :func:`_subagents_with_fs_permissions`), so it holds the same filesystem
+    tools against the same real backend. Without this it would hold them
+    WITHOUT the translation — a second, untranslated door to the folders the
+    supervisor's door screens.
+    """
+
+    if not _host_filesystem_permissions(
+        workspace_backend, granted_host_roots=granted_host_roots
+    ):
+        return ()
+    from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
+        HostPathToolMiddleware,
+    )
+
+    return (HostPathToolMiddleware,)
+
+
 def _composed_deep_backend(
     subagent_artifacts_backend: object | None,
     *,
@@ -1910,6 +1981,13 @@ def _host_default_backend(
     ``root_dir`` is the process working directory, which only affects RELATIVE
     path resolution; absolute paths ignore it entirely.
 
+    It is wrapped in ``NativeHostPathBackend`` because the path that arrives
+    here has been rewritten by ``HostPathToolMiddleware`` into the POSIX-shaped
+    spelling deepagents' tool surface and permission globs require. That
+    spelling is not openable on Windows (``/C:/Users/p`` is not a path), so the
+    wrapper undoes it immediately before the real filesystem call and re-applies
+    it to the paths that come back. On POSIX both directions are the identity.
+
     DESKTOP ONLY. ``workspace_backend is None`` on every web / postgres /
     in-memory image, and those must keep composing exactly as before: a hosted
     deployment has no user sitting at the machine, so "ask the user" degrades to
@@ -1925,6 +2003,9 @@ def _host_default_backend(
     from agent_runtime.capabilities.desktop.host_floor import (  # noqa: PLC0415
         HostFilesystemFloor,
     )
+    from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
+        NativeHostPathBackend,
+    )
 
     if not _host_filesystem_permissions(
         workspace_backend, granted_host_roots=granted_host_roots
@@ -1932,8 +2013,14 @@ def _host_default_backend(
         # Not desktop, or rules unavailable (version skew). Either way: do NOT
         # expose a real filesystem. Compose exactly as before.
         return guarded_default(StateBackend(), workspace_backend)
+    # Order is load-bearing. The floor is OUTERMOST because it judges the path
+    # the tool layer produced — the canonical POSIX spelling — against roots
+    # recorded in that same spelling; decoding to `C:\...` first would hand it a
+    # string its `PurePosixPath` comparisons cannot read, and every Windows
+    # hidden path would slip the floor. `NativeHostPathBackend` sits directly on
+    # the real backend, undoing the encoding in the last inch before the disk.
     return HostFilesystemFloor(
-        FilesystemBackend(virtual_mode=False),
+        NativeHostPathBackend(FilesystemBackend(virtual_mode=False)),
         # The SAME resolution the rules were built from, so the floor can never
         # refuse a folder the rules allow.
         roots=_granted_host_roots(  # type: ignore[arg-type]

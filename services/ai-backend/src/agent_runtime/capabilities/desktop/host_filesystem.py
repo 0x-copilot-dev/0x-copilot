@@ -62,6 +62,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Final
 
+from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
+
 #: Prefixes the agent owns inside its own virtual filesystem. These are routed
 #: by `CompositeBackend` to real backends (memory, drafts, subagent artifacts),
 #: so they must be allowed BEFORE the catch-all interrupt rule or every ordinary
@@ -121,6 +123,28 @@ class GrantedRoot:
             raise ValueError(f"granted root must be POSIX-absolute: {self.path!r}")
         if ".." in PurePosixPath(self.path).parts:
             raise ValueError(f"granted root must not contain '..': {self.path!r}")
+
+    @classmethod
+    def from_host_path(cls, path: str, *, writable: bool = True) -> GrantedRoot:
+        r"""Build a root from a host path in EITHER platform's grammar.
+
+        `__post_init__` demands the POSIX-shaped canonical spelling because that
+        is what a tool call is rewritten to before the rules are matched — a
+        rule written as `C:\Users\p\Downloads` would match nothing the tool layer
+        ever produces. This is the one seam that performs that conversion, so a
+        grant lane never has to know the encoding.
+
+        A path the classifier will not resolve to a concrete folder — a
+        traversal, a device namespace, a drive-relative remainder — raises
+        rather than becoming an `allow` rule. A grant is the widest thing this
+        rule set can express, so an unresolvable one degrades to "that folder
+        still asks", never to a rule matching more than the user agreed to.
+        """
+
+        classified = HostPathClassifier.classify(path)
+        if not classified.is_host:
+            raise ValueError(f"granted root is not a host folder: {path!r}")
+        return cls(path=classified.canonical, writable=writable)
 
     @property
     def scratch_path(self) -> str:
