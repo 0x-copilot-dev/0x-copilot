@@ -107,6 +107,11 @@ export interface ConnectorHandlers {
     readonly oauthClient?: McpOAuthClientConfigRequest;
     readonly callbackMode?: "loopback" | "deep_link";
   }): Promise<ConnectorAuthorizationResult>;
+  /**
+   * Abort the connect awaiting a redirect, causing its `authorize` to reject.
+   * Idempotent and a no-op when nothing is pending.
+   */
+  cancelPendingAuthorize(): void;
 }
 
 export interface IpcLogger {
@@ -505,6 +510,23 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         const result = await connectors.authorize(params);
         // Only the SAFE connection metadata may cross to the renderer.
         return ConnectorAuthorizationResultSchema.parse(result);
+      },
+    );
+
+    // Cancel the connect awaiting a redirect. The renderer's Cancel affordances
+    // fire this; the pending `authorize` above then rejects (its loopback
+    // closed), which the renderer treats as a quiet return to "Connect".
+    // Argument-free for the same reason `auth.cancel-sign-in` is: one connect
+    // is in flight at a time, so there is nothing to name.
+    ipcMain.handle(
+      CONNECTOR_CHANNELS.cancelAuthorize,
+      async (_event, raw: unknown) => {
+        parseOrThrow(
+          CONNECTOR_CHANNELS.cancelAuthorize,
+          EmptyParamsSchema,
+          raw ?? {},
+        );
+        connectors.cancelPendingAuthorize();
       },
     );
   }

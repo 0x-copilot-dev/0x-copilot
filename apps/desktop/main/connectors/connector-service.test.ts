@@ -101,7 +101,10 @@ describe("ConnectorService.authorize", () => {
 
     const result = await service.authorize({ slug: "gmail" });
 
-    expect(connect).toHaveBeenCalledWith("gmail", { productScope: undefined });
+    expect(connect).toHaveBeenCalledWith(
+      "gmail",
+      expect.objectContaining({ productScope: undefined }),
+    );
     expect(connectMcpServer).not.toHaveBeenCalled();
     expect(result.server_id).toBe("desktop:gmail");
   });
@@ -117,7 +120,10 @@ describe("ConnectorService.authorize", () => {
     });
 
     expect(connect).not.toHaveBeenCalled();
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.any(Object),
+    );
     expect(result).toEqual({
       server_id: "seed:linear",
       connector_slug: "linear",
@@ -135,7 +141,10 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ slug: "linear", serverId: "seed:linear" });
 
     expect(installed()).toEqual(["linear"]);
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.any(Object),
+    );
   });
 
   it("does NOT re-install a server row that already exists", async () => {
@@ -149,7 +158,10 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ slug: "linear", serverId: "seed:linear" });
 
     expect(installed()).toEqual([]);
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.any(Object),
+    );
   });
 
   it("does NOT install a CUSTOM server's slug — the phantom 404", async () => {
@@ -164,7 +176,10 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ slug: "my-server", serverId: "custom:abc123" });
 
     expect(installed()).toEqual([]);
-    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "custom:abc123",
+      expect.any(Object),
+    );
   });
 
   it("still installs when the id is known but its row does not exist", async () => {
@@ -179,7 +194,10 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ slug: "linear", serverId: "seed:linear" });
 
     expect(installed()).toEqual(["linear"]);
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.any(Object),
+    );
   });
 
   it("degrades to installing when the server listing cannot be read", async () => {
@@ -211,7 +229,10 @@ describe("ConnectorService.authorize", () => {
       serverId: "custom:abc123",
     });
 
-    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "custom:abc123",
+      expect.any(Object),
+    );
     expect(result.server_id).toBe("custom:abc123");
   });
 
@@ -235,7 +256,10 @@ describe("ConnectorService.authorize", () => {
 
     await service.authorize({ slug: "notion", serverId: "stale:notion" });
 
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:notion");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:notion",
+      expect.any(Object),
+    );
   });
 
   it("does NOT install for a custom server that has no slug", async () => {
@@ -246,7 +270,10 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ serverId: "custom:abc123" });
 
     expect(installed()).toEqual([]);
-    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "custom:abc123",
+      expect.any(Object),
+    );
   });
 
   it("never installs on the profile route", async () => {
@@ -275,7 +302,10 @@ describe("ConnectorService.authorize", () => {
 
     const result = await service.authorize({ serverId: "custom:abc123" });
 
-    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "custom:abc123",
+      expect.any(Object),
+    );
     expect(result.connector_slug).toBeNull();
   });
 
@@ -288,7 +318,10 @@ describe("ConnectorService.authorize", () => {
     const result = await service.authorize({ slug: "linear" });
 
     expect(installed()).toEqual(["linear"]);
-    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(connectMcpServer).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.any(Object),
+    );
     expect(result.server_id).toBe("seed:linear");
   });
 
@@ -343,5 +376,92 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ serverId: "custom:abc123" });
 
     expect(catalogFetches()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancellation — the single pending slot
+// ---------------------------------------------------------------------------
+//
+// One connect is in flight at a time, so the service holds exactly one abort,
+// newest-wins. That mirrors `AuthService`'s pending sign-in slot, and the
+// identity check on the way out is the part worth pinning: a finishing connect
+// must not clear a NEWER connect's abort, or the newer one silently becomes
+// uncancellable.
+
+describe("ConnectorService — cancelPendingAuthorize", () => {
+  /**
+   * A service whose MCP flow parks forever — like a real connect waiting on a
+   * redirect — and records each attempt as it hands out its cancel. Tests wait
+   * on `started.length` rather than counting microtasks, because `authorize`
+   * does real awaits (catalog probe, server listing) before it gets there.
+   */
+  function makePausableService(): {
+    service: ConnectorService;
+    started: Array<() => void>;
+  } {
+    const { service } = makeService([], { existingServerIds: ["seed:linear"] });
+    const started: Array<() => void> = [];
+    Object.assign(service.coordinator, {
+      connectMcpServer: (
+        _id: string,
+        options: { onCancelAvailable?: (cancel: () => void) => void } = {},
+      ) =>
+        new Promise<void>((_resolve, reject) => {
+          const abort = (): void => reject(new Error("connect cancelled"));
+          options.onCancelAvailable?.(abort);
+          started.push(abort);
+        }),
+    });
+    return { service, started };
+  }
+
+  it("is a no-op when nothing is pending", () => {
+    const { service } = makeService(["gmail"]);
+    // A Cancel that races the connect's own completion must be harmless, so
+    // this may not throw.
+    expect(() => service.cancelPendingAuthorize()).not.toThrow();
+    expect(() => service.cancelPendingAuthorize()).not.toThrow();
+  });
+
+  it("aborts the connect awaiting a redirect", async () => {
+    const { service, started } = makePausableService();
+    const pending = service.authorize({
+      slug: "linear",
+      serverId: "seed:linear",
+    });
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+
+    service.cancelPendingAuthorize();
+
+    await expect(pending).rejects.toThrow(/connect cancelled/);
+  });
+
+  it("lets a second connect abort the first — newest wins", async () => {
+    const { service, started } = makePausableService();
+    // Assertions are attached the moment each promise exists. Starting the
+    // second connect rejects the first synchronously, so waiting to attach
+    // would surface a real rejection as an unhandled one.
+    const first = service.authorize({
+      slug: "linear",
+      serverId: "seed:linear",
+    });
+    const firstRejects = expect(first).rejects.toThrow(/connect cancelled/);
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+
+    const second = service.authorize({
+      slug: "linear",
+      serverId: "seed:linear",
+    });
+    const secondRejects = expect(second).rejects.toThrow(/connect cancelled/);
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+
+    // The first is unreachable once a second browser flow owns the screen, so
+    // it is aborted rather than left holding a loopback port for five minutes.
+    await firstRejects;
+    // The second is still live; cancelling it now must reach IT, not the slot
+    // the first one left behind.
+    service.cancelPendingAuthorize();
+    await secondRejects;
   });
 });
