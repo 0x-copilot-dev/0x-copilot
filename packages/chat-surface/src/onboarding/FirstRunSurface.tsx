@@ -158,8 +158,20 @@ export interface FirstRunSurfaceProps {
    * `ChatScreen.onMcpInstallCatalog`; on desktop main opens the system browser
    * for OAuth). Defaults to a `connectorsPort`-driven install → `beginAuth`
    * when omitted.
+   *
+   * RETURN THE PROMISE when the host can tell that the connect FINISHED — the
+   * surface refetches on it, and that is the only way the popover learns the
+   * connector is connected. Resolving is the completion signal, so a host that
+   * brokers OAuth out-of-process (desktop: main + the system browser) must not
+   * resolve until the round-trip is done. Returning `void` is still honoured
+   * and still means "I cannot report completion": correct for a host whose
+   * connect navigates the whole document away (web full-page redirect), where
+   * the remount does the refetch. Anything else leaves the panel showing a
+   * pre-connect world until the app restarts.
    */
-  readonly onConnectCatalog?: (entry: FirstRunInstallableConnector) => void;
+  readonly onConnectCatalog?: (
+    entry: FirstRunInstallableConnector,
+  ) => void | Promise<unknown>;
   /**
    * P4 — host handler that opens the custom-MCP config form. Defaults to a
    * no-op (the inline paste-a-config form is a host concern). Also the routing
@@ -349,7 +361,23 @@ export function FirstRunSurface({
   const handleConnectCatalog = useCallback(
     (entry: FirstRunInstallableConnector): void => {
       if (onConnectCatalog) {
-        onConnectCatalog(entry);
+        // The host owns the connect, but the surface owns the DATA — so the
+        // refetch has to hang off the host's completion or nothing closes the
+        // loop. This override used to `return` here, which skipped the
+        // `setReloadToken` below: on desktop the OAuth completed, the backend
+        // recorded `auth_state: authenticated`, and the popover kept rendering
+        // the list it had fetched before the connect existed, until an app
+        // restart. Awaiting the host's promise is what connects the two.
+        const settled = onConnectCatalog(entry);
+        if (settled !== undefined) {
+          void Promise.resolve(settled)
+            .then(() => setReloadToken((n) => n + 1))
+            .catch(() => {
+              // Same swallow as the default path below: a failed connect
+              // surfaces at run time via the `mcp_auth_required` card, and the
+              // list has not moved, so there is nothing to refetch.
+            });
+        }
         return;
       }
       if (!connectorsPort) {
