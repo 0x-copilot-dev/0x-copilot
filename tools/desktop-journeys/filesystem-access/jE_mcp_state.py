@@ -36,7 +36,22 @@ from _fs_journey_lib import (  # noqa: E402
 )
 
 JOURNEY = "FS-E"
-TOOLS_RAIL = '[aria-label="Tools"][data-destination]'
+
+#: Address the rail by SLUG, never by label. Two reasons, both measured on the
+#: live app: solo desktop renders slug ``connectors`` as the label "Tools" and
+#: slug ``tools`` as "Skills", so the label reads as the other destination; and
+#: a label picks up a `" (3)"` badge suffix once the surface has rows, which an
+#: exact `[aria-label="Tools"]` match then misses. The trailing `[aria-label]`
+#: is not decoration — a second element carries `data-destination="run"` with no
+#: label, and this pins the selector to the rail button a user actually clicks.
+TOOLS_RAIL = '[data-destination="connectors"][aria-label]'
+RUN_RAIL = '[data-destination="run"][aria-label]'
+
+#: The FTUE surface mounts NO rail at all — `[data-destination]` matches zero
+#: elements until this button opens the workspace. Clicking a destination before
+#: it exists is a 500 from the driver, which reads as a product failure and is
+#: not one.
+SKIP_FIRST_RUN = "[data-testid=first-run-skip]"
 
 
 def _safe(session: DriverSession, path: str) -> Any:
@@ -121,7 +136,20 @@ def main() -> int:
                     str(e.get("slug")) == "linear" for e in server_entries
                 )
 
-                # The surface a user would look at.
+                # The surface a user would look at. Leave the first-run surface
+                # first, or there is no rail to click.
+                if session.present(SKIP_FIRST_RUN):
+                    session.click(SKIP_FIRST_RUN)
+                    evidence["left_first_run_via_skip"] = True
+                assert session.wait_for(TOOLS_RAIL, timeout_s=30), (
+                    "no Tools destination in the nav rail after leaving first run"
+                )
+                evidence["rail"] = session.evaluate(
+                    "(() => Array.from(document.querySelectorAll("
+                    "'[data-destination][aria-label]')).map((el) => ({"
+                    " slug: el.getAttribute('data-destination'),"
+                    " label: el.getAttribute('aria-label') })))()"
+                )
                 session.click(TOOLS_RAIL)
                 time.sleep(3)
                 session.shot("e-01-tools-destination")
@@ -137,7 +165,7 @@ def main() -> int:
                 # two points and found it still on screen moments after the send,
                 # which is either a slow FTUE→cockpit handoff or a bar that
                 # outlives the first message. Sampling settles which.
-                session.click('[aria-label="Run"][data-destination]')
+                session.click(RUN_RAIL)
                 time.sleep(2)
                 session.send_first_run_message("Say READY and nothing else.")
                 samples: list[dict[str, Any]] = []
