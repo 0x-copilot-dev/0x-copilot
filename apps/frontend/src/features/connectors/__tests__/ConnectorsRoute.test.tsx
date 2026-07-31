@@ -60,6 +60,8 @@ vi.mock("../../../api/connectorsApi", async () => {
 // real HTTP surface.
 const mcpApiMocks = vi.hoisted(() => ({
   createMcpServer: vi.fn(),
+  readMcpConfig: vi.fn(),
+  writeMcpConfig: vi.fn(),
   installMcpServer: vi.fn(),
   startMcpAuth: vi.fn(),
 }));
@@ -70,6 +72,8 @@ vi.mock("../../../api/mcpApi", async () => {
   return {
     ...actual,
     createMcpServer: mcpApiMocks.createMcpServer,
+    readMcpConfig: mcpApiMocks.readMcpConfig,
+    writeMcpConfig: mcpApiMocks.writeMcpConfig,
     installMcpServer: mcpApiMocks.installMcpServer,
     startMcpAuth: mcpApiMocks.startMcpAuth,
   };
@@ -547,116 +551,45 @@ function mcpServer(overrides: Partial<McpServer> = {}): McpServer {
   };
 }
 
-describe("ConnectorsRoute custom server add", () => {
-  const originalOpen = window.open;
-
+describe("ConnectorsRoute — Manage MCP", () => {
   beforeEach(() => {
     connectorsApiMocks.fetchConnectors.mockReset();
     connectorsApiMocks.streamConnectorEvents.mockReset();
-    mcpApiMocks.createMcpServer.mockReset();
-    mcpApiMocks.startMcpAuth.mockReset();
-    window.open = vi.fn() as unknown as typeof window.open;
+    mcpApiMocks.readMcpConfig.mockReset();
+    mcpApiMocks.writeMcpConfig.mockReset();
   });
   afterEach(() => {
-    window.open = originalOpen;
     vi.clearAllMocks();
   });
 
-  /** Open the modal, switch to the custom form, and submit `url`. */
-  async function submitCustomUrl(
-    url: string,
-    { clientId }: { clientId?: string } = {},
-  ): Promise<void> {
+  /** Open the connect modal and click through to the config editor. */
+  async function openEditor(): Promise<void> {
     fireEvent.click(
       screen.getAllByRole("button", { name: "Connect a tool" })[0],
     );
     fireEvent.click(screen.getByTestId("connect-catalog-custom"));
-    fireEvent.change(screen.getByPlaceholderText("https://mcp.example.com"), {
-      target: { value: url },
+    await waitFor(() => {
+      expect(screen.getByTestId("manage-mcp-editor")).toBeInTheDocument();
     });
-    if (clientId !== undefined) {
-      fireEvent.change(screen.getByPlaceholderText("client_id"), {
-        target: { value: clientId },
-      });
-    }
-    fireEvent.click(screen.getByTestId("connect-custom-add"));
   }
 
-  it("creates the server with url + oauth client, starts auth, and closes on the SSE write-through", async () => {
-    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
-    mcpApiMocks.createMcpServer.mockResolvedValueOnce(
-      mcpServer({ auth_mode: "oauth2", auth_state: "auth_pending" }),
-    );
-    mcpApiMocks.startMcpAuth.mockResolvedValueOnce({
-      server_id: "srv_custom",
-      auth_url: "https://example.com/mcp-auth",
-      expires_at: "2026-05-01T01:00:00Z",
-    });
-    const sse = captureStreamCallbacks();
-
-    render(<ConnectorsRoute identity={IDENTITY} />);
-    await waitFor(() => {
-      expect(connectorsApiMocks.streamConnectorEvents).toHaveBeenCalledTimes(1);
-    });
-
-    await submitCustomUrl("https://mcp.example.com/mcp", {
-      clientId: "cid_123",
-    });
-
-    await waitFor(() => {
-      expect(mcpApiMocks.createMcpServer).toHaveBeenCalledWith(
-        "https://mcp.example.com/mcp",
-        IDENTITY,
-        { client_id: "cid_123", token_endpoint_auth_method: "none" },
-      );
-    });
-
-    // Auth needed → the MCP OAuth round-trip starts in a popup while the
-    // modal shows the spinner.
-    await waitFor(() => {
-      expect(mcpApiMocks.startMcpAuth).toHaveBeenCalledWith(
-        "srv_custom",
-        IDENTITY,
-      );
-    });
-    expect(window.open).toHaveBeenCalledWith(
-      "https://example.com/mcp-auth",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    expect(screen.getByTestId("connect-oauth")).toBeInTheDocument();
-
-    // The backend write-through emits connector.created; the custom flow has
-    // no permission step, so the modal closes.
-    act(() => {
-      sse.lastCall().onEvent(
-        envelope(
-          "connector.created",
-          connector({
-            id: "conn_custom" as ConnectorId,
-            slug: "custom" as ConnectorSlug,
-            display_name: "Custom server",
-            status: "connected",
-          }),
-          1,
-        ),
-      );
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId("connect-oauth")).not.toBeInTheDocument();
-    });
-    expect(screen.queryByTestId("connect-permission")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("connect-custom-form")).not.toBeInTheDocument();
-  });
-
-  it("shows the modal alert when the create fails", async () => {
+  it("opens the editor seeded from the server's document", async () => {
+    // Seeded from the server, never from local state: an editor that opened
+    // empty would happily save a document omitting every server it failed to
+    // load, deleting them.
     connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
     connectorsApiMocks.streamConnectorEvents.mockReturnValue({
       close: vi.fn(),
     });
-    mcpApiMocks.createMcpServer.mockRejectedValueOnce(
-      new Error("create_failed"),
-    );
+    mcpApiMocks.readMcpConfig.mockResolvedValueOnce({
+      servers: {
+        github: {
+          type: "http",
+          url: "https://api.githubcopilot.com/mcp/",
+          headers: { Authorization: "\u2022".repeat(8) },
+        },
+      },
+    });
 
     render(<ConnectorsRoute identity={IDENTITY} />);
     await waitFor(() => {
@@ -666,24 +599,101 @@ describe("ConnectorsRoute custom server add", () => {
       );
     });
 
-    await submitCustomUrl("https://mcp.example.com/mcp");
+    await openEditor();
 
+    expect(mcpApiMocks.readMcpConfig).toHaveBeenCalledWith(IDENTITY);
+    // The editor mounts before the read resolves, so it is the seeded CONTENT
+    // that has to be awaited, not the element.
     await waitFor(() => {
-      expect(screen.getByTestId("connect-oauth-error")).toBeInTheDocument();
+      const seeded = screen.getByTestId(
+        "manage-mcp-editor",
+      ) as HTMLTextAreaElement;
+      expect(seeded.value).toContain("api.githubcopilot.com");
     });
-    expect(screen.getByTestId("connect-oauth-error").textContent).toContain(
-      "create_failed",
-    );
-    expect(mcpApiMocks.startMcpAuth).not.toHaveBeenCalled();
+    const editor = screen.getByTestId(
+      "manage-mcp-editor",
+    ) as HTMLTextAreaElement;
+    // The credential reads back redacted, never as the token itself.
+    expect(editor.value).toContain("\u2022".repeat(8));
   });
 
-  it("clears pending immediately (modal closes) when the server needs no auth", async () => {
+  it("saves the document with a typed credential in it", async () => {
+    // Not `Once`: a successful save refetches the connector list, which is the
+    // wiring that makes the JSON and the Tools list agree.
+    connectorsApiMocks.fetchConnectors.mockResolvedValue(listResponse([]));
+    connectorsApiMocks.streamConnectorEvents.mockReturnValue({
+      close: vi.fn(),
+    });
+    mcpApiMocks.readMcpConfig.mockResolvedValueOnce({
+      servers: {
+        github: {
+          type: "http",
+          url: "https://api.githubcopilot.com/mcp/",
+          headers: { Authorization: "\u2022".repeat(8) },
+        },
+      },
+    });
+    mcpApiMocks.writeMcpConfig.mockResolvedValueOnce({
+      created: ["github"],
+      updated: [],
+      deleted: [],
+      unchanged: [],
+    });
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+    await openEditor();
+
+    // Wait for the seeded content before replacing it.
+    await waitFor(() => {
+      const seeded = screen.getByTestId(
+        "manage-mcp-editor",
+      ) as HTMLTextAreaElement;
+      expect(seeded.value).toContain("githubcopilot");
+    });
+    fireEvent.change(screen.getByTestId("manage-mcp-editor"), {
+      target: {
+        value: JSON.stringify({
+          servers: {
+            github: {
+              type: "http",
+              url: "https://api.githubcopilot.com/mcp/",
+              headers: { Authorization: "Bearer ghp_real" },
+            },
+          },
+        }),
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mcpApiMocks.writeMcpConfig).toHaveBeenCalledTimes(1);
+    });
+    const [request, identity] = mcpApiMocks.writeMcpConfig.mock.calls[0];
+    expect(identity).toEqual(IDENTITY);
+    // Everything in one document — no companion secrets map.
+    expect(request).toEqual({ document: expect.anything() });
+    expect(request.document.servers.github.headers.Authorization).toBe(
+      "Bearer ghp_real",
+    );
+  });
+
+  it("surfaces a save failure instead of closing", async () => {
     connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
     connectorsApiMocks.streamConnectorEvents.mockReturnValue({
       close: vi.fn(),
     });
-    mcpApiMocks.createMcpServer.mockResolvedValueOnce(
-      mcpServer({ auth_mode: "none", auth_state: "auth_unsupported" }),
+    mcpApiMocks.readMcpConfig.mockResolvedValueOnce({
+      servers: {},
+      inputs: [],
+    });
+    mcpApiMocks.writeMcpConfig.mockRejectedValueOnce(
+      new Error('server "broken" is type stdio but has no command'),
     );
 
     render(<ConnectorsRoute identity={IDENTITY} />);
@@ -693,16 +703,25 @@ describe("ConnectorsRoute custom server add", () => {
         "ready",
       );
     });
+    await openEditor();
 
-    await submitCustomUrl("https://mcp.example.com/mcp");
-
-    // Install alone completes: no auth round-trip, spinner resolves, closed.
-    await waitFor(() => {
-      expect(screen.queryByTestId("connect-oauth")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("manage-mcp-editor"), {
+      target: {
+        value: JSON.stringify({
+          servers: { broken: { type: "stdio" } },
+        }),
+      },
     });
-    expect(mcpApiMocks.startMcpAuth).not.toHaveBeenCalled();
-    expect(window.open).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("connect-custom-form")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/is type stdio but has no command/),
+      ).toBeInTheDocument();
+    });
+    // Still open, with the user's text intact — a failed save that closed the
+    // editor would discard the config they were trying to fix.
+    expect(screen.getByTestId("manage-mcp-editor")).toBeInTheDocument();
   });
 });
 
