@@ -47,7 +47,11 @@ function toEntry(server: McpServer): JsonConfigEntry {
   return {
     id: server.server_id,
     name: server.display_name,
-    url: server.url,
+    // This legacy panel predates stdio servers, which carry no URL. It is
+    // superseded by the Manage MCP config document and mounted nowhere, so
+    // this keeps it compiling rather than teaching it a transport it cannot
+    // represent.
+    url: server.url ?? "",
     transport: server.transport,
     auth_mode: server.auth_mode,
     enabled: server.enabled,
