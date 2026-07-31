@@ -722,7 +722,6 @@ export type {
   ConnectorAccessPort,
   ConnectFlow,
   ConnectAuthorizeRequest,
-  CustomServerResult,
   UseConnectFlowOptions,
   RevealOnceProps,
   ConnectorDetailViewProps,
@@ -1653,7 +1652,6 @@ export {
   type ConnectModalProps,
   type ConnectPermission,
   type ConnectPermissionOption,
-  type CustomServerInput,
 } from "./destinations/connectors";
 // === end Phase 4 (PR-4.8) ===
 

@@ -8,9 +8,8 @@
 //   3. Merges connector envelopes into the local list via the pure
 //      `applyConnectorEnvelope` adapter.
 //   4. Drives the shared <ConnectModal> connect flow through `useConnectFlow`
-//      (PRD-11 D4): the host injects `authorize` (open a popup / start OAuth),
-//      `addCustomServer` (create an MCP server, return its OAuth url), and
-//      `onConnect` (persist the picked access mode). The SSE channel feeds
+//      (PRD-11 D4): the host injects `authorize` (open a popup / start OAuth)
+//      and `onConnect` (persist the picked access mode). The SSE channel feeds
 //      completion back through `flow.markConnected`.
 //
 // SSE goes through `streamConnectorEvents` (transport port) — no raw
@@ -34,7 +33,6 @@ import {
   useMcpConfig,
   type McpConfigPort,
   type ConnectorAccessPort,
-  type CustomServerInput,
 } from "@0x-copilot/chat-surface";
 import type {
   Connector,
@@ -56,7 +54,6 @@ import {
   streamConnectorEvents,
 } from "../../api/connectorsApi";
 import {
-  createMcpServer,
   installMcpServer,
   readMcpConfig,
   startMcpAuth,
@@ -170,10 +167,10 @@ export function ConnectorsRoute({
   // ---- Connect flow capabilities (PRD-11 D4) -------------------------
 
   // `authorize`: a catalog pick starts the provider OAuth round-trip and opens
-  // a popup (keeping the modal alive); a custom server's OAuth url is opened
-  // directly. Completion is reported by the SSE channel via `markConnected`.
+  // a popup (keeping the modal alive). Completion is reported by the SSE
+  // channel via `markConnected`.
   const authorize = useCallback(
-    async (request: { slug?: ConnectorSlug; url?: string }): Promise<void> => {
+    async (request: { slug?: ConnectorSlug }): Promise<void> => {
       if (request.slug !== undefined) {
         // Install-then-authorize over the MCP path — the SAME two calls the
         // composer's connect makes. The destination used to POST its own
@@ -188,31 +185,6 @@ export function ConnectorsRoute({
         }
         return;
       }
-      if (request.url !== undefined && typeof window !== "undefined") {
-        window.open(request.url, "_blank", "noopener,noreferrer");
-      }
-    },
-    [identity],
-  );
-
-  // `addCustomServer`: create the MCP server, then, mirroring
-  // `useConnectors.addServer`'s post-create guards, return its OAuth url when
-  // the server still needs auth (so the hook opens it via `authorize`). A
-  // server needing no auth returns no url → the hook clears pending + closes.
-  const addCustomServer = useCallback(
-    async (input: CustomServerInput): Promise<{ authorizeUrl?: string }> => {
-      const server = await createMcpServer(
-        input.url,
-        identity,
-        input.oauthClient,
-      );
-      const needsAuth =
-        server.auth_mode !== "none" &&
-        server.auth_state !== "auth_unsupported" &&
-        server.auth_state !== "authenticated";
-      if (!needsAuth) return {};
-      const auth = await startMcpAuth(server.server_id, identity);
-      return { authorizeUrl: auth.auth_url };
     },
     [identity],
   );
@@ -234,7 +206,6 @@ export function ConnectorsRoute({
 
   const flow = useConnectFlow({
     authorize,
-    addCustomServer,
     onConnect: persistConnect,
   });
 
@@ -484,7 +455,6 @@ export function ConnectorsRoute({
         catalog={catalog}
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
-        onAddCustomServer={flow.onAddCustomServer}
         onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}

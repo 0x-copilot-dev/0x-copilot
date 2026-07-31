@@ -3,7 +3,6 @@ export type {
   ConnectModalProps,
   ConnectPermission,
   ConnectPermissionOption,
-  CustomServerInput,
 } from "./ConnectModal";
 
 export {
@@ -22,7 +21,6 @@ export { useConnectFlow } from "./useConnectFlow";
 export type {
   ConnectFlow,
   ConnectAuthorizeRequest,
-  CustomServerResult,
   UseConnectFlowOptions,
 } from "./useConnectFlow";
 export { RevealOnce } from "./RevealOnce";

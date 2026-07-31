@@ -31,7 +31,6 @@ function port(
     listServers: vi.fn().mockResolvedValue([]),
     listCatalog: vi.fn().mockResolvedValue([]),
     installFromCatalog: vi.fn(),
-    addCustomServer: vi.fn(),
     beginAuth: vi.fn(),
     deleteServer: vi.fn(),
     ...over,

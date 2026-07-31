@@ -48,7 +48,6 @@ import {
   useNotify,
   useTransport,
   type ConnectorAccessPort,
-  type CustomServerInput,
   type McpConfigDocumentPayload,
   type McpConfigPort,
   type McpConfigWritePayload,
@@ -384,14 +383,13 @@ export function ConnectorsBinder({
   // PRD-11 D4 — the connect flow is host-neutral; only "open the authorization
   // surface" is desktop-specific. The renderer is DENIED window.open, so a
   // catalog pick routes through the main-brokered, slug-scoped connect IPC
-  // (loopback bind + system browser). A url-only request (a custom server's
-  // OAuth) is rejected — desktop cannot open it from the renderer.
+  // (loopback bind + system browser). A request naming neither a slug nor a
+  // server is rejected — desktop cannot open a bare URL from the renderer.
   const markConnectedRef = useRef<(slug?: ConnectorSlug) => void>(() => {});
   const authorize = useCallback(
     async (request: {
       slug?: ConnectorSlug;
       serverId?: string;
-      url?: string;
     }): Promise<void> => {
       if (request.slug === undefined && request.serverId === undefined) {
         throw new Error(
@@ -425,19 +423,6 @@ export function ConnectorsBinder({
     [retry],
   );
 
-  // Custom-server add: create the MCP server over the port. Desktop cannot
-  // complete a browser OAuth from the renderer, so the flow completes on create
-  // (a non-auth server is fully registered; an OAuth server is registered and
-  // its sign-in is a documented desktop follow-up).
-  const addCustomServer = useCallback(
-    async (input: CustomServerInput): Promise<{ authorizeUrl?: string }> => {
-      await port.addCustomServer(input.url, input.oauthClient);
-      retry();
-      return {};
-    },
-    [port, retry],
-  );
-
   const persistConnect = useCallback(
     async (
       slug: ConnectorSlug,
@@ -452,7 +437,6 @@ export function ConnectorsBinder({
 
   const flow = useConnectFlow({
     authorize,
-    addCustomServer,
     onConnect: persistConnect,
   });
   markConnectedRef.current = flow.markConnected;
@@ -587,7 +571,6 @@ export function ConnectorsBinder({
         catalog={catalog}
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
-        onAddCustomServer={flow.onAddCustomServer}
         onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}

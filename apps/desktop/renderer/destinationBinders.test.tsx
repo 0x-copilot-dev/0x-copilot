@@ -796,8 +796,8 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
 // ---------------------------------------------------------------------------
 // PRD-11 DoD 8 — desktop mounts the SAME ConnectModal. This is the regression
 // guard that fails on `main`: the old binder mounted no modal (its CTA flipped
-// a filter tab). (a) the CTA opens the modal; (b) the custom-server form reaches
-// the injected port's addCustomServer (observed as a single POST /v1/mcp/servers).
+// a filter tab). (a) the CTA opens the modal; (b) the pinned escape-hatch row
+// opens the MCP config editor and round-trips the document.
 // ---------------------------------------------------------------------------
 
 describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
