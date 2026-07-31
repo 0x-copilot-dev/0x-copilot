@@ -8,7 +8,7 @@ HTTP status codes, and that provider tokens never appear in any route response.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -17,7 +17,11 @@ from backend_app.connectors.desktop_routes import (
     register_desktop_connector_routes,
 )
 from backend_app.connectors.oauth_coordinator import DesktopMcpOAuthCoordinator
-from backend_app.connectors.profile_catalog import DesktopProfileCatalog
+from backend_app.connectors.profile_catalog import (
+    ConnectorReleaseStage,
+    DesktopConnectorProfile,
+    DesktopProfileCatalog,
+)
 from backend_app.contracts import OAuthTokenRequest, OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
 from backend_app.mcp_oauth import McpAuthorization
@@ -72,7 +76,36 @@ class _FakeExchanger:
         )
 
 
-def _client(*, preview_enabled: bool = False) -> tuple[TestClient, InMemoryMcpStore]:
+def _tenant_scoped_profile() -> DesktopConnectorProfile:
+    """A profile needing a tenant id the app cannot supply — see
+    `test_desktop_oauth._tenant_scoped_profile`. No SHIPPED profile is like
+    this since Outlook was removed, but the route's 403 mapping still has to
+    hold, so the rule is exercised with data instead of being dropped."""
+
+    return DesktopConnectorProfile(
+        profile_id="synthetic-tenanted",
+        connector_slug="tenanted",
+        display_name="Tenanted",
+        description="Needs a tenant admin.",
+        server_id="desktop:synthetic:tenanted",
+        display_group="Synthetic",
+        endpoint_template="https://example.invalid/tenants/{tenantId}/mcp",
+        transport="http",
+        release_stage=ConnectorReleaseStage.STABLE,
+        requires_preview_gate=False,
+        verified_at=date(2026, 7, 18),
+        # The loader requires this of any profile-owned seed.
+        requires_pre_registered_client=True,
+        requires_admin_setup=True,
+        callback_modes=("loopback_pkce",),
+    )
+
+
+def _client(
+    *,
+    preview_enabled: bool = False,
+    catalog: DesktopProfileCatalog | None = None,
+) -> tuple[TestClient, InMemoryMcpStore]:
     app = create_app(
         configure_logging_on_create=False,
         configure_telemetry_on_create=False,
@@ -86,7 +119,7 @@ def _client(*, preview_enabled: bool = False) -> tuple[TestClient, InMemoryMcpSt
         token_exchanger=_FakeExchanger(),
         auth_session_ttl=timedelta(minutes=5),
     )
-    catalog = DesktopProfileCatalog.load()
+    catalog = catalog if catalog is not None else DesktopProfileCatalog.load()
     coordinator = DesktopMcpOAuthCoordinator(
         mcp_service=mcp_service,
         catalog=catalog,
@@ -127,7 +160,8 @@ class TestCatalog:
         resp = client.get("/v1/connectors/desktop/catalog", params=_q())
         assert resp.status_code == 200, resp.text
         slugs = {e["slug"] for e in resp.json()["entries"]}
-        assert {"gmail", "gdrive", "outlook", "atlassian"} <= slugs
+        assert {"gmail", "gdrive", "atlassian"} <= slugs
+        assert "outlook" not in slugs
 
     def test_atlassian_available_gmail_preview_by_default(self) -> None:
         client, _store = _client(preview_enabled=False)
@@ -139,12 +173,12 @@ class TestCatalog:
         }
         assert entries["atlassian"]["availability"] == "available"
         assert entries["gmail"]["availability"] == "preview"
-        # Outlook is preview AND tenant-templated; preview is the honest default
-        # first (the deployment hasn't enabled preview connectors).
-        assert entries["outlook"]["availability"] == "preview"
 
-    def test_outlook_admin_setup_when_preview_enabled(self) -> None:
-        client, _store = _client(preview_enabled=True)
+    def test_tenant_template_reports_admin_setup_when_preview_enabled(self) -> None:
+        client, _store = _client(
+            preview_enabled=True,
+            catalog=DesktopProfileCatalog((_tenant_scoped_profile(),)),
+        )
         entries = {
             e["slug"]: e
             for e in client.get("/v1/connectors/desktop/catalog", params=_q()).json()[
@@ -152,7 +186,18 @@ class TestCatalog:
             ]
         }
         # With preview on, the tenant-template gate surfaces.
-        assert entries["outlook"]["availability"] == "admin_setup_required"
+        assert entries["tenanted"]["availability"] == "admin_setup_required"
+
+    def test_no_shipped_connector_needs_an_admin(self) -> None:
+        """The product-level promise behind removing Outlook: every row a user
+        can see is one they can finish themselves."""
+
+        client, _store = _client(preview_enabled=True)
+        entries = client.get("/v1/connectors/desktop/catalog", params=_q()).json()[
+            "entries"
+        ]
+        assert entries
+        assert all(e["availability"] != "admin_setup_required" for e in entries)
 
 
 class TestOAuthRoundTrip:
@@ -226,9 +271,12 @@ class TestGates:
         assert resp.json()["detail"] == "connector_preview_disabled"
 
     def test_admin_setup_required_returns_403(self) -> None:
-        client, _store = _client(preview_enabled=True)
+        client, _store = _client(
+            preview_enabled=True,
+            catalog=DesktopProfileCatalog((_tenant_scoped_profile(),)),
+        )
         resp = client.post(
-            "/v1/connectors/outlook/desktop/start-oauth",
+            "/v1/connectors/tenanted/desktop/start-oauth",
             params=_q(),
             json=_loopback_body(),
         )

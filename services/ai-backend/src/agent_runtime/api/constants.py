@@ -68,6 +68,9 @@ class Keys:
         METADATA = "metadata"
         MODEL_DISPLAY_LABEL = "model_display_label"
         NAME = "name"
+        # Model-facing routing hint returned by a tool that declined to act
+        # because a different tool owns the next step.
+        NEXT_STEP = "next_step"
         ORG_ID = "org_id"
         OUTPUT = "output"
         # Set on a TOOL_RESULT payload when its oversized ``output`` was offloaded
@@ -312,13 +315,19 @@ class Values:
 
         ASK_A_QUESTION = "ask_a_question"
         GREP = "grep"
+        # Inventory of servers the user has ALREADY connected — the first step of
+        # the connector protocol, and the counterpart to
+        # ``SUGGEST_MCP_CONNECTOR`` below, which only proposes connectors that
+        # are not installed. Without it a run whose prompt suppresses the MCP
+        # card block has no model-visible way to learn a usable server exists.
+        LIST_CONNECTED_SERVERS = "list_connected_servers"
         READ_FILE = "read_file"
         RG = "rg"
         SEARCH_FILES = "search_files"
-        # Non-blocking MCP discovery tool. Agent calls this when an unauthenticated
-        # MCP server would improve the answer; emits ``mcp_auth_required`` with
-        # ``discovery_reason`` so the frontend renders a Connect/Skip card without
-        # pausing the run.
+        # Non-blocking MCP discovery tool. Agent calls this when an uninstalled
+        # catalog connector would improve the answer; emits ``mcp_auth_required``
+        # with ``discovery_reason`` so the frontend renders a Connect/Skip card
+        # without pausing the run.
         SUGGEST_MCP_CONNECTOR = "suggest_mcp_connector"
         # PRD-D3 — the bulk row-set staging propose seam (flag-gated, worker-built).
         STAGE_ROWSET_WRITE = "stage_rowset_write"
@@ -400,6 +409,16 @@ class Messages:
         # catalog membership rules) and pair with 422 for field-level FE rendering.
         UNKNOWN_MODEL_PROVIDER = "Default model provider is not in the catalog."
         UNKNOWN_MODEL_NAME = "Default model name is not in the catalog."
+
+    class Discovery:
+        """Model-facing routing guidance returned by the connector tools."""
+
+        ALREADY_CONNECTED_NEXT_STEP = (
+            "This server is already connected. suggest_mcp_connector only "
+            "proposes connectors that are not connected yet — call "
+            "load_mcp_server with this server's name to load its tools, then "
+            "call_mcp_tool. Do not tell the user to connect it."
+        )
 
     class Audit:
         """Action-name strings written to audit log rows."""

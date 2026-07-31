@@ -58,6 +58,11 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
+from backend_app.mcp_config import (
+    McpConfigDocument,
+    McpConfigWriteRequest,
+    McpConfigWriteResult,
+)
 from backend_app.mcp_revisions import RevisionCursorExpired
 from backend_app.identity import (
     AuthProviderDomainStore,
@@ -1046,6 +1051,94 @@ def create_app(
         if stored is not None:
             _connector_write_through(app, stored, action="connector.installed")
         return response
+
+    # The MCP configuration as ONE editable document — the "Manage MCP"
+    # surface. Read is `MCP_READ` because the document deliberately carries no
+    # secret (a stored credential renders as its `${input:...}` placeholder);
+    # write is `MCP_WRITE` because a save can create and DELETE servers.
+    @app.get(
+        "/v1/mcp/config",
+        response_model=McpConfigDocument,
+        # A server states only what applies to it: no `"command": null` on an
+        # HTTP entry, no `"headers": {}` on a stdio one. The document is read
+        # and edited by hand, so inapplicable keys are not cosmetic clutter —
+        # they bury the fields that matter.
+        response_model_exclude_none=True,
+        dependencies=[Depends(RequireScopes(MCP_READ))],
+    )
+    def read_mcp_config(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> McpConfigDocument:
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        return _AppServices.mcp(app).read_config(
+            org_id=identity.org_id, user_id=identity.user_id
+        )
+
+    @app.put(
+        "/v1/mcp/config",
+        response_model=McpConfigWriteResult,
+        dependencies=[Depends(RequireScopes(MCP_WRITE))],
+    )
+    def write_mcp_config(
+        request: Request,
+        payload: McpConfigWriteRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> McpConfigWriteResult:
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        service = _AppServices.mcp(app)
+        # Captured BEFORE the reconcile: a deleted row is gone by the time the
+        # result names it, and the connector projection needs the record to
+        # mark the tool disconnected. Skipping this is how a config save would
+        # leave a permanently "Disconnected" tool that nothing could clear.
+        before = {
+            record.name: record
+            for record in service.store.list_servers(
+                org_id=identity.org_id, user_id=identity.user_id
+            )
+        }
+        try:
+            result = service.write_config(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            # Every rejection here is a statement about the document the user
+            # just wrote — an unknown field, a stdio entry with no command, a
+            # local server on a deployment that forbids one. 422 with the
+            # message intact is what lets the editor point at the problem
+            # instead of saying "save failed".
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        # Same write-through the single-server routes perform, for every row
+        # this document touched.
+        after = {
+            record.name: record
+            for record in service.store.list_servers(
+                org_id=identity.org_id, user_id=identity.user_id
+            )
+        }
+        for name in result.created:
+            if (record := after.get(name)) is not None:
+                _connector_write_through(app, record, action="connector.installed")
+        for name in result.updated:
+            if (record := after.get(name)) is not None:
+                _connector_write_through(app, record, action="connector.updated")
+        for name in result.deleted:
+            if (record := before.get(name)) is not None:
+                # ``server_deleted``, not ``removed`` — same distinction the
+                # DELETE route draws: the connector row survives, projected to
+                # disconnected, and only DELETE /v1/connectors/{id} removes it.
+                _connector_write_through(
+                    app, record, action="connector.server_deleted", removed=True
+                )
+        return result
 
     @app.get(
         "/v1/mcp/servers",
@@ -2078,8 +2171,18 @@ def create_app(
     # ``resolved_connectors_store`` is resolved + stashed on ``app.state``
     # earlier (beside the runtime-policies route registration) so the aggregate
     # sees the same instance; reuse it here — do NOT re-create it.
+    # ONE preview switch for both catalogs. This used to be read further down,
+    # after the registry had already been loaded with the `preview_enabled=False`
+    # default — so with the flag ON the desktop catalog reported Gmail/Drive as
+    # connectable while the destination catalog, built from the same registry,
+    # still reported them as preview. Same slug, same boot, two answers.
+    desktop_preview_enabled = (
+        os.environ.get("DESKTOP_CONNECTORS_ALLOW_PREVIEW", "").strip().lower() == "true"
+    )
     try:
-        connector_catalog = ConnectorRegistry.load().as_catalog_entries()
+        connector_catalog = ConnectorRegistry.load(
+            preview_enabled=desktop_preview_enabled
+        ).as_catalog_entries()
     except Exception:
         logging.getLogger(__name__).warning(
             "connector_registry_load_failed", exc_info=True
@@ -2210,9 +2313,8 @@ def create_app(
     # Preview connectors (Google/Microsoft) stay disabled unless the deployment
     # explicitly sets ``DESKTOP_CONNECTORS_ALLOW_PREVIEW=true``; even then the
     # tenant-template profiles fail closed with ``admin_setup_required``.
-    desktop_preview_enabled = (
-        os.environ.get("DESKTOP_CONNECTORS_ALLOW_PREVIEW", "").strip().lower() == "true"
-    )
+    # ``desktop_preview_enabled`` is resolved once, above, beside the registry
+    # load that shares it.
     try:
         desktop_profile_catalog = DesktopProfileCatalog.load()
     except Exception:  # noqa: BLE001 — soft-fail; desktop surface degrades

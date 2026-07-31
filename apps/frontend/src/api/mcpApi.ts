@@ -8,6 +8,11 @@ import type {
   McpServerListResponse,
   UpdateMcpServerRequest,
 } from "@0x-copilot/api-types";
+import type {
+  McpConfigDocumentPayload,
+  McpConfigWritePayload,
+} from "@0x-copilot/chat-surface";
+
 import type { RequestIdentity } from "./config";
 import {
   httpDelete,
@@ -121,5 +126,30 @@ export function completeMcpOAuth(
     code: code ?? undefined,
     error: error ?? undefined,
     error_description: errorDescription ?? undefined,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// "Manage MCP" — the whole configuration as one editable document.
+//
+// Deliberately untyped beyond the two envelope shapes the UI reads: the
+// document's schema belongs to the backend (`McpConfigDocument`), the editor
+// treats it as text, and mirroring the schema here would only give it a third
+// place to drift from.
+// ---------------------------------------------------------------------------
+
+export function readMcpConfig(
+  identity: RequestIdentity,
+): Promise<McpConfigDocumentPayload> {
+  return httpGet<McpConfigDocumentPayload>("/v1/mcp/config", identity);
+}
+
+export function writeMcpConfig(
+  request: { readonly document: unknown },
+  identity: RequestIdentity,
+): Promise<McpConfigWritePayload> {
+  return httpJson<McpConfigWritePayload>("PUT", "/v1/mcp/config", request, {
+    org_id: identity.orgId,
+    user_id: identity.userId,
   });
 }

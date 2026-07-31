@@ -51,6 +51,7 @@ class TestBuiltinOperationCatalog:
             "grep",
             "invoke_capability",
             "ls",
+            "list_connected_servers",
             "load_mcp_server",
             "load_prior_tool_result",
             "load_skill",

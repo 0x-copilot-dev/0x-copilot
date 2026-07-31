@@ -124,6 +124,52 @@ class TestListEndpoint:
         assert "gmail" not in available_slugs
         assert "slack" in available_slugs
 
+    def test_available_entries_carry_their_availability(self) -> None:
+        """The wire must say which rows can actually be connected.
+
+        Without this the browser gets N identical entries and renders N
+        identical Connect buttons — including over an announced slug that
+        resolves to no MCP server in any deployment.
+        """
+
+        client, _store = _client(
+            catalog=(
+                ConnectorCatalogEntry(
+                    slug="linear",
+                    display_name="Linear",
+                    description="Issues.",
+                    availability="available",
+                ),
+                ConnectorCatalogEntry(
+                    slug="slack",
+                    display_name="Slack",
+                    description="Chat.",
+                    availability="coming_soon",
+                    availability_reason="Not yet available.",
+                ),
+            )
+        )
+        resp = client.get("/v1/connectors", params=_q())
+        assert resp.status_code == 200, resp.text
+        by_slug = {e["slug"]: e for e in resp.json()["available"]}
+        assert by_slug["slack"]["availability"] == "coming_soon"
+        assert by_slug["slack"]["availability_reason"] == "Not yet available."
+        assert by_slug["linear"]["availability"] == "available"
+        assert by_slug["linear"]["availability_reason"] is None
+
+    def test_available_entry_omitting_availability_stays_null(self) -> None:
+        """A catalog source that says nothing must not be coerced to a state.
+
+        `None` is what every client reads as "connectable" — inventing
+        "unavailable" here would silently hide connectors behind any caller
+        that builds an entry the old way.
+        """
+
+        client, _store = _client()
+        resp = client.get("/v1/connectors", params=_q())
+        by_slug = {e["slug"]: e for e in resp.json()["available"]}
+        assert by_slug["slack"]["availability"] is None
+
     def test_list_filter_status_or(self) -> None:
         client, store = _client()
         _seed_record(store, slug="gmail", status="connected")

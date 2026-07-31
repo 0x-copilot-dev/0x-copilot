@@ -54,6 +54,15 @@
     "model_visible": true
   },
   {
+    "tool_name": "list_connected_servers",
+    "capability": "builtin",
+    "op": "list_connected_servers",
+    "source": "capabilities.tools.builtin.list_connected_servers",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
     "tool_name": "suggest_mcp_connector",
     "capability": "builtin",
     "op": "suggest_mcp_connector",

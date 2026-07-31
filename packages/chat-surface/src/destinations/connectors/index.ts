@@ -18,7 +18,10 @@ export type { RemoveConnectorDialogProps } from "./RemoveConnectorDialog";
 export { AccessModeSegment } from "./AccessModeSegment";
 export type { AccessModeSegmentProps } from "./AccessModeSegment";
 export type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
-export { useConnectFlow } from "./useConnectFlow";
+export {
+  useConnectFlow,
+  ConnectOAuthClientRequiredError,
+} from "./useConnectFlow";
 export type {
   ConnectFlow,
   ConnectAuthorizeRequest,
@@ -27,6 +30,20 @@ export type {
 } from "./useConnectFlow";
 export { RevealOnce } from "./RevealOnce";
 export type { RevealOnceProps } from "./RevealOnce";
+
+export { ManageMcpModal } from "./ManageMcpModal";
+export type {
+  ManageMcpModalProps,
+  ManageMcpSaveRequest,
+} from "./ManageMcpModal";
+export { useMcpConfig } from "./useMcpConfig";
+export type {
+  McpConfigDocumentPayload,
+  McpConfigPort,
+  McpConfigWritePayload,
+  UseMcpConfigOptions,
+  UseMcpConfigResult,
+} from "./useMcpConfig";
 
 export { ConnectorDetailView } from "./ConnectorDetailView";
 export type {

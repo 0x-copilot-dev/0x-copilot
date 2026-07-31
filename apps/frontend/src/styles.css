@@ -1127,9 +1127,11 @@ p {
   min-width: 0;
 }
 
-.aui-plain-text {
-  white-space: pre-wrap;
-}
+/* `.aui-plain-text` moved to chat-surface's messages/markdown.css (imported
+ * above by App.tsx, so web still gets it). The copy that lived here set only
+ * `white-space: pre-wrap`, which does not stop a long unbreakable token from
+ * overflowing the user bubble — keeping a second, weaker copy here is exactly
+ * how the two hosts drift. */
 
 .aui-assistant-message-footer {
   align-items: center;
@@ -1593,13 +1595,18 @@ p {
  * over with `space-between` + `tools{flex:1 1 auto}`, the package does it with
  * `__right{margin-left:auto}` + `tools{flex:0 1 auto}`. Mixing the two halves
  * collapses the row, so the four blocks here change together. */
+/* `flex-wrap` kept in lockstep with chat-surface's composer.css — see the long
+ * note on `.aui-composer-tools` there. This host never imports that file, so the
+ * narrow-rail fix has to be restated here or web keeps the clipped row. */
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
   padding: 6px 8px 8px;
   position: relative;
+  row-gap: 4px;
 }
 
 .aui-composer-focus-meta {
@@ -1664,26 +1671,20 @@ p {
   }
 }
 
+/* Wraps, never clips — kept in lockstep with chat-surface's composer.css, which
+ * carries the full note. Short version: `nowrap` + `overflow: hidden` made the
+ * narrow Run rail silently eat the Tools and model pills, and the clipping
+ * protected nothing (both popovers this cluster anchors are portaled). */
 .aui-composer-tools {
   align-items: center;
   display: flex;
   /* `0 1 auto`: the tools cluster shrinks but never GROWS to fill the row —
    * growing is what made `space-between` necessary in the first place. */
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
-  overflow: hidden;
-}
-
-/* Mirrors chat-surface's composer recipe. The Tools panel must escape this
- * narrow flex group or its fixed click-out scrim becomes the only hit target. */
-.aui-composer-tools--tools-popover {
-  overflow: visible;
-  /* Match chat-surface: this host layer keeps the shared 70/71 scrim/panel
-   * pair above ancestor stacking contexts without changing their recipe. */
-  position: relative;
-  z-index: 72;
+  row-gap: 4px;
 }
 
 .atlas-composer-mic {
