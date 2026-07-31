@@ -180,6 +180,31 @@ Full detail: [docs/ci-cd/branching-and-release.md](docs/ci-cd/branching-and-rele
 feature ──PR──▶ dev ──promote-to-main.yml──▶ main ──release-cli.yml──▶ npm
 ```
 
+**The working clone tracks `dev`, not `main`.** Branch from `dev`, PR into `dev`:
+
+```bash
+git checkout dev && git pull
+git checkout -b feat/your-change
+gh pr create --base dev
+```
+
+Never `git checkout main` to "get the latest" — `main` is a release pointer and
+is normally _behind_ `dev`, so it is the stale one between promotions. It also
+lags on repo hygiene: a fix merged to `dev` (a `.gitignore` rule, a CI gate) is
+simply absent from a `main` checkout until the next promotion.
+
+Promotion and publishing are both manual dispatches, dry-run by default:
+
+```bash
+gh workflow run promote-to-main.yml -r dev -f dry_run=false   # dev -> main
+gh workflow run release-cli.yml -r main -f bump=auto -f dry_run=false
+```
+
+Promotion is a **fast-forward**, not a merge and not a squash: `main` ends up
+byte-identical to `dev`, same commits and same SHAs. Squashing is deliberately
+avoided because the changelog is built from the individual Conventional Commits
+inside each PR.
+
 Releases are manual-dispatch and dry-run by default. Versioning is pre-1.0: a
 **breaking change bumps MINOR** (`0.1.4 → 0.2.0`), everything else bumps PATCH,
 because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0`. Never hand-edit

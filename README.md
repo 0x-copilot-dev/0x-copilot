@@ -66,8 +66,47 @@ Open <http://127.0.0.1:8080> when the installer finishes. See the
 [self-hosting guide](deploy/self-host/README.md) for domains, TLS, authentication,
 model providers, local models, upgrades, and operations.
 
+## Contributing
+
+Pull requests target **`dev`**, never `main`.
+
+```
+feature ──PR──▶ dev ──promote-to-main.yml──▶ main ──release-cli.yml──▶ npm
+```
+
+`dev` is the integration branch: every change lands there first and CI runs on
+it. `main` is the released branch and moves only when the promotion workflow is
+dispatched, which refuses to promote a `dev` commit whose checks are not all
+green and all finished.
+
+So work from `dev`, not `main` — `main` is a release pointer and is usually the
+older of the two:
+
+```bash
+git checkout dev && git pull    # start here
+git checkout -b feat/your-change
+gh pr create --base dev
+```
+
+Three checks must pass on every PR: `lint-and-secrets`, `tenants-lint` and
+`repo-gates` (about 45 seconds total). Merging requires write access, which is
+held by the maintainers — anyone may fork and open a PR, and a maintainer merges
+it after review. Outside contributions need two approvals.
+
+Use [Conventional Commit](https://www.conventionalcommits.org) subjects
+(`feat:`, `fix:`, `feat!:`, a `BREAKING CHANGE:` footer). They are not
+decoration: the CLI changelog and the next version number are both derived from
+them, and a subject that is not conventional is skipped rather than guessed at.
+
+Releases are manual and dry-run by default. While the CLI is `0.x`, a breaking
+change bumps the **minor** digit (`0.1.4 → 0.2.0`) and everything else bumps
+patch, because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0`. Full detail, including
+how promotion and publishing are run:
+[branching and release](docs/ci-cd/branching-and-release.md).
+
 ## Documentation
 
+- [Branching, protection and release](docs/ci-cd/branching-and-release.md)
 - [Desktop and supervised runtime](apps/desktop/README.md)
 - [CLI installation and troubleshooting](tools/cli/README.md)
 - [Self-hosting](deploy/self-host/README.md)
