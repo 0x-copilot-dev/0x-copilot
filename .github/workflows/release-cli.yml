@@ -9,8 +9,20 @@
 # PATCH, because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0` -- the minor is what
 # actually breaks consumers before 1.0. Force `major` to graduate to 1.0.0.
 #
-# Requires the NPM_TOKEN secret (an npm automation token with publish rights on the
-# @0x-copilot scope).
+# Authentication is npm Trusted Publishing (OIDC) -- there is no NPM_TOKEN. The
+# package on npmjs.com trusts this repository and THIS workflow filename, and the
+# npm CLI exchanges the job's short-lived GitHub OIDC token for publish rights.
+# Nothing long-lived exists to leak or rotate; renaming this file breaks publishing
+# until the trusted-publisher record is updated to match.
+#
+# That imposes two hard version floors, and missing either fails only at the very
+# last step, after a full payload build: npm CLI >= 11.5.1 and Node >= 22.14.0.
+# Node 22 ships npm 10.x, so the CLI is upgraded explicitly below rather than
+# assumed from the runtime.
+#
+# Provenance is NOT passed as a flag: publishing through a trusted publisher
+# generates and publishes the attestation automatically. `--provenance` is
+# redundant here.
 
 name: release-cli
 
@@ -39,7 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # push the version commit + tag, create the Release
-      id-token: write # npm provenance attestation
+      # This IS the npm credential. Without it there is no OIDC token to exchange
+      # and, with no NPM_TOKEN to fall back to, publishing fails outright.
+      # Provenance rides along on the same mechanism.
+      id-token: write
     steps:
       # Releases come from main only. dev is the integration branch and its head
       # has not been through the promotion gate, so publishing from it would ship
@@ -62,12 +77,24 @@ jobs:
         with:
           python-version: "3.13"
 
+      # Node 22, not the 20 the CI workflows use: trusted publishing requires
+      # >= 22.14.0. ci-desktop already runs 22, so this is not a new runtime for
+      # the desktop and frontend builds this job performs.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: package-lock.json
           registry-url: "https://registry.npmjs.org"
+
+      # Node 22 ships npm 10.x, which has no OIDC support and would fall through
+      # to token auth that does not exist here, failing with ENEEDAUTH after the
+      # whole payload has been built. Upgrade explicitly and assert the floor.
+      - name: Ensure an npm that speaks OIDC
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+          node --version
 
       - name: Test the release tooling
         run: |
@@ -149,13 +176,15 @@ jobs:
           npm run assemble --workspace @0x-copilot/cli
           npm run check:packed --workspace @0x-copilot/cli
 
-      - name: Publish to npm
+      # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment (id-token:
+      # write is granted on this job) and authenticates as the trusted publisher
+      # configured for @0x-copilot/cli. Provenance is emitted automatically.
+      - name: Publish to npm via trusted publishing
         if: ${{ !inputs.dry_run }}
         working-directory: tools/cli
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           COPILOT_SKIP_BUILD: "1"
-        run: npm publish --provenance --access public
+        run: npm publish --access public
 
       # Only after a successful publish. Tagging first would leave a tag pointing
       # at a version that does not exist on the registry if publish then failed.

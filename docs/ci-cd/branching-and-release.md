@@ -57,6 +57,30 @@ nobody asked when `ci-desktop` and `ci-e2-final-conformance` went red on `main`.
 
 `release-cli.yml`, dispatched manually against `main`.
 
+### Authentication: trusted publishing, not a token
+
+There is no `NPM_TOKEN`. `@0x-copilot/cli` is configured on npmjs.com with a
+**trusted publisher** (OIDC) naming this repository and this workflow file, and
+the npm CLI exchanges the job's short-lived GitHub OIDC token for publish rights.
+Nothing long-lived exists to leak or rotate.
+
+Three consequences worth knowing before something fails at the last step:
+
+- **The workflow filename is part of the trust record.** Renaming
+  `release-cli.yml` breaks publishing until the npm-side record is updated.
+- **npm >= 11.5.1 and Node >= 22.14.0 are required.** Node 22 ships npm 10.x,
+  which has no OIDC support and falls through to token auth that does not exist
+  here — `ENEEDAUTH`, after the entire payload has already been built. The
+  workflow upgrades npm explicitly rather than trusting the runtime's default.
+- **`--provenance` is not passed.** Publishing through a trusted publisher
+  generates and publishes the attestation automatically; the flag is redundant.
+
+Settings live at npmjs.com → the package → Settings → Trusted Publisher:
+publisher `GitHub Actions`, `0x-copilot-dev` / `0x-copilot`, workflow
+`release-cli.yml`, allowed action `npm publish`. Environment name is left blank;
+setting one adds a second approval gate but requires declaring the same
+`environment:` on the job.
+
 Inputs:
 
 - **`bump`** — `auto` (default), `patch`, `minor`, `major`
@@ -130,9 +154,10 @@ covered by `tools/test_apply_branch_protection.py`.
 
 Ordering matters — protection last, or it locks out the setup itself.
 
-- [ ] `parthpahwa1` accepts the collaborator invite (write access)
-- [ ] Create `NPM_TOKEN` (npm automation token, publish rights on `@0x-copilot`)
-      as a repository secret
+- [x] `parthpahwa1` accepts the collaborator invite (write access)
+- [x] Configure the npm trusted publisher for `@0x-copilot/cli`
+      (GitHub Actions, `0x-copilot-dev/0x-copilot`, `release-cli.yml`,
+      allow `npm publish`). No repository secret is needed.
 - [ ] Push the `dev` branch from `main`
 - [ ] Push the baseline tag `cli-v0.1.4` at the current `main`, so the first
       automated release describes only what came after it
