@@ -72,6 +72,10 @@ from agent_runtime.capabilities.tools.builtin.publish_artifact import (
 from agent_runtime.capabilities.tools.builtin.revise_artifact import (
     ReviseArtifactInput,
 )
+from agent_runtime.capabilities.tools.builtin.list_connected_servers import (
+    ListConnectedServersInput,
+    ListConnectedServersTool,
+)
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
     SuggestMcpConnectorTool,
@@ -92,6 +96,7 @@ from agent_runtime.control_plane.context import (
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
     CAPABILITY_DISCOVERY_INSTRUCTIONS,
+    CONNECTOR_ROUTING_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -436,10 +441,19 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=enforced_tools.interrupt_on,
-                # D7: generic filesystem interrupts never authorize a host
-                # mutation. C3 stages workspace changes through its typed
-                # adapter; C2 is the only commit authority.
-                permissions=(),
+                # Host filesystem rules. D7 still holds and is now enforced by
+                # the rule set itself rather than by having none: every host
+                # WRITE is `deny`, so a generic filesystem interrupt cannot
+                # authorize a mutation — C3 stages workspace changes through its
+                # typed adapter and C2 remains the only commit authority.
+                #
+                # What the rules add is READS. An ungranted host path is
+                # `interrupt`, which parks the call on the same
+                # HumanInTheLoopMiddleware that already gates MCP tools; on
+                # approval the read proceeds against a real filesystem. Before
+                # this, such a path fell through to the StateBackend default and
+                # was answered with an empty listing and a green tick.
+                permissions=_host_filesystem_permissions(workspace_backend),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
                 middleware=(
@@ -616,6 +630,25 @@ def _model_visible_tools(
                 AskAQuestionInput,
             ),
             owner=ModelToolOwner.TOOLS,
+        )
+    )
+    # Ordered before ``suggest_mcp_connector`` because that is the protocol
+    # order: use what is already connected, and only propose an install when
+    # nothing connected can serve the request. The two are complementary, not
+    # alternatives — suggestion never sees an installed server, so removing this
+    # listing would leave the ``deferred`` posture (where the MCP card block is
+    # suppressed) with no model-visible route to a connected server at all.
+    model_tools.append(
+        ModelToolDeclaration.declared(
+            _structured_tool(
+                ListConnectedServersTool(
+                    registry=mcp_registry,
+                    runtime_context=runtime_context,
+                    loader=loader,
+                ),
+                ListConnectedServersInput,
+            ),
+            owner=ModelToolOwner.DISCOVERY,
         )
     )
     model_tools.append(
@@ -1375,6 +1408,7 @@ def _local_tool_names(
     if include_skill_loader:
         names.add("load_skill")
     names.add(Values.Tool.ASK_A_QUESTION)
+    names.add(Values.Tool.LIST_CONNECTED_SERVERS)
     if include_mcp_discovery:
         names.add(Values.Tool.SUGGEST_MCP_CONNECTOR)
     return frozenset(names)
@@ -1492,6 +1526,11 @@ def _instructions_with_mcp_cards(
             instructions,
             MCP_SERVER_CARDS_INSTRUCTIONS,
             "\n".join(card_lines),
+            # Ordered after the cards on purpose: the routing rules refer to
+            # auth states the model has just read, and the step it most often
+            # gets wrong — suggesting a connector that is already listed above
+            # as authenticated — is the one stated last.
+            CONNECTOR_ROUTING_INSTRUCTIONS,
         )
     )
 
@@ -1521,7 +1560,18 @@ def _instructions_with_capability_discovery(
 
     if not capability_bridge_tools:
         return instructions
-    return "\n\n".join((instructions, CAPABILITY_DISCOVERY_INSTRUCTIONS))
+    return "\n\n".join(
+        (
+            instructions,
+            CAPABILITY_DISCOVERY_INSTRUCTIONS,
+            # The routing rules are needed *more* here than under the cards.
+            # Suppression removes the enumeration that told the model which
+            # servers are authenticated, so without an explicit "check what is
+            # connected first" step its cheapest-looking move is to suggest a
+            # connector for something already connected.
+            CONNECTOR_ROUTING_INSTRUCTIONS,
+        )
+    )
 
 
 async def _skill_cards(
@@ -1567,18 +1617,24 @@ def _instructions_with_suggested_connectors(
             (
                 "## Suggestable integrations the user has not yet connected\n\n"
                 "The capabilities below are available in the workspace "
-                "catalog but are NOT installed for the current user.\n\n"
-                "**When the user's request mentions or implies one of these "
-                'slugs (e.g. "check my Linear tasks", "any new Notion '
-                'pages?", "connect Asana"), you MUST:**\n'
-                "1. Immediately call ``suggest_mcp_connector(slug, reason, "
+                "catalog but are NOT installed for the current user. This "
+                "list never contains a connector the user has already "
+                "connected — anything connected is reached through "
+                "``load_mcp_server``, not through suggestion.\n\n"
+                "**When a request maps to one of these slugs AND nothing "
+                "already connected can serve it, you MUST:**\n"
+                "1. Call ``suggest_mcp_connector(slug, reason, "
                 "expected_value)`` with the matching slug. This emits a "
                 "Connect/Skip card the user can click — no extra "
                 "confirmation from you needed.\n"
                 "2. Then write a single short line to the user pointing at "
-                "the card (e.g. \"Linear isn't connected yet — tap "
+                "the card (e.g. \"Asana isn't connected yet — tap "
                 'Connect above to set it up.").\n\n'
                 "**Do NOT:**\n"
+                "- Suggest a connector before checking what is already "
+                "connected. A request naming a service you are already "
+                "connected to is served by that connection, not by a "
+                "Connect card.\n"
                 "- Ask the user which option they want or list numbered "
                 "alternatives. The Connect/Skip card is the one and only "
                 "next step.\n"
@@ -1631,6 +1687,50 @@ def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
     return tuple(str(path) for path in memory_backend.memory_paths)
 
 
+def _host_filesystem_permissions(
+    workspace_backend: object | None = None,
+) -> tuple[object, ...]:
+    """Deep Agents ``FilesystemPermission`` rules for host paths — DESKTOP only.
+
+    Gated on the same signal as :func:`_host_default_backend`, and for a sharper
+    reason than symmetry: an ``interrupt`` rule asks a human. On a hosted image
+    there is no human at the machine, so the ask would park the run forever —
+    the exact hang this work already produced once. Web / postgres / in-memory
+    images therefore get no rules at all and compose byte-identically.
+
+    Returns an empty tuple if deepagents' permission type cannot be imported,
+    so a version skew degrades to today's behaviour instead of failing the run.
+    """
+
+    if workspace_backend is None:
+        return ()
+
+    from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
+        HostFilesystemRules,
+    )
+
+    try:
+        from deepagents.middleware.filesystem import (  # noqa: PLC0415
+            FilesystemPermission,
+        )
+    except ImportError:  # pragma: no cover - version skew guard
+        _LOGGER.warning("host_filesystem.permission_type_unavailable")
+        return ()
+
+    # Folders the user explicitly attached become `allow` rules, so they stop
+    # prompting. Read by CAPABILITY (`granted_roots`), never by isinstance —
+    # gating on a concrete class is how the previous guard silently opted out in
+    # ENFORCE mode, where the workspace object is a different type. A lane that
+    # cannot supply roots yields (), and every folder simply keeps asking.
+    roots = getattr(workspace_backend, "granted_roots", ())
+    if not isinstance(roots, tuple):
+        _LOGGER.warning("host_filesystem.granted_roots_malformed")
+        roots = ()
+    return tuple(
+        FilesystemPermission(**rule) for rule in HostFilesystemRules.build(roots=roots)
+    )
+
+
 def _composed_deep_backend(
     subagent_artifacts_backend: object | None,
     *,
@@ -1671,7 +1771,8 @@ def _composed_deep_backend(
       paths stay on the ``StateBackend`` default exactly as before.
 
     Any FS path not routed above (and, off the file store, ``/memories/`` &c.)
-    stays on deepagents' ``StateBackend`` default.
+    stays on deepagents' ``StateBackend`` default — except a HOST-absolute path,
+    which the default is guarded against (see ``guarded_default`` below).
     """
 
     routes: dict[str, object] = {}
@@ -1695,9 +1796,60 @@ def _composed_deep_backend(
     if not routes:
         return None
     from deepagents.backends.composite import CompositeBackend
-    from deepagents.backends.state import StateBackend
 
-    return CompositeBackend(default=StateBackend(), routes=routes)
+    # A host-absolute path is not a prefix of anything, so it can never be a
+    # route: it lands on the DEFAULT. Left as a bare ``StateBackend`` that is
+    # agent memory, which held nothing at ``/Users/<name>/Downloads`` and so
+    # answered ``ls`` with an empty listing AS A SUCCESS. ``guarded_default``
+    # diverts exactly the paths the workspace backend claims — which answers
+    # them with a real listing, a grant request, or an explicit refusal — and
+    # returns the default untouched when there is no workspace backend, so
+    # every non-desktop run composes byte-for-byte as before.
+    return CompositeBackend(
+        default=_host_default_backend(workspace_backend),
+        routes=routes,
+    )
+
+
+def _host_default_backend(workspace_backend: object | None) -> object:
+    """The backend for every path no route claims — including host paths.
+
+    A host-absolute path is not a prefix of anything, so it can never be a
+    route: it lands here. This used to be a bare ``StateBackend`` (agent
+    memory), which answers EVERY path with success and nothing — so
+    ``ls ~/Downloads`` came back empty with a green tick over a folder holding
+    a thousand files.
+
+    It is now deepagents' ``FilesystemBackend`` with ``virtual_mode=False``,
+    which uses absolute paths as-is and therefore reads the real disk.
+    Upstream's docstring calls that combination "no security", and that is
+    accurate and intended: the boundary is NOT this object. It is the
+    ``FilesystemPermission`` rule set applied in the tool layer BEFORE any
+    backend runs (see ``_host_filesystem_permissions``), where every host write
+    is denied and every ungranted host read is an interrupt. Removing those
+    rules while leaving this backend in place would hand the model the disk.
+
+    ``root_dir`` is the process working directory, which only affects RELATIVE
+    path resolution; absolute paths ignore it entirely.
+
+    DESKTOP ONLY. ``workspace_backend is None`` on every web / postgres /
+    in-memory image, and those must keep composing exactly as before: a hosted
+    deployment has no user sitting at the machine, so "ask the user" degrades to
+    "park forever", and an approved read would touch the SERVER's disk rather
+    than the person's. The user's own filesystem is a desktop concept, so the
+    capability stays on the desktop path.
+    """
+
+    from deepagents.backends.filesystem import FilesystemBackend  # noqa: PLC0415
+    from deepagents.backends.state import StateBackend  # noqa: PLC0415
+
+    from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
+
+    if not _host_filesystem_permissions(workspace_backend):
+        # Not desktop, or rules unavailable (version skew). Either way: do NOT
+        # expose a real filesystem. Compose exactly as before.
+        return guarded_default(StateBackend(), workspace_backend)
+    return FilesystemBackend(virtual_mode=False)
 
 
 def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:

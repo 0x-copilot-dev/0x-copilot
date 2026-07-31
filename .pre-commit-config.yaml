@@ -117,6 +117,29 @@ repos:
         pass_filenames: false
         files: ^services/ai-backend/src/.*\.py$
 
+      - id: check-css-selector-shadowing
+        name: forbid app stylesheets shadowing packages/* selectors
+        description: |
+          packages/chat-surface and packages/design-system are the single
+          source of truth for shared surface styling. A class name declared in
+          BOTH a package sheet and a host sheet has two owners, and at equal
+          specificity whichever sheet loads last silently wins -- how a stale
+          copy of `.fr-main` in apps/desktop/renderer/firstrun.css shrink-wrapped
+          the onboarding column and rendered the first-run composer 408px wide
+          inside its 640px column. The check compares class-bearing selectors
+          across apps/* and packages/*. Deliberate overrides carry a
+          `/* shadow-ok: <reason> */` comment on the rule; pre-existing debt is
+          recorded in tools/css_shadowing_baseline.txt, which may only shrink.
+
+          App sources trigger it too, not just stylesheets: an app only comes
+          into scope once it imports a package stylesheet, so adding that import
+          can turn an existing sheet into a shadow without the sheet changing.
+          The whole check is ~0.15s of stdlib, so the wide trigger is free.
+        entry: python tools/check_css_selector_shadowing.py
+        language: system
+        pass_filenames: false
+        files: ^((apps|packages)/.*\.css|apps/.*\.(ts|tsx|js|jsx|mjs|astro|html)|tools/(check_css_selector_shadowing\.py|test_check_css_selector_shadowing\.py|css_shadowing_baseline\.txt))$
+
       - id: check-llm-provider-imports
         name: forbid direct LLM provider SDK imports outside the runtime entry point
         description: |

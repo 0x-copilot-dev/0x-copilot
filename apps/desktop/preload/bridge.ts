@@ -10,6 +10,11 @@ import { isCapabilityChannel } from "../main/capabilities/channels";
 import { isConnectorChannel } from "../main/connectors/channels";
 import { isFirstRunChannel } from "../main/services/first-run-channels";
 import { isSecureStorageChannel } from "../main/services/secure-storage-channels";
+import {
+  WINDOW_CHROME_STATE_CHANNEL,
+  isWindowChromeState,
+  type WindowChromeState,
+} from "../main/window-channels";
 
 import type { WindowBridge } from "./window-bridge-types";
 
@@ -38,6 +43,8 @@ const statefulChannels = new Set<string>([
 ]);
 const latestStatefulPayloads = new Map<string, unknown>();
 const statefulHandlers = new Map<string, Set<IpcHandler>>();
+let latestWindowChromeState: WindowChromeState | null = null;
+const windowChromeHandlers = new Set<(state: WindowChromeState) => void>();
 
 for (const channel of statefulChannels) {
   statefulHandlers.set(channel, new Set());
@@ -48,6 +55,20 @@ for (const channel of statefulChannels) {
     }
   });
 }
+
+// Window chrome is a dedicated bridge capability rather than a generic IPC
+// channel. Subscribe eagerly and replay the latest snapshot because main can
+// publish did-finish-load before React commits DesktopWindowFrame.
+ipcRenderer.on(
+  WINDOW_CHROME_STATE_CHANNEL,
+  (_event: IpcRendererEvent, payload: unknown) => {
+    if (!isWindowChromeState(payload)) return;
+    latestWindowChromeState = payload;
+    for (const handler of windowChromeHandlers) {
+      handler(payload);
+    }
+  },
+);
 
 const bridge: WindowBridge = {
   ipc: {
@@ -84,6 +105,17 @@ const bridge: WindowBridge = {
       ipcRenderer.on(channel, wrapped);
       return () => {
         ipcRenderer.removeListener(channel, wrapped);
+      };
+    },
+  },
+  windowChrome: {
+    subscribe(handler: (state: WindowChromeState) => void): () => void {
+      windowChromeHandlers.add(handler);
+      if (latestWindowChromeState !== null) {
+        handler(latestWindowChromeState);
+      }
+      return () => {
+        windowChromeHandlers.delete(handler);
       };
     },
   },

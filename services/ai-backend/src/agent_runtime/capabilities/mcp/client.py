@@ -79,6 +79,32 @@ class McpAmbiguousDispatchError(McpConnectionError):
     """A proxied RPC may have dispatched; callers must never replay it."""
 
 
+class McpRequestRejectedError(McpClientError):
+    """The proxy or server rejected the request itself (HTTP 4xx).
+
+    Deliberately NOT an :class:`McpConnectionError`. A 4xx means the request
+    was *understood and refused*, so nothing about it is transient: the peer
+    answered, and an identical retry is answered identically. Collapsing it
+    into the connection family is what let a 400 reach the user as "the
+    server isn't responding right now — try again in a moment", a sentence in
+    which every clause was false and whose advice could not succeed.
+
+    401/403 keep their own :class:`McpAuthError` (actionable: reconnect) and
+    404 narrows to :class:`McpNotFoundError`; this class covers the rest,
+    where the request itself is malformed — an internal defect the user
+    cannot act on.
+    """
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        """Record the rejecting status alongside the safe message."""
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class McpNotFoundError(McpRequestRejectedError):
+    """The addressed MCP server, or the method on it, does not exist (HTTP 404)."""
+
+
 class McpTimeoutError(McpClientError):
     """The MCP server exceeded the loader timeout budget."""
 

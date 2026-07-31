@@ -116,14 +116,24 @@ export class ConnectorService {
     // what a run's discovery suggestion hits every time, since suggesting a
     // connector never installed it.
     //
-    // Install is idempotent on slug (it returns the existing row unchanged), so
-    // this is safe to run on every authorize rather than gated behind a
-    // lookup, and it finally makes true the thing the desktop port has claimed
-    // all along: install and authenticate are ONE brokered flow.
-    const resolvedId =
-      slug !== undefined
-        ? await this.ensureCatalogServer(slug, { fallbackServerId: serverId })
-        : serverId;
+    // Install is idempotent on slug, but "idempotent" is not "free" and it is
+    // not "always applicable", which is why running it on every authorize was
+    // wrong twice over:
+    //
+    //   • the composer's Connect installs first and hands us the `server_id`
+    //     it just minted — re-installing it was a second POST for a row we
+    //     were already holding the id of (2×200 per connect);
+    //   • a CUSTOM server (added via `POST /v1/mcp/servers`) has a real row
+    //     but no catalog entry, so installing "its slug" asked for a catalog
+    //     seed that does not exist and answered 404 — twice per connect,
+    //     logged at warning, in the one path where a real failure has to be
+    //     visible.
+    //
+    // A known id is therefore trusted only once its row is confirmed to
+    // exist. That confirmation is the whole point: `seed:<slug>` is the
+    // catalog IDENTITY and not proof of a row, so a run's discovery
+    // suggestion still falls through to install and still mints one.
+    const resolvedId = await this.resolveServerId(slug, serverId);
     if (resolvedId !== undefined) {
       await this.coordinator.connectMcpServer(resolvedId);
       // No `auth_state` to report: the MCP route resolves once the round-trip
@@ -141,6 +151,54 @@ export class ConnectorService {
   }
 
   /**
+   * Resolve the server row to authorize against, installing only if needed.
+   *
+   * Order, and why: an existing row always wins. It is the only answer that
+   * is certainly authorizable, and reaching it costs one idempotent GET
+   * instead of a POST that mutates. Install is the fallback for the case that
+   * genuinely has no row yet — a catalog seed the user has never connected.
+   */
+  private async resolveServerId(
+    slug: string | undefined,
+    serverId: string | undefined,
+  ): Promise<string | undefined> {
+    if (serverId !== undefined && (await this.serverExists(serverId))) {
+      return serverId;
+    }
+    if (slug !== undefined) {
+      return this.ensureCatalogServer(slug, { fallbackServerId: serverId });
+    }
+    return serverId;
+  }
+
+  /** Does `serverId` name a real `mcp_servers` row for this user? */
+  private async serverExists(serverId: string): Promise<boolean> {
+    const bearer = await this.getBearer();
+    if (bearer === null) return false;
+    const response = await this.doFetch(
+      `${this.facadeBaseUrl}/v1/mcp/servers`,
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${bearer}`,
+        },
+      },
+    );
+    // A listing we did not get is not evidence either way, so it degrades to
+    // exactly the previous behaviour (install-if-slug) rather than to a guess.
+    // Claiming "exists" on a failed read would skip the install a genuine
+    // catalog seed still needs and authorize against a row that was never
+    // minted — trading a harmless duplicate for a broken connect.
+    if (!response.ok) return false;
+    const body = (await response.json()) as {
+      servers?: readonly { server_id?: string }[];
+    };
+    const servers = body.servers ?? [];
+    return servers.some((server) => server.server_id === serverId);
+  }
+
+  /**
    * Ensure the catalog seed for `slug` has a server row, and return its id.
    *
    * Idempotent server-side, so this is an "ensure" rather than an "install".
@@ -150,14 +208,15 @@ export class ConnectorService {
    *
    * `fallbackServerId` is what a NON-catalog server authorizes by. Install
    * answers 404 `Unknown catalog entry` for any slug the curated catalog does
-   * not carry — which is every custom register-by-URL server, since its slug is
-   * derived from its host (`api_githubcopilot_com`). Treating that 404 as fatal
-   * is what made Connect fail for every hand-added server: the row existed, the
-   * renderer had resolved its id, and this threw before a browser ever opened.
-   * A 404 means only "the catalog does not know this slug"; when the caller
-   * already holds a real row it is not an error at all. Every other status
-   * still throws — notably 422, the honest "this entry needs a pre-registered
-   * OAuth client", where no row can exist and no id can rescue it.
+   * not carry — which is every custom register-by-URL server, whose slug is
+   * derived from its host (`api_githubcopilot_com`). `resolveServerId` normally
+   * spares those the request entirely, but when the server listing cannot be
+   * read they still arrive here, and treating the 404 as fatal made Connect
+   * throw before a browser ever opened for a row that plainly existed. A 404
+   * means only "the catalog does not know this slug"; when the caller already
+   * holds a real row that is not an error at all. Every other status still
+   * throws — notably 422, the honest "this entry needs a pre-registered OAuth
+   * client", where no row can exist and no id can rescue it.
    */
   private async ensureCatalogServer(
     slug: string,

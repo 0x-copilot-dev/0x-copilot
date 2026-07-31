@@ -45,3 +45,18 @@ export type { PaletteSearchPort } from "./PaletteSearchPort";
 // === PRD-07 — project detail Chats + Files data seam ===
 export type { ProjectDataPort } from "./ProjectDataPort";
 // === end PRD-07 ===
+
+// === Workspace folder grants — real filesystem access, granted not assumed ===
+// Request / list / revoke a host-folder grant. Deliberately NOT an extension of
+// `FilePickerPort` (that seam is content upload and exposes no path); the host
+// keeps the native picker, the OS confirm, and the broker grant store. Web
+// supplies no implementation, so consumers treat the port as optional.
+export type {
+  WorkspaceGrant,
+  WorkspaceGrantMode,
+  WorkspaceGrantOutcome,
+  WorkspaceGrantPort,
+  WorkspaceGrantRequestInput,
+  WorkspaceRevokeOutcome,
+} from "./WorkspaceGrantPort";
+// === end Workspace folder grants ===

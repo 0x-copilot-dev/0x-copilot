@@ -311,6 +311,23 @@ class Messages:
         REQUESTED_SERVER_UNKNOWN = "Requested MCP server is not available."
         REQUESTED_TOOL_UNKNOWN = "Requested MCP tool is not available on this server."
 
+    class Proxy:
+        """Safe transport-level messages for the backend MCP proxy hop.
+
+        Split by failure class rather than by call site. The old single
+        "MCP JSON-RPC request failed." covered a rejected request, an
+        unreachable server, and a timeout alike, which is precisely the
+        collapse that made a 400 indistinguishable from an outage.
+        """
+
+        NOT_FOUND = "The MCP server or method was not found."
+        RPC_REJECTED = "The MCP proxy rejected the JSON-RPC request as invalid."
+        RPC_UNAVAILABLE = "The MCP JSON-RPC request could not be completed."
+        SESSION_REJECTED = "The MCP proxy rejected the client-session request."
+        SESSION_UNAVAILABLE = "MCP client-session request failed."
+        RELEASE_REJECTED = "The MCP proxy rejected the client-session release."
+        RELEASE_UNAVAILABLE = "MCP client-session release failed."
+
     class Loader:
         """Safe error and warning messages emitted by the MCP loader."""
 
@@ -320,6 +337,21 @@ class Messages:
         )
         CONNECTION_FAILED = "The MCP server could not be reached."
         DESCRIPTORS_INVALID = "The MCP server returned invalid descriptors."
+        # The next two are read by the model and paraphrased into user-facing
+        # copy, so each one states its own non-transience. When they did not,
+        # a 400 became "the server isn't responding right now, try again in a
+        # moment" — advice that sends the user into a loop that cannot succeed.
+        REQUEST_REJECTED = (
+            "The connector rejected the request as invalid. The server did "
+            "reply, so this is not a connection problem and not temporary: "
+            "the same call always returns the same error. Report it as a "
+            "defect on our side rather than suggesting a retry."
+        )
+        SERVER_NOT_FOUND = (
+            "The connector could not be found — it may not be installed for "
+            "this account, or it may have been removed. This is not temporary "
+            "and a retry will not change it. Connecting the tool resolves it."
+        )
         DESCRIPTORS_LOAD_FAILED = (
             "The MCP server descriptors could not be loaded safely."
         )

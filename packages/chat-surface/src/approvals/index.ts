@@ -27,11 +27,24 @@ export {
   type ConnectorConsentCardProps,
   type ConnectorConsentState,
 } from "./ConnectorConsentCard";
+// The folder-grant ask. Same `.cc` frame as the connector card because it is the
+// same kind of moment (a capability the run does not have yet); the decision
+// itself is host-owned — it runs through `WorkspaceGrantPort`, whose native
+// dialog is the only thing that can actually hand over a folder.
+export {
+  WorkspaceGrantCard,
+  type WorkspaceGrantCardProps,
+  type WorkspaceGrantCardState,
+} from "./WorkspaceGrantCard";
 export {
   accessLabel,
+  grantAccessLabel,
   parseApprovalPresentation,
   parseConnectorTrust,
+  parseWorkspaceGrantRequest,
   EMPTY_CONNECTOR_TRUST,
+  WORKSPACE_GRANT_PAYLOAD_KEY,
+  type WorkspaceGrantRequest,
   type ApprovalLayout,
   type ApprovalPresentation,
   type ApprovalPreview,

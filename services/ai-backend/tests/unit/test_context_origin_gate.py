@@ -67,6 +67,13 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         "agent_runtime.capabilities.dataflow:stage_rowset_write_tool",
         "agent_runtime.capabilities.desktop:50_workspace_guidance",
         "agent_runtime.capabilities.discovery:16_capability_discovery_protocol",
+        # Accepted rent: one schema block per model call, in exchange for the
+        # model being able to establish what is already connected. Its
+        # neighbour below can only ever describe connectors that are NOT
+        # connected, so without this entry a run whose prompt suppresses the
+        # MCP card enumeration has no model-visible route to a connected
+        # server — and reaches for a Connect card the user does not need.
+        "agent_runtime.capabilities.discovery:ListConnectedServersTool",
         "agent_runtime.capabilities.discovery:SuggestMcpConnectorTool",
         "agent_runtime.capabilities.discovery:_capability_bridge_tools",
         "agent_runtime.capabilities.interpreter:code_mode_tool",
@@ -108,7 +115,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
     append sites onto one entry would shrink the tuple rather than fail. The
     gate's duplicate check makes that a violation, and this asserts the
     resulting count directly: one entry per composition site in
-    ``_model_visible_tools``, which today is the registry seed plus twelve
+    ``_model_visible_tools``, which today is the registry seed plus thirteen
     appends plus the capability-bridge extend.
     """
 
@@ -129,7 +136,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
         if label.rsplit(":", 1)[0] in tool_owners
         and not label.rsplit(":", 1)[1][:1].isdigit()
     ]
-    assert len(composed) == 14
+    assert len(composed) == 15
 
 
 class PlantedSourceTreeMixin:

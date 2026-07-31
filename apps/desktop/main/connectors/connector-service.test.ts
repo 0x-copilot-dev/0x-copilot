@@ -21,7 +21,13 @@ import { ConnectorService } from "./connector-service";
  */
 function makeService(
   profileSlugs: string[],
-  options: { readonly installStatus?: number } = {},
+  options: {
+    readonly installStatus?: number;
+    /** Rows that already exist in `mcp_servers` for this user. */
+    readonly existingServerIds?: readonly string[];
+    /** Fail the server listing, to pin the degradation path. */
+    readonly listServersFails?: boolean;
+  } = {},
 ): {
   service: ConnectorService;
   connect: ReturnType<typeof vi.fn>;
@@ -45,6 +51,19 @@ function makeService(
         // Mirrors the backend: a catalog install mints `seed:<slug>` and is
         // idempotent, returning the existing row on repeat.
         return { ok: true, json: async () => ({ server_id: `seed:${slug}` }) };
+      }
+      if (url.endsWith("/v1/mcp/servers")) {
+        if (options.listServersFails === true) {
+          return { ok: false, status: 503 };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            servers: (options.existingServerIds ?? []).map((id) => ({
+              server_id: id,
+            })),
+          }),
+        };
       }
       catalogFetches += 1;
       return {
@@ -110,15 +129,103 @@ describe("ConnectorService.authorize", () => {
   it("installs the catalog seed before authorizing it", async () => {
     // The row does not exist until install mints it. Authorizing `seed:linear`
     // straight off a discovery suggestion answers "MCP server was not found for
-    // this scope" — suggesting a connector never installed it. Install is
-    // idempotent on slug, so this runs unconditionally rather than behind a
-    // lookup.
+    // this scope" — suggesting a connector never installed it.
     const { service, connectMcpServer, installed } = makeService(["gmail"]);
 
     await service.authorize({ slug: "linear", serverId: "seed:linear" });
 
     expect(installed()).toEqual(["linear"]);
     expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("does NOT re-install a server row that already exists", async () => {
+    // The composer's Connect installs first and hands `authorize` the id it
+    // just minted. Installing again was a second POST for a row we were
+    // already holding the id of — 2×200 per connect in the desktop logs.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["seed:linear"],
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual([]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("does NOT install a CUSTOM server's slug — the phantom 404", async () => {
+    // A custom server added by URL has a real row and no catalog entry, so
+    // "installing its slug" asked for a seed that does not exist and answered
+    // 404. Twice per connect, at warning level, in the one path where a real
+    // failure has to stand out.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["custom:abc123"],
+    });
+
+    await service.authorize({ slug: "my-server", serverId: "custom:abc123" });
+
+    expect(installed()).toEqual([]);
+    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+  });
+
+  it("still installs when the id is known but its row does not exist", async () => {
+    // `seed:<slug>` is the catalog IDENTITY, not proof of a row. A discovery
+    // suggestion carries one for a connector that was never installed, so
+    // confirming absence has to send it to install rather than authorize a
+    // row that is not there.
+    const { service, connectMcpServer, installed } = makeService(["gmail"], {
+      existingServerIds: ["seed:notion"],
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual(["linear"]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("degrades to installing when the server listing cannot be read", async () => {
+    // An unreadable listing is not evidence either way, so it falls back to
+    // the previous behaviour rather than to a guess: claiming "exists" would
+    // authorize a row that may never have been minted.
+    const { service, installed } = makeService(["gmail"], {
+      listServersFails: true,
+    });
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual(["linear"]);
+  });
+
+  it("still connects a custom server when install 404s on its slug", async () => {
+    // The degraded path: listing unreadable, so a custom server reaches
+    // install after all, and its host-derived slug is not a catalog entry. A
+    // 404 only means "the catalog does not know this slug" — with a real row
+    // already in hand it is not an error, and treating it as fatal threw
+    // before a browser ever opened.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      listServersFails: true,
+      installStatus: 404,
+    });
+
+    const result = await service.authorize({
+      slug: "api_githubcopilot_com",
+      serverId: "custom:abc123",
+    });
+
+    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(result.server_id).toBe("custom:abc123");
+  });
+
+  it("still refuses a 404 install when there is no row to fall back to", async () => {
+    // Without a known server id a 404 is terminal: no row exists, so there is
+    // nothing to authorize and opening a browser would be a lie.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 404,
+    });
+
+    await expect(service.authorize({ slug: "nonexistent" })).rejects.toThrow(
+      /install failed/,
+    );
+    expect(connectMcpServer).not.toHaveBeenCalled();
   });
 
   it("authorizes the id the INSTALL returned, not the one passed in", async () => {
@@ -236,52 +343,5 @@ describe("ConnectorService.authorize", () => {
     await service.authorize({ serverId: "custom:abc123" });
 
     expect(catalogFetches()).toBe(0);
-  });
-
-  it("authorizes a custom server by its own id when the catalog has no such slug", async () => {
-    // The api.githubcopilot.com regression, and the gap that let it ship: a
-    // register-by-URL server has a REAL registry row plus a host-derived slug
-    // (`api_githubcopilot_com`) the curated catalog has never heard of, so
-    // install answers 404 `Unknown catalog entry`. That 404 used to abort
-    // Connect even though the caller had already resolved the row's id from
-    // `listServers()` — the OAuth flow never started and no browser opened.
-    const { service, connectMcpServer } = makeService(["gmail"], {
-      installStatus: 404,
-    });
-
-    const result = await service.authorize({
-      slug: "api_githubcopilot_com",
-      serverId: "mcp_7f3c",
-    });
-
-    expect(connectMcpServer).toHaveBeenCalledWith("mcp_7f3c");
-    expect(result.server_id).toBe("mcp_7f3c");
-  });
-
-  it("still refuses a 404 install when there is no row to fall back to", async () => {
-    // Without an id, an unknown slug leaves nothing to authorize. Saying so
-    // beats opening a browser at something that cannot finish.
-    const { service, connectMcpServer } = makeService(["gmail"], {
-      installStatus: 404,
-    });
-
-    await expect(
-      service.authorize({ slug: "api_githubcopilot_com" }),
-    ).rejects.toThrow(/install failed/);
-    expect(connectMcpServer).not.toHaveBeenCalled();
-  });
-
-  it("still refuses a 422 install even when a row id IS known", async () => {
-    // 422 is the pre-registered-client gate — a catalog entry that genuinely
-    // cannot complete over this route. Unlike 404 it says nothing about
-    // whether the catalog knows the slug, so no fallback id rescues it.
-    const { service, connectMcpServer } = makeService(["gmail"], {
-      installStatus: 422,
-    });
-
-    await expect(
-      service.authorize({ slug: "linear", serverId: "seed:linear" }),
-    ).rejects.toThrow(/install failed/);
-    expect(connectMcpServer).not.toHaveBeenCalled();
   });
 });

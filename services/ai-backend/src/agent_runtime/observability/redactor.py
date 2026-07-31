@@ -120,6 +120,83 @@ class MetadataRedactor:
         return result
 
 
+class ToolArgumentRedactor:
+    """Redact tool-call arguments for the persisted invocation ledger.
+
+    The ledger's arguments column is named ``args_json_redacted``, so the
+    ledger is entitled to hold the call's inputs — provided the credential
+    shapes are stripped. It held ``{}`` instead, for every invocation, which
+    made the ledger useless for the one job it exists to do: when a connector
+    call failed, the request that failed could not be recovered from it.
+
+    Unlike :class:`MetadataRedactor` (log metadata: flat, scalars only), tool
+    arguments are structurally nested and their nesting is the diagnostic
+    content, so this preserves shape:
+
+    - Keys in :data:`DENY_KEYS` are dropped at every depth.
+    - Strings longer than :attr:`MAX_STRING_LENGTH` are clipped with a marker.
+    - Recursion deeper than :attr:`MAX_DEPTH`, or a sequence longer than
+      :attr:`MAX_SEQUENCE_LENGTH`, is elided rather than truncated silently.
+
+    Every lossy step leaves a visible marker: a ledger that quietly drops
+    content is the failure mode this class was written to end.
+    """
+
+    MAX_STRING_LENGTH: ClassVar[int] = 2_000
+    MAX_DEPTH: ClassVar[int] = 6
+    MAX_SEQUENCE_LENGTH: ClassVar[int] = 100
+    _CLIPPED_MARKER: ClassVar[str] = "…[clipped]"
+    _ELIDED_MARKER: ClassVar[str] = "[elided]"
+    _REDACTED_MARKER: ClassVar[str] = "[redacted]"
+
+    @classmethod
+    def redact(cls, value: object) -> dict[str, Any]:
+        """Return a persistable, credential-free copy of a tool-argument mapping.
+
+        Matches :class:`JsonObjectCoercer`'s shape contract so callers never
+        have to pre-coerce: ``None`` becomes ``{}`` (an absent payload reads as
+        empty, not as ``{"value": None}``) and any other non-mapping is wrapped
+        under ``value``.
+        """
+        if value is None:
+            return {}
+        walked = cls._walk(value, depth=0)
+        return walked if isinstance(walked, dict) else {"value": walked}
+
+    @classmethod
+    def _walk(cls, value: object, *, depth: int) -> Any:
+        """Recursively copy ``value``, marking anything dropped along the way."""
+        if depth > cls.MAX_DEPTH:
+            return cls._ELIDED_MARKER
+        if isinstance(value, str):
+            if len(value) <= cls.MAX_STRING_LENGTH:
+                return value
+            return value[: cls.MAX_STRING_LENGTH] + cls._CLIPPED_MARKER
+        if isinstance(value, Mapping):
+            return {
+                str(key): (
+                    cls._REDACTED_MARKER
+                    if isinstance(key, str) and key in DENY_KEYS
+                    else cls._walk(item, depth=depth + 1)
+                )
+                for key, item in value.items()
+                if isinstance(key, str)
+            }
+        if isinstance(value, (list, tuple)):
+            items = [
+                cls._walk(item, depth=depth + 1)
+                for item in list(value)[: cls.MAX_SEQUENCE_LENGTH]
+            ]
+            if len(value) > cls.MAX_SEQUENCE_LENGTH:
+                items.append(cls._ELIDED_MARKER)
+            return items
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        # Anything else (a model, a set, an arbitrary object) is stringified
+        # under the same clipping rule rather than dropped.
+        return cls._walk(repr(value), depth=depth)
+
+
 class JsonObjectCoercer:
     """Pydantic field-validator helper that coerces values into the
     ``dict`` shape ``JsonObject`` fields expect, without performing

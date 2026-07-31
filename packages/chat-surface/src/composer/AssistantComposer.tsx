@@ -21,6 +21,10 @@ import {
 } from "./Composer";
 import { Icon } from "../icons/Icon";
 import type { FilePickerPort } from "../ports/FilePickerPort";
+import type { WorkspaceGrantPort } from "../ports/WorkspaceGrantPort";
+import { AttachmentPill } from "./AttachmentPill";
+import { grantAccessLabel } from "../approvals/presentation";
+import { useWorkspaceFolderGrants } from "./useWorkspaceFolderGrants";
 import type { ThinkingDepth } from "./depth";
 import { ModelPill } from "./ModelPill";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
@@ -76,6 +80,16 @@ export interface AssistantComposerProps {
    * runtime adapters need a real `File`.
    */
   filePicker: FilePickerPort;
+  /**
+   * Substrate folder-grant capability — OPTIONAL, and its absence is meaningful.
+   * Supplied (desktop) it adds the `+` menu's Attach Folder row and the granted
+   * folder pills; omitted (web, tests) neither renders, because there is no
+   * folder to grant and a control that cannot work is worse than no control.
+   *
+   * Not folded into {@link FilePickerPort}: that seam is content upload and
+   * deliberately exposes no path. See `ports/WorkspaceGrantPort`.
+   */
+  workspaceGrantPort?: WorkspaceGrantPort | null;
   /**
    * Host slot for the `+` plus-menu popover (portal + outside-click). See
    * {@link AssistantComposerPlusMenuSlotArgs}.
@@ -220,6 +234,7 @@ export const AssistantComposer = forwardRef<
     skills,
     attachmentAdapter,
     filePicker,
+    workspaceGrantPort,
     renderPlusMenu,
     skillInstructionPrompt,
     mcpServerInstructionPrompt,
@@ -294,6 +309,22 @@ export const AssistantComposer = forwardRef<
     [],
   );
 
+  // Called unconditionally (hook rules); a null port makes it inert. Only the
+  // RENDER is gated on the capability — see `folderControlsVisible` below.
+  const folderGrants = useWorkspaceFolderGrants(workspaceGrantPort);
+  const folderControlsVisible =
+    workspaceGrantPort !== undefined && workspaceGrantPort !== null;
+
+  // Depend on the stable callback, not the state object the hook rebuilds each
+  // render, so the menu row's identity doesn't churn on every keystroke.
+  const requestFolderGrant = folderGrants.requestGrant;
+  const attachFolder = useCallback((): void => {
+    // Dismiss first: the host's native folder dialog takes the focus, and a
+    // popover still mounted behind it is a popover that outlives its context.
+    dismissMenu();
+    void requestFolderGrant();
+  }, [dismissMenu, requestFolderGrant]);
+
   const openFilePicker = useCallback(
     async (accept: string): Promise<void> => {
       const selections = await filePicker.pick({
@@ -338,6 +369,40 @@ export const AssistantComposer = forwardRef<
     dismissMenu();
     requestAnimationFrame(() => composerRef.current?.focus());
   }
+
+  // Granted folders (and any grant failure) ride the composer's top bar beside
+  // the skill pills. Same row because both answer "what is attached here?" —
+  // different verb on the control, because a folder is the one attachment that
+  // outlives the message: dismissing it REVOKES the agent's access.
+  const folderPills =
+    folderControlsVisible &&
+    (folderGrants.grants.length > 0 || folderGrants.error !== null) ? (
+      <>
+        {folderGrants.grants.map((grant) => (
+          <AttachmentPill
+            key={grant.grantId}
+            attachment={{
+              name: grant.label,
+              // The ACCESS, not a MIME type — it is what this pill claims the
+              // agent can do. `grantAccessLabel` yields null for a mode this
+              // build doesn't recognise, and an empty slot is the honest
+              // render of "I can't say" (never a guessed "Read-only").
+              type: grantAccessLabel(grant.mode) ?? "",
+            }}
+            icon={<Icon name="folder" size={12} />}
+            removeLabel={`Stop sharing ${grant.label} with the agent`}
+            onRemove={() => void folderGrants.revokeGrant(grant.grantId)}
+          />
+        ))}
+        {/* A failed list-read or revoke is SHOWN. The whole point of this
+            subsystem is that filesystem trouble never renders as nothing. */}
+        {folderGrants.error !== null ? (
+          <span className="aui-composer-folder-error" role="status">
+            {folderGrants.error}
+          </span>
+        ) : null}
+      </>
+    ) : null;
 
   const handleInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -399,7 +464,7 @@ export const AssistantComposer = forwardRef<
       onSubmitError={onSubmitError}
       onCancel={onCancel}
       onInputKeyDown={handleInputKeyDown}
-      hasTopBarContent={selectedSkills.length > 0}
+      hasTopBarContent={selectedSkills.length > 0 || folderPills !== null}
       // Pass `undefined` (not `null`) when there's no topbar content —
       // chat-surface's Composer.tsx checks `topBarSlot !== undefined`
       // for the `data-has-topbar` flag, which the AUI CSS reads to
@@ -407,7 +472,7 @@ export const AssistantComposer = forwardRef<
       // (incorrectly) trip that check and add ~32px of dead space below
       // the action row in the empty state.
       topBarSlot={
-        selectedSkills.length > 0 ? (
+        selectedSkills.length > 0 || folderPills !== null ? (
           <div className="aui-composer-attachments">
             {selectedSkills.map((skill) => (
               <span key={skill.skill_id} className="aui-skill-pill">
@@ -425,6 +490,7 @@ export const AssistantComposer = forwardRef<
                 ) : null}
               </span>
             ))}
+            {folderPills}
           </div>
         ) : undefined
       }
@@ -469,6 +535,12 @@ export const AssistantComposer = forwardRef<
                     onAttachImage={() => void openFilePicker("image/*")}
                     onAttachFile={() =>
                       void openFilePicker(fileAttachmentAccept)
+                    }
+                    // Undefined when no grant port is wired, which is what
+                    // keeps the row off web (the menu reads the prop, not a
+                    // capability flag it would have to be told about).
+                    onAttachFolder={
+                      folderControlsVisible ? attachFolder : undefined
                     }
                     onOpenMcp={() => setMenuView("mcp")}
                     onOpenSkills={() => setMenuView("skills")}

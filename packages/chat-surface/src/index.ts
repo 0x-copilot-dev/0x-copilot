@@ -2078,3 +2078,52 @@ export {
   type ProviderMarkTone,
 } from "./icons/providerMarks";
 // === end Composer parity — provider brand marks ===
+
+// === Workspace folder grants — real filesystem access, granted not assumed ===
+// The client half of "the agent may read a folder only after you hand it over".
+// Three surfaces, one seam:
+//   · `WorkspaceGrantPort` (+ its shapes) — request / list / revoke a host
+//     folder. Deliberately NOT part of `FilePickerPort`: that seam is content
+//     upload and exposes no path, while a grant is a durable capability whose
+//     whole subject is a path. Web implements NEITHER — every consumer treats
+//     the port as optional and renders nothing without it.
+//   · `useWorkspaceFolderGrants` — the "what is attached" list behind the
+//     composer's Attach Folder row and the same list in Settings. The broker is
+//     the source of truth (every change re-reads `listGrants`) and a failed read
+//     is never rendered as an empty list.
+//   · `WorkspaceGrantCard` + `parseWorkspaceGrantRequest` — the mid-run ask,
+//     raised by the backend stamping `WORKSPACE_GRANT_PAYLOAD_KEY` on an
+//     interrupt payload, routed by `TcChat` and driven by
+//     `useWorkspaceGrantCardStates` (exported with the run cockpit).
+// HOST-OWNED, and it has to stay that way: the native folder picker, the OS
+// confirmation, the broker grant store, and the decision POST that resumes the
+// run. A host-absolute path is an input to the GRANT flow only — reads remain
+// mount + relative, which is the property `workspace_backend.py` guarantees.
+export type {
+  WorkspaceGrant,
+  WorkspaceGrantMode,
+  WorkspaceGrantOutcome,
+  WorkspaceGrantPort,
+  WorkspaceGrantRequestInput,
+  WorkspaceRevokeOutcome,
+} from "./ports/WorkspaceGrantPort";
+export {
+  useWorkspaceFolderGrants,
+  type WorkspaceFolderGrantsState,
+} from "./composer";
+export {
+  WorkspaceGrantCard,
+  type WorkspaceGrantCardProps,
+  type WorkspaceGrantCardState,
+  grantAccessLabel,
+  parseWorkspaceGrantRequest,
+  WORKSPACE_GRANT_PAYLOAD_KEY,
+  type WorkspaceGrantRequest,
+} from "./approvals";
+export {
+  useWorkspaceGrantCardStates,
+  type WorkspaceGrantCardController,
+  type WorkspaceGrantCardHandlers,
+  type WorkspaceGrantCardStates,
+} from "./destinations/run";
+// === end Workspace folder grants ===
