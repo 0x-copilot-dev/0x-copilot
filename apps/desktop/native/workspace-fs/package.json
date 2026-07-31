@@ -7,7 +7,8 @@
   "types": "index.d.ts",
   "gypfile": true,
   "scripts": {
-    "build": "node-gyp rebuild",
-    "build:electron": "node-gyp rebuild --runtime=electron --dist-url=https://electronjs.org/headers --target=$npm_config_electron_version"
+    "build": "node build.mjs",
+    "selfcheck": "node selfcheck.cjs",
+    "test": "node --test ."
   }
 }

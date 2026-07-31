@@ -172,6 +172,86 @@
 }
 
 /* ==========================================================================
+   Folder-grant card — the same `.cc` frame, two extra states + the path line
+   ==========================================================================
+   `WorkspaceGrantCard` deliberately reuses every rule above; only the states the
+   connector card has no equivalent for, and the one element it has no
+   equivalent for, are added here. */
+
+/* A held grant reads like a connected connector because it is the same fact:
+   the run has a capability it did not have a moment ago. */
+.cc[data-state="granted"] {
+  border-color: color-mix(in srgb, var(--color-success) 32%, transparent);
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+}
+
+/* Failure is NOT decline. It gets the danger edge so a card that says "couldn't"
+   cannot be skimmed as a card that says "didn't". */
+.cc[data-state="failed"] {
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 6%, var(--color-surface));
+}
+
+/* The path. The one string on any consent card that must never be truncated —
+   it is the subject of the decision, so it wraps (breaking mid-segment on a long
+   path rather than overflowing) instead of ellipsing. Mono because it is an
+   identifier, indented to the `.cc__foot` gutter so it hangs off the title.
+   `margin: 0` is load-bearing, not tidying: this is a `<p>` (it is a sentence-
+   level fact, not a label) sitting BETWEEN the title row and the trust line in a
+   `gap: 3px` column, and nothing else zeroes it here — web's host stylesheet
+   drops only `margin-top`, and desktop's bootstrap imports no `p` reset at all,
+   so the UA's `margin-block: 1em` would add ~21px mid-card on the one host that
+   actually has the grant capability. */
+.cc__path {
+  margin: 0;
+  padding-left: 32px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  line-height: var(--line-height-base);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* ==========================================================================
+   Compact approval density
+   --------------------------------------------------------------------------
+   An approval card lives INSIDE the chat column, directly above the composer,
+   and every row it spends pushes the conversation out of view. The default
+   rhythm was tuned for a standalone card, not for one stacked in a running
+   thread, so the vertical padding is tightened here rather than in either
+   host's stylesheet — desktop imports this file, web imports it too, and a
+   host-local override would immediately drift between them (the stranded-CSS
+   failure this package exists to prevent).
+
+   Only VERTICAL space is reduced. Horizontal padding, hit targets and the
+   button row are untouched: a smaller approval must not become a harder one
+   to click correctly, since the whole point of the card is a deliberate
+   decision.
+   ========================================================================== */
+
+.apc__head {
+  padding-block: 7px;
+}
+
+.apc__row {
+  padding-block: 6px;
+}
+
+/* The standing "you're always asked…" line repeated on every card, so it
+   stopped being read and only cost height. It is now carried as the card's
+   accessible description (see ApprovalCard.tsx) — announced, not displayed.
+   `.apc__foot` ONLY: an earlier revision of this rule also hid `.cc__foot`,
+   which was wrong. That element is not boilerplate — ConnectorConsentCard and
+   WorkspaceGrantCard put their actual permission CLAUSES there (what access is
+   being granted, to what), which is the specific information the user needs in
+   order to answer. Hiding it made those two cards ask for consent without
+   saying what to. */
+.apc__foot {
+  display: none;
+}
+
+/* ==========================================================================
    Approval card — shared frame, three shapes
    ========================================================================== */
 

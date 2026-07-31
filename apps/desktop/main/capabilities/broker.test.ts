@@ -185,7 +185,16 @@ describe("CapabilityBroker", () => {
     expect(res.status).toBe(413);
   });
 
-  it("lists grants as a path-free projection (no host root leaks)", async () => {
+  it("lists grants with the root the worker needs, and nothing more", async () => {
+    // G1 REVERSED, deliberately and only for this audience. The worker performs
+    // the read through deepagents' FilesystemBackend, so it resolves real host
+    // paths anyway; withholding the root only stopped it turning an ATTACHED
+    // folder into an `allow` rule, so every read of a folder the user had
+    // explicitly attached asked again. See `BrokerGrant` in types.ts.
+    //
+    // The exact-keys assertion is the guard that survives: this projection must
+    // gain NOTHING else by accident. The renderer's projection is separately
+    // pinned path-free (`type PathFree<T>` in WorkspaceGrantPort.test.ts).
     const res = await fetch(`${baseUrl}/v1/grants/list`, {
       method: "POST",
       headers: H(),
@@ -193,8 +202,6 @@ describe("CapabilityBroker", () => {
     });
     expect(res.status).toBe(200);
     const text = await res.text();
-    // G1: the canonical host root must NEVER appear in the response body.
-    expect(text).not.toContain("/data/private");
     const body = JSON.parse(text) as {
       grants: Array<Record<string, unknown>>;
     };
@@ -205,9 +212,10 @@ describe("CapabilityBroker", () => {
       "label",
       "mode",
       "mount",
+      "root",
       "status",
     ]);
-    expect(g).not.toHaveProperty("root");
+    expect(g.root).toBe("/data/private");
     expect(typeof g.mount).toBe("string");
     expect(g.mount).toMatch(/^mnt_/u);
   });
@@ -223,13 +231,15 @@ describe("CapabilityBroker", () => {
       body: "{}",
     });
     const text = await res.text();
-    expect(text).not.toContain("/data/private"); // G1: no host root
     const body = JSON.parse(text) as {
       grants: Array<Record<string, unknown>>;
     };
     expect(body.grants).toHaveLength(1);
     expect(body.grants[0].grantId).toBe("a");
-    expect(body.grants[0]).not.toHaveProperty("root");
+    // Carries its root (see the list test above); a REVOKED grant must still
+    // not appear at all, which is the property this test actually owns.
+    expect(body.grants[0].root).toBe("/data/private");
+    expect(text).not.toContain('"b"');
     expect(body.grants[0].mount).toMatch(/^mnt_/u);
   });
 
