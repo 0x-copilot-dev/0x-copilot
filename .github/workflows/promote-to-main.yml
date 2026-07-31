@@ -108,6 +108,23 @@ jobs:
           ).stdout
           runs = json.loads(raw).get("check_runs", [])
 
+          # Drop this job's OWN check run before judging anything. Dispatched
+          # against dev, this workflow reports a check run on the very commit it
+          # is inspecting, so without this it waits for itself to finish and can
+          # never succeed. The first dry run failed exactly that way, naming
+          # itself in "Still running: lint-and-secrets, promote, repo-gates".
+          # Matched on the run id rather than the job name, so renaming the job
+          # cannot quietly reintroduce the deadlock.
+          own_run_id = os.environ.get("GITHUB_RUN_ID", "")
+          before = len(runs)
+          runs = [
+              run
+              for run in runs
+              if own_run_id and own_run_id not in str(run.get("details_url") or "")
+          ]
+          if len(runs) != before:
+              print("(excluded this promotion run's own check from the gate)")
+
           if not runs:
               print(f"::error::No check runs found for dev@{sha[:8]}.")
               print("::error::Nothing has verified this commit. Refusing to promote.")
