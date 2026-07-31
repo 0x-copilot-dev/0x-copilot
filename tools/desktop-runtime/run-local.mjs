@@ -660,10 +660,23 @@ conn.close()
   // Shared desktop-profile env (see docs/deployment/profiles.md and
   // backend_app/desktop_app.py). No dev IdP: every service runs its
   // *_ENVIRONMENT=production so /v1/dev/* is never registered.
+  // Mirrors the SHARED block in apps/desktop/main/services/service-env.ts, which
+  // every supervised child receives. Keeping the two in step is the whole point
+  // of this harness: it claims to boot the desktop's real topology, so anything
+  // the real supervisor gives all three services belongs here.
+  //
+  // ENTERPRISE_AUTH_SECRET was missing, and only ai-backend noticed. It runs with
+  // RUNTIME_ENVIRONMENT=production, where StableUserProfileHmac.from_environment
+  // fails closed — "stable run-control assignment HMAC is unavailable" — and the
+  // whole supervised boot died at startup. backend and facade were unaffected
+  // because they set the secret explicitly further down, which is also why the
+  // gap survived: the one service that took it only from the shared block was the
+  // one service the shared block forgot.
   const profileEnv = {
     ENTERPRISE_DEPLOYMENT_PROFILE: "single_user_desktop",
     OTEL_SDK_DISABLED: "true",
     ENTERPRISE_SERVICE_TOKEN: secrets.serviceToken,
+    ENTERPRISE_AUTH_SECRET: secrets.authSecret,
   };
 
   const backend = startService({
