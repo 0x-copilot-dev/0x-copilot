@@ -34,13 +34,15 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientError,
     McpConnectionError,
     McpLeaseError,
+    McpNotFoundError,
+    McpRequestRejectedError,
     McpResourceDiscoveryPage,
     McpTimeoutError,
     McpToolDiscoveryPage,
     McpUnsupportedMethodError,
     RawMcpConnectionMetadata,
 )
-from agent_runtime.capabilities.mcp.constants import Keys, Values
+from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 
 
@@ -145,6 +147,61 @@ class BackendMcpProvider:
             f"No MCP server card found for server_id or name '{value}'.",
             retryable=False,
         )
+
+
+class McpProxyStatusClassifier:
+    """Map a backend-proxy HTTP status onto the typed error it actually means.
+
+    Every non-2xx used to funnel through ``raise_for_status()`` into one
+    ``McpAmbiguousDispatchError``/``McpConnectionError``, which the loader
+    then reported as ``connection_failed`` + ``retryable=True``. A 400 —
+    answered in 834ms by a server that was plainly reachable — therefore
+    reached the user as "isn't responding right now, this is a temporary
+    connection issue, try again in a moment": three false claims and one
+    instruction that cannot ever succeed.
+
+    The status class is the evidence, so it decides:
+
+    ``401`` / ``403``  auth — actionable by the user (reconnect).
+    ``404``            the server or method is not there.
+    other ``4xx``      the request was understood and refused. Deterministic,
+                       so never retryable and never "temporary".
+    ``5xx`` / other    the peer failed to answer usefully. Genuinely
+                       transient, and on a dispatch path genuinely ambiguous.
+    """
+
+    _AUTH_STATUSES: ClassVar[frozenset[int]] = frozenset({401, 403})
+    _NOT_FOUND_STATUS: ClassVar[int] = 404
+    _CLIENT_ERROR_RANGE: ClassVar[range] = range(400, 500)
+
+    @classmethod
+    def error_for(
+        cls,
+        status_code: int,
+        *,
+        rejected_message: str,
+        unavailable_message: str,
+        dispatch_ambiguous: bool,
+    ) -> McpClientError | None:
+        """Return the error ``status_code`` warrants, or ``None`` when it is a success.
+
+        ``dispatch_ambiguous`` marks a call that may have reached the upstream
+        connector before failing, so its server-side failures become
+        :class:`McpAmbiguousDispatchError` ("never replay this"). A 4xx is
+        never ambiguous regardless: a refusal is proof the peer decided.
+        """
+
+        if 200 <= status_code < 300:
+            return None
+        if status_code in cls._AUTH_STATUSES:
+            return McpAuthError("MCP server is not authenticated.")
+        if status_code == cls._NOT_FOUND_STATUS:
+            return McpNotFoundError(Messages.Proxy.NOT_FOUND, status_code=status_code)
+        if status_code in cls._CLIENT_ERROR_RANGE:
+            return McpRequestRejectedError(rejected_message, status_code=status_code)
+        if dispatch_ambiguous:
+            return McpAmbiguousDispatchError(unavailable_message)
+        return McpConnectionError(unavailable_message)
 
 
 @dataclass
@@ -384,16 +441,21 @@ class BackendMcpClient:
         except httpx.TimeoutException as exc:
             raise McpAmbiguousDispatchError("MCP JSON-RPC request timed out.") from exc
         except httpx.HTTPError as exc:
-            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.") from exc
+            raise McpAmbiguousDispatchError(Messages.Proxy.RPC_UNAVAILABLE) from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
             raise lease_error
-        if response.status_code in {401, 403}:
-            raise McpAuthError("MCP server is not authenticated.")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.") from exc
+        # Classify by status class instead of collapsing every non-2xx into
+        # one ambiguous-dispatch failure. This is a dispatch path, so a *server*
+        # failure stays ambiguous; a 4xx never is.
+        status_error = McpProxyStatusClassifier.error_for(
+            response.status_code,
+            rejected_message=Messages.Proxy.RPC_REJECTED,
+            unavailable_message=Messages.Proxy.RPC_UNAVAILABLE,
+            dispatch_ambiguous=True,
+        )
+        if status_error is not None:
+            raise status_error
         envelope = response.json()
         rpc_payload = (
             envelope.get(Keys.JsonRpc.PAYLOAD) if isinstance(envelope, dict) else None
@@ -420,7 +482,7 @@ class BackendMcpClient:
         except httpx.TimeoutException as exc:
             raise McpTimeoutError("MCP client-session request timed out.") from exc
         except httpx.HTTPError as exc:
-            raise McpConnectionError("MCP client-session request failed.") from exc
+            raise McpConnectionError(Messages.Proxy.SESSION_UNAVAILABLE) from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
             if isinstance(lease_error, McpLeaseError) and lease_error.code in {
@@ -429,12 +491,17 @@ class BackendMcpClient:
             }:
                 raise McpLeaseError(lease_error.code, acquisition_safe=True)
             raise lease_error
-        if response.status_code in {401, 403}:
-            raise McpAuthError("MCP server is not authenticated.")
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise McpConnectionError("MCP client-session request failed.") from exc
+        # Lease acquisition happens before any dispatch, so a server-side
+        # failure here is a plain connection failure rather than an ambiguous
+        # one — nothing could have reached the connector yet.
+        status_error = McpProxyStatusClassifier.error_for(
+            response.status_code,
+            rejected_message=Messages.Proxy.SESSION_REJECTED,
+            unavailable_message=Messages.Proxy.SESSION_UNAVAILABLE,
+            dispatch_ambiguous=False,
+        )
+        if status_error is not None:
+            raise status_error
         payload = response.json()
         lease = payload.get(Keys.Field.LEASE) if isinstance(payload, dict) else None
         if (
@@ -470,14 +537,18 @@ class BackendMcpClient:
         except httpx.TimeoutException as exc:
             raise McpTimeoutError("MCP client-session release timed out.") from exc
         except httpx.HTTPError as exc:
-            raise McpConnectionError("MCP client-session release failed.") from exc
+            raise McpConnectionError(Messages.Proxy.RELEASE_UNAVAILABLE) from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
             raise lease_error
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise McpConnectionError("MCP client-session release failed.") from exc
+        status_error = McpProxyStatusClassifier.error_for(
+            response.status_code,
+            rejected_message=Messages.Proxy.RELEASE_REJECTED,
+            unavailable_message=Messages.Proxy.RELEASE_UNAVAILABLE,
+            dispatch_ambiguous=False,
+        )
+        if status_error is not None:
+            raise status_error
 
     async def _recover_lease_for_replay(self, payload: Mapping[str, Any]) -> bool:
         """Transition to a new lease and return whether the original RPC needs replay."""
