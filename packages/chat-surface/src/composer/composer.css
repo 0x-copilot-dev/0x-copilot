@@ -306,6 +306,18 @@
  * Geometry mirrors the composer shell it sits on (`.aui-composer`: same
  * `max-width`, same auto margins) so the folder name lines up with the `+`
  * below it instead of floating over the rail's full width. */
+/* The bar + the composer frame as ONE layout unit. Without this they are two
+   flex children of the host's own column and inherit ITS gap — 16px in the
+   FTUE — so the bar floats clear of the frame it describes. The pair takes the
+   page gap once, from outside; the distance to the frame is set here. */
+.aui-composer-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
 .aui-folder-bar {
   align-items: center;
   display: flex;
@@ -314,7 +326,7 @@
      Local / repo / branch row) reads as one unit with the input, not as a
      floating caption above it. A roomy gap made it look like unrelated page
      furniture. */
-  margin: 0 auto var(--space-2xs);
+  margin: 0 auto;
   max-width: var(--chat-content-width);
   min-width: 0;
   padding: 0 2px;

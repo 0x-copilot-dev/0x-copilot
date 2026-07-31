@@ -743,7 +743,15 @@ export const AssistantComposer = forwardRef<
   }
 
   return (
-    <>
+    // ONE element, not a fragment. The bar and the composer are a single unit —
+    // the bar describes what THIS composer can reach — but as sibling fragment
+    // children they became two independent flex children of whatever laid the
+    // composer out, so the PAGE's gap landed between them. In the FTUE that is
+    // `.fr-compose { gap: var(--space-lg) }`, which pushed the bar ~16px clear
+    // of the frame and made it read as unrelated page furniture. Wrapping makes
+    // the pair take the page gap ONCE, from outside, and lets the bar sit tight
+    // to the frame it belongs to.
+    <div className="aui-composer-stack">
       <WorkspaceFolderBar
         grants={barGrants}
         error={folderGrants.error}
@@ -752,7 +760,7 @@ export const AssistantComposer = forwardRef<
         onRevoke={revokeFolder}
       />
       {composer}
-    </>
+    </div>
   );
 });
 
