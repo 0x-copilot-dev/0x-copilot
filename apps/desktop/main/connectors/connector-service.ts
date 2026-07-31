@@ -121,7 +121,9 @@ export class ConnectorService {
     // lookup, and it finally makes true the thing the desktop port has claimed
     // all along: install and authenticate are ONE brokered flow.
     const resolvedId =
-      slug !== undefined ? await this.ensureCatalogServer(slug) : serverId;
+      slug !== undefined
+        ? await this.ensureCatalogServer(slug, { fallbackServerId: serverId })
+        : serverId;
     if (resolvedId !== undefined) {
       await this.coordinator.connectMcpServer(resolvedId);
       // No `auth_state` to report: the MCP route resolves once the round-trip
@@ -145,8 +147,22 @@ export class ConnectorService {
    * Falls back to the conventional `seed:<slug>` id if the response omits one —
    * that is the id the backend mints for a catalog entry, so a malformed
    * response degrades to the previous behaviour instead of throwing.
+   *
+   * `fallbackServerId` is what a NON-catalog server authorizes by. Install
+   * answers 404 `Unknown catalog entry` for any slug the curated catalog does
+   * not carry — which is every custom register-by-URL server, since its slug is
+   * derived from its host (`api_githubcopilot_com`). Treating that 404 as fatal
+   * is what made Connect fail for every hand-added server: the row existed, the
+   * renderer had resolved its id, and this threw before a browser ever opened.
+   * A 404 means only "the catalog does not know this slug"; when the caller
+   * already holds a real row it is not an error at all. Every other status
+   * still throws — notably 422, the honest "this entry needs a pre-registered
+   * OAuth client", where no row can exist and no id can rescue it.
    */
-  private async ensureCatalogServer(slug: string): Promise<string> {
+  private async ensureCatalogServer(
+    slug: string,
+    options: { readonly fallbackServerId?: string } = {},
+  ): Promise<string | undefined> {
     const bearer = await this.getBearer();
     if (bearer === null) {
       throw new ConnectorOAuthError("start", "not signed in");
@@ -164,6 +180,9 @@ export class ConnectorService {
       },
     );
     if (!response.ok) {
+      if (response.status === 404 && options.fallbackServerId !== undefined) {
+        return options.fallbackServerId;
+      }
       // 422 here is the honest "this entry needs a pre-registered OAuth client"
       // case; surfacing the status beats a browser that cannot complete.
       throw new ConnectorOAuthError(

@@ -237,4 +237,51 @@ describe("ConnectorService.authorize", () => {
 
     expect(catalogFetches()).toBe(0);
   });
+
+  it("authorizes a custom server by its own id when the catalog has no such slug", async () => {
+    // The api.githubcopilot.com regression, and the gap that let it ship: a
+    // register-by-URL server has a REAL registry row plus a host-derived slug
+    // (`api_githubcopilot_com`) the curated catalog has never heard of, so
+    // install answers 404 `Unknown catalog entry`. That 404 used to abort
+    // Connect even though the caller had already resolved the row's id from
+    // `listServers()` — the OAuth flow never started and no browser opened.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 404,
+    });
+
+    const result = await service.authorize({
+      slug: "api_githubcopilot_com",
+      serverId: "mcp_7f3c",
+    });
+
+    expect(connectMcpServer).toHaveBeenCalledWith("mcp_7f3c");
+    expect(result.server_id).toBe("mcp_7f3c");
+  });
+
+  it("still refuses a 404 install when there is no row to fall back to", async () => {
+    // Without an id, an unknown slug leaves nothing to authorize. Saying so
+    // beats opening a browser at something that cannot finish.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 404,
+    });
+
+    await expect(
+      service.authorize({ slug: "api_githubcopilot_com" }),
+    ).rejects.toThrow(/install failed/);
+    expect(connectMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("still refuses a 422 install even when a row id IS known", async () => {
+    // 422 is the pre-registered-client gate — a catalog entry that genuinely
+    // cannot complete over this route. Unlike 404 it says nothing about
+    // whether the catalog knows the slug, so no fallback id rescues it.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 422,
+    });
+
+    await expect(
+      service.authorize({ slug: "linear", serverId: "seed:linear" }),
+    ).rejects.toThrow(/install failed/);
+    expect(connectMcpServer).not.toHaveBeenCalled();
+  });
 });
