@@ -39,12 +39,12 @@ expresses "no review for these two, full review for everyone else".
 
 ## What each branch actually enforces
 
-|                            | `main`   | `dev`                                            |
-| -------------------------- | -------- | ------------------------------------------------ |
-| deletion / force-push      | blocked  | blocked                                          |
-| linear history             | required | —                                                |
-| pull request + 2 approvals | —        | required                                         |
-| status checks              | —        | `lint-and-secrets`, `tenants-lint`, `repo-gates` |
+|                            | `main`  | `dev`                                            |
+| -------------------------- | ------- | ------------------------------------------------ |
+| deletion / force-push      | blocked | blocked                                          |
+| linear history             | —       | —                                                |
+| pull request + 2 approvals | —       | required                                         |
+| status checks              | —       | `lint-and-secrets`, `tenants-lint`, `repo-gates` |
 
 **`main` deliberately carries fewer rules than `dev`**, which reads backwards
 until you try the alternative. Review and checks live on `dev`, and `main` only
@@ -61,6 +61,14 @@ the API rejects it with _"Actor GitHub Actions integration must be part of the
 ruleset source or owner organization"_. Integration bypass actors require an
 organization, and this repo is owned by a user. Same root cause as the CODEOWNERS
 teams problem.
+
+`required_linear_history` is absent from `main` for a related reason, found by
+running the promotion for real: it forbids merge commits, and every PR merged
+into `dev` creates one that promotion then fast-forwards onto `main`
+(`remote: - This branch must not contain merge commits.`). Squash-only merges
+into `dev` would satisfy the rule, but `tools/cli_release.py` builds the
+changelog from the individual Conventional Commits inside a PR, so squashing
+would coarsen every release note to one line per PR.
 
 So `main`'s quality gate is `promote-to-main.yml`, not the ruleset. The residual
 risk is worth naming plainly: **a collaborator can still push directly to `main`.**
