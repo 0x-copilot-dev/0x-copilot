@@ -770,6 +770,24 @@ class RuntimeDependencies(RuntimeContract):
     # user has granted no folders, so the route is absent and those images are
     # byte-identical.
     workspace_backend: object | None = None
+    # The host folders the user has ATTACHED, resolved once per run by the worker
+    # off the desktop capability broker's active-grant snapshot (as
+    # ``GrantedRoot``s). The factory turns them into the deepagents ``allow``
+    # rules — and the matching ``HostFilesystemFloor`` roots — that stop an
+    # attached folder prompting on every read.
+    #
+    # Carried here rather than read off ``workspace_backend`` because that object
+    # is chosen by ``workspace_effect_mode``: in ENFORCE it is C3's
+    # gateway/tombstone backend, which cannot name a host root (its host-session
+    # projection is path-free by design), so the capability read found nothing and
+    # attaching a folder bought the user nothing in the mode the desktop ships.
+    # Which folders the user granted is a broker fact, not a property of the
+    # write-staging lane.
+    #
+    # ``None`` means "not resolved" and falls back to the backend capability, so
+    # every existing composition is unchanged; ``()`` means "resolved: nothing is
+    # attached". ``None`` everywhere off the desktop path.
+    granted_host_roots: tuple[object, ...] | None = None
     # Optional gated ``run_code_mode`` tool (AC6 Monty code mode). Built per run
     # by the worker only when ``RUNTIME_ENABLE_MONTY`` + ``single_user_desktop``
     # hold and the file object store is present; the factory appends it to the

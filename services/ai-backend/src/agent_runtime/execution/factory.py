@@ -270,11 +270,17 @@ async def _assemble_harness(
     workspace_writable = bool(
         getattr(workspace_backend, "supports_writes", False) or workspace_effect_staging
     )
+    # Which folders the user attached, resolved by the worker off the capability
+    # broker. Threaded separately from ``workspace_backend`` on purpose: the
+    # effect mode chooses that object, and in ENFORCE it chooses one that cannot
+    # name a host root — which silently made every attached folder ask again.
+    granted_host_roots = runtime_dependencies.granted_host_roots
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
         large_tool_results_backend=runtime_dependencies.large_tool_results_backend,
         workspace_backend=workspace_backend,
+        granted_host_roots=granted_host_roots,
         memory_routes=_file_memory_routes(memory_backend),
     )
 
@@ -453,7 +459,9 @@ async def _assemble_harness(
                 # approval the read proceeds against a real filesystem. Before
                 # this, such a path fell through to the StateBackend default and
                 # was answered with an empty listing and a green tick.
-                permissions=_host_filesystem_permissions(workspace_backend),
+                permissions=_host_filesystem_permissions(
+                    workspace_backend, granted_host_roots=granted_host_roots
+                ),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
                 middleware=(
@@ -1689,6 +1697,8 @@ def _deepagents_memory_paths(memory_backend: object | None) -> tuple[str, ...]:
 
 def _host_filesystem_permissions(
     workspace_backend: object | None = None,
+    *,
+    granted_host_roots: tuple[object, ...] | None = None,
 ) -> tuple[object, ...]:
     """Deep Agents ``FilesystemPermission`` rules for host paths — DESKTOP only.
 
@@ -1697,6 +1707,10 @@ def _host_filesystem_permissions(
     there is no human at the machine, so the ask would park the run forever —
     the exact hang this work already produced once. Web / postgres / in-memory
     images therefore get no rules at all and compose byte-identically.
+
+    ``granted_host_roots`` is the run's resolved attach set (see
+    :func:`_granted_host_roots`). ``None`` means nobody resolved one, not "there
+    are none".
 
     Returns an empty tuple if deepagents' permission type cannot be imported,
     so a version skew degrades to today's behaviour instead of failing the run.
@@ -1720,32 +1734,49 @@ def _host_filesystem_permissions(
     return tuple(
         FilesystemPermission(**rule)
         for rule in HostFilesystemRules.build(
-            roots=_granted_host_roots(workspace_backend)
+            roots=_granted_host_roots(workspace_backend, resolved=granted_host_roots)
         )
     )
 
 
-def _granted_host_roots(workspace_backend: object | None) -> tuple[object, ...]:
+def _granted_host_roots(
+    workspace_backend: object | None,
+    *,
+    resolved: tuple[object, ...] | None = None,
+) -> tuple[object, ...]:
     """The folders the user attached, as ``GrantedRoot`` rule/floor input.
 
-    Read by CAPABILITY (``granted_roots``), never by isinstance — gating on a
-    concrete class is how the previous guard silently opted out in ENFORCE mode,
-    where the workspace object is a different type. A lane that cannot supply
-    roots yields ``()``, and every folder simply keeps asking.
+    ``resolved`` is the run's attach set as the WORKER resolved it, straight off
+    the capability broker's active-grant snapshot
+    (``WorkspaceBackendWorkerWiring.granted_host_roots``). It wins whenever it is
+    supplied, and that is the point: which folders the user attached is a broker
+    fact, so the rules must not depend on which ``/workspace/`` object the run's
+    ``workspace_effect_mode`` happened to build. ``None`` means "nobody resolved
+    one" — an empty tuple means "resolved, and the user has attached nothing".
 
-    …but it says so OUT LOUD. Reading a capability does not conjure one: the
-    ENFORCE lane's backends (``WorkspaceGatewayBackend`` /
-    ``WorkspaceTombstoneBackend``) do not implement ``granted_roots``, and their
-    grant projection carries no host root at all, so in that lane attaching a
-    folder still buys the user nothing. That is the same OUTCOME the isinstance
-    gate produced, and it was equally invisible in every packaged log. It is a
-    WARNING because it silently disables the whole point of attaching a folder.
+    With nothing resolved we fall back to reading the backend by CAPABILITY
+    (``granted_roots``), never by isinstance — gating on a concrete class is how
+    the previous guard silently opted out in ENFORCE mode, where the workspace
+    object is a different type. A lane that can supply neither yields ``()``, and
+    every folder simply keeps asking.
+
+    …but it says so OUT LOUD, because that state used to be the ENFORCE lane's
+    permanent condition: ``WorkspaceGatewayBackend`` / ``WorkspaceTombstoneBackend``
+    do not implement ``granted_roots`` and their grant projection carries no host
+    root at all, so attaching a folder bought the user nothing and no packaged log
+    said so. The worker now resolves roots for that lane too, so reaching this
+    warning means the resolution itself was skipped — still worth a line.
 
     Single-sourced because the rule set and :class:`HostFilesystemFloor` must
     admit exactly the same roots; two independent reads could drift into a floor
     that refuses a folder the rules allow.
     """
 
+    if resolved is not None:
+        if not isinstance(resolved, tuple):  # pragma: no cover - typing guard
+            _LOGGER.warning("host_filesystem.granted_roots_malformed")
+            return ()
+        return resolved
     roots = getattr(workspace_backend, "granted_roots", None)
     if roots is None:
         _LOGGER.warning(
@@ -1766,6 +1797,7 @@ def _composed_deep_backend(
     drafts_backend: object | None = None,
     large_tool_results_backend: object | None = None,
     workspace_backend: object | None = None,
+    granted_host_roots: tuple[object, ...] | None = None,
     memory_routes: Mapping[str, object] | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
@@ -1835,12 +1867,18 @@ def _composed_deep_backend(
     # returns the default untouched when there is no workspace backend, so
     # every non-desktop run composes byte-for-byte as before.
     return CompositeBackend(
-        default=_host_default_backend(workspace_backend),
+        default=_host_default_backend(
+            workspace_backend, granted_host_roots=granted_host_roots
+        ),
         routes=routes,
     )
 
 
-def _host_default_backend(workspace_backend: object | None) -> object:
+def _host_default_backend(
+    workspace_backend: object | None,
+    *,
+    granted_host_roots: tuple[object, ...] | None = None,
+) -> object:
     """The backend for every path no route claims — including host paths.
 
     A host-absolute path is not a prefix of anything, so it can never be a
@@ -1886,13 +1924,19 @@ def _host_default_backend(workspace_backend: object | None) -> object:
         HostFilesystemFloor,
     )
 
-    if not _host_filesystem_permissions(workspace_backend):
+    if not _host_filesystem_permissions(
+        workspace_backend, granted_host_roots=granted_host_roots
+    ):
         # Not desktop, or rules unavailable (version skew). Either way: do NOT
         # expose a real filesystem. Compose exactly as before.
         return guarded_default(StateBackend(), workspace_backend)
     return HostFilesystemFloor(
         FilesystemBackend(virtual_mode=False),
-        roots=_granted_host_roots(workspace_backend),  # type: ignore[arg-type]
+        # The SAME resolution the rules were built from, so the floor can never
+        # refuse a folder the rules allow.
+        roots=_granted_host_roots(  # type: ignore[arg-type]
+            workspace_backend, resolved=granted_host_roots
+        ),
     )
 
 

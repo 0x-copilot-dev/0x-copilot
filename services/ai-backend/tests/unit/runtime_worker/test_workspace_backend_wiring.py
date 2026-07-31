@@ -276,20 +276,24 @@ class TestSilentFallthroughRegression:
         assert floor.permits_read("/Users/ada/Notes/.hidden") is True
         assert floor.permits_read("/Users/ada/Secrets/.env") is False
 
-    async def test_a_lane_without_granted_roots_says_so_out_loud(
+    async def test_an_unresolved_lane_still_says_so_out_loud(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Grants are inert in the ENFORCE lane, and that must not be silent.
+        """Nothing resolved AND nothing to read must still be audible.
 
-        `WorkspaceGatewayBackend` / `WorkspaceTombstoneBackend` — what
-        `RunHandler` returns when `workspace_effect_mode is ENFORCE` — do not
-        implement `granted_roots`, and their broker projection carries no host
-        root at all. So the capability read yields nothing and every attached
-        folder keeps asking, which is precisely the outcome the old isinstance
-        gate produced. Reading a capability instead of a class did not fix that;
-        it only made it a different kind of silent. A WARNING is the difference
-        between "the user's grants do nothing in this lane" being discoverable
-        from a packaged log and being discoverable only by re-deriving it.
+        This warning was written for the ENFORCE lane, whose C3 backends
+        (`WorkspaceGatewayBackend` / `WorkspaceTombstoneBackend`) implement no
+        `granted_roots` and whose grant projection carries no host root — so the
+        capability read yielded nothing and every attached folder kept asking,
+        silently. That lane is now resolved by the worker off the broker
+        snapshot and passed in, so reaching this branch means the RESOLUTION was
+        skipped, not that the lane is inherently mute. Still worth a line: the
+        outcome for the user is identical, and "your grants do nothing this run"
+        must be discoverable from a packaged log rather than re-derived.
+
+        `()` supplied explicitly is a different claim — "resolved, nothing
+        attached" — and must stay silent, or a first run with no grants would
+        warn on every single run.
         """
 
         from agent_runtime.execution.factory import _granted_host_roots
@@ -302,6 +306,11 @@ class TestSilentFallthroughRegression:
 
         assert "host_filesystem.granted_roots_unavailable" in caplog.text
         assert "EnforceLaneBackend" in caplog.text
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert _granted_host_roots(EnforceLaneBackend(), resolved=()) == ()
+        assert caplog.text == ""
 
     async def test_non_desktop_composition_is_unchanged(self) -> None:
         # With no workspace backend the default must stay the bare StateBackend,
