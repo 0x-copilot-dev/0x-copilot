@@ -88,6 +88,20 @@ export interface RunComposerProps {
   readonly catalogRefreshKey?: number;
   /** Newly authenticated connector to enable in the run-scoped Tools state. */
   readonly autoActivateConnectorId?: string | null;
+  /**
+   * The conversation this composer sends into — scopes the REMEMBERED model
+   * pick, so reopening a chat restores the model chosen in it (what the pill's
+   * "this chat" header promises). Run dispatch still belongs to the cockpit;
+   * this is an identity for the preference, not a send target. `null`/omitted =
+   * a brand-new chat, which opens on the last-used model instead.
+   */
+  readonly conversationId?: string | null;
+  /**
+   * What this chat last RAN with (`model_name`), from the cockpit ctx. Backs
+   * the local memory so a chat opened on another machine still shows the model
+   * its transcript came from.
+   */
+  readonly conversationModel?: string | null;
 }
 
 /**
@@ -121,6 +135,8 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     providerKeysPort,
     catalogRefreshKey,
     autoActivateConnectorId,
+    conversationId = null,
+    conversationModel = null,
   } = props;
 
   // The last run-create failure, surfaced inline above the composer. The
@@ -163,7 +179,11 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
-  } = useRunComposerBindings(catalogRefreshKey);
+  } = useRunComposerBindings(
+    catalogRefreshKey,
+    conversationId,
+    conversationModel,
+  );
 
   // Provider-key writes must re-drive the catalog. The model popover's inline
   // "Add a provider key" form calls this port's `save`, so wrapping it refetches

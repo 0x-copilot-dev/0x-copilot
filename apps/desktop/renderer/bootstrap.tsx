@@ -52,6 +52,7 @@ import {
   DeploymentProfileProvider,
   DocumentPresenceSignal,
   HashRouter,
+  KeyValueStoreProvider,
   LocalStorageKeyValueStore,
   NotificationCenterProvider,
   ToastStack,
@@ -156,39 +157,50 @@ export function App(): ReactElement {
   return (
     <NotificationCenterProvider>
       <DeploymentProfileProvider profile={DESKTOP_DEPLOYMENT_PROFILE}>
-        <BootGate bridge={window.bridge}>
-          <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
-            {(session, signOut) => (
-              // First-run gate: a returning user (flag set) drops straight
-              // through to the shell; a first-time user sees onboarding until
-              // they finish or skip. P1 mounts the shared 3-state
-              // FirstRunSurface (gate → composer → ack) via `renderFirstRun`;
-              // the binder wires the BYOK / models ports to the facade.
-              <FirstRunGate
-                bridge={window.bridge}
-                workspaceId={session.workspaceId}
-                // The shell binds its active conversation from this router; the
-                // gate navigates it to the created conversation at handoff so
-                // the first run opens bound, not on an empty standby composer.
-                router={router}
-                renderFirstRun={(onComplete) => (
-                  <FirstRunSurfaceMount
-                    workspaceId={session.workspaceId}
-                    onComplete={onComplete}
-                  />
-                )}
-              >
-                <ChatShellForSession
-                  session={session}
-                  onSignOut={signOut}
+        {/* The KV store is mounted HERE, not only inside ChatShell: the
+            first-run gate renders OUTSIDE the shell, so a surface there
+            (the FTUE composer's model pill) would otherwise resolve the
+            provider's no-op default store and persist nothing — a preference
+            that silently goes nowhere is worse than none. ChatShell still
+            mounts its own provider with this same instance. */}
+        <KeyValueStoreProvider store={keyValueStore}>
+          <BootGate bridge={window.bridge}>
+            <SignInGate
+              bridge={window.bridge}
+              workspaceId={DEFAULT_WORKSPACE_ID}
+            >
+              {(session, signOut) => (
+                // First-run gate: a returning user (flag set) drops straight
+                // through to the shell; a first-time user sees onboarding until
+                // they finish or skip. P1 mounts the shared 3-state
+                // FirstRunSurface (gate → composer → ack) via `renderFirstRun`;
+                // the binder wires the BYOK / models ports to the facade.
+                <FirstRunGate
+                  bridge={window.bridge}
+                  workspaceId={session.workspaceId}
+                  // The shell binds its active conversation from this router; the
+                  // gate navigates it to the created conversation at handoff so
+                  // the first run opens bound, not on an empty standby composer.
                   router={router}
-                  keyValueStore={keyValueStore}
-                  presenceSignal={presenceSignal}
-                />
-              </FirstRunGate>
-            )}
-          </SignInGate>
-        </BootGate>
+                  renderFirstRun={(onComplete) => (
+                    <FirstRunSurfaceMount
+                      workspaceId={session.workspaceId}
+                      onComplete={onComplete}
+                    />
+                  )}
+                >
+                  <ChatShellForSession
+                    session={session}
+                    onSignOut={signOut}
+                    router={router}
+                    keyValueStore={keyValueStore}
+                    presenceSignal={presenceSignal}
+                  />
+                </FirstRunGate>
+              )}
+            </SignInGate>
+          </BootGate>
+        </KeyValueStoreProvider>
       </DeploymentProfileProvider>
       {/* One toast surface for the whole app; floats above full-bleed surfaces. */}
       <ToastStack />
