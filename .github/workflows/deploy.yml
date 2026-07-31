@@ -228,20 +228,37 @@ jobs:
 
       - name: Enrich and re-upload deployment manifest
         if: always()
+        # Values arrive as environment variables, never interpolated into the
+        # script body. Two reasons, and the first one was a live bug: a boolean
+        # input substitutes as lowercase `true`/`false`, so the old
+        # `"force_deploy": ${{ inputs.force_deploy }},` became
+        # `"force_deploy": true,` and raised NameError on every deploy, failing
+        # this step each time it ran. Second, interpolating a value straight into
+        # a script body is the standard Actions script-injection shape; env vars
+        # keep the data out of the program text.
+        env:
+          RECORD_TENANT_ID: ${{ inputs.tenant_id }}
+          RECORD_ENVIRONMENT: ${{ inputs.environment }}
+          RECORD_RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RECORD_APPROVER: ${{ github.actor }}
+          RECORD_STARTED_AT: ${{ steps.start.outputs.started_at }}
+          RECORD_COMPLETED_AT: ${{ steps.done.outputs.completed_at }}
+          RECORD_OUTCOME: ${{ job.status }}
+          RECORD_FORCE_DEPLOY: ${{ inputs.force_deploy }}
         run: |
           python3 << 'PY'
           import json, os
           from pathlib import Path
           mf = json.loads(Path("deployment-manifest.json").read_text())
           mf["deployment_record"] = {
-            "tenant_id": "${{ inputs.tenant_id }}",
-            "environment": "${{ inputs.environment }}",
-            "release_sha": "${{ steps.release.outputs.sha }}",
-            "approver": "${{ github.actor }}",
-            "started_at": "${{ steps.start.outputs.started_at }}",
-            "completed_at": "${{ steps.done.outputs.completed_at }}",
-            "outcome": "${{ job.status }}",
-            "force_deploy": ${{ inputs.force_deploy }},
+            "tenant_id": os.environ["RECORD_TENANT_ID"],
+            "environment": os.environ["RECORD_ENVIRONMENT"],
+            "release_sha": os.environ["RECORD_RELEASE_SHA"],
+            "approver": os.environ["RECORD_APPROVER"],
+            "started_at": os.environ["RECORD_STARTED_AT"],
+            "completed_at": os.environ["RECORD_COMPLETED_AT"],
+            "outcome": os.environ["RECORD_OUTCOME"],
+            "force_deploy": os.environ.get("RECORD_FORCE_DEPLOY", "").lower() == "true",
           }
           Path("deployment-manifest-deployed.json").write_text(json.dumps(mf, indent=2) + "\n")
           PY

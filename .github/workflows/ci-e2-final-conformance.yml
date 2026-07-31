@@ -21,7 +21,7 @@ on:
       - "tools/check_service_boundaries.py"
       - ".github/workflows/ci-e2-final-conformance.yml"
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "services/ai-backend/**"
       - "services/backend/**"

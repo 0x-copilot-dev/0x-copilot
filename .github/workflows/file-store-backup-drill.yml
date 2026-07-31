@@ -27,6 +27,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "services/ai-backend/src/runtime_adapters/file/**"
       - "services/ai-backend/tests/unit/runtime_adapters/file/test_backup_restore_drill.py"

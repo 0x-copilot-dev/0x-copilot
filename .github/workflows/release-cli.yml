@@ -1,0 +1,203 @@
+# Publish @0x-copilot/cli to npm, with a generated changelog and a GitHub Release.
+#
+# Manual dispatch only, and DRY RUN BY DEFAULT: the first run prints the version it
+# would pick and the changelog it would write, and changes nothing. Re-dispatch with
+# dry_run=false to actually publish.
+#
+# Versioning is computed by tools/cli_release.py from Conventional Commits. While the
+# package is 0.x a breaking change bumps the MINOR digit and everything else bumps
+# PATCH, because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0` -- the minor is what
+# actually breaks consumers before 1.0. Force `major` to graduate to 1.0.0.
+#
+# Requires the NPM_TOKEN secret (an npm automation token with publish rights on the
+# @0x-copilot scope).
+
+name: release-cli
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump. 'auto' derives it from Conventional Commits since the last cli-v tag."
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      dry_run:
+        description: "Print the plan without publishing. Leave true until the plan looks right."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the version commit + tag, create the Release
+      id-token: write # npm provenance attestation
+    steps:
+      # Releases come from main only. dev is the integration branch and its head
+      # has not been through the promotion gate, so publishing from it would ship
+      # a commit nobody promoted.
+      - name: Refuse to release from anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::release-cli must be dispatched against main (got ${{ github.ref }})."
+          exit 1
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Full history and tags: the planner diffs against the last cli-v tag,
+          # and a shallow clone would silently look like a first release and dump
+          # the entire history into the changelog.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Test the release tooling
+        run: |
+          python -m pip install --upgrade pip pytest
+          PYTHONPATH=tools python -m pytest tools/test_cli_release.py -q
+
+      - name: Compute the release plan
+        id: plan
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          PYTHONPATH=tools python tools/cli_release.py --bump "$BUMP" --output plan.json
+          {
+            echo "version=$(python -c 'import json;print(json.load(open("plan.json"))["version"])')"
+            echo "tag=$(python -c 'import json;print(json.load(open("plan.json"))["tag"])')"
+            echo "bump=$(python -c 'import json;print(json.load(open("plan.json"))["bump"])')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the plan to the run summary
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          python3 << 'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          plan = json.load(open("plan.json"))
+          mode = "DRY RUN - nothing was published" if os.environ["DRY_RUN"] == "true" else "PUBLISHING"
+          print(f"## release-cli: {mode}\n")
+          print(f"- previous tag: `{plan['previous_tag'] or 'none (first release)'}`")
+          print(f"- current version: `{plan['current_version']}`")
+          print(f"- bump: **{plan['bump']}**")
+          print(f"- next version: **{plan['version']}** (tag `{plan['tag']}`)")
+          print(f"- commits in range: {plan['commit_count']} ({plan['breaking_count']} breaking)\n")
+          print("### Changelog entry\n")
+          print(plan["changelog_entry"])
+          PY
+
+      # Guard against the most common publish failure: the computed version is
+      # already on the registry, which npm rejects with E403/E409 only AFTER the
+      # whole payload has been built.
+      - name: Refuse to republish an existing version
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          if npm view "@0x-copilot/cli@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::@0x-copilot/cli@$VERSION is already published. Pick a different bump."
+            exit 1
+          fi
+          echo "@0x-copilot/cli@$VERSION is free."
+
+      - name: Stop here on a dry run
+        if: inputs.dry_run
+        run: |
+          echo "Dry run complete - see the job summary for the plan. Re-dispatch with dry_run=false to publish."
+
+      - name: Install workspace dependencies
+        if: ${{ !inputs.dry_run }}
+        run: npm ci
+
+      # Same sequence ci-cli.yml's packed-payload job proves on every PR. The
+      # published tarball is assembled from a monorepo-shaped mirror, so the
+      # desktop and frontend builds must exist before prepack runs.
+      - name: Build payload inputs
+        if: ${{ !inputs.dry_run }}
+        run: |
+          npm run build --workspace @0x-copilot/desktop
+          npm run build --workspace @0x-copilot/frontend
+
+      - name: Apply the version bump and changelog
+        if: ${{ !inputs.dry_run }}
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: PYTHONPATH=tools python tools/cli_release.py --bump "$BUMP" --write
+
+      - name: Verify the tarball before publishing
+        if: ${{ !inputs.dry_run }}
+        env:
+          COPILOT_SKIP_BUILD: "1"
+        run: |
+          npm run assemble --workspace @0x-copilot/cli
+          npm run check:packed --workspace @0x-copilot/cli
+
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run }}
+        working-directory: tools/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          COPILOT_SKIP_BUILD: "1"
+        run: npm publish --provenance --access public
+
+      # Only after a successful publish. Tagging first would leave a tag pointing
+      # at a version that does not exist on the registry if publish then failed.
+      - name: Commit, tag and push
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/cli/package.json tools/cli/CHANGELOG.md
+          git commit -m "chore(release): @0x-copilot/cli ${VERSION} [skip ci]"
+          git tag -a "$TAG" -m "@0x-copilot/cli ${VERSION}"
+          git push origin HEAD:main
+          git push origin "$TAG"
+
+      - name: Create the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          python3 -c "import json;open('notes.md','w').write(json.load(open('plan.json'))['changelog_entry'])"
+          gh release create "$TAG" \
+            --title "@0x-copilot/cli $VERSION" \
+            --notes-file notes.md \
+            --verify-tag
+
+      # main is now one commit ahead of dev. Left alone that breaks the next
+      # fast-forward promotion, so carry the release commit back immediately.
+      # A conflict here is reported, never forced.
+      - name: Back-merge the release commit into dev
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git fetch origin dev
+          git checkout -B dev origin/dev
+          if git merge --no-edit origin/main; then
+            git push origin dev
+            echo "dev now carries the release commit."
+          else
+            echo "::warning::Back-merge into dev conflicts. Resolve manually: git merge origin/main"
+            git merge --abort
+          fi

@@ -1,13 +1,45 @@
-* @0x-copilot/security-reviewers
+# Code owners for 0x-copilot.
+#
+# WHY THIS FILE CHANGED SHAPE. It previously assigned every path to teams
+# (@0x-copilot/security-reviewers, @0x-copilot/backend-owners, ...). Teams exist
+# only inside GitHub Organizations, and this repository is owned by a USER
+# account, so those handles resolved to nobody: `require_code_owner_review` had
+# nothing to require and the rule was decorative. Owners must be individual users
+# until the repo moves under an organization -- at which point the team form can
+# come back, along with the finer-grained split this file used to imply.
+#
+# Both owners are bypass actors on the branch rulesets, so their own PRs need no
+# review. This file governs contributions from everyone else: an outside PR
+# touching a listed path needs its owner's approval on top of the 2 approvals the
+# ruleset requires.
+#
+# Last matching pattern wins, so the catch-all comes first.
 
-/services/backend/ @0x-copilot/backend-owners @0x-copilot/security-reviewers
-/services/backend-facade/ @0x-copilot/backend-owners @0x-copilot/security-reviewers
-/services/ai-backend/ @0x-copilot/ai-runtime-owners @0x-copilot/security-reviewers
-/apps/frontend/ @0x-copilot/frontend-owners @0x-copilot/security-reviewers
-/.github/ @0x-copilot/security-reviewers
-/.github/workflows/ @0x-copilot/security-reviewers
-/.github/dependabot.yml @0x-copilot/security-reviewers
-/deploy/ @0x-copilot/security-reviewers
-/deploy/tenants.yml @0x-copilot/security-reviewers @0x-copilot/backend-owners
-/docs/ci-cd/ @0x-copilot/security-reviewers
-/docs/security/ @0x-copilot/security-reviewers
+*                                 @0x-copilot-dev @parthpahwa1
+
+# Deployable services.
+/services/backend/                @0x-copilot-dev @parthpahwa1
+/services/backend-facade/         @0x-copilot-dev @parthpahwa1
+/services/ai-backend/             @0x-copilot-dev @parthpahwa1
+
+# Apps and shared packages.
+/apps/frontend/                   @0x-copilot-dev @parthpahwa1
+/apps/desktop/                    @0x-copilot-dev @parthpahwa1
+/packages/                        @0x-copilot-dev @parthpahwa1
+
+# Supply chain and release. A change under these paths can publish to npm, move
+# main, or rewrite the branch rules themselves, so they matter most.
+/.github/                         @0x-copilot-dev @parthpahwa1
+/.github/workflows/               @0x-copilot-dev @parthpahwa1
+/.github/dependabot.yml           @0x-copilot-dev @parthpahwa1
+/CODEOWNERS                       @0x-copilot-dev @parthpahwa1
+/deploy/                          @0x-copilot-dev @parthpahwa1
+/deploy/branch-protection.json    @0x-copilot-dev @parthpahwa1
+/deploy/tenants.yml               @0x-copilot-dev @parthpahwa1
+/tools/apply_branch_protection.py @0x-copilot-dev @parthpahwa1
+/tools/cli_release.py             @0x-copilot-dev @parthpahwa1
+/tools/cli/                       @0x-copilot-dev @parthpahwa1
+
+# Security and CI documentation.
+/docs/ci-cd/                      @0x-copilot-dev @parthpahwa1
+/docs/security/                   @0x-copilot-dev @parthpahwa1
