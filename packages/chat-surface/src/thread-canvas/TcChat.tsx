@@ -41,6 +41,9 @@ import {
   EMPTY_CONNECTOR_TRUST,
   type ApprovalPresentation,
   type ConnectorTrust,
+  WorkspaceGrantCard,
+  type WorkspaceGrantCardState,
+  type WorkspaceGrantRequest,
 } from "../approvals";
 // WC-P5a (AD-6/AD-7) — the MCP-OAuth launcher port TYPE + the approval-kind
 // union. `McpAuthPort` is a pure interface (no runtime code), so this type-only
@@ -120,6 +123,13 @@ export interface TcChatApproval {
    * reason it routes to a card you ANSWER rather than one you approve.
    */
   readonly question: QuestionSpec | null;
+  /**
+   * Parsed folder ask (`payload.workspace_grant`). Non-null routes to
+   * `WorkspaceGrantCard`, whose Grant hands the decision to the host's
+   * `WorkspaceGrantPort` — an OS dialog, not a `/decision` POST. Optional so a
+   * fixture or a host that projects no grants keeps its current shape.
+   */
+  readonly workspaceGrant?: WorkspaceGrantRequest | null;
   /** Resolved? Pending → card / conf-card; resolved → receipt. */
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
@@ -150,6 +160,15 @@ function isMcpAuthApproval(approval: TcChatApproval): boolean {
     approval.approvalKind === "mcp_auth" ||
     approval.approvalId.startsWith(MCP_DISCOVERY_APPROVAL_PREFIX)
   );
+}
+
+// A folder ask is recognised by its PAYLOAD, not by a kind: the backend raises
+// it by stamping `payload.workspace_grant` on whichever interrupt it already
+// emits, so any kind can carry one. Checked before the `mcp_auth` branch —
+// which folder to hand over is a different question from which vendor to sign
+// in to, and only one of the two cards names a path.
+function isWorkspaceGrantApproval(approval: TcChatApproval): boolean {
+  return (approval.workspaceGrant ?? null) !== null;
 }
 
 export interface TcChatMessagePart {
@@ -344,6 +363,38 @@ export interface TcChatProps {
    */
   readonly onConnectorMute?: (catalogSlug: string) => void;
   /**
+   * Per-`approval_id` state of a folder ask, owned by the host's grant machine
+   * (`useWorkspaceGrantCardStates`). Absent entries render `pending` for the
+   * same reason the connector states do: the run stream can report that a
+   * folder was asked for, but the OS dialog that answers it is invisible to the
+   * stream.
+   */
+  readonly workspaceGrantStates?: Readonly<
+    Record<string, WorkspaceGrantCardState>
+  >;
+  /**
+   * Per-`approval_id` failure text for a folder ask that could not be granted
+   * (OS refusal, broker down, disk gone). Shown verbatim on the `failed` card,
+   * because "we couldn't" with no reason is the same dead end as an empty
+   * listing — the user cannot tell whether to retry or to go fix something.
+   */
+  readonly workspaceGrantFailures?: Readonly<Record<string, string>>;
+  /**
+   * Grant the folder — the host calls `WorkspaceGrantPort.requestGrant` and the
+   * OS dialog it opens is the real consent. Omitted → the card renders inert
+   * (the ask stays readable, the buttons do nothing), never a `/decision`
+   * fallback: `onApprove` would resume a run that still has no grant, which is
+   * exactly how a refusal became an empty success.
+   */
+  readonly onWorkspaceGrant?: (
+    approvalId: string,
+    request: WorkspaceGrantRequest,
+  ) => void;
+  /** Decline the folder — the run continues without it (host owns the POST). */
+  readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
+  /** Abandon the ask while the OS dialog is up (state-only; see the hook). */
+  readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
+  /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
    * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
@@ -411,6 +462,11 @@ export function TcChat(props: TcChatProps): ReactElement {
     connectedConnectorReceipt = null,
     onConnectorConsentCancel,
     onConnectorMute,
+    workspaceGrantStates,
+    workspaceGrantFailures,
+    onWorkspaceGrant,
+    onWorkspaceGrantDeny,
+    onWorkspaceGrantCancel,
     renderComposer,
   } = props;
   const transport = useTransport();
@@ -449,7 +505,19 @@ export function TcChat(props: TcChatProps): ReactElement {
   // past state). The host also drops them from `approvals` when scrubbed, but
   // guarding on the scrub cursor here keeps standalone usage correct too.
   const scrubbedOffNow = scrub.scrubbedTo !== "now";
-  const visibleApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+  // A RESOLVED approval is history, not a live decision, so it does not belong
+  // in the strip directly above the composer. Once the user has approved, the
+  // run continues and its result — the listing, the answer — is already in the
+  // transcript; a "✓ Approved · <name>" line pinned above the input adds no
+  // information and pushes the conversation up. The record is not lost: the
+  // Approvals tab still projects every decision from the same event stream.
+  //
+  // Question cards are exempt because a resolved question still shows the
+  // answer the user gave, which the transcript does not repeat.
+  const liveApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+  const visibleApprovals = liveApprovals.filter(
+    (approval) => !approval.resolved || approval.question !== null,
+  );
   const projectedConnectedReceipt =
     connectedConnectorReceipt !== null &&
     visibleApprovals.some(
@@ -548,15 +616,24 @@ export function TcChat(props: TcChatProps): ReactElement {
                 ? renderQuestionCard(approval, onAnswer)
                 : approval.resolved
                   ? renderApprovalReceipt(approval)
-                  : isMcpAuthApproval(approval)
-                    ? renderMcpAuthConnectCard(
+                  : isWorkspaceGrantApproval(approval)
+                    ? renderWorkspaceGrantCard(
                         approval,
-                        mcpAuthPort,
-                        connectorConsentStates,
-                        onConnectorConsentCancel,
-                        onConnectorMute,
+                        workspaceGrantStates,
+                        workspaceGrantFailures,
+                        onWorkspaceGrant,
+                        onWorkspaceGrantDeny,
+                        onWorkspaceGrantCancel,
                       )
-                    : renderConfCard(approval, onApprove, onReject),
+                    : isMcpAuthApproval(approval)
+                      ? renderMcpAuthConnectCard(
+                          approval,
+                          mcpAuthPort,
+                          connectorConsentStates,
+                          onConnectorConsentCancel,
+                          onConnectorMute,
+                        )
+                      : renderConfCard(approval, onApprove, onReject),
             )}
             {connectedReceipt}
           </div>
@@ -587,15 +664,24 @@ export function TcChat(props: TcChatProps): ReactElement {
               ? renderQuestionCard(approval, onAnswer)
               : approval.resolved
                 ? renderApprovalReceipt(approval)
-                : isMcpAuthApproval(approval)
-                  ? renderMcpAuthConnectCard(
+                : isWorkspaceGrantApproval(approval)
+                  ? renderWorkspaceGrantCard(
                       approval,
-                      mcpAuthPort,
-                      connectorConsentStates,
-                      onConnectorConsentCancel,
-                      onConnectorMute,
+                      workspaceGrantStates,
+                      workspaceGrantFailures,
+                      onWorkspaceGrant,
+                      onWorkspaceGrantDeny,
+                      onWorkspaceGrantCancel,
                     )
-                  : renderStudioApprovalCard(approval, onApprove, onReject),
+                  : isMcpAuthApproval(approval)
+                    ? renderMcpAuthConnectCard(
+                        approval,
+                        mcpAuthPort,
+                        connectorConsentStates,
+                        onConnectorConsentCancel,
+                        onConnectorMute,
+                      )
+                    : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
           {connectedReceipt}
         </div>
@@ -718,6 +804,50 @@ function renderMcpAuthConnectCard(
         connectTestId={`tc-chat-mcp-connect-${approval.approvalId}`}
         denyTestId={`tc-chat-mcp-skip-${approval.approvalId}`}
         testId={`tc-chat-connector-${approval.approvalId}`}
+      />
+    </div>
+  );
+}
+
+// The folder-grant ask. Same shape of wiring as the Connect card above and for
+// the same reason: what settles it is an OS dialog the run stream cannot see, so
+// the state comes from the host's machine (`useWorkspaceGrantCardStates`) and
+// the decision goes to `WorkspaceGrantPort`, never to the `/decision` POST that
+// `onApprove` owns. Rendered in BOTH modes — being asked for a folder is not a
+// Studio-only event. With no handler wired the card renders inert: the ask stays
+// readable, which is still strictly better than the defect it replaces (an
+// ungranted read answered with an empty listing and a green tick).
+function renderWorkspaceGrantCard(
+  approval: TcChatApproval,
+  states?: Readonly<Record<string, WorkspaceGrantCardState>>,
+  failures?: Readonly<Record<string, string>>,
+  onGrant?: (approvalId: string, request: WorkspaceGrantRequest) => void,
+  onDeny?: (approvalId: string) => void,
+  onCancel?: (approvalId: string) => void,
+): ReactNode {
+  // Non-null by construction — `isWorkspaceGrantApproval` gated this branch.
+  const request = approval.workspaceGrant!;
+  const actionable = onGrant !== undefined;
+  const grant = (): void => onGrant?.(approval.approvalId, request);
+  return (
+    <div
+      key={`workspace-grant-${approval.approvalId}`}
+      data-testid={`tc-chat-workspace-grant-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+    >
+      <WorkspaceGrantCard
+        request={request}
+        state={states?.[approval.approvalId] ?? "pending"}
+        failureMessage={failures?.[approval.approvalId] ?? null}
+        actionable={actionable}
+        onGrant={grant}
+        onDeny={() => onDeny?.(approval.approvalId)}
+        onCancel={() => onCancel?.(approval.approvalId)}
+        // Retry and reverse-a-decline are the same verb as Grant — ask again.
+        onReconsider={grant}
+        grantTestId={`tc-chat-workspace-grant-approve-${approval.approvalId}`}
+        denyTestId={`tc-chat-workspace-grant-deny-${approval.approvalId}`}
+        testId={`tc-chat-grant-${approval.approvalId}`}
       />
     </div>
   );

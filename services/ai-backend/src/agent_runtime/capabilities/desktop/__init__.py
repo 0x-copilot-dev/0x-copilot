@@ -2,6 +2,17 @@
 
 AC5 slice 3a: a read-only Deep Agents backend (``/workspace/``) over user-granted
 host folders, driven by a thin async client to the loopback capability broker.
+
+A host-absolute path the agent supplies is classified here
+(:mod:`~agent_runtime.capabilities.desktop.host_path`) and, when no grant covers
+it, becomes a blocking grant request
+(:mod:`~agent_runtime.capabilities.desktop.workspace_grant`) rather than an empty
+listing. ``HostPathClassifier.is_host_shaped`` /
+``BrokeredWorkspaceBackend.claims_path`` are what a router consults so such a
+path can never fall through to a virtual backend, and
+:func:`~agent_runtime.capabilities.desktop.host_route.guarded_default` is the seam
+that applies the claim where it has to be applied — the composite's DEFAULT, since
+a host path is not a prefix and can never be a route.
 """
 
 from __future__ import annotations
@@ -33,6 +44,20 @@ from agent_runtime.capabilities.desktop.broker_client import (
     WorkspacePreparedEffect,
     WorkspaceUploadSlot,
 )
+from agent_runtime.capabilities.desktop.host_path import (
+    ClassifiedPath,
+    HostPathClassifier,
+    HostPathFlavour,
+    HostPathKind,
+    HostPathMessages,
+    HostPathRefusal,
+    HostRootIndex,
+    HostRootMatch,
+)
+from agent_runtime.capabilities.desktop.host_route import (
+    HostPathGuardBackend,
+    guarded_default,
+)
 from agent_runtime.capabilities.desktop.workspace_authority import (
     BrokerWorkspaceAuthority,
     ImmutableWorkspaceContentResolver,
@@ -53,6 +78,14 @@ from agent_runtime.capabilities.desktop.workspace_backend import (
     WorkspaceMountTable,
     WorkspaceWriteNotSupportedError,
     build_workspace_backend,
+)
+from agent_runtime.capabilities.desktop.workspace_grant import (
+    WorkspaceGrantGate,
+    WorkspaceGrantMessages,
+    WorkspaceGrantOutcome,
+    WorkspaceGrantRequest,
+    WorkspaceGrantResume,
+    WorkspaceGrantValues,
 )
 
 __all__ = [
@@ -75,7 +108,16 @@ __all__ = [
     "BrokerUnsupportedError",
     "BrokerWorkspaceAuthority",
     "BrokeredWorkspaceBackend",
+    "ClassifiedPath",
     "DesktopBrokerClient",
+    "HostPathClassifier",
+    "HostPathFlavour",
+    "HostPathGuardBackend",
+    "HostPathKind",
+    "HostPathMessages",
+    "HostPathRefusal",
+    "HostRootIndex",
+    "HostRootMatch",
     "ImmutableWorkspaceContentResolver",
     "WorkspaceBackendConfig",
     "WorkspaceAuthorityContractError",
@@ -84,6 +126,12 @@ __all__ = [
     "WorkspaceChangeEntry",
     "WorkspaceCommitResult",
     "WorkspaceConflictError",
+    "WorkspaceGrantGate",
+    "WorkspaceGrantMessages",
+    "WorkspaceGrantOutcome",
+    "WorkspaceGrantRequest",
+    "WorkspaceGrantResume",
+    "WorkspaceGrantValues",
     "WorkspaceHostSession",
     "WorkspaceHostSessionGrant",
     "WorkspaceEffectExecutor",
@@ -98,4 +146,5 @@ __all__ = [
     "WorkspaceWriteNotSupportedError",
     "WorkspaceUploadSlot",
     "build_workspace_backend",
+    "guarded_default",
 ]

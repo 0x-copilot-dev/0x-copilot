@@ -35,10 +35,16 @@ describe("ApprovalCard", () => {
       container.querySelector(".atlas-approval-card__actions button")
         ?.textContent,
     ).toBe("Approve");
-    // Zone 4 — footer reassurance.
+    // Zone 4 — the standing rule is no longer a visible row. It repeated the
+    // same sentence on every card and only cost height in the chat column, so
+    // it moved to the card's accessible description: still announced, no
+    // longer occupying space.
+    expect(container.querySelector(".atlas-approval-card__foot")).toBeNull();
     expect(
-      container.querySelector(".atlas-approval-card__foot")?.textContent,
-    ).toContain("You're always asked before Copilot writes outside this chat.");
+      container
+        .querySelector(".atlas-approval-card")
+        ?.getAttribute("aria-description"),
+    ).toBe("You're always asked before Copilot writes outside this chat.");
   });
 
   it("renders the vendor·access pill with an aria-label", () => {

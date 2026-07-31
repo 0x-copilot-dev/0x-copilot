@@ -50,6 +50,7 @@ import { fileURLToPath } from "node:url";
 
 import { stageBrowserRuntime } from "./browser-runtime.mjs";
 import macosSigning from "./macos-signing.cjs";
+import { auditWorkspaceFsAddon } from "./workspace-fs-audit.mjs";
 
 const { signAndVerifyMacAppBundle } = macosSigning;
 
@@ -1152,6 +1153,15 @@ async function main() {
   // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
   stageWebAssets(args.dest);
 
+  // Read-side confinement audit — recorded in staging-manifest.json, so whether
+  // the shipped tree has the atomic confined open is never inferred from silence.
+  const workspaceFs = auditWorkspaceFsAddon({
+    repoRoot: REPO_ROOT,
+    platform: args.platform,
+    arch: args.arch,
+    log,
+  });
+
   // Prune and thin on every distribution path. `--adhoc-sign` used to be the
   // only path that removed runtime cruft, leaving signed DMG builds needlessly
   // larger. Architecture thinning must precede either ad-hoc or Developer-ID
@@ -1191,6 +1201,7 @@ async function main() {
       sha256: pgEntry.sha256,
     },
     browser,
+    workspace_fs: workspaceFs,
     features: {
       monty,
     },

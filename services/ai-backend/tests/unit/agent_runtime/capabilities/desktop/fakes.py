@@ -4,6 +4,11 @@ Models the broker's ``/v1/fs/*`` wire contract over a small in-memory tree so
 the adapter can be exercised end-to-end without Electron or a real filesystem.
 Records every request so tests can assert auth headers and that a **host path
 never leaves the process** (requests carry only ``grant_id`` + virtual path).
+
+:class:`RecordingConsent` stands in for the ``langgraph.types.interrupt`` seam so
+the grant-request path can be driven without a graph: it records the consent
+payload the user would have seen and returns the resume the desktop host would
+have sent back.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -23,6 +29,12 @@ from agent_runtime.capabilities.desktop.broker_client import (
 TEST_TOKEN = "fake-broker-token-do-not-log-000000000000000"
 TEST_BASE_URL = "http://127.0.0.1:54321"
 TEST_PROTOCOL = "1"
+
+#: The interrupt-payload block that turns any approval into a folder ask. Spelled
+#: here as the literal the CLIENT requires — ``WORKSPACE_GRANT_PAYLOAD_KEY`` in
+#: ``packages/chat-surface/src/approvals/presentation.ts`` — because Python cannot
+#: import that constant and a drifted key renders no card at all.
+GRANT_BLOCK_KEY = "workspace_grant"
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
@@ -52,9 +64,15 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 
 @dataclass
 class FakeBrokerFs:
-    """A tiny in-memory filesystem addressed by grant-relative POSIX paths."""
+    """A tiny in-memory filesystem addressed by grant-relative POSIX paths.
+
+    ``denied`` models the paths the real broker refuses at resolution time — a
+    symlink or TOCTOU escape out of the grant root, or an insufficient grant mode
+    — which surface as ``permission_denied`` rather than as a missing file.
+    """
 
     files: dict[str, bytes]
+    denied: set[str] = field(default_factory=set)
 
     def _dirs(self) -> set[str]:
         dirs = {""}
@@ -328,6 +346,11 @@ class RecordingBroker:
     def _dispatch(
         fs: FakeBrokerFs, op: str, body: dict[str, object]
     ) -> dict[str, object] | tuple[str, None]:
+        target = body.get("path")
+        if isinstance(target, str) and target in fs.denied:
+            # The broker resolved the path outside the grant root (symlink /
+            # TOCTOU escape) and refused it.
+            return ("permission_denied", None)
         if op == "stat":
             return fs.stat(body["path"])
         if op == "list":
@@ -364,6 +387,36 @@ class RecordingBroker:
             )
         return {"snapshotId": "snap-fake", "capturedAt": 1000, "grants": grants}
 
+    def add_grant(
+        self,
+        grant_id: str,
+        files: dict[str, bytes],
+        *,
+        label: str = "",
+        mount: str | None = None,
+        mode: str = "read_only",
+    ) -> None:
+        """Register a NEW active grant, as Electron does once the user grants.
+
+        The projection stays path-free — a grant appears with an id, an opaque
+        mount and a sanitized label, never a host root.
+        """
+        self.grants[grant_id] = FakeBrokerFs(files=files)
+        self.grant_meta[grant_id] = {
+            "label": label or grant_id,
+            "mount": mount or f"mnt_{grant_id}",
+            "mode": mode,
+            "status": "active",
+        }
+
+    def bodies(self) -> str:
+        """Every recorded request (route + headers + body) as one JSON string.
+
+        Lets a test assert a *negative*: that no host-absolute path appears
+        anywhere in what this process sent to the broker.
+        """
+        return json.dumps(self.requests)
+
     def transport(self) -> httpx.MockTransport:
         """An httpx transport wired to this fake broker."""
         return httpx.MockTransport(self._handler)
@@ -378,3 +431,49 @@ class RecordingBroker:
             ),
             http_client=httpx.AsyncClient(transport=self.transport()),
         )
+
+
+@dataclass
+class RecordingConsent:
+    """Fake ``langgraph.types.interrupt`` seam standing in for the user.
+
+    Records every consent payload (so a test can assert what the user would have
+    been shown, and that nothing was shown at all when a path must fail closed)
+    and returns ``resume`` — the decision the desktop host echoes back. ``on_ask``
+    runs first, which is where a test makes the broker report a freshly granted
+    folder exactly as Electron would after the native picker.
+    """
+
+    resume: object = None
+    on_ask: Callable[[dict[str, object]], None] | None = None
+    payloads: list[dict[str, object]] = field(default_factory=list)
+
+    def __call__(self, payload: dict[str, object]) -> object:
+        """Record the payload, run the side effect, and return the resume."""
+        self.payloads.append(payload)
+        if self.on_ask is not None:
+            self.on_ask(payload)
+        return self.resume
+
+    @property
+    def asked(self) -> bool:
+        """True when the user was asked at least once."""
+        return bool(self.payloads)
+
+    @property
+    def payload(self) -> dict[str, object]:
+        """The most recent consent payload."""
+        return self.payloads[-1]
+
+    @property
+    def grant_block(self) -> dict[str, object]:
+        """The ``workspace_grant`` block of the most recent consent payload.
+
+        Read under the key the CLIENT requires (``packages/chat-surface`` exports
+        it as ``WORKSPACE_GRANT_PAYLOAD_KEY``), not a local nickname — the block
+        key is the contract, and a fake that looked under a different one would
+        pass while the real card found nothing to render.
+        """
+        block = self.payload[GRANT_BLOCK_KEY]
+        assert isinstance(block, dict)
+        return block
