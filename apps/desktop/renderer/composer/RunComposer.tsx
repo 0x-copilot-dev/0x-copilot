@@ -21,6 +21,7 @@ import { modelSelectionForId } from "./desktopModelCatalog";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
+import { desktopDictationPort } from "./DesktopSpeechRecognitionDictationPort";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
@@ -288,6 +289,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         connectors={{ servers: [...servers], loading: serversLoading }}
         skills={{ skills: [...skills], loading: skillsLoading }}
         attachmentAdapter={attachmentAdapter}
+        dictationPort={desktopDictationPort}
         filePicker={filePicker}
         // Real host folders, granted not assumed: adds the `+` menu's folder row
         // and a pill per active grant, whose dismiss REVOKES the access.

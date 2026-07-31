@@ -33,6 +33,7 @@ import {
   type ComposerHandle,
 } from "../composer";
 import type { FilePickerPort } from "../ports/FilePickerPort";
+import type { DictationPort } from "../ports/DictationPort";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import type { KeyFormConnected } from "./KeyForm";
 import type { StartRunError } from "../destinations/run";
@@ -60,6 +61,7 @@ export interface OnboardingComposerProps {
     readonly loading: boolean;
   };
   readonly attachmentAdapter?: AttachmentAdapter;
+  readonly dictationPort?: DictationPort;
   readonly filePicker: FilePickerPort;
   readonly renderPlusMenu: (a: AssistantComposerPlusMenuSlotArgs) => ReactNode;
   readonly skillInstructionPrompt: (displayName: string) => string;
@@ -135,6 +137,7 @@ function OnboardingComposerInner(
     connectors,
     skills,
     attachmentAdapter,
+    dictationPort,
     filePicker,
     renderPlusMenu,
     skillInstructionPrompt,
@@ -256,6 +259,7 @@ function OnboardingComposerInner(
         }}
         skills={{ skills: [...skills.skills], loading: skills.loading }}
         attachmentAdapter={attachmentAdapter}
+        dictationPort={dictationPort}
         filePicker={filePicker}
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}

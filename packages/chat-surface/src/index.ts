@@ -33,6 +33,13 @@ export {
 } from "./artifacts";
 export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
 export type {
+  DictationCallbacks,
+  DictationEndReason,
+  DictationPort,
+  DictationSession,
+  DictationTranscript,
+} from "./ports/DictationPort";
+export type {
   WorkspaceApprovalDecision,
   WorkspaceApprovalHostDecisionResult,
   WorkspaceApprovalHostPort,
@@ -393,6 +400,8 @@ export {
   type ComposerMode,
   type ComposerSubmitPayload,
   type ComposerSlotCtx,
+  type ComposerDictationControl,
+  type ComposerDictationState,
   type AttachmentAdapter,
   type AttachmentContentPart,
   type CompleteAttachment,

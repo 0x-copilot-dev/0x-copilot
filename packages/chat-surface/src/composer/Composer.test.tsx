@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createRef, type ReactNode } from "react";
 
 import type {
@@ -12,6 +18,7 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
+import type { DictationCallbacks, DictationPort } from "../ports/DictationPort";
 import {
   Composer,
   type AttachmentAdapter,
@@ -47,6 +54,33 @@ function withTransport(transport: Transport, children: ReactNode): ReactNode {
   return (
     <TransportProvider transport={transport}>{children}</TransportProvider>
   );
+}
+
+function makeDictationPort(): {
+  readonly port: DictationPort;
+  readonly stop: ReturnType<typeof vi.fn>;
+  readonly cancel: ReturnType<typeof vi.fn>;
+  readonly callbacks: () => DictationCallbacks;
+} {
+  let activeCallbacks: DictationCallbacks | null = null;
+  const stop = vi.fn();
+  const cancel = vi.fn();
+  return {
+    port: {
+      start: vi.fn((callbacks: DictationCallbacks) => {
+        activeCallbacks = callbacks;
+        return { stop, cancel };
+      }),
+    },
+    stop,
+    cancel,
+    callbacks: () => {
+      if (activeCallbacks === null) {
+        throw new Error("dictation has not started");
+      }
+      return activeCallbacks;
+    },
+  };
 }
 
 describe("Composer", () => {
@@ -242,11 +276,90 @@ describe("Composer", () => {
     render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
     expect(screen.getByTestId("composer-attach")).toBeInTheDocument();
     expect(screen.getByTestId("composer-mic")).toBeInTheDocument();
+    expect(screen.getByTestId("composer-mic")).toBeDisabled();
     expect(screen.getByTestId("composer-send")).toBeInTheDocument();
     expect(screen.getByTestId("composer-send")).toHaveAttribute(
       "aria-label",
       "Send",
     );
+  });
+
+  it("toggles dictation and writes interim/final speech into the text buffer", () => {
+    const dictation = makeDictationPort();
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={() => {}} dictationPort={dictation.port} />,
+      ),
+    );
+    const textarea = screen.getByTestId(
+      "composer-textarea",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Please" } });
+
+    const mic = screen.getByTestId("composer-mic");
+    expect(mic).not.toBeDisabled();
+    fireEvent.click(mic);
+    expect(mic).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("composer-dictation-status")).toHaveTextContent(
+      "Starting voice input",
+    );
+
+    act(() => dictation.callbacks().onStart());
+    expect(screen.getByTestId("composer-dictation-status")).toHaveTextContent(
+      "Listening",
+    );
+
+    act(() =>
+      dictation.callbacks().onTranscript({
+        transcript: "review",
+        isFinal: false,
+      }),
+    );
+    expect(textarea.value).toBe("Please review");
+
+    act(() =>
+      dictation.callbacks().onTranscript({
+        transcript: "review the budget",
+        isFinal: true,
+      }),
+    );
+    expect(textarea.value).toBe("Please review the budget");
+
+    fireEvent.click(mic);
+    expect(dictation.stop).toHaveBeenCalledTimes(1);
+    expect(mic).toBeDisabled();
+    expect(screen.getByTestId("composer-dictation-status")).toHaveTextContent(
+      "Finishing voice input",
+    );
+    act(() => dictation.callbacks().onEnd("stopped"));
+    expect(mic).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.queryByTestId("composer-dictation-status"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a safe dictation error and lets typing dismiss it", () => {
+    const dictation = makeDictationPort();
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer onSend={() => {}} dictationPort={dictation.port} />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("composer-mic"));
+    act(() =>
+      dictation
+        .callbacks()
+        .onError("Microphone access was denied. Enable it and try again."),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Microphone access was denied",
+    );
+    const textarea = screen.getByTestId("composer-textarea");
+    fireEvent.change(textarea, { target: { value: "typed instead" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("swaps Send for a Cancel button while a run is active and calls onCancel", () => {

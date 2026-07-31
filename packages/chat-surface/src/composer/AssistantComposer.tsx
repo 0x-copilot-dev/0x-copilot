@@ -21,6 +21,7 @@ import {
 } from "./Composer";
 import { Icon } from "../icons/Icon";
 import type { FilePickerPort } from "../ports/FilePickerPort";
+import type { DictationPort } from "../ports/DictationPort";
 import type { WorkspaceGrantPort } from "../ports/WorkspaceGrantPort";
 import { AttachmentPill } from "./AttachmentPill";
 import { grantAccessLabel } from "../approvals/presentation";
@@ -71,6 +72,8 @@ export interface AssistantComposerProps {
    * core stays free of the host's runtime attachment types.
    */
   attachmentAdapter?: AttachmentAdapter;
+  /** Host-owned speech-to-text capability. Omitted disables the mic. */
+  dictationPort?: DictationPort;
   /**
    * Substrate file picker. The `+` menu's Attach Image / Attach File
    * actions route through `filePicker.pick({ multiple, accept })` instead
@@ -233,6 +236,7 @@ export const AssistantComposer = forwardRef<
     connectors,
     skills,
     attachmentAdapter,
+    dictationPort,
     filePicker,
     workspaceGrantPort,
     renderPlusMenu,
@@ -423,6 +427,7 @@ export const AssistantComposer = forwardRef<
       disabled={disabled}
       running={running}
       attachmentAdapter={attachmentAdapter}
+      dictationPort={dictationPort}
       placeholder={placeholder}
       // Phase 9 composer redesign: empty composer was a single-row sliver
       // — felt skeletal next to the welcome cards. 3 rows is the size the
@@ -494,7 +499,12 @@ export const AssistantComposer = forwardRef<
           </div>
         ) : undefined
       }
-      bottomBarRender={({ text, running: isRunning, attachmentsCount }) => (
+      bottomBarRender={({
+        text,
+        running: isRunning,
+        attachmentsCount,
+        dictation,
+      }) => (
         <div className="aui-composer-action-wrapper">
           <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
@@ -590,13 +600,43 @@ export const AssistantComposer = forwardRef<
            * it flush right now that the static hint row — whose
            * `margin-left: auto` used to do the pushing — is gone. */}
           <div className="aui-composer-action-wrapper__right">
+            {dictation.message !== null ? (
+              <span
+                className="aui-composer-dictation-status"
+                role={dictation.state === "error" ? "alert" : "status"}
+                data-testid="assistant-composer-dictation-status"
+                data-state={dictation.state}
+              >
+                {dictation.message}
+              </span>
+            ) : null}
             <button
               type="button"
               className="aui-icon-button ui-cicon atlas-composer-mic"
-              aria-label="Voice input (coming soon)"
-              data-tooltip="Voice input"
+              aria-label={
+                dictation.active
+                  ? "Stop voice input"
+                  : dictation.state === "unavailable"
+                    ? "Voice input unavailable"
+                    : "Voice input"
+              }
+              aria-pressed={dictation.active}
+              data-dictation-state={dictation.state}
+              data-tooltip={
+                dictation.active
+                  ? "Stop voice input"
+                  : dictation.state === "unavailable"
+                    ? "Voice input unavailable"
+                    : "Voice input"
+              }
               data-tooltip-align="end"
-              disabled
+              onClick={dictation.toggle}
+              disabled={
+                dictation.state === "unavailable" ||
+                dictation.state === "stopping" ||
+                disabled ||
+                controlsDisabled
+              }
             >
               <svg
                 viewBox="0 0 24 24"

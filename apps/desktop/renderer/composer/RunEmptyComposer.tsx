@@ -30,6 +30,7 @@ import { modelSelectionForId } from "./desktopModelCatalog";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
+import { desktopDictationPort } from "./DesktopSpeechRecognitionDictationPort";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
@@ -188,6 +189,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       connectors={{ servers: [...servers], loading: serversLoading }}
       skills={{ skills: [...skills], loading: skillsLoading }}
       attachmentAdapter={attachmentAdapter}
+      dictationPort={desktopDictationPort}
       filePicker={filePicker}
       renderPlusMenu={renderPlusMenu}
       skillInstructionPrompt={skillInstructionPrompt}
