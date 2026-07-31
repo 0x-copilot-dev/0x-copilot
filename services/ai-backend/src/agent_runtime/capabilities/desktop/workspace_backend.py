@@ -376,6 +376,16 @@ class WorkspaceMountTable:
         an ``allow`` rule, because the rule would either match nothing (harmless
         but useless) or — far worse — match the wrong subtree. A dropped root
         degrades to "this folder still asks", never to "this folder is open".
+
+        Built through :meth:`GrantedRoot.from_host_path`, which converts the
+        broker's root into the canonical POSIX spelling the tool layer rewrites
+        every path to. The plain constructor demands that spelling and REJECTS a
+        drive-absolute root, so a Windows grant (``C:\\Users\\p\\Downloads``)
+        landed in the ``except ValueError`` below and was dropped — leaving the
+        Windows half of the product with a folder the user had explicitly
+        attached that asked again on every single read. This is the one
+        production caller of that seam, and it is the only lane the rules and
+        the floor are now built from.
         """
 
         from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
@@ -390,8 +400,8 @@ class WorkspaceMountTable:
                 continue
             try:
                 roots.append(
-                    GrantedRoot(
-                        path=mount.host_root,
+                    GrantedRoot.from_host_path(
+                        mount.host_root,
                         # Only a grant that actually permits writing may site a
                         # writable scratch dir; read-only stays read-only.
                         writable=mount.mode != "read_only",
