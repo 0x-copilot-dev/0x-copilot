@@ -101,6 +101,17 @@ function buildEnv() {
 }
 
 // ---------------------------------------------------------------------------
+// How long Playwright waits for Electron to come up. A FIRST boot on a fresh
+// userData dir runs `initdb`, the migrations and three uvicorns before the
+// window exists, and on a loaded machine that can outlast the 120s default —
+// which surfaces as `electron.launch: Timeout exceeded` with a perfectly
+// healthy supervisor log, i.e. a harness timeout wearing a product failure's
+// clothes. Overridable so a slow host can be told the truth; the default is
+// unchanged, so nothing that passes today starts waiting longer.
+const LAUNCH_TIMEOUT_MS = Number(
+  process.env.DRIVER_LAUNCH_TIMEOUT_MS || 120_000,
+);
+
 let app = null;
 let page = null;
 const capturedUrls = [];
@@ -126,7 +137,7 @@ async function launch() {
     args: [APP_DIR],
     cwd: REPO_ROOT,
     env,
-    timeout: 120_000,
+    timeout: LAUNCH_TIMEOUT_MS,
   });
 
   // Pipe the electron main-process stdout/stderr (incl. supervisor + service
@@ -150,7 +161,7 @@ async function launch() {
   });
   logMain("[driver] shell.openExternal intercept installed");
 
-  page = await app.firstWindow({ timeout: 120_000 });
+  page = await app.firstWindow({ timeout: LAUNCH_TIMEOUT_MS });
   wireWindow(page);
   logMain(`[driver] firstWindow url=${page.url()}`);
 
