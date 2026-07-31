@@ -2098,10 +2098,10 @@ export {
 //     upload and exposes no path, while a grant is a durable capability whose
 //     whole subject is a path. Web implements NEITHER — every consumer treats
 //     the port as optional and renders nothing without it.
-//   · `useWorkspaceFolderGrants` — the "what is attached" list behind the
-//     composer's Attach Folder row and the same list in Settings. The broker is
-//     the source of truth (every change re-reads `listGrants`) and a failed read
-//     is never rendered as an empty list.
+//   · `useWorkspaceFolderGrants` (+ `mostRecentFirst`) — the "what is attached"
+//     list behind `WorkspaceFolderBar` (the folder line above the composer) and
+//     the same list in Settings. The broker is the source of truth (every change
+//     re-reads `listGrants`) and a failed read is never rendered as an empty list.
 //   · `WorkspaceGrantCard` + `parseWorkspaceGrantRequest` — the mid-run ask,
 //     raised by the backend stamping `WORKSPACE_GRANT_PAYLOAD_KEY` on an
 //     interrupt payload, routed by `TcChat` and driven by
@@ -2119,8 +2119,18 @@ export type {
   WorkspaceRevokeOutcome,
 } from "./ports/WorkspaceGrantPort";
 export {
+  mostRecentFirst,
   useWorkspaceFolderGrants,
+  WorkspaceFolderBar,
+  WORKSPACE_FOLDER_BAR_EMPTY_LABEL,
+  type WorkspaceFolderBarProps,
   type WorkspaceFolderGrantsState,
+} from "./composer";
+export {
+  BypassPill,
+  BYPASS_PILL_COPY,
+  type BypassMode,
+  type BypassPillProps,
 } from "./composer";
 export {
   WorkspaceGrantCard,

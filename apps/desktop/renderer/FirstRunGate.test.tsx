@@ -51,6 +51,7 @@ import { CHANNELS } from "@0x-copilot/chat-transport";
 import { HashRouter } from "@0x-copilot/chat-surface";
 
 import type { WindowBridge } from "../preload/window-bridge-types";
+import { CAPABILITY_CHANNELS } from "../main/capabilities/channels";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
 import { OLLAMA_DOWNLOAD_URL } from "../main/services/ollama-download";
 import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
@@ -267,6 +268,61 @@ describe("FirstRunSurfaceMount", () => {
     );
     expect(screen.getByTestId("first-run-composer")).not.toBeNull();
     expect(screen.queryByTestId("first-run-composer-placeholder")).toBeNull();
+  });
+
+  // PRD-FS-10 §7 — this mount never received `workspaceGrantPort`, so the
+  // folder affordance existed in the Run composer and NOT on first run, the one
+  // screen where handing the agent a folder matters most. The port is bridged
+  // from `window.bridge`, so the only honest check is that the real capability
+  // channels are reached and the folder lands on screen by NAME.
+  it("hands the FTUE composer the folder-grant port and names the folder", async () => {
+    const bridge = makeBridge({
+      [CAPABILITY_CHANNELS.listGrants]: () =>
+        Promise.resolve([
+          {
+            grantId: "grant_ftue",
+            label: "kaleidoscope",
+            mode: "read_only",
+            status: "active",
+          },
+        ]),
+    });
+    stubWindowBridge(bridge);
+    render(
+      <FirstRunSurfaceMount
+        workspaceId="org_acme"
+        onComplete={vi.fn()}
+        initialStage="ready"
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /^kaleidoscope/ }),
+    ).not.toBeNull();
+    expect(
+      bridge.calls.some((c) => c.channel === CAPABILITY_CHANNELS.listGrants),
+    ).toBe(true);
+  });
+
+  it("shows the empty folder affordance on first run when nothing is granted", async () => {
+    stubWindowBridge(
+      makeBridge({
+        [CAPABILITY_CHANNELS.listGrants]: () => Promise.resolve([]),
+      }),
+    );
+    render(
+      <FirstRunSurfaceMount
+        workspaceId="org_acme"
+        onComplete={vi.fn()}
+        initialStage="ready"
+      />,
+    );
+
+    // A bar that only appeared once you already had a folder could never teach
+    // anyone that folders exist — so the empty state is the whole point here.
+    expect(
+      await screen.findByRole("button", { name: /Attach a folder/i }),
+    ).not.toBeNull();
   });
 
   it("flips to the acknowledgment on send (create → onSent → ack)", async () => {

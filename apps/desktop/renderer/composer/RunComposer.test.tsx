@@ -13,17 +13,41 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CAPABILITY_CHANNELS } from "../../main/capabilities/channels";
+import type { WindowBridge } from "../../preload/window-bridge-types";
 import { RunComposer } from "./RunComposer";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
 afterEach(() => {
   cleanup();
+  delete (globalThis.window as unknown as { bridge?: WindowBridge }).bridge;
 });
+
+/** The Electron bridge, answering the capability channels however a test says. */
+function installBridge(answers: Record<string, unknown>): void {
+  const invoke = vi.fn(async (channel: string, _payload: unknown) => {
+    const answer = answers[channel];
+    if (typeof answer === "function") return (answer as () => unknown)();
+    return answer ?? null;
+  });
+  (globalThis.window as unknown as { bridge?: WindowBridge }).bridge = {
+    ipc: {
+      invoke: invoke as unknown as WindowBridge["ipc"]["invoke"],
+      on: () => () => {},
+    },
+  };
+}
 
 // jsdom ships no IntersectionObserver; the composer's markdown/caret path wants
 // one. A no-op keeps the tree renderable.
@@ -166,6 +190,42 @@ function typeAndSend(container: HTMLElement, text: string): void {
   if (send === null) throw new Error("composer send button not mounted");
   fireEvent.click(send);
 }
+
+describe("RunComposer — the in-chat mount is unchanged (PRD-FS-10 §4.1)", () => {
+  it("shows NO folder bar mid-conversation, even with a live grant", async () => {
+    // This composer only exists once a run is bound, i.e. always after the
+    // first message. The bar is orientation for STARTING a chat; here the
+    // transcript already shows what the agent has been touching. The grant is
+    // still live — it is the BAR that is scoped to the moment, not the access.
+    installBridge({
+      [CAPABILITY_CHANNELS.listGrants]: [
+        {
+          grantId: "grant_ke",
+          label: "kaleidoscope",
+          mode: "read_only",
+          status: "active",
+        },
+      ],
+    });
+    const { container } = renderComposer();
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    expect(screen.queryByRole("button", { name: /^kaleidoscope/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Attach a folder/i }),
+    ).toBeNull();
+
+    // …and the `+` menu is NOT a fallback for it (PRD-FS-10 §5).
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        "button[aria-label='Open attachment and tools menu']",
+      ) as HTMLButtonElement,
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: /Attach Folder/i }),
+    ).toBeNull();
+  });
+});
 
 describe("RunComposer", () => {
   it("mounts the shared AssistantComposer (base composer textarea present)", async () => {

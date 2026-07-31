@@ -255,6 +255,11 @@ export function FirstRunSurfaceMount({
           skills={{ skills: [], loading: false }}
           attachmentAdapter={onboardingAttachmentAdapter}
           filePicker={onboardingFilePicker}
+          // Web has no folder-grant capability (PRD-FS-10 §7): a browser cannot
+          // hand the agent a host directory. Passed EXPLICITLY rather than
+          // omitted so the absence reads as a decision — the folder bar and the
+          // execution-mode pill are simply not rendered here.
+          workspaceGrantPort={null}
           renderPlusMenu={renderOnboardingPlusMenu}
           skillInstructionPrompt={skillInstructionPrompt}
           mcpServerInstructionPrompt={mcpServerInstructionPrompt}

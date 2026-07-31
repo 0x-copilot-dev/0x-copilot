@@ -36,6 +36,7 @@ import {
   skillInstructionPrompt,
 } from "./composerPrompts";
 import { useRunComposerBindings } from "./useRunComposerBindings";
+import { bridgeWorkspaceGrantPort } from "../workspaceGrantPort";
 import {
   AIRDROP_CLAIMS_CSV_ATTACHMENT_ID,
   resolveAirdropClaimsCsv,
@@ -191,6 +192,11 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       attachmentAdapter={attachmentAdapter}
       dictationPort={desktopDictationPort}
       filePicker={filePicker}
+      // The folder bar belongs HERE above all (PRD-FS-10 §7): this is the
+      // composer a user sees before their first message, which is exactly when
+      // the bar renders. `bridgeWorkspaceGrantPort` memoizes per bridge, so the
+      // in-chat RunComposer and this mount share ONE port, not two.
+      workspaceGrantPort={bridgeWorkspaceGrantPort()}
       renderPlusMenu={renderPlusMenu}
       skillInstructionPrompt={skillInstructionPrompt}
       mcpServerInstructionPrompt={mcpServerInstructionPrompt}

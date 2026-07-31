@@ -7,6 +7,7 @@ import {
   forwardRef,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -23,9 +24,12 @@ import { Icon } from "../icons/Icon";
 import type { FilePickerPort } from "../ports/FilePickerPort";
 import type { DictationPort } from "../ports/DictationPort";
 import type { WorkspaceGrantPort } from "../ports/WorkspaceGrantPort";
-import { AttachmentPill } from "./AttachmentPill";
-import { grantAccessLabel } from "../approvals/presentation";
-import { useWorkspaceFolderGrants } from "./useWorkspaceFolderGrants";
+import {
+  mostRecentFirst,
+  useWorkspaceFolderGrants,
+} from "./useWorkspaceFolderGrants";
+import { WorkspaceFolderBar } from "./WorkspaceFolderBar";
+import { BypassPill, type BypassMode } from "./BypassPill";
 import type { ThinkingDepth } from "./depth";
 import { ModelPill } from "./ModelPill";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
@@ -85,14 +89,47 @@ export interface AssistantComposerProps {
   filePicker: FilePickerPort;
   /**
    * Substrate folder-grant capability — OPTIONAL, and its absence is meaningful.
-   * Supplied (desktop) it adds the `+` menu's Attach Folder row and the granted
-   * folder pills; omitted (web, tests) neither renders, because there is no
-   * folder to grant and a control that cannot work is worse than no control.
+   * Supplied (desktop) it mounts the {@link WorkspaceFolderBar} above the frame
+   * and the {@link BypassPill} in the control row; omitted or null (web, tests)
+   * NEITHER renders, because there is no folder to grant and no ask to bypass,
+   * and a control that cannot work is worse than no control.
    *
    * Not folded into {@link FilePickerPort}: that seam is content upload and
    * deliberately exposes no path. See `ports/WorkspaceGrantPort`.
    */
   workspaceGrantPort?: WorkspaceGrantPort | null;
+  /**
+   * Has this chat already sent a message? HOST-SUPPLIED — never inferred here
+   * (PRD-FS-10 §6.3). The hosts disagree about what counts as a message, so a
+   * transcript-length guess inside the package would be wrong on one of them.
+   *
+   * Drives one thing: the folder bar is orientation ("this is what I'm working
+   * on"), which is needed when STARTING, not mid-conversation where the
+   * transcript already shows what the agent has been touching — so the bar
+   * renders only while this is false.
+   *
+   * Defaults to **true** (bar absent). Every surface that is pre-first-message
+   * by construction goes through `OnboardingComposer`, which passes false; a
+   * host that says nothing is mid-conversation, and the safe default for a
+   * forgotten prop is a missing bar rather than one on the wrong screen.
+   */
+  hasSentFirstMessage?: boolean;
+  /**
+   * Execution mode for this run — selection only. PRD-FS-11 owns the behaviour
+   * and the precedence (message > run > master); this ships the control.
+   */
+  bypassMode?: BypassMode;
+  /**
+   * The Settings master switch, **off by default**. While it is off the pill
+   * renders as a disabled `Manual` and does not offer Bypass at all: an option
+   * that is offered and then ignored is worse than an absent one.
+   */
+  bypassMasterEnabled?: boolean;
+  /**
+   * Selection sink. Its ABSENCE also disables the pill — a host that flips the
+   * master on without wiring this would otherwise offer a choice nothing reads.
+   */
+  onBypassModeChange?: (mode: BypassMode) => void;
   /**
    * Host slot for the `+` plus-menu popover (portal + outside-click). See
    * {@link AssistantComposerPlusMenuSlotArgs}.
@@ -209,12 +246,17 @@ export interface AssistantComposerProps {
 /**
  * Atlas composer. Wraps the single monorepo
  * `@0x-copilot/chat-surface` `<Composer>` with the Atlas-specific
- * `aui-*`-classed bottom bar (plus-menu, connectors trigger, mic, model
- * pill, depth control, send/stop) plus the selected-skills top-bar
- * pills. The chat-surface Composer owns text state, attachments, and
- * the imperative handle (setText/appendText/addAttachment/submit).
- * `@` stays plain text; `/` on an empty composer opens the skills
- * workspace pane (host-owned via onInputKeyDown).
+ * `aui-*`-classed bottom bar plus the selected-skills top-bar pills, and —
+ * where the host has a `WorkspaceGrantPort` and the chat has not started —
+ * the {@link WorkspaceFolderBar} above the frame.
+ *
+ * Control row, left to right (PRD-FS-10 §4.2):
+ *   `+` · connectors · Tools · bypass · … · model · mic · send
+ *
+ * The chat-surface Composer owns text state, attachments, and the imperative
+ * handle (setText/appendText/addAttachment/submit). `@` stays plain text; `/`
+ * on an empty composer opens the skills workspace pane (host-owned via
+ * onInputKeyDown).
  *
  * Substrate touchpoints are injected, not embedded, so this core stays
  * framework-agnostic (`no-restricted-globals` clean): the file picker is
@@ -239,6 +281,10 @@ export const AssistantComposer = forwardRef<
     dictationPort,
     filePicker,
     workspaceGrantPort,
+    hasSentFirstMessage = true,
+    bypassMode = "manual",
+    bypassMasterEnabled = false,
+    onBypassModeChange,
     renderPlusMenu,
     skillInstructionPrompt,
     mcpServerInstructionPrompt,
@@ -320,14 +366,29 @@ export const AssistantComposer = forwardRef<
     workspaceGrantPort !== undefined && workspaceGrantPort !== null;
 
   // Depend on the stable callback, not the state object the hook rebuilds each
-  // render, so the menu row's identity doesn't churn on every keystroke.
+  // render, so the bar's handler identity doesn't churn on every keystroke.
   const requestFolderGrant = folderGrants.requestGrant;
+  const revokeFolderGrant = folderGrants.revokeGrant;
   const attachFolder = useCallback((): void => {
-    // Dismiss first: the host's native folder dialog takes the focus, and a
-    // popover still mounted behind it is a popover that outlives its context.
-    dismissMenu();
     void requestFolderGrant();
-  }, [dismissMenu, requestFolderGrant]);
+  }, [requestFolderGrant]);
+  const revokeFolder = useCallback(
+    (grantId: string): void => {
+      void revokeFolderGrant(grantId);
+    },
+    [revokeFolderGrant],
+  );
+
+  // The bar NAMES one folder, so which one has to be decided here rather than
+  // taken from the broker's list order — see `mostRecentFirst`.
+  const barGrants = useMemo(
+    () => mostRecentFirst(folderGrants.grants, folderGrants.lastGrantedId),
+    [folderGrants.grants, folderGrants.lastGrantedId],
+  );
+
+  // The bar is a capability + a moment: the host must have a grant port, and
+  // the chat must not have started yet.
+  const folderBarVisible = folderControlsVisible && !hasSentFirstMessage;
 
   const openFilePicker = useCallback(
     async (accept: string): Promise<void> => {
@@ -374,40 +435,6 @@ export const AssistantComposer = forwardRef<
     requestAnimationFrame(() => composerRef.current?.focus());
   }
 
-  // Granted folders (and any grant failure) ride the composer's top bar beside
-  // the skill pills. Same row because both answer "what is attached here?" —
-  // different verb on the control, because a folder is the one attachment that
-  // outlives the message: dismissing it REVOKES the agent's access.
-  const folderPills =
-    folderControlsVisible &&
-    (folderGrants.grants.length > 0 || folderGrants.error !== null) ? (
-      <>
-        {folderGrants.grants.map((grant) => (
-          <AttachmentPill
-            key={grant.grantId}
-            attachment={{
-              name: grant.label,
-              // The ACCESS, not a MIME type — it is what this pill claims the
-              // agent can do. `grantAccessLabel` yields null for a mode this
-              // build doesn't recognise, and an empty slot is the honest
-              // render of "I can't say" (never a guessed "Read-only").
-              type: grantAccessLabel(grant.mode) ?? "",
-            }}
-            icon={<Icon name="folder" size={12} />}
-            removeLabel={`Stop sharing ${grant.label} with the agent`}
-            onRemove={() => void folderGrants.revokeGrant(grant.grantId)}
-          />
-        ))}
-        {/* A failed list-read or revoke is SHOWN. The whole point of this
-            subsystem is that filesystem trouble never renders as nothing. */}
-        {folderGrants.error !== null ? (
-          <span className="aui-composer-folder-error" role="status">
-            {folderGrants.error}
-          </span>
-        ) : null}
-      </>
-    ) : null;
-
   const handleInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (event.key !== "/" || event.currentTarget.value.trim().length > 0) {
@@ -420,7 +447,12 @@ export const AssistantComposer = forwardRef<
     [onOpenSkillsPanel, showSlashCue],
   );
 
-  return (
+  // The folder line sits ABOVE the composer frame, not inside it (PRD-FS-10
+  // §4.1) — it is context for what follows, in the place Claude Code and Codex
+  // put the working folder. A FRAGMENT, not a wrapper div: hosts lay the
+  // composer out as a child of their own flex column, and inserting a box
+  // between them would silently restyle every mount that never shows a bar.
+  const composer = (
     <Composer
       ref={setComposerRef}
       className="aui-composer"
@@ -469,7 +501,7 @@ export const AssistantComposer = forwardRef<
       onSubmitError={onSubmitError}
       onCancel={onCancel}
       onInputKeyDown={handleInputKeyDown}
-      hasTopBarContent={selectedSkills.length > 0 || folderPills !== null}
+      hasTopBarContent={selectedSkills.length > 0}
       // Pass `undefined` (not `null`) when there's no topbar content —
       // chat-surface's Composer.tsx checks `topBarSlot !== undefined`
       // for the `data-has-topbar` flag, which the AUI CSS reads to
@@ -477,7 +509,7 @@ export const AssistantComposer = forwardRef<
       // (incorrectly) trip that check and add ~32px of dead space below
       // the action row in the empty state.
       topBarSlot={
-        selectedSkills.length > 0 || folderPills !== null ? (
+        selectedSkills.length > 0 ? (
           <div className="aui-composer-attachments">
             {selectedSkills.map((skill) => (
               <span key={skill.skill_id} className="aui-skill-pill">
@@ -495,7 +527,6 @@ export const AssistantComposer = forwardRef<
                 ) : null}
               </span>
             ))}
-            {folderPills}
           </div>
         ) : undefined
       }
@@ -546,12 +577,6 @@ export const AssistantComposer = forwardRef<
                     onAttachFile={() =>
                       void openFilePicker(fileAttachmentAccept)
                     }
-                    // Undefined when no grant port is wired, which is what
-                    // keeps the row off web (the menu reads the prop, not a
-                    // capability flag it would have to be told about).
-                    onAttachFolder={
-                      folderControlsVisible ? attachFolder : undefined
-                    }
                     onOpenMcp={() => setMenuView("mcp")}
                     onOpenSkills={() => setMenuView("skills")}
                     onEscape={dismissMenu}
@@ -573,18 +598,22 @@ export const AssistantComposer = forwardRef<
             </div>
             {connectorsTrigger ?? null}
             {toolsTrigger ?? null}
-            {models && selectedModel !== undefined && onModelChange ? (
-              <ModelPill
-                models={models}
-                value={selectedModel}
-                onChange={onModelChange}
-                disabled={controlsDisabled}
-                onAddCustom={onAddCustomModel}
-                onAddProviderKey={onAddProviderKey}
-                providerKeysPort={providerKeysPort}
-                onProviderKeyAdded={onProviderKeyAdded}
-                onGetLocalModels={onGetLocalModels}
-                localModelSizes={localModelSizes}
+            {/* The slot the model pill vacated (PRD-FS-10 §4.2): it is the
+             * first place the eye lands, and "will this run ask me?" is the
+             * decision a user re-makes per task where model choice is
+             * set-and-forget. Gated on the same capability as the folder bar —
+             * with no grant port there is nothing to ask about, so on web this
+             * is ABSENT rather than a control that changes nothing. */}
+            {folderControlsVisible ? (
+              <BypassPill
+                mode={bypassMode}
+                enabled={
+                  bypassMasterEnabled &&
+                  onBypassModeChange !== undefined &&
+                  controlsDisabled !== true &&
+                  !disabled
+                }
+                onChange={(next) => onBypassModeChange?.(next)}
               />
             ) : null}
             {depth !== undefined && onDepthChange ? (
@@ -598,7 +627,13 @@ export const AssistantComposer = forwardRef<
           </div>
           {/* Right cluster. `margin-left: auto` (composer.css) is what pushes
            * it flush right now that the static hint row — whose
-           * `margin-left: auto` used to do the pushing — is gone. */}
+           * `margin-left: auto` used to do the pushing — is gone.
+           *
+           * ORDER (PRD-FS-10 §4.2): … model · mic · send. The model pill moved
+           * out of the left cluster but stays LEFT of the mic — mic and send are
+           * the trailing action pair and read as one group, so nothing is
+           * dropped between them. DOM order is visual order, which is also the
+           * tab order: keyboard focus still walks left to right. */}
           <div className="aui-composer-action-wrapper__right">
             {dictation.message !== null ? (
               <span
@@ -609,6 +644,20 @@ export const AssistantComposer = forwardRef<
               >
                 {dictation.message}
               </span>
+            ) : null}
+            {models && selectedModel !== undefined && onModelChange ? (
+              <ModelPill
+                models={models}
+                value={selectedModel}
+                onChange={onModelChange}
+                disabled={controlsDisabled}
+                onAddCustom={onAddCustomModel}
+                onAddProviderKey={onAddProviderKey}
+                providerKeysPort={providerKeysPort}
+                onProviderKeyAdded={onProviderKeyAdded}
+                onGetLocalModels={onGetLocalModels}
+                localModelSizes={localModelSizes}
+              />
             ) : null}
             <button
               type="button"
@@ -691,6 +740,23 @@ export const AssistantComposer = forwardRef<
       // while typing "/" is unaffected — it lives in the action row.
       hintRender={() => null}
     />
+  );
+
+  if (!folderBarVisible) {
+    return composer;
+  }
+
+  return (
+    <>
+      <WorkspaceFolderBar
+        grants={barGrants}
+        error={folderGrants.error}
+        busy={folderGrants.busy}
+        onAttach={attachFolder}
+        onRevoke={revokeFolder}
+      />
+      {composer}
+    </>
   );
 });
 

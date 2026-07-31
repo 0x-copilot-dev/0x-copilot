@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
-"""FS2 — the Attach Folder row must actually render in the desktop composer.
+"""FS2 — the folder affordance is the BAR on the composer, not a `+` menu row.
 
-The row is deliberately gated: ComposerPlusMenu renders it only when the host
-supplies `onAttachFolder`, which AssistantComposer supplies only when a
-`WorkspaceGrantPort` is non-null. Web has no such port and must NOT show it.
-That gate is correct, and it is also exactly the kind of seam where a feature
-can be fully built, fully unit-tested, and still render nowhere — so the only
-honest check is to open the real menu in the real app and look.
+THIS ASSERTION IS INVERTED FROM WHAT IT USED TO BE, deliberately. This file
+previously demanded that an "Attach Folder" row EXIST in the composer's `+`
+menu. PRD-FS-10 deletes that row: a folder grant copies nothing into the message
+and OUTLIVES it (it persists until revoked), so housing it beside "Attach Image"
+taught the wrong model of what a grant is — and two entry points to one
+capability is how the grant model got muddled in the first place. The affordance
+now sits ON the composer frame, above the input, before the first message.
 
-Asserts by ACCESSIBLE NAME, not by a test id: the row is what a user reaches
-for, so if it is unreachable by its label the affordance does not exist for a
-person regardless of what the DOM contains.
+So the journey asks two questions of the real app:
+
+  1. the `+` menu must NOT offer Attach Folder (in the FTUE composer or the Run
+     composer) — the row is gone, not merely deprecated;
+  2. the folder bar must be REACHABLE before the first message, on the FTUE
+     composer, where handing the agent a folder matters most. That mount never
+     received `workspaceGrantPort`, which is why the old affordance appeared in
+     Run and not on first run.
+
+It also checks the visibility rule the PRD calls out as the one that needs care:
+after the first message is sent, the bar is GONE (the grant is not — the bar is
+scoped to the moment, the access is not).
+
+Asserts by ACCESSIBLE NAME / visible text, not by a test id: these controls are
+what a user reaches for, so if they are unreachable by their label the
+affordance does not exist for a person regardless of what the DOM contains.
 """
 
 from __future__ import annotations
@@ -43,10 +57,23 @@ _ROW_TITLES_JS: Final = (
     ".map((t) => t.slice(0, 80)))()"
 )
 
+# The row that must NOT exist any more, anywhere in the open menu.
 _ROW_PROBE_JS: Final = (
     "(() => { const hit = Array.from(document.querySelectorAll('"
     + _MENU_SELECTOR
     + "')).find((el) => /attach folder/i.test(el.textContent || ''));"
+    " if (!hit) return null; const r = hit.getBoundingClientRect();"
+    " return { text: (hit.textContent || '').trim().slice(0, 160),"
+    " visible: r.width > 0 && r.height > 0,"
+    " enabled: !hit.hasAttribute('disabled') }; })()"
+)
+
+# The bar that must exist instead: the composer's folder control, named by what
+# a user reads on it. Empty state says "Attach a folder"; once a folder is
+# granted it says the BASENAME (never a path — that is the §5 rule this also
+# guards, by reporting the text so a leak would be visible in the evidence).
+_BAR_PROBE_JS: Final = (
+    "(() => { const hit = document.querySelector('.aui-folder-bar__attach');"
     " if (!hit) return null; const r = hit.getBoundingClientRect();"
     " return { text: (hit.textContent || '').trim().slice(0, 160),"
     " visible: r.width > 0 && r.height > 0,"
@@ -58,6 +85,12 @@ def _probe_row(session: DriverSession) -> Any:
     """Is an 'Attach Folder' row reachable in whatever menu is open now?"""
 
     return session.evaluate(_ROW_PROBE_JS)
+
+
+def _probe_bar(session: DriverSession) -> Any:
+    """Is the composer's folder bar on screen right now?"""
+
+    return session.evaluate(_BAR_PROBE_JS)
 
 
 def _result(outcome: str, **extra: Any) -> None:
@@ -77,7 +110,7 @@ def main() -> int:
 
     _result("running", provider=provider)
     with _journey_environment():
-        session = DriverSession(name="filesystem-access-fs2-attach-folder")
+        session = DriverSession(name="filesystem-access-fs2-folder-bar")
         found: dict[str, Any] = {}
         try:
             with session:
@@ -88,17 +121,19 @@ def main() -> int:
                 assert session.wait_for(PLUS, timeout_s=45), (
                     "composer plus trigger never appeared"
                 )
+
+                # (2) The bar is on the FTUE composer, before anything is sent.
+                found["ftue_folder_bar"] = _probe_bar(session)
+                session.shot("fs2-02-ftue-folder-bar")
+
+                # (1) …and the `+` menu no longer offers the row.
                 session.click(PLUS)
-                session.shot("fs2-02-plus-menu-open")
-
-                # Read every row the menu offers, by its visible title.
+                session.shot("fs2-03-plus-menu-open")
                 found["ftue_rows"] = session.evaluate(_ROW_TITLES_JS)
-                found["ftue_attach_folder"] = _probe_row(session)
+                found["ftue_attach_folder_row"] = _probe_row(session)
 
-                # The FTUE composer and the Run composer are DIFFERENT mounts.
-                # The desktop host wires RunComposer, so an absent row on the
-                # onboarding screen does not settle the question — leave FTUE
-                # and ask the same question of the composer a user spends its
+                # The FTUE composer and the Run composer are DIFFERENT mounts,
+                # so ask the same question of the composer a user spends their
                 # actual session in.
                 session.press("body", "Escape")
                 session.send_first_run_message(
@@ -107,14 +142,15 @@ def main() -> int:
                 assert session.wait_for(PLUS, timeout_s=90), (
                     "run composer plus trigger never appeared"
                 )
-                session.shot("fs2-03-run-composer")
+                session.shot("fs2-04-run-composer")
+
+                # The visibility rule: gone once the chat has started.
+                found["run_folder_bar"] = _probe_bar(session)
+
                 session.click(PLUS)
-                session.shot("fs2-04-run-composer-menu-open")
-                found["run_attach_folder"] = _probe_row(session)
+                session.shot("fs2-05-run-composer-menu-open")
+                found["run_attach_folder_row"] = _probe_row(session)
                 found["run_rows"] = session.evaluate(_ROW_TITLES_JS)
-                found["attach_folder_present"] = (
-                    found["ftue_attach_folder"] or found["run_attach_folder"]
-                )
         finally:
             out = session.run_dir / "fs2-evidence.json"
             out.write_text(
@@ -123,18 +159,37 @@ def main() -> int:
             print(f"[fs2] evidence -> {out}", flush=True)
             print(f"[fs2] shots    -> {session.run_dir}", flush=True)
 
-    if not found.get("attach_folder_present"):
+    failures: list[str] = []
+    if found.get("ftue_attach_folder_row") or found.get("run_attach_folder_row"):
+        failures.append(
+            "the `+` menu still offers Attach Folder — PRD-FS-10 deletes that row"
+        )
+    bar = found.get("ftue_folder_bar")
+    if not bar or not bar.get("visible"):
+        failures.append(
+            "no folder bar on the FTUE composer — the mount is missing its "
+            "workspaceGrantPort, the exact gap PRD-FS-10 §7 closes"
+        )
+    elif "/" in str(bar.get("text", "")):
+        failures.append(f"the folder bar printed a path: {bar.get('text')!r}")
+    if found.get("run_folder_bar"):
+        failures.append(
+            "the folder bar is still showing after the first message was sent"
+        )
+
+    if failures:
         _result(
             "FAILED",
-            reason="Attach Folder is unreachable in BOTH the FTUE and Run composers",
+            reason="; ".join(failures),
             ftue_rows=len(found.get("ftue_rows") or []),
             run_rows=len(found.get("run_rows") or []),
         )
         return 1
     _result(
         "passed",
-        ftue=bool(found.get("ftue_attach_folder")),
-        run=bool(found.get("run_attach_folder")),
+        ftue_bar=str((found.get("ftue_folder_bar") or {}).get("text", "")),
+        bar_hidden_after_send=True,
+        plus_menu_row_gone=True,
     )
     return 0
 
