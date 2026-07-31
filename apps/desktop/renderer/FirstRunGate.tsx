@@ -57,6 +57,7 @@ import { createFirstRunConnectorsPort } from "./onboarding/firstRunConnectorsPor
 import { createFirstRunProfilePort } from "./onboarding/firstRunProfilePort";
 import { createFirstRunRunsPort } from "./onboarding/firstRunRunsPort";
 import { useOnboardingComposerModels } from "./onboarding/useOnboardingComposerModels";
+import { useDesktopComposerBypassWithTransport } from "./composer/useDesktopComposerBypass";
 import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
 
 import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
@@ -397,6 +398,16 @@ export function FirstRunSurfaceMount({
     [],
   );
 
+  // Execution mode (PRD-FS-10 §4.3). The gate holds its own namespaced
+  // transport rather than a provider's, so it takes the explicit-transport
+  // variant. No `spend()`: a successful first run tears this surface down, and
+  // on a FAILED one the pill must stay where the user put it so the retry does
+  // not silently drop the bypass they chose.
+  const { bypassTrigger, filesystemBypass } =
+    useDesktopComposerBypassWithTransport(transport, {
+      disabled: launchPhase === "starting",
+    });
+
   const { launch: startLaunch, reset: resetLaunch } = launch;
   const handleSubmit = useCallback(
     (payload: {
@@ -414,9 +425,10 @@ export function FirstRunSurfaceMount({
         attachments: toReadableRunAttachments(payload.attachments),
         webSearchEnabled: webSearchRef.current,
         pausedConnectorIds: pausedConnectorIdsRef.current,
+        filesystemBypass,
       });
     },
-    [launchPhase, resetLaunch, startLaunch],
+    [launchPhase, resetLaunch, startLaunch, filesystemBypass],
   );
 
   // P4 — featured 1-click connect. The renderer cannot open an external URL on
@@ -500,6 +512,7 @@ export function FirstRunSurfaceMount({
           startError={launchPhase === "error" ? launch.error : null}
           onDismissError={resetLaunch}
           toolsTrigger={ctx.toolsTrigger}
+          bypassTrigger={bypassTrigger}
           disabled={launchPhase === "starting"}
         />
       );
@@ -514,6 +527,7 @@ export function FirstRunSurfaceMount({
       launchPhase,
       launch.error,
       resetLaunch,
+      bypassTrigger,
     ],
   );
 

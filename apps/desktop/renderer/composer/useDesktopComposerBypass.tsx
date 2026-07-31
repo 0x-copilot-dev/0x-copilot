@@ -35,6 +35,7 @@ import {
   type FilesystemBypassSelection,
   type FilesystemBypassState,
 } from "@0x-copilot/chat-surface";
+import type { Transport } from "@0x-copilot/chat-transport";
 import type { WorkspaceDefaultsResponse } from "@0x-copilot/api-types";
 
 import {
@@ -56,11 +57,33 @@ export interface DesktopComposerBypass {
   readonly spend: () => void;
 }
 
+/**
+ * The pill for a composer mounted UNDER a `TransportProvider` — the Run rail
+ * and the cockpit's empty state.
+ */
 export function useDesktopComposerBypass(
   options: UseDesktopComposerBypassOptions = {},
 ): DesktopComposerBypass {
+  return useDesktopComposerBypassWithTransport(useTransport(), options);
+}
+
+/**
+ * The same pill for a composer that holds its own Transport instead of reading
+ * one from context — the first-run gate, which builds a namespaced
+ * `IpcTransport` for the per-install `first-run.*` channels and therefore sits
+ * outside any provider.
+ *
+ * Split out rather than made conditional inside the hook above: `useTransport`
+ * THROWS when no provider is present, and a hook cannot decide whether to call
+ * it. Passing the dependency in is the ordinary fix — the hook needs a
+ * Transport, not one particular way of obtaining it. Without this the FTUE was
+ * the one composer with no execution-mode control at all.
+ */
+export function useDesktopComposerBypassWithTransport(
+  transport: Transport,
+  options: UseDesktopComposerBypassOptions = {},
+): DesktopComposerBypass {
   const { disabled = false } = options;
-  const transport = useTransport();
   const [masterEnabled, setMasterEnabled] = useState(false);
   const [state, setState] =
     useState<FilesystemBypassState>(MANUAL_BYPASS_STATE);

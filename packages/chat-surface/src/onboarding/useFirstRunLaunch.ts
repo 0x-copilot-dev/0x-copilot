@@ -33,6 +33,7 @@ import type {
 
 import { parseTransportError } from "../errors/transportError";
 import type { StartRunError } from "../destinations/run";
+import type { FilesystemBypassSelection } from "../composer/filesystemBypass";
 import type {
   FirstRunLaunchResult,
   FirstRunRunsPort,
@@ -56,6 +57,8 @@ export interface FirstRunLaunchPayload {
   readonly webSearchEnabled: boolean;
   /** P4 — connectors paused for this run (omitted when none are paused). */
   readonly pausedConnectorIds?: readonly string[];
+  /** PRD-FS-10 §4.3 — the bypass pill's selection at send time. */
+  readonly filesystemBypass?: FilesystemBypassSelection;
 }
 
 export interface UseFirstRunLaunchOptions {
@@ -149,6 +152,7 @@ export function useFirstRunLaunch(
           attachments: payload.attachments,
           webSearchEnabled: payload.webSearchEnabled,
           pausedConnectorIds: payload.pausedConnectorIds,
+          filesystemBypass: payload.filesystemBypass,
         })
         .then((result) => {
           setPhase("handoff");

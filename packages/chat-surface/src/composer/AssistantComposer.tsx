@@ -448,9 +448,10 @@ export const AssistantComposer = forwardRef<
 
   // The folder line sits ABOVE the composer frame, not inside it (PRD-FS-10
   // §4.1) — it is context for what follows, in the place Claude Code and Codex
-  // put the working folder. A FRAGMENT, not a wrapper div: hosts lay the
-  // composer out as a child of their own flex column, and inserting a box
-  // between them would silently restyle every mount that never shows a bar.
+  // put the working folder. When a bar IS shown the pair is wrapped in
+  // `.aui-composer-stack` (see the return), so the page's gap lands outside
+  // the pair rather than between them; when it is not, this element is
+  // returned bare and every mount that never shows a bar is untouched.
   const composer = (
     <Composer
       ref={setComposerRef}

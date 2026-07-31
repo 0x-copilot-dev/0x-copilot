@@ -313,13 +313,22 @@
 .aui-composer-stack {
   display: flex;
   flex-direction: column;
-  /* 2px, not 6. The rendered distance is this PLUS the frame's own top
-     padding, so the measured bar-bottom-to-frame-top was 14px at gap:6 —
-     roughly double what the bar should sit at. Halving the measured result
-     means halving this, not the total. */
-  gap: 2px;
+  /* 6px, and it is the WHOLE bar-to-frame distance — see the margin reset
+     below. Two sources fed this join before (this gap PLUS `.aui-composer`'s
+     own `margin-top: var(--space-sm)`), which is why setting it to 2 measured
+     10 and setting it to 6 measured 14. */
+  gap: 6px;
   min-width: 0;
   width: 100%;
+}
+
+/* The frame's top margin separates it from whatever sits above — in the FTUE
+   the starter chips. Inside the stack the BAR is what sits above, and the
+   stack's gap already spaces them, so the margin would be a second helping.
+   Scoped to the stack, which exists only when the bar is rendered (see the
+   `folderBarVisible` early return), so a composer with no bar keeps its 8px. */
+.aui-composer-stack > .aui-composer {
+  margin-top: 0;
 }
 
 .aui-folder-bar {

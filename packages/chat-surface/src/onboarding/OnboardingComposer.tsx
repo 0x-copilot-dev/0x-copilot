@@ -17,26 +17,15 @@ import {
   useRef,
   type ForwardedRef,
   type ReactElement,
-  type ReactNode,
 } from "react";
 
-import type {
-  McpServer,
-  ModelCatalogModel,
-  Skill,
-} from "@0x-copilot/api-types";
+import type { McpServer, Skill } from "@0x-copilot/api-types";
 
 import {
   AssistantComposer,
-  type AssistantComposerPlusMenuSlotArgs,
-  type AttachmentAdapter,
+  type AssistantComposerProps,
   type ComposerHandle,
 } from "../composer";
-import type { FilePickerPort } from "../ports/FilePickerPort";
-import type { DictationPort } from "../ports/DictationPort";
-import type { WorkspaceGrantPort } from "../ports/WorkspaceGrantPort";
-import type { ProviderKeysPort } from "../settings/data/providerKeys";
-import type { KeyFormConnected } from "./KeyForm";
 import type { StartRunError } from "../destinations/run";
 import {
   FIRST_RUN_SUGGESTIONS,
@@ -51,8 +40,34 @@ export const ONBOARDING_COMPOSER_COPY = {
     'Tell it what you want in plain words — "watch my wallet", "draft the thread"…',
 } as const;
 
-export interface OnboardingComposerProps {
-  // --- host substrate wiring (identical shapes to RunComposer → AssistantComposer) ---
+/**
+ * The composer props this surface simply hands on.
+ *
+ * DELIBERATELY a derivation of {@link AssistantComposerProps} rather than a
+ * hand-written copy of it. The copy is how the FTUE lost features one at a
+ * time: a prop added to the composer had to be re-declared here, destructured
+ * here, and forwarded here, and any of the three being missed produced a
+ * control that worked in the Run rail and was simply absent on first run. It
+ * happened to `workspaceGrantPort` (PRD-FS-10 §7) and then, identically, to
+ * `bypassTrigger`. Deriving means a new composer prop reaches first run by
+ * doing nothing at all.
+ *
+ * Three props are NOT forwardable because this surface fixes them: `minRows`
+ * (the hero's roomy 3 rows, not the rail's 2), `placeholder` (the SPEC hero
+ * copy), and `depthVisible` (off — first run is not where you tune reasoning
+ * depth).
+ *
+ * `connectors` / `skills` are re-declared for their READONLY element types.
+ * Hosts hold these lists in state and pass them straight through; requiring a
+ * mutable array would push a defensive copy onto every call site instead of the
+ * one here.
+ */
+type ForwardedComposerProps = Omit<
+  AssistantComposerProps,
+  "connectors" | "skills" | "depthVisible" | "minRows" | "placeholder"
+>;
+
+export interface OnboardingComposerProps extends ForwardedComposerProps {
   readonly connectors: {
     readonly servers: readonly McpServer[];
     readonly loading: boolean;
@@ -61,130 +76,50 @@ export interface OnboardingComposerProps {
     readonly skills: readonly Skill[];
     readonly loading: boolean;
   };
-  readonly attachmentAdapter?: AttachmentAdapter;
-  readonly dictationPort?: DictationPort;
-  readonly filePicker: FilePickerPort;
   /**
-   * Folder-grant capability, forwarded verbatim to {@link AssistantComposer}
-   * (PRD-FS-10 §7). This mount used to receive NOTHING, which is why the folder
-   * affordance appeared in the Run composer and not on first run — the one
-   * screen where attaching a folder matters most. Desktop passes its bridged
-   * port; web passes null and the folder bar + bypass pill are simply absent.
+   * Required here though optional on the composer: a first-run surface with no
+   * model list has nothing to send with, and silently rendering an empty model
+   * pill is how that goes unnoticed.
    */
-  readonly workspaceGrantPort?: WorkspaceGrantPort | null;
-  /**
-   * Overridable, but false is the structural truth of this surface: it IS the
-   * pre-first-message composer (FTUE state B / the cockpit's empty state) and
-   * the host swaps it away the moment a run starts. Nothing here is inferred
-   * from a transcript — that is the guess PRD-FS-10 §6.3 forbids.
-   */
-  readonly hasSentFirstMessage?: boolean;
-  readonly renderPlusMenu: (a: AssistantComposerPlusMenuSlotArgs) => ReactNode;
-  readonly skillInstructionPrompt: (displayName: string) => string;
-  readonly mcpServerInstructionPrompt: (displayName: string) => string;
-  readonly onShowConnectors: () => void;
-  readonly onOpenSkillsSettings: () => void;
-  readonly onOpenMcpSettings: () => void;
-  readonly selectedSkills?: readonly Skill[];
-  readonly onAttachSkill?: (skill: Skill) => void;
-  readonly onRemoveSkill?: (skillId: string) => void;
-  readonly onClearSkills?: () => void;
-
-  // --- model controls (same as RunComposer; label may carry "· N%" from P2) ---
-  readonly models: Array<ModelCatalogModel & { disabled?: boolean }>;
+  readonly models: NonNullable<AssistantComposerProps["models"]>;
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
-  readonly onAddCustomModel?: (slug: string) => void;
-  /**
-   * Model-popover footer deep-link → Settings → Provider keys. When supplied,
-   * this deliberately takes precedence over the inline key-form fallback.
-   * Forwarded verbatim to {@link AssistantComposer} → `ModelPill`.
-   */
-  readonly onAddProviderKey?: () => void;
-  /**
-   * When set, the composer's ModelPill "Add a provider key" opens an inline
-   * `<KeyForm>` sub-view inside the model popover (saved through this port).
-   * Forwarded verbatim to {@link AssistantComposer}.
-   */
-  readonly providerKeysPort?: ProviderKeysPort;
-  /** Refresh seam fired after a successful inline add-key connect. */
-  readonly onProviderKeyAdded?: (result: KeyFormConnected) => void;
-  /**
-   * Model-popover footer deep-link → Settings → Local models. Pass-through to
-   * {@link AssistantComposer} → `ModelPill`; the package never navigates.
-   */
-  readonly onGetLocalModels?: () => void;
-  /**
-   * Host-joined on-disk byte sizes of installed local models (from
-   * `GET /v1/local-models`). Pass-through to {@link AssistantComposer} →
-   * `ModelPill`, where a local row reads "42 GB · never leaves this machine".
-   */
-  readonly localModelSizes?: Readonly<Record<string, number>>;
 
-  // --- first-run specifics ---
+  // --- first-run specifics (nothing below exists on the composer) ---
   readonly suggestions?: readonly FirstRunSuggestion[];
   /** Host resolves a chip's attachmentId to a File (fetch/IPC lives in the host). */
   readonly resolveAttachment?: (attachmentId: string) => Promise<File | null>;
-  /**
-   * Raised on send; the host binder maps CompleteAttachment[] →
-   * RunAttachmentRequest[] and drives `useFirstRunLaunch.launch()`.
-   */
-  readonly onSubmit: (payload: {
-    text: string;
-    attachments: ReadonlyArray<unknown>;
-  }) => void | Promise<void>;
   /** Inline error above the composer (keyless send etc.) — reuses StartRunError. */
   readonly startError?: StartRunError | null;
   /** Route to the gate's KeyForm on a configuration_error CTA (not Settings). */
   readonly onAddKey?: () => void;
   readonly onDismissError?: () => void;
-  /** Legacy connector-only trigger for hosts without the richer tools adapter. */
-  readonly connectorsTrigger?: ReactNode;
-  /** Run-scoped Tools pill + anchored popover. */
-  readonly toolsTrigger?: ReactNode;
-  readonly disabled?: boolean;
 }
 
 function OnboardingComposerInner(
   props: OnboardingComposerProps,
   ref: ForwardedRef<ComposerHandle>,
 ): ReactElement {
+  // Only what THIS surface reads or reshapes is named; everything else rides
+  // `composerProps` to the composer untouched. Do not re-add a prop here just
+  // to pass it on — that is the drift this shape exists to prevent.
   const {
     connectors,
     skills,
-    attachmentAdapter,
-    dictationPort,
-    filePicker,
-    workspaceGrantPort,
-    hasSentFirstMessage = false,
-    renderPlusMenu,
-    skillInstructionPrompt,
-    mcpServerInstructionPrompt,
-    onShowConnectors,
-    onOpenSkillsSettings,
-    onOpenMcpSettings,
-    selectedSkills,
-    onAttachSkill,
-    onRemoveSkill,
-    onClearSkills,
-    models,
-    selectedModel,
-    onModelChange,
-    onAddCustomModel,
-    onAddProviderKey,
-    providerKeysPort,
-    onProviderKeyAdded,
-    onGetLocalModels,
-    localModelSizes,
     suggestions = FIRST_RUN_SUGGESTIONS,
     resolveAttachment,
-    onSubmit,
     startError = null,
     onAddKey,
     onDismissError,
-    connectorsTrigger,
-    toolsTrigger,
+    // Read here (the chips + error strip disable with the composer) and still
+    // forwarded below.
     disabled = false,
+    // Overridable, but false is the structural truth of this surface: it IS the
+    // pre-first-message composer (FTUE state B / the cockpit's empty state) and
+    // the host swaps it away the moment a run starts. Nothing is inferred from
+    // a transcript — that is the guess PRD-FS-10 §6.3 forbids.
+    hasSentFirstMessage = false,
+    ...composerProps
   } = props;
 
   // Local handle for chip picks, bridged to the forwarded ref (AssistantComposer
@@ -271,43 +206,18 @@ function OnboardingComposerInner(
 
       <AssistantComposer
         ref={setComposerRef}
+        {...composerProps}
         connectors={{
           servers: [...connectors.servers],
           loading: connectors.loading,
         }}
         skills={{ skills: [...skills.skills], loading: skills.loading }}
-        attachmentAdapter={attachmentAdapter}
-        dictationPort={dictationPort}
-        filePicker={filePicker}
-        workspaceGrantPort={workspaceGrantPort}
         hasSentFirstMessage={hasSentFirstMessage}
-        renderPlusMenu={renderPlusMenu}
-        skillInstructionPrompt={skillInstructionPrompt}
-        mcpServerInstructionPrompt={mcpServerInstructionPrompt}
-        onOpenMcpSettings={onOpenMcpSettings}
-        onOpenSkillsSettings={onOpenSkillsSettings}
-        onShowConnectors={onShowConnectors}
-        selectedSkills={selectedSkills}
-        onAttachSkill={onAttachSkill}
-        onRemoveSkill={onRemoveSkill}
-        onClearSkills={onClearSkills}
-        connectorsTrigger={connectorsTrigger}
-        toolsTrigger={toolsTrigger}
-        models={models}
-        selectedModel={selectedModel}
-        onModelChange={onModelChange}
-        onAddCustomModel={onAddCustomModel}
-        onAddProviderKey={onAddProviderKey}
-        providerKeysPort={providerKeysPort}
-        onProviderKeyAdded={onProviderKeyAdded}
-        onGetLocalModels={onGetLocalModels}
-        localModelSizes={localModelSizes}
+        disabled={disabled}
         depthVisible={false}
         // Hero surface — web's roomy 3 rows (not the narrow Run rail's 2).
         minRows={3}
         placeholder={ONBOARDING_COMPOSER_COPY.placeholder}
-        onSubmit={onSubmit}
-        disabled={disabled}
       />
     </div>
   );
