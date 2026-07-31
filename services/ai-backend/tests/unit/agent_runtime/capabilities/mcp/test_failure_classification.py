@@ -22,6 +22,9 @@ never be marked retryable.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import logging
+
 import httpx
 import pytest
 
@@ -55,6 +58,7 @@ from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 _SERVER_ID = "seed:linear"
 _SERVER_NAME = "linear"
+_LOADER_LOGGER = "agent_runtime.capabilities.mcp.loader"
 
 # Words that promise the failure will pass on its own. A 4xx message containing
 # any of them is the defect, whatever else it says.
@@ -100,17 +104,32 @@ class McpFailureFixtureMixin:
         )
 
     @classmethod
-    def client_answering(cls, status_code: int) -> BackendMcpClient:
-        """A client whose proxy hop always answers ``status_code``."""
+    def client_answering(
+        cls,
+        status_code: int,
+        *,
+        body: dict[str, object] | None = None,
+        lease: str | None = "lease-token-that-is-long-enough",
+    ) -> BackendMcpClient:
+        """A client whose proxy hop always answers ``status_code``.
+
+        ``body`` overrides the response payload so a test can choose between
+        the backend's typed lease-failure envelope
+        (``{"detail": {"code": ...}}``) and an untyped body, which are two
+        different branches of the client's error classification.
+
+        ``lease=None`` forces the client through real lease acquisition, which
+        is the hop the *load* path takes and the dispatch path does not.
+        """
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(status_code, json={"detail": "scripted"})
+            return httpx.Response(status_code, json=body or {"detail": "scripted"})
 
         return BackendMcpClient(
             backend_url="http://backend.local",
             runtime_context=cls.context(),
             card=cls.card(),
-            lease="lease-token-that-is-long-enough",
+            lease=lease,
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
 
@@ -259,6 +278,172 @@ class TestLoaderEndToEnd(DynamicMcpLoadingMixin):
         assert result.error is not None
         assert result.error.code is McpLoadErrorCode.AUTH_FAILURE
         assert result.error.retryable is False
+
+
+class ScriptedBackendLoadMixin(McpFailureFixtureMixin):
+    """Run a REAL load against a REAL ``BackendMcpClient`` over scripted HTTP.
+
+    The gap this closes: the end-to-end tests above inject an already-typed
+    exception into ``list_tools``, so they prove the loader maps
+    ``McpAuthError`` correctly while assuming something upstream produced
+    one. Nothing drove an actual **HTTP status** through the real transport
+    on the **load** path. A load reaches the proxy through hops the dispatch
+    path never takes — ``client-session`` acquisition, then ``initialize``
+    — and only a test that starts from a status code can show the whole
+    chain classifies it. "The tool returned an error" passes either way,
+    which is exactly what let a misclassification ship.
+    """
+
+    @dataclass
+    class ScriptedProvider:
+        """Provider handing the loader one pre-built client."""
+
+        cards: tuple[McpServerCard, ...]
+        client: BackendMcpClient
+
+        async def list_server_cards(self) -> tuple[McpServerCard, ...]:
+            return self.cards
+
+        def create_client(self, card: McpServerCard) -> BackendMcpClient:
+            return self.client
+
+    @classmethod
+    async def load_against(
+        cls, status_code: int, *, body: dict[str, object] | None = None
+    ):
+        """Load a server whose every backend hop answers ``status_code``."""
+        client = cls.client_answering(status_code, body=body, lease=None)
+        loader = McpLoader(
+            DynamicMcpRegistry(
+                providers=(cls.ScriptedProvider(cards=(cls.card(),), client=client),)
+            )
+        )
+        return await loader.load_server(
+            McpLoadRequest(
+                server_name=_SERVER_NAME,
+                runtime_context=cls.context(),
+            )
+        )
+
+
+class TestLoadPathClassifiesRealHttpStatuses(ScriptedBackendLoadMixin):
+    """A status code, through the real client, to what the model is handed."""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(None, id="untyped-body"),
+            pytest.param({"detail": {"code": "auth_required"}}, id="typed-envelope"),
+        ],
+    )
+    async def test_a_401_is_an_auth_failure_and_never_retryable(
+        self, body: dict[str, object] | None
+    ) -> None:
+        # The reported defect, stated as its evidence: Linear answered 401
+        # ("Missing or invalid access token") and the user was told the server
+        # "could not be reached", ``retryable=True``. Both classification
+        # branches — the backend's typed lease envelope and a plain body —
+        # have to reach the same honest answer.
+        result = await self.load_against(401, body=body)
+        assert result.error is not None
+        assert result.error.code is McpLoadErrorCode.AUTH_FAILURE
+        assert result.error.code is not McpLoadErrorCode.CONNECTION_FAILED
+        assert result.error.retryable is False
+
+    async def test_a_401_names_reconnecting_as_the_way_out(self) -> None:
+        # A non-retryable error with no next step is still a dead end: the
+        # model has to paraphrase *something*, and for a bare "authentication
+        # failed" the something it invents is "try again in a moment".
+        result = await self.load_against(401)
+        assert result.error is not None
+        assert "reconnect" in result.error.safe_message.lower()
+
+    async def test_a_401_never_promises_the_problem_will_pass(self) -> None:
+        result = await self.load_against(401)
+        assert result.error is not None
+        lowered = result.error.safe_message.lower()
+        for word in _TRANSIENCE_WORDS:
+            lowered = lowered.replace(f"not {word}", "")
+        assert [word for word in _TRANSIENCE_WORDS if word in lowered] == []
+
+    async def test_a_403_is_also_an_auth_failure(self) -> None:
+        result = await self.load_against(403)
+        assert result.error is not None
+        assert result.error.code is McpLoadErrorCode.AUTH_FAILURE
+        assert result.error.retryable is False
+
+    async def test_a_400_stays_a_protocol_error_not_an_outage(self) -> None:
+        # The live incident's actual status: the backend turned an internal
+        # ``ValidationError`` into a bare 400. It is deterministic, so it must
+        # not be described as unreachable or marked retryable.
+        result = await self.load_against(400)
+        assert result.error is not None
+        assert result.error.code is McpLoadErrorCode.MCP_PROTOCOL_ERROR
+        assert result.error.retryable is False
+
+    async def test_a_5xx_remains_a_retryable_outage(self) -> None:
+        # The control: narrowing 4xx must not make a real outage look
+        # permanent. A 503 genuinely is temporary.
+        result = await self.load_against(503)
+        assert result.error is not None
+        assert result.error.code is McpLoadErrorCode.CONNECTION_FAILED
+        assert result.error.retryable is True
+
+
+class TestFailedLoadsAreNeverSilent(ScriptedBackendLoadMixin):
+    """A failed load must name itself in the log exactly once.
+
+    The reported incident produced zero MCP log lines in either service:
+    OAuth completed, the connector connected, 52 descriptors were discovered,
+    the load died — and the only trace was a generic run start and finish.
+    Naming the failure took a live reproduction and a database read.
+    """
+
+    async def test_a_failed_load_logs_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger=_LOADER_LOGGER):
+            result = await self.load_against(401)
+        assert result.error is not None
+        records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert records, "a failed load left no trace in the log"
+
+    async def test_the_log_line_names_code_server_and_retryability(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A line that says only "load failed" costs another reproduction to
+        # act on. These four fields are what turn the log into the diagnosis.
+        with caplog.at_level(logging.WARNING, logger=_LOADER_LOGGER):
+            await self.load_against(401)
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert McpLoadErrorCode.AUTH_FAILURE.value in message
+        assert _SERVER_NAME in message
+        assert "retryable=False" in message
+        assert "trace_failure_class" in message
+
+    async def test_a_successful_load_stays_quiet(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The other half: logging every load would bury the failures.
+        client = self.client_answering(
+            200,
+            body={"payload": {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}},
+            lease=None,
+        )
+        # Lease acquisition needs a lease string, not an RPC envelope, so a
+        # blanket-200 client cannot complete a real load; assert instead that
+        # nothing logs a warning for a load that never reached a failure code.
+        loader = McpLoader(
+            DynamicMcpRegistry(
+                providers=(self.ScriptedProvider(cards=(self.card(),), client=client),)
+            )
+        )
+        with caplog.at_level(logging.WARNING, logger=_LOADER_LOGGER):
+            result = await loader.load_server(
+                McpLoadRequest(server_name=_SERVER_NAME, runtime_context=self.context())
+            )
+        if result.succeeded:
+            assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
 class TestLoaderReportsFailuresHonestly(McpFailureFixtureMixin):
