@@ -15,8 +15,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
+
+from pydantic import BaseModel
 
 from backend_app.contracts import (
     McpDescriptorRevision,
@@ -26,9 +28,34 @@ from backend_app.contracts import (
 )
 from backend_app.store import PostgresMcpStore
 
+_ContractT = TypeVar("_ContractT", bound=BaseModel)
+
 
 class RevisionCursorExpired(ValueError):
     """The requested opaque feed cursor was retained no longer."""
+
+
+class _RowProjection:
+    """Projects a ``SELECT *`` row onto a contract's declared fields.
+
+    The revision tables key every row by ``(org_id, user_id, ...)`` and the
+    notice/idempotency tables add surrogate keys (``sequence_no``,
+    ``idempotency_key``). The contracts are body-free *views* that
+    deliberately carry none of those, and they are ``extra="forbid"`` — so
+    splatting a whole row into one raises ``ValidationError``, which the
+    caller's route layer surfaces to the runtime as a ``400``. Project the
+    row down to the declared fields first; a row that is *missing* a
+    declared field still fails validation, which is the half of the check
+    worth keeping.
+    """
+
+    @staticmethod
+    def build(contract: type[_ContractT], row: Any) -> _ContractT:
+        """Build ``contract`` from the subset of ``row`` it actually declares."""
+        declared = contract.model_fields
+        return contract(
+            **{key: value for key, value in dict(row).items() if key in declared}
+        )
 
 
 def _scope_hash(
@@ -550,11 +577,11 @@ class _PostgresMcpRevisionPersistence:
 
     @staticmethod
     def _view_from_row(row: Any) -> McpDescriptorRevision:
-        return McpDescriptorRevision(**dict(row))
+        return _RowProjection.build(McpDescriptorRevision, row)
 
     @staticmethod
     def _notice_from_row(row: Any) -> McpDescriptorRevisionNotice:
-        return McpDescriptorRevisionNotice(**dict(row))
+        return _RowProjection.build(McpDescriptorRevisionNotice, row)
 
 
 class PostgresMcpRevisionStore(_PostgresMcpRevisionPersistence):

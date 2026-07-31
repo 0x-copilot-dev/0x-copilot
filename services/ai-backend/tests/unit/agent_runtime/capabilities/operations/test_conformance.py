@@ -172,6 +172,7 @@ class TestOperationConformance:
         assert {registration.op for registration in actual} == {
             "web_search",
             "ask_a_question",
+            "list_connected_servers",
             "suggest_mcp_connector",
             "run_code_mode",
             "run_in_sandbox",

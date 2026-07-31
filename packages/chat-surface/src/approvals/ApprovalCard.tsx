@@ -59,6 +59,9 @@ export function ApprovalCard({
     <Card
       className={classNames("atlas-approval-card", className)}
       data-status="waiting"
+      // Keeps the standing rule available to assistive tech now that it no
+      // longer occupies a visible row.
+      aria-description={reassurance}
     >
       <header className="atlas-approval-card__head">
         <span className="atlas-approval-card__icon" aria-hidden="true">
@@ -98,13 +101,13 @@ export function ApprovalCard({
 
       <div className="atlas-approval-card__actions">{actions}</div>
 
-      <footer className="atlas-approval-card__foot">
-        <span className="atlas-approval-card__foot-icon" aria-hidden="true">
-          <ShieldGlyph />
-        </span>
-        <span>{reassurance}</span>
-      </footer>
-
+      {/* The shield + standing-rule footer was removed deliberately: it repeated
+          the same sentence on every card, so it stopped being read and only
+          spent vertical space in the chat column. The card's own title, path
+          row and Reject/Approve buttons already say an approval is required —
+          the rule does not need restating each time. `reassurance` is still
+          accepted and is rendered as the card's accessible description, so the
+          claim survives for screen readers without occupying a row. */}
       {details ? (
         <ActivityDetails label={detailsLabel}>{details}</ActivityDetails>
       ) : null}

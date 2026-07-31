@@ -95,11 +95,26 @@ export function toRendererGrant(grant: Grant): RendererGrant {
 /**
  * Broker-audience projection — the grant shape returned over the loopback
  * broker's grant-management routes (`/v1/grants/list`, `/v1/grants/snapshot`)
- * to the semi-trusted runtime worker. Like `RendererGrant` it carries NO host
- * `root`; the worker keys every FS op off `grantId`, and `mount` is an OPAQUE,
- * per-boot, non-reversible handle to the grant's virtual root so the worker can
- * tell which grants share a physical tree WITHOUT ever learning that tree. The
- * canonical `root` stays main-side for internal FS resolution only (G1).
+ * to the semi-trusted runtime worker. `mount` is an OPAQUE, per-boot,
+ * non-reversible handle to the grant's virtual root, so the worker can tell
+ * which grants share a physical tree without deriving that tree from the id.
+ *
+ * `root` — the deliberate reversal of G1, for the BROKER audience only
+ * ---------------------------------------------------------------------
+ * G1 originally withheld the host path here so a compromised worker could not
+ * learn where a grant pointed. That stopped buying anything once host reads
+ * moved to deepagents' `FilesystemBackend`: the worker now resolves and reads
+ * real host paths itself, so it necessarily holds them. Withholding the root
+ * only hid it from the component that needed it, and the cost was concrete —
+ * the worker could not turn a granted folder into an `allow` rule, so every
+ * read of a folder the user had EXPLICITLY ATTACHED still stopped and asked
+ * again. Attaching a folder bought the user nothing.
+ *
+ * `RendererGrant` is UNCHANGED and stays path-free. The renderer never reads
+ * files, has no use for a host path, and is the likelier exfiltration surface;
+ * that projection is guarded at compile time by `type PathFree<T>` in
+ * `WorkspaceGrantPort.test.ts`. The reversal is scoped to the audience that
+ * performs the read.
  */
 export interface BrokerGrant {
   readonly grantId: string;
@@ -108,6 +123,11 @@ export interface BrokerGrant {
   readonly status: GrantStatus;
   /** Opaque per-boot virtual-root id. NEVER the host path. */
   readonly mount: string;
+  /**
+   * The grant's canonical host root. Consumed by the worker to build the
+   * filesystem `allow` rule that stops this folder prompting on every read.
+   */
+  readonly root: string;
 }
 
 /** Path-free projection of a `GrantSnapshot` for the broker audience. */
@@ -119,9 +139,14 @@ export interface BrokerGrantSnapshot {
 
 /**
  * Project an internal `Grant` to its broker-audience view. `mount` is supplied
- * by the broker (it owns the per-boot salt used to derive the opaque id); this
- * function is the single place that decides WHICH fields cross to the worker —
- * and `root` is not one of them.
+ * by the broker (it owns the per-boot salt used to derive the opaque id).
+ *
+ * This function is the single place that decides WHICH fields cross to the
+ * worker, which is why the G1 reversal is exactly one line here: `root` now
+ * crosses, because the worker performs the read and cannot allow-list a folder
+ * it cannot name. See `BrokerGrant` for why that is safe and what stayed
+ * path-free. Keep this the only projection site — the renderer's equivalent
+ * (`toRendererGrant`) must NOT gain a root.
  */
 export function toBrokerGrant(grant: Grant, mount: string): BrokerGrant {
   return {
@@ -130,6 +155,7 @@ export function toBrokerGrant(grant: Grant, mount: string): BrokerGrant {
     label: grant.label,
     status: grant.status,
     mount,
+    root: grant.root,
   };
 }
 

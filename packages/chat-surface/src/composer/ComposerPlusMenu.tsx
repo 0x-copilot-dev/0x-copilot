@@ -34,6 +34,10 @@
 // spreadsheets, slid…", so they are trimmed to design-length fragments here.
 // Row TITLES are byte-unchanged (`Attach Image` / `Attach File` / `MCP Servers`
 // / `Skills`) — the file-picker tests match the menuitem accessible name.
+//
+// `Attach Folder` is the one CONDITIONAL row: it renders only when the caller
+// passes `onAttachFolder`, i.e. only where a `WorkspaceGrantPort` exists (see
+// that prop). The four unconditional rows keep their identity and their count.
 
 import type { McpServer, Skill } from "@0x-copilot/api-types";
 import type {
@@ -170,6 +174,7 @@ export function ComposerPlusMenu({
   onBack,
   onAttachImage,
   onAttachFile,
+  onAttachFolder,
   onOpenMcp,
   onOpenSkills,
   onOpenMcpSettings,
@@ -192,6 +197,14 @@ export function ComposerPlusMenu({
   onBack: () => void;
   onAttachImage: () => void;
   onAttachFile: () => void;
+  /**
+   * Grant the agent a real folder. OPTIONAL, and the row renders only when it
+   * is supplied: the capability is a `WorkspaceGrantPort` the desktop host
+   * implements and web has none, so on web there is no folder to attach and a
+   * row that opens nothing is worse than an absent row. Same gating idea as the
+   * `DeploymentProfile` rail — the host's capability decides, not this file.
+   */
+  onAttachFolder?: () => void;
   onOpenMcp: () => void;
   onOpenSkills: () => void;
   onOpenMcpSettings: () => void;
@@ -359,6 +372,19 @@ export function ComposerPlusMenu({
           hint="Attach a file"
           onClick={onAttachFile}
         />
+        {/* A folder is not an upload: nothing is copied into the message, the
+            agent is handed durable read access to a place on this computer. It
+            sits with the attach actions because that is where a user looks for
+            "let it see my stuff", but the sub-line has to say what it costs. */}
+        {onAttachFolder !== undefined ? (
+          <MenuRow
+            badge={<Icon name="folder" size={13} />}
+            title="Attach Folder"
+            sub="grant one folder · revoke anytime"
+            hint="Grant the agent access to a folder on this computer"
+            onClick={onAttachFolder}
+          />
+        ) : null}
         <div className="ui-pop__div" />
         <div className="ui-pop__grp">Tools &amp; skills</div>
         <MenuRow

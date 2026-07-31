@@ -8,20 +8,19 @@
  *    collapses to content height and the UI floats in a partially-filled
  *    window. `index.html` sets none of this.
  *
- * 2) macOS `titleBarStyle: "hiddenInset"` (see main/window.ts) renders the
- *    traffic-light buttons OVER the content with no reserved space, so the app
- *    rail's brand mark + top icons collide with the close/minimise/zoom
- *    buttons (and the brand turbine looks "missing" behind them). Reserve a
- *    draggable titlebar strip at the top: content sits below it, and dragging
- *    the strip moves the window. The app itself opts back out of the drag
- *    region so every control stays clickable.
+ * 2) INTEGRATE THE NATIVE TITLE BAR. macOS `titleBarStyle: "hiddenInset"` (see
+ *    main/window.ts) renders the traffic-light buttons over web content. The
+ *    compact application header is therefore also the native title bar: in a
+ *    window, the turbine clears the traffic lights horizontally; in native
+ *    fullscreen, the controls disappear and the turbine returns to the rail.
+ *    There is no permanently reserved vertical strip.
  *
  * 3) THE DOCUMENT NEVER SCROLLS. The window is a fixed application frame:
  *    `.desktop-window-frame` is `height: 100%; overflow: hidden` and every
  *    scroll region lives inside it. Nothing should ever be reachable by
- *    scrolling the DOCUMENT — if it is, the reserved titlebar strip and the
- *    frame's own border scroll away with it and the whole shell can be dragged
- *    out of the window. Declaring the invariant here makes that structurally
+ *    scrolling the DOCUMENT — if it is, the frame's own border scrolls away
+ *    with it and the whole shell can be dragged out of the window. Declaring
+ *    the invariant here makes that structurally
  *    impossible rather than merely unintended, so a single escaped
  *    absolutely-positioned descendant (one whose containing block resolved to
  *    the initial containing block instead of its own component, and which the
@@ -47,22 +46,16 @@ body {
 }
 
 :root {
-  /* Height of the reserved macOS traffic-light strip. */
-  --titlebar-inset: 32px;
+  /* RunHeader is the compact window bar. The generic shell topbar is taller,
+     but shares the same integrated native-control treatment. */
+  --desktop-titlebar-height: 38px;
+  --desktop-traffic-light-clearance: 70px;
 }
 
 #root {
   box-sizing: border-box;
-  padding-top: var(--titlebar-inset);
-  /* Seamless: the reserved strip matches the near-black app canvas rather than
-     the body fallback, so there is no seam above the rail/header. */
+  padding-top: 0;
   background: var(--color-bg, #09090b);
-  -webkit-app-region: drag;
-}
-
-/* The application (the shell / login card) is fully interactive — only the
-   bare reserved strip above it drags the window. */
-#root > * {
   -webkit-app-region: no-drag;
 }
 
@@ -85,6 +78,79 @@ body {
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 70%),
     0 40px 100px -30px rgb(0 0 0 / 80%);
+}
+
+/* The real app headers double as the draggable native title bar. Interactive
+   descendants opt back out so mode tabs, search, wallet controls, and links
+   keep receiving pointer input. */
+.desktop-window-frame [data-testid="run-header"],
+.desktop-window-frame [data-component="topbar"],
+.desktop-window-frame .fr-top {
+  -webkit-app-region: drag;
+}
+
+.desktop-window-frame [data-testid="run-header"] button,
+.desktop-window-frame [data-testid="run-header"] a,
+.desktop-window-frame [data-component="topbar"] button,
+.desktop-window-frame [data-component="topbar"] a,
+.desktop-window-frame .fr-top button,
+.desktop-window-frame .fr-top a {
+  -webkit-app-region: no-drag;
+}
+
+/* In the shell, the rail and main header meet on one uninterrupted title-bar
+   band. The divider begins below that band instead of cutting through the
+   native traffic-light cluster. */
+.desktop-window-frame [data-component="app-rail"] {
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+  padding-top: 3px !important;
+  border-right: 0 !important;
+}
+
+.desktop-window-frame [data-component="app-rail"]::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: var(--desktop-titlebar-height);
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border);
+  pointer-events: none;
+}
+
+/* Windowed macOS: place the turbine just after the native traffic lights while
+   preserving its original flex box, so the first destination still begins
+   below the title bar. The button is already position:relative, therefore its
+   z-index keeps it above the adjacent header's painted background. */
+.desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
+  [data-rail-brand] {
+  z-index: 2;
+  transform: translateX(var(--desktop-traffic-light-clearance));
+}
+
+/* The ordinary destination topbar has a left-aligned page title. Clear the
+   windowed turbine there; RunHeader's product identity is centred and needs no
+   equivalent padding. */
+.desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
+  [data-component="topbar"] {
+  padding-left: calc(var(--desktop-traffic-light-clearance) + 30px) !important;
+}
+
+/* First-run owns its own top bar rather than ChatShell's rail/header pair. Its
+   brand clears the same native controls in a window and returns flush-left in
+   fullscreen. */
+.desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
+  .fr-top {
+  padding-left: calc(var(--desktop-traffic-light-clearance) + 16px);
+}
+
+/* Native fullscreen has no rounded window corners or external shadow. */
+.desktop-window-frame[data-full-screen="true"] {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* Both bootstrap's full shell and its routed Run outlet are normal desktop

@@ -50,7 +50,11 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
     StreamEventSource,
 )
-from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
+from agent_runtime.execution.tool_outcomes import (
+    ToolErrorCode,
+    ToolInvocationOutcome,
+    ToolOutcome,
+)
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
@@ -883,6 +887,20 @@ class RuntimeRunHandler:
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             return
+        except asyncio.CancelledError:
+            # Cancellation is a BaseException, so ``except Exception`` below
+            # never saw it and in-flight tool calls were left open on this
+            # path — the ledger's third terminal case, and the one a worker
+            # shutdown takes. Reconcile, then re-raise so cancellation keeps
+            # propagating: the run's terminal status and event stay owned by
+            # the cancel handler, which is the only thing that knows the run
+            # was cancelled rather than killed.
+            await self._reconcile_inflight_tool_calls(
+                run,
+                outcome=ToolOutcome.CANCELLED,
+                error_code=ToolErrorCode.TOOL_CANCELLED,
+            )
+            raise
         except Exception as exc:
             await self._reconcile_inflight_tool_calls(
                 run,
@@ -2485,6 +2503,16 @@ class RuntimeRunHandler:
                     subagent_id=entry.subagent_id,
                 )
                 ledger.observed_settled(entry.call_id)
+                # Close the DURABLE row too. Emitting the synthetic events
+                # without this is what left a finished run holding invocations
+                # still marked ``running``, with no record of the failure that
+                # ended them — so the one store built to explain a failed tool
+                # call explained nothing.
+                await self.stream_event_mapper.message_processor.close_tool_invocation(
+                    run=run,
+                    call_id=entry.call_id,
+                    **ToolInvocationOutcome.from_result_payload(payload),
+                )
             except Exception:
                 logging.getLogger(__name__).warning(
                     "tool_call_reconcile.failed run=%s call_id=%s outcome=%s",

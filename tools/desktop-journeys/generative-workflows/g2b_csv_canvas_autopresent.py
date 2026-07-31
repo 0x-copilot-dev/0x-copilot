@@ -28,7 +28,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _lib import DriverSession
+from _lib import EXIT_SKIPPED, SOURCE_TARGET, DriverSession
 from g2_csv_lifecycle import (
     CREATE_PROMPT,
     PreflightSkip,
@@ -97,11 +97,13 @@ def _assert_canvas_presents_without_navigation(session: DriverSession) -> None:
 
 def main() -> int:
     try:
-        _preflight_staged_runtime()
+        # Source target: DriverSession below launches the checkout's
+        # apps/desktop, so require the checkout's stage, not ~/.0xcopilot.
+        _preflight_staged_runtime(target=SOURCE_TARGET)
         provider, key = _byok_provider()
     except PreflightSkip as exc:
         _result("skipped", str(exc))
-        return 0
+        return EXIT_SKIPPED
 
     _result("running", f"canvas auto-present; provider={provider}")
     with _journey_environment():

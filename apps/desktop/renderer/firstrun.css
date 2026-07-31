@@ -15,18 +15,21 @@
  * front door rendered at the full 640px. Only the two overrides below are real.
  */
 
-/* `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
+/* shadow-ok: the shared sheet's `.fr` sizes the surface for a scrolling web
+ * document. The desktop window is a clipped application frame rather than a
+ * scrolling document, so the shared height must be re-based here. Substrate
+ * delta, not a second copy of the shared chrome — see below and
+ * tools/check_css_selector_shadowing.py.
+ *
+ * `min-height: 0` is load-bearing, not tidying. The shared surface stylesheet
  * sizes `.fr` with `min-height: 100vh`, which is right for a web host whose
  * DOCUMENT scrolls. The desktop document never scrolls (desktop.css invariant 3)
- * and this surface sits inside `.desktop-window-frame`, whose content box is one
- * titlebar inset — 33px with the frame's hairline borders — SHORTER than the
- * viewport. A `100vh` box therefore hangs past the frame and has that tail
- * CLIPPED by the frame's `overflow: hidden`; because min-height beats height,
- * `height: 100%` alone does not save it, and internal `overflow: auto` cannot
- * scroll a tail that was never inside the scrollport. Measured live at 1200x600
- * and 1200x420: exactly 33px of the surface, including its footer, was
- * unreachable before this line. Everything else about `.fr` (flex column,
- * overflow, ground, type) comes from the shared sheet — do not restate it. */
+ * and this surface sits inside `.desktop-window-frame`. A `100vh` box can hang
+ * past that bordered frame and have its tail CLIPPED by `overflow: hidden`;
+ * because min-height beats height, `height: 100%` alone does not save it, and
+ * internal `overflow: auto` cannot scroll a tail that was never inside the
+ * scrollport. Everything else about `.fr` (flex column, overflow, ground,
+ * type) comes from the shared sheet — do not restate it. */
 .fr {
   height: 100%;
   min-height: 0;

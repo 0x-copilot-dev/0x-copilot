@@ -807,6 +807,14 @@
   font-size: var(--font-size-2xs);
 }
 
+/* A folder grant that could not be read, made, or revoked. It sits in the pill
+   row rather than replacing it, because the pills that ARE known stay true. */
+.aui-composer-folder-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  align-self: center;
+}
+
 .aui-skill-pill {
   align-items: center;
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);

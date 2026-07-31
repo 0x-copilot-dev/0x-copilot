@@ -101,6 +101,7 @@ import {
   bridgeMcpAuthDeps,
   createDesktopMcpAuthPort,
 } from "./desktopMcpAuthPort";
+import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -1043,6 +1044,18 @@ export function RunBinder({
     return deps === undefined ? undefined : createDesktopMcpAuthPort(deps);
   }, [notify, transport]);
 
+  // The mid-run folder ask. Same port object the composer's folder row uses
+  // (`bridgeWorkspaceGrantPort` memoizes per bridge), because the two are one
+  // capability seen from two places: a grant taken here shows up as a pill
+  // there, and revoking that pill takes this run's access away too.
+  //
+  // The cockpit needs it in its own right: when the agent hits a path outside
+  // granted scope the run pauses on a `WorkspaceGrantCard`, and this port is what
+  // that card reads to decide it can be ANSWERED. Without it the ask renders
+  // inert — which is how a refusal turns back into a dead end — and the run only
+  // resumes after a real grant, never on an approve alone.
+  const workspaceGrantPort = bridgeWorkspaceGrantPort();
+
   // Composer chrome ports: the inline Tools popover's MCP surface (the shared
   // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
   // surface. Both are stable per transport, so memoize.
@@ -1259,6 +1272,8 @@ export function RunBinder({
       // RESOLVES here, so the connected state is reported directly rather than
       // recovered from a callback route.
       mcpAuthPort={mcpAuthPort}
+      // Real host folders, granted not assumed — see the binding above.
+      workspaceGrantPort={workspaceGrantPort}
       connectedConnectorServerId={connectedConnectorServerId}
       failedConnector={failedConnector}
       // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron

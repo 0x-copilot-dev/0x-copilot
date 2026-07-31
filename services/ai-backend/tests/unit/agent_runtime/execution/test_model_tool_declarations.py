@@ -109,6 +109,7 @@ class ComposedSurfaceMixin:
         "load_skill",
         "load_prior_tool_result",
         "ask_a_question",
+        "list_connected_servers",
         "suggest_mcp_connector",
         "run_code_mode",
         "run_in_sandbox",
@@ -131,6 +132,9 @@ class ComposedSurfaceMixin:
             "agent_runtime.capabilities.tools:load_prior_tool_result"
         ),
         "ask_a_question": "agent_runtime.capabilities.tools:ask_a_question",
+        "list_connected_servers": (
+            "agent_runtime.capabilities.discovery:list_connected_servers"
+        ),
         "suggest_mcp_connector": (
             "agent_runtime.capabilities.discovery:suggest_mcp_connector"
         ),
