@@ -24,6 +24,10 @@ import type {
   ConnectorAvailability,
   ConnectorCapabilitySummary,
 } from "./connectors";
+// Reused, not redeclared: the desktop start-oauth body and the MCP
+// create/update bodies must describe the same client or the two paths could
+// drift into disagreeing about what a pre-registered client is.
+import type { McpOAuthClientConfigRequest } from "./index";
 
 // ---------------------------------------------------------------------------
 // Where the desktop should receive the OAuth code.
@@ -74,6 +78,17 @@ export type DesktopRequestedProductScope = "read" | "draft";
 export interface DesktopStartConnectorOAuthRequest {
   readonly callback: DesktopConnectorCallback;
   readonly requested_product_scope: DesktopRequestedProductScope;
+  /**
+   * Pre-registered OAuth client for a vendor that supports neither RFC 8414
+   * discovery nor RFC 7591 dynamic registration — every profile shipped in
+   * `desktop_profiles.yaml` is one. Without it such a connector fails with
+   * `connector_oauth_client_required`; supplying it once persists the client
+   * onto the MCP record (secret encrypted into the TokenVault), so later
+   * connects can omit it.
+   *
+   * OPTIONAL: a connector whose discovery works must never be made to ask.
+   */
+  readonly oauth_client?: McpOAuthClientConfigRequest;
 }
 
 /**

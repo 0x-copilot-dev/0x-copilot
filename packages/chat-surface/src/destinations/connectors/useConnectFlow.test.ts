@@ -7,7 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ConnectorSlug } from "@0x-copilot/api-types";
 
-import { useConnectFlow, type UseConnectFlowOptions } from "./useConnectFlow";
+import {
+  ConnectOAuthClientRequiredError,
+  useConnectFlow,
+  type UseConnectFlowOptions,
+} from "./useConnectFlow";
 
 /** A deferred promise so a test can hold the flow in its `pending` phase. */
 function deferred<T>() {
@@ -112,5 +116,77 @@ describe("useConnectFlow", () => {
     });
     expect(view.result.current.open).toBe(true);
     expect(view.result.current.error).toBe("nope");
+  });
+});
+
+describe("useConnectFlow — pre-registered OAuth client", () => {
+  const SLUG = "atlassian" as ConnectorSlug;
+
+  it("holds the slug instead of surfacing an error when a client is required", async () => {
+    // The distinction that makes the form possible: this is not "connect
+    // failed", it is "connect needs one more input".
+    const authorize = vi.fn(() =>
+      Promise.reject(new ConnectOAuthClientRequiredError(SLUG)),
+    );
+    const { view } = setup({ authorize });
+    await act(async () => {
+      view.result.current.onSelectEntry(SLUG);
+      await Promise.resolve();
+    });
+    expect(view.result.current.clientRequiredSlug).toBe(SLUG);
+    expect(view.result.current.error).toBeNull();
+    expect(view.result.current.pending).toBe(false);
+    expect(view.result.current.connectingSlug).toBeNull();
+  });
+
+  it("retries the SAME slug with the supplied client", async () => {
+    const authorize = vi
+      .fn()
+      .mockRejectedValueOnce(new ConnectOAuthClientRequiredError(SLUG))
+      .mockResolvedValueOnce(undefined);
+    const { view } = setup({ authorize });
+    await act(async () => {
+      view.result.current.onSelectEntry(SLUG);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      view.result.current.submitOAuthClient({ client_id: "cid" });
+      await Promise.resolve();
+    });
+    expect(authorize).toHaveBeenNthCalledWith(2, {
+      slug: SLUG,
+      oauthClient: { client_id: "cid" },
+    });
+    expect(view.result.current.clientRequiredSlug).toBeNull();
+  });
+
+  it("ignores a client submitted when nothing is waiting for one", () => {
+    const { authorize, view } = setup();
+    act(() => view.result.current.submitOAuthClient({ client_id: "cid" }));
+    expect(authorize).not.toHaveBeenCalled();
+  });
+
+  it("a non-client failure still surfaces as an error", async () => {
+    const authorize = vi.fn(() => Promise.reject(new Error("boom")));
+    const { view } = setup({ authorize });
+    await act(async () => {
+      view.result.current.onSelectEntry(SLUG);
+      await Promise.resolve();
+    });
+    expect(view.result.current.error).toBe("boom");
+    expect(view.result.current.clientRequiredSlug).toBeNull();
+  });
+
+  it("closing the flow clears the waiting-for-client state", async () => {
+    const authorize = vi.fn(() =>
+      Promise.reject(new ConnectOAuthClientRequiredError(SLUG)),
+    );
+    const { view } = setup({ authorize });
+    await act(async () => {
+      view.result.current.onSelectEntry(SLUG);
+      await Promise.resolve();
+    });
+    act(() => view.result.current.closeConnect());
+    expect(view.result.current.clientRequiredSlug).toBeNull();
   });
 });

@@ -212,3 +212,216 @@ describe("<ConnectModal>", () => {
     });
   });
 });
+
+describe("ConnectModal — pre-registered OAuth client step", () => {
+  const CATALOG = [
+    {
+      slug: "atlassian" as ConnectorSlug,
+      display_name: "Atlassian",
+      description: "Jira issues and Confluence pages.",
+    },
+  ];
+
+  // The regression this guard exists for: a client-required stop clears BOTH
+  // `pending` and `error`, which is exactly the pair the modal reads as
+  // "OAuth succeeded". Without the guard it advances to the permission step
+  // for a connector that never authorized anything.
+  it("does not mistake a client-required stop for OAuth success", () => {
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={vi.fn()}
+        pending={false}
+        error={null}
+        clientRequiredSlug={"atlassian" as ConnectorSlug}
+        onSubmitOAuthClient={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Atlassian"));
+    expect(screen.getByTestId("connect-client-form")).toBeInTheDocument();
+    expect(screen.queryByTestId("connect-confirm")).toBeNull();
+  });
+
+  it("submits the client the user typed", () => {
+    const onSubmitOAuthClient = vi.fn();
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={vi.fn()}
+        clientRequiredSlug={"atlassian" as ConnectorSlug}
+        onSubmitOAuthClient={onSubmitOAuthClient}
+      />,
+    );
+    fireEvent.click(screen.getByText("Atlassian"));
+    fireEvent.change(screen.getByPlaceholderText("client_id"), {
+      target: { value: "my-client" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("client_secret"), {
+      target: { value: "my-secret" },
+    });
+    fireEvent.submit(screen.getByTestId("connect-client-form"));
+    expect(onSubmitOAuthClient).toHaveBeenCalledWith(
+      {
+        client_id: "my-client",
+        client_secret: "my-secret",
+        token_endpoint_auth_method: "client_secret_post",
+      },
+      // Loopback is the default; a provider registered against the fixed
+      // deep-link URI is the case the next test covers.
+      "loopback",
+    );
+  });
+
+  // The redirect the client was registered against is not cosmetic: a provider
+  // that demands one exact callback URL rejects the varying loopback port
+  // outright, so the client alone cannot unblock it.
+  it("carries the deep-link redirect choice through to the host", () => {
+    const onSubmitOAuthClient = vi.fn();
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={vi.fn()}
+        clientRequiredSlug={"atlassian" as ConnectorSlug}
+        onSubmitOAuthClient={onSubmitOAuthClient}
+      />,
+    );
+    fireEvent.click(screen.getByText("Atlassian"));
+    fireEvent.change(screen.getByPlaceholderText("client_id"), {
+      target: { value: "my-client" },
+    });
+    fireEvent.change(screen.getByTestId("connect-client-callback-mode"), {
+      target: { value: "deep_link" },
+    });
+    fireEvent.submit(screen.getByTestId("connect-client-form"));
+    expect(onSubmitOAuthClient).toHaveBeenCalledWith(
+      expect.objectContaining({ client_id: "my-client" }),
+      "deep_link",
+    );
+  });
+
+  it("refuses an empty client id", () => {
+    const onSubmitOAuthClient = vi.fn();
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={vi.fn()}
+        clientRequiredSlug={"atlassian" as ConnectorSlug}
+        onSubmitOAuthClient={onSubmitOAuthClient}
+      />,
+    );
+    fireEvent.click(screen.getByText("Atlassian"));
+    fireEvent.submit(screen.getByTestId("connect-client-form"));
+    expect(onSubmitOAuthClient).not.toHaveBeenCalled();
+    expect(screen.getByTestId("connect-client-error")).toBeInTheDocument();
+  });
+});
+
+describe("ConnectModal — one flow from row or CTA", () => {
+  const CATALOG = [
+    {
+      slug: "atlassian" as ConnectorSlug,
+      display_name: "Atlassian",
+      description: "Jira issues and Confluence pages.",
+    },
+    {
+      slug: "linear" as ConnectorSlug,
+      display_name: "Linear",
+      description: "Issues, projects, and cycles.",
+    },
+  ];
+
+  // A row connect used to bypass the modal entirely, which silently skipped the
+  // access-mode step — so the same action asked less of the user depending on
+  // which button they pressed.
+  it("an initial entry picks itself and authorizes on open", () => {
+    const onSelectEntry = vi.fn();
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={onSelectEntry}
+        initialEntrySlug={"linear" as ConnectorSlug}
+        pending
+      />,
+    );
+    expect(onSelectEntry).toHaveBeenCalledWith("linear");
+    // Straight to the OAuth step — the catalog list is not shown again.
+    expect(screen.queryByTestId("connect-catalog-list")).toBeNull();
+  });
+
+  it("reaches the SAME access-mode step a CTA connect reaches", () => {
+    const onConnect = vi.fn();
+    const { rerender } = render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={onConnect}
+        onSelectEntry={vi.fn()}
+        initialEntrySlug={"linear" as ConnectorSlug}
+        pending
+      />,
+    );
+    // Host reports the OAuth round-trip finished.
+    rerender(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={onConnect}
+        onSelectEntry={vi.fn()}
+        initialEntrySlug={"linear" as ConnectorSlug}
+        pending={false}
+      />,
+    );
+    const readAct = screen
+      .getAllByTestId("connect-permission-option")
+      .find((el) => el.getAttribute("data-value") === "read_act")!;
+    fireEvent.click(readAct);
+    fireEvent.click(screen.getByTestId("connect-confirm"));
+    expect(onConnect).toHaveBeenCalledWith("linear", "read_act");
+  });
+
+  it("without an initial entry it still opens on the catalog", () => {
+    const onSelectEntry = vi.fn();
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={onSelectEntry}
+      />,
+    );
+    expect(onSelectEntry).not.toHaveBeenCalled();
+    expect(screen.getByText("Atlassian")).toBeInTheDocument();
+  });
+
+  it("an unknown initial slug falls back to the catalog, not a blank modal", () => {
+    render(
+      <ConnectModal
+        open
+        onClose={vi.fn()}
+        catalog={CATALOG}
+        onConnect={vi.fn()}
+        onSelectEntry={vi.fn()}
+        initialEntrySlug={"nope" as ConnectorSlug}
+      />,
+    );
+    expect(screen.getByText("Atlassian")).toBeInTheDocument();
+  });
+});

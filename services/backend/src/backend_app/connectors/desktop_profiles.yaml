@@ -33,6 +33,33 @@ profiles:
     requires_preview_gate: true
     verified_at: "2026-07-18"
     requires_pre_registered_client: true
+    # The app owns the OAuth client, not the user. This names the env pair the
+    # deployment already ships for "Continue with Google"
+    # (GOOGLE_OAUTH_CLIENT_ID / _CLIENT_SECRET, seeded from the bundled
+    # google-oauth.json by services/google-oauth-default.ts). With it set, a
+    # user connects Gmail by consenting on Google's own screen — no client to
+    # paste, no admin, which is how every consumer product does this.
+    #
+    # `requires_pre_registered_client` stays TRUE and is not a contradiction:
+    # Google publishes no dynamic client registration, so a pre-registered
+    # client is genuinely required. The only question this field answers is
+    # WHOSE it is.
+    oauth_client_env: GOOGLE_OAUTH
+    # Google publishes no RFC 7591 dynamic registration, so state the endpoints
+    # instead of discovering them. These are Google's standard OAuth 2.0
+    # endpoints — the SAME ones "Continue with Google" already uses.
+    authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth"
+    token_endpoint: "https://oauth2.googleapis.com/token"
+    authorize_params:
+      # Without this Google returns NO refresh token and the connector stops
+      # working an hour after it is connected.
+      access_type: offline
+      # Incremental authorization: the returned grant keeps scopes the user has
+      # already given this client, so connecting Drive does not cost them Gmail.
+      include_granted_scopes: "true"
+      # Sign-in asked only for identity. This is a genuinely new request, so ask
+      # — and asking is also what makes Google re-issue a refresh token.
+      prompt: consent
     reference_urls:
       - "https://developers.google.com/workspace/gmail/api/reference/mcp"
     callback_modes: [loopback_pkce, deep_link_pkce]
@@ -82,6 +109,24 @@ profiles:
     requires_preview_gate: true
     verified_at: "2026-07-18"
     requires_pre_registered_client: true
+    # Same deployment-owned client as Gmail — one Google Cloud project, one
+    # consent screen, both scopes.
+    oauth_client_env: GOOGLE_OAUTH
+    # Google publishes no RFC 7591 dynamic registration, so state the endpoints
+    # instead of discovering them. These are Google's standard OAuth 2.0
+    # endpoints — the SAME ones "Continue with Google" already uses.
+    authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth"
+    token_endpoint: "https://oauth2.googleapis.com/token"
+    authorize_params:
+      # Without this Google returns NO refresh token and the connector stops
+      # working an hour after it is connected.
+      access_type: offline
+      # Incremental authorization: the returned grant keeps scopes the user has
+      # already given this client, so connecting Drive does not cost them Gmail.
+      include_granted_scopes: "true"
+      # Sign-in asked only for identity. This is a genuinely new request, so ask
+      # — and asking is also what makes Google re-issue a refresh token.
+      prompt: consent
     reference_urls:
       - "https://developers.google.com/workspace/drive/api/reference/mcp"
     callback_modes: [loopback_pkce, deep_link_pkce]
@@ -122,48 +167,6 @@ profiles:
     unsupported_capabilities:
       - "Drive files include readable Sheets and Slides text, not cell/formula or slide editing."
       - "No format-stable export or chart operations."
-
-  - profile_id: microsoft-work-iq-mail
-    connector_slug: outlook
-    display_name: Outlook
-    description: Mail and calendar.
-    server_id: "desktop:microsoft:work-iq-mail"
-    display_group: Microsoft 365
-    endpoint_template: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_MailTools"
-    transport: http
-    release_stage: preview
-    requires_preview_gate: true
-    verified_at: "2026-07-18"
-    requires_pre_registered_client: true
-    requires_admin_setup: true
-    reference_urls:
-      - "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-mail-work-iq"
-      - "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
-    callback_modes: [loopback_pkce, deep_link_pkce]
-    permissions:
-      - identifier: "WorkIQ-MailServer"
-        kind: admin_permission
-        required_for: read
-        admin_consent_required: true
-    tools:
-      - tool_name: mcp_MailTools_graph_mail_getMessage
-        product_scope: read
-        risk: low
-        approval: session
-      - tool_name: mcp_MailTools_graph_mail_listSent
-        product_scope: read
-        risk: low
-        approval: session
-      - tool_name: mcp_MailTools_graph_mail_searchMessages
-        product_scope: read
-        risk: low
-        approval: session
-      - tool_name: mcp_MailTools_graph_mail_createMessage
-        product_scope: draft
-        risk: medium
-        approval: per_call
-    unsupported_capabilities:
-      - "Reply, reply-all, send, update, and delete are hidden in AC9."
 
   - profile_id: atlassian-rovo
     connector_slug: atlassian

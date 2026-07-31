@@ -28,6 +28,7 @@ import {
 import type {
   Connector,
   ConnectorAccessMode,
+  ConnectorAvailability,
   ConnectorCatalogEntry,
   ConnectorId,
   ConnectorSlug,
@@ -82,6 +83,70 @@ const STATUS_LABEL: Readonly<Record<ConnectorStatus, string>> = {
   disconnected: "Disconnected",
 };
 
+// --- Catalog-row availability (the "can I actually connect this" axis) ------
+//
+// The server has always known this — `ConnectorCatalogEntry.availability` is on
+// the desktop wire, and `ConnectorRegistry.as_catalog_entries` documents the
+// field as being there "so the client can render the state instead of offering
+// a Connect button that cannot succeed". The client rendered an unconditional
+// Connect anyway, so every row looked equally live and three of the four could
+// only ever fail: a preview profile is refused by the coordinator's
+// availability gate before a browser opens, an admin-setup profile is refused
+// even when preview is on, and an announced slug has no server behind it at
+// all. A button whose only possible outcome is an error is not a button.
+//
+// `undefined` is deliberately NOT in this map: a payload that omits the field
+// (any pre-AC9 web response) keeps the old always-connectable behaviour rather
+// than being downgraded to "unavailable" on missing evidence.
+
+type UnavailableReason = Exclude<ConnectorAvailability, "available">;
+
+const AVAILABILITY_LABEL: Readonly<Record<UnavailableReason, string>> = {
+  preview: "Preview",
+  admin_setup_required: "Admin setup",
+  tenant_disabled: "Disabled",
+  unsupported_by_policy: "Not permitted",
+  tool_contract_mismatch: "Unavailable",
+  temporarily_unavailable: "Unavailable",
+  coming_soon: "Coming soon",
+};
+
+const AVAILABILITY_TONE: Readonly<Record<UnavailableReason, StatusTone>> = {
+  preview: "info",
+  admin_setup_required: "warning",
+  tenant_disabled: "muted",
+  unsupported_by_policy: "warning",
+  tool_contract_mismatch: "warning",
+  temporarily_unavailable: "warning",
+  coming_soon: "muted",
+};
+
+// Fallback copy per state, used when the server sends no `availability_reason`.
+// Each says what would have to change, because "Preview" alone tells a user
+// nothing they can act on.
+const AVAILABILITY_FALLBACK_REASON: Readonly<
+  Record<UnavailableReason, string>
+> = {
+  preview: "Preview connectors are off in this deployment.",
+  admin_setup_required: "A workspace admin has to set this one up.",
+  tenant_disabled: "Turned off for this workspace.",
+  unsupported_by_policy: "Blocked by policy.",
+  tool_contract_mismatch: "The provider's tools no longer match the profile.",
+  temporarily_unavailable: "The provider is unreachable right now.",
+  coming_soon: "Not yet available.",
+};
+
+/** `undefined` when the entry is connectable (or says nothing about itself). */
+function unavailableReason(
+  entry: ConnectorCatalogEntry,
+): UnavailableReason | undefined {
+  const availability = entry.availability;
+  if (availability === undefined || availability === "available") {
+    return undefined;
+  }
+  return availability;
+}
+
 export interface ConnectorsDestinationProps {
   /**
    * Server-projected list payload. `null` = loading skeleton; the
@@ -110,6 +175,25 @@ export interface ConnectorsDestinationProps {
 
   /** Connect a catalog entry directly from the surface. */
   readonly onConnectEntry?: (slug: ConnectorSlug) => void;
+
+  /**
+   * The slug whose OAuth round-trip is in flight, if any (`ConnectFlow.
+   * connectingSlug`). Drives the row's own pending label.
+   *
+   * Without it the surface had no pending state at all: the row's Connect
+   * called into the flow, the flow set `pending`, and `pending` was rendered
+   * ONLY by <ConnectModal> — which the row never opens. Both the spinner and
+   * the failure below landed in an unmounted component, which is the whole
+   * reason the button read as dead.
+   */
+  readonly connectingSlug?: ConnectorSlug | null;
+
+  /**
+   * A failed connect attempt (`ConnectFlow.error`). Rendered as an inline
+   * alert above the catalog. The host does not need to gate this on its modal
+   * being closed — when the modal is open it covers the surface anyway.
+   */
+  readonly connectError?: string | null;
 
   /**
    * Remove a connector entirely. Destructive, so the destination confirms
@@ -164,6 +248,8 @@ export function ConnectorsDestination(
     onConnect,
     catalog,
     onConnectEntry,
+    connectingSlug = null,
+    connectError = null,
     onOpenConnector,
     onOpenWebhooks,
     onReconnect,
@@ -310,33 +396,25 @@ export function ConnectorsDestination(
               <SectionHeader data-testid="connectors-available-header">
                 {TOOLS_AVAILABLE_HEADER}
               </SectionHeader>
+              {connectError !== null && connectError.length > 0 ? (
+                <div
+                  role="alert"
+                  data-testid="connectors-connect-error"
+                  style={accessErrorStyle}
+                >
+                  {connectError}
+                </div>
+              ) : null}
               <RowList
                 items={installable}
                 keyFor={(entry) => entry.slug}
                 ariaLabel="Connectors available to add"
                 data-testid="connectors-available-list"
                 renderRow={(entry) => (
-                  <Row
-                    icon={
-                      <AppIcon name={entry.slug} size="tile" tone="neutral" />
-                    }
-                    iconSize={30}
-                    subFont="mono"
-                    title={entry.display_name}
-                    sub={entry.description}
-                    meta={
-                      onConnectEntry !== undefined ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => onConnectEntry(entry.slug)}
-                          data-testid={`connector-available-connect-${entry.slug}`}
-                        >
-                          Connect
-                        </Button>
-                      ) : undefined
-                    }
-                    data-testid="connector-available-row"
+                  <CatalogRow
+                    entry={entry}
+                    connecting={connectingSlug === entry.slug}
+                    onConnectEntry={onConnectEntry}
                   />
                 )}
               />
@@ -441,6 +519,77 @@ function renderBody(args: BodyArgs): ReactElement {
           renderIcon={renderIcon}
         />
       )}
+    />
+  );
+}
+
+// --- One catalog ("Add a connector") row -----------------------------------
+
+interface CatalogRowProps {
+  readonly entry: ConnectorCatalogEntry;
+  /** This row's OAuth round-trip is in flight. */
+  readonly connecting: boolean;
+  readonly onConnectEntry?: (slug: ConnectorSlug) => void;
+}
+
+function CatalogRow({
+  entry,
+  connecting,
+  onConnectEntry,
+}: CatalogRowProps): ReactElement {
+  const reason = unavailableReason(entry);
+  const connectable = reason === undefined;
+
+  // The sub-line stays ONE mono line (the design's `.lrow__sub`): the reason is
+  // appended to the description rather than added as a second line, so a
+  // blocked row keeps the same height as a connectable one and the list does
+  // not rag. The chip answers "what state", the tail answers "why".
+  const explanation =
+    reason === undefined
+      ? undefined
+      : (entry.availability_reason ?? AVAILABILITY_FALLBACK_REASON[reason]);
+  const sub =
+    explanation === undefined
+      ? entry.description
+      : entry.description.length > 0
+        ? `${entry.description} — ${explanation}`
+        : explanation;
+
+  return (
+    <Row
+      icon={<AppIcon name={entry.slug} size="tile" tone="neutral" />}
+      iconSize={30}
+      subFont="mono"
+      title={entry.display_name}
+      sub={sub}
+      chip={
+        reason !== undefined ? (
+          <StatusPill
+            status={AVAILABILITY_TONE[reason]}
+            label={AVAILABILITY_LABEL[reason]}
+          />
+        ) : undefined
+      }
+      meta={
+        // Only a connectable row gets a Connect. A blocked row shows its chip
+        // and nothing else — the previous disabled-button-shaped alternative
+        // still implies "click here when ready", which is not true of a state
+        // the user cannot change from this surface.
+        connectable && onConnectEntry !== undefined ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={connecting}
+            onClick={() => onConnectEntry(entry.slug)}
+            data-testid={`connector-available-connect-${entry.slug}`}
+          >
+            {connecting ? "Connecting…" : "Connect"}
+          </Button>
+        ) : undefined
+      }
+      data-testid="connector-available-row"
+      data-slug={entry.slug}
+      data-availability={entry.availability ?? "available"}
     />
   );
 }

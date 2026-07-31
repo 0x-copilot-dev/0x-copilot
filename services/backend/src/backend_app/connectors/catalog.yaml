@@ -1,39 +1,26 @@
 # Connectors the product advertises but cannot install yet.
 #
-# This file used to be a second connector catalog: nine marketing slugs the
-# Tools destination rendered on its "Available" tab, overlapping the thirteen
-# real MCP servers in `mcp_catalog.DEFAULT_CATALOG` by exactly three. The two
-# lists disagreed, so the composer and the destination showed different
-# products. Six of the nine now resolve from a profile or a seed and have been
-# removed from here; what remains was never a catalog entry at all — it is a
-# promise.
+# DELIBERATELY EMPTY. The file and its machinery stay; the rows are gone.
 #
-# Every row here resolves `installable=False` through `ConnectorRegistry`, and
-# there is deliberately no endpoint field to fill in. A row cannot become
-# installable by editing this file. It becomes installable by gaining a seed
-# in `mcp_catalog.py` or a profile in `desktop_profiles.yaml`, at which point
-# the registry prefers that source and `superseded_announcements()` reports
-# the leftover row so this file self-cleans.
+# It once held three slugs — gcal, slack, salesforce — that resolved to no MCP
+# server in any deployment. They were rendered with a Connect button that could
+# not succeed, and then (briefly) with an honest "Coming soon" chip. Neither is
+# what a connector picker is for: a row the user cannot act on is clutter at
+# best and a broken promise at worst. A connector earns a row by being
+# connectable, not by being planned.
+#
+# The machinery is retained precisely because it is the guard. Any row added
+# back here resolves `installable=False` through `ConnectorRegistry`, and there
+# is deliberately no endpoint field to fill in — a row cannot become
+# installable by editing this file. It becomes installable by gaining a seed in
+# `mcp_catalog.py` or a profile in `desktop_profiles.yaml`, at which point the
+# registry prefers that source and `superseded_announcements()` reports the
+# leftover row so this file self-cleans.
+#
+# So: if you are about to add a slug here, add it to `mcp_catalog.py` or
+# `desktop_profiles.yaml` instead. If it cannot go in either of those yet, it
+# does not belong in the product's connector list yet either.
 #
 # `note` is shown to the user, so write it as a status, not an apology.
-#
-# The rule this file exists to keep: a card may say "coming soon", but no card
-# may offer a Connect button that resolves to nothing. That is exactly what
-# these three slugs did, in every deployment, until the registry landed.
 
-entries:
-  - slug: gcal
-    display_name: Google Calendar
-    description: Meetings, agendas, and availability.
-    icon_hint: gcal
-    note: Not yet available. Gmail and Drive connect the same way today.
-  - slug: slack
-    display_name: Slack
-    description: Channels, DMs, and threads.
-    icon_hint: slack
-    note: Not yet available.
-  - slug: salesforce
-    display_name: Salesforce
-    description: Accounts, contacts, and pipeline.
-    icon_hint: salesforce
-    note: Not yet available.
+entries: []

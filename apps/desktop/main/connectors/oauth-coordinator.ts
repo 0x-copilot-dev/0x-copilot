@@ -31,8 +31,12 @@ import type {
   DesktopRequestedProductScope,
   DesktopStartConnectorOAuthRequest,
   DesktopStartConnectorOAuthResponse,
+  McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
-import { DESKTOP_CONNECTOR_LOOPBACK_PATH } from "@0x-copilot/api-types";
+import {
+  DESKTOP_CONNECTOR_DEEP_LINK_URI,
+  DESKTOP_CONNECTOR_LOOPBACK_PATH,
+} from "@0x-copilot/api-types";
 
 import {
   awaitLoopbackCode,
@@ -40,6 +44,26 @@ import {
 } from "../auth/loopback-server";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Per-attempt inputs to a connect. Both optional — the common case sends
+ *  neither, and a connector whose OAuth discovery works never needs a client. */
+export interface ConnectorConnectOptions {
+  readonly productScope?: DesktopRequestedProductScope;
+  /**
+   * Which redirect the provider was registered against. `"loopback"` (default)
+   * suits providers that accept an arbitrary loopback port; `"deep_link"` is
+   * required by providers that demand one exact, pre-registered callback URL.
+   * The profile's `callback_modes` declares what the backend will accept.
+   */
+  readonly callbackMode?: "loopback" | "deep_link";
+  /**
+   * Pre-registered OAuth client, supplied by the user after a connect failed
+   * with `connector_oauth_client_required`. Held only for the duration of the
+   * request; the backend encrypts the secret into the TokenVault, so a later
+   * connect for the same server can omit it.
+   */
+  readonly oauthClient?: McpOAuthClientConfigRequest;
+}
 
 export class ConnectorOAuthError extends Error {
   readonly stage: "start" | "redirect" | "callback";
@@ -131,23 +155,41 @@ export class ConnectorOAuthCoordinator {
    */
   async connect(
     slug: string,
-    options: { readonly productScope?: DesktopRequestedProductScope } = {},
+    options: ConnectorConnectOptions = {},
   ): Promise<DesktopConnectorConnectionResult> {
     const bearer = await this.getBearer();
     if (bearer === null) {
       throw new ConnectorOAuthError("start", "not signed in");
     }
 
-    const handle: LoopbackHandle = await this.loopback({
-      callbackPath: DESKTOP_CONNECTOR_LOOPBACK_PATH,
-      timeoutMs: this.timeoutMs,
-      randomPorts: {},
-    });
+    // Deep-link mode registers the FIXED `enterprise://oauth/callback` as the
+    // redirect; loopback registers `http://127.0.0.1:<random>/…`.
+    //
+    // The random port is the reason this choice has to exist. RFC 8252 lets a
+    // native app vary the loopback port, and Google honours that — but a
+    // provider that demands an exact, pre-registered callback URL (Atlassian
+    // 3LO among them) rejects a port it has never seen, and no amount of
+    // supplying a client_id fixes it. The deep-link URI was already accepted by
+    // the backend and already demuxed here; it was simply never REQUESTED, so
+    // that whole class of provider was unreachable.
+    const useDeepLink = options.callbackMode === "deep_link";
+    const handle: LoopbackHandle | null = useDeepLink
+      ? null
+      : await this.loopback({
+          callbackPath: DESKTOP_CONNECTOR_LOOPBACK_PATH,
+          timeoutMs: this.timeoutMs,
+          randomPorts: {},
+        });
 
     let registeredState: string | null = null;
     try {
       // -- 1. ask the facade to start the flow (backend mints state+PKCE) ----
-      const start = await this.startOAuth(slug, handle.port, bearer, options);
+      const start = await this.startOAuth(
+        slug,
+        handle?.port ?? null,
+        bearer,
+        options,
+      );
 
       // -- 2. arm loopback + register the state for deep-link demux -----------
       const received = new Promise<{ code: string; state: string }>(
@@ -156,7 +198,7 @@ export class ConnectorOAuthCoordinator {
         },
       );
       registeredState = start.state;
-      handle.armState(start.state);
+      handle?.armState(start.state);
 
       // -- 3. system browser round-trip --------------------------------------
       await this.openExternal(start.authorization_url);
@@ -164,7 +206,12 @@ export class ConnectorOAuthCoordinator {
       // -- 4. first valid state wins: loopback OR deep-link delivery ----------
       let delivered: { code: string; state: string };
       try {
-        delivered = await Promise.race([received, handle.codePromise]);
+        // In deep-link mode there is no loopback to race — the app's own
+        // protocol handler is the only delivery path.
+        delivered =
+          handle === null
+            ? await received
+            : await Promise.race([received, handle.codePromise]);
       } catch (err) {
         throw new ConnectorOAuthError(
           "redirect",
@@ -179,23 +226,35 @@ export class ConnectorOAuthCoordinator {
       return await this.completeOAuth(start, delivered.code, bearer);
     } finally {
       if (registeredState !== null) this.pending.delete(registeredState);
-      handle.close();
+      handle?.close();
     }
   }
 
   private async startOAuth(
     slug: string,
-    port: number,
+    port: number | null,
     bearer: string,
-    options: { readonly productScope?: DesktopRequestedProductScope },
+    options: ConnectorConnectOptions,
   ): Promise<DesktopStartConnectorOAuthResponse> {
     const body: DesktopStartConnectorOAuthRequest = {
-      callback: {
-        kind: "desktop_loopback",
-        port,
-        path: DESKTOP_CONNECTOR_LOOPBACK_PATH,
-      },
+      callback:
+        port === null
+          ? {
+              kind: "desktop_deep_link",
+              uri: DESKTOP_CONNECTOR_DEEP_LINK_URI,
+            }
+          : {
+              kind: "desktop_loopback",
+              port,
+              path: DESKTOP_CONNECTOR_LOOPBACK_PATH,
+            },
       requested_product_scope: options.productScope ?? "read",
+      // Only sent when the user has actually supplied one. The secret transits
+      // this process in memory and is never written to disk here — the backend
+      // encrypts it into the TokenVault on receipt.
+      ...(options.oauthClient !== undefined
+        ? { oauth_client: options.oauthClient }
+        : {}),
     };
     const response = await this.doFetch(
       `${this.facadeBaseUrl}/v1/connectors/${encodeURIComponent(slug)}/desktop/start-oauth`,

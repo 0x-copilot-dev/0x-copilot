@@ -71,19 +71,35 @@ class TestShippedRegistry:
 
         registry = ConnectorRegistry.load()
         slugs = {row.slug for row in registry}
-        # Was destination-only and uninstallable...
-        assert {"gcal", "salesforce", "slack"} <= slugs
-        # ...and these were composer-only, invisible in Tools.
+        # These were composer-only, invisible in Tools.
         assert {"linear", "sentry", "asana"} <= slugs
+        # These were destination-only and uninstallable. Unifying the two lists
+        # made that visible; the answer was to remove them, not to render them
+        # in both places.
+        assert {"gcal", "salesforce", "slack"}.isdisjoint(slugs)
 
-    def test_the_former_orphans_are_declared_not_installable(self) -> None:
-        registry = ConnectorRegistry.load()
-        for slug in ("gcal", "salesforce", "slack"):
-            row = registry.get(slug)
-            assert row is not None, slug
-            assert row.installable is False, slug
-            assert row.lifecycle is ConnectorLifecycle.COMING_SOON, slug
-            assert row.server_id is None, slug
+    def test_an_announced_row_is_still_declared_not_installable(self) -> None:
+        """The announced lane is empty but not gone.
+
+        The three orphans it held are removed; this pins that a row added back
+        still resolves as uninstallable rather than quietly gaining a Connect
+        button, which is the only reason to keep the file at all.
+        """
+
+        registry = ConnectorRegistry.resolve(
+            announced=[
+                AnnouncedConnector(
+                    slug="hypothetical",
+                    display_name="Hypothetical",
+                    note="Not yet available.",
+                )
+            ]
+        )
+        row = registry.get("hypothetical")
+        assert row is not None
+        assert row.installable is False
+        assert row.lifecycle is ConnectorLifecycle.COMING_SOON
+        assert row.server_id is None
 
     def test_no_announcement_has_been_overtaken(self) -> None:
         registry = ConnectorRegistry.load()
@@ -190,3 +206,73 @@ class TestAnnouncedRows:
         from pathlib import Path
 
         assert ConnectorRegistry.load_announced(Path("/nonexistent.yaml")) == ()
+
+
+class TestCatalogEntryAvailability:
+    """`as_catalog_entries` must carry the state, not just the name.
+
+    The projection's own docstring always promised the lifecycle rode along
+    "so the client can render the state instead of offering a Connect button
+    that cannot succeed" — but it built entries with four fields, none of them
+    the lifecycle, and the route model had nowhere to put it. Every row
+    therefore reached the browser looking equally connectable, including the
+    announced slugs that resolve to no server at all.
+    """
+
+    def test_announced_row_is_coming_soon_and_carries_its_note(self) -> None:
+        registry = ConnectorRegistry.resolve(
+            announced=[
+                AnnouncedConnector(
+                    slug="slack",
+                    display_name="Slack",
+                    description="Channels, DMs, and threads.",
+                    note="Not yet available.",
+                )
+            ],
+        )
+        (entry,) = registry.as_catalog_entries()
+        assert entry.availability == "coming_soon"
+        assert entry.availability_reason == "Not yet available."
+
+    def test_seed_row_is_available(self) -> None:
+        registry = ConnectorRegistry.resolve(seeds=[_seed("linear")])
+        (entry,) = registry.as_catalog_entries()
+        assert entry.availability == "available"
+        assert entry.availability_reason is None
+
+    def test_preview_profile_is_not_available_until_preview_is_enabled(
+        self,
+    ) -> None:
+        """The exact gate `DesktopMcpOAuthCoordinator._assert_available`
+        enforces — the catalog must agree with it, or the button lies."""
+
+        off = ConnectorRegistry.load(preview_enabled=False).as_map()
+        on = ConnectorRegistry.load(preview_enabled=True).as_map()
+        assert off["gmail"].lifecycle is ConnectorLifecycle.PREVIEW
+        assert on["gmail"].lifecycle is ConnectorLifecycle.AVAILABLE
+
+    def test_no_shipped_connector_needs_an_admin(self) -> None:
+        """Every row a user can see is one they can finish themselves.
+
+        This replaces an assertion about Outlook specifically. Outlook was the
+        only shipped profile that needed a tenant admin (Microsoft Work IQ:
+        M365 Copilot licence + an Entra app registration), which is exactly why
+        it was removed — a personal account could never complete it. The rule
+        that no such row ships is the durable version of that assertion; the
+        gate itself is pinned on synthetic data in test_desktop_oauth.py.
+        """
+
+        on = ConnectorRegistry.load(preview_enabled=True).as_map()
+        assert on
+        assert all(
+            row.lifecycle is not ConnectorLifecycle.ADMIN_SETUP_REQUIRED
+            for row in on.values()
+        )
+
+    def test_shipped_catalog_offers_no_coming_soon_row(self) -> None:
+        """Nothing ships as `coming_soon` any more — the three slugs that did
+        were removed rather than shown as rows the user cannot act on."""
+
+        entries = ConnectorRegistry.load(preview_enabled=False).as_catalog_entries()
+        assert entries
+        assert all(e.availability != "coming_soon" for e in entries)
