@@ -29,10 +29,15 @@ import {
   render,
   screen,
   waitFor,
+  act,
 } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  publishWorkspaceDefaults,
+  resetWorkspaceDefaultsStore,
+} from "../workspaceDefaultsStore";
 import type { WindowBridge } from "../../preload/window-bridge-types";
 import { RunComposer } from "./RunComposer";
 
@@ -213,6 +218,38 @@ describe("RunComposer — filesystem bypass pill", () => {
     // Not offered means not reachable — clicking must not surface Bypass.
     fireEvent.click(pill());
     expect(screen.queryByRole("menuitemradio", { name: /Bypass/ })).toBeNull();
+  });
+
+  it("enables the pill when Settings publishes the switch turning on", async () => {
+    // THE BUG THIS PINS. The hook read `/v1/agent/workspace/defaults` in a
+    // `useEffect` keyed on `[transport]` — once per mount. Turning bypass on in
+    // Settings therefore did not reach a LIVE composer at all; the FS-D journey
+    // measured `master_reached_pill_via: "a renderer reload"`.
+    //
+    // Asserted through the real hook and the real store, with no remount and no
+    // second transport answer — a re-render or a fresh fetch would make this
+    // pass for the wrong reason.
+    resetWorkspaceDefaultsStore();
+    mount(false);
+    await waitFor(() => {
+      expect(pill()).toBeDisabled();
+    });
+
+    // Exactly what SettingsMount does after its PUT resolves.
+    act(() => {
+      publishWorkspaceDefaults({
+        behavior_overrides: { filesystem_bypass_enabled: true },
+      } as never);
+    });
+
+    await waitFor(() => {
+      expect(pill()).toBeEnabled();
+    });
+    // ...and Bypass is now genuinely reachable, not merely un-greyed.
+    fireEvent.click(pill());
+    expect(
+      screen.queryByRole("menuitemradio", { name: /Bypass/ }),
+    ).not.toBeNull();
   });
 
   it("sends no filesystem_bypass field while the master switch is off", async () => {

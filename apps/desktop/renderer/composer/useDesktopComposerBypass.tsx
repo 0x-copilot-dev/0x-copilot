@@ -37,6 +37,11 @@ import {
 } from "@0x-copilot/chat-surface";
 import type { WorkspaceDefaultsResponse } from "@0x-copilot/api-types";
 
+import {
+  publishWorkspaceDefaults,
+  subscribeWorkspaceDefaults,
+} from "../workspaceDefaultsStore";
+
 export interface UseDesktopComposerBypassOptions {
   /** Disable the pill for reasons other than the master switch. */
   readonly disabled?: boolean;
@@ -62,6 +67,25 @@ export function useDesktopComposerBypass(
 
   useEffect(() => {
     let cancelled = false;
+
+    // SUBSCRIBE FIRST, fetch second. Settings publishes the PUT response when
+    // the switch moves, and subscribing replays the last known value
+    // immediately — so a pill mounted after that write is correct without
+    // waiting for its own GET to land.
+    //
+    // This effect used to key on `[transport]` alone and read once per mount.
+    // The header above claims the switch is "re-read from the server rather
+    // than cached per-session"; read-once-per-mount IS cached per session, and
+    // the measured consequence was a pill that stayed disabled after the user
+    // turned bypass on until the renderer reloaded (FS-D journey:
+    // `master_reached_pill_via: "a renderer reload"`).
+    const unsubscribe = subscribeWorkspaceDefaults((defaults) => {
+      if (cancelled) return;
+      setMasterEnabled(
+        defaults.behavior_overrides?.filesystem_bypass_enabled === true,
+      );
+    });
+
     void (async () => {
       try {
         const defaults = await transport.request<WorkspaceDefaultsResponse>({
@@ -69,16 +93,21 @@ export function useDesktopComposerBypass(
           path: "/v1/agent/workspace/defaults",
         });
         if (cancelled) return;
-        setMasterEnabled(
-          defaults.behavior_overrides?.filesystem_bypass_enabled === true,
-        );
+        // Publish rather than setState directly: this reading is as current as
+        // any other, so sharing it spares a sibling consumer its own GET.
+        publishWorkspaceDefaults(defaults);
       } catch {
         // Fail closed — see the header. An unreachable switch is an off switch.
+        // Deliberately NOT published: a failed read is not a reading, and
+        // announcing "off" to every subscriber would turn one component's
+        // network blip into a workspace-wide downgrade.
         if (!cancelled) setMasterEnabled(false);
       }
     })();
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [transport]);
 

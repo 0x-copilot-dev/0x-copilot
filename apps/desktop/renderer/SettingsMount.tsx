@@ -91,6 +91,7 @@ import {
 } from "@0x-copilot/chat-transport";
 import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
+import { publishWorkspaceDefaults } from "./workspaceDefaultsStore";
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
 import { mergeCatalog } from "./composer/desktopModelCatalog";
 
@@ -524,6 +525,10 @@ export function SettingsMount({
       behavior_overrides: workspaceDefaults.behavior_overrides,
     };
     try {
+      // NOTE: the response is published to `workspaceDefaultsStore` below —
+      // a PUT response is the most current reading of this endpoint there is,
+      // and publishing it is what lets a live composer see the switch move
+      // without a renderer reload.
       const updated = await transport.request<WorkspaceDefaultsResponse>({
         method: "PUT",
         path: "/v1/agent/workspace/defaults",
@@ -680,6 +685,10 @@ export function SettingsMount({
         body,
       });
       setWorkspaceDefaults(updated);
+      // Announce it. Without this the composer's bypass pill keeps the value it
+      // read when it mounted, so turning the switch on here left the pill
+      // disabled until a renderer reload (measured by the FS-D journey).
+      publishWorkspaceDefaults(updated);
       toast(okMessage);
     } catch {
       toast("Saving that setting failed — retry in a moment.");
