@@ -151,7 +151,6 @@ const fakeConnectorsPort = {
   listCatalog: () => Promise.resolve([]),
   installFromCatalog: () =>
     Promise.reject(new Error("not used by parity render")),
-  addCustomServer: () => Promise.reject(new Error("not used by parity render")),
   beginAuth: () => Promise.resolve(),
 };
 

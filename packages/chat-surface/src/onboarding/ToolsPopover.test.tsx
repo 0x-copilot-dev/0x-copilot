@@ -49,7 +49,6 @@ function makePort(
     listServers: vi.fn().mockResolvedValue([]),
     listCatalog: vi.fn().mockResolvedValue([]),
     installFromCatalog: vi.fn().mockResolvedValue(server({})),
-    addCustomServer: vi.fn().mockResolvedValue(server({})),
     beginAuth: vi.fn().mockResolvedValue(undefined),
     deleteServer: vi.fn().mockResolvedValue(undefined),
     ...over,

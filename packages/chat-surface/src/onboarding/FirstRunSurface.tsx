@@ -343,8 +343,9 @@ export function FirstRunSurface({
 
   // Default 1-click connect: mirror `ChatScreen.onMcpInstallCatalog` over the
   // injected port (install → begin OAuth). A pre-registered vendor routes to
-  // the custom-config form (keyless install 422s). Hosts may override both via
-  // `onConnectCatalog` / `onAddCustom` (desktop opens the system browser).
+  // `onAddCustom` — Manage MCP — because a keyless install 422s. Hosts may
+  // override both via `onConnectCatalog` / `onAddCustom` (desktop opens the
+  // system browser).
   const handleConnectCatalog = useCallback(
     (entry: FirstRunInstallableConnector): void => {
       if (onConnectCatalog) {
