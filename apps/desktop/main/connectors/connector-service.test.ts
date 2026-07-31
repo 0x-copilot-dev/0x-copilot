@@ -195,6 +195,39 @@ describe("ConnectorService.authorize", () => {
     expect(installed()).toEqual(["linear"]);
   });
 
+  it("still connects a custom server when install 404s on its slug", async () => {
+    // The degraded path: listing unreadable, so a custom server reaches
+    // install after all, and its host-derived slug is not a catalog entry. A
+    // 404 only means "the catalog does not know this slug" — with a real row
+    // already in hand it is not an error, and treating it as fatal threw
+    // before a browser ever opened.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      listServersFails: true,
+      installStatus: 404,
+    });
+
+    const result = await service.authorize({
+      slug: "api_githubcopilot_com",
+      serverId: "custom:abc123",
+    });
+
+    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+    expect(result.server_id).toBe("custom:abc123");
+  });
+
+  it("still refuses a 404 install when there is no row to fall back to", async () => {
+    // Without a known server id a 404 is terminal: no row exists, so there is
+    // nothing to authorize and opening a browser would be a lie.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 404,
+    });
+
+    await expect(service.authorize({ slug: "nonexistent" })).rejects.toThrow(
+      /install failed/,
+    );
+    expect(connectMcpServer).not.toHaveBeenCalled();
+  });
+
   it("authorizes the id the INSTALL returned, not the one passed in", async () => {
     // The caller's id can be stale for an uninstalled suggestion; the backend
     // is the authority on what row now exists.
