@@ -37,6 +37,7 @@ from backend_app.connectors.oauth_coordinator import (
     DesktopOAuthCallback,
     DesktopOAuthError,
 )
+from backend_app.contracts import McpOAuthClientRequest
 from backend_app.connectors.profile_catalog import (
     ConnectorReleaseStage,
     DesktopConnectorProfile,
@@ -57,6 +58,11 @@ _ERROR_STATUS: dict[str, int] = {
     # The connector exists but has no OAuth client configured — not connectable
     # yet. 409 Conflict (a state conflict), not a 500.
     "connector_oauth_setup_required": status.HTTP_409_CONFLICT,
+    # Distinct from the above: the vendor supports NEITHER discovery nor dynamic
+    # registration, so this is not a transient setup failure — it names exactly
+    # what is missing (a pre-registered client) and is fixable by supplying one
+    # on the next start-oauth. The client renders a form rather than a dead end.
+    "connector_oauth_client_required": status.HTTP_409_CONFLICT,
     "connector_oauth_redirect_unsupported": status.HTTP_400_BAD_REQUEST,
     "connector_oauth_state_invalid": status.HTTP_400_BAD_REQUEST,
     "connector_oauth_expired": status.HTTP_400_BAD_REQUEST,
@@ -83,12 +89,34 @@ class _DesktopDeepLinkCallbackModel(BaseModel):
     uri: Literal["enterprise://oauth/callback"] = "enterprise://oauth/callback"
 
 
+class _OAuthClientModel(BaseModel):
+    """Pre-registered OAuth client for a vendor with no dynamic registration.
+
+    Mirrors ``McpOAuthClientConfigRequest`` (api-types). ``client_secret`` is
+    accepted here and immediately encrypted into the ``TokenVault`` by
+    ``McpRegistryService.update_server``; it is never persisted in the clear,
+    never logged, and never echoed back on any response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    client_id: str = Field(..., min_length=1)
+    client_secret: str | None = None
+    token_endpoint_auth_method: str | None = None
+    scope: str | None = None
+    authorization_endpoint: str | None = None
+    token_endpoint: str | None = None
+
+    def to_request(self) -> McpOAuthClientRequest:
+        return McpOAuthClientRequest(**self.model_dump())
+
+
 class DesktopStartOAuthRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     callback: _DesktopLoopbackCallbackModel | _DesktopDeepLinkCallbackModel = Field(
         ..., discriminator="kind"
     )
     requested_product_scope: Literal["read", "draft", "write"] = "read"
+    oauth_client: _OAuthClientModel | None = None
 
     def to_callback(self) -> DesktopOAuthCallback:
         if self.callback.kind == "desktop_loopback":
@@ -212,6 +240,11 @@ def register_desktop_connector_routes(
                 user_id=identity.user_id,
                 callback=payload.to_callback(),
                 requested_product_scope=payload.requested_product_scope,
+                oauth_client=(
+                    payload.oauth_client.to_request()
+                    if payload.oauth_client is not None
+                    else None
+                ),
             )
         except DesktopOAuthError as exc:
             raise _http_from_oauth_error(exc) from exc

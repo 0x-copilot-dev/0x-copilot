@@ -97,6 +97,12 @@ class ConnectorCatalogEntryModel(BaseModel):
     display_name: str
     description: str = ""
     icon_hint: str | None = None
+    # Whether this row can actually be connected, and why not when it cannot.
+    # ADDITIVE + optional (mirrors the optional api-types fields), so payloads
+    # and snapshots that predate it stay valid. Omitted === connectable, which
+    # is the only safe default for a field a client may not understand.
+    availability: str | None = None
+    availability_reason: str | None = None
 
 
 class ConnectorListResponseModel(BaseModel):
@@ -293,6 +299,8 @@ def register_connector_routes(
                 display_name=entry.display_name,
                 description=entry.description,
                 icon_hint=entry.icon_hint,
+                availability=getattr(entry, "availability", None),
+                availability_reason=getattr(entry, "availability_reason", None),
             )
             for entry in service.catalog
             if entry.slug not in installed_slugs

@@ -67,6 +67,19 @@ class RegistryError(ValueError):
     """The connector registry could not be resolved."""
 
 
+# Lifecycle → the wire's `availability` vocabulary (api-types
+# `ConnectorAvailability`). One axis, not two: "can I connect this, and if not
+# why" is a single question, and the desktop catalog already answers it with
+# these strings. `coming_soon` exists on the union precisely so an announced
+# row can answer it too instead of arriving indistinguishable from a live one.
+_AVAILABILITY_BY_LIFECYCLE: Mapping[ConnectorLifecycle, str] = {
+    ConnectorLifecycle.AVAILABLE: "available",
+    ConnectorLifecycle.PREVIEW: "preview",
+    ConnectorLifecycle.ADMIN_SETUP_REQUIRED: "admin_setup_required",
+    ConnectorLifecycle.COMING_SOON: "coming_soon",
+}
+
+
 class AnnouncedConnector(BaseModel):
     """A connector the product advertises but cannot install yet.
 
@@ -107,6 +120,11 @@ class ResolvedConnector(BaseModel):
     # risk. NOT a claim that it has none — the absence is the point, so a
     # caller that needs per-tool risk knows to withhold rather than assume.
     capabilities_declared: bool = False
+    # Why this row is not connectable, in the user's words. Empty for an
+    # available row. Carried from the announced entry's ``note``; preview and
+    # admin-setup rows leave it empty and let the client's per-state copy
+    # speak, so that wording lives in exactly one place.
+    availability_reason: str = ""
 
     @property
     def installable(self) -> bool:
@@ -224,6 +242,7 @@ class ConnectorRegistry:
             server_id=None,
             icon_hint=entry.icon_hint,
             capabilities_declared=False,
+            availability_reason=entry.note,
         )
 
     @staticmethod
@@ -320,6 +339,13 @@ class ConnectorRegistry:
         `coming_soon` card is honest and a missing one is a silent lie of
         omission. The lifecycle rides along so the client can render the
         state instead of offering a Connect button that cannot succeed.
+
+        That last sentence described an intent, not the code: the projection
+        dropped `lifecycle` on the floor and the wire model had nowhere to put
+        it, so every row reached the browser indistinguishable from every
+        other and the destination rendered an unconditional Connect over all
+        of them — including the three announced slugs that resolve to no
+        server at all. The lifecycle now actually rides along.
         """
 
         from backend_app.connectors.service import (  # noqa: PLC0415
@@ -332,6 +358,8 @@ class ConnectorRegistry:
                 display_name=row.display_name,
                 description=row.description,
                 icon_hint=row.icon_hint,
+                availability=_AVAILABILITY_BY_LIFECYCLE[row.lifecycle],
+                availability_reason=row.availability_reason or None,
             )
             for row in self._resolved
         )

@@ -2078,8 +2078,18 @@ def create_app(
     # ``resolved_connectors_store`` is resolved + stashed on ``app.state``
     # earlier (beside the runtime-policies route registration) so the aggregate
     # sees the same instance; reuse it here — do NOT re-create it.
+    # ONE preview switch for both catalogs. This used to be read further down,
+    # after the registry had already been loaded with the `preview_enabled=False`
+    # default — so with the flag ON the desktop catalog reported Gmail/Drive as
+    # connectable while the destination catalog, built from the same registry,
+    # still reported them as preview. Same slug, same boot, two answers.
+    desktop_preview_enabled = (
+        os.environ.get("DESKTOP_CONNECTORS_ALLOW_PREVIEW", "").strip().lower() == "true"
+    )
     try:
-        connector_catalog = ConnectorRegistry.load().as_catalog_entries()
+        connector_catalog = ConnectorRegistry.load(
+            preview_enabled=desktop_preview_enabled
+        ).as_catalog_entries()
     except Exception:
         logging.getLogger(__name__).warning(
             "connector_registry_load_failed", exc_info=True
@@ -2210,9 +2220,8 @@ def create_app(
     # Preview connectors (Google/Microsoft) stay disabled unless the deployment
     # explicitly sets ``DESKTOP_CONNECTORS_ALLOW_PREVIEW=true``; even then the
     # tenant-template profiles fail closed with ``admin_setup_required``.
-    desktop_preview_enabled = (
-        os.environ.get("DESKTOP_CONNECTORS_ALLOW_PREVIEW", "").strip().lower() == "true"
-    )
+    # ``desktop_preview_enabled`` is resolved once, above, beside the registry
+    # load that shares it.
     try:
         desktop_profile_catalog = DesktopProfileCatalog.load()
     except Exception:  # noqa: BLE001 — soft-fail; desktop surface degrades

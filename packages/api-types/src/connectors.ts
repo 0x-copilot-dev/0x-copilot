@@ -201,7 +201,14 @@ export type ConnectorAvailability =
   | "tenant_disabled"
   | "unsupported_by_policy"
   | "tool_contract_mismatch"
-  | "temporarily_unavailable";
+  | "temporarily_unavailable"
+  // Advertised with nothing behind it yet (`connectors/catalog.yaml`). Only the
+  // registry projection produces it — no desktop profile can, since a profile
+  // by definition carries an endpoint. It belongs on THIS axis rather than a
+  // parallel `lifecycle` field: "can I connect this, and if not why" is one
+  // question, and answering it in two places is how the Connect button came to
+  // be rendered over a slug that resolves to nothing.
+  | "coming_soon";
 
 /**
  * One user-facing capability line on a reconciled connector (e.g. "Search Jira

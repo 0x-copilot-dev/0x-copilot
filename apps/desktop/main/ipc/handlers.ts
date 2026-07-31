@@ -7,6 +7,7 @@ import type {
   DesktopConnectorCatalogResponse,
   DesktopConnectorConnectionResult,
   DesktopRequestedProductScope,
+  McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
 
 import type { TransportBridge } from "../transport-bridge";
@@ -103,6 +104,8 @@ export interface ConnectorHandlers {
     readonly slug?: string;
     readonly serverId?: string;
     readonly productScope?: DesktopRequestedProductScope;
+    readonly oauthClient?: McpOAuthClientConfigRequest;
+    readonly callbackMode?: "loopback" | "deep_link";
   }): Promise<ConnectorAuthorizationResult>;
 }
 

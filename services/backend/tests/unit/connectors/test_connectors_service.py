@@ -242,24 +242,35 @@ class TestConsumerProjection:
 
 
 class TestCatalogLoad:
-    def test_catalog_yaml_now_holds_only_unimplemented_promises(self) -> None:
-        """`catalog.yaml` stopped being a second connector catalog.
+    def test_catalog_yaml_advertises_nothing(self) -> None:
+        """`catalog.yaml` stopped being a second connector catalog, then
+        stopped advertising at all.
 
-        It used to advertise nine slugs — six of which are really described
-        by a profile or an MCP seed, and three of which were described by
-        nothing at all. `ConnectorRegistry` is the one reader now, so this
-        file keeps only the part that was never a catalog entry: connectors
-        the product announces with no implementation behind them.
+        It once held nine slugs; six were really described by a profile or an
+        MCP seed, and three — gcal, slack, salesforce — were described by
+        nothing anywhere. Those three could not be connected in any deployment,
+        so they are gone rather than rendered as a row the user cannot act on.
+        The file and its machinery remain as the guard: anything added back
+        resolves `installable=False`, which is what makes it a guard and not a
+        catalog.
         """
 
-        slugs = {e.slug for e in load_catalog()}
-        assert slugs == {"gcal", "slack", "salesforce"}
+        assert load_catalog() == ()
 
-    def test_the_implemented_slugs_resolve_from_the_registry(self) -> None:
-        """The six that left this file are still advertised — from elsewhere."""
+    def test_every_advertised_slug_is_installable(self) -> None:
+        """The invariant the empty file protects: nothing reaches the catalog
+        that cannot produce a server record."""
 
         registry = ConnectorRegistry.load()
-        for slug in ("gmail", "gdrive", "outlook", "atlassian", "github", "notion"):
+        assert len(registry) > 0
+        not_installable = [row.slug for row in registry if not row.installable]
+        assert not_installable == []
+
+    def test_the_implemented_slugs_resolve_from_the_registry(self) -> None:
+        """The ones that left this file are still advertised — from elsewhere."""
+
+        registry = ConnectorRegistry.load()
+        for slug in ("gmail", "gdrive", "atlassian", "github", "notion"):
             row = registry.get(slug)
             assert row is not None, slug
             assert row.installable, slug

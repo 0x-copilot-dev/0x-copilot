@@ -95,6 +95,10 @@ export function ConnectorsRoute({
 }: ConnectorsRouteProps): ReactElement {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
+  // Route-level banner for a REMOVE or RECONNECT failure — the two actions the
+  // route performs itself. A failed catalog *connect* does not land here: it
+  // belongs to the shared flow and reaches the surface as `connectError`, next
+  // to the row the user clicked.
   const [pendingError, setPendingError] = useState<string | null>(null);
   // Route-level banner for an access-mode PATCH failure. The shared
   // ConnectorsDestination already reverts the segment inline; this is the
@@ -438,7 +442,9 @@ export function ConnectorsRoute({
           items={items}
           onConnect={flow.openConnect}
           catalog={catalog}
-          onConnectEntry={(slug) => flow.onSelectEntry(slug)}
+          onConnectEntry={(slug) => flow.connectEntry(slug)}
+          connectingSlug={flow.connectingSlug}
+          connectError={flow.error}
           onOpenConnector={onOpenConnector}
           onOpenWebhooks={onOpenWebhooks}
           onReconnect={(id) => {
@@ -461,6 +467,7 @@ export function ConnectorsRoute({
         onAddCustomServer={flow.onAddCustomServer}
         pending={flow.pending}
         error={flow.error}
+        initialEntrySlug={flow.initialEntrySlug}
       />
     </section>
   );

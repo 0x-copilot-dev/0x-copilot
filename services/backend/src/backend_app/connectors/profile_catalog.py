@@ -30,7 +30,7 @@ from typing import Iterable, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend_app.connectors.service import ConnectorCatalogEntry, load_catalog
 from backend_app.mcp_catalog import DEFAULT_CATALOG
@@ -101,6 +101,30 @@ class DesktopConnectorProfile(_ProfileContract):
     requires_preview_gate: bool = False
     verified_at: date
     requires_pre_registered_client: bool = False
+    # Env-var PREFIX naming the deployment-owned OAuth client for this provider
+    # — `<PREFIX>_CLIENT_ID` / `<PREFIX>_CLIENT_SECRET`. Empty means "no client
+    # ships with the app", and the user is asked for one.
+    #
+    # This is the difference between a developer tool and a product. A vendor
+    # with no dynamic client registration still only needs ONE registered app —
+    # the app's — and every user simply consents to it on the vendor's own
+    # screen. Asking each user to register their own OAuth app instead is a
+    # workflow no consumer product has, and it was the real reason Connect
+    # could not succeed here.
+    oauth_client_env: str = ""
+    # The provider's OAuth endpoints, stated rather than discovered. A provider
+    # that publishes RFC 8414 metadata needs neither; these exist for the ones
+    # that do not, which is the same set that has no dynamic registration.
+    # Supplying them turns the connect into a plain OAuth round-trip against a
+    # known authorization server — no discovery fetch, no client to invent.
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    # Extra authorization-URL parameters this provider needs. Google requires
+    # `access_type=offline` to return a refresh token at all (without it the
+    # connector dies silently when the first access token expires) and
+    # `include_granted_scopes=true` so connecting Drive does not narrow a grant
+    # Gmail already holds.
+    authorize_params: dict[str, str] = Field(default_factory=dict)
     requires_admin_setup: bool = False
     reuses_existing_seed: bool = False
     reference_urls: tuple[str, ...] = ()
