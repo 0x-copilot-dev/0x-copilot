@@ -1654,6 +1654,12 @@ class RuntimeRunHandler:
                 scope=scope,
             ),
             grants=session.grants,
+            # Read from the PERSISTED run context, not re-derived here. The
+            # decision was sealed once at run-create against the workspace
+            # master switch; re-resolving it in the worker would let a
+            # Settings change mid-flight retro-authorize a run the user
+            # started under a different posture.
+            bypass=run.runtime_context.filesystem_bypass,
         )
         return WorkspaceGatewayBackend(
             merged=merged,

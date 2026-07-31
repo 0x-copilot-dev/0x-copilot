@@ -29,7 +29,6 @@ import {
   useWorkspaceFolderGrants,
 } from "./useWorkspaceFolderGrants";
 import { WorkspaceFolderBar } from "./WorkspaceFolderBar";
-import { BypassPill, type BypassMode } from "./BypassPill";
 import type { ThinkingDepth } from "./depth";
 import { ModelPill } from "./ModelPill";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
@@ -115,21 +114,23 @@ export interface AssistantComposerProps {
    */
   hasSentFirstMessage?: boolean;
   /**
-   * Execution mode for this run — selection only. PRD-FS-11 owns the behaviour
-   * and the precedence (message > run > master); this ships the control.
+   * Execution-mode pill (`<BypassPill>`) and its popover — PRD-FS-10 §4.2 puts
+   * it in the slot the model pill vacates, immediately right of Tools, because
+   * execution mode is the decision a user re-makes per task while model choice
+   * is set-and-forget.
+   *
+   * A SLOT rather than data props. PRD-FS-10 shipped the pill mounted here off
+   * `bypassMode` / `bypassMasterEnabled` / `onBypassModeChange`; PRD-FS-11
+   * replaced that with a host-owned trigger, because the master switch is
+   * SERVER-held (`WorkspaceBehaviorOverrides.filesystem_bypass_enabled`) and a
+   * substrate-agnostic core must not learn to fetch it. Keeping both would give
+   * one control two mount points and the mode two owners.
+   *
+   * Still gated here on `workspaceGrantPort` (see the render site): a host may
+   * pass a trigger, but a composer with no grant capability never shows it.
+   * Omitted → nothing renders, which is the correct web/test degradation.
    */
-  bypassMode?: BypassMode;
-  /**
-   * The Settings master switch, **off by default**. While it is off the pill
-   * renders as a disabled `Manual` and does not offer Bypass at all: an option
-   * that is offered and then ignored is worse than an absent one.
-   */
-  bypassMasterEnabled?: boolean;
-  /**
-   * Selection sink. Its ABSENCE also disables the pill — a host that flips the
-   * master on without wiring this would otherwise offer a choice nothing reads.
-   */
-  onBypassModeChange?: (mode: BypassMode) => void;
+  bypassTrigger?: ReactNode;
   /**
    * Host slot for the `+` plus-menu popover (portal + outside-click). See
    * {@link AssistantComposerPlusMenuSlotArgs}.
@@ -282,9 +283,6 @@ export const AssistantComposer = forwardRef<
     filePicker,
     workspaceGrantPort,
     hasSentFirstMessage = true,
-    bypassMode = "manual",
-    bypassMasterEnabled = false,
-    onBypassModeChange,
     renderPlusMenu,
     skillInstructionPrompt,
     mcpServerInstructionPrompt,
@@ -299,6 +297,7 @@ export const AssistantComposer = forwardRef<
     onClearSkills,
     connectorsTrigger,
     toolsTrigger,
+    bypassTrigger,
     // activeModelLabel is still typed on the prop surface (callers haven't
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
@@ -598,24 +597,21 @@ export const AssistantComposer = forwardRef<
             </div>
             {connectorsTrigger ?? null}
             {toolsTrigger ?? null}
-            {/* The slot the model pill vacated (PRD-FS-10 §4.2): it is the
-             * first place the eye lands, and "will this run ask me?" is the
-             * decision a user re-makes per task where model choice is
-             * set-and-forget. Gated on the same capability as the folder bar —
-             * with no grant port there is nothing to ask about, so on web this
-             * is ABSENT rather than a control that changes nothing. */}
-            {folderControlsVisible ? (
-              <BypassPill
-                mode={bypassMode}
-                enabled={
-                  bypassMasterEnabled &&
-                  onBypassModeChange !== undefined &&
-                  controlsDisabled !== true &&
-                  !disabled
-                }
-                onChange={(next) => onBypassModeChange?.(next)}
-              />
-            ) : null}
+            {/* PRD-FS-10 §4.2 — execution mode takes the slot the model pill
+             * VACATED (the model now sits in the right cluster, left of the
+             * mic): this is the first place the eye lands, and "will this run
+             * ask me?" is the decision a user re-makes per task where model
+             * choice is set-and-forget.
+             *
+             * A SLOT, gated on a CAPABILITY. The host owns the master switch
+             * (server-held) and the mode/scope selection, so this core never
+             * learns to fetch either — but the gate stays here, because it is a
+             * property of the composer and not of any one host: bypass only
+             * ever applies inside a folder the user granted with write
+             * permission, so with no grant port there is nothing to ask about
+             * and nothing bypass could permit. On web that makes it ABSENT
+             * rather than a control that changes nothing. */}
+            {folderControlsVisible ? (bypassTrigger ?? null) : null}
             {depth !== undefined && onDepthChange ? (
               <ThinkingDepthControl
                 value={depth}

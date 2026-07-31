@@ -103,3 +103,55 @@ describe("<ApprovalPolicy>", () => {
     }
   });
 });
+
+// PRD-FS-10 §4.3 tier 1 — the filesystem-bypass MASTER switch. It lives on
+// this block rather than in a second approval system, and its default is the
+// product decision, not an implementation detail.
+describe("<ApprovalPolicy> — filesystem bypass master switch", () => {
+  const toggle = (): HTMLElement =>
+    screen.getByTestId("filesystem-bypass-toggle");
+
+  it("is OFF for a value that predates the field", () => {
+    // VALUE has no `filesystemBypassEnabled`. An existing persisted row must
+    // read as off, never as "unset means allow".
+    render(<ApprovalPolicy value={VALUE} onChange={vi.fn()} />);
+    expect(toggle()).not.toBeChecked();
+  });
+
+  it("reflects an explicit false and an explicit true", () => {
+    const { rerender } = render(
+      <ApprovalPolicy
+        value={{ ...VALUE, filesystemBypassEnabled: false }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(toggle()).not.toBeChecked();
+
+    rerender(
+      <ApprovalPolicy
+        value={{ ...VALUE, filesystemBypassEnabled: true }}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(toggle()).toBeChecked();
+  });
+
+  it("reports the whole next value, leaving the three axes untouched", () => {
+    const onChange = vi.fn();
+    render(<ApprovalPolicy value={VALUE} onChange={onChange} />);
+
+    toggle().click();
+
+    expect(onChange).toHaveBeenCalledWith({
+      readOnly: "auto",
+      write: "require",
+      danger: "require",
+      filesystemBypassEnabled: true,
+    });
+  });
+
+  it("is disabled with the rest of the block", () => {
+    render(<ApprovalPolicy value={VALUE} onChange={vi.fn()} disabled />);
+    expect(toggle()).toBeDisabled();
+  });
+});

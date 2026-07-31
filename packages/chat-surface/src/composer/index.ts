@@ -93,11 +93,26 @@ export {
   type WorkspaceFolderGrantsState,
 } from "./useWorkspaceFolderGrants";
 // === end Workspace folder grants ===
-// === Execution mode (PRD-FS-10 §4.3 ships the control; PRD-FS-11 the behaviour) ===
+// === Filesystem bypass (PRD-FS-10 §4.3 the control, PRD-FS-11 the behaviour) ===
+// The composer's execution-mode pill plus the two client-side questions it
+// implies: may the control be offered (master switch), and is a selection
+// spent after a send (scope). The AUTHORITY is server-side — the runtime folds
+// master ▸ run ▸ message and re-checks the grant bound — so nothing exported
+// here can widen anything.
 export {
   BypassPill,
-  BYPASS_PILL_COPY,
-  type BypassMode,
   type BypassPillProps,
+  BYPASS_BOUND_NOTE,
+  BYPASS_BOUND_SUB,
+  BYPASS_DISABLED_TOOLTIP,
 } from "./BypassPill";
-// === end Execution mode ===
+export {
+  MANUAL_BYPASS_STATE,
+  bypassSelectionForSend,
+  bypassStateAfterSend,
+  type FilesystemBypassMode,
+  type FilesystemBypassScope,
+  type FilesystemBypassSelection,
+  type FilesystemBypassState,
+} from "./filesystemBypass";
+// === end Filesystem bypass ===

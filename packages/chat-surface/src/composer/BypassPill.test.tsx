@@ -1,14 +1,17 @@
-// BypassPill — PRD-FS-10 §8 test 9, and the gating around it.
+// Composer execution-mode pill (PRD-FS-10 §4.3 the control, PRD-FS-11 the
+// behaviour).
 //
-// The DISABLED state is the load-bearing one. This PRD ships the control before
-// PRD-FS-11 ships the behaviour, so until the Settings master is on the pill
-// must not offer Bypass AT ALL: a choice that is offered and then ignored is
-// worse than an absent one, and "the user said bypass" is exactly the kind of
-// claim that later gets read as authorization by something downstream.
+// The load-bearing assertions are the NEGATIVE ones, and they are made by
+// accessible name rather than test id: if a user can reach "Bypass" while the
+// master switch is off, it exists for them regardless of what a data attribute
+// says. "Not offered" has to mean not-in-the-tree.
 //
-// The composer-level cases drive the REAL composition (gating, wiring, the
-// capability check) rather than rendering the pill directly — a pill can be
-// perfect and mounted nowhere, or mounted everywhere it should not be.
+// The last block drives the REAL composition rather than the pill alone,
+// because a pill can be perfect and mounted where it must never appear. That
+// case came from the FS-10 lane, which mounted the pill inside the composer off
+// data props; the mount moved to a host-owned `bypassTrigger` slot, and the
+// capability gate it was carrying did not move with it — so it is re-pinned
+// here against the slot.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { type ReactNode } from "react";
@@ -29,11 +32,211 @@ import type {
   WorkspaceGrant,
   WorkspaceGrantPort,
 } from "../ports/WorkspaceGrantPort";
-import { BypassPill } from "./BypassPill";
 import {
   AssistantComposer,
   type AssistantComposerProps,
 } from "./AssistantComposer";
+import { BYPASS_BOUND_NOTE, BYPASS_BOUND_SUB, BypassPill } from "./BypassPill";
+import {
+  bypassSelectionForSend,
+  bypassStateAfterSend,
+  MANUAL_BYPASS_STATE,
+} from "./filesystemBypass";
+
+describe("BypassPill — master switch OFF", () => {
+  it("renders a disabled Manual pill", () => {
+    render(
+      <BypassPill mode="manual" enabled={false} onChange={() => undefined} />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: /Execution mode: Manual/,
+    });
+    expect(trigger).toBeDisabled();
+  });
+
+  it("offers no Bypass option at all — not even after a click", () => {
+    render(
+      <BypassPill mode="manual" enabled={false} onChange={() => undefined} />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Execution mode: Manual/ }),
+    );
+    expect(screen.queryByRole("menuitemradio", { name: /Bypass/ })).toBeNull();
+    expect(screen.queryByText(BYPASS_BOUND_NOTE)).toBeNull();
+  });
+
+  it("reports Manual even when a stale mode says bypass", () => {
+    // Defence against a host that persisted a selection, then had the master
+    // switch turned off underneath it. The pill must not display a posture the
+    // deployment no longer permits.
+    const onChange = vi.fn();
+    render(<BypassPill mode="bypass" enabled={false} onChange={onChange} />);
+    expect(
+      screen.getByRole("button", { name: /Execution mode: Manual/ }),
+    ).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("points at Settings rather than silently doing nothing", () => {
+    render(
+      <BypassPill mode="manual" enabled={false} onChange={() => undefined} />,
+    );
+    expect(
+      screen
+        .getByRole("button", { name: /Execution mode: Manual/ })
+        .getAttribute("data-tooltip"),
+    ).toMatch(/Settings/);
+  });
+});
+
+describe("BypassPill — master switch ON", () => {
+  it("opens a menu offering Manual and Bypass", () => {
+    render(<BypassPill mode="manual" enabled onChange={() => undefined} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Execution mode: Manual/ }),
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: /Manual/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitemradio", { name: /Bypass/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("states the standing bound as a non-selectable note", () => {
+    render(<BypassPill mode="bypass" enabled onChange={() => undefined} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Execution mode: Bypass/ }),
+    );
+    const note = screen.getByRole("note");
+    expect(note).toHaveTextContent(BYPASS_BOUND_NOTE);
+    expect(note).toHaveTextContent(BYPASS_BOUND_SUB);
+    // A clarifier that could be clicked would read as a fourth option.
+    expect(
+      screen.queryByRole("menuitemradio", {
+        name: new RegExp(BYPASS_BOUND_NOTE),
+      }),
+    ).toBeNull();
+  });
+
+  it("reports the selection and closes", () => {
+    const onChange = vi.fn();
+    render(<BypassPill mode="manual" enabled onChange={onChange} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Execution mode: Manual/ }),
+    );
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Bypass/ }));
+    expect(onChange).toHaveBeenCalledWith("bypass");
+    expect(screen.queryByRole("menuitemradio", { name: /Bypass/ })).toBeNull();
+  });
+
+  it("offers the scope choice only once Bypass is the mode", () => {
+    const { rerender } = render(
+      <BypassPill
+        mode="manual"
+        enabled
+        onChange={() => undefined}
+        scope="message"
+        onScopeChange={() => undefined}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Execution mode: Manual/ }),
+    );
+    expect(
+      screen.queryByRole("menuitemradio", { name: /This run/ }),
+    ).toBeNull();
+
+    rerender(
+      <BypassPill
+        mode="bypass"
+        enabled
+        onChange={() => undefined}
+        scope="message"
+        onScopeChange={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: /This run/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("stays inert while the composer is otherwise disabled", () => {
+    render(
+      <BypassPill mode="manual" enabled disabled onChange={() => undefined} />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: /Execution mode: Manual/,
+    });
+    expect(trigger).toBeDisabled();
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("menuitemradio", { name: /Bypass/ })).toBeNull();
+  });
+});
+
+describe("bypassSelectionForSend", () => {
+  it("sends nothing while the master switch is off", () => {
+    expect(
+      bypassSelectionForSend(
+        { mode: "bypass", scope: "run" },
+        { masterEnabled: false },
+      ),
+    ).toBeUndefined();
+  });
+
+  it("sends nothing for the default Manual posture", () => {
+    // A host that never surfaces the pill must produce the byte-identical
+    // run-create body it produced before bypass existed.
+    expect(
+      bypassSelectionForSend(MANUAL_BYPASS_STATE, { masterEnabled: true }),
+    ).toBeUndefined();
+  });
+
+  it("files the selection under the slot that names its scope", () => {
+    expect(
+      bypassSelectionForSend(
+        { mode: "bypass", scope: "message" },
+        { masterEnabled: true },
+      ),
+    ).toEqual({ message: "bypass" });
+    expect(
+      bypassSelectionForSend(
+        { mode: "bypass", scope: "run" },
+        { masterEnabled: true },
+      ),
+    ).toEqual({ run: "bypass" });
+  });
+
+  it("sends an explicit Manual at run scope", () => {
+    // "This run does not bypass" is a real statement, distinct from absence,
+    // and the backend distinguishes the two.
+    expect(
+      bypassSelectionForSend(
+        { mode: "manual", scope: "run" },
+        { masterEnabled: true },
+      ),
+    ).toEqual({ run: "manual" });
+  });
+});
+
+describe("bypassStateAfterSend", () => {
+  it("spends a message-scoped selection", () => {
+    expect(bypassStateAfterSend({ mode: "bypass", scope: "message" })).toEqual(
+      MANUAL_BYPASS_STATE,
+    );
+  });
+
+  it("keeps a run-scoped selection", () => {
+    const sticky = { mode: "bypass", scope: "run" } as const;
+    expect(bypassStateAfterSend(sticky)).toEqual(sticky);
+  });
+});
+
+// --- Where the pill may appear ------------------------------------------
+// The slot is host-owned, but the GATE is not: bypass only ever applies inside
+// a folder the user granted with write permission, so a composer with no grant
+// capability has nothing bypass could permit. A host that passes a trigger
+// anyway must still get nothing.
 
 function makeTransport(): Transport {
   return {
@@ -76,6 +279,9 @@ function renderComposer(overrides: Partial<AssistantComposerProps> = {}): void {
     onShowConnectors: vi.fn(),
     onSubmit: vi.fn(),
     workspaceGrantPort: makeGrantPort(),
+    bypassTrigger: (
+      <BypassPill mode="manual" enabled onChange={() => undefined} />
+    ),
     ...overrides,
   };
   render(
@@ -85,67 +291,14 @@ function renderComposer(overrides: Partial<AssistantComposerProps> = {}): void {
   );
 }
 
-function pill(): HTMLElement {
-  return screen.getByRole("button", { name: /Execution mode/i });
-}
-
-describe("BypassPill — master OFF (test 9)", () => {
-  it("is a disabled Manual pill that offers nothing", () => {
-    const onChange = vi.fn();
-    render(<BypassPill mode="manual" enabled={false} onChange={onChange} />);
-
-    const trigger = screen.getByRole("button", {
-      name: "Execution mode: Manual",
-    });
-    expect(trigger).toBeDisabled();
-
-    fireEvent.click(trigger);
-    // No menu, and in particular no reachable "Bypass" anywhere in the document.
-    expect(screen.queryByRole("menuitemradio")).toBeNull();
-    expect(screen.queryByText("Bypass")).toBeNull();
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it("still says MANUAL when a stale bypass selection outlives the master", () => {
-    // A selection kept from when the master was on must not be DISPLAYED as
-    // bypass: the pill's job is to say what this run will actually do, and with
-    // the master off the answer is "it will ask".
-    render(<BypassPill mode="bypass" enabled={false} onChange={vi.fn()} />);
-    expect(
-      screen.getByRole("button", { name: "Execution mode: Manual" }),
-    ).toBeTruthy();
-    expect(screen.queryByText("Bypass")).toBeNull();
-  });
-});
-
-describe("BypassPill — master ON", () => {
-  it("offers Manual and Bypass, with the standing clarifier", () => {
-    const onChange = vi.fn();
-    render(<BypassPill mode="manual" enabled onChange={onChange} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Execution mode/i }));
-
-    expect(
-      screen.getByRole("menuitemradio", { name: /Manual/ }),
-    ).toHaveAttribute("aria-checked", "true");
-    const bypass = screen.getByRole("menuitemradio", { name: /Bypass/ });
-    expect(bypass).toHaveAttribute("aria-checked", "false");
-
-    // Terse, and NOT selectable: it is a standing rule about the system, not a
-    // third option and not a warning about the choice being made.
-    const clarifier = screen.getByText("Ungranted still asks");
-    expect(clarifier).toBeTruthy();
-    expect(clarifier.closest("button")).toBeNull();
-    expect(
-      screen.getByText("bypass never widens what you granted"),
-    ).toBeTruthy();
-
-    fireEvent.click(bypass);
-    expect(onChange).toHaveBeenCalledWith("bypass");
-  });
-});
-
 describe("AssistantComposer — where the pill may appear", () => {
+  it("mounts a supplied trigger on a host with the grant capability", () => {
+    renderComposer();
+    expect(
+      screen.getByRole("button", { name: /Execution mode/i }),
+    ).toBeInTheDocument();
+  });
+
   it("is absent on a host with no grant capability (web)", () => {
     renderComposer({ workspaceGrantPort: null });
     expect(
@@ -153,36 +306,10 @@ describe("AssistantComposer — where the pill may appear", () => {
     ).toBeNull();
   });
 
-  it("renders DISABLED by default — the master is off until Settings says so", () => {
-    renderComposer({ onBypassModeChange: vi.fn() });
-    expect(pill()).toBeDisabled();
-    expect(pill()).toHaveAccessibleName("Execution mode: Manual");
-  });
-
-  it("stays disabled when the master is on but nothing consumes the choice", () => {
-    // Offered-but-ignored is the failure this guards: a host that flips the
-    // master without wiring the sink would otherwise ship a live-looking control
-    // that changes nothing about the run.
-    renderComposer({ bypassMasterEnabled: true });
-    expect(pill()).toBeDisabled();
-  });
-
-  it("becomes a real menu once the master is on AND the host consumes it", () => {
-    const onBypassModeChange = vi.fn();
-    renderComposer({ bypassMasterEnabled: true, onBypassModeChange });
-
-    expect(pill()).not.toBeDisabled();
-    fireEvent.click(pill());
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /Bypass/ }));
-    expect(onBypassModeChange).toHaveBeenCalledWith("bypass");
-  });
-
-  it("reflects the host's selection", () => {
-    renderComposer({
-      bypassMasterEnabled: true,
-      bypassMode: "bypass",
-      onBypassModeChange: vi.fn(),
-    });
-    expect(pill()).toHaveAccessibleName("Execution mode: Bypass");
+  it("renders nothing when the host supplies no trigger", () => {
+    renderComposer({ bypassTrigger: undefined });
+    expect(
+      screen.queryByRole("button", { name: /Execution mode/i }),
+    ).toBeNull();
   });
 });

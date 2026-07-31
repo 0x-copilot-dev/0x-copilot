@@ -139,6 +139,7 @@ import {
 // the cockpit composes them behind the `surfacesV2` flag (flag off ⇒ never
 // constructed, so the cockpit is byte-identical to today).
 import { ReceiptV2LaunchCard, ReceiptV2Surface } from "../../surfaces/receipt";
+import type { FilesystemBypassSelection } from "../../composer/filesystemBypass";
 import { PostureChip } from "./PostureChip";
 import { PendingCounterChip } from "./PendingCounterChip";
 import { usePendingWork } from "./usePendingWork";
@@ -956,6 +957,17 @@ export interface RunStartRequest {
    * why a popover row toggled off used to stay callable.
    */
   readonly pausedConnectorIds?: readonly string[];
+  /**
+   * Composer bypass-pill selection (PRD-FS-10 §4.3), tiers 2 and 3. Omitted
+   * when the master switch is off or the composer is in its default Manual
+   * posture, so a host that never surfaces the pill sends the byte-identical
+   * body it sent before bypass existed.
+   *
+   * ADVISORY. The runtime folds it against the workspace master switch it
+   * holds server-side and re-checks the grant bound before any approval pause
+   * is skipped; this field can neither widen a grant nor authorize a write.
+   */
+  readonly filesystemBypass?: FilesystemBypassSelection;
 }
 
 /**
@@ -4444,6 +4456,12 @@ export function buildRunCreateBody(
   // sending (an explicit `true` is the runtime default, so it is omitted).
   if (request.webSearchEnabled === false) {
     body.web_search_enabled = false;
+  }
+  // Only an actual selection is sent. `bypassSelectionForSend` already
+  // suppresses the default Manual posture and everything while the master
+  // switch is off, so an empty object never reaches the wire.
+  if (request.filesystemBypass !== undefined) {
+    body.filesystem_bypass = request.filesystemBypass;
   }
   // Both live under `request_context`, so build it once — assigning twice would
   // silently drop whichever came first.

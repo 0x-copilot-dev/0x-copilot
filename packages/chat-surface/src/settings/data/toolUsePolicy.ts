@@ -42,6 +42,7 @@ import type {
 
 import type { Transport } from "../../ports/Transport";
 import type {
+  ApprovalPolicyAxis,
   ApprovalPolicyValue,
   DangerApprovalMode,
   ReadOnlyApprovalMode,
@@ -76,12 +77,19 @@ const DANGER_MODES: ReadonlySet<DangerApprovalMode> = new Set([
   "block",
 ]);
 
-/** The wire kind backing each UI axis (readOnly↔read, danger↔destructive). */
+/**
+ * The wire kind backing each UI axis (readOnly↔read, danger↔destructive).
+ *
+ * Keyed by `ApprovalPolicyAxis`, not by `keyof ApprovalPolicyValue`: the card
+ * also carries the filesystem-bypass master switch, which is persisted through
+ * `WorkspaceBehaviorOverrides` and has no kind on this endpoint. Sending it
+ * here would be a silent no-op at best.
+ */
 const KIND_FOR_AXIS = {
   readOnly: "read",
   write: "write",
   danger: "destructive",
-} as const satisfies Record<keyof ApprovalPolicyValue, ToolPolicyKind>;
+} as const satisfies Record<ApprovalPolicyAxis, ToolPolicyKind>;
 
 function modeForKind(
   response: ToolUsePolicyResponse,
@@ -135,6 +143,48 @@ export function toolUsePolicyRequestFromValue(
       { kind: KIND_FOR_AXIS.danger, mode: value.danger },
     ],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem bypass master switch (PRD-FS-10 §4.3 tier 1)
+//
+// It renders on the Approval policy card but persists somewhere else:
+// `workspace_defaults.behavior_overrides.filesystem_bypass_enabled`, not
+// `/v1/me/policies/tool-use`. That is not an accident of layering — the three
+// risk axes are per-USER and the bypass switch is per-WORKSPACE, because
+// "may anyone here skip the file-write pause" is a deployment posture, not a
+// personal preference.
+//
+// Two lanes means two save calls, and both hosts must make the same two. These
+// helpers are that agreement, written once: without them each binder would
+// re-derive "which half goes where" and one of them would eventually drop the
+// switch on the floor, leaving a toggle that looks saved and does nothing.
+// ---------------------------------------------------------------------------
+
+/** Seed the card's value from the workspace blob the host already loaded. */
+export function withFilesystemBypass(
+  value: ApprovalPolicyValue,
+  enabled: boolean | undefined,
+): ApprovalPolicyValue {
+  return { ...value, filesystemBypassEnabled: enabled === true };
+}
+
+/**
+ * The workspace-defaults patch a policy edit implies, or `null` when the edit
+ * did not touch the switch.
+ *
+ * Returning `null` for an unchanged switch matters: `persistBehaviorOverride`
+ * is a read-merge-PUT of the whole defaults document, so firing it on every
+ * approval-axis edit would turn each of them into an extra write that could
+ * clobber a concurrent edit to an unrelated knob.
+ */
+export function filesystemBypassPatch(
+  previous: ApprovalPolicyValue,
+  next: ApprovalPolicyValue,
+): { filesystem_bypass_enabled: boolean } | null {
+  const before = previous.filesystemBypassEnabled === true;
+  const after = next.filesystemBypassEnabled === true;
+  return before === after ? null : { filesystem_bypass_enabled: after };
 }
 
 /** The tool-use approval-policy port (both hosts bind the same adapter). */

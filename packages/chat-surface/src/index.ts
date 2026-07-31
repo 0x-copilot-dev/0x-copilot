@@ -462,6 +462,27 @@ export {
 } from "./composer";
 // === end Phase 1 (PR-1.3) ===
 
+// === Filesystem bypass (PRD-FS-10 §4.3) ===
+// The composer's execution-mode pill and the client half of the three-tier
+// decision. Hosts mount `<BypassPill>` into `AssistantComposer.bypassTrigger`,
+// gate `enabled` on the Settings master switch they already load, and map the
+// state onto `RunStartRequest.filesystemBypass` with `bypassSelectionForSend`.
+export {
+  BypassPill,
+  type BypassPillProps,
+  BYPASS_BOUND_NOTE,
+  BYPASS_BOUND_SUB,
+  BYPASS_DISABLED_TOOLTIP,
+  MANUAL_BYPASS_STATE,
+  bypassSelectionForSend,
+  bypassStateAfterSend,
+  type FilesystemBypassMode,
+  type FilesystemBypassScope,
+  type FilesystemBypassSelection,
+  type FilesystemBypassState,
+} from "./composer";
+// === end Filesystem bypass ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
@@ -1146,6 +1167,8 @@ export {
   createToolUsePolicyPort,
   approvalPolicyFromResponse,
   toolUsePolicyRequestFromValue,
+  filesystemBypassPatch,
+  withFilesystemBypass,
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
   type ApprovalPolicyProps,
@@ -2126,12 +2149,9 @@ export {
   type WorkspaceFolderBarProps,
   type WorkspaceFolderGrantsState,
 } from "./composer";
-export {
-  BypassPill,
-  BYPASS_PILL_COPY,
-  type BypassMode,
-  type BypassPillProps,
-} from "./composer";
+// `BypassPill` and its vocabulary are hoisted once, in the Filesystem-bypass
+// block above — PRD-FS-11's shape (mode + scope + host-owned mount) supersedes
+// the FS-10 selection-only export that stood here.
 export {
   WorkspaceGrantCard,
   type WorkspaceGrantCardProps,

@@ -45,6 +45,7 @@ import {
   AssistantComposer,
   type AssistantComposerProps,
 } from "./AssistantComposer";
+import { BypassPill } from "./BypassPill";
 
 /** A host that HAS the folder capability — what gates the bypass pill. */
 function makeGrantPort(): WorkspaceGrantPort {
@@ -140,9 +141,16 @@ describe("AssistantComposer bottom row (v3 parity)", () => {
   // in: a future layout change may move the boxes, but bypass must stay left of
   // the mic and the model must stay between them.
   it("orders [+] → bypass → model → mic → send (PRD-FS-10 §4.2)", async () => {
+    // The pill arrives through the host-owned `bypassTrigger` slot (PRD-FS-11
+    // moved the mount out of this component — see `BypassPill.tsx`), but WHERE
+    // the slot renders is still this component's decision, which is what this
+    // asserts. `workspaceGrantPort` is the capability gate on that slot.
     const container = renderComposer({
       workspaceGrantPort: makeGrantPort(),
       hasSentFirstMessage: true,
+      bypassTrigger: (
+        <BypassPill mode="manual" enabled onChange={() => undefined} />
+      ),
     });
 
     const plus = screen.getByRole("button", {

@@ -62,6 +62,10 @@ from agent_runtime.effects.errors import (
     EffectStageStaleRevision,
 )
 from agent_runtime.effects.staging import EffectStager
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+)
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.entities import OperationRequest
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -381,6 +385,7 @@ def _harness(
     ledger: FakeLedger | None = None,
     outbox: FakeOutbox | None = None,
     overlay_store: WorkspaceOverlayStorePort | None = None,
+    bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS,
 ) -> Harness:
     base = ExplodingWorkspaceBase(files)
     overlays = InMemoryWorkspaceOverlayStore()
@@ -417,6 +422,7 @@ def _harness(
             ),
             proposals=proposals,
             grants=grants,
+            bypass=bypass,
         ),
         run_id=RUN_ID,
         base_read=base,

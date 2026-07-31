@@ -20,6 +20,7 @@
 // Colors resolve ONLY to design-system v2 tokens (via the chrome primitives +
 // SegmentedControl).
 
+import { Toggle } from "@0x-copilot/design-system";
 import { type ReactElement } from "react";
 
 import { SegmentedControl, type SegmentedOption } from "./controls";
@@ -43,7 +44,33 @@ export interface ApprovalPolicyValue {
   readonly readOnly: ReadOnlyApprovalMode;
   readonly write: WriteApprovalMode;
   readonly danger: DangerApprovalMode;
+  /**
+   * Filesystem bypass MASTER switch (PRD-FS-10 §4.3 tier 1). Off by default,
+   * and optional so every existing caller keeps compiling and keeps the
+   * off posture — a host that has not wired it cannot accidentally advertise
+   * bypass.
+   *
+   * It lives on THIS value rather than in a new settings page because it is
+   * the same question the three axes above answer — how autonomously the
+   * agent may act — asked about the one capability whose approvals are staged
+   * rather than interrupted. Persisted through
+   * `WorkspaceBehaviorOverrides.filesystem_bypass_enabled`, so it needs no
+   * migration and no new endpoint.
+   */
+  readonly filesystemBypassEnabled?: boolean;
 }
+
+/**
+ * The three risk AXES, as distinct from the whole value.
+ *
+ * They are the fields backed by `/v1/me/policies/tool-use`;
+ * `filesystemBypassEnabled` rides `WorkspaceBehaviorOverrides` instead. Naming
+ * the axis set keeps the wire mapping in `data/toolUsePolicy.ts` exhaustive
+ * over exactly what that endpoint carries, so a future field added to this
+ * value cannot be silently posted to a route that has no column for it — the
+ * compiler asks which lane it belongs to.
+ */
+export type ApprovalPolicyAxis = "readOnly" | "write" | "danger";
 
 export interface ApprovalPolicyProps {
   readonly value: ApprovalPolicyValue;
@@ -83,6 +110,17 @@ export const DANGER_APPROVAL_OPTIONS: ReadonlyArray<
 /** The DESIGN-SPEC §4 note: scope is per-connector, not global. */
 export const APPROVAL_POLICY_CONNECTOR_NOTE =
   "Which tools each policy covers is chosen per-connector on the Connectors page.";
+
+/**
+ * The bypass row's hint. States the bound in the same words the composer pill
+ * uses, because a user who reads only one of the two surfaces must come away
+ * with the same rule: bypass suspends the pause inside folders you attached
+ * with write permission, and changes nothing anywhere else.
+ */
+export const FILESYSTEM_BYPASS_HINT =
+  "Let the agent apply file changes without asking, inside folders you attached " +
+  "with write permission. Anything ungranted still asks, and every change is " +
+  "still recorded.";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -136,6 +174,24 @@ export function ApprovalPolicy({
           options={withDisabled(DANGER_APPROVAL_OPTIONS, disabled)}
           value={value.danger}
           onChange={(danger) => onChange({ ...value, danger })}
+        />
+      </Frow>
+
+      {/* Tier 1 of the filesystem bypass. Until this is on, the composer's
+          run/message controls are not offered — the pill renders disabled
+          Manual and its menu is not mounted at all. */}
+      <Frow label="File changes without asking" hint={FILESYSTEM_BYPASS_HINT}>
+        <Toggle
+          data-testid="filesystem-bypass-toggle"
+          aria-label="Allow file changes without asking"
+          checked={value.filesystemBypassEnabled === true}
+          disabled={disabled}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              filesystemBypassEnabled: event.currentTarget.checked,
+            })
+          }
         />
       </Frow>
     </SetCard>
