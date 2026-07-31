@@ -197,7 +197,7 @@
       "state": "connect",
       "design": ".mrow--dash.mrow--pin",
       "live": "[data-testid=\"connect-catalog-custom\"]",
-      "what": "'Custom MCP server' escape hatch. Design CASCADE TRAP: .mrow--dash/.mrow--pin at copilot.css:101-103 lose to .mrow at :414 (equal specificity, declared earlier), so it computes SOLID border, padding 10px, radius 8px, 468px; only position:sticky, bottom:-15px, margin-top 10px and margin-inline -15px survive. Live: an ORDINARY catalog row — same pickRowStyle as every other entry, no sticky/pinned treatment, no dashed intent (ConnectModal.tsx:347-370). NOTE: this row only exists because the host passes `onAddCustomServer` (ConnectModal.tsx:314) — WEB does (ConnectorsRoute.tsx:613-615), DESKTOP never mounts ConnectModal at all (destinationBinders.tsx:480-490)."
+      "what": "'Custom MCP server' escape hatch. Design CASCADE TRAP: .mrow--dash/.mrow--pin at copilot.css:101-103 lose to .mrow at :414 (equal specificity, declared earlier), so it computes SOLID border, padding 10px, radius 8px, 468px; only position:sticky, bottom:-15px, margin-top 10px and margin-inline -15px survive. Live: an ORDINARY catalog row — same pickRowStyle as every other entry, no sticky/pinned treatment, no dashed intent (ConnectModal.tsx:347-370). NOTE: this row only exists because the host passes `onManageMcp`, which opens the Manage MCP config editor; BOTH hosts now mount ConnectModal and pass it."
     },
 
     {

@@ -75,6 +75,10 @@ extraResources:
 mac:
   icon: build/icon.icns
   category: public.app-category.productivity
+  extendInfo:
+    NSMicrophoneUsageDescription: >-
+      0xCopilot uses the microphone only when you choose Voice input in the
+      message composer.
   # dmg for the installer, zip for electron-updater (mac updates are delivered
   # as zip — dmg alone cannot be applied by electron-updater).
   target:

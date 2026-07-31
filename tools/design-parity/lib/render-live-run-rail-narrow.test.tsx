@@ -160,7 +160,6 @@ const fakeConnectorsPort = {
   listServers: () => Promise.resolve([]),
   listCatalog: () => Promise.resolve(CATALOG),
   installFromCatalog: () => Promise.reject(new Error("unused")),
-  addCustomServer: () => Promise.reject(new Error("unused")),
   beginAuth: () => Promise.resolve(),
 };
 

@@ -325,6 +325,16 @@
   min-width: 0;
 }
 
+.aui-composer-dictation-status {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2xs);
+  white-space: nowrap;
+}
+
+.aui-composer-dictation-status[data-state="error"] {
+  color: var(--color-danger);
+}
+
 .aui-composer-slash-cue {
   align-items: center;
   animation: aui-slash-cue-enter 160ms ease-out;
@@ -405,6 +415,12 @@
   min-width: 26px;
   padding: 0;
   width: 26px;
+}
+
+.atlas-composer-mic[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
 }
 
 /* Send tier — design `.cmp-send`: 28px square, 8px radius, 14px glyph. */

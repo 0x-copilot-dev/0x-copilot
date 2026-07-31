@@ -33,6 +33,13 @@ export {
 } from "./artifacts";
 export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
 export type {
+  DictationCallbacks,
+  DictationEndReason,
+  DictationPort,
+  DictationSession,
+  DictationTranscript,
+} from "./ports/DictationPort";
+export type {
   WorkspaceApprovalDecision,
   WorkspaceApprovalHostDecisionResult,
   WorkspaceApprovalHostPort,
@@ -393,6 +400,8 @@ export {
   type ComposerMode,
   type ComposerSubmitPayload,
   type ComposerSlotCtx,
+  type ComposerDictationControl,
+  type ComposerDictationState,
   type AttachmentAdapter,
   type AttachmentContentPart,
   type CompleteAttachment,
@@ -726,7 +735,6 @@ export type {
   ConnectorAccessPort,
   ConnectFlow,
   ConnectAuthorizeRequest,
-  CustomServerResult,
   UseConnectFlowOptions,
   RevealOnceProps,
   ConnectorDetailViewProps,
@@ -1657,7 +1665,6 @@ export {
   type ConnectModalProps,
   type ConnectPermission,
   type ConnectPermissionOption,
-  type CustomServerInput,
 } from "./destinations/connectors";
 // === end Phase 4 (PR-4.8) ===
 

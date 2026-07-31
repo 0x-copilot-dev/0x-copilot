@@ -317,11 +317,45 @@ export type McpServerHealth =
   | "unavailable"
   | "disabled";
 
+/**
+ * A configured request header or stdio environment value, as the server
+ * reports it.
+ *
+ * `value` is present for a plain value and `null` for a credential — the
+ * server seals those in its token vault and never returns them, so
+ * `secret_set` is the only thing a client can learn about one. There is
+ * deliberately no hint or masked tail: partial disclosure of a bearer token
+ * is still disclosure.
+ */
+export interface McpConfiguredValue {
+  name: string;
+  value?: string | null;
+  secret_set?: boolean;
+}
+
+/** How a local (stdio) MCP server is launched. Env credentials are sealed. */
+export interface McpStdioConfig {
+  command: string;
+  args?: readonly string[];
+  env?: readonly McpConfiguredValue[];
+  cwd?: string | null;
+}
+
 export interface McpServer {
   server_id: string;
   name: string;
   display_name: string;
-  url: string;
+  /**
+   * `null` for a `stdio` server, which has no endpoint at all — it is a
+   * subprocess, and `stdio` is its address. Exactly one of `url` / `stdio`
+   * identifies a server, so a client that renders a URL must handle the
+   * local case rather than assume a string.
+   */
+  url: string | null;
+  /** Configured request headers (remote transports). */
+  headers?: readonly McpConfiguredValue[];
+  /** Launch spec (stdio transport only). */
+  stdio?: McpStdioConfig | null;
   transport: McpTransport;
   auth_mode: McpAuthMode;
   auth_state: McpAuthState;
@@ -362,6 +396,71 @@ export interface McpServer {
   updated_at: string;
 }
 
+/* -------------------------------------------------------------------------
+ * The MCP configuration DOCUMENT — `GET` / `PUT /v1/mcp/config`
+ *
+ * The whole registry as one editable object, which is what the "Manage MCP"
+ * surface reads and writes. The shape follows the `mcp.json` convention the
+ * MCP client ecosystem already uses, so a block copied from a project's
+ * install instructions pastes in unchanged. That convention is a CLIENT
+ * convention — the MCP specification itself defines only the two transports
+ * and says nothing about configuration files.
+ *
+ * Credentials never appear here. A sealed value reads back as the redaction
+ * marker `MCP_CONFIG_REDACTED`, and writing that marker back unchanged means
+ * "keep what is stored" — which is what makes reformatting the document, or
+ * adding a server to it, non-destructive.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * What a stored credential reads back as. Write it back unchanged to keep the
+ * stored value; replace it with a new string to rotate.
+ */
+export const MCP_CONFIG_REDACTED =
+  "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
+
+/**
+ * One server entry. Remote fields (`url`, `headers`) and local ones
+ * (`command`, `args`, `env`, `cwd`) are mutually exclusive, and the server
+ * omits whatever does not apply rather than sending it null — the document is
+ * read and edited by hand, so inapplicable keys would bury the ones that
+ * matter.
+ */
+export interface McpConfigServer {
+  type?: McpTransport;
+  url?: string;
+  headers?: Readonly<Record<string, string>>;
+  command?: string;
+  args?: readonly string[];
+  env?: Readonly<Record<string, string>>;
+  cwd?: string;
+}
+
+export interface McpConfigDocument {
+  servers: Readonly<Record<string, McpConfigServer>>;
+}
+
+/**
+ * The `PUT` body: just the document. There is no companion map of secrets —
+ * a new credential is typed into the document like any other value and sealed
+ * on arrival, so one representation reaches the server.
+ */
+export interface McpConfigWriteRequest {
+  document: McpConfigDocument;
+}
+
+/**
+ * What the save actually did, by server name. Reported rather than implied
+ * because a save can DELETE: a server the document omits is removed, and that
+ * is the outcome a user is most likely not to have intended.
+ */
+export interface McpConfigWriteResult {
+  created?: readonly string[];
+  updated?: readonly string[];
+  deleted?: readonly string[];
+  unchanged?: readonly string[];
+}
+
 export interface McpOAuthClientConfigRequest {
   client_id: string;
   client_secret?: string;
@@ -371,14 +470,35 @@ export interface McpOAuthClientConfigRequest {
   token_endpoint?: string;
 }
 
+/** Inbound half of `McpConfiguredValue`: always plaintext, sealed on arrival. */
+export interface McpConfiguredValueRequest {
+  name: string;
+  /**
+   * Omit to keep whatever the server already has stored for this name. That
+   * is what lets a client round-trip a config it read back without either
+   * restating a credential it was never shown or blanking one.
+   */
+  value?: string | null;
+}
+
+export interface McpStdioRequest {
+  command: string;
+  args?: readonly string[];
+  env?: readonly McpConfiguredValueRequest[];
+  cwd?: string | null;
+}
+
 export interface CreateMcpServerRequest {
   org_id: string;
   user_id: string;
-  url: string;
+  /** Required for `http` / `sse`; omitted for `stdio`, which sends `stdio`. */
+  url?: string | null;
   display_name?: string;
   transport?: McpTransport;
   auth_mode?: McpAuthMode;
   oauth_client?: McpOAuthClientConfigRequest;
+  headers?: readonly McpConfiguredValueRequest[];
+  stdio?: McpStdioRequest | null;
 }
 
 /**

@@ -7,7 +7,6 @@
 //   • listServers()          → GET  /v1/mcp/servers            (McpServer[])
 //   • listCatalog()          → GET  /v1/mcp/catalog            (McpCatalogEntry[])
 //   • installFromCatalog()   → POST /v1/mcp/servers/install    (McpServer)
-//   • addCustomServer()      → POST /v1/mcp/servers            (McpServer)
 //   • beginAuth(serverId)    → host-owned redirect / external-open of the
 //                              OAuth `auth_url` from
 //                              POST /v1/mcp/servers/{id}/auth/start
@@ -35,15 +34,10 @@ export interface FirstRunConnectorsPort {
   /**
    * 1-click install of a catalog entry by slug. Keyless install of an entry
    * flagged `requires_pre_registered_client` 422s — the popover routes those
-   * to the custom-config form instead of calling this.
+   * to the host's `onAddCustom` (Manage MCP) instead of calling this.
    */
   installFromCatalog(
     slug: string,
-    oauthClient?: McpOAuthClientConfigRequest,
-  ): Promise<McpServer>;
-  /** Register a custom (non-catalog) MCP server from a URL. */
-  addCustomServer(
-    url: string,
     oauthClient?: McpOAuthClientConfigRequest,
   ): Promise<McpServer>;
   /**

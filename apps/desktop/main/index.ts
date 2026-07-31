@@ -87,6 +87,7 @@ import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
+import { configureMediaPermissions } from "./media-permissions";
 import { applyBrandDockIcon, applyBrandIdentity } from "./branding";
 import {
   createProductionDesktopBrowserSubsystem,
@@ -639,6 +640,7 @@ if (hasSingleInstanceLock) {
 
     const rendererDir = join(__dirname, "..", "renderer");
     registerAppProtocolHandler(rendererDir, session.defaultSession);
+    configureMediaPermissions(session.defaultSession);
 
     // Boot screen immediately: the window exists (renderer shows
     // BootProgress) before any service work starts. If the renderer
