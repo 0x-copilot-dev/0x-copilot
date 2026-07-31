@@ -27,6 +27,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "services/ai-backend/src/runtime_adapters/file/**"
       - "services/ai-backend/tests/unit/runtime_adapters/file/test_backup_restore_drill.py"
@@ -62,7 +63,14 @@ jobs:
       - name: Install ai-backend deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          # requirements-dev.txt, not requirements.txt: the runtime file has no
+          # test tooling, so the drill's own `python -m pytest` below died with
+          # "No module named pytest" on every run. Nobody saw it because this
+          # workflow only triggers when its own narrow paths change, and they
+          # rarely do -- the drill has been dormant and broken at the same time.
+          # requirements-dev.txt pulls in requirements.txt via `-r` and adds the
+          # pinned pytest, matching how ci-ai-backend installs.
+          python -m pip install -r requirements-dev.txt
 
       - name: Run the file-store backup→restore drill
         env:

@@ -1,51 +1,162 @@
 {
-  "$schema_note": "Source of truth for the GitHub repository ruleset applied to refs/heads/main. Apply via .github/workflows/apply-branch-protection.yml. Schema follows the GitHub REST API: POST /repos/{owner}/{repo}/rulesets.",
-  "name": "main-branch-protection",
-  "target": "branch",
-  "enforcement": "active",
-  "conditions": {
-    "ref_name": {
-      "include": ["refs/heads/main"],
-      "exclude": []
-    }
-  },
-  "rules": [
-    {
-      "type": "deletion"
-    },
-    {
-      "type": "non_fast_forward"
-    },
-    {
-      "type": "required_linear_history"
-    },
-    {
-      "type": "required_signatures"
-    },
-    {
-      "type": "pull_request",
-      "parameters": {
-        "required_approving_review_count": 2,
-        "dismiss_stale_reviews_on_push": true,
-        "require_code_owner_review": true,
-        "require_last_push_approval": true,
-        "required_review_thread_resolution": true
-      }
-    },
-    {
-      "type": "required_status_checks",
-      "parameters": {
-        "strict_required_status_checks_policy": true,
-        "required_status_checks": [
-          { "context": "ci-repo / lint-and-secrets" },
-          { "context": "ci-repo / tenants-lint" },
-          { "context": "ci-backend / test-and-audit" },
-          { "context": "ci-backend-facade / test-and-audit" },
-          { "context": "ci-ai-backend / test-and-audit" },
-          { "context": "ci-frontend / build-and-audit" }
-        ]
-      }
-    }
+  "$schema_note": "Source of truth for the GitHub repository rulesets. Apply via .github/workflows/apply-branch-protection.yml. Schema follows the GitHub REST API: POST /repos/{owner}/{repo}/rulesets. This file holds a LIST of rulesets under `rulesets`; the workflow reconciles each one by name.",
+
+  "$model": [
+    "Branching: feature -> dev (PR) -> main (promotion workflow only).",
+    "dev is the integration branch: every merge lands there first and CI runs on it.",
+    "main is the released branch. It moves only via .github/workflows/promote-to-main.yml,",
+    "which fast-forwards it to a dev commit that has already gone green.",
+    "",
+    "MERGE RIGHTS. Merging a PR requires write access, and write is granted to exactly two",
+    "collaborators: 0x-copilot-dev and parthpahwa1. Anyone may fork and open a PR; nobody",
+    "else can merge one. That is enforced by repository access, not by these rules --",
+    "a ruleset cannot express 'only these logins may merge'. Keep the collaborator list",
+    "short and this property holds.",
+    "",
+    "REVIEWS. Outside contributors need 2 approvals, which with two collaborators means",
+    "both must approve. The two collaborators are bypass actors, so their own PRs need no",
+    "review. Bypass is the only mechanism GitHub offers for an author-dependent review",
+    "requirement -- there is no per-author review count.",
+    "",
+    "CHECK CONTEXTS are CHECK-RUN NAMES: bare job names, carrying the matrix suffix where a",
+    "job is a matrix (e.g. 'cli (ubuntu-latest)'). They are NOT 'workflow / job'. That form",
+    "is only how the PR UI renders them; used here it silently matches nothing and leaves",
+    "every PR blocked forever on a check that never reports. Verify any addition against:",
+    "  gh api repos/OWNER/REPO/commits/SHA/check-runs --jq '.check_runs[].name'",
+    "",
+    "REQUIRED CHECKS ARE DELIBERATELY FEW. Every workflow here is path-filtered, and GitHub",
+    "treats a required check that never runs as pending, blocking the PR. So only",
+    "unconditional checks belong in this list. The per-service suites (ci-ai-backend,",
+    "ci-backend, ci-backend-facade, ci-frontend, ci-desktop, ci-cli) are NOT required per-PR",
+    "for exactly that reason -- promote-to-main.yml gates them instead, evaluating the whole",
+    "commit rather than one PR's diff. That is the stronger gate: it is what would have",
+    "caught the ci-desktop and ci-e2-final-conformance breakage that reached main.",
+    "",
+    "required_signatures is deliberately ABSENT. Most history is unsigned (verify with",
+    "`gh api repos/OWNER/REPO/commits --jq '.[].commit.verification.verified'`), so enabling",
+    "it blocks all work. Turn it on only as part of a deliberate signing rollout.",
+    "",
+    "BYPASS ACTOR 15368 is the GitHub Actions app. release-cli.yml pushes the version-bump",
+    "commit and tag, and promote-to-main.yml fast-forwards main; both are blocked by these",
+    "rules without it. The tradeoff is real and worth stating: it means ANY workflow in this",
+    "repository can write to main and dev. That is acceptable only because .github/ is",
+    "CODEOWNER-gated and workflow changes go through review like everything else. The",
+    "tighter alternative is a fine-grained PAT held as a secret and used only by those two",
+    "workflows, which narrows the blast radius at the cost of a token to rotate."
   ],
-  "bypass_actors": []
+
+  "rulesets": [
+    {
+      "name": "main-branch-protection",
+      "target": "branch",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "include": ["refs/heads/main"],
+          "exclude": []
+        }
+      },
+      "bypass_actors": [
+        {
+          "actor_id": 306191580,
+          "actor_type": "User",
+          "bypass_mode": "always"
+        },
+        {
+          "actor_id": 114860912,
+          "actor_type": "User",
+          "bypass_mode": "always"
+        },
+        {
+          "actor_id": 15368,
+          "actor_type": "Integration",
+          "bypass_mode": "always"
+        }
+      ],
+      "rules": [
+        { "type": "deletion" },
+        { "type": "non_fast_forward" },
+        { "type": "required_linear_history" },
+        {
+          "type": "pull_request",
+          "parameters": {
+            "required_approving_review_count": 2,
+            "dismiss_stale_reviews_on_push": true,
+            "require_code_owner_review": true,
+            "require_last_push_approval": true,
+            "required_review_thread_resolution": true,
+            "allowed_merge_methods": ["merge", "squash"]
+          }
+        },
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "strict_required_status_checks_policy": true,
+            "do_not_enforce_on_create": false,
+            "required_status_checks": [
+              { "context": "lint-and-secrets" },
+              { "context": "tenants-lint" },
+              { "context": "repo-gates" }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "dev-branch-protection",
+      "target": "branch",
+      "enforcement": "active",
+      "conditions": {
+        "ref_name": {
+          "include": ["refs/heads/dev"],
+          "exclude": []
+        }
+      },
+      "bypass_actors": [
+        {
+          "actor_id": 306191580,
+          "actor_type": "User",
+          "bypass_mode": "always"
+        },
+        {
+          "actor_id": 114860912,
+          "actor_type": "User",
+          "bypass_mode": "always"
+        },
+        {
+          "actor_id": 15368,
+          "actor_type": "Integration",
+          "bypass_mode": "always"
+        }
+      ],
+      "rules": [
+        { "type": "deletion" },
+        { "type": "non_fast_forward" },
+        {
+          "type": "pull_request",
+          "parameters": {
+            "required_approving_review_count": 2,
+            "dismiss_stale_reviews_on_push": true,
+            "require_code_owner_review": false,
+            "require_last_push_approval": false,
+            "required_review_thread_resolution": true,
+            "allowed_merge_methods": ["merge", "squash"]
+          }
+        },
+        {
+          "type": "required_status_checks",
+          "parameters": {
+            "strict_required_status_checks_policy": false,
+            "do_not_enforce_on_create": false,
+            "required_status_checks": [
+              { "context": "lint-and-secrets" },
+              { "context": "tenants-lint" },
+              { "context": "repo-gates" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
 }

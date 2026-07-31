@@ -1,0 +1,168 @@
+# Promote dev to main. This is the ONLY way main moves (aside from release-cli's
+# version-bump commit).
+#
+# Manual dispatch, dry-run by default. The promotion gate is the real quality bar
+# in this repo: per-PR required checks can only cover the few workflows that run
+# unconditionally, because GitHub treats a path-filtered check that never runs as
+# pending and blocks the PR forever. This job has no such constraint -- it asks a
+# different question, "is every workflow that ran on this dev commit green?", and
+# that is exactly the question that was never asked when ci-desktop and
+# ci-e2-final-conformance broke main.
+#
+# Promotion is a fast-forward. If main has drifted (a release commit that was not
+# back-merged, or a direct push) the job stops rather than merging around it.
+
+name: promote-to-main
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be promoted without moving main."
+        type: boolean
+        default: true
+      allow_failed_checks:
+        description: "DANGEROUS. Promote even if checks on the dev commit are not green. Requires a reason."
+        type: boolean
+        default: false
+      reason:
+        description: "Why this promotion is happening. Required when allow_failed_checks is set."
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-to-main
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # fast-forward main
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Require a reason when overriding the gate
+        if: ${{ inputs.allow_failed_checks && inputs.reason == '' }}
+        run: |
+          echo "::error::allow_failed_checks=true requires a reason."
+          exit 1
+
+      - name: Resolve dev and main
+        id: refs
+        run: |
+          git fetch origin main dev --tags
+          DEV_SHA=$(git rev-parse origin/dev)
+          MAIN_SHA=$(git rev-parse origin/main)
+          {
+            echo "dev_sha=$DEV_SHA"
+            echo "main_sha=$MAIN_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$DEV_SHA" = "$MAIN_SHA" ]; then
+            echo "::notice::dev and main are identical. Nothing to promote."
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "noop=false" >> "$GITHUB_OUTPUT"
+
+          # Fast-forward only. If main carries a commit dev does not, promoting
+          # would either lose it or turn into a merge nobody reviewed.
+          if ! git merge-base --is-ancestor "$MAIN_SHA" "$DEV_SHA"; then
+            echo "::error::main ($MAIN_SHA) is not an ancestor of dev ($DEV_SHA)."
+            echo "::error::Back-merge main into dev first: git checkout dev && git merge origin/main"
+            exit 1
+          fi
+
+          echo "### Promotion plan" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`main\` $MAIN_SHA → $DEV_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>Commits being promoted</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          git log --no-merges --format='- %h %s' "$MAIN_SHA..$DEV_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require every check on the dev commit to be green
+        if: ${{ steps.refs.outputs.noop == 'false' && !inputs.allow_failed_checks }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEV_SHA: ${{ steps.refs.outputs.dev_sha }}
+        run: |
+          python3 << 'PY'
+          import json, os, subprocess, sys
+
+          sha = os.environ["DEV_SHA"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          raw = subprocess.run(
+              ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          runs = json.loads(raw).get("check_runs", [])
+
+          if not runs:
+              print(f"::error::No check runs found for dev@{sha[:8]}.")
+              print("::error::Nothing has verified this commit. Refusing to promote.")
+              sys.exit(1)
+
+          # A check still running is not a pass. Promoting mid-flight is how a
+          # red commit reaches main while the tab still looks yellow.
+          pending = [r["name"] for r in runs if r["status"] != "completed"]
+          failed = [
+              f"{r['name']} ({r['conclusion']})"
+              for r in runs
+              if r["status"] == "completed"
+              and r["conclusion"] not in {"success", "neutral", "skipped"}
+          ]
+
+          print(f"{len(runs)} check run(s) on dev@{sha[:8]}")
+          for run in sorted(runs, key=lambda r: r["name"]):
+              state = run["conclusion"] or run["status"]
+              print(f"  {state:<12} {run['name']}")
+
+          if pending:
+              print(f"::error::Still running: {', '.join(sorted(pending))}")
+          if failed:
+              print(f"::error::Not green: {', '.join(sorted(failed))}")
+          if pending or failed:
+              sys.exit(1)
+          print("All checks green.")
+          PY
+
+      - name: Record an overridden gate
+        if: ${{ steps.refs.outputs.noop == 'false' && inputs.allow_failed_checks }}
+        env:
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "### ⚠️ Check gate overridden"
+            echo ""
+            echo "- by: \`$ACTOR\`"
+            echo "- reason: $REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Promotion gate overridden by $ACTOR: $REASON"
+
+      - name: Fast-forward main
+        if: ${{ steps.refs.outputs.noop == 'false' && !inputs.dry_run }}
+        env:
+          DEV_SHA: ${{ steps.refs.outputs.dev_sha }}
+        run: |
+          git push origin "$DEV_SHA:refs/heads/main"
+          echo "::notice::main is now at $DEV_SHA"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Promoted.** \`main\` is now at \`$DEV_SHA\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report a dry run
+        if: ${{ steps.refs.outputs.noop == 'false' && inputs.dry_run }}
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Dry run.** \`main\` was not moved. Re-dispatch with dry_run=false to promote." >> "$GITHUB_STEP_SUMMARY"

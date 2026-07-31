@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "services/backend/**"
       - "services/backend/requirements.in"

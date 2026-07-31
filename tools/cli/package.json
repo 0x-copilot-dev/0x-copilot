@@ -13,6 +13,7 @@
     "payload",
     "README.md",
     "TROUBLESHOOTING.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {

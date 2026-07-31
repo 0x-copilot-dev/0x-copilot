@@ -28,6 +28,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "services/backend/migrations/**"
       - "services/ai-backend/migrations/**"

@@ -31,6 +31,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - "apps/desktop/**"
       - "packages/api-types/**"

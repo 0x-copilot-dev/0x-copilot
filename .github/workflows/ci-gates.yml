@@ -1,0 +1,91 @@
+# Repository-wide static gates.
+#
+# Replaces ci-dark-capabilities-gate.yml, ci-orphan-destinations.yml and
+# ci-css-selector-shadowing.yml, which were three ~70-line workflows running the
+# identical five steps (checkout, setup-python, pip install pytest, pytest the
+# gate, run the gate) and paying three runner startups to do it.
+#
+# One job, one matrix, one required check context. That last part matters most:
+# a required status check must be one that always runs, and per-gate path filters
+# made each of the old contexts conditional -- GitHub treats a required check that
+# never runs as pending and blocks the PR forever, so none of them could safely be
+# required. `repo-gates` runs on the union of the paths and is therefore
+# requireable, which is what puts these gates on the branch-protection list at all.
+#
+# Adding a gate: drop tools/check_<name>.py + tools/test_check_<name>.py, add the
+# name to the matrix and its source tree to the paths. No new workflow.
+
+name: ci-gates
+
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/src/**"
+      - "services/ai-backend/tests/**"
+      - "apps/**"
+      - "packages/**"
+      - "tools/check_*.py"
+      - "tools/test_check_*.py"
+      - "tools/desktop-runtime/**"
+      - "tools/cli-testing/**"
+      - ".github/workflows/ci-gates.yml"
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "services/ai-backend/src/**"
+      - "services/ai-backend/tests/**"
+      - "apps/**"
+      - "packages/**"
+      - "tools/check_*.py"
+      - "tools/test_check_*.py"
+      - "tools/desktop-runtime/**"
+      - "tools/cli-testing/**"
+      - ".github/workflows/ci-gates.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  repo-gates:
+    name: repo-gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      # Each gate is tested before it is trusted: a gate whose own tests fail is
+      # not evidence about the repository, it is a broken instrument.
+      - name: Test the gates
+        run: |
+          PYTHONPATH=tools python -m pytest -q \
+            tools/test_check_dark_capabilities.py \
+            tools/test_check_orphan_destinations.py \
+            tools/test_check_css_selector_shadowing.py \
+            tools/test_check_service_boundaries.py \
+            tools/test_apply_branch_protection.py \
+            tools/test_cli_release.py
+
+      - name: Dark capabilities
+        run: python tools/check_dark_capabilities.py
+
+      - name: Orphan destinations
+        run: python tools/check_orphan_destinations.py
+
+      - name: CSS selector shadowing
+        run: python tools/check_css_selector_shadowing.py
+
+      - name: Service boundaries
+        run: python tools/check_service_boundaries.py
