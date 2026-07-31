@@ -54,18 +54,29 @@ human `.md`). If that holds, the user tier is already done and the work is only
 the run/conversation tier. Confirm by reading and running it — this program has
 twice had "already implemented" turn out to be false when checked.
 
-## 4. Retention — decide explicitly, do not inherit
+## 4. Retention — D8: no cleanup
 
-`/large_tool_results/` is the sharp edge. Those files are offloaded **tool
-output**: potentially large, and potentially containing anything a tool read.
-Once they are real files they need the same treatment as the rest of the
-deletion surface the compliance rules enumerate (conversations, messages, runs,
-events, outbox rows, payload refs, memory, checkpoints, approvals, tool
-invocations).
+**Decision: `.tmp` is never cleaned on a timer.** It is deleted only when the
+chat that owns it is deleted (D6). Nothing ages out, nothing is size-capped.
 
-Answer before implementing: how long does `.tmp` survive a completed run; is
-chat deletion best-effort or guaranteed; what happens to `.tmp` when the app is
-force-quit mid-run.
+This matches Claude Code, which keeps every transcript indefinitely with no
+retention setting. Measured on this machine: `~/.claude/projects` holds 2,404
+transcripts totalling **1.4 GB** accumulated over **17 days** — roughly
+82 MB/day with no cleanup mechanism at all.
+
+**The accepted risk, recorded so it is a decision and not an oversight.** That
+policy is cheaper for Claude Code than for us: its transcripts are JSONL text,
+whereas `/large_tool_results/` holds content that was offloaded _precisely
+because it was too large to inline_. Same policy, steeper curve. If `.tmp`
+growth becomes a support issue, the first lever is an age-out on
+`tool-results/` alone — it is cache (the ledger holds the reference), while
+`subagents/` and `drafts/` are record and explain what the agent did.
+
+A force-quit mid-run needs no separate sweep: the directory belongs to a
+conversation that exists, so D6 already collects it when that chat is deleted.
+
+Retention questions that remain open belong to the ledger and payload refs, not
+here — this PRD does not change those.
 
 ## 5. Permissions
 
@@ -94,6 +105,25 @@ it prompt to pick a project? Ad-hoc attach is the most common first use, so it
 should keep working; the bar likely shows the project when there is one and the
 plain attach affordance when there is not.
 
+### 6.1 Moving a chat between projects
+
+Allowed, and normal — chats get miscategorised and reorganising is expected.
+But because a project OWNS its folders (D1), moving a chat CHANGES WHAT IT CAN
+READ. A chat that read files from project A, moved to B, can no longer re-read
+them: the transcript still shows the reads, and re-running fails. Two rules make
+that honest rather than surprising.
+
+- **D9 — the move changes access going FORWARD only, never retroactively.** Do
+  not rewrite, re-scope or re-authorise history. What the chat already did stays
+  exactly as recorded.
+- **D10 — the move dialog says what changes**, in one line: "This chat will lose
+  access to _kaleidoscope_ and gain _atlas_." A silent access change is how
+  someone ends up debugging why the agent suddenly cannot see a file it read
+  yesterday.
+
+**Ad-hoc grants survive the move.** They were granted to THAT CHAT, not to the
+project, so moving it must not revoke them.
+
 ## 7. Definition of done
 
 - [ ] A project owns ≥1 folder; opening it makes those folders readable without prompting
@@ -104,3 +134,5 @@ plain attach affordance when there is not.
 - [ ] `.copilot` creation removed; read-only grants no longer a special case
 - [ ] A test proves the `.tmp` allow survives the dotted-segment matching trap (§5)
 - [ ] No chat title appears in any path, log line or error message
+- [ ] Moving a chat between projects changes access forward-only and states what changes
+- [ ] Ad-hoc grants survive a project move
