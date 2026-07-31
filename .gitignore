@@ -27,3 +27,9 @@ scratch/
 apps/desktop/resources/
 
 .DS_Store
+
+# Repo-local `gh` CLI config directories. hosts.yml inside these holds a LIVE
+# OAuth token, and this repository is public -- committing one publishes a
+# working GitHub credential. Ignored by pattern rather than by exact name so a
+# second account's directory cannot be added without also being ignored.
+.gh-cli-*/

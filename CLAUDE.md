@@ -185,6 +185,38 @@ Releases are manual-dispatch and dry-run by default. Versioning is pre-1.0: a
 because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0`. Never hand-edit
 `tools/cli/package.json`'s version or `CHANGELOG.md` — `tools/cli_release.py` owns both.
 
+### Check which account `gh` is using before any PR or merge
+
+Run `gh auth status` first. It must report **`0x-copilot-dev`**. That account holds
+repo admin and is a ruleset bypass actor; the machine's default `gh` login is a
+different user, so an agent that skips this check acts as the wrong identity and
+gets confusing permission failures.
+
+The credentials live in a repo-local config directory selected by `GH_CONFIG_DIR`:
+
+```bash
+export GH_CONFIG_DIR="$PWD/.gh-cli-0x-copilot-dev"   # from the repo root
+gh auth status                                        # must say 0x-copilot-dev
+```
+
+Two traps:
+
+- **Git worktrees do not inherit it.** `$PWD` inside `.claude/worktrees/<id>/` is
+  not the repo root, and the config directory only exists in the main checkout —
+  so `gh` silently falls back to the default account. Point `GH_CONFIG_DIR` at the
+  **main checkout's** absolute path, not a relative one.
+- **`.gh-cli-*/hosts.yml` holds a live OAuth token and this repository is
+  public.** The pattern `.gh-cli-*/` is gitignored; never remove that entry, never
+  commit such a directory, and never print the file's contents.
+
+For Claude Code specifically, set it once in `.claude/settings.local.json` (which
+is gitignored, so the machine-specific absolute path stays out of git) and every
+session — worktrees included — picks it up:
+
+```json
+{ "env": { "GH_CONFIG_DIR": "/absolute/path/to/repo/.gh-cli-0x-copilot-dev" } }
+```
+
 ## CI/CD & Docker
 
 - CI is path-filtered — unrelated apps/services should not rebuild on unrelated changes.

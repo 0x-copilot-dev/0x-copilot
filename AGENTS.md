@@ -192,6 +192,30 @@ them from Conventional Commit subjects. Publishing uses npm Trusted Publishing
 (OIDC), so there is no npm token — and the **workflow filename is part of the
 trust record**, so renaming `release-cli.yml` breaks publishing.
 
+### Check which account `gh` is using before any PR or merge
+
+Run `gh auth status` first. It must report **`0x-copilot-dev`**. That account holds
+repo admin and is a ruleset bypass actor; the machine's default `gh` login is a
+different user, so an agent that skips this check acts as the wrong identity and
+gets confusing permission failures.
+
+The credentials live in a repo-local config directory selected by `GH_CONFIG_DIR`:
+
+```bash
+export GH_CONFIG_DIR="$PWD/.gh-cli-0x-copilot-dev"   # from the repo root
+gh auth status                                        # must say 0x-copilot-dev
+```
+
+Two traps:
+
+- **Git worktrees do not inherit it.** `$PWD` inside `.claude/worktrees/<id>/` is
+  not the repo root, and the config directory only exists in the main checkout —
+  so `gh` silently falls back to the default account. Point `GH_CONFIG_DIR` at the
+  **main checkout's** absolute path, not a relative one.
+- **`.gh-cli-*/hosts.yml` holds a live OAuth token and this repository is
+  public.** The pattern `.gh-cli-*/` is gitignored; never remove that entry, never
+  commit such a directory, and never print the file's contents.
+
 ## CI/CD & Docker
 
 - CI is path-filtered — unrelated apps/services should not rebuild on unrelated changes.
