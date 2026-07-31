@@ -44,6 +44,10 @@ from agent_runtime.capabilities.desktop.broker_client import (
     WorkspacePreparedEffect,
     WorkspaceUploadSlot,
 )
+from agent_runtime.capabilities.desktop.host_floor import (
+    HostFilesystemFloor,
+    HostFloorMessages,
+)
 from agent_runtime.capabilities.desktop.host_path import (
     ClassifiedPath,
     HostPathClassifier,
@@ -110,6 +114,8 @@ __all__ = [
     "BrokeredWorkspaceBackend",
     "ClassifiedPath",
     "DesktopBrokerClient",
+    "HostFilesystemFloor",
+    "HostFloorMessages",
     "HostPathClassifier",
     "HostPathFlavour",
     "HostPathGuardBackend",

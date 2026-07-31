@@ -133,6 +133,71 @@ class TestWorkspaceAuthorityClient:
             "/internal/workspace/v2/prepared/prepared_1/commit",
         ]
 
+    @staticmethod
+    def _host_session_transport(
+        grant: dict[str, object],
+    ) -> httpx.MockTransport:
+        return httpx.MockTransport(
+            lambda _request: httpx.Response(
+                201,
+                json={
+                    "host_session_ref": f"whs_{'x' * 43}",
+                    "expires_at": 1_900_000_000_000,
+                    "grants": [grant],
+                },
+            )
+        )
+
+    async def test_the_real_broker_wire_shape_is_accepted(self) -> None:
+        """The private allowlist must match what Electron actually sends.
+
+        `toHostSessionGrant` emits `grantId`; `grant_id` is only the Pydantic
+        alias. Written in field spelling the allowlist matched NO real grant, so
+        every live host session failed closed — invisibly, because every fixture
+        in this suite spoke the alias. This one speaks the wire.
+        """
+
+        client = _client(
+            self._host_session_transport(
+                {
+                    "grantId": "grant_1",
+                    "mount": "mnt_1",
+                    "mode": "read_write",
+                    "label": "Projects",
+                    "status": "active",
+                }
+            )
+        )
+
+        host = await client.workspace_host_session(run_id="run_1", user_id="user_1")
+
+        assert [g.grant_id for g in host.grants] == ["grant_1"]
+
+    async def test_a_root_on_the_private_bootstrap_fails_the_session_closed(
+        self,
+    ) -> None:
+        """This channel stays path-free even though `/v1/grants/*` no longer is.
+
+        The root reversal was scoped to the audience that performs the READ. C2's
+        private write bootstrap is not that audience, and admitting a root here
+        would make the narrow contract this assertion exists to hold negotiable.
+        """
+
+        client = _client(
+            self._host_session_transport(
+                {
+                    "grantId": "grant_1",
+                    "mount": "mnt_1",
+                    "mode": "read_write",
+                    "status": "active",
+                    "root": "/Users/ada/Projects",
+                }
+            )
+        )
+
+        with pytest.raises(Exception, match="workspace host session response"):
+            await client.workspace_host_session(run_id="run_1", user_id="user_1")
+
     async def test_host_session_rejection_is_typed_and_prepared_uri_is_validated(
         self,
     ) -> None:

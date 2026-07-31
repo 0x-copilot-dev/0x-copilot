@@ -124,11 +124,33 @@ export interface BrokerGrant {
   /** Opaque per-boot virtual-root id. NEVER the host path. */
   readonly mount: string;
   /**
-   * The grant's canonical host root. Consumed by the worker to build the
-   * filesystem `allow` rule that stops this folder prompting on every read.
+   * The grant's canonical host root — present ONLY while the grant is active.
+   *
+   * It crosses at all because the worker builds the filesystem `allow` rule
+   * from it. A revoked or expired grant authorizes nothing, so its root buys
+   * the worker nothing either; sending it would hand out the location of a
+   * folder the user has explicitly detached, on a route ("list everything on
+   * record") whose natural future caller is exactly the code that would turn
+   * those rows into allow rules. Absent means the same thing an older broker
+   * meant: no rule, so that folder keeps asking.
    */
-  readonly root: string;
+  readonly root?: string;
 }
+
+/**
+ * The C2 host-session grant projection — deliberately NARROWER than
+ * `BrokerGrant`, and the one place the root reversal must not reach.
+ *
+ * `/internal/workspace/v2/host-sessions` bootstraps the worker's private write
+ * authority. The ai-backend asserts field-by-field that this response carries
+ * no read capability, permit, prepared reference, device identity, root or
+ * path (`broker_client._assert_host_session_wire_is_private`), and it fails the
+ * whole session closed if one appears. Projecting these grants through
+ * `toBrokerGrant` therefore did not just widen a contract — it broke the
+ * channel, silently and only outside the tests, because that assertion is what
+ * the real wire meets.
+ */
+export type HostSessionGrant = Omit<BrokerGrant, "root">;
 
 /** Path-free projection of a `GrantSnapshot` for the broker audience. */
 export interface BrokerGrantSnapshot {
@@ -149,13 +171,36 @@ export interface BrokerGrantSnapshot {
  * (`toRendererGrant`) must NOT gain a root.
  */
 export function toBrokerGrant(grant: Grant, mount: string): BrokerGrant {
+  const projected: BrokerGrant = {
+    grantId: grant.grantId,
+    mode: grant.mode,
+    label: grant.label,
+    status: grant.status,
+    mount,
+  };
+  // Only a grant that still authorizes something carries its root. `status` is
+  // already the effective one — `GrantStore.list` reports an expired grant as
+  // revoked — so expiry is covered by the same test.
+  return grant.status === "active"
+    ? { ...projected, root: grant.root }
+    : projected;
+}
+
+/**
+ * Project an internal `Grant` for the C2 host-session bootstrap: `BrokerGrant`
+ * minus the root, always. Separate from `toBrokerGrant` because the audiences
+ * differ — see `HostSessionGrant`.
+ */
+export function toHostSessionGrant(
+  grant: Grant,
+  mount: string,
+): HostSessionGrant {
   return {
     grantId: grant.grantId,
     mode: grant.mode,
     label: grant.label,
     status: grant.status,
     mount,
-    root: grant.root,
   };
 }
 

@@ -1719,18 +1719,47 @@ def _host_filesystem_permissions(
         _LOGGER.warning("host_filesystem.permission_type_unavailable")
         return ()
 
-    # Folders the user explicitly attached become `allow` rules, so they stop
-    # prompting. Read by CAPABILITY (`granted_roots`), never by isinstance —
-    # gating on a concrete class is how the previous guard silently opted out in
-    # ENFORCE mode, where the workspace object is a different type. A lane that
-    # cannot supply roots yields (), and every folder simply keeps asking.
-    roots = getattr(workspace_backend, "granted_roots", ())
+    return tuple(
+        FilesystemPermission(**rule)
+        for rule in HostFilesystemRules.build(
+            roots=_granted_host_roots(workspace_backend)
+        )
+    )
+
+
+def _granted_host_roots(workspace_backend: object | None) -> tuple[object, ...]:
+    """The folders the user attached, as ``GrantedRoot`` rule/floor input.
+
+    Read by CAPABILITY (``granted_roots``), never by isinstance — gating on a
+    concrete class is how the previous guard silently opted out in ENFORCE mode,
+    where the workspace object is a different type. A lane that cannot supply
+    roots yields ``()``, and every folder simply keeps asking.
+
+    …but it says so OUT LOUD. Reading a capability does not conjure one: the
+    ENFORCE lane's backends (``WorkspaceGatewayBackend`` /
+    ``WorkspaceTombstoneBackend``) do not implement ``granted_roots``, and their
+    grant projection carries no host root at all, so in that lane attaching a
+    folder still buys the user nothing. That is the same OUTCOME the isinstance
+    gate produced, and it was equally invisible in every packaged log. It is a
+    WARNING because it silently disables the whole point of attaching a folder.
+
+    Single-sourced because the rule set and :class:`HostFilesystemFloor` must
+    admit exactly the same roots; two independent reads could drift into a floor
+    that refuses a folder the rules allow.
+    """
+
+    roots = getattr(workspace_backend, "granted_roots", None)
+    if roots is None:
+        _LOGGER.warning(
+            "host_filesystem.granted_roots_unavailable lane=%s "
+            "(attached folders will keep asking on every read)",
+            type(workspace_backend).__name__,
+        )
+        return ()
     if not isinstance(roots, tuple):
         _LOGGER.warning("host_filesystem.granted_roots_malformed")
-        roots = ()
-    return tuple(
-        FilesystemPermission(**rule) for rule in HostFilesystemRules.build(roots=roots)
-    )
+        return ()
+    return roots
 
 
 def _composed_deep_backend(
@@ -1831,6 +1860,15 @@ def _host_default_backend(workspace_backend: object | None) -> object:
     is denied and every ungranted host read is an interrupt. Removing those
     rules while leaving this backend in place would hand the model the disk.
 
+    …with ONE exception the rule set cannot express. deepagents matches rule
+    paths without ``DOTGLOB``, so ``/**`` matches no path containing a hidden
+    segment, and unmatched means allow: ``~/.ssh/id_rsa`` was readable AND
+    writable with zero grants and no prompt.
+    :class:`~agent_runtime.capabilities.desktop.host_floor.HostFilesystemFloor`
+    wraps the real backend with exactly those two missing verdicts (and nothing
+    else — see its module header), so the tool layer stays the boundary for
+    every path the matcher can actually see.
+
     ``root_dir`` is the process working directory, which only affects RELATIVE
     path resolution; absolute paths ignore it entirely.
 
@@ -1846,12 +1884,18 @@ def _host_default_backend(workspace_backend: object | None) -> object:
     from deepagents.backends.state import StateBackend  # noqa: PLC0415
 
     from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
+    from agent_runtime.capabilities.desktop.host_floor import (  # noqa: PLC0415
+        HostFilesystemFloor,
+    )
 
     if not _host_filesystem_permissions(workspace_backend):
         # Not desktop, or rules unavailable (version skew). Either way: do NOT
         # expose a real filesystem. Compose exactly as before.
         return guarded_default(StateBackend(), workspace_backend)
-    return FilesystemBackend(virtual_mode=False)
+    return HostFilesystemFloor(
+        FilesystemBackend(virtual_mode=False),
+        roots=_granted_host_roots(workspace_backend),  # type: ignore[arg-type]
+    )
 
 
 def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:

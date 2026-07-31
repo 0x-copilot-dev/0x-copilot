@@ -68,6 +68,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -111,6 +112,8 @@ from agent_runtime.capabilities.desktop.workspace_grant import (
     WorkspaceGrantGate,
     WorkspaceGrantMessages,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Grant access modes carried for read-side presentation and compatibility.
 GrantMode = Literal["read_only", "read_write_no_delete", "read_write"]
@@ -303,22 +306,66 @@ class WorkspaceMountTable:
                 continue
             name = cls.mount_name(grant, used=frozenset(used))
             used.add(name)
-            mounts.append(
-                WorkspaceMount(
-                    name=name,
-                    grant_id=grant.grant_id,
-                    label=grant.label or None,
-                    mode=grant.mode,
-                    # The grant's real host root, when the broker sends one.
-                    # This is what `HostFilesystemRules` turns into an `allow`
-                    # rule, so a folder the user explicitly attached stops
-                    # prompting on every read. A broker that omits it yields
-                    # None and the mount still works — the folder just keeps
-                    # asking, which is degraded rather than broken.
-                    host_root=grant.root or None,
-                )
-            )
+            mount = cls._mount_for(grant, name=name)
+            if mount is not None:
+                mounts.append(mount)
         return tuple(mounts)
+
+    @classmethod
+    def _mount_for(cls, grant: BrokerGrant, *, name: str) -> WorkspaceMount | None:
+        """One grant's mount, degrading per-grant rather than per-snapshot.
+
+        ``root`` crosses a PROCESS BOUNDARY: it is whatever the broker put on the
+        wire, and :class:`WorkspaceMount` rejects anything that is not a
+        host-absolute path (a relative root, ``~``-relative, a Windows root that
+        nobody normalised to POSIX). That rejection is correct — a root we cannot
+        resolve must never become an ``allow`` rule — but raising it HERE used to
+        abort the whole table: one malformed grant took every OTHER folder the
+        user had attached down with it, mid-run, through
+        ``WorkspaceBackendWorkerWiring.workspace_backend`` whose only ``except``
+        is ``BrokerError``. Multi-grant is exactly where that hurts most.
+
+        So the bad field is dropped, not the grant. The mount still binds its
+        ``grant_id``, so broker-served reads through ``/workspace/<name>/...``
+        keep working; it simply carries no host root, which is the same state a
+        broker that never sends one produces — the folder keeps ASKING. That is
+        the safe direction: degraded, never widened. ``None`` (skip the grant
+        entirely) is reserved for a mount that cannot be built at all.
+        """
+
+        host_root = grant.root or None
+        try:
+            return WorkspaceMount(
+                name=name,
+                grant_id=grant.grant_id,
+                label=grant.label or None,
+                mode=grant.mode,
+                # The grant's real host root, when the broker sends one.
+                # This is what `HostFilesystemRules` turns into an `allow`
+                # rule, so a folder the user explicitly attached stops
+                # prompting on every read. A broker that omits it yields
+                # None and the mount still works — the folder just keeps
+                # asking, which is degraded rather than broken.
+                host_root=host_root,
+            )
+        except ValueError:
+            if host_root is None:
+                # Nothing left to drop: the name or the grant id is unusable.
+                logger.warning("workspace_mount.unusable_grant mount=%s", name)
+                return None
+        # Never log the offending root: it is a host path.
+        logger.warning("workspace_mount.unusable_root mount=%s", name)
+        try:
+            return WorkspaceMount(
+                name=name,
+                grant_id=grant.grant_id,
+                label=grant.label or None,
+                mode=grant.mode,
+                host_root=None,
+            )
+        except ValueError:
+            logger.warning("workspace_mount.unusable_grant mount=%s", name)
+            return None
 
     @classmethod
     def granted_roots(cls, mounts: Sequence[WorkspaceMount]) -> tuple[object, ...]:

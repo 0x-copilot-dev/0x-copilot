@@ -71,12 +71,27 @@ def _assert_host_session_wire_is_private(body: Mapping[str, object]) -> None:
     Electron change must not accidentally put a read capability, permit,
     prepared reference, device identity, root, or path into the worker's
     private bootstrap response and have Pydantic silently ignore it.
+
+    The grant field names are the ones that actually travel — Electron's
+    ``toHostSessionGrant`` emits ``grantId``, and only the Pydantic ALIAS is
+    ``grant_id``. Written in field spelling, this allowlist matched nothing a
+    real broker sends: every live host session would have failed closed, while
+    every test fed it snake_case and stayed green. Both spellings are admitted
+    so the assertion is about WHICH fields cross, never about which caller
+    spelled them how — that is the model's job.
     """
 
     expected = {"host_session_ref", "expires_at", "grants"}
     if set(body) != expected or not isinstance(body["grants"], list):
         raise BrokerProtocolError("workspace host session response is invalid")
-    allowed_grant_fields = {"grant_id", "mount", "mode", "label", "status"}
+    allowed_grant_fields = {
+        "grantId",
+        "grant_id",
+        "mount",
+        "mode",
+        "label",
+        "status",
+    }
     for grant in body["grants"]:
         if not isinstance(grant, dict) or set(grant) - allowed_grant_fields:
             raise BrokerProtocolError("workspace host session response is invalid")
