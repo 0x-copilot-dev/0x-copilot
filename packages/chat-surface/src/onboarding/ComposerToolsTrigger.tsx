@@ -36,6 +36,10 @@ export interface ComposerToolsTriggerProps {
   readonly pausedConnectorIds: readonly string[];
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  /** Catalog slug whose OAuth is in flight, or null (drives the row spinner). */
+  readonly connectingSlug?: string | null;
+  /** Abort that connect. Absent ⇒ the host cannot cancel; no Cancel renders. */
+  readonly onCancelConnect?: () => void;
   readonly onAddCustom: () => void;
   readonly disabled?: boolean;
 }
@@ -51,6 +55,8 @@ export function ComposerToolsTrigger(
     pausedConnectorIds,
     onToggleConnector,
     onConnectCatalog,
+    connectingSlug,
+    onCancelConnect,
     onAddCustom,
     disabled,
   } = props;
@@ -95,6 +101,8 @@ export function ComposerToolsTrigger(
             pausedConnectorIds={pausedConnectorIds}
             onToggleConnector={onToggleConnector}
             onConnectCatalog={onConnectCatalog}
+            connectingSlug={connectingSlug}
+            onCancelConnect={onCancelConnect}
             onAddCustom={onAddCustom}
             onClose={close}
           />

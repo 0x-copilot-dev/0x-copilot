@@ -85,6 +85,14 @@ export function useDesktopComposerTools(
         });
         return { serverId: server.server_id };
       },
+      // Reaches MAIN, which closes the armed loopback so the `authorize` above
+      // rejects. A renderer-only reset would leave the provider's tab live and
+      // the flow running for its full timeout.
+      async cancel() {
+        const win = window as unknown as { bridge?: Window["bridge"] };
+        if (win.bridge === undefined) return;
+        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.cancelAuthorize, {});
+      },
     }),
     [connectorsPort],
   );

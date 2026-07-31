@@ -24,6 +24,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -74,6 +75,8 @@ export interface ConnectorTools {
   readonly webSearchEnabled: boolean;
   /** Ids paused for this run → `request_context.paused_connectors`. */
   readonly pausedConnectorIds: readonly string[];
+  /** Catalog slug mid-connect, or null. Hosts use it to gate other chrome. */
+  readonly connectingSlug: string | null;
 }
 
 export function useConnectorTools(
@@ -95,6 +98,16 @@ export function useConnectorTools(
   // Bumped whenever durable connector state moves under us, so the pill's badge
   // and the open panel both refetch instead of rendering a pre-connect world.
   const [reloadToken, setReloadToken] = useState(0);
+  // Which catalog slug is mid-connect, or null. Before this the row simply did
+  // not change: the browser opened and the popover went on saying "Connect", so
+  // the only feedback that anything had happened was the other application
+  // appearing on screen.
+  const [connectingSlug, setConnectingSlug] = useState<string | null>(null);
+  // Set when the user cancels, so the rejection their own Cancel caused is not
+  // then reported to them as a connect failure. Same shape `SignInGate` uses:
+  // the side that pressed Cancel already knows, so it stays quiet rather than
+  // parsing an error message back out across the IPC hop.
+  const cancelledRef = useRef(false);
 
   // A connector that just authorized must not stay paused from earlier in the
   // session. Derived during render rather than in an effect: an effect would
@@ -135,6 +148,8 @@ export function useConnectorTools(
         onAddCustom?.();
         return;
       }
+      cancelledRef.current = false;
+      setConnectingSlug(entry.slug);
       void (async () => {
         try {
           const outcome = await host.connect(entry);
@@ -151,15 +166,38 @@ export function useConnectorTools(
           );
           setReloadToken((n) => n + 1);
         } catch (error: unknown) {
+          if (cancelledRef.current) {
+            // The user's own Cancel caused this rejection, so it is not an
+            // error to report. Re-read anyway: cancelling cannot un-grant an
+            // authorization the provider already completed, so the server —
+            // not this guess — decides whether the connector is connected.
+            setReloadToken((n) => n + 1);
+            return;
+          }
           onConnectError?.(
             entry.displayName,
             error instanceof Error ? error.message : String(error),
           );
+        } finally {
+          setConnectingSlug(null);
         }
       })();
     },
     [host, onAddCustom, onConnectError],
   );
+
+  const handleCancelConnect = useCallback((): void => {
+    if (host.cancel === undefined) return;
+    cancelledRef.current = true;
+    // The row leaves its connecting state on the connect's rejection, not here
+    // — otherwise it would claim to have stopped something that is still
+    // running if the abort itself failed.
+    void host.cancel().catch(() => {
+      // Nothing useful to say: either the flow already finished (so the
+      // connect's own result governs) or main is gone, in which case the
+      // rejection below restores the row anyway.
+    });
+  }, [host]);
 
   const toolsTrigger = useMemo<ReactNode | undefined>(
     () =>
@@ -172,6 +210,10 @@ export function useConnectorTools(
           pausedConnectorIds={effectivePausedIds}
           onToggleConnector={handleToggleConnector}
           onConnectCatalog={handleConnectCatalog}
+          connectingSlug={connectingSlug}
+          onCancelConnect={
+            host.cancel === undefined ? undefined : handleCancelConnect
+          }
           onAddCustom={() => onAddCustom?.()}
           disabled={disabled}
         />
@@ -183,6 +225,9 @@ export function useConnectorTools(
       effectivePausedIds,
       handleToggleConnector,
       handleConnectCatalog,
+      connectingSlug,
+      host.cancel,
+      handleCancelConnect,
       onAddCustom,
       disabled,
     ],
@@ -192,5 +237,6 @@ export function useConnectorTools(
     toolsTrigger,
     webSearchEnabled,
     pausedConnectorIds: effectivePausedIds,
+    connectingSlug,
   };
 }

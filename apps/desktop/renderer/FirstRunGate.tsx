@@ -441,6 +441,15 @@ export function FirstRunSurfaceMount({
     [],
   );
 
+  // Cancel reaches MAIN, which closes the armed loopback so the `authorize`
+  // above rejects. Supplying this is what makes the popover render a Cancel
+  // beside the spinner at all.
+  const handleCancelConnect = useCallback(
+    (): Promise<unknown> =>
+      window.bridge.ipc.invoke(CONNECTOR_CHANNELS.cancelAuthorize, {}),
+    [],
+  );
+
   // P8 §8 — state ①'s "Get Ollama ↗". Same shape as the connector open above:
   // the renderer cannot open an external URL (main denies `window.open`), so it
   // asks MAIN for the INTENT and main owns the destination. The channel takes
@@ -569,6 +578,7 @@ export function FirstRunSurfaceMount({
         profilePort={profilePort}
         connectorsPort={connectorsPort}
         onConnectCatalog={handleConnectCatalog}
+        onCancelConnect={handleCancelConnect}
         // Skip / the surface's own engine-carrying `onComplete` slot both mean
         // "reveal the shell with NO created run" — the real first-run handoff
         // (carrying the conversation id) is fired by `useFirstRunLaunch` above,

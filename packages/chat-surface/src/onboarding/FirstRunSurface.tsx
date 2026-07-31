@@ -174,6 +174,13 @@ export interface FirstRunSurfaceProps {
     entry: FirstRunInstallableConnector,
   ) => void | Promise<unknown>;
   /**
+   * P4 — abort the connect in flight. Supplying it is what makes the Tools
+   * popover render a Cancel beside the spinner, so a host that cannot really
+   * stop its flow should omit it rather than pass a no-op: a Cancel that only
+   * tidies the UI leaves the provider's tab live and the user misinformed.
+   */
+  readonly onCancelConnect?: () => void | Promise<unknown>;
+  /**
    * P4 — host handler that opens the custom-MCP config form. Defaults to a
    * no-op (the inline paste-a-config form is a host concern). Also the routing
    * target for `requiresPreRegisteredClient` catalog rows.
@@ -313,6 +320,7 @@ export function FirstRunSurface({
   profilePort,
   connectorsPort,
   onConnectCatalog,
+  onCancelConnect,
   onAddCustom,
   appVersion,
   keyProviders,
@@ -355,8 +363,18 @@ export function FirstRunSurface({
         await connectorsPort.beginAuth(server.server_id);
         return { serverId: server.server_id };
       },
+      // Present only when the host gave one — the popover keys its Cancel
+      // affordance off the verb existing, so an absent one honestly means
+      // "this host cannot stop the flow".
+      ...(onCancelConnect === undefined
+        ? {}
+        : {
+            cancel: async () => {
+              await onCancelConnect();
+            },
+          }),
     }),
-    [onConnectCatalog, connectorsPort],
+    [onConnectCatalog, onCancelConnect, connectorsPort],
   );
 
   const {

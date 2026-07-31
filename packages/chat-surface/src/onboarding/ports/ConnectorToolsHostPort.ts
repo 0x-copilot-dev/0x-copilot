@@ -45,4 +45,23 @@ export interface ConnectorToolsHostPort {
   connect(
     entry: FirstRunInstallableConnector,
   ): Promise<ConnectorConnectOutcome | void>;
+
+  /**
+   * Abort the connect currently in flight, if this host can.
+   *
+   * OPTIONAL on purpose — the capability is expressed in the type rather than
+   * assumed, and the surface renders a Cancel affordance only when a host
+   * supplies one. Web omits it: its connect is a full-page redirect, so by the
+   * time there is anything to cancel the document is gone.
+   *
+   * Must actually stop the flow, not just tidy the UI. A renderer-only cancel
+   * leaves the provider's tab live, so a user who cancels and then approves
+   * anyway ends up connected — worse than no button at all, because they were
+   * told it stopped.
+   *
+   * Resolving does not guarantee the connector is disconnected: an
+   * authorization the provider already completed cannot be un-granted from
+   * here. The surface re-reads its list afterwards and lets the server win.
+   */
+  cancel?(): Promise<void>;
 }

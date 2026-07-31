@@ -221,3 +221,134 @@ describe("useConnectorTools", () => {
   // toggling the row twice — it passed with the logic deleted. The behaviour is
   // carried over verbatim from the desktop original rather than re-derived.
 });
+
+// ---------------------------------------------------------------------------
+// In-flight state + cancel
+// ---------------------------------------------------------------------------
+//
+// The reported symptom was "nothing happens, just the website opens": the row
+// kept saying "Connect" for the whole round-trip and there was no way out.
+
+describe("useConnectorTools — connecting state", () => {
+  it("shows a spinner row and a Cancel while the connect is in flight", async () => {
+    let settle: (() => void) | null = null;
+    const host: ConnectorToolsHostPort = {
+      connect: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+      ),
+      cancel: vi.fn(async () => undefined),
+    };
+    render(<Harness port={makePort()} host={host} />);
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+
+    // The row swaps to the in-flight presentation, with a way out.
+    const row = await screen.findByTestId("first-run-tools-connecting-linear");
+    expect(row.textContent).toContain("Connecting…");
+    expect(screen.getByTestId("first-run-tools-cancel-linear")).not.toBeNull();
+    // And it is no longer the "Connect" row.
+    expect(screen.queryByTestId("first-run-tools-connect-linear")).toBeNull();
+
+    settle!();
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("first-run-tools-connecting-linear"),
+      ).toBeNull(),
+    );
+  });
+
+  it("renders NO Cancel when the host cannot actually abort", async () => {
+    // Web's connect is a full-page redirect, so there is nothing to cancel.
+    // Offering the button anyway would promise something that cannot happen.
+    const host: ConnectorToolsHostPort = {
+      connect: vi.fn(() => new Promise<void>(() => undefined)),
+    };
+    render(<Harness port={makePort()} host={host} />);
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+
+    await screen.findByTestId("first-run-tools-connecting-linear");
+    expect(screen.queryByTestId("first-run-tools-cancel-linear")).toBeNull();
+  });
+
+  it("cancel calls the host, restores the row, and re-reads the list", async () => {
+    const listServers = vi.fn().mockResolvedValue([]);
+    let fail: ((error: Error) => void) | null = null;
+    const cancel = vi.fn(async () => undefined);
+    const host: ConnectorToolsHostPort = {
+      connect: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            fail = reject;
+          }),
+      ),
+      cancel,
+    };
+    const onConnectError = vi.fn();
+    render(
+      <Harness
+        port={makePort({ listServers })}
+        host={host}
+        onConnectError={onConnectError}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+    fireEvent.click(await screen.findByTestId("first-run-tools-cancel-linear"));
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    // Main aborting the flow is what rejects the connect.
+    fail!(new Error("connect cancelled"));
+
+    // The row goes back to being connectable.
+    await screen.findByTestId("first-run-tools-connect-linear");
+    // Cancelling cannot un-grant an authorization the provider already
+    // completed, so the list is re-read and the SERVER decides the truth.
+    await waitFor(() => expect(listServers).toHaveBeenCalledTimes(2));
+    // And the user is not shown an error for the thing they just asked for.
+    expect(onConnectError).not.toHaveBeenCalled();
+  });
+
+  it("disables the other connect rows while one is in flight", async () => {
+    // Main holds ONE pending connect, so a second click would abort the first.
+    const host: ConnectorToolsHostPort = {
+      connect: vi.fn(() => new Promise<void>(() => undefined)),
+      cancel: vi.fn(async () => undefined),
+    };
+    render(
+      <Harness
+        port={makePort({
+          listCatalog: vi
+            .fn()
+            .mockResolvedValue([
+              catalogEntry(),
+              catalogEntry({ slug: "notion", display_name: "Notion" }),
+            ]),
+        })}
+        host={host}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+    await screen.findByTestId("first-run-tools-connecting-linear");
+
+    const other = screen.getByTestId("first-run-tools-connect-notion");
+    expect((other as HTMLButtonElement).disabled).toBe(true);
+  });
+});
