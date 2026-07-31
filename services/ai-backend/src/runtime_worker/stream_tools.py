@@ -16,6 +16,8 @@ from agent_runtime.execution.contracts import (
     JsonObject,
     StreamEventSource,
 )
+from agent_runtime.execution.tool_outcomes import ToolInvocationOutcome
+from agent_runtime.observability.redactor import ToolArgumentRedactor
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.persistence.records import ToolInvocationRecord
 from agent_runtime.persistence.records.common import ToolInvocationStatus
@@ -50,6 +52,12 @@ class ToolCallStreamState:
     started_emitted: bool = False
     pending_start: bool = False
     started_at: datetime | None = None
+    # The ``running`` ledger row minted at TOOL_CALL_STARTED. Held so the
+    # terminal write reuses the SAME ``invocation_id`` and therefore UPDATES
+    # that row (both stores upsert on it) instead of appending a second one.
+    # Without it there was no way to close the row, and every invocation in
+    # the ledger stayed ``running`` with a null ``completed_at`` forever.
+    invocation: ToolInvocationRecord | None = None
 
 
 class StreamMessageProcessor:
@@ -121,6 +129,12 @@ class StreamMessageProcessor:
 
         self._ledgers.pop(run_id, None)
         self._reasoning_buffers.pop(run_id, None)
+        # Per-call stream state was never dropped here. It survived every run
+        # in a long-lived worker, and each entry now also holds the call's
+        # ``ToolInvocationRecord`` (args included), so leaving it would grow the
+        # leak in proportion to what the ledger fix added.
+        for key in [key for key in self._tool_call_ids if key[0] == run_id]:
+            del self._tool_call_ids[key]
 
     async def emit_reasoning_events(
         self,
@@ -267,6 +281,14 @@ class StreamMessageProcessor:
             settled_call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
             if settled_call_id is not None:
                 self.ledger_for_run(run.run_id).observed_settled(settled_call_id)
+                # Close the persisted ledger row in the same beat the in-memory
+                # ledger settles. These two had drifted apart: the in-memory
+                # one settled here, the durable one never did.
+                await self.close_tool_invocation(
+                    run=run,
+                    call_id=settled_call_id,
+                    **ToolInvocationOutcome.from_result_payload(payload),
+                )
             completed_payload: JsonObject = {
                 Keys.Field.TOOL_NAME: payload[Keys.Field.TOOL_NAME],
                 Keys.Field.CALL_ID: payload[Keys.Field.CALL_ID],
@@ -392,23 +414,96 @@ class StreamMessageProcessor:
 
         if state.call_id is None or state.tool_name is None:
             return
+        record = ToolInvocationRecord(
+            run_id=run.run_id,
+            org_id=run.org_id,
+            task_id=subagent_id,
+            tool_name=state.tool_name,
+            connector_slug=connector_slug,
+            call_id=state.call_id,
+            status=ToolInvocationStatus.RUNNING,
+            args=ToolArgumentRedactor.redact(self._state_arguments(state)),
+            started_at=state.started_at,
+        )
+        # Held even if the write below fails: the terminal write is what makes
+        # the row honest, and it must target the same id either way.
+        state.invocation = record
         try:
-            await self.event_producer.persistence.record_tool_invocation(
-                ToolInvocationRecord(
-                    run_id=run.run_id,
-                    org_id=run.org_id,
-                    task_id=subagent_id,
-                    tool_name=state.tool_name,
-                    connector_slug=connector_slug,
-                    call_id=state.call_id,
-                    status=ToolInvocationStatus.RUNNING,
-                    started_at=state.started_at,
-                )
-            )
+            await self.event_producer.persistence.record_tool_invocation(record)
         except Exception:  # noqa: BLE001 — ledger write is best-effort.
             logger.warning(
                 "tool_invocation_record_failed",
                 extra={"run_id": run.run_id, "call_id": state.call_id},
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _state_arguments(state: ToolCallStreamState) -> JsonObject:
+        """Best available arguments for a call: the parsed dict, else the buffered JSON text.
+
+        Streamed tool calls accumulate their arguments as text deltas, so at
+        TOOL_CALL_STARTED this is often still partial (or empty). The terminal
+        write re-reads it once the buffer is complete, which is what makes a
+        failing call's payload recoverable from the ledger.
+        """
+
+        if state.args:
+            return state.args
+        return StreamMessageProcessor.parse_args_text(state.args_text)
+
+    async def close_tool_invocation(
+        self,
+        *,
+        run: RunRecord,
+        call_id: str,
+        status: ToolInvocationStatus,
+        result_summary: JsonObject | None = None,
+        safe_error_code: str | None = None,
+        safe_error_message: str | None = None,
+    ) -> None:
+        """Write the terminal ledger row for ``call_id``: status + ``completed_at`` + error.
+
+        THE closing half of the ledger, missing since PRD-08 D1b: only the
+        ``running`` row was ever written, so a run could finish with every
+        invocation still open and no record of what failed or why. Both stores
+        upsert on ``invocation_id`` — and the postgres adapter's
+        ``ON CONFLICT DO UPDATE`` already listed exactly the columns written
+        here — so re-putting the held record closes the row in place.
+
+        Called from the natural ``tool_result`` seam AND from the run handler's
+        terminal reconciliation, so failure and cancellation close too. Like
+        the opening write it is best-effort: a ledger write must never fail a
+        run, least of all one that is already failing.
+        """
+
+        state = self._tool_call_ids.get((run.run_id, call_id))
+        # No held record means no row was ever opened for this call, so there is
+        # nothing to close — closing would append an orphan rather than settle
+        # anything.
+        if state is None or state.invocation is None:
+            return
+        terminal = state.invocation.model_copy(
+            update={
+                "status": status,
+                # Re-read the arguments: by now the streamed buffer is complete,
+                # whereas at TOOL_CALL_STARTED it was frequently still empty.
+                "args": ToolArgumentRedactor.redact(self._state_arguments(state)),
+                "result_summary": result_summary or {},
+                "completed_at": datetime.now(timezone.utc),
+                "safe_error_code": safe_error_code,
+                "safe_error_message": safe_error_message,
+            }
+        )
+        # Replacing the held record makes a second close idempotent rather than
+        # re-opening the row: the reconciler can run over a call the natural
+        # seam already settled.
+        state.invocation = terminal
+        try:
+            await self.event_producer.persistence.record_tool_invocation(terminal)
+        except Exception:  # noqa: BLE001 — ledger write is best-effort.
+            logger.warning(
+                "tool_invocation_close_failed",
+                extra={"run_id": run.run_id, "call_id": call_id},
                 exc_info=True,
             )
 
