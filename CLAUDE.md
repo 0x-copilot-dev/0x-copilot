@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Product direction: desktop-first, web deprecated
+
+**`apps/desktop` is the product.** `apps/frontend` (the web surface) is
+**deprecated** — keep it building, do not invest in it. When a change could land
+in either, it lands in desktop.
+
+Practically, for anything you are asked to build:
+
+- Default to the desktop app. Do not add web-only features, web-only routes, or
+  web-specific UI polish unless explicitly asked.
+- Shared behaviour belongs in `packages/chat-surface` (the single-source-of-truth
+  interaction layer both hosts mount), not in `apps/frontend`.
+- Web changes are still legitimate for keeping it green — build fixes, dependency
+  bumps, shared-package fallout, security fixes. Nothing here says let it break.
+- Do not delete the web app or its CI. Deprecated is not removed, and both hosts
+  still mount the same shared surface.
+
 ## Workspace Layout
 
 Monorepo with independently deployable components. Each Python service owns its own Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, `Dockerfile`, tests, and deploy path. The frontend and desktop apps share the npm workspace (`apps/*`, `packages/*`). Implemented paths only:
@@ -9,7 +26,7 @@ Monorepo with independently deployable components. Each Python service owns its 
 - `services/ai-backend` — agent runtime (FastAPI + LangGraph + Deep Agents). Modules: `agent_runtime/` (domain), `runtime_api/` (HTTP/SSE), `runtime_worker/` (queued run executor), `runtime_adapters/` (in-memory + postgres stores).
 - `services/backend` — core backend (`backend_app/`): MCP registration, OAuth state, token vault, user skills, audit events, identity (dev IdP, Google OAuth, SIWE, BYOK provider keys).
 - `services/backend-facade` — product-facing API (`backend_facade/`); proxies `/v1/*` to `backend` and `ai-backend`. **Apps must call only the facade.**
-- `apps/frontend` — Vite + React web surface.
+- `apps/frontend` — Vite + React web surface. **DEPRECATED** (see above); keep green, do not extend.
 - `apps/desktop` — Electron client (`@0x-copilot/desktop`); supervises an embedded PostgreSQL + the three Python services from a bundled runtime. Staging/boot tooling lives in `tools/desktop-runtime/`.
 - `apps/website` — `0xcopilot.tech` marketing site (Astro), deployed to GitHub Pages.
 - `packages/api-types` — TypeScript contracts for app-facing payloads.
@@ -153,6 +170,21 @@ Hard rule: no deployable component imports another's `src/`. This is non-negotia
 - `packages/shared-config` is planned — do not import from it until it exists.
 - Add or update a service-boundary doc before creating a new service or shared package.
 
+## Branching & Releases
+
+**Open PRs against `dev`, never `main`.** `main` moves only via `promote-to-main.yml`
+(manual dispatch, fast-forward) and the version-bump commit `release-cli.yml` writes.
+Full detail: [docs/ci-cd/branching-and-release.md](docs/ci-cd/branching-and-release.md).
+
+```
+feature ──PR──▶ dev ──promote-to-main.yml──▶ main ──release-cli.yml──▶ npm
+```
+
+Releases are manual-dispatch and dry-run by default. Versioning is pre-1.0: a
+**breaking change bumps MINOR** (`0.1.4 → 0.2.0`), everything else bumps PATCH,
+because npm resolves `^0.1.4` as `>=0.1.4 <0.2.0`. Never hand-edit
+`tools/cli/package.json`'s version or `CHANGELOG.md` — `tools/cli_release.py` owns both.
+
 ## CI/CD & Docker
 
 - CI is path-filtered — unrelated apps/services should not rebuild on unrelated changes.
@@ -162,6 +194,46 @@ Hard rule: no deployable component imports another's `src/`. This is non-negotia
 - PR CI must not require production secrets or live third-party services.
 - Production deploys require GitHub Environments with manual approval.
 - Never commit secrets, real `.env` files, tokens, certificates, or production credentials.
+
+### CI rules that have already cost us a day
+
+Each of these shipped, broke something silently, and is now guarded by a test in
+`tools/test_apply_branch_protection.py`. Do not "simplify" them back.
+
+1. **A required status check must be unconditional.** GitHub reports a required
+   check that never starts as _pending_, not skipped — so adding `paths:` to a
+   required workflow wedges every PR whose diff misses those paths
+   (`mergeStateStatus: BLOCKED`, waiting on a job that will never begin). If you
+   make a check required, delete its `paths:` filter. `ci-repo` and `ci-gates`
+   are unconditional for exactly this reason.
+2. **Workflow logic belongs in `tools/` with a test, not in a YAML heredoc.**
+   A heredoc is invisible to ruff, pytest and review. `apply-branch-protection.yml`
+   carried a module-level `return`, raised `SyntaxError` on every dispatch, and
+   left `main` unprotected for months. Note `ast.parse` accepts that code —
+   `compile()` is what catches it.
+3. **Never interpolate `${{ }}` inside an embedded script.** A `type: boolean`
+   input substitutes as lowercase `true`, which is a `NameError` in Python, and
+   any value pasted into program text is a script-injection vector. Pass values
+   through `env:` and read `os.environ`.
+4. **Required-check contexts are bare job names** (`lint-and-secrets`), with the
+   matrix suffix where applicable (`cli (ubuntu-latest)`). The `workflow / job`
+   form the PR UI displays matches nothing. Verify with
+   `gh api repos/OWNER/REPO/commits/SHA/check-runs --jq '.check_runs[].name'`.
+5. **`administration` is not a valid `permissions:` key.** It makes the whole
+   workflow unparseable (HTTP 422 on dispatch). Repository administration cannot
+   be granted to `GITHUB_TOKEN` at all; ruleset writes need a fine-grained PAT.
+6. **This repo is owned by a user, not an org.** Two consequences that look like
+   bugs: `CODEOWNERS` cannot reference `@org/team` handles (they resolve to
+   nobody), and rulesets cannot use `actor_type: Integration` bypass actors. That
+   is why `main` carries fewer rules than `dev` — see the `$model` block in
+   `deploy/branch-protection.json` before changing it.
+7. **A dormant workflow rots.** Path-filtered drills that rarely trigger were
+   found broken the first time they ran in months — one had never installed
+   `pytest`, another booted without a required secret. If you touch a drill,
+   confirm it actually ran and passed; a gate that cannot start reports nothing.
+8. **Don't merge red, and don't trust `gh pr merge --auto` to wait.** With no
+   branch protection requiring a check, `--auto` merges immediately. Poll the
+   checks and merge deliberately.
 
 ## Compliance Reviews
 

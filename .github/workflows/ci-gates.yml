@@ -5,44 +5,36 @@
 # identical five steps (checkout, setup-python, pip install pytest, pytest the
 # gate, run the gate) and paying three runner startups to do it.
 #
-# One job, one matrix, one required check context. That last part matters most:
-# a required status check must be one that always runs, and per-gate path filters
-# made each of the old contexts conditional -- GitHub treats a required check that
-# never runs as pending and blocks the PR forever, so none of them could safely be
-# required. `repo-gates` runs on the union of the paths and is therefore
-# requireable, which is what puts these gates on the branch-protection list at all.
+# One job, one required check context. That last part matters most: a required
+# status check must be one that ALWAYS runs, and the old per-gate workflows were
+# each path-filtered, so none of them could safely be required. `repo-gates` is
+# unconditional (see below), which is what puts these gates on the
+# branch-protection list at all.
 #
-# Adding a gate: drop tools/check_<name>.py + tools/test_check_<name>.py, add the
-# name to the matrix and its source tree to the paths. No new workflow.
+# Adding a gate: drop tools/check_<name>.py + tools/test_check_<name>.py, then add
+# both to the steps below. Nothing to wire into a paths filter -- there isn't one.
 
 name: ci-gates
 
+# DELIBERATELY UNCONDITIONAL -- no `paths:` filter anywhere below.
+#
+# repo-gates is a REQUIRED status check on dev, and a required check must always
+# run. GitHub treats one that never reports as pending forever, so a
+# path-filtered required check silently blocks every PR that misses its paths.
+# That is not hypothetical: this workflow shipped with a paths filter, and the
+# very next PR -- which touched tools/apply_branch_protection.py, a path the
+# filter did not list -- went straight to mergeStateStatus BLOCKED, waiting on a
+# job that was never going to start.
+#
+# The rule is therefore: required <=> unconditional. ci-repo (lint-and-secrets,
+# tenants-lint) is unconditional for the same reason. The whole job is ~45s, so
+# running it on every PR costs far less than one blocked merge.
 on:
   pull_request:
-    paths:
-      - "services/ai-backend/src/**"
-      - "services/ai-backend/tests/**"
-      - "apps/**"
-      - "packages/**"
-      - "tools/check_*.py"
-      - "tools/test_check_*.py"
-      - "tools/desktop-runtime/**"
-      - "tools/cli-testing/**"
-      - ".github/workflows/ci-gates.yml"
   push:
     branches:
       - main
       - dev
-    paths:
-      - "services/ai-backend/src/**"
-      - "services/ai-backend/tests/**"
-      - "apps/**"
-      - "packages/**"
-      - "tools/check_*.py"
-      - "tools/test_check_*.py"
-      - "tools/desktop-runtime/**"
-      - "tools/cli-testing/**"
-      - ".github/workflows/ci-gates.yml"
   workflow_dispatch:
 
 concurrency:
