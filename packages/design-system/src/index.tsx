@@ -709,11 +709,30 @@ export interface MenuProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
 }
 
+/** Shallow compare of the handful of keys `computePosition` writes. Without
+ *  this the position pass would setState with a fresh object every time and
+ *  never settle (a new object is never `Object.is`-equal to the old one). */
+function sameStyle(a: CSSProperties, b: CSSProperties): boolean {
+  const keys: (keyof CSSProperties)[] = [
+    "position",
+    "zIndex",
+    "top",
+    "bottom",
+    "left",
+    "right",
+    "minWidth",
+    "maxWidth",
+  ];
+  return keys.every((key) => a[key] === b[key]);
+}
+
 /**
  * Headless anchored dropdown shell. Mounts only when open; dismisses on Escape
  * or pointerdown outside the menu (and outside anchorRef when provided).
  * Auto-flip placement is intentionally not handled here — consumers that need
- * it pull a placement library where it's actually used.
+ * it pull a placement library where it's actually used. Horizontal placement IS
+ * clamped to the viewport (see `computePosition`), because a panel that opens
+ * off-screen is not a placement preference, it is an unusable control.
  */
 export function Menu({
   open,
@@ -788,10 +807,35 @@ export function Menu({
     } else {
       next.top = rect.bottom + SPACE;
     }
+    // Horizontal placement, CLAMPED to the viewport (real bug). Aligning the
+    // panel to the anchor and stopping there means a panel anchored near a
+    // window edge simply hangs off it: measured in the Run cockpit's Studio
+    // rail — which is the window's rightmost column and is resizable down to
+    // 300px — the 300px model picker sat 134px off-screen and the 336px Tools
+    // panel 88px off, so their right-hand controls could not be clicked at all.
+    // (`DesktopAnchoredPlusMenu` in apps/desktop already clamped for exactly
+    // this reason, with a hard-coded panel width; this is the same correction
+    // at the shared primitive, measured instead of guessed.)
+    //
+    // The panel's width comes from its OWN class (`.atlas-model-pill__menu` is
+    // 300px), so it is unknowable until it has rendered — hence reading it off
+    // `menuRef` here. On the first pass the ref is empty (or the panel is not
+    // yet positioned) and the clamp is skipped; the effect below re-runs on the
+    // resulting style change, and this formula is a pure function of the anchor
+    // rect and the panel width, so the second pass lands on the final value and
+    // the third is identical. `sameStyle` stops there rather than looping.
+    const panelWidth = menuRef.current?.getBoundingClientRect().width ?? 0;
+    const clamp = (desired: number): number =>
+      panelWidth === 0
+        ? desired
+        : Math.max(
+            SPACE,
+            Math.min(desired, window.innerWidth - panelWidth - SPACE),
+          );
     if (align === "right") {
-      next.right = window.innerWidth - rect.right;
+      next.right = clamp(window.innerWidth - rect.right);
     } else {
-      next.left = rect.left;
+      next.left = clamp(rect.left);
     }
     // Anchor-width default — once portaled to <body>, percentage widths
     // (e.g. ``width: 100%`` on .aui-user-card__menu) would otherwise
@@ -802,15 +846,18 @@ export function Menu({
     // class which still wins via the cascade.
     next.minWidth = `${rect.width}px`;
     next.maxWidth = "min(32rem, calc(100vw - 2rem))";
-    setAnchorStyle(next);
+    setAnchorStyle((current) => (sameStyle(current, next) ? current : next));
   }
 
+  // `anchorStyle` is a dependency so the clamp above gets its second pass once
+  // the panel has been laid out and can be measured. Layout effects run before
+  // paint, so the correction is never visible as a jump.
   useLayoutEffect(() => {
     if (open) {
       computePosition();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, side, align]);
+  }, [open, side, align, anchorStyle]);
 
   if (!open) {
     return null;
