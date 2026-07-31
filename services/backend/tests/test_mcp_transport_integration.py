@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 import pytest
@@ -299,6 +300,128 @@ def test_complete_paginated_tools_and_resources_publishes_exactly_once(
         org_id="org", user_id="user", after_cursor=None, limit=10
     )
     assert len(feed.notices) == 1
+
+
+class _CapturingHandler(logging.Handler):
+    """Collect records straight off a named logger.
+
+    The service's structured logging does not propagate to root once the app
+    has been built, so ``caplog`` can see nothing depending on which tests ran
+    first. Attaching to the logger asserts on what the service really emits.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+class TestPostDispatchObservationCannotDiscardAGoodResult:
+    """Descriptor bookkeeping runs after the connector already answered.
+
+    The incident: a ``SELECT *`` row splatted into an ``extra="forbid"``
+    contract raised ``ValidationError`` inside the post-dispatch descriptor
+    observation. ``ValidationError`` is a ``ValueError``, and the RPC route
+    maps ``ValueError`` to ``400``, so a *successful* Linear round-trip —
+    52 tools already discovered and returned — was converted into a client
+    error that killed ``load_mcp_server`` at ``resources/list``. The runtime
+    then reported it as "the MCP server could not be reached", and neither
+    service logged a line naming the real cause.
+
+    The projection bug itself is fixed. This pins the structural half: a
+    bookkeeping failure must degrade revision tracking, never discard a
+    result the connector already produced.
+    """
+
+    @staticmethod
+    def _observation_failure(monkeypatch, exc: Exception) -> None:
+        def boom(*_args, **_kwargs):
+            raise exc
+
+        monkeypatch.setattr(
+            McpRegistryService, "_observe_proxied_descriptor_page", boom
+        )
+
+    def test_a_failing_observation_still_returns_the_connector_payload(
+        self, monkeypatch
+    ) -> None:
+        service, _store, _vault, record = _service()
+        remote = _Remote([{"result": {"tools": [{"name": "a"}]}}])
+        monkeypatch.setattr("backend_app.mcp_transport.urlopen", remote)
+        lease = service.create_internal_client_session(
+            org_id="org", user_id="user", server_id=record.server_id
+        ).lease
+        # Exactly the live failure: a Pydantic ValidationError is a ValueError.
+        self._observation_failure(
+            monkeypatch, ValueError("2 validation errors for McpDescriptorRevision")
+        )
+
+        response = _rpc(
+            service,
+            record,
+            lease,
+            {"jsonrpc": "2.0", "method": "tools/list", "params": {}},
+        )
+
+        # Was: ValueError out of the service -> HTTP 400 -> the runtime's
+        # "could not be reached", for a call the connector answered fine.
+        assert response.payload == {"result": {"tools": [{"name": "a"}]}}
+
+    def test_a_failing_observation_is_logged_not_swallowed(self, monkeypatch) -> None:
+        # Failing open is only defensible if it is loud. Silently continuing
+        # would hide the next projection bug for as long as this one hid.
+        service, _store, _vault, record = _service()
+        remote = _Remote([{"result": {"tools": [{"name": "a"}]}}])
+        monkeypatch.setattr("backend_app.mcp_transport.urlopen", remote)
+        lease = service.create_internal_client_session(
+            org_id="org", user_id="user", server_id=record.server_id
+        ).lease
+        self._observation_failure(monkeypatch, ValueError("projection exploded"))
+
+        # Capture on the logger itself: once any test has built the app, the
+        # service's structured logging stops propagating to root and
+        # ``caplog`` would silently see nothing, making this assertion pass or
+        # fail on test order rather than on behaviour.
+        handler = _CapturingHandler()
+        service_logger = logging.getLogger("backend_app.service")
+        service_logger.addHandler(handler)
+        try:
+            _rpc(
+                service,
+                record,
+                lease,
+                {"jsonrpc": "2.0", "method": "tools/list", "params": {}},
+            )
+        finally:
+            service_logger.removeHandler(handler)
+
+        records = [r for r in handler.records if r.levelno >= logging.ERROR]
+        assert records, "a swallowed observation failure left no trace"
+        message = "\n".join(r.getMessage() for r in records)
+        assert "tools/list" in message
+        assert record.server_id in message
+        assert any(r.exc_info for r in records)
+
+    def test_an_unexpected_error_type_is_contained_too(self, monkeypatch) -> None:
+        # The live bug arrived as a ValueError, but the reason to contain it
+        # is that it is *bookkeeping*, not that it was that class.
+        service, _store, _vault, record = _service()
+        remote = _Remote([{"result": {"tools": [{"name": "a"}]}}])
+        monkeypatch.setattr("backend_app.mcp_transport.urlopen", remote)
+        lease = service.create_internal_client_session(
+            org_id="org", user_id="user", server_id=record.server_id
+        ).lease
+        self._observation_failure(monkeypatch, KeyError("descriptor_digest"))
+
+        response = _rpc(
+            service,
+            record,
+            lease,
+            {"jsonrpc": "2.0", "method": "tools/list", "params": {}},
+        )
+        assert response.payload == {"result": {"tools": [{"name": "a"}]}}
 
 
 def test_descriptor_diagnostics_record_paging_bytes_and_rejected_admission(

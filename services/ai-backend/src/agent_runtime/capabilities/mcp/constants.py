@@ -331,7 +331,18 @@ class Messages:
     class Loader:
         """Safe error and warning messages emitted by the MCP loader."""
 
-        AUTH_FAILED = "MCP server authentication failed."
+        # Like the two below, this is paraphrased into user-facing copy, so it
+        # has to carry the one action that resolves it. "Authentication failed"
+        # alone left the model to invent a next step, and the step it invents
+        # for a bare failure is "try again in a moment" — which for an expired
+        # or rejected credential never succeeds. Reconnecting does.
+        AUTH_FAILED = (
+            "The connector rejected the stored credential. The server did "
+            "reply, so this is not a connection problem and not temporary: "
+            "retrying will not change it. Ask the user to reconnect this "
+            "connector in Settings, which re-runs sign-in and stores a fresh "
+            "credential."
+        )
         CANONICAL_EFFECT_PIPELINE_REQUIRED = (
             "This connector change requires the canonical review pipeline."
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError, URLError
 
@@ -150,6 +151,117 @@ def test_restarting_mcp_auth_keeps_existing_token_runtime_loadable() -> None:
 
     assert cards["servers"][0]["auth_state"] == "authenticated"
     assert set(session) == {"lease"}
+
+
+class _CapturingHandler(logging.Handler):
+    """Collect records straight off a named logger.
+
+    ``create_app`` installs the service's structured JSON logging, which does
+    not propagate to the root logger, so ``caplog`` sees nothing. Attaching
+    here captures what the service actually emits rather than asserting
+    against a handler the production path never reaches.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_an_internal_failure_returned_as_400_names_itself_in_the_log(
+    monkeypatch,
+) -> None:
+    """A ``ValueError`` on the RPC route is ours, and it must not be silent.
+
+    The route maps every ``ValueError`` to ``400``. The caller is ai-backend
+    sending an envelope it just built, so in practice the ``400`` reports an
+    *internal* failure using a client-error status — and the runtime, seeing
+    only a status code, told the user "the MCP server could not be reached".
+    Nothing anywhere recorded what actually broke. Diagnosing it needed a live
+    reproduction and a database read; one log line replaces both.
+    """
+
+    class Response:
+        headers = {"content-type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, *_args: object) -> bytes:
+            return b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}'
+
+    monkeypatch.setattr(
+        "backend_app.mcp_transport.urlopen", lambda request, timeout: Response()
+    )
+    store = InMemoryMcpStore()
+    app = create_app(
+        McpRegistryService(
+            store=store,
+            token_exchanger=FakeOAuthTokenExchanger(),
+            oauth_client=FakeOAuthClient(),
+        )
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    server_id = client.post(
+        "/v1/mcp/servers",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "url": "https://mcp.example.com/mcp",
+            "display_name": "Drive MCP",
+        },
+    ).json()["server_id"]
+    client.post(
+        f"/internal/v1/mcp/servers/{server_id}/auth/start",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "redirect_uri": "http://localhost:5173/mcp/oauth/callback",
+        },
+    )
+    state = next(iter(store.auth_sessions.keys()))
+    client.get("/v1/mcp/oauth/callback", params={"state": state, "code": "oauth_code"})
+    lease = client.post(
+        f"/internal/v1/mcp/servers/{server_id}/client-session",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()["lease"]
+
+    # Stand in for the live cause: a Pydantic ``ValidationError`` raised deep
+    # in the proxy path, which is a ``ValueError``.
+    def explode(*_args, **_kwargs):
+        raise ValueError("2 validation errors for McpDescriptorRevision")
+
+    monkeypatch.setattr(McpRegistryService, "_remote_rpc", explode)
+
+    handler = _CapturingHandler()
+    route_logger = logging.getLogger("backend_app.app")
+    route_logger.addHandler(handler)
+    try:
+        response = client.post(
+            f"/internal/v1/mcp/servers/{server_id}/rpc",
+            json={
+                "org_id": "org_123",
+                "user_id": "user_123",
+                "lease": lease,
+                "payload": {"jsonrpc": "2.0", "id": 1, "method": "resources/list"},
+            },
+        )
+    finally:
+        route_logger.removeHandler(handler)
+
+    assert response.status_code == 400
+    records = [r for r in handler.records if r.levelno >= logging.ERROR]
+    assert records, "the 400 was returned without a single log line"
+    message = "\n".join(r.getMessage() for r in records)
+    assert server_id in message
+    assert "resources/list" in message
+    # The exception itself, not just the fact that one happened.
+    assert any(r.exc_info for r in records)
 
 
 def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:

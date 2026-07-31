@@ -66,6 +66,41 @@ class _McpDiscoveryPaginationError(ValueError):
         self.code = code
 
 
+class McpLoadFailureLog:
+    """Emit one warning line for every failed load, whatever killed it.
+
+    A failed ``load_mcp_server`` used to leave *no trace at all*: the typed
+    failure paths each return an ``McpLoadResult`` and only the catch-all
+    ``except Exception`` logged anything. An entire capability could fail —
+    OAuth completed, connector connected, 52 descriptors discovered — and
+    the service log recorded nothing but a generic run start and finish, so
+    naming the failure took a live reproduction and a database read instead
+    of one grep.
+
+    Everything logged here is already model-facing or non-identifying:
+    ``safe_message`` is the string the loader hands the model, and the code /
+    retryable / server-name fields are the same values it returns. No URL, no
+    header, no token, no descriptor body.
+    """
+
+    _LOGGER = logging.getLogger(__name__)
+
+    @classmethod
+    def record(cls, request: McpLoadRequest, result: McpLoadResult) -> None:
+        """Log ``result`` when it is a failure; do nothing when it succeeded."""
+        error = result.error
+        if error is None:
+            return
+        cls._LOGGER.warning(
+            "MCP load failed: server=%s code=%s retryable=%s trace=%s detail=%s",
+            error.server_name or request.server_name,
+            error.code.value,
+            error.retryable,
+            request.runtime_context.trace_id,
+            error.safe_message,
+        )
+
+
 @dataclass(frozen=True)
 class McpLoader:
     """Connects to a selected MCP server and validates discovered descriptors.
@@ -86,6 +121,20 @@ class McpLoader:
     cache: McpDiscoveryCachePort | None = None
 
     async def load_server(self, request: McpLoadRequest) -> McpLoadResult:
+        """Load a selected MCP server, logging the outcome when it fails.
+
+        Wrapping the real load is what makes the logging exhaustive: every
+        typed failure return in ``_load_server`` — permission, transport,
+        auth, 4xx, timeout, descriptor validation, cache race — funnels
+        through this one seam, so a new failure path cannot be added that
+        stays silent.
+        """
+
+        result = await self._load_server(request)
+        McpLoadFailureLog.record(request, result)
+        return result
+
+    async def _load_server(self, request: McpLoadRequest) -> McpLoadResult:
         """Load a selected MCP server while rechecking permissions and validation.
 
         When a cache is wired, the heavy network path
