@@ -16,7 +16,21 @@ import yaml
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
+from copilot_service_contracts.deployment_profile import (
+    ENV_DEPLOYMENT_PROFILE,
+    PROFILE_SINGLE_USER_DESKTOP,
+)
+
 from backend_app.identity._pkce import compute_challenge, generate_verifier
+
+from backend_app.mcp_config import (
+    McpConfigDocument,
+    McpConfigWriteRequest,
+    McpConfigWriteResult,
+    create_request_from_entry,
+    document_from_records,
+    entries_differ,
+)
 
 from backend_app.contracts import (
     AuditEventRecord,
@@ -46,6 +60,8 @@ from backend_app.contracts import (
     McpAuthState,
     McpCatalogEntryResponse,
     McpCatalogResponse,
+    McpConfiguredValue,
+    McpConfiguredValueRequest,
     McpDescriptorRevision,
     McpDescriptorRevisionFeed,
     McpOAuthClientConfig,
@@ -55,6 +71,8 @@ from backend_app.contracts import (
     McpServerRecord,
     McpRevisionReason,
     McpServerResponse,
+    McpStdioConfig,
+    McpStdioRequest,
     OAuthTokenRequest,
     SkillAuditEventRecord,
     SkillListResponse,
@@ -417,18 +435,75 @@ class McpRegistryService:
             ),
         )
 
+    def _local_servers_allowed(self) -> bool:
+        """May this deployment register a LOCAL MCP server?
+
+        "Local" means either a loopback/private-network endpoint or a stdio
+        server, and both are the same capability wearing different clothes:
+        the power to make this process talk to something the operator did not
+        put on the public internet. On a laptop that is the entire point — the
+        user's filesystem server, their local model gateway. On a hosted
+        deployment it is two vulnerabilities:
+
+          * a loopback/private URL turns the registry into an SSRF primitive
+            aimed at the cluster's own metadata service and internal APIs;
+          * a stdio server is arbitrary command execution on a shared host,
+            requested through an ordinary product API.
+
+        So the answer is NO unless the deployment is one person on their own
+        machine. Fails closed: an unset or unrecognised profile is not desktop.
+        Development is allowed because `make dev` runs the same single-operator
+        topology on the developer's own machine.
+        """
+
+        if os.getenv("BACKEND_ENVIRONMENT", "").strip().lower() == "development":
+            return True
+        profile = os.getenv(ENV_DEPLOYMENT_PROFILE, "").strip().lower()
+        return profile == PROFILE_SINGLE_USER_DESKTOP
+
+    def _reject_local_endpoint_unless_allowed(self, url: str | None) -> None:
+        """Re-apply the strict public-URL rule when local servers are barred.
+
+        The contract layer deliberately accepts a local URL (it cannot see the
+        deployment profile, and the desktop legitimately needs one), which
+        makes THIS the only place the restriction exists. It runs on every
+        inbound create — the strict validator raises the same
+        ``ValueError`` it always did, so callers and their error copy are
+        unchanged.
+        """
+
+        if url is None or self._local_servers_allowed():
+            return
+        Validators.validate_public_mcp_url(url)
+
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
-        display_name = request.display_name or self._display_name_from_url(request.url)
+        self._reject_local_endpoint_unless_allowed(request.url)
+        if request.stdio is not None and not self._local_servers_allowed():
+            raise ValueError(
+                "local (stdio) MCP servers are not permitted in this deployment"
+            )
+        display_name = request.display_name or self._display_name_for(request)
         # Idempotent on (org_id, user_id, normalized URL). Without this
         # the registry accumulates duplicate rows on every retry — and
         # the agent runtime refuses to boot when two MCP servers share
         # a stable name (see ai-backend mcp/registry.py:74,
         # `DUPLICATE_SERVER_NAME`), locking the user out of chat. Match
         # the catalog flow's idempotency contract.
-        existing = self._server_by_url(
-            org_id=request.org_id,
-            user_id=request.user_id,
-            url=request.url,
+        #
+        # A stdio server has no URL to be idempotent ON, so it dedupes by its
+        # stable name instead — same guarantee, different natural key.
+        existing = (
+            self._server_by_url(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                url=request.url,
+            )
+            if request.url is not None
+            else self._server_by_name(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                name=self._stable_name(display_name),
+            )
         )
         if existing is not None:
             return McpServerResponse.from_record(existing)
@@ -439,6 +514,8 @@ class McpRegistryService:
             display_name=display_name,
             url=request.url,
             transport=request.transport,
+            headers=self._configured_values(request.headers),
+            stdio=self._stdio_config(request.stdio),
             auth_mode=request.auth_mode,
             auth_state=(
                 McpAuthState.AUTHENTICATED
@@ -463,6 +540,235 @@ class McpRegistryService:
         )
         return McpServerResponse.from_record(record)
 
+    def read_config(self, *, org_id: str, user_id: str) -> McpConfigDocument:
+        """The whole MCP configuration as one editable document."""
+
+        return document_from_records(
+            self.store.list_servers(org_id=org_id, user_id=user_id)
+        )
+
+    def write_config(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: McpConfigWriteRequest,
+    ) -> McpConfigWriteResult:
+        """Reconcile the registry to match the submitted document.
+
+        The document is the desired state and this makes it so: entries with
+        no row are created, rows with no entry are deleted, and the rest are
+        rewritten only when they actually changed. That is what "edit the JSON
+        and it reflects in the UI" has to mean — anything less (append-only,
+        say) would leave the editor showing servers the user had just removed.
+
+        Deletion is the sharp edge, and it is deliberate rather than
+        incidental: a config file whose omissions mean nothing is not a config
+        file. The result reports every name in each bucket so the caller can
+        show exactly what happened instead of a silent "saved".
+
+        Validation runs over the WHOLE document before anything is written, so
+        one malformed entry rejects the save rather than half-applying it and
+        leaving the user's registry in a state their editor no longer
+        describes. There is no cross-row transaction available here — each
+        registry mutation owns its own — so pre-validation is what keeps a
+        typo from being destructive.
+        """
+
+        existing = {
+            record.name: record
+            for record in self.store.list_servers(org_id=org_id, user_id=user_id)
+        }
+        planned: dict[str, CreateMcpServerRequest] = {}
+        for name, entry in request.document.servers.items():
+            planned[name] = create_request_from_entry(
+                name,
+                entry,
+                org_id=org_id,
+                user_id=user_id,
+            )
+            # Same local-server gate as the single-server create path. Applied
+            # here too because this route reaches the registry directly, and a
+            # gate that only guards one of two doors is not a gate.
+            self._reject_local_endpoint_unless_allowed(planned[name].url)
+            if planned[name].stdio is not None and not self._local_servers_allowed():
+                raise ValueError(
+                    "local (stdio) MCP servers are not permitted in this deployment"
+                )
+
+        created: list[str] = []
+        updated: list[str] = []
+        unchanged: list[str] = []
+        for name, entry in request.document.servers.items():
+            record = existing.get(name)
+            if record is None:
+                self.create_server(planned[name])
+                created.append(name)
+            elif entries_differ(entry, record):
+                self._rewrite_server(record, planned[name])
+                updated.append(name)
+            else:
+                unchanged.append(name)
+
+        deleted: list[str] = []
+        for name, record in existing.items():
+            if name in request.document.servers:
+                continue
+            if self.delete_server(
+                org_id=org_id, user_id=user_id, server_id=record.server_id
+            ):
+                deleted.append(name)
+
+        return McpConfigWriteResult(
+            created=tuple(sorted(created)),
+            updated=tuple(sorted(updated)),
+            deleted=tuple(sorted(deleted)),
+            unchanged=tuple(sorted(unchanged)),
+        )
+
+    def _rewrite_server(
+        self, record: McpServerRecord, request: CreateMcpServerRequest
+    ) -> McpServerRecord:
+        """Apply a changed document entry to an existing row, in place.
+
+        The row keeps its ``server_id``, which matters more than it looks:
+        that id is what connector rows, OAuth tokens, and any live session
+        lease point at. Deleting and recreating would give the same server a
+        new identity and silently drop the token the user had already
+        authorized — so editing a header must not be a way to sign yourself
+        out.
+        """
+
+        updated = record.model_copy(
+            update={
+                "url": request.url,
+                "transport": request.transport,
+                "headers": self._configured_values(
+                    request.headers, carry_from=record.headers
+                ),
+                "stdio": self._stdio_config(request.stdio, carry_from=record.stdio),
+                "auth_mode": request.auth_mode,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        with self.store.transaction(org_id=record.org_id) as conn:
+            self.store.update_server(updated, conn=conn)
+            self.revision_authority.invalidate(
+                org_id=updated.org_id,
+                user_id=updated.user_id,
+                server_id=updated.server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
+            self._audit(updated, "mcp_server_updated", conn=conn)
+        # A changed endpoint, header, or command must not keep serving through
+        # a session pooled against the old one.
+        self.invalidate_server_sessions(
+            org_id=updated.org_id,
+            user_id=updated.user_id,
+            server_id=updated.server_id,
+        )
+        return updated
+
+    def _display_name_for(self, request: CreateMcpServerRequest) -> str:
+        """A human label for a server the caller did not name.
+
+        A remote server is named after its host, as it always was. A stdio
+        server has no host, so it is named after what it launches: the first
+        non-flag argument (the package or script), falling back to the command
+        itself. ``npx`` alone would name every npm-delivered server the same
+        thing, and since the display name is what ``_stable_name`` slugifies
+        into the registry's unique ``name``, a collision there does not just
+        look wrong — it makes the second server dedupe into the first.
+
+        The package argument is kept WHOLE for that reason. Trimming
+        ``@modelcontextprotocol/server-filesystem`` to its last segment reads
+        better, but it collides with any other scope publishing a
+        ``server-filesystem``, which is precisely the failure being avoided.
+        Only the command fallback is trimmed, and only of its directory path.
+        """
+
+        if request.url is not None:
+            return self._display_name_from_url(request.url)
+        stdio = request.stdio
+        if stdio is None:  # pragma: no cover — the contract forbids it
+            raise ValueError("a server needs either a URL or a stdio config")
+        for arg in stdio.args:
+            if not arg.startswith("-"):
+                return arg
+        return stdio.command.rsplit("/", 1)[-1]
+
+    def _configured_values(
+        self,
+        requested: tuple[McpConfiguredValueRequest, ...],
+        *,
+        carry_from: tuple[McpConfiguredValue, ...] = (),
+    ) -> tuple[McpConfiguredValue, ...]:
+        """Store configured header / env values, sealing the credentials.
+
+        A value whose NAME reads as a credential is encrypted by ``TokenVault``
+        and never leaves again; anything else is stored as written so the
+        config document can show it. The name decides, not the caller — see
+        ``Validators.is_credential``.
+
+        ``value is None`` means the document did not supply one: it carried the
+        redaction marker, or an unresolved ``${input:...}``. Then ``carry_from``
+        — the previous version of these values — is consulted and the stored
+        ciphertext is kept. This is the property the whole editor rests on: a
+        GET can never show a credential, so a PUT of that same document arrives
+        with nothing for it, and without carrying it forward every unrelated
+        edit would silently destroy the token and start 401-ing for no reason
+        the user could see.
+
+        A name with nothing supplied and nothing stored is DROPPED rather than
+        stored empty — an `Authorization: Bearer ` with nothing after it earns
+        a 401 that reads as a bad token, sending the user to re-check a
+        credential they never entered.
+        """
+
+        carried = {
+            item.name: item.encrypted_value
+            for item in carry_from
+            if item.encrypted_value is not None
+        }
+        stored: list[McpConfiguredValue] = []
+        for item in requested:
+            if item.value is None:
+                encrypted = carried.get(item.name)
+                if encrypted is not None:
+                    stored.append(
+                        McpConfiguredValue(name=item.name, encrypted_value=encrypted)
+                    )
+                continue
+            if Validators.is_credential(item.name, item.value):
+                stored.append(
+                    McpConfiguredValue(
+                        name=item.name,
+                        encrypted_value=self.token_vault.encrypt(item.value),
+                    )
+                )
+            else:
+                stored.append(McpConfiguredValue(name=item.name, value=item.value))
+        return tuple(stored)
+
+    def _stdio_config(
+        self,
+        requested: McpStdioRequest | None,
+        *,
+        carry_from: McpStdioConfig | None = None,
+    ) -> McpStdioConfig | None:
+        if requested is None:
+            return None
+        return McpStdioConfig(
+            command=requested.command,
+            args=requested.args,
+            env=self._configured_values(
+                requested.env,
+                carry_from=carry_from.env if carry_from is not None else (),
+            ),
+            cwd=requested.cwd,
+        )
+
     def _server_by_url(
         self,
         *,
@@ -472,7 +778,22 @@ class McpRegistryService:
     ) -> McpServerRecord | None:
         normalized = url.strip().rstrip("/").lower()
         for record in self.store.list_servers(org_id=org_id, user_id=user_id):
+            # A stdio row has no URL and can never match one.
+            if record.url is None:
+                continue
             if record.url.strip().rstrip("/").lower() == normalized:
+                return record
+        return None
+
+    def _server_by_name(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        name: str,
+    ) -> McpServerRecord | None:
+        for record in self.store.list_servers(org_id=org_id, user_id=user_id):
+            if record.name == name:
                 return record
         return None
 
@@ -1264,6 +1585,8 @@ class McpRegistryService:
             encrypted_access_token=(
                 token.encrypted_access_token if token is not None else None
             ),
+            headers=record.headers,
+            stdio=record.stdio,
         )
         return scope
 
