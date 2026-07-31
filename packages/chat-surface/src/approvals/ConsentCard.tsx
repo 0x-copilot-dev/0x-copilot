@@ -73,6 +73,9 @@ export function ConsentCard({
       data-testid={testId}
       role="group"
       aria-label={`Approval: ${title}`}
+      // The standing rule is no longer a visible row (see below); keep it
+      // available to assistive tech so the claim is not simply deleted.
+      aria-description={reassurance}
     >
       <div className="apc__head">
         <span className="apc__icon" aria-hidden="true">
@@ -139,12 +142,14 @@ export function ConsentCard({
         </button>
       </div>
 
-      <p className="apc__foot">
-        <span className="apc__foot-icon" aria-hidden="true">
-          <ShieldGlyph />
-        </span>
-        <span>{reassurance}</span>
-      </p>
+      {/* The standing "you're always asked…" line is NOT rendered. It repeated
+          the same sentence on every card, so it stopped being read and only
+          cost height in the chat column. Removed as an ELEMENT rather than
+          hidden by CSS: a `display:none` override sat above the original
+          `.apc__foot { display:flex }` in the same stylesheet, lost the
+          cascade to it, and shipped twice looking fixed. `reassurance` is kept
+          as the card's accessible description so the claim survives for
+          screen readers without occupying a row. */}
     </div>
   );
 }

@@ -238,19 +238,6 @@
   padding-block: 6px;
 }
 
-/* The standing "you're always asked…" line repeated on every card, so it
-   stopped being read and only cost height. It is now carried as the card's
-   accessible description (see ApprovalCard.tsx) — announced, not displayed.
-   `.apc__foot` ONLY: an earlier revision of this rule also hid `.cc__foot`,
-   which was wrong. That element is not boilerplate — ConnectorConsentCard and
-   WorkspaceGrantCard put their actual permission CLAUSES there (what access is
-   being granted, to what), which is the specific information the user needs in
-   order to answer. Hiding it made those two cards ask for consent without
-   saying what to. */
-.apc__foot {
-  display: none;
-}
-
 /* ==========================================================================
    Approval card — shared frame, three shapes
    ========================================================================== */

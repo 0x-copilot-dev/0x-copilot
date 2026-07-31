@@ -168,7 +168,7 @@ describe("ConsentCard — the three approval shapes", () => {
     expect(screen.queryByTestId("apc-row-approve-p1")).toBeNull();
   });
 
-  it("renders the reassurance the host passed, never one from the presentation", () => {
+  it("carries the host's reassurance as the card's description, not a visible row", () => {
     render(
       <ConsentCard
         title="Delete the repo"
@@ -176,7 +176,18 @@ describe("ConsentCard — the three approval shapes", () => {
         reassurance={REASSURANCE}
       />,
     );
-    expect(screen.getByText(REASSURANCE)).toBeInTheDocument();
+    // The standing "you're always asked..." line repeated on every card, so it
+    // stopped being read and only cost height directly above the composer. It
+    // is now the card's accessible description: announced, not displayed.
+    //
+    // Asserted as an ABSENT ELEMENT, not a hidden one. A first attempt hid it
+    // with `.apc__foot { display: none }` placed ABOVE the original
+    // `display: flex` in the same stylesheet — it lost the cascade and shipped
+    // twice looking fixed, because nothing tested the rendered result.
+    expect(screen.queryByText(REASSURANCE)).toBeNull();
+    expect(screen.getByRole("group").getAttribute("aria-description")).toBe(
+      REASSURANCE,
+    );
   });
 });
 
