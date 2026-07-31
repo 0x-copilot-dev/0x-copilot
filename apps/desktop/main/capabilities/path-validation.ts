@@ -341,9 +341,11 @@ export const SENSITIVE_ROOT_SEGMENTS: readonly string[] = [
 /**
  * Top-level trees owned by the operating system or its package manager: system
  * configuration, binaries, libraries, kernel interfaces, boot state, and the
- * superuser's home. Matched against a root's FIRST path segment (for Windows,
- * the first segment after the drive), so the whole tree beneath goes with it —
- * `/etc/ssl/private`, `/usr/local/bin`, `C:\Windows\System32`.
+ * superuser's home. Matched against the FIRST segment of the tree being judged
+ * (for Windows, the first after the drive), so everything beneath goes with it —
+ * `/etc/ssl/private`, `/usr/local/bin`, `C:\Windows\System32`. On a mounted
+ * volume the tree being judged is each subtree of the volume in turn, so the
+ * same names are refused there too (see `classifyForbiddenRoot`).
  *
  * `private` is here because macOS firmlinks `/etc`, `/var` and `/tmp` into it,
  * so `/private/etc` is the same directory as `/etc` and must classify the same
@@ -393,6 +395,9 @@ export const SYSTEM_ROOT_SEGMENTS: readonly string[] = [
  * (`/Volumes/Backup`) covers an entire disk. Neither is a folder — "name the
  * folder you need" is the same refusal `HostPathMessages.VOLUME_ROOT` makes on
  * the backend, kept in step here.
+ *
+ * These also mark where THIS machine's namespace ends and a foreign one begins;
+ * see `mountedVolumeContentStart`.
  */
 export const VOLUME_PARENT_SEGMENTS: readonly string[] = [
   "volumes", // macOS
@@ -400,6 +405,24 @@ export const VOLUME_PARENT_SEGMENTS: readonly string[] = [
   "media", // Linux (removable)
   "net", // autofs
   "network", // macOS
+];
+
+/**
+ * What a machine calls the directory its user accounts live in.
+ *
+ * FOREIGN FILESYSTEMS ONLY. The `other_user_home` rule below derives the
+ * container from `ctx.homeDir`, and on this machine that derivation is exact —
+ * a hard-coded list could only add wrong answers to it, refusing `/home/…` on a
+ * Mac and `/Users/…` on Linux. On a MOUNTED volume there is nothing to derive
+ * from: the disk came off another machine, which may keep its accounts under
+ * `home` (Linux) or `Documents and Settings` (old Windows) and is a sibling of
+ * nothing this process knows. So the list names the class, and is consulted
+ * only where the derivation has no answer.
+ */
+export const HOME_CONTAINER_SEGMENTS: readonly string[] = [
+  "users", // macOS, Windows
+  "home", // Linux, BSD
+  "documents and settings", // Windows (legacy)
 ];
 
 /**
@@ -554,6 +577,33 @@ function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
 /**
  * Classify a candidate grant root, or return null when it is safe to grant.
  * Pure — takes the home/userData context explicitly so it stays testable.
+ *
+ * TWO PASSES, because a path has two meanings.
+ *
+ * The first pass reads the path as THIS machine spells it. That is the whole
+ * answer for a path on this machine's own filesystem.
+ *
+ * The second exists because a mount point is not a folder: it is the root of an
+ * entire other filesystem, which contains the very same classes under the very
+ * same names. Every rule keyed on a first segment or on `ctx.homeDir` therefore
+ * evaporated one level below `/Volumes/<disk>` — `/Volumes/Backup/etc`,
+ * `/Volumes/Backup/System/Library`, `/Volumes/Backup/Users/bob/Documents` were
+ * all granted, while their host-namespace spellings were refused. A grant on a
+ * Time Machine disk could hand over a snapshot of the whole machine, this user's
+ * home included, one indirection away from every rule written to stop exactly
+ * that. So below a mount point the classes are re-tested MOUNT-RELATIVELY, and
+ * a path lands on the same rule whichever way it is spelled.
+ *
+ * At EVERY depth, not just directly below the mount. A backup re-roots a
+ * filesystem at a depth we cannot know
+ * (`/Volumes/X/Backups.backupdb/<Mac>/<snapshot>/Users/bob`), a restored copy at
+ * another, a disk image at another still, and none of it is decidable from the
+ * string. Assuming any directory on a mounted volume could be a filesystem root
+ * is the only assumption that closes the class rather than one spelling of it.
+ * The price is paid on mounted volumes only, and it is over-REFUSAL: a folder
+ * named `dev` or `lib` on an external disk is refused as if it were `/dev` or
+ * `/lib`, and the person names a different folder. That is the deliberate
+ * direction — the alternative is a denylist that a mount point walks around.
  */
 export function classifyForbiddenRoot(
   root: string,
@@ -571,11 +621,47 @@ export function classifyForbiddenRoot(
   // second is what the card would have shown the user.
   if (root.startsWith("~")) return "home_directory";
 
-  const norm = normalizeRootForCompare(root);
+  const segments = splitPathSegments(root).map((s) => s.toLowerCase());
+
+  // Pass 1 — the path in this machine's own namespace.
+  const own = classifyResolvedTree(segments, ctx, { foreign: false });
+  if (own !== null) return own;
+
+  // Pass 2 — the same path read as content of a mounted volume.
+  const start = mountedVolumeContentStart(root, segments, ctx);
+  if (start === null) return null;
+  for (let index = start; index < segments.length; index += 1) {
+    const reason = classifyResolvedTree(segments.slice(index), ctx, {
+      foreign: true,
+    });
+    if (reason !== null) return reason;
+  }
+  return null;
+}
+
+/**
+ * Classify one already-lower-cased segment list AS A FILESYSTEM PATH — the tree
+ * it names, judged by containment against the trees that may not be granted.
+ *
+ * Called twice by `classifyForbiddenRoot`: once on the path itself, and once per
+ * subtree of a mounted volume, where the same segments name the same classes on
+ * a different filesystem. Every rule here is therefore written to hold for both
+ * callers; none of them may consult the original string.
+ *
+ * `foreign` says which caller this is. It gates exactly one rule — the one whose
+ * answer `ctx` cannot supply for another machine's disk — and nothing else, so a
+ * path on this machine keeps the classification it has always had.
+ */
+function classifyResolvedTree(
+  segments: readonly string[],
+  ctx: GrantRootContext,
+  { foreign }: { readonly foreign: boolean },
+): ForbiddenRootReason | null {
+  const norm = segments.join("/");
   const home = normalizeRootForCompare(ctx.homeDir);
   const userData = normalizeRootForCompare(ctx.userDataDir);
-  const segments = splitPathSegments(root).map((s) => s.toLowerCase());
   const insideHome = home !== "" && isAncestorOrEqual(home, norm);
+  const top = topLevelSegment(segments);
 
   // The home directory itself, or any ancestor of it (`/Users`, `/home`, …):
   // far too broad, and an ancestor exposes every user.
@@ -597,10 +683,20 @@ export function classifyForbiddenRoot(
   if (homeParent !== null && isAncestorOrEqual(homeParent, norm) && !insideHome)
     return "other_user_home";
 
+  // A home container this process could NOT derive, and every account tree in
+  // it. Only on a foreign filesystem: the rule above is exact for this machine
+  // and a list can only add wrong answers to it, but a mounted disk carries
+  // another machine's container, which may be spelled differently (`/home` on a
+  // Linux disk read from a Mac, `Documents and Settings` on an old Windows
+  // image). Still skipped inside this user's own home, so a snapshot of their
+  // OWN home keeps the answers the derived rules gave it.
+  if (foreign && !insideHome && HOME_CONTAINER_SEGMENTS.includes(top)) {
+    return "other_user_home";
+  }
+
   // A mount parent (`/Volumes`) or a whole volume one level in
   // (`/Volumes/Backup`). Deeper is an ordinary folder on an external disk and
-  // stays grantable.
-  const top = topLevelSegment(segments);
+  // is judged by the mount-relative pass instead.
   if (VOLUME_PARENT_SEGMENTS.includes(top) && depthBelowTop(segments) <= 1) {
     return "volume_root";
   }
@@ -633,6 +729,54 @@ export function classifyForbiddenRoot(
   // Any well-known credential directory anywhere along the path.
   if (segments.some((s) => SENSITIVE_ROOT_SEGMENTS.includes(s))) {
     return "sensitive_directory";
+  }
+  return null;
+}
+
+/** A path's leading `c:` drive segment, lower-cased; null when it has none. */
+function driveLetterOf(segments: readonly string[]): string | null {
+  const first = segments[0] ?? "";
+  return /^[a-z]:$/u.test(first) ? first : null;
+}
+
+/**
+ * Index of the first segment that is CONTENT OF A MOUNTED VOLUME, or null when
+ * the path is not on one. Everything from that index down belongs to a
+ * filesystem this process did not create and cannot describe with `ctx`.
+ *
+ * Three shapes count as a mount:
+ *   - `/Volumes/<disk>/…`, `/mnt/<disk>/…`, `/media/<disk>/…`, … — content
+ *     starts two segments in (the mount parent, then the volume's own name).
+ *   - `\\server\share\…` — a share is a volume on another machine; the share
+ *     root itself was already refused as `volume_root`.
+ *   - a drive root OTHER than the one the home directory is on. `D:\Users\bob`
+ *     is the same tree as `/Volumes/Backup/Users/bob`, spelled for Windows.
+ *
+ * The home's OWN drive is deliberately excluded: it is this machine's
+ * filesystem, already fully judged by the first pass, and re-scanning it would
+ * refuse `C:\Users\alice\code\dev` for containing a segment named `dev`.
+ */
+function mountedVolumeContentStart(
+  rawRoot: string,
+  segments: readonly string[],
+  ctx: GrantRootContext,
+): number | null {
+  // `\\server\share\…`, and the forward-slash spelling of the same path, which
+  // Node also reads as UNC. Device namespaces (`\\.\`, `\\?\`) never reach here
+  // — `classifyForbiddenRoot` refuses them before calling this. On POSIX a
+  // leading `//` is just `/`, where this only skips two segments the first pass
+  // already judged.
+  if (/^[/\\]{2}[^/\\]/u.test(rawRoot)) return 2;
+
+  const drive = driveLetterOf(segments);
+  const homeDrive = driveLetterOf(
+    splitPathSegments(ctx.homeDir).map((s) => s.toLowerCase()),
+  );
+  if (drive !== null && drive !== homeDrive) return 1;
+
+  const offset = drive === null ? 0 : 1;
+  if (VOLUME_PARENT_SEGMENTS.includes(segments[offset] ?? "")) {
+    return offset + 2;
   }
   return null;
 }

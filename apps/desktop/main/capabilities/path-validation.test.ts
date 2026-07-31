@@ -444,6 +444,192 @@ describe("classifyForbiddenRoot — paths that do not render as themselves", () 
   });
 });
 
+// ---------------------------------------------------------------------------
+// classifyForbiddenRoot — CONTAINMENT, not first segment.
+//
+// Every class above except the credential list and the `.app` check used to be
+// decided by the path's FIRST segment or by comparison to `ctx.homeDir`, so all
+// of them evaporated one level below a mount point. Measured, before the fix:
+//
+//     ALLOWED  /Volumes/Backup/etc
+//     ALLOWED  /Volumes/Backup/System/Library
+//     ALLOWED  /Volumes/Untitled/usr/local/bin
+//     ALLOWED  /Volumes/Backup/Users/alice
+//     ALLOWED  /Volumes/Backup/Users/bob/Documents
+//     ALLOWED  /Volumes/Backup/Users/alice/Library
+//
+// `/Volumes/Backup` itself was refused as a whole volume, and everything INSIDE
+// it — another account's home, a Time Machine snapshot of the entire system
+// tree — was unclassified. A mount point is not a folder; it is the root of an
+// entire other filesystem, and the same classes live inside it under the same
+// names.
+//
+// ONE TABLE, both halves. The rows below are the measured gaps AND the cases
+// that already passed, so a refactor that re-opens either half fails here.
+// ---------------------------------------------------------------------------
+
+const CLASSIFICATION_TABLE: Array<[string, ForbiddenRootReason | null]> = [
+  // --- measured as ALLOWED before this change ------------------------------
+  ["/Volumes/Backup/etc", "system_directory"],
+  ["/Volumes/Backup/System/Library", "system_directory"],
+  ["/Volumes/Untitled/usr/local/bin", "system_directory"],
+  ["/Volumes/Backup/Users/alice", "home_directory"],
+  ["/Volumes/Backup/Users/bob/Documents", "other_user_home"],
+  ["/Volumes/Backup/Users/alice/Library", "user_data_directory"],
+
+  // --- the same class, at the depths a backup actually re-roots at ---------
+  [
+    "/Volumes/TimeMachine/Backups.backupdb/MacBook/Latest/Users/bob",
+    "other_user_home",
+  ],
+  [
+    "/Volumes/TimeMachine/Backups.backupdb/MacBook/Latest/etc/ssl",
+    "system_directory",
+  ],
+  ["/Volumes/Backup/private/etc", "system_directory"],
+  ["/Volumes/Backup/Windows/System32", "system_directory"],
+  ["/Volumes/Backup/tmp", "system_directory"],
+  ["/Volumes/Backup/Applications/Thing.app", "application_bundle"],
+  ["/Volumes/Backup/Users/alice/.ssh", "sensitive_directory"],
+  ["/mnt/disk1/etc", "system_directory"],
+  ["/media/usb1/Users/bob", "other_user_home"],
+  // A container this process cannot derive from `ctx.homeDir`: the disk came
+  // off another machine, which keeps its accounts somewhere else.
+  ["/Volumes/LinuxDisk/home/ada", "other_user_home"],
+  ["/Volumes/Backup/Documents and Settings/bob", "other_user_home"],
+  // A share and a second drive are volumes too, in both spellings.
+  ["\\\\server\\share\\Users\\bob", "other_user_home"],
+  ["//server/share/Users/bob", "other_user_home"],
+  ["D:\\Users\\bob", "other_user_home"],
+
+  // --- already refused, and must stay refused -------------------------------
+  ["/", "filesystem_root"],
+  ["C:\\", "filesystem_root"],
+  ["/etc", "system_directory"],
+  ["/etc/ssl/private", "system_directory"],
+  ["/var/log", "system_directory"],
+  ["/usr/local/bin", "system_directory"],
+  ["/bin", "system_directory"],
+  ["/opt/homebrew", "system_directory"],
+  ["/dev/disk1", "system_directory"],
+  ["/proc/self", "system_directory"],
+  ["/boot", "system_directory"],
+  ["/root", "system_directory"],
+  ["/System/Library", "system_directory"],
+  ["/Library/Preferences", "system_directory"],
+  ["/private/etc", "system_directory"],
+  ["/private/var/db", "system_directory"],
+  ["/tmp", "system_directory"],
+  ["/tmp/quarterly-reports", "system_directory"],
+  ["C:\\Windows\\System32", "system_directory"],
+  ["C:\\Program Files\\Thing", "system_directory"],
+  ["C:\\ProgramData", "system_directory"],
+  ["D:\\$Recycle.Bin", "system_directory"],
+  ["/Applications", "application_bundle"],
+  ["/Applications/Mail.app/Contents", "application_bundle"],
+  ["/Users/alice/Applications/Thing.app", "application_bundle"],
+  ["/Users", "home_directory"],
+  ["/Users/alice", "home_directory"],
+  ["~", "home_directory"],
+  ["~/Downloads", "home_directory"],
+  ["/Users/bob", "other_user_home"],
+  ["/Users/bob/Documents/2024", "other_user_home"],
+  ["/Volumes", "volume_root"],
+  ["/Volumes/Backup", "volume_root"],
+  ["/mnt/data", "volume_root"],
+  ["/media/usb", "volume_root"],
+  ["\\\\server\\share", "volume_root"],
+  ["\\\\.\\PhysicalDrive0", "device_path"],
+  ["\\\\?\\C:\\Users\\alice", "device_path"],
+  [
+    "/Users/alice/Library/Application Support/Slack",
+    "application_state_directory",
+  ],
+  ["/Users/alice/.ssh", "sensitive_directory"],
+  ["/Users/alice/Re\u200Bports", "deceptive_path"],
+
+  // --- already grantable, and must stay grantable ---------------------------
+  ["/Users/alice/Documents", null],
+  ["/Users/alice/clients/acme/reports", null],
+  ["/Users/alice/project/var", null],
+  ["/Users/alice/etc", null],
+  ["/Users/alice/code/app/Library", null],
+  ["/Users/alice/書類", null],
+  ["/Users/alice/Проект-v2", null],
+  ["D:\\Projects\\windows-build", null],
+  // A home container this machine does not use. `ctx.homeDir` is the authority
+  // on THIS filesystem and it says `/home/me` is nobody's home here, so the
+  // hard-coded container list must not overrule it — that list exists for disks
+  // this process cannot describe, and nothing else. Contrast the same spelling
+  // on a mounted volume, three rows up.
+  ["/home/me/Documents", null],
+  // An ordinary folder on an external disk is the case this whole gate exists
+  // to keep working; the volume rule stops one level up, not here.
+  ["/Volumes/Backup/Invoices", null],
+  ["/Volumes/Backup/Clients/Acme/Reports", null],
+  ["/Volumes/Backup/Users/alice/Documents", null],
+  ["\\\\server\\share\\reports", null],
+];
+
+describe("classifyForbiddenRoot — the whole policy, one table", () => {
+  it.each(CLASSIFICATION_TABLE)("%s -> %s", (root, expected) => {
+    expect(reasonFor(root)).toBe(expected);
+  });
+});
+
+describe("classifyForbiddenRoot — a class, not a spelling", () => {
+  // The property, stated once: a path lands on the SAME rule whether it is read
+  // from this machine's filesystem or from a copy of one on a mounted disk. Not
+  // "is refused" — the same reason, so the sentence the card shows is the same
+  // sentence, and an allowed folder stays allowed through every spelling.
+  const SPELLINGS = [
+    "/etc",
+    "/etc/ssl/private",
+    "/usr/local/bin",
+    "/System/Library",
+    "/private/etc",
+    "/tmp",
+    "/Applications/Mail.app",
+    "/Users",
+    "/Users/alice",
+    "/Users/bob",
+    "/Users/bob/Documents/2024",
+    "/Users/alice/Library",
+    // The two that must come back ALLOWED through every prefix.
+    "/Users/alice/Documents",
+    "/Invoices",
+  ];
+  const MOUNTS = [
+    "/Volumes/Backup", // a disk's own root
+    "/Volumes/TM/Backups.backupdb/MacBook/2026-07-31-014500", // a snapshot in it
+  ];
+
+  it.each(SPELLINGS)("%s classifies the same on a mounted volume", (path) => {
+    const own = reasonFor(path);
+    for (const mount of MOUNTS) {
+      expect([mount + path, reasonFor(mount + path)]).toEqual([
+        mount + path,
+        own,
+      ]);
+    }
+  });
+});
+
+describe("classifyForbiddenRoot — the cost of the containment rule", () => {
+  it("over-refuses a system NAME on a mounted volume, deliberately", () => {
+    // A backup re-roots a filesystem at a depth no string can reveal, so every
+    // directory on a mounted volume has to be treated as a possible filesystem
+    // root. The price is here and it is paid in the safe direction: a folder
+    // named `dev` on an external disk is refused as if it were `/dev`, and the
+    // person names another folder. Changing this means re-deciding that
+    // trade-off, not quietly relaxing a matcher.
+    expect(reasonFor("/Volumes/T7/dev/my-project")).toBe("system_directory");
+    // …and the same name inside the user's OWN home is untouched, because the
+    // home is not a foreign filesystem.
+    expect(reasonFor("/Users/alice/dev/my-project")).toBeNull();
+  });
+});
+
 describe("assertGrantableRoot — what the person is told", () => {
   it("throws a readable sentence, and carries the machine reason with it", () => {
     // A refusal the card cannot show is the silent no-op this gate exists to

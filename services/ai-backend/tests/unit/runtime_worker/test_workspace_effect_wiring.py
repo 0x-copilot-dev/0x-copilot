@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 import json
 import logging
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from agent_runtime.capabilities.desktop.host_floor import HostFilesystemFloor
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.workspace.contracts import (
     WorkspaceBaseEntry,
@@ -45,7 +46,21 @@ from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_adapters.in_memory.workspace_overlay_store import (
     InMemoryWorkspaceOverlayStore,
 )
-from runtime_api.schemas import RunRecord, RuntimeRunCommand
+from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+)
+from runtime_api.schemas import (
+    AgentRunStatus,
+    ApprovalDecision,
+    ApprovalRequestRecord,
+    MessageRecord,
+    MessageRole,
+    RunRecord,
+    RuntimeApprovalResolvedCommand,
+    RuntimeRunCommand,
+)
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
@@ -189,9 +204,16 @@ def _handler(
     sessions: InMemoryWorkspaceHostSessionRegistry | None,
     broker: RecordingBroker | None = None,
     settings: RuntimeSettings | None = None,
+    agent_factory: object | None = None,
 ) -> tuple[RuntimeRunHandler, InMemoryRuntimeApiStore]:
     store = InMemoryRuntimeApiStore()
     publication = InMemoryArtifactPublicationCoordinator()
+    extra: dict[str, object] = {}
+    if agent_factory is not None:
+        # Only the `handle()` drives below need this; every other test in the
+        # file reaches its seam directly and must keep composing as before.
+        extra["agent_factory"] = agent_factory
+        extra["runtime_invoker"] = _quiet_invoker
     return (
         RuntimeRunHandler(
             persistence=store,
@@ -207,9 +229,32 @@ def _handler(
                 if broker is None
                 else httpx.AsyncClient(transport=broker.transport())
             ),
+            **extra,  # type: ignore[arg-type]
         ),
         store,
     )
+
+
+_APPROVAL_ID = "appr-c3"
+
+
+async def _quiet_invoker(_harness: object, _messages: object) -> dict[str, object]:
+    """A model that says one thing and asks for nothing."""
+
+    return {"messages": [{"role": "assistant", "content": "Done."}]}
+
+
+async def _silent_resumer(
+    _harness: object,
+    _payload: object,
+    *,
+    interrupt_id: str | None = None,
+) -> AsyncIterator[dict[str, object]]:
+    """A resumed graph that completes without emitting anything."""
+
+    del interrupt_id
+    if False:  # pragma: no cover - typed empty async iterator
+        yield {}
 
 
 async def test_enforce_without_host_authority_mounts_tombstone() -> None:
@@ -797,3 +842,238 @@ class TestResumeKeepsAttachedFolders:
     )
     assert WORKSPACE_STAGED_WRITE_GUIDANCE in instructions
     assert "do NOT immediately modify the host file" in instructions
+
+
+class TestTheHandoffIsItselfExercised:
+    """The LINE that carries the resolved roots out of the handler.
+
+    Every test above builds the runtime context by hand: it calls
+    ``_granted_host_roots_for_run`` itself and injects the answer as
+    ``granted_host_roots=roots``. That proves the FACTORY uses the value. It
+    proves nothing at all about the handler PASSING it — and the handler is
+    where the value has to come from, because the ENFORCE lane's workspace
+    object structurally cannot answer for itself.
+
+    Measured: deleting ``granted_host_roots=granted_host_roots`` from
+    ``RuntimeRunHandler.handle`` (and its twin in ``RuntimeApprovalHandler``)
+    left the whole suite green, while in production every folder the user had
+    attached went straight back to asking on every read. A test that injects the
+    value it then asserts cannot see that; this is the fourth defect of that
+    exact shape in this program.
+
+    So nothing is injected here. The real handler runs a real command, resolves
+    the roots itself, hands them off itself, the real ``acreate_agent_runtime``
+    composes them, and the assertion reads the rule list deepagents was actually
+    given. Delete either hand-off and these fail.
+    """
+
+    @staticmethod
+    def _broker_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DESKTOP_WORKSPACE_BROKER_URL", TEST_BASE_URL)
+        monkeypatch.setenv("DESKTOP_WORKSPACE_BROKER_TOKEN", TEST_TOKEN)
+
+    @staticmethod
+    def _capturing_factory(
+        builder: CapturingAgentBuilder,
+    ) -> Callable[..., Awaitable[object]]:
+        """The production factory, with the deepagents build request captured."""
+
+        async def factory(*, context: object, dependencies: object) -> object:
+            return await acreate_agent_runtime(
+                context=context,  # type: ignore[arg-type]
+                dependencies=dependencies,  # type: ignore[arg-type]
+                agent_builder=builder,
+            )
+
+        return factory
+
+    @staticmethod
+    async def _seed_run(store: InMemoryRuntimeApiStore) -> RunRecord:
+        """The run `handle()` will claim, and the message it answers."""
+
+        run = _run()
+        await store.append_message(
+            MessageRecord(
+                message_id=run.user_message_id,
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                role=MessageRole.USER,
+                content_text="What is in the folder I attached?",
+            )
+        )
+        store.runs[run.run_id] = run
+        store.events_by_run.setdefault(run.run_id, [])
+        return run
+
+    @staticmethod
+    async def _seed_approval(store: InMemoryRuntimeApiStore, run: RunRecord) -> None:
+        """One resolved approval, plus the 1-item batch its gate requires."""
+
+        await store.seed_approval_request(
+            ApprovalRequestRecord(
+                approval_id=_APPROVAL_ID,
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                user_id=run.user_id,
+                metadata={
+                    "approval_kind": "action",
+                    "native_interrupt_id": _APPROVAL_ID,
+                    "tool_name": "read_file",
+                },
+            )
+        )
+        await store.insert_approval_batch(
+            spec=ApprovalBatchSpec.build(
+                batch=ApprovalBatchRecord(
+                    batch_id=_APPROVAL_ID,
+                    run_id=run.run_id,
+                    org_id=run.org_id,
+                ),
+                items=[
+                    ApprovalBatchItemRecord(
+                        item_id=_APPROVAL_ID,
+                        batch_id=_APPROVAL_ID,
+                        index=0,
+                    )
+                ],
+            )
+        )
+
+    async def test_the_run_handler_hands_the_roots_it_resolved_to_the_factory(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Driven from ``handle()``. Nothing about the roots is supplied by hand."""
+
+        from deepagents.middleware.filesystem import _check_fs_permission
+
+        self._broker_env(monkeypatch)
+        builder = CapturingAgentBuilder()
+        handler, store = _handler(
+            sessions=TestEnforceLaneGrantedRoots._bound_sessions(),
+            broker=_attach(),
+            agent_factory=self._capturing_factory(builder),
+        )
+        await self._seed_run(store)
+
+        await handler.handle(_command())
+
+        assert builder.calls, "the run never reached the agent builder"
+        rules = list(builder.calls[0].permissions)
+        # The folder the user attached reads without a consent card — and the
+        # ONLY way a rule for it can exist here is the handler having passed the
+        # roots it resolved.
+        assert _check_fs_permission(rules, "read", _ATTACHED) == "allow"
+        assert _check_fs_permission(rules, "read", f"{_ATTACHED}/notes.md") == "allow"
+        # …and attaching one folder is still not attaching a disk.
+        assert _check_fs_permission(rules, "read", _UNGRANTED) == "interrupt"
+
+    async def test_the_run_handler_composes_the_floor_over_the_same_roots(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half the rule matcher cannot see, from the same drive.
+
+        The rules and the floor are built from one resolution on purpose. Asserting
+        only the rules would leave a hand-off that reaches the matcher and not the
+        floor — under which a hidden file inside an attached folder stays unreadable
+        no matter how many folders the user attaches.
+        """
+
+        self._broker_env(monkeypatch)
+        builder = CapturingAgentBuilder()
+        handler, store = _handler(
+            sessions=TestEnforceLaneGrantedRoots._bound_sessions(),
+            broker=_attach(),
+            agent_factory=self._capturing_factory(builder),
+        )
+        await self._seed_run(store)
+
+        await handler.handle(_command())
+
+        assert builder.calls
+        floor = builder.calls[0].memory_backend.default  # type: ignore[union-attr]
+        assert isinstance(floor, HostFilesystemFloor)
+        assert [root.path for root in floor.roots] == [_ATTACHED]
+        assert floor.permits_read(f"{_ATTACHED}/.env.local") is True
+        assert floor.permits_read(f"{_UNGRANTED}/.env.local") is False
+
+    async def test_the_approval_handler_hands_off_the_same_way_on_resume(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resume twin of the same line, driven through ``handle()``.
+
+        An approval rebuilds the agent, so it rebuilds the rule set. Deleting the
+        hand-off here means a user who has just approved something watches the
+        next turn ask again for a folder they attached before the run started.
+        """
+
+        from deepagents.middleware.filesystem import _check_fs_permission
+
+        self._broker_env(monkeypatch)
+        builder = CapturingAgentBuilder()
+        store = InMemoryRuntimeApiStore()
+        run = await self._seed_run(store)
+        store.runs[run.run_id] = run.model_copy(
+            update={"status": AgentRunStatus.WAITING_FOR_APPROVAL}
+        )
+        await self._seed_approval(store, run)
+        handler = RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            settings=_settings(),
+            agent_factory=self._capturing_factory(builder),
+            runtime_resumer=_silent_resumer,
+            workspace_broker_http_client=httpx.AsyncClient(
+                transport=_attach().transport()
+            ),
+        )
+
+        await handler.handle(
+            RuntimeApprovalResolvedCommand(
+                approval_id=_APPROVAL_ID,
+                run_id=run.run_id,
+                org_id=run.org_id,
+                decision=ApprovalDecision.APPROVED,
+            )
+        )
+
+        assert builder.calls, "the resume never reached the agent builder"
+        rules = list(builder.calls[0].permissions)
+        assert _check_fs_permission(rules, "read", f"{_ATTACHED}/notes.md") == "allow"
+        assert _check_fs_permission(rules, "read", _UNGRANTED) == "interrupt"
+
+    async def test_the_tool_path_translator_is_gated_on_the_same_resolution(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The third hand-off, whose only visible effect is an alarm.
+
+        ``_host_path_tool_middleware`` re-derives the rule set purely to gate
+        itself, and dropping ``granted_host_roots`` there does not change which
+        middleware is installed — rules 4 and 5 exist with no grants at all. What
+        it changes is that every ENFORCE run logs
+        ``host_filesystem.granted_roots_unavailable``, the line whose whole
+        meaning is "root resolution was SKIPPED". An alarm that fires on healthy
+        runs is an alarm nobody reads, so it is pinned here rather than left to
+        be rediscovered from a packaged log.
+        """
+
+        self._broker_env(monkeypatch)
+        builder = CapturingAgentBuilder()
+        handler, store = _handler(
+            sessions=TestEnforceLaneGrantedRoots._bound_sessions(),
+            broker=_attach(),
+            agent_factory=self._capturing_factory(builder),
+        )
+        await self._seed_run(store)
+
+        with caplog.at_level(logging.WARNING):
+            await handler.handle(_command())
+
+        assert builder.calls
+        assert not [
+            record
+            for record in caplog.records
+            if "granted_roots_unavailable" in record.getMessage()
+        ], (
+            "a run that DID resolve its roots must not raise the skipped-resolution alarm"
+        )
