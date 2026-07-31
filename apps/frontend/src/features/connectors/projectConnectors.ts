@@ -87,7 +87,9 @@ export function projectConnectors(
 
     return {
       server_id: server.server_id,
-      display_name: server.display_name || server.name || server.url,
+      // `server_id` last: a stdio server has no URL to fall back to.
+      display_name:
+        server.display_name || server.name || server.url || server.server_id,
       state,
       current_scopes: currentScopes,
       default_scopes: defaults,
