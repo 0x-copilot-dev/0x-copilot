@@ -66,6 +66,9 @@ export function ConsentCard({
   rejectTestId = "apc-reject",
 }: ConsentCardProps): ReactElement {
   const layout = presentation?.layout ?? "params";
+  // Referenced by `aria-describedby` below, so it must be unique per card on a
+  // page that can show several at once.
+  const reassuranceId = `${testId ?? "apc"}-reassurance`;
   return (
     <div
       className="apc"
@@ -75,8 +78,17 @@ export function ConsentCard({
       aria-label={`Approval: ${title}`}
       // The standing rule is no longer a visible row (see below); keep it
       // available to assistive tech so the claim is not simply deleted.
-      aria-description={reassurance}
+      //
+      // `aria-describedby` → a visually-hidden node, NOT `aria-description`.
+      // The latter is ARIA 1.3 and thinly implemented: with it the card's
+      // computed accessible description was measurably EMPTY
+      // (`toHaveAccessibleDescription` received ""), i.e. the reassurance had
+      // been deleted for screen readers too rather than merely unpainted.
+      aria-describedby={reassuranceId}
     >
+      <span id={reassuranceId} className="apc__a11y-only">
+        {reassurance}
+      </span>
       <div className="apc__head">
         <span className="apc__icon" aria-hidden="true">
           {icon ?? <ShieldGlyph />}

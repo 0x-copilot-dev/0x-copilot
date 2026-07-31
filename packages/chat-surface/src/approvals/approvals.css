@@ -764,3 +764,22 @@
   font-size: var(--font-size-2xs);
   color: var(--color-text-muted);
 }
+
+/* Announced, never painted. Carries the standing reassurance that used to be a
+   visible `.apc__foot` row: identical boilerplate on every card, so it earned no
+   pixels in the strip above the composer — but a screen-reader user meeting
+   their first approval still needs to hear it.
+
+   The clip-rect idiom rather than `display:none` / `visibility:hidden` /
+   `width:0`, all of which remove the node from the accessibility tree and would
+   put us back where we started. */
+.apc__a11y-only {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}

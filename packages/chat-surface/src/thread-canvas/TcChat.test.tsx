@@ -1005,7 +1005,15 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     const conf = screen.getByTestId("tc-chat-conf-card-appr-1");
     expect(conf).toHaveClass("conf-card");
     expect(conf).toHaveTextContent("Post to #launch-aurora");
-    expect(conf).toHaveTextContent("The agent paused here");
+    // The reassurance is ANNOUNCED, not painted. It is boilerplate identical on
+    // every card, so it earns no pixels in the strip above the composer — but a
+    // screen-reader user meeting their first approval still needs it, so it
+    // survives as the card's accessible description. Asserted on the CARD, not
+    // the `.conf-card` wrapper: the wrapper would inherit the hidden node's text
+    // either way, so it cannot tell announced from displayed.
+    expect(
+      screen.getByTestId("tc-chat-conf-consent-appr-1"),
+    ).toHaveAccessibleDescription(/The agent paused here/);
     // The design reserves "Approve & sign" for actions that actually reach a
     // wallet; it arrives via `presentation.approve_label` on those approvals.
     // A generic approval promises no signature.
