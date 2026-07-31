@@ -33,6 +33,13 @@ export {
 } from "./artifacts";
 export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
 export type {
+  DictationCallbacks,
+  DictationEndReason,
+  DictationPort,
+  DictationSession,
+  DictationTranscript,
+} from "./ports/DictationPort";
+export type {
   WorkspaceApprovalDecision,
   WorkspaceApprovalHostDecisionResult,
   WorkspaceApprovalHostPort,
@@ -393,6 +400,8 @@ export {
   type ComposerMode,
   type ComposerSubmitPayload,
   type ComposerSlotCtx,
+  type ComposerDictationControl,
+  type ComposerDictationState,
   type AttachmentAdapter,
   type AttachmentContentPart,
   type CompleteAttachment,
@@ -696,6 +705,10 @@ export {
   // hand-rolling a second remove dialog.
   RemoveConnectorDialog,
   useConnectFlow,
+  // Hosts THROW this from their `authorize` to say "this connector needs a
+  // pre-registered OAuth client" — the one connect failure the user can fix,
+  // which the flow turns into a form instead of an error string.
+  ConnectOAuthClientRequiredError,
   RevealOnce,
   ConnectorDetailView,
   ScopeReviewTab,
@@ -706,14 +719,22 @@ export {
   WebhookDetailView, // orphan-destination-waiver: owner=DEAD-1 — folded IA (webhook detail is unmounted while `webhooks` is folded; disposition owned by the DEAD-1 IA-fold audit).
   WebhookCreateWizard,
   WEBHOOK_VERIFICATION_SNIPPET,
+  ManageMcpModal,
+  useMcpConfig,
 } from "./destinations/connectors";
 export type {
   ConnectorsDestinationProps,
+  ManageMcpModalProps,
+  ManageMcpSaveRequest,
+  McpConfigDocumentPayload,
+  McpConfigPort,
+  McpConfigWritePayload,
+  UseMcpConfigOptions,
+  UseMcpConfigResult,
   RemoveConnectorDialogProps,
   ConnectorAccessPort,
   ConnectFlow,
   ConnectAuthorizeRequest,
-  CustomServerResult,
   UseConnectFlowOptions,
   RevealOnceProps,
   ConnectorDetailViewProps,
@@ -1644,7 +1665,6 @@ export {
   type ConnectModalProps,
   type ConnectPermission,
   type ConnectPermissionOption,
-  type CustomServerInput,
 } from "./destinations/connectors";
 // === end Phase 4 (PR-4.8) ===
 

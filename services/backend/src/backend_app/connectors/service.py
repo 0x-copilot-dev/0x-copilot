@@ -80,7 +80,14 @@ class ConnectorCatalogEntry:
     this object is the in-memory representation.
     """
 
-    __slots__ = ("slug", "display_name", "description", "icon_hint")
+    __slots__ = (
+        "slug",
+        "display_name",
+        "description",
+        "icon_hint",
+        "availability",
+        "availability_reason",
+    )
 
     def __init__(
         self,
@@ -89,11 +96,21 @@ class ConnectorCatalogEntry:
         display_name: str,
         description: str = "",
         icon_hint: str | None = None,
+        # Why the row can (or cannot) be connected — the api-types
+        # `ConnectorAvailability` vocabulary. ``None`` means the source said
+        # nothing, which every client must read as "connectable", NOT as
+        # "unavailable": missing evidence is not evidence of absence, and the
+        # opposite default would silently hide connectors behind any caller
+        # that constructs an entry without this.
+        availability: str | None = None,
+        availability_reason: str | None = None,
     ) -> None:
         self.slug = slug
         self.display_name = display_name
         self.description = description
         self.icon_hint = icon_hint
+        self.availability = availability
+        self.availability_reason = availability_reason
 
 
 def load_catalog(path: Path | None = None) -> tuple[ConnectorCatalogEntry, ...]:

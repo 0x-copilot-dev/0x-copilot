@@ -74,6 +74,40 @@ describe("projectFocusPlan", () => {
       ],
     });
   });
+
+  it("prefers the agent-authored tool purpose over a lifecycle label", () => {
+    expect(
+      projectFocusPlan([
+        event(
+          "tool_call_started",
+          1,
+          { call_id: "call-web", tool_name: "web_search" },
+          "Calling web_search",
+        ),
+        event(
+          "tool_call_delta",
+          2,
+          {
+            call_id: "call-web",
+            tool_name: "web_search",
+            args: {
+              display_title: "PEP 8 docs",
+              display_summary: "Find the official Python style guide",
+            },
+          },
+          "web_search running",
+        ),
+        event(
+          "tool_result",
+          3,
+          { call_id: "call-web", tool_name: "web_search" },
+          "web_search completed",
+        ),
+      ]),
+    ).toEqual({
+      steps: [{ id: "call-web", label: "PEP 8 docs", state: "complete" }],
+    });
+  });
 });
 
 describe("FocusPlan", () => {

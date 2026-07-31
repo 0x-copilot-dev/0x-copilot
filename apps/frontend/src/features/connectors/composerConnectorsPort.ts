@@ -12,8 +12,7 @@
 // than the hooks because the port is a plain object of async methods the popover
 // calls itself (it owns its own load-once state); wiring it over the api layer
 // keeps every read fresh and avoids coupling the popover to a component's hook
-// state. Custom-MCP registration reuses the same `POST /v1/mcp/servers` route the
-// JSON-config editor posts to (`features/connectors/jsonConfig.ts`).
+// state.
 
 import type {
   McpCatalogEntry,
@@ -24,7 +23,6 @@ import type { ComposerConnectorsPort } from "@0x-copilot/chat-surface";
 
 import type { RequestIdentity } from "../../api/config";
 import {
-  createMcpServer,
   installMcpServer,
   listMcpCatalog,
   listMcpServers,
@@ -53,12 +51,6 @@ export function createComposerConnectorsPort(
       oauthClient?: McpOAuthClientConfigRequest,
     ): Promise<McpServer> {
       return installMcpServer(slug, identity, oauthClient);
-    },
-    addCustomServer(
-      url: string,
-      oauthClient?: McpOAuthClientConfigRequest,
-    ): Promise<McpServer> {
-      return createMcpServer(url, identity, oauthClient);
     },
     async beginAuth(serverId: string): Promise<void> {
       const auth = await startMcpAuth(serverId, identity);

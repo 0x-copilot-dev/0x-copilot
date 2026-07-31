@@ -8,9 +8,8 @@
 //   3. Merges connector envelopes into the local list via the pure
 //      `applyConnectorEnvelope` adapter.
 //   4. Drives the shared <ConnectModal> connect flow through `useConnectFlow`
-//      (PRD-11 D4): the host injects `authorize` (open a popup / start OAuth),
-//      `addCustomServer` (create an MCP server, return its OAuth url), and
-//      `onConnect` (persist the picked access mode). The SSE channel feeds
+//      (PRD-11 D4): the host injects `authorize` (open a popup / start OAuth)
+//      and `onConnect` (persist the picked access mode). The SSE channel feeds
 //      completion back through `flow.markConnected`.
 //
 // SSE goes through `streamConnectorEvents` (transport port) — no raw
@@ -29,9 +28,11 @@ import {
 import {
   ConnectModal,
   ConnectorsDestination,
+  ManageMcpModal,
   useConnectFlow,
+  useMcpConfig,
+  type McpConfigPort,
   type ConnectorAccessPort,
-  type CustomServerInput,
 } from "@0x-copilot/chat-surface";
 import type {
   Connector,
@@ -53,9 +54,10 @@ import {
   streamConnectorEvents,
 } from "../../api/connectorsApi";
 import {
-  createMcpServer,
   installMcpServer,
+  readMcpConfig,
   startMcpAuth,
+  writeMcpConfig,
 } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
 import { applyConnectorEnvelope } from "./adapters";
@@ -95,6 +97,10 @@ export function ConnectorsRoute({
 }: ConnectorsRouteProps): ReactElement {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
+  // Route-level banner for a REMOVE or RECONNECT failure — the two actions the
+  // route performs itself. A failed catalog *connect* does not land here: it
+  // belongs to the shared flow and reaches the surface as `connectError`, next
+  // to the row the user clicked.
   const [pendingError, setPendingError] = useState<string | null>(null);
   // Route-level banner for an access-mode PATCH failure. The shared
   // ConnectorsDestination already reverts the segment inline; this is the
@@ -165,10 +171,10 @@ export function ConnectorsRoute({
   // ---- Connect flow capabilities (PRD-11 D4) -------------------------
 
   // `authorize`: a catalog pick starts the provider OAuth round-trip and opens
-  // a popup (keeping the modal alive); a custom server's OAuth url is opened
-  // directly. Completion is reported by the SSE channel via `markConnected`.
+  // a popup (keeping the modal alive). Completion is reported by the SSE
+  // channel via `markConnected`.
   const authorize = useCallback(
-    async (request: { slug?: ConnectorSlug; url?: string }): Promise<void> => {
+    async (request: { slug?: ConnectorSlug }): Promise<void> => {
       if (request.slug !== undefined) {
         // Install-then-authorize over the MCP path — the SAME two calls the
         // composer's connect makes. The destination used to POST its own
@@ -183,31 +189,6 @@ export function ConnectorsRoute({
         }
         return;
       }
-      if (request.url !== undefined && typeof window !== "undefined") {
-        window.open(request.url, "_blank", "noopener,noreferrer");
-      }
-    },
-    [identity],
-  );
-
-  // `addCustomServer`: create the MCP server, then, mirroring
-  // `useConnectors.addServer`'s post-create guards, return its OAuth url when
-  // the server still needs auth (so the hook opens it via `authorize`). A
-  // server needing no auth returns no url → the hook clears pending + closes.
-  const addCustomServer = useCallback(
-    async (input: CustomServerInput): Promise<{ authorizeUrl?: string }> => {
-      const server = await createMcpServer(
-        input.url,
-        identity,
-        input.oauthClient,
-      );
-      const needsAuth =
-        server.auth_mode !== "none" &&
-        server.auth_state !== "auth_unsupported" &&
-        server.auth_state !== "authenticated";
-      if (!needsAuth) return {};
-      const auth = await startMcpAuth(server.server_id, identity);
-      return { authorizeUrl: auth.auth_url };
     },
     [identity],
   );
@@ -229,9 +210,29 @@ export function ConnectorsRoute({
 
   const flow = useConnectFlow({
     authorize,
-    addCustomServer,
     onConnect: persistConnect,
   });
+
+  // "Manage MCP" — the config document, read and written through the facade.
+  // Refetching after a save is what makes the JSON and the connector list
+  // agree: a server added or removed in the document has to appear or vanish
+  // in Tools without a reload, which is the point of editing it here rather
+  // than in a file on disk.
+  const mcpConfigPort = useMemo<McpConfigPort>(
+    () => ({
+      readConfig: () => readMcpConfig(identity),
+      writeConfig: (request) => writeMcpConfig(request, identity),
+    }),
+    [identity],
+  );
+  const mcpConfig = useMcpConfig({
+    port: mcpConfigPort,
+    onSaved: () => setReloadToken((t) => t + 1),
+  });
+  const openMcpConfig = useCallback((): void => {
+    flow.closeConnect();
+    mcpConfig.openConfig();
+  }, [flow, mcpConfig]);
 
   // ---- SSE subscription with exponential-backoff reconnect -----------
   const backoffRef = useRef(RECONNECT_BACKOFF_MIN_MS);
@@ -438,7 +439,9 @@ export function ConnectorsRoute({
           items={items}
           onConnect={flow.openConnect}
           catalog={catalog}
-          onConnectEntry={(slug) => flow.onSelectEntry(slug)}
+          onConnectEntry={(slug) => flow.connectEntry(slug)}
+          connectingSlug={flow.connectingSlug}
+          connectError={flow.error}
           onOpenConnector={onOpenConnector}
           onOpenWebhooks={onOpenWebhooks}
           onReconnect={(id) => {
@@ -458,9 +461,19 @@ export function ConnectorsRoute({
         catalog={catalog}
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}
-        onAddCustomServer={flow.onAddCustomServer}
+        onManageMcp={openMcpConfig}
         pending={flow.pending}
         error={flow.error}
+        initialEntrySlug={flow.initialEntrySlug}
+      />
+      <ManageMcpModal
+        open={mcpConfig.open}
+        onClose={mcpConfig.closeConfig}
+        document={mcpConfig.document}
+        onSave={mcpConfig.save}
+        pending={mcpConfig.pending}
+        error={mcpConfig.error}
+        result={mcpConfig.result}
       />
     </section>
   );

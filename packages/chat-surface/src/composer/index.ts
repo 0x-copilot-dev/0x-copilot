@@ -5,6 +5,8 @@ export {
   type ComposerMode,
   type ComposerSubmitPayload,
   type ComposerSlotCtx,
+  type ComposerDictationControl,
+  type ComposerDictationState,
   type AttachmentAdapter,
   type AttachmentContentPart,
   type CompleteAttachment,

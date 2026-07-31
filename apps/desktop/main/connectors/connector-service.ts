@@ -10,6 +10,7 @@
 import type {
   DesktopConnectorCatalogResponse,
   DesktopRequestedProductScope,
+  McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
 
 import type { ConnectorAuthorizationResult } from "./channels";
@@ -99,10 +100,27 @@ export class ConnectorService {
     readonly slug?: string;
     readonly serverId?: string;
     readonly productScope?: DesktopRequestedProductScope;
+    /**
+     * Pre-registered OAuth client the user supplied after a previous attempt
+     * failed with `connector_oauth_client_required`. Only the PROFILE topology
+     * consumes it — the MCP route registers its client dynamically, which is
+     * the whole reason it needs no pre-registered one.
+     */
+    readonly oauthClient?: McpOAuthClientConfigRequest;
+    /**
+     * Which redirect the user's OAuth app was registered against. Only the
+     * PROFILE topology honours it; MCP OAuth registers its client dynamically
+     * against whatever redirect it is given, so it has nothing to match.
+     */
+    readonly callbackMode?: "loopback" | "deep_link";
   }): Promise<ConnectorAuthorizationResult> {
-    const { slug, serverId, productScope } = target;
+    const { slug, serverId, productScope, oauthClient, callbackMode } = target;
     if (slug !== undefined && (await this.hasDesktopProfile(slug))) {
-      const result = await this.coordinator.connect(slug, { productScope });
+      const result = await this.coordinator.connect(slug, {
+        productScope,
+        ...(oauthClient !== undefined ? { oauthClient } : {}),
+        ...(callbackMode !== undefined ? { callbackMode } : {}),
+      });
       return {
         server_id: result.server_id,
         connector_slug: result.connector_slug,

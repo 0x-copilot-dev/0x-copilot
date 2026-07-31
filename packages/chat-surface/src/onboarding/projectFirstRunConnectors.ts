@@ -107,7 +107,9 @@ export function projectFirstRunConnectors(
     }
     connected.push({
       serverId: server.server_id,
-      displayName: server.display_name || server.name || server.url,
+      // `server_id` last: a stdio server has no URL to fall back to.
+      displayName:
+        server.display_name || server.name || server.url || server.server_id,
       scopesSummary: server.scopes_summary ?? null,
       logoUrl: server.logo_url ?? null,
       brandColor: server.brand_color ?? null,

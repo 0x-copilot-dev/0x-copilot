@@ -35,6 +35,13 @@ export type {
   FilePickerPort,
   FilePickerSelection,
 } from "./FilePickerPort";
+export type {
+  DictationCallbacks,
+  DictationEndReason,
+  DictationPort,
+  DictationSession,
+  DictationTranscript,
+} from "./DictationPort";
 export type { ClipboardPort } from "./ClipboardPort";
 // === end Phase 0.5 ===
 

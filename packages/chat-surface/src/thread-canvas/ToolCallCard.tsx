@@ -9,7 +9,6 @@ import {
   activityCardMetaStyle,
   activityCardStaticHeaderStyle,
   activityCardTileStyle,
-  activityCardTitleStyle,
 } from "../activity/ActivityCardChrome";
 import type { ToolCallEntry } from "./eventProjector";
 
@@ -79,6 +78,10 @@ function renderHeader(
   const provenance = provenanceLabel(toolCall);
   const access = accessLabel(toolCall.accessMode);
   const duration = formatDuration(toolCall.durationMs);
+  const summary =
+    toolCall.status === "error"
+      ? (toolCall.errorMessage ?? toolCall.summary)
+      : toolCall.summary;
 
   return (
     <div
@@ -89,7 +92,7 @@ function renderHeader(
       </span>
       <span style={headerCopyStyle}>
         <span style={identityLineStyle}>
-          <span style={activityCardTitleStyle}>{toolCall.toolName}</span>
+          <span style={toolTitleStyle}>{toolCall.title}</span>
           {provenance !== null ? (
             <span style={provenanceStyle}>{provenance}</span>
           ) : null}
@@ -98,18 +101,33 @@ function renderHeader(
             <span style={activityCardMetaStyle}>{duration}</span>
           ) : null}
         </span>
-        {toolCall.summary !== undefined ? (
-          <span style={summaryTextStyle}>{toolCall.summary}</span>
+        {summary !== undefined ? (
+          <span
+            style={
+              toolCall.status === "error"
+                ? errorSummaryTextStyle
+                : summaryTextStyle
+            }
+          >
+            {summary}
+          </span>
         ) : null}
       </span>
-      <span style={statusMarkStyle(toolCall.status)} aria-label={statusLabel}>
-        {running ? (
-          <span className="tc-tool-card__spinner" style={spinnerStyle} />
-        ) : toolCall.status === "error" ? (
-          "!"
-        ) : (
-          "✓"
-        )}
+      <span
+        style={statusGroupStyle}
+        aria-label={statusLabel}
+        data-testid={`tc-chat-tool-${toolCall.id}-status`}
+      >
+        <span style={statusMarkStyle(toolCall.status)} aria-hidden="true">
+          {running ? (
+            <span className="tc-tool-card__spinner" style={spinnerStyle} />
+          ) : toolCall.status === "error" ? (
+            "!"
+          ) : (
+            "✓"
+          )}
+        </span>
+        <span style={statusLabelStyle}>{statusLabel}</span>
       </span>
       {discloseable ? (
         <span
@@ -131,6 +149,9 @@ function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
       style={activityCardDetailStyle}
       data-testid={`tc-chat-tool-${toolCall.id}-details`}
     >
+      {toolCall.title !== toolCall.toolName ? (
+        <DetailRow label="tool" value={toolCall.toolName} />
+      ) : null}
       {toolCall.args !== undefined ? (
         <PayloadRow
           label="args"
@@ -199,7 +220,7 @@ function DetailRow({
   value,
   tone = "default",
 }: {
-  readonly label: "source" | "error";
+  readonly label: "tool" | "source" | "error";
   readonly value: string;
   readonly tone?: "default" | "error";
 }): ReactElement {
@@ -245,6 +266,7 @@ function hasToolDetails(toolCall: ToolCallEntry): boolean {
   return (
     toolCall.args !== undefined ||
     toolCall.result !== undefined ||
+    toolCall.title !== toolCall.toolName ||
     toolCall.provenance !== undefined ||
     toolCall.errorMessage !== undefined ||
     (toolCall.subagentTaskIds?.length ?? 0) > 0
@@ -298,7 +320,7 @@ function statusText(status: ToolCallEntry["status"]): string {
     case "running":
       return "Running";
     case "complete":
-      return "Completed";
+      return "Done";
     case "error":
       return "Failed";
   }
@@ -348,6 +370,17 @@ const identityLineStyle: CSSProperties = {
   minWidth: 0,
 };
 
+const toolTitleStyle: CSSProperties = {
+  color: "var(--color-text)",
+  fontFamily: "var(--font-sans)",
+  fontSize: "var(--font-size-sm)",
+  fontWeight: 500,
+  lineHeight: "18px",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
 const toolMetaStyle: CSSProperties = {
   color: "var(--color-text-subtle)",
   fontFamily: "var(--font-mono)",
@@ -382,6 +415,27 @@ const summaryTextStyle: CSSProperties = {
   marginTop: 3,
   overflow: "hidden",
   textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const errorSummaryTextStyle: CSSProperties = {
+  ...summaryTextStyle,
+  color: "var(--color-danger)",
+};
+
+const statusGroupStyle: CSSProperties = {
+  alignItems: "center",
+  display: "inline-flex",
+  flex: "0 0 auto",
+  gap: 4,
+};
+
+const statusLabelStyle: CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-sans)",
+  fontSize: "var(--font-size-2xs)",
+  fontWeight: 500,
+  lineHeight: "14px",
   whiteSpace: "nowrap",
 };
 

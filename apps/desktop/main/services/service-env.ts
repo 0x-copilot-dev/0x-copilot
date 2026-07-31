@@ -43,6 +43,13 @@ export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   "RUNTIME_ENABLE_MONTY",
   "RUNTIME_INTERPRETER_PROVIDER",
   "RUNTIME_MONTY_LIMIT_PROFILE",
+  // Preview connectors (Gmail / Google Drive / Outlook). The backend gates
+  // these OFF unless this is exactly "true", and until now nothing forwarded
+  // it — so the three preview rows were unreachable in every desktop build
+  // regardless of what the operator set. Forwarding it does not turn them on;
+  // it only makes the existing switch reachable, and the backend still fails
+  // closed on a tenant-template profile even with preview enabled.
+  "DESKTOP_CONNECTORS_ALLOW_PREVIEW",
 ];
 
 export const UVICORN_MODULES: Record<SupervisedServiceName, string> = {
@@ -288,6 +295,19 @@ export function buildServiceEnv(
   }
   env.PYTHONPATH = pythonPathValue(inputs.pathDelimiter);
   env.PYTHONUNBUFFERED = "1";
+  // Preview connectors ON by default in the desktop app; the passthrough above
+  // still lets an operator set "false" to turn them off.
+  //
+  // The flag was written for a multi-tenant deployment where an admin decides
+  // what their users may reach. On a single-user desktop the user IS the
+  // operator, so defaulting it off meant the only person who could flip it was
+  // also the person who would have to discover an undocumented env var to do
+  // it — which is indistinguishable from the feature not existing. Gmail and
+  // Drive point at documented Google endpoints and now authorize with the
+  // app's own OAuth client, so there is nothing left for the gate to protect
+  // against.
+  env.DESKTOP_CONNECTORS_ALLOW_PREVIEW =
+    inputs.processEnv.DESKTOP_CONNECTORS_ALLOW_PREVIEW?.trim() || "true";
   // OTel kill switch: the desktop runs on a laptop with no collector. Without
   // it, ai-backend's TelemetryBootstrap fails closed under *_ENVIRONMENT=production
   // ("OTEL_EXPORTER_OTLP_ENDPOINT must be set in production").

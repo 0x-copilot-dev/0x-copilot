@@ -1835,6 +1835,36 @@ def test_tool_result_does_not_lift_surface_from_json_string_content() -> None:
     assert json.loads(payload["output"]["content"]) == return_dict
 
 
+def test_tool_result_promotes_embedded_typed_error_to_failed_status() -> None:
+    """A normally-returned connector error must not become a green success."""
+
+    from langchain_core.messages import ToolMessage
+
+    return_dict = {
+        "error": {
+            "code": "connection_failed",
+            "safe_message": "The MCP server could not be reached.",
+            "retryable": True,
+            "server_name": "linear",
+            "correlation_id": "corr-safe",
+        }
+    }
+    message = ToolMessage(
+        content=json.dumps(return_dict),
+        name="load_mcp_server",
+        tool_call_id="call_failed_load",
+        # LangChain reports success because the callable returned a typed value.
+        status="success",
+    )
+
+    payload = StreamMessageProcessor.tool_result_payload(message)
+
+    assert payload["status"] == "failed"
+    assert payload["error_code"] == "connection_failed"
+    assert payload["safe_message"] == "The MCP server could not be reached."
+    assert payload["output"] == return_dict
+
+
 def test_tool_result_without_surface_is_unchanged() -> None:
     """A structured tool result with no surface keeps ``output`` untouched and
     gains no surface fields."""

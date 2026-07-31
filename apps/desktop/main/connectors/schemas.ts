@@ -22,11 +22,38 @@ export const ListCatalogParamsSchema = z.object({}).strict();
  * of `authorize` having to. Still no redirect URI, port, or token — main
  * derives the loopback callback itself.
  */
+const OAuthClientParamsSchema = z
+  .object({
+    client_id: z.string().min(1),
+    client_secret: z.string().min(1).optional(),
+    token_endpoint_auth_method: z.string().min(1).optional(),
+    scope: z.string().min(1).optional(),
+    authorization_endpoint: z.string().url().optional(),
+    token_endpoint: z.string().url().optional(),
+  })
+  .strict();
+
 export const AuthorizeParamsSchema = z
   .object({
     slug: z.string().min(1).optional(),
     serverId: z.string().min(1).optional(),
     productScope: z.enum(["read", "draft"]).optional(),
+    /**
+     * The ONE secret this boundary accepts inbound, and it is deliberate: it is
+     * the user's own OAuth app credential, typed by them, for a vendor that
+     * supports no dynamic registration. It travels renderer → main → facade and
+     * is encrypted into the backend TokenVault on arrival; main neither stores
+     * nor logs it. This does not weaken the rule the schema exists to enforce —
+     * that rule is about what main will ACCEPT AS AUTHORITY (a redirect URI, a
+     * port, a provider token) and what it will HAND BACK to the renderer, and
+     * a client_id the user pasted is neither.
+     */
+    oauthClient: OAuthClientParamsSchema.optional(),
+    /** Redirect style the provider was registered against — see
+     *  `ConnectorConnectOptions.callbackMode`. Not a redirect URI: main still
+     *  derives the actual callback itself, so this cannot be used to point the
+     *  flow anywhere of the caller's choosing. */
+    callbackMode: z.enum(["loopback", "deep_link"]).optional(),
   })
   .strict()
   .refine((value) => value.slug !== undefined || value.serverId !== undefined, {

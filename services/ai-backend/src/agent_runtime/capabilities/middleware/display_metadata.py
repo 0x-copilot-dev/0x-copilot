@@ -540,11 +540,13 @@ def agent_display_from_payload(
 ) -> tuple[str | None, str | None]:
     """Extract ``(title, summary)`` agent-supplied display from an event payload.
 
-    Read order: ``payload.args._display_title`` and ``payload.args._display_summary``.
-    The args dict is where the agent's tool_call args land — same shape
-    for regular tools and for the ``call_mcp_tool`` dispatcher (the agent
-    puts ``_display_*`` at the top level of the dispatcher's args, not
-    nested inside ``args.arguments``).
+    The args dict is where the agent's tool-call args land. LangChain/Pydantic
+    may preserve the model-facing aliases (``_display_title`` /
+    ``_display_summary``) or serialise their validated field names
+    (``display_title`` / ``display_summary``), so both forms are canonical
+    inputs here. This is the same shape for regular tools and for the
+    ``call_mcp_tool`` dispatcher: display fields remain at the top level of
+    the dispatcher's args, not nested inside ``args.arguments``.
 
     Returns ``(None, None)`` for any non-mapping payload, missing args,
     or missing display keys. Empty strings are treated as missing —
@@ -557,8 +559,12 @@ def agent_display_from_payload(
     args = payload.get("args")
     if not isinstance(args, Mapping):
         return None, None
-    title = _non_empty_string(args.get(DISPLAY_TITLE_KEY))
-    summary = _non_empty_string(args.get(DISPLAY_SUMMARY_KEY))
+    title = _non_empty_string(args.get(DISPLAY_TITLE_KEY)) or _non_empty_string(
+        args.get("display_title")
+    )
+    summary = _non_empty_string(args.get(DISPLAY_SUMMARY_KEY)) or _non_empty_string(
+        args.get("display_summary")
+    )
     return title, summary
 
 

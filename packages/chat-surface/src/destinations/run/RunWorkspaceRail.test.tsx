@@ -158,6 +158,21 @@ describe("RunWorkspaceRail — tabs (FR-3.10)", () => {
     });
   });
 
+  it("reserves Focus-only breathing room below the active composer", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail mode="focus" chatSlot={chatSlot()} />,
+    );
+    expect(screen.getByTestId("run-rail-panel-chat")).toHaveStyle({
+      boxSizing: "border-box",
+      paddingBottom: "16px",
+    });
+
+    rerender(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    expect(screen.getByTestId("run-rail-panel-chat")).not.toHaveStyle({
+      paddingBottom: "16px",
+    });
+  });
+
   it("exposes a tablist with tab + tabpanel roles", () => {
     render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
     expect(screen.getByRole("tablist")).toBeInTheDocument();

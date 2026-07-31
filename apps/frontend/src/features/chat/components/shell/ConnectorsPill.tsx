@@ -117,6 +117,8 @@ export function activeConnectorsFromScopes(
     })
     .map((server) => ({
       id: server.server_id,
-      name: server.display_name || server.url,
+      // `server_id` last: a stdio server has no URL, so the chain has to
+      // end on something that is always a string or the pill renders null.
+      name: server.display_name || server.url || server.server_id,
     }));
 }

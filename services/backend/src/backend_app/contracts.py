@@ -15,20 +15,51 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# RFC 7230 `token`. Deliberately excludes CR, LF, and `:` — see
+# ``Validators.normalize_configured_value_name``.
+_HEADER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+# Headers the Streamable HTTP transport owns; configuration may not set them.
+# Names that ARE a credential, matched whole (see `is_credential_name`).
+_EXACT_CREDENTIAL_NAMES = frozenset({"authorization", "proxy-authorization", "cookie"})
+# Substrings that mark a name as credential-bearing.
+_CREDENTIAL_MARKERS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "api_key",
+    "api-key",
+    "credential",
+)
+_RESERVED_HEADER_NAMES = frozenset(
+    {
+        "accept",
+        "content-length",
+        "content-type",
+        "host",
+        "mcp-protocol-version",
+        "mcp-session-id",
+    }
+)
 
 
 class _Fields:
     """Flat constant pool for every field name referenced in validators or key lookups."""
 
     ALLOWED_TOOLS = "allowed_tools"
+    ARGS = "args"
     AUTH_STATE = "auth_state"
     AUTHORIZATION_ENDPOINT = "authorization_endpoint"
     CLIENT_ID = "client_id"
     CLIENT_SECRET = "client_secret"
     CODE = "code"
+    COMMAND = "command"
     COMPATIBILITY = "compatibility"
     CREATED_AT = "created_at"
+    CWD = "cwd"
     DESCRIPTION = "description"
+    HEADER_NAME = "header_name"
     DISPLAY_NAME = "display_name"
     ENABLED = "enabled"
     ERROR = "error"
@@ -113,6 +144,92 @@ class Validators:
         text = value.strip()
         if not text:
             raise ValueError("value must not be empty")
+        return text
+
+    @staticmethod
+    def normalize_configured_value_name(value: object) -> str:
+        """Validate a header name or environment-variable name.
+
+        Accepts the RFC 7230 ``token`` character set, which is a superset of
+        every legal environment-variable name, so one rule covers both uses.
+        The point is not politeness about spelling: a name carrying CR, LF, or
+        a colon would let a configured header inject additional headers or a
+        body into the request the transport builds, so the character set is a
+        security boundary and rejection is the only safe answer.
+
+        Reserved names are refused outright. ``mcp-session-id`` and
+        ``mcp-protocol-version`` are protocol state the transport negotiates
+        and re-sends per the spec; ``content-type`` and ``accept`` are dictated
+        by the Streamable HTTP transport. Letting configuration overwrite any
+        of them breaks the session rather than customizing it, and it would
+        break it intermittently — only once a session id had been issued.
+        """
+
+        text = Validators.normalize_text(value)
+        if not _HEADER_NAME_PATTERN.fullmatch(text):
+            raise ValueError("name contains unsupported characters")
+        if text.lower() in _RESERVED_HEADER_NAMES:
+            raise ValueError(f"{text} is managed by the transport and cannot be set")
+        return text
+
+    @staticmethod
+    def is_credential(name: str, value: str) -> bool:
+        """Does this configured value carry a credential?
+
+        The NAME is the primary signal, because a value is just a string —
+        there is nothing about ``ghp_abc123`` that identifies it as a token and
+        nothing about ``2`` that identifies it as safe. Matching is on
+        substrings, since real configs spell it a dozen ways (``X-Api-Key``,
+        ``GITHUB_TOKEN``, ``ANTHROPIC_API_KEY``, ``DB_PASSWORD``);
+        ``authorization`` and ``cookie`` match whole, being credentials by
+        definition.
+
+        One value-side rule joins it: a URL carrying a password in its userinfo
+        (``postgres://user:pass@host/db``) IS a credential whatever the
+        variable is called, and ``DATABASE_URL`` — the single most common way
+        to hand a service a password — would otherwise read as plain and be
+        shown back in full. Narrow and high-confidence: a URL with a password
+        in it is never not a secret.
+
+        Deliberately conservative in the direction that costs least. A name
+        that merely looks credential-ish gets sealed, which costs the user the
+        ability to re-read a harmless value; guessing the other way costs them
+        a leaked token.
+        """
+
+        lowered = name.strip().lower()
+        if lowered in _EXACT_CREDENTIAL_NAMES:
+            return True
+        if any(marker in lowered for marker in _CREDENTIAL_MARKERS):
+            return True
+        return Validators._url_carries_password(value)
+
+    @staticmethod
+    def _url_carries_password(value: str) -> bool:
+        text = value.strip()
+        if "://" not in text:
+            return False
+        try:
+            return bool(urlsplit(text).password)
+        except ValueError:
+            # Not parseable as a URL, so not a URL with a password in it.
+            return False
+
+    @staticmethod
+    def normalize_launch_command(value: object) -> str:
+        """Validate a stdio server's executable.
+
+        Only the program is validated here; arguments are passed through
+        untouched because they are handed to the OS as a vector, never to a
+        shell, so they cannot mean anything but themselves. What this DOES
+        refuse is a command carrying a NUL or a newline — neither can appear in
+        a real executable path, and both are classic ways to smuggle a second
+        instruction past a naive reader.
+        """
+
+        text = Validators.normalize_text(value)
+        if any(ch in text for ch in ("\x00", "\n", "\r")):
+            raise ValueError("command contains unsupported characters")
         return text
 
     @staticmethod
@@ -329,6 +446,127 @@ class McpOAuthClientRequest(BackendContract):
         return Validators.validate_public_mcp_url(value)
 
 
+# ---------------------------------------------------------------------------
+# Configured values — request headers and stdio environment variables
+# ---------------------------------------------------------------------------
+#
+# One model serves both because they are the same thing wearing two hats: a
+# named string the user configures, which may or may not be a secret.
+#
+# The secret/non-secret split is DECLARED by the user rather than guessed. A
+# literal (``"X-Api-Version": "2"``) round-trips through the config editor
+# verbatim, because there is nothing to protect and silently masking it would
+# make the document lie about its own contents. A secret is written as the
+# ``${input:<id>}`` placeholder the MCP client ecosystem already uses; the
+# resolved value is encrypted into ``encrypted_value`` via ``TokenVault`` and
+# NEVER travels back out, while the document keeps showing the placeholder.
+# That is what makes the editor round-trippable without either leaking a token
+# into a text area or destroying it on the next save.
+
+
+class McpConfiguredValue(BackendContract):
+    """A configured header or environment value.
+
+    Exactly one of ``value`` / ``encrypted_value`` is set, and which one it is
+    IS the secret/non-secret decision:
+
+      value            a plain configured value (``X-Api-Version: 2``). Stored
+                       as written and echoed back verbatim, because there is
+                       nothing to protect and masking it would make the config
+                       document lie about its own contents.
+      encrypted_value  a credential, sealed by ``TokenVault``. Never leaves the
+                       backend: the document renders it as a redaction marker.
+
+    The classification is made once, on write, by ``is_credential_name`` — the
+    caller does not get to assert "this is not a secret" about a header named
+    ``Authorization``.
+    """
+
+    name: str
+    value: str | None = None
+    encrypted_value: str | None = None
+
+    @field_validator(_Fields.NAME)
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        return Validators.normalize_configured_value_name(value)
+
+    @model_validator(mode="after")
+    def _exactly_one_representation(self) -> "McpConfiguredValue":
+        if (self.value is None) == (self.encrypted_value is None):
+            raise ValueError(
+                "a configured value is either plain or encrypted, not both "
+                "and not neither"
+            )
+        return self
+
+
+class McpConfiguredValueRequest(BackendContract):
+    """Inbound half of ``McpConfiguredValue`` — always plaintext.
+
+    ``value is None`` means "keep whatever is already stored for this name".
+    That is how a save of the redaction marker preserves a credential the
+    document could not show, and it is what makes the editor safe to reformat:
+    the round trip carries no secret in either direction.
+    """
+
+    name: str
+    value: str | None = None
+
+    @field_validator(_Fields.NAME)
+    @classmethod
+    def _normalize_name(cls, value: object) -> str:
+        return Validators.normalize_configured_value_name(value)
+
+
+class McpStdioConfig(BackendContract):
+    """How to launch a local stdio MCP server.
+
+    Spec-shaped: the client launches the server as a subprocess and speaks
+    newline-delimited JSON-RPC over its stdin/stdout. ``command`` is executed
+    directly — never through a shell — so quoting and metacharacters carry no
+    meaning and there is no shell-injection surface to reason about.
+    """
+
+    command: str
+    args: tuple[str, ...] = ()
+    env: tuple[McpConfiguredValue, ...] = ()
+    cwd: str | None = None
+
+    @field_validator(_Fields.COMMAND)
+    @classmethod
+    def _normalize_command(cls, value: object) -> str:
+        return Validators.normalize_launch_command(value)
+
+    @field_validator(_Fields.CWD)
+    @classmethod
+    def _normalize_cwd(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return Validators.normalize_text(value)
+
+
+class McpStdioRequest(BackendContract):
+    """Inbound half of ``McpStdioConfig``."""
+
+    command: str
+    args: tuple[str, ...] = ()
+    env: tuple[McpConfiguredValueRequest, ...] = ()
+    cwd: str | None = None
+
+    @field_validator(_Fields.COMMAND)
+    @classmethod
+    def _normalize_command(cls, value: object) -> str:
+        return Validators.normalize_launch_command(value)
+
+    @field_validator(_Fields.CWD)
+    @classmethod
+    def _normalize_cwd(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        return Validators.normalize_text(value)
+
+
 class McpServerRecord(BackendContract):
     server_id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: str
@@ -350,8 +588,16 @@ class McpServerRecord(BackendContract):
     connector_slug: str | None = None
     name: str
     display_name: str
-    url: str
+    # ``None`` for a stdio server, which has no endpoint at all — it is a
+    # subprocess, and its ``stdio`` config is the address. Remote transports
+    # still require one; the model validator enforces the pairing so a
+    # half-configured row cannot be stored.
+    url: str | None = None
     transport: McpTransport = McpTransport.HTTP
+    # Request headers for a remote server, and the launch spec for a local
+    # one. Both carry secrets encrypted at rest (see ``McpConfiguredValue``).
+    headers: tuple[McpConfiguredValue, ...] = ()
+    stdio: McpStdioConfig | None = None
     auth_mode: McpAuthMode = McpAuthMode.OAUTH2
     auth_state: McpAuthState = McpAuthState.UNAUTHENTICATED
     health: McpServerHealth = McpServerHealth.HEALTHY
@@ -393,8 +639,39 @@ class McpServerRecord(BackendContract):
 
     @field_validator(_Fields.URL)
     @classmethod
-    def _validate_url(cls, value: object) -> str:
-        return Validators.validate_public_mcp_url(value)
+    def _validate_url(cls, value: object) -> str | None:
+        """Validate the endpoint, permitting a local one.
+
+        The record is persistence, and persistence is not where the local-
+        server policy lives: whether a deployment may register a localhost or
+        plain-http endpoint depends on the deployment profile, which a contract
+        cannot see. ``McpRegistryService`` holds that gate and applies it to
+        every inbound request before a record is ever constructed. Re-checking
+        here with the strict rule would not add a second line of defence — it
+        would make the desktop's own legitimate local servers unstorable.
+        """
+
+        if value is None:
+            return None
+        return Validators.validate_public_mcp_url(value, allow_localhost=True)
+
+    @model_validator(mode="after")
+    def _transport_matches_address(self) -> "McpServerRecord":
+        """A server is addressed by exactly one of ``url`` or ``stdio``."""
+
+        if self.transport is McpTransport.STDIO:
+            if self.stdio is None:
+                raise ValueError("a stdio server needs a stdio launch config")
+            if self.url is not None:
+                raise ValueError("a stdio server has no URL")
+            return self
+        if self.url is None:
+            raise ValueError(f"a {self.transport.value} server needs a URL")
+        if self.stdio is not None:
+            raise ValueError(
+                f"a {self.transport.value} server has no stdio launch config"
+            )
+        return self
 
 
 class SkillManifestFields(BackendContract):
@@ -577,11 +854,14 @@ class InternalSkillBundle(BackendContract):
 class CreateMcpServerRequest(BackendContract):
     org_id: str
     user_id: str
-    url: str
+    # ``None`` only for a stdio server; see ``McpServerRecord.url``.
+    url: str | None = None
     display_name: str | None = None
     transport: McpTransport = McpTransport.HTTP
     auth_mode: McpAuthMode = McpAuthMode.OAUTH2
     oauth_client: McpOAuthClientRequest | None = None
+    headers: tuple[McpConfiguredValueRequest, ...] = ()
+    stdio: McpStdioRequest | None = None
 
     @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
     @classmethod
@@ -590,8 +870,35 @@ class CreateMcpServerRequest(BackendContract):
 
     @field_validator(_Fields.URL)
     @classmethod
-    def _validate_url(cls, value: object) -> str:
-        return Validators.validate_public_mcp_url(value)
+    def _validate_url(cls, value: object) -> str | None:
+        """Shape-check only; the local-endpoint gate is the service's.
+
+        Same split as ``McpServerRecord._validate_url``: this rejects a value
+        that is not a URL at all, and ``McpRegistryService`` decides whether a
+        *local* one is permitted under the running deployment profile. Doing
+        the profile check here is not possible — a contract has no profile —
+        and doing the strict check here would ban local servers outright.
+        """
+
+        if value is None:
+            return None
+        return Validators.validate_public_mcp_url(value, allow_localhost=True)
+
+    @model_validator(mode="after")
+    def _transport_matches_address(self) -> "CreateMcpServerRequest":
+        if self.transport is McpTransport.STDIO:
+            if self.stdio is None:
+                raise ValueError("a stdio server needs a stdio launch config")
+            if self.url is not None:
+                raise ValueError("a stdio server has no URL")
+            return self
+        if self.url is None:
+            raise ValueError(f"a {self.transport.value} server needs a URL")
+        if self.stdio is not None:
+            raise ValueError(
+                f"a {self.transport.value} server has no stdio launch config"
+            )
+        return self
 
 
 class UpdateMcpServerRequest(BackendContract):
@@ -607,11 +914,54 @@ class UpdateMcpServerRequest(BackendContract):
         return Validators.normalize_text(value)
 
 
+class McpConfiguredValueView(BackendContract):
+    """Outbound view of a configured header / env value.
+
+    A plain value passes through verbatim — it is not a secret and any surface
+    showing the config has to be able to show what it will save back. A
+    credential leaves as ``value=None`` plus ``secret_set=True``: enough to
+    render "configured", and deliberately without a hint, prefix, or masked
+    tail, because partial disclosure of a bearer token is still disclosure.
+    """
+
+    name: str
+    value: str | None = None
+    secret_set: bool = False
+
+    @classmethod
+    def from_config(cls, config: McpConfiguredValue) -> "McpConfiguredValueView":
+        return cls(
+            name=config.name,
+            value=config.value,
+            secret_set=config.encrypted_value is not None,
+        )
+
+
+class McpStdioView(BackendContract):
+    """Outbound view of a stdio launch config — env secrets redacted."""
+
+    command: str
+    args: tuple[str, ...] = ()
+    env: tuple[McpConfiguredValueView, ...] = ()
+    cwd: str | None = None
+
+    @classmethod
+    def from_config(cls, config: McpStdioConfig) -> "McpStdioView":
+        return cls(
+            command=config.command,
+            args=config.args,
+            env=tuple(McpConfiguredValueView.from_config(e) for e in config.env),
+            cwd=config.cwd,
+        )
+
+
 class McpServerResponse(BackendContract):
     server_id: str
     name: str
     display_name: str
-    url: str
+    url: str | None = None
+    headers: tuple[McpConfiguredValueView, ...] = ()
+    stdio: McpStdioView | None = None
     transport: McpTransport
     auth_mode: McpAuthMode
     auth_state: McpAuthState
@@ -649,6 +999,14 @@ class McpServerResponse(BackendContract):
             name=record.name,
             display_name=record.display_name,
             url=record.url,
+            headers=tuple(
+                McpConfiguredValueView.from_config(h) for h in record.headers
+            ),
+            stdio=(
+                McpStdioView.from_config(record.stdio)
+                if record.stdio is not None
+                else None
+            ),
             transport=record.transport,
             auth_mode=record.auth_mode,
             auth_state=record.auth_state,

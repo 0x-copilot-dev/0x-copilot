@@ -67,21 +67,6 @@ describe("createFirstRunConnectorsPort", () => {
     });
   });
 
-  it("addCustomServer POSTs {url} (+ oauth_client when supplied)", async () => {
-    const { transport, calls } = fakeTransport({
-      "/v1/mcp/servers": { server_id: "custom_1" },
-    });
-    await createFirstRunConnectorsPort(transport).addCustomServer(
-      "https://mcp.test/sse",
-      { client_id: "abc" },
-    );
-    expect(calls[0]).toEqual({
-      method: "POST",
-      path: "/v1/mcp/servers",
-      body: { url: "https://mcp.test/sse", oauth_client: { client_id: "abc" } },
-    });
-  });
-
   it("beginAuth POSTs the encoded auth/start path", async () => {
     const { transport, calls } = fakeTransport({
       "/v1/mcp/servers/seed%3Asafe/auth/start": {

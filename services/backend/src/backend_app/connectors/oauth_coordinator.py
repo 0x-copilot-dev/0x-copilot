@@ -22,6 +22,7 @@ The session TTL is five minutes (AC9), enforced by
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
@@ -39,9 +40,11 @@ from backend_app.contracts import (
     McpAuthCallbackRequest,
     McpAuthMode,
     McpAuthState,
+    McpOAuthClientRequest,
     McpServerHealth,
     McpServerRecord,
     McpTransport,
+    UpdateMcpServerRequest,
 )
 from backend_app.mcp_oauth import McpOAuthError
 from backend_app.service import McpRegistryService
@@ -170,12 +173,46 @@ class DesktopMcpOAuthCoordinator:
         user_id: str,
         callback: DesktopOAuthCallback,
         requested_product_scope: Literal["read", "draft", "write"] = "read",
+        oauth_client: McpOAuthClientRequest | None = None,
     ) -> DesktopStartResult:
-        """Begin OAuth for a desktop connector and return the authorization URL."""
+        """Begin OAuth for a desktop connector and return the authorization URL.
+
+        ``oauth_client`` supplies the pre-registered client for a profile that
+        needs one (every profile shipped today does). It is persisted onto the
+        MCP record via the same ``update_server`` path the custom-server flow
+        uses — encryption, audit row, and revision invalidation included — so
+        the secret lands in the ``TokenVault`` and nowhere else.
+        """
 
         profile = self.catalog.get(slug)
         self._assert_available(profile, callback)
         self._ensure_server(profile, org_id=org_id, user_id=user_id)
+        # A caller-supplied client wins; otherwise fall back to the client the
+        # DEPLOYMENT ships for this provider. That fallback is what makes
+        # Connect a one-click consent rather than a credential-entry chore: the
+        # user authorizes the app on the vendor's own screen, exactly as they
+        # already do for "Continue with Google".
+        requested_scopes = self._requested_permissions(profile, requested_product_scope)
+        effective_client = oauth_client or self._deployment_client(
+            profile, requested_scopes
+        )
+        if effective_client is not None:
+            self.mcp_service.update_server(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=profile.server_id,
+                request=UpdateMcpServerRequest(oauth_client=effective_client),
+            )
+        # Provider-specific authorization parameters ride on the server's
+        # discovery blob, which is where everything else the OAuth layer knows
+        # about this server already lives.
+        if profile.authorize_params:
+            self.mcp_service.set_provider_discovery(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=profile.server_id,
+                discovery={"authorize_params": dict(profile.authorize_params)},
+            )
 
         redirect_uri = callback.redirect_uri()
         try:
@@ -194,9 +231,17 @@ class DesktopMcpOAuthCoordinator:
             # desktop error (→ 409) so the client shows a graceful "needs setup"
             # message instead of a raw 500. Catch McpOAuthError specifically so
             # genuine programming errors still surface.
-            raise DesktopOAuthError(
-                "connector_oauth_setup_required",
-                "this connector has no OAuth client configured",
+            #
+            # Two different states hide behind that one failure, and the client
+            # can only act on one of them. When the profile declares the vendor
+            # supports no dynamic registration and no client has been supplied,
+            # the failure is not "setup is broken" but "a client_id is missing"
+            # — which the user can fix by pasting one. Distinguish them HERE,
+            # after the attempt, rather than pre-judging from the YAML flag: a
+            # provider whose discovery does work must keep working even if the
+            # profile claims otherwise.
+            raise self._client_error(
+                profile, org_id=org_id, user_id=user_id, supplied=oauth_client
             ) from exc
         state = self._state_from_auth_url(response.auth_url)
         self._pending[state] = _PendingSession(
@@ -210,9 +255,7 @@ class DesktopMcpOAuthCoordinator:
             authorization_url=response.auth_url,
             state=state,
             expires_at=response.expires_at,
-            requested_permissions=self._requested_permissions(
-                profile, requested_product_scope
-            ),
+            requested_permissions=requested_scopes,
         )
 
     def complete(
@@ -279,6 +322,92 @@ class DesktopMcpOAuthCoordinator:
             raise DesktopOAuthError("connector_preview_disabled")
         if profile.requires_admin_setup or profile.has_tenant_template:
             raise DesktopOAuthError("connector_admin_setup_required")
+
+    def _deployment_client(
+        self,
+        profile: DesktopConnectorProfile,
+        scopes: tuple[str, ...] = (),
+    ) -> McpOAuthClientRequest | None:
+        """The app-owned OAuth client for this profile's provider, if shipped.
+
+        Reads ``<PREFIX>_CLIENT_ID`` / ``<PREFIX>_CLIENT_SECRET`` from the
+        environment, where the prefix comes from the profile's
+        ``oauth_client_env``. Absent id → ``None``, and the flow falls through
+        to asking the user, so a deployment that ships no client degrades to the
+        old behaviour rather than failing.
+
+        The secret is read here and handed straight to ``update_server``, which
+        encrypts it into the ``TokenVault``. It is never returned, logged, or
+        written to a record in the clear.
+        """
+
+        prefix = profile.oauth_client_env
+        if not prefix:
+            return None
+        client_id = os.environ.get(f"{prefix}_CLIENT_ID", "").strip()
+        if not client_id:
+            return None
+        client_secret = os.environ.get(f"{prefix}_CLIENT_SECRET", "").strip()
+        return McpOAuthClientRequest(
+            client_id=client_id,
+            # A desktop app is a PUBLIC client: with no secret it authenticates
+            # by PKCE alone, which is what Google's native-app model expects.
+            # Mirrors `build_google_provider`'s auth_method decision so the two
+            # Google paths cannot disagree about what kind of client this is.
+            client_secret=client_secret or None,
+            token_endpoint_auth_method=(
+                "client_secret_post" if client_secret else "none"
+            ),
+            # The scopes THIS connector needs, and only those. Sign-in asked for
+            # identity alone; a connect is a separate, larger request, which is
+            # why it re-prompts rather than quietly widening the login grant.
+            scope=" ".join(scopes) if scopes else None,
+            authorization_endpoint=profile.authorization_endpoint or None,
+            token_endpoint=profile.token_endpoint or None,
+        )
+
+    def _client_error(
+        self,
+        profile: DesktopConnectorProfile,
+        *,
+        org_id: str,
+        user_id: str,
+        supplied: McpOAuthClientRequest | None,
+    ) -> DesktopOAuthError:
+        """Name what is missing after an authorization attempt has failed.
+
+        A profile marked ``requires_pre_registered_client`` names a vendor that
+        exposes neither RFC 8414 metadata nor RFC 7591 dynamic registration, so
+        no amount of retrying will produce a ``client_id``. If none was supplied
+        and none is on the record, say exactly that — it is the one form of this
+        failure the user can actually resolve.
+        """
+
+        if (
+            not profile.requires_pre_registered_client
+            or supplied is not None
+            or self._deployment_client(profile) is not None
+        ):
+            return DesktopOAuthError(
+                "connector_oauth_setup_required",
+                "this connector has no OAuth client configured",
+            )
+        existing = self.mcp_service.store.get_server(
+            org_id=org_id, server_id=profile.server_id
+        )
+        if (
+            existing is not None
+            and existing.user_id == user_id
+            and existing.oauth_client is not None
+        ):
+            return DesktopOAuthError(
+                "connector_oauth_setup_required",
+                "this connector has no OAuth client configured",
+            )
+        return DesktopOAuthError(
+            "connector_oauth_client_required",
+            "this connector needs a pre-registered OAuth client",
+        )
 
     def _ensure_server(
         self,

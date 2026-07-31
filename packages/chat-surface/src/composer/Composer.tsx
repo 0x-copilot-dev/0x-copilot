@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -19,6 +20,11 @@ import { flushSync } from "react-dom";
 import { MentionPopover, type MentionCandidate } from "./MentionPopover";
 import { ModelPicker, type Depth, type ModelDescriptor } from "./ModelPicker";
 import { ToolPicker } from "./ToolPicker";
+import type {
+  DictationEndReason,
+  DictationPort,
+  DictationSession,
+} from "../ports/DictationPort";
 
 /* Shared composer for Studio / Focus / Auto.
  *
@@ -209,6 +215,22 @@ export interface ComposerSlotCtx {
   readonly disabled: boolean;
   readonly attachmentsCount: number;
   readonly focused: boolean;
+  readonly dictation: ComposerDictationControl;
+}
+
+export type ComposerDictationState =
+  | "unavailable"
+  | "idle"
+  | "starting"
+  | "listening"
+  | "stopping"
+  | "error";
+
+export interface ComposerDictationControl {
+  readonly state: ComposerDictationState;
+  readonly active: boolean;
+  readonly message: string | null;
+  readonly toggle: () => void;
 }
 
 /**
@@ -292,6 +314,13 @@ export interface ComposerProps {
    * default-handler doesn't open the file in a new tab).
    */
   readonly attachmentAdapter?: AttachmentAdapter;
+  /**
+   * Host-owned speech-to-text capability. The Composer owns the listening
+   * lifecycle and writes interim/final transcript text into its existing
+   * buffer; the host owns the browser/native speech API behind this port.
+   * Omitted means voice input is unavailable and the microphone is disabled.
+   */
+  readonly dictationPort?: DictationPort;
   readonly onCancel?: () => void;
   readonly running?: boolean;
   readonly disabled?: boolean;
@@ -413,6 +442,13 @@ interface MentionTriggerState {
 const DEFAULT_MODEL = "claude-opus-4-7";
 const DEFAULT_DEPTH: Depth = "balanced";
 
+function appendSpokenText(base: string, spoken: string): string {
+  const cleaned = spoken.trim();
+  if (cleaned === "") return base;
+  if (base === "") return cleaned;
+  return /\s$/u.test(base) ? `${base}${cleaned}` : `${base} ${cleaned}`;
+}
+
 function ComposerInner(
   props: ComposerProps,
   ref: ForwardedRef<ComposerHandle>,
@@ -422,6 +458,7 @@ function ComposerInner(
     onSubmit,
     onSubmitError,
     attachmentAdapter,
+    dictationPort,
     onCancel,
     running = false,
     disabled = false,
@@ -471,6 +508,15 @@ function ComposerInner(
   const [focused, setFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dictationSessionRef = useRef<DictationSession | null>(null);
+  const dictationGenerationRef = useRef(0);
+  const dictationBaseTextRef = useRef("");
+  const dictationFinalTextRef = useRef("");
+  const dictationInterimTextRef = useRef("");
+  const [dictationState, setDictationState] = useState<ComposerDictationState>(
+    dictationPort === undefined ? "unavailable" : "idle",
+  );
+  const [dictationMessage, setDictationMessage] = useState<string | null>(null);
   /* Guard against re-entrancy on submit (handle.submit() can be called from
    * a host button that's also a click target inside the bottom bar). */
   const submittingRef = useRef(false);
@@ -502,6 +548,135 @@ function ComposerInner(
     el.style.height = `${next}px`;
   }, [text, textareaMinPx, textareaMaxPx]);
 
+  const cancelDictation = useCallback((): void => {
+    dictationGenerationRef.current += 1;
+    dictationSessionRef.current?.cancel();
+    dictationSessionRef.current = null;
+    dictationInterimTextRef.current = "";
+    setDictationState(dictationPort === undefined ? "unavailable" : "idle");
+    setDictationMessage(null);
+  }, [dictationPort]);
+
+  useEffect(() => {
+    if (dictationPort === undefined) {
+      cancelDictation();
+      setDictationState("unavailable");
+      return;
+    }
+    if (dictationState === "unavailable") {
+      setDictationState("idle");
+    }
+  }, [cancelDictation, dictationPort, dictationState]);
+
+  useEffect(
+    () => () => {
+      dictationGenerationRef.current += 1;
+      dictationSessionRef.current?.cancel();
+      dictationSessionRef.current = null;
+    },
+    [],
+  );
+
+  const startDictation = useCallback((): void => {
+    if (dictationPort === undefined || disabled) return;
+
+    const generation = dictationGenerationRef.current + 1;
+    dictationGenerationRef.current = generation;
+    dictationBaseTextRef.current = text;
+    dictationFinalTextRef.current = "";
+    dictationInterimTextRef.current = "";
+    setDictationState("starting");
+    setDictationMessage("Starting voice input…");
+
+    const isCurrent = (): boolean =>
+      dictationGenerationRef.current === generation;
+    const finish = (reason: DictationEndReason): void => {
+      if (!isCurrent()) return;
+      dictationSessionRef.current = null;
+      dictationInterimTextRef.current = "";
+      if (reason === "error") {
+        setDictationState("error");
+        return;
+      }
+      setDictationState("idle");
+      setDictationMessage(null);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+
+    try {
+      dictationSessionRef.current = dictationPort.start({
+        onStart: () => {
+          if (!isCurrent()) return;
+          setDictationState("listening");
+          setDictationMessage("Listening…");
+        },
+        onTranscript: ({ transcript, isFinal }) => {
+          if (!isCurrent()) return;
+          if (isFinal) {
+            dictationFinalTextRef.current = appendSpokenText(
+              dictationFinalTextRef.current,
+              transcript,
+            );
+            dictationInterimTextRef.current = "";
+          } else {
+            dictationInterimTextRef.current = transcript;
+          }
+          const spoken = appendSpokenText(
+            dictationFinalTextRef.current,
+            dictationInterimTextRef.current,
+          );
+          setText(appendSpokenText(dictationBaseTextRef.current, spoken));
+          setMention(null);
+        },
+        onEnd: finish,
+        onError: (message) => {
+          if (!isCurrent()) return;
+          dictationSessionRef.current = null;
+          setDictationState("error");
+          setDictationMessage(message);
+        },
+      });
+    } catch {
+      if (!isCurrent()) return;
+      dictationSessionRef.current = null;
+      setDictationState("error");
+      setDictationMessage("Voice input couldn't start. Please try again.");
+    }
+  }, [dictationPort, disabled, text]);
+
+  const toggleDictation = useCallback((): void => {
+    const session = dictationSessionRef.current;
+    if (session !== null && dictationState === "stopping") return;
+    if (
+      session !== null &&
+      (dictationState === "starting" || dictationState === "listening")
+    ) {
+      setDictationState("stopping");
+      setDictationMessage("Finishing voice input…");
+      try {
+        const result = session.stop();
+        if (
+          result !== undefined &&
+          typeof (result as Promise<void>).then === "function"
+        ) {
+          void (result as Promise<void>).catch(() => {
+            if (dictationSessionRef.current !== session) return;
+            dictationSessionRef.current = null;
+            setDictationState("error");
+            setDictationMessage("Voice input couldn't stop cleanly.");
+          });
+        }
+      } catch {
+        if (dictationSessionRef.current !== session) return;
+        dictationSessionRef.current = null;
+        setDictationState("error");
+        setDictationMessage("Voice input couldn't stop cleanly.");
+      }
+      return;
+    }
+    startDictation();
+  }, [dictationState, startDictation]);
+
   const detectMention = useCallback(
     (value: string, caret: number): MentionTriggerState | null => {
       const upto = value.slice(0, caret);
@@ -523,6 +698,9 @@ function ComposerInner(
   );
 
   const handleTextChange = (next: string, caret: number): void => {
+    if (dictationSessionRef.current !== null || dictationState === "error") {
+      cancelDictation();
+    }
     setText(next);
     setMention(detectMention(next, caret));
   };
@@ -588,6 +766,7 @@ function ComposerInner(
     if (!hasContent || disabled || running) {
       return;
     }
+    cancelDictation();
     /* "/skill ..." submissions exit through onSkillCommand if the host
      * wired it; otherwise they fall through to the normal send path so
      * the input isn't lost. */
@@ -659,6 +838,7 @@ function ComposerInner(
       });
   }, [
     attachments,
+    cancelDictation,
     detectSkillCommand,
     disabled,
     finaliseAttachments,
@@ -709,18 +889,21 @@ function ComposerInner(
         textareaRef.current?.focus();
       },
       clear: (): void => {
+        cancelDictation();
         flushSync(() => {
           setText("");
           setMention(null);
         });
       },
       setText: (next: string): void => {
+        cancelDictation();
         flushSync(() => {
           setText(next);
         });
       },
       getText: (): string => text,
       appendText: (next: string): void => {
+        cancelDictation();
         const el = textareaRef.current;
         const caret =
           el !== null && globalThis.document.activeElement === el
@@ -749,7 +932,7 @@ function ComposerInner(
         send();
       },
     }),
-    [addFile, send, text],
+    [addFile, cancelDictation, send, text],
   );
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -769,6 +952,9 @@ function ComposerInner(
       return;
     }
     if (event.key === "Escape") {
+      if (dictationSessionRef.current !== null) {
+        cancelDictation();
+      }
       if (toolPickerOpen) {
         setToolPickerOpen(false);
       }
@@ -948,6 +1134,15 @@ function ComposerInner(
     disabled,
     attachmentsCount: attachments.length,
     focused,
+    dictation: {
+      state: dictationPort === undefined ? "unavailable" : dictationState,
+      active:
+        dictationState === "starting" ||
+        dictationState === "listening" ||
+        dictationState === "stopping",
+      message: dictationMessage,
+      toggle: toggleDictation,
+    },
   };
 
   /* data-has-topbar reflects "is the host or the Composer's own
@@ -1162,12 +1357,45 @@ function ComposerInner(
               </>
             ) : (
               <>
+                {slotCtx.dictation.message !== null ? (
+                  <span
+                    role={
+                      slotCtx.dictation.state === "error" ? "alert" : "status"
+                    }
+                    data-testid="composer-dictation-status"
+                    style={dictationStatusStyle(
+                      slotCtx.dictation.state === "error",
+                    )}
+                  >
+                    {slotCtx.dictation.message}
+                  </span>
+                ) : null}
                 <button
                   type="button"
-                  aria-label="Voice input"
-                  title="Voice input"
+                  onClick={slotCtx.dictation.toggle}
+                  disabled={
+                    slotCtx.dictation.state === "unavailable" ||
+                    slotCtx.dictation.state === "stopping" ||
+                    disabled
+                  }
+                  aria-pressed={slotCtx.dictation.active}
+                  aria-label={
+                    slotCtx.dictation.active
+                      ? "Stop voice input"
+                      : slotCtx.dictation.state === "unavailable"
+                        ? "Voice input unavailable"
+                        : "Voice input"
+                  }
+                  title={
+                    slotCtx.dictation.active
+                      ? "Stop voice input"
+                      : slotCtx.dictation.state === "unavailable"
+                        ? "Voice input unavailable"
+                        : "Voice input"
+                  }
                   data-testid="composer-mic"
-                  style={iconButtonStyle(false)}
+                  data-dictation-state={slotCtx.dictation.state}
+                  style={iconButtonStyle(slotCtx.dictation.active)}
                 >
                   <MicIcon />
                 </button>
@@ -1539,6 +1767,12 @@ const toolbarRightStyle: CSSProperties = {
   alignItems: "center",
   gap: 4,
 };
+
+const dictationStatusStyle = (error: boolean): CSSProperties => ({
+  color: error ? "var(--color-danger)" : "var(--color-text-subtle)",
+  fontSize: "var(--font-size-2xs)",
+  whiteSpace: "nowrap",
+});
 
 const iconButtonStyle = (active: boolean): CSSProperties => ({
   display: "inline-flex",

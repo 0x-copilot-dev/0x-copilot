@@ -41,6 +41,7 @@ import { IpcTransport } from "@0x-copilot/chat-transport";
 
 import { DesktopAnchoredPlusMenu } from "./composer/DesktopAnchoredPlusMenu";
 import { DesktopComposerFilePicker } from "./composer/DesktopComposerFilePicker";
+import { desktopDictationPort } from "./composer/DesktopSpeechRecognitionDictationPort";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
@@ -460,6 +461,7 @@ export function FirstRunSurfaceMount({
           connectors={{ servers: [], loading: false }}
           skills={{ skills: [], loading: false }}
           attachmentAdapter={onboardingAttachmentAdapter}
+          dictationPort={desktopDictationPort}
           filePicker={onboardingFilePicker}
           renderPlusMenu={renderPlusMenu}
           skillInstructionPrompt={skillInstructionPrompt}

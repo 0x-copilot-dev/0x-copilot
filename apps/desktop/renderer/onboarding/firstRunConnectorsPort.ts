@@ -7,7 +7,6 @@
 //   • listServers()        → GET  /v1/mcp/servers                 (McpServerListResponse)
 //   • listCatalog()        → GET  /v1/mcp/catalog                 (McpCatalogResponse)
 //   • installFromCatalog() → POST /v1/mcp/servers/install         (McpServer)
-//   • addCustomServer()    → POST /v1/mcp/servers                 (McpServer)
 //   • beginAuth(serverId)  → POST /v1/mcp/servers/{id}/auth/start (McpAuthStartResponse)
 //
 // Identity is server-derived (the facade injects org/user from the bearer), so —
@@ -18,7 +17,7 @@
 // `window.open` and exposes no generic `openExternal` channel), so the FTUE
 // binder's featured 1-click connect instead routes through the main-brokered
 // `CONNECTOR_CHANNELS.connect` (system browser). This port method stays wired to
-// the real endpoint for the generic (custom-server) path.
+// the real endpoint for the popover's own catalog install → authorize path.
 
 import type { Transport } from "@0x-copilot/chat-transport";
 import type { FirstRunConnectorsPort } from "@0x-copilot/chat-surface";
@@ -67,21 +66,6 @@ export function createFirstRunConnectorsPort(
       return transport.request<McpServer>({
         method: "POST",
         path: "/v1/mcp/servers/install",
-        body,
-      });
-    },
-
-    async addCustomServer(
-      url: string,
-      oauthClient?: McpOAuthClientConfigRequest,
-    ): Promise<McpServer> {
-      const body: Record<string, unknown> = { url };
-      if (oauthClient !== undefined) {
-        body.oauth_client = oauthClient;
-      }
-      return transport.request<McpServer>({
-        method: "POST",
-        path: "/v1/mcp/servers",
         body,
       });
     },

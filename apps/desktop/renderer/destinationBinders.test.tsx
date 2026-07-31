@@ -796,8 +796,8 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
 // ---------------------------------------------------------------------------
 // PRD-11 DoD 8 — desktop mounts the SAME ConnectModal. This is the regression
 // guard that fails on `main`: the old binder mounted no modal (its CTA flipped
-// a filter tab). (a) the CTA opens the modal; (b) the custom-server form reaches
-// the injected port's addCustomServer (observed as a single POST /v1/mcp/servers).
+// a filter tab). (a) the CTA opens the modal; (b) the pinned escape-hatch row
+// opens the MCP config editor and round-trips the document.
 // ---------------------------------------------------------------------------
 
 describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
@@ -822,9 +822,15 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
     expect(modal.querySelector("h2")?.textContent).toBe("Connect a tool");
   });
 
-  it("submitting the custom-server form reaches the port's addCustomServer exactly once", async () => {
+  // The pinned row now opens "Manage MCP" — the whole configuration as one
+  // editable document — instead of the single Server-URL form it used to.
+  // That form could express exactly one kind of server (remote, no
+  // credential, no headers) while the row opening it advertised "paste a JSON
+  // config — stdio or remote", so a user following the row's own description
+  // had nowhere to put a header or a command.
+  it("the pinned row opens the MCP config editor and loads the document", async () => {
     const recorder: Recorder = { calls: [] };
-    const { getByTestId, getByPlaceholderText } = render(
+    const { getByTestId } = render(
       <TransportProvider transport={connectorsTransport(recorder)}>
         <ConnectorsBinder />
       </TransportProvider>,
@@ -835,17 +841,55 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
     });
     fireEvent.click(getByTestId("connectors-connect-cta"));
     fireEvent.click(getByTestId("connect-catalog-custom"));
-    fireEvent.change(getByPlaceholderText("https://mcp.example.com"), {
-      target: { value: "https://mcp.example.com" },
-    });
-    fireEvent.click(getByTestId("connect-custom-add"));
 
-    // The port's addCustomServer POSTs to /v1/mcp/servers — exactly once.
     await waitFor(() => {
-      const creates = recorder.calls.filter(
-        (c) => c.method === "POST" && c.path === "/v1/mcp/servers",
+      expect(getByTestId("manage-mcp-editor")).toBeInTheDocument();
+    });
+    // The editor is seeded from the server, not from local state — otherwise
+    // it would happily save a document that omitted every server it failed to
+    // load, deleting them.
+    const reads = recorder.calls.filter(
+      (c) => c.method === "GET" && c.path === "/v1/mcp/config",
+    );
+    expect(reads).toHaveLength(1);
+  });
+
+  it("saving the editor PUTs the document exactly once", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { getByTestId, getByRole } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("connectors-connect-cta")).toBeInTheDocument();
+    });
+    fireEvent.click(getByTestId("connectors-connect-cta"));
+    fireEvent.click(getByTestId("connect-catalog-custom"));
+    await waitFor(() => {
+      expect(getByTestId("manage-mcp-editor")).toBeInTheDocument();
+    });
+
+    fireEvent.change(getByTestId("manage-mcp-editor"), {
+      target: {
+        value: JSON.stringify({
+          servers: {
+            github: {
+              type: "http",
+              url: "https://api.githubcopilot.com/mcp/",
+            },
+          },
+        }),
+      },
+    });
+    fireEvent.click(getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      const writes = recorder.calls.filter(
+        (c) => c.method === "PUT" && c.path === "/v1/mcp/config",
       );
-      expect(creates).toHaveLength(1);
+      expect(writes).toHaveLength(1);
     });
   });
 });
