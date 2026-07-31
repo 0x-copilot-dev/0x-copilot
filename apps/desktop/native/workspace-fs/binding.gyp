@@ -1,12 +1,19 @@
 {
     # node-gyp build config for the workspace-fs Node-API addon.
     #
-    # Node-API ONLY (src/workspace_fs.c includes node_api.h and nothing else),
-    # so ONE binary is ABI-stable across Node and Electron: build.mjs builds it
-    # with the plain Node headers and the SAME .node loads in the Electron main
-    # process (verified: Node 25 / modules=141 build loaded under Electron 43 /
-    # modules=148). Do not add a V8 / nan / node.h dependency — that would make
-    # the artifact per-runtime and force an electron-rebuild step.
+    # Node-API, so ONE binary is ABI-stable across Node and Electron: build.mjs
+    # builds it with the plain Node headers and the SAME .node loads in the
+    # Electron main process (verified: Node 25 / modules=141 build loaded under
+    # Electron 43 / modules=148). Do not add a V8 / nan / node.h dependency —
+    # that would make the artifact per-runtime and force an electron-rebuild
+    # step.
+    #
+    # One deliberate exception, Windows-only: uv_open_osfhandle. Windows keeps
+    # the fd table per CRT instance and this addon does not share a CRT with the
+    # host, so a CRT fd minted here is meaningless to node:fs (EBADF on first
+    # use). libuv's entry point does the conversion on the host's side. It is a
+    # plain C symbol both node.exe and Electron export, so the single-binary
+    # property above is unaffected; it is not a V8/node.h dependency.
     "targets": [
         {
             "target_name": "workspace_fs",
