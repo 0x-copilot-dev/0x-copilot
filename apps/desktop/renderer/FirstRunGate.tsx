@@ -57,6 +57,7 @@ import { createFirstRunConnectorsPort } from "./onboarding/firstRunConnectorsPor
 import { createFirstRunProfilePort } from "./onboarding/firstRunProfilePort";
 import { createFirstRunRunsPort } from "./onboarding/firstRunRunsPort";
 import { useOnboardingComposerModels } from "./onboarding/useOnboardingComposerModels";
+import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
 
 import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
@@ -463,6 +464,11 @@ export function FirstRunSurfaceMount({
           attachmentAdapter={onboardingAttachmentAdapter}
           dictationPort={desktopDictationPort}
           filePicker={onboardingFilePicker}
+          // PRD-FS-10 §7 — the FTUE mount never received this, so the folder
+          // affordance existed everywhere EXCEPT first run, the one screen where
+          // handing the agent a folder matters most. Same memoized bridge the
+          // Run composer uses, so both mounts read one grant list.
+          workspaceGrantPort={bridgeWorkspaceGrantPort()}
           renderPlusMenu={renderPlusMenu}
           skillInstructionPrompt={skillInstructionPrompt}
           mcpServerInstructionPrompt={mcpServerInstructionPrompt}

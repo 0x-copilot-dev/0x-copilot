@@ -291,9 +291,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         attachmentAdapter={attachmentAdapter}
         dictationPort={desktopDictationPort}
         filePicker={filePicker}
-        // Real host folders, granted not assumed: adds the `+` menu's folder row
-        // and a pill per active grant, whose dismiss REVOKES the access.
+        // Real host folders, granted not assumed. The capability also gates the
+        // execution-mode pill — with no grant port there is nothing to ask about.
         workspaceGrantPort={workspaceGrantPort}
+        // This composer only exists once a run is bound (the cockpit shows
+        // `RunEmptyComposer` until then), so the chat has always started by the
+        // time it mounts: no folder bar here, by the visibility rule in
+        // PRD-FS-10 §4.1. Stated rather than left to the default so the reader
+        // sees WHY the bar is missing mid-conversation.
+        hasSentFirstMessage
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}
         mcpServerInstructionPrompt={mcpServerInstructionPrompt}

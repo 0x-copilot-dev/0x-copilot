@@ -293,6 +293,121 @@
   display: none;
 }
 
+/* Folder bar (WorkspaceFolderBar.tsx) — the granted folder, ON the frame,
+ * above the composer (PRD-FS-10 §4.1).
+ *
+ * These rules live in the PACKAGE stylesheet, which is what makes them arrive
+ * wherever the component does. The web app forks composer rules into its own
+ * styles.css and does NOT import this file — the split that once made the
+ * desktop cockpit render a bare frame — but nothing is stranded here: web
+ * supplies no `WorkspaceGrantPort`, so the bar never renders there at all. If
+ * web ever gains the capability, this file has to be imported, NOT re-forked.
+ *
+ * Geometry mirrors the composer shell it sits on (`.aui-composer`: same
+ * `max-width`, same auto margins) so the folder name lines up with the `+`
+ * below it instead of floating over the rail's full width. */
+.aui-folder-bar {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  margin: var(--space-sm) auto 0;
+  max-width: var(--chat-content-width);
+  min-width: 0;
+  padding: 0 2px;
+  width: 100%;
+}
+
+/* Quiet by default — it is context, not a call to action. Mono 10px is the
+ * "technical chrome" tier the composer's other metadata uses (`.ui-cpill`), so
+ * the folder name reads as a fact about this chat rather than a heading. */
+.aui-folder-bar__attach {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  gap: 6px;
+  height: 24px;
+  letter-spacing: var(--tracking-normal);
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 6px;
+}
+
+.aui-folder-bar__attach:hover:not([disabled]),
+.aui-folder-bar__attach[data-busy] {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.aui-folder-bar__attach:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.aui-folder-bar__attach[disabled] {
+  cursor: progress;
+}
+
+/* The folder glyph must never be the flex item that gives — only the NAME
+ * shrinks, and it ellipsizes rather than wrapping the row to two lines. */
+.aui-folder-bar__attach svg {
+  flex: none;
+  height: 12px;
+  width: 12px;
+}
+
+.aui-folder-bar__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `+2` — "there are more, this is the one I'm naming", one tier quieter. */
+.aui-folder-bar__more {
+  color: var(--color-text-subtle);
+  flex: none;
+}
+
+.aui-folder-bar__revoke {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  font: inherit;
+  height: 1.1rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.1rem;
+}
+
+.aui-folder-bar__revoke:hover {
+  color: var(--color-text);
+}
+
+/* A folder grant that could not be read, made, or revoked. It sits BESIDE the
+   name rather than replacing it, because the folder that IS known stays true. */
+.aui-folder-bar__error {
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Design `.cmp-row{display:flex;align-items:center;gap:5px;padding:6px 8px 8px}`.
  * The inset lives here because the shell is padding-free (see `.aui-composer`).
  * No `justify-content` — the right cluster's own `margin-left:auto` does the
@@ -314,11 +429,18 @@
 }
 
 /* The static hint row is gone (owner ruling), and with it the `margin-left:auto`
- * that used to right-align this cluster — so it owns the push itself. */
+ * that used to right-align this cluster — so it owns the push itself.
+ *
+ * `flex: 0 1 auto` (was `0 0 auto`): the MODEL PILL now lives here (PRD-FS-10
+ * §4.2), and it is the one control in the row that can be arbitrarily wide.
+ * Refusing to shrink would push the whole cluster onto a second line in the
+ * narrow Run rail; shrinking lets `.atlas-model-pill__name` ellipsize, which is
+ * the behaviour that pill was already built for. Nothing else in here can give
+ * — mic and send are `flex: none`. */
 .aui-composer-action-wrapper__right {
   align-items: center;
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   gap: 5px;
   justify-content: flex-end;
   margin-left: auto;
@@ -363,18 +485,22 @@
   padding: 0 0.28rem;
 }
 
-/* Left cluster: [+] → connectors → tools → model → depth, at the design's
+/* Left cluster: [+] → connectors → tools → bypass → depth, at the design's
  * single 5px rhythm (`.cmp-row{gap:5px}`) with no divider — the eye groups
  * these by shape, not by a hairline.
  *
  * WRAPS, never clips (real bug). This was `flex-wrap: nowrap` + `overflow:
  * hidden`. In the Run cockpit's Studio rail — draggable down to a 300px minimum
- * — that combination hid the trailing controls two ways: the model pill is the
- * only item here with `min-width: 0` (the `+` is `flex: none` and the Tools
- * pill's wrapper span has no `min-width: 0`), so it absorbed 100% of the squeeze
- * alone — measured at rail 300, its name box collapsed to 34px, rendering
- * "GPT-5.4 mini" as "GPT…" — and anything still over-wide after that was cut off
- * by the `overflow: hidden` with nothing to indicate it was there.
+ * — that combination hid the trailing controls two ways: the model pill (which
+ * used to live here) was the only item with `min-width: 0` (the `+` is
+ * `flex: none` and the Tools pill's wrapper span has no `min-width: 0`), so it
+ * absorbed 100% of the squeeze alone — measured at rail 300, its name box
+ * collapsed to 34px, rendering "GPT-5.4 mini" as "GPT…" — and anything still
+ * over-wide after that was cut off by the `overflow: hidden` with nothing to
+ * indicate it was there. The model pill has since moved to the right cluster
+ * (PRD-FS-10 §4.2), which shrinks for the same reason; the bypass pill that
+ * replaced it is `flex: none` and a fixed two-word label, so this cluster now
+ * gives by WRAPPING only.
  *
  * The clipping protected nothing: BOTH popovers this cluster anchors (the `+`
  * menu and the Tools panel) render through a portal to document.body, so neither
@@ -628,6 +754,100 @@
   gap: var(--space-xs);
 }
 
+/* Execution-mode pill (BypassPill.tsx) — PRD-FS-10 §4.3.
+ *
+ * The SAME pill recipe as the model pill, deliberately: it takes that pill's
+ * old slot and a second pill idiom in one row would read as a second kind of
+ * control. Values are restated (not inherited via a shared class) for the same
+ * reason `.atlas-model-pill` restates `.ui-cpill`: this file loads after
+ * design-system/styles.css at equal specificity, so a divergent value here
+ * would quietly win. Change one, change both. */
+.atlas-bypass-pill__root {
+  flex: none;
+  position: relative;
+}
+
+.atlas-bypass-pill {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  gap: 6px;
+  height: 26px;
+  letter-spacing: var(--tracking-normal);
+  max-width: 100%;
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.atlas-bypass-pill:hover:not([disabled]),
+.atlas-bypass-pill[data-open],
+.atlas-bypass-pill[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.atlas-bypass-pill:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* Master off. Dimmed and inert — it still SAYS "Manual", which is the true
+ * answer to "what will this run do?", it just cannot be changed from here. */
+.atlas-bypass-pill[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Bypass is a live state, so it carries the accent the way the mic does when
+ * recording; Manual is the quiet default and takes no colour at all. */
+.atlas-bypass-pill[data-mode="bypass"]:not([disabled]) {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+}
+
+.atlas-bypass-pill svg {
+  flex: none;
+  height: 11px;
+  width: 11px;
+}
+
+.atlas-bypass-pill__menu {
+  width: 260px;
+  min-width: 0;
+  padding: 0;
+}
+
+/* The clarifier. NOT a `.ui-pop-row`: it is a fact about the system, and the
+ * row recipe's hover fill would offer it as a third choice. */
+.atlas-bypass-pill__note {
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 9px;
+}
+
+.atlas-bypass-pill__note-lead {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+}
+
+.atlas-bypass-pill__note-sub {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+}
+
 .atlas-model-pill__custom-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -821,14 +1041,6 @@
 .aui-attachment-pill small {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
-}
-
-/* A folder grant that could not be read, made, or revoked. It sits in the pill
-   row rather than replacing it, because the pills that ARE known stay true. */
-.aui-composer-folder-error {
-  color: var(--color-danger);
-  font-size: var(--font-size-xs);
-  align-self: center;
 }
 
 .aui-skill-pill {

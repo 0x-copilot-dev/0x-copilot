@@ -34,6 +34,7 @@ import {
 } from "../composer";
 import type { FilePickerPort } from "../ports/FilePickerPort";
 import type { DictationPort } from "../ports/DictationPort";
+import type { WorkspaceGrantPort } from "../ports/WorkspaceGrantPort";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import type { KeyFormConnected } from "./KeyForm";
 import type { StartRunError } from "../destinations/run";
@@ -63,6 +64,21 @@ export interface OnboardingComposerProps {
   readonly attachmentAdapter?: AttachmentAdapter;
   readonly dictationPort?: DictationPort;
   readonly filePicker: FilePickerPort;
+  /**
+   * Folder-grant capability, forwarded verbatim to {@link AssistantComposer}
+   * (PRD-FS-10 §7). This mount used to receive NOTHING, which is why the folder
+   * affordance appeared in the Run composer and not on first run — the one
+   * screen where attaching a folder matters most. Desktop passes its bridged
+   * port; web passes null and the folder bar + bypass pill are simply absent.
+   */
+  readonly workspaceGrantPort?: WorkspaceGrantPort | null;
+  /**
+   * Overridable, but false is the structural truth of this surface: it IS the
+   * pre-first-message composer (FTUE state B / the cockpit's empty state) and
+   * the host swaps it away the moment a run starts. Nothing here is inferred
+   * from a transcript — that is the guess PRD-FS-10 §6.3 forbids.
+   */
+  readonly hasSentFirstMessage?: boolean;
   readonly renderPlusMenu: (a: AssistantComposerPlusMenuSlotArgs) => ReactNode;
   readonly skillInstructionPrompt: (displayName: string) => string;
   readonly mcpServerInstructionPrompt: (displayName: string) => string;
@@ -139,6 +155,8 @@ function OnboardingComposerInner(
     attachmentAdapter,
     dictationPort,
     filePicker,
+    workspaceGrantPort,
+    hasSentFirstMessage = false,
     renderPlusMenu,
     skillInstructionPrompt,
     mcpServerInstructionPrompt,
@@ -261,6 +279,8 @@ function OnboardingComposerInner(
         attachmentAdapter={attachmentAdapter}
         dictationPort={dictationPort}
         filePicker={filePicker}
+        workspaceGrantPort={workspaceGrantPort}
+        hasSentFirstMessage={hasSentFirstMessage}
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}
         mcpServerInstructionPrompt={mcpServerInstructionPrompt}

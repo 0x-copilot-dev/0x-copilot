@@ -93,6 +93,10 @@ export function RunEmptyComposer({
       skills={{ skills: [], loading: false }}
       attachmentAdapter={attachmentAdapter}
       filePicker={onboardingFilePicker}
+      // No folder-grant capability on web (PRD-FS-10 §7) — explicit null, so
+      // the bar and the execution-mode pill degrade to ABSENT rather than to
+      // controls that cannot work.
+      workspaceGrantPort={null}
       renderPlusMenu={renderOnboardingPlusMenu}
       skillInstructionPrompt={skillInstructionPrompt}
       mcpServerInstructionPrompt={mcpServerInstructionPrompt}

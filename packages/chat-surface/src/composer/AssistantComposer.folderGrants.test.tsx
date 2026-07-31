@@ -1,11 +1,19 @@
-// Attach Folder — the composer's half of "granted, not assumed".
+// The folder affordance — PRD-FS-10 §8, tests 1-7.
 //
-// The gating assertion is the important one. Web implements no
-// `WorkspaceGrantPort`, so the row must not render there at all: a menu item
-// that opens nothing is worse than an absent one, and this is the same rule the
-// `DeploymentProfile` rail follows (the capability decides, not the component).
-// The rest pins that a granted folder is visible as a pill and that dismissing
-// the pill REVOKES through the port rather than just forgetting locally.
+// It moved OUT of the `+` menu and ONTO the composer frame, so the first
+// assertion here is an inversion of what this file used to pin: with a grant
+// port wired (the case that used to render the row), the menu must no longer
+// offer "Attach Folder" at all. Two entry points to one capability is how the
+// grant model got muddled; a test that tolerated both would let it back.
+//
+// Everything is asserted by ACCESSIBLE NAME rather than by test id: if a user
+// cannot reach a control by its label, the affordance does not exist for them
+// regardless of what the DOM contains.
+//
+// These drive the REAL `AssistantComposer` composition (its own hook, its own
+// gating) rather than rendering `WorkspaceFolderBar` directly — the bar can be
+// perfect and still be mounted nowhere, which is the failure mode this whole
+// subsystem keeps hitting.
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ReactNode } from "react";
@@ -56,6 +64,20 @@ const DOWNLOADS: WorkspaceGrant = {
   mode: "read_only",
 };
 
+const KALEIDOSCOPE: WorkspaceGrant = {
+  grantId: "grant_02",
+  mount: "m_41ab",
+  label: "kaleidoscope",
+  mode: "read_only",
+};
+
+const NOTES: WorkspaceGrant = {
+  grantId: "grant_03",
+  mount: "m_77de",
+  label: "notes",
+  mode: "read_only",
+};
+
 function makeGrantPort(
   overrides: Partial<WorkspaceGrantPort> = {},
 ): WorkspaceGrantPort {
@@ -67,7 +89,9 @@ function makeGrantPort(
   };
 }
 
-function renderComposer(overrides: Partial<AssistantComposerProps> = {}): void {
+function renderComposer(
+  overrides: Partial<AssistantComposerProps> = {},
+): HTMLElement {
   const filePicker: FilePickerPort = { pick: vi.fn(async () => []) };
   const props: AssistantComposerProps = {
     connectors: { servers: [], loading: false },
@@ -83,13 +107,18 @@ function renderComposer(overrides: Partial<AssistantComposerProps> = {}): void {
     onOpenSkillsSettings: vi.fn(),
     onShowConnectors: vi.fn(),
     onSubmit: vi.fn(),
+    // The interesting moment is BEFORE the first send — the surfaces that are
+    // pre-first-message by construction (FTUE, the cockpit's empty state) all
+    // pass this, so the tests state it too rather than leaning on a default.
+    hasSentFirstMessage: false,
     ...overrides,
   };
-  render(
+  const { container } = render(
     <TransportProvider transport={makeTransport()}>
       <AssistantComposer {...props} />
     </TransportProvider>,
   );
+  return container;
 }
 
 function openPlusMenu(): void {
@@ -98,59 +127,120 @@ function openPlusMenu(): void {
   );
 }
 
-describe("AssistantComposer — Attach Folder row gating", () => {
-  it("does not render the row when no WorkspaceGrantPort is supplied", () => {
-    renderComposer();
+/** The bar's control, whatever it currently says. */
+function folderControl(): HTMLElement | null {
+  return (
+    screen.queryByRole("button", { name: /Attach a folder/i }) ??
+    screen.queryByRole("button", { name: /^(Downloads|kaleidoscope|notes)/i })
+  );
+}
+
+describe("`+` menu — Attach Folder is gone (test 1)", () => {
+  it("does not offer Attach Folder even where the capability EXISTS", async () => {
+    // The strong form. Web never had the row; the regression to guard against
+    // is the desktop menu keeping it "for discoverability" beside the new bar.
+    const port = makeGrantPort({ listGrants: vi.fn(async () => [DOWNLOADS]) });
+    renderComposer({ workspaceGrantPort: port });
+    await screen.findByRole("button", { name: /^Downloads/ });
+
     openPlusMenu();
 
     expect(
       screen.queryByRole("menuitem", { name: /Attach Folder/i }),
     ).toBeNull();
-    // The four unconditional rows are untouched.
+    // The message-attachment rows are untouched — this menu still does its job.
     expect(
       screen.getByRole("menuitem", { name: /Attach Image/i }),
     ).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: /Attach File/i })).toBeTruthy();
   });
+});
 
-  it("renders the row when a port is supplied, and asks the host for a folder", async () => {
+describe("WorkspaceFolderBar — what it names (tests 2, 4, 6, 7)", () => {
+  it("names the folder by BASENAME before the first message (test 2)", async () => {
+    const port = makeGrantPort({
+      listGrants: vi.fn(async () => [KALEIDOSCOPE]),
+    });
+    renderComposer({ workspaceGrantPort: port });
+
+    expect(
+      await screen.findByRole("button", { name: /^kaleidoscope/ }),
+    ).toBeTruthy();
+  });
+
+  it("offers the empty affordance with zero grants (test 4)", async () => {
     const port = makeGrantPort();
     renderComposer({ workspaceGrantPort: port });
-    openPlusMenu();
 
-    const row = screen.getByRole("menuitem", { name: /Attach Folder/i });
-    expect(row).toBeTruthy();
-
-    fireEvent.click(row);
+    // A bar that appeared only once you already had a folder could never teach
+    // anyone that folders exist, so the empty state is the point.
+    const attach = await screen.findByRole("button", {
+      name: /Attach a folder/i,
+    });
+    fireEvent.click(attach);
     await waitFor(() => expect(port.requestGrant).toHaveBeenCalledTimes(1));
     // No path from this entry point — the host's own picker IS the consent.
     expect(port.requestGrant).toHaveBeenCalledWith(undefined);
-    // The popover dismisses before the native dialog takes the focus.
+  });
+
+  it("renders nothing at all when the host has no port — web (test 6)", () => {
+    renderComposer({ workspaceGrantPort: null });
+    expect(folderControl()).toBeNull();
+    // …and the pill it gates is absent too, not a control that changes nothing.
     expect(
-      screen.queryByRole("menuitem", { name: /Attach Folder/i }),
+      screen.queryByRole("button", { name: /Execution mode/i }),
     ).toBeNull();
   });
 
-  it("treats an explicit null port as no capability", () => {
-    renderComposer({ workspaceGrantPort: null });
-    openPlusMenu();
-    expect(
-      screen.queryByRole("menuitem", { name: /Attach Folder/i }),
-    ).toBeNull();
+  it("treats an omitted port the same as an explicit null (test 6)", () => {
+    renderComposer();
+    expect(folderControl()).toBeNull();
+  });
+
+  it("puts NO host path in the DOM, whatever the broker sends (test 7)", async () => {
+    // The projection is path-free by contract, so the risk is a surface that
+    // renders whatever ELSE a future broker field carries. Hand it exactly that:
+    // a grant object with an extra host root on it.
+    const leaky = {
+      ...KALEIDOSCOPE,
+      root: "/Users/sarah/Documents/kaleidoscope",
+    } as unknown as WorkspaceGrant;
+    const port = makeGrantPort({ listGrants: vi.fn(async () => [leaky]) });
+    const container = renderComposer({ workspaceGrantPort: port });
+
+    await screen.findByRole("button", { name: /^kaleidoscope/ });
+    const rendered = container.textContent ?? "";
+    expect(rendered).toContain("kaleidoscope");
+    expect(rendered).not.toContain("/Users/");
+    expect(container.innerHTML).not.toContain("/Users/");
+    // The opaque per-boot mount id is not for a person to read either.
+    expect(rendered).not.toContain("m_41ab");
   });
 });
 
-describe("AssistantComposer — granted folder pills", () => {
-  it("renders a pill per active grant, labelled with its access", async () => {
-    const port = makeGrantPort({ listGrants: vi.fn(async () => [DOWNLOADS]) });
+describe("WorkspaceFolderBar — several grants", () => {
+  it("names the MOST RECENTLY granted folder, plus +N", async () => {
+    // The broker returns its own order, and it is not a promise anyone made:
+    // `notes` leads the list, but `kaleidoscope` is the folder the user just
+    // handed over, so that is the one the bar names.
+    const active: WorkspaceGrant[] = [NOTES, DOWNLOADS];
+    const port = makeGrantPort({
+      listGrants: vi.fn(async () => [...active]),
+      requestGrant: vi.fn(async () => {
+        active.push(KALEIDOSCOPE);
+        return { status: "granted" as const, grant: KALEIDOSCOPE };
+      }),
+    });
     renderComposer({ workspaceGrantPort: port });
 
-    expect(await screen.findByText("Downloads")).toBeTruthy();
-    // The pill's small print is the ACCESS, not a MIME type.
-    expect(screen.getByText("Read-only")).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /^notes/ }));
+
+    const named = await screen.findByRole("button", { name: /^kaleidoscope/ });
+    expect(named.textContent).toContain("kaleidoscope");
+    expect(named.textContent).toContain("+2");
   });
 
-  it("revokes through the port when the pill is dismissed", async () => {
+  it("revokes the named folder through the port", async () => {
     let active: readonly WorkspaceGrant[] = [DOWNLOADS];
     const revokeGrant = vi.fn(async (grantId: string) => {
       active = active.filter((grant) => grant.grantId !== grantId);
@@ -162,18 +252,59 @@ describe("AssistantComposer — granted folder pills", () => {
     });
     renderComposer({ workspaceGrantPort: port });
 
+    // "Stop sharing", not "Remove" — dismissing this takes access away.
     const remove = await screen.findByRole("button", {
       name: "Stop sharing Downloads with the agent",
     });
     fireEvent.click(remove);
 
     await waitFor(() => expect(revokeGrant).toHaveBeenCalledWith("grant_01"));
-    // The broker is the source of truth: the pill goes away because the
-    // re-read says the grant is gone, not because we forgot it locally.
-    await waitFor(() => expect(screen.queryByText("Downloads")).toBeNull());
+    // The broker is the source of truth: the name goes away because the re-read
+    // says the grant is gone, not because we forgot it locally.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Downloads/ })).toBeNull(),
+    );
+  });
+});
+
+describe("WorkspaceFolderBar — cancelled vs failed (test 5)", () => {
+  it("leaves the bar unchanged when the user dismisses the picker", async () => {
+    const port = makeGrantPort({
+      listGrants: vi.fn(async () => [DOWNLOADS]),
+      requestGrant: vi.fn(async () => ({ status: "cancelled" as const })),
+    });
+    renderComposer({ workspaceGrantPort: port });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Downloads/ }));
+    await waitFor(() => expect(port.requestGrant).toHaveBeenCalledTimes(1));
+
+    // Their own decision must not read as an app failure: same folder, no line.
+    expect(screen.getByRole("button", { name: /^Downloads/ })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("shows a failed grant read instead of silently rendering no folders", async () => {
+  it("shows the message when the grant FAILS", async () => {
+    const port = makeGrantPort({
+      listGrants: vi.fn(async () => [DOWNLOADS]),
+      requestGrant: vi.fn(async () => ({
+        status: "failed" as const,
+        message: "That folder is on a disk that is no longer mounted.",
+      })),
+    });
+    renderComposer({ workspaceGrantPort: port });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Downloads/ }));
+
+    expect(
+      await screen.findByText(
+        "That folder is on a disk that is no longer mounted.",
+      ),
+    ).toBeTruthy();
+    // The folder that IS known stays named — a failure is never an empty state.
+    expect(screen.getByRole("button", { name: /^Downloads/ })).toBeTruthy();
+  });
+
+  it("shows a failed list-read instead of silently rendering no folders", async () => {
     const port = makeGrantPort({
       listGrants: vi.fn(async () => {
         throw new Error("The capability broker is not running.");
@@ -183,6 +314,35 @@ describe("AssistantComposer — granted folder pills", () => {
 
     expect(
       await screen.findByText("The capability broker is not running."),
+    ).toBeTruthy();
+  });
+});
+
+describe("WorkspaceFolderBar — visibility rule (test 3)", () => {
+  it("is ABSENT once the chat has sent its first message, grant or not", async () => {
+    const port = makeGrantPort({ listGrants: vi.fn(async () => [DOWNLOADS]) });
+    renderComposer({ workspaceGrantPort: port, hasSentFirstMessage: true });
+
+    // Give the mount's grant read time to land — the bar's absence has to be
+    // the visibility rule, not a race we happened to win.
+    await waitFor(() => expect(port.listGrants).toHaveBeenCalled());
+    expect(folderControl()).toBeNull();
+    expect(screen.queryByText("Downloads")).toBeNull();
+
+    // And the `+` menu is NOT a fallback: the capability is reachable from
+    // Settings, never from a re-added row.
+    openPlusMenu();
+    expect(
+      screen.queryByRole("menuitem", { name: /Attach Folder/i }),
+    ).toBeNull();
+  });
+
+  it("renders the bar before the first message with the same port", async () => {
+    // The pair that proves the previous test is about the MOMENT, not the port.
+    const port = makeGrantPort({ listGrants: vi.fn(async () => [DOWNLOADS]) });
+    renderComposer({ workspaceGrantPort: port, hasSentFirstMessage: false });
+    expect(
+      await screen.findByRole("button", { name: /^Downloads/ }),
     ).toBeTruthy();
   });
 });
