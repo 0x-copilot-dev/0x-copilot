@@ -2,9 +2,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertGrantableRoot,
   assertWithinRoot,
+  classifyForbiddenRoot,
+  FORBIDDEN_ROOT_MESSAGES,
   FS_LIMITS,
   FsError,
+  type ForbiddenRootReason,
   modeSatisfies,
   normalizeVirtualPath,
   segmentIsSensitiveDir,
@@ -218,5 +222,269 @@ describe("segmentIsSensitiveDir (single leaf name)", () => {
   it("does not match ordinary names", () => {
     expect(segmentIsSensitiveDir("src")).toBe(false);
     expect(segmentIsSensitiveDir("ssh")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyForbiddenRoot — the grant denylist.
+//
+// It used to be exercised only through the native folder DIALOG, where the
+// worst realistic input is a folder someone picked by accident. The mid-run
+// "always allow" card changed the producer: the folder is now NAMED BY THE
+// MODEL, printed on a card, and attached with one click and no OS dialog. So
+// the question these tests ask is not "what might a person pick by mistake" but
+// "what could a model name that a hurried person would approve" — which is a
+// wider set, and most of it reads as innocuous.
+//
+// Every case below FAILS before the denylist was extended: each one was granted.
+// ---------------------------------------------------------------------------
+
+const HOME = "/Users/alice";
+const USER_DATA = "/Users/alice/Library/Application Support/copilot";
+const CTX = { homeDir: HOME, userDataDir: USER_DATA };
+
+function reasonFor(root: string): ForbiddenRootReason | null {
+  return classifyForbiddenRoot(root, CTX);
+}
+
+describe("classifyForbiddenRoot — system config and binaries", () => {
+  it("refuses an OS-owned top-level tree, and everything under it", () => {
+    for (const root of [
+      "/etc",
+      "/etc/ssl/private",
+      "/var",
+      "/var/log",
+      "/usr",
+      "/usr/local/bin",
+      "/bin",
+      "/sbin",
+      "/opt/homebrew",
+      "/dev/disk1",
+      "/proc/self",
+      "/sys/kernel",
+      "/boot",
+      "/root",
+      "/System/Library",
+      "/Library/Preferences",
+    ]) {
+      expect(reasonFor(root)).toBe("system_directory");
+    }
+  });
+
+  it("refuses the macOS firmlink spelling of the same directories", () => {
+    // `/etc` IS `/private/etc` — a denylist that knows only one spelling knows
+    // neither, and `/private/…` is the one that survives a `realpath`.
+    expect(reasonFor("/private/etc")).toBe("system_directory");
+    expect(reasonFor("/private/var/db")).toBe("system_directory");
+    expect(reasonFor("/private/tmp")).toBe("system_directory");
+  });
+
+  it("refuses a world-writable scratch tree", () => {
+    // The cheapest place on the machine for anything at all to plant a folder
+    // worth naming on a card.
+    expect(reasonFor("/tmp")).toBe("system_directory");
+    expect(reasonFor("/tmp/quarterly-reports")).toBe("system_directory");
+  });
+
+  it("refuses the Windows system trees, drive letter and all", () => {
+    expect(reasonFor("C:\\Windows\\System32")).toBe("system_directory");
+    expect(reasonFor("C:\\Program Files\\Thing")).toBe("system_directory");
+    expect(reasonFor("C:\\ProgramData")).toBe("system_directory");
+    expect(reasonFor("D:\\$Recycle.Bin")).toBe("system_directory");
+  });
+
+  it("still allows an ordinary folder whose NAME merely resembles one", () => {
+    // First segment, not any segment: refusing `…/var` anywhere would take a
+    // project's own `var` directory with it.
+    expect(reasonFor("/Users/alice/project/var")).toBeNull();
+    expect(reasonFor("/Users/alice/etc")).toBeNull();
+    expect(reasonFor("D:\\Projects\\windows-build")).toBeNull();
+  });
+
+  it("exempts a home directory that lives inside one", () => {
+    // A container or service account can legitimately be homed at
+    // `/var/lib/<app>`; refusing every folder in that person's own home would
+    // leave them with no grantable folder at all.
+    const ctx = { homeDir: "/var/lib/copilot", userDataDir: "/var/lib/x/ud" };
+    expect(classifyForbiddenRoot("/var/lib/copilot/reports", ctx)).toBeNull();
+    // …and the rest of `/var` is refused exactly as before.
+    expect(classifyForbiddenRoot("/var/log", ctx)).toBe("system_directory");
+  });
+});
+
+describe("classifyForbiddenRoot — application bundles", () => {
+  it("refuses the applications folder and any bundle inside it", () => {
+    expect(reasonFor("/Applications")).toBe("application_bundle");
+    expect(reasonFor("/Applications/Mail.app/Contents")).toBe(
+      "application_bundle",
+    );
+  });
+
+  it("refuses a bundle in the user's OWN home too", () => {
+    // Inside home, so no other rule sees it — and it is still executable code
+    // rather than a folder of documents.
+    expect(reasonFor("/Users/alice/Applications/Thing.app")).toBe(
+      "application_bundle",
+    );
+  });
+});
+
+describe("classifyForbiddenRoot — other accounts", () => {
+  it("refuses another user's home, and anything inside it", () => {
+    expect(reasonFor("/Users/bob")).toBe("other_user_home");
+    expect(reasonFor("/Users/bob/Documents/2024")).toBe("other_user_home");
+  });
+
+  it("derives the rule from homeDir, not from a list of home-parent names", () => {
+    const ctx = { homeDir: "/home/ada", userDataDir: "/home/ada/.ud" };
+    expect(classifyForbiddenRoot("/home/kai/notes", ctx)).toBe(
+      "other_user_home",
+    );
+    expect(classifyForbiddenRoot("/home/ada/notes", ctx)).toBeNull();
+  });
+
+  it("leaves this user's own folders alone", () => {
+    expect(reasonFor("/Users/alice/Documents")).toBeNull();
+  });
+});
+
+describe("classifyForbiddenRoot — volumes and devices", () => {
+  it("refuses a mount parent and a whole volume, but not a folder on one", () => {
+    expect(reasonFor("/Volumes")).toBe("volume_root");
+    expect(reasonFor("/Volumes/Backup")).toBe("volume_root");
+    expect(reasonFor("/Volumes/Backup/Invoices")).toBeNull();
+    expect(reasonFor("/mnt/data")).toBe("volume_root");
+    expect(reasonFor("/media/usb")).toBe("volume_root");
+  });
+
+  it("refuses a whole network share, but not a folder on one", () => {
+    expect(reasonFor("\\\\server\\share")).toBe("volume_root");
+    expect(reasonFor("\\\\server\\share\\reports")).toBeNull();
+  });
+
+  it("refuses a device namespace", () => {
+    expect(reasonFor("\\\\.\\PhysicalDrive0")).toBe("device_path");
+    expect(reasonFor("\\\\?\\Volume{9d2f}\\")).toBe("device_path");
+    // The extended-length spelling of an ordinary path is refused too: it is a
+    // second spelling for a folder that already has one, and a second spelling
+    // is how a denylist gets walked around.
+    expect(reasonFor("\\\\?\\C:\\Users\\alice")).toBe("device_path");
+  });
+});
+
+describe("classifyForbiddenRoot — an unexpanded home path", () => {
+  it("refuses `~` rather than letting it resolve against anything", () => {
+    // Nothing in this process expands `~`, so a card showing `~/Downloads` and
+    // a grant made from it are two different folders by construction.
+    expect(reasonFor("~")).toBe("home_directory");
+    expect(reasonFor("~/Downloads")).toBe("home_directory");
+    expect(reasonFor("~alice/Downloads")).toBe("home_directory");
+  });
+});
+
+describe("classifyForbiddenRoot — installed apps' saved state", () => {
+  it("refuses the per-platform application-state trees under home", () => {
+    // A NEIGHBOUR of this app's own userData, so the answer comes from the
+    // app-state rule rather than from the userData rule that already refuses
+    // `~/Library` as one of its ancestors.
+    expect(reasonFor("/Users/alice/Library/Application Support/Slack")).toBe(
+      "application_state_directory",
+    );
+    // With userData elsewhere, the tree itself is still refused on its own.
+    const mac = { homeDir: HOME, userDataDir: "/Users/alice/.copilot-data" };
+    expect(classifyForbiddenRoot("/Users/alice/Library", mac)).toBe(
+      "application_state_directory",
+    );
+    const win = {
+      homeDir: "C:\\Users\\alice",
+      userDataDir: "C:\\Users\\alice\\AppData\\Roaming\\copilot",
+    };
+    expect(classifyForbiddenRoot("C:\\Users\\alice\\AppData\\Local", win)).toBe(
+      "application_state_directory",
+    );
+    const xdg = { homeDir: "/home/ada", userDataDir: "/home/ada/.ud" };
+    expect(classifyForbiddenRoot("/home/ada/.config/gh", xdg)).toBe(
+      "application_state_directory",
+    );
+    expect(classifyForbiddenRoot("/home/ada/.local/share", xdg)).toBe(
+      "application_state_directory",
+    );
+  });
+
+  it("only applies directly under home", () => {
+    // A project that happens to contain a `Library` folder is not app state.
+    expect(reasonFor("/Users/alice/code/app/Library")).toBeNull();
+  });
+});
+
+describe("classifyForbiddenRoot — paths that do not render as themselves", () => {
+  it("refuses invisible and bidirectional control characters", () => {
+    // A right-to-left override makes the tail of a path render backwards, so
+    // the string on the card is not the string being granted. Consent to a
+    // rendering is not consent to the path.
+    expect(reasonFor("/Users/alice/\u202Estrop\u202C/x")).toBe(
+      "deceptive_path",
+    );
+    expect(reasonFor("/Users/alice/Re\u200Bports")).toBe("deceptive_path");
+    expect(reasonFor("/Users/alice/Rep\u00ADorts")).toBe("deceptive_path");
+    expect(reasonFor("/Users/alice/x\u0007y")).toBe("deceptive_path");
+  });
+
+  it("refuses a compatibility form that BECOMES a separator or a traversal", () => {
+    expect(reasonFor("/Users/alice/a\uFF0Fb")).toBe("deceptive_path");
+    expect(reasonFor("/Users/alice/\uFF0E\uFF0E/etc")).toBe("deceptive_path");
+  });
+
+  it("leaves ordinary non-Latin folder names alone", () => {
+    // The rule is about characters that HIDE what a path is, not about scripts.
+    // Refusing a segment for mixing alphabets would take `Проект-v2` with it.
+    expect(reasonFor("/Users/alice/書類")).toBeNull();
+    expect(reasonFor("/Users/alice/Проект-v2")).toBeNull();
+    expect(reasonFor("/Users/alice/مستندات")).toBeNull();
+  });
+});
+
+describe("assertGrantableRoot — what the person is told", () => {
+  it("throws a readable sentence, and carries the machine reason with it", () => {
+    // A refusal the card cannot show is the silent no-op this gate exists to
+    // avoid; a category name in place of a sentence is the same thing wearing
+    // developer clothes.
+    try {
+      assertGrantableRoot("/Applications/Mail.app", CTX);
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FsError);
+      const fs = error as FsError;
+      expect(fs.code).toBe("permission_denied");
+      expect(fs.reason).toBe("application_bundle");
+      expect(fs.message).toBe(FORBIDDEN_ROOT_MESSAGES.application_bundle);
+      // A sentence, not a token.
+      expect(fs.message).toMatch(/^[A-Z].*[.]$/u);
+    }
+  });
+
+  it("never echoes the path, whichever rule refused it", () => {
+    for (const root of [
+      "/Users/bob/private-thing",
+      "/Volumes/Very-Secret-Disk",
+      "/private/etc",
+      "/Applications/Very-Secret.app",
+      "/Users/alice/Library/Application Support/Very-Secret",
+    ]) {
+      try {
+        assertGrantableRoot(root, CTX);
+        throw new Error(`expected a refusal for ${root}`);
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).not.toContain(root);
+        expect(message.toLowerCase()).not.toContain("secret");
+      }
+    }
+  });
+
+  it("allows the ordinary case it exists to keep working", () => {
+    expect(() =>
+      assertGrantableRoot("/Users/alice/clients/acme/reports", CTX),
+    ).not.toThrow();
   });
 });

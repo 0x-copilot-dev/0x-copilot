@@ -121,20 +121,39 @@ export class GrantStore implements GrantProvider {
     this.#grantTtlMs = config.grantTtlMs ?? 30 * 24 * 60 * 60 * 1000;
   }
 
+  /**
+   * Apply the grant policy to a candidate root, creating nothing.
+   *
+   * The policy is `assertGrantableRoot`; this method exists only so a caller
+   * can ask the question EARLY without also having to own the home/userData
+   * context. The named-folder lane uses it to refuse a class before touching
+   * the disk: probing `/etc` first makes the refusal a story about whether the
+   * folder exists rather than about whether it may ever be shared, and it
+   * performs a filesystem lookup on behalf of a path we had already decided to
+   * refuse.
+   *
+   * `create` calls it again on the resolved root. That is not duplication of
+   * the DECISION — it is the same pure function at the choke point, so a future
+   * caller that skips this pre-check is still blocked.
+   */
+  assertGrantable(root: string): void {
+    assertGrantableRoot(root, {
+      homeDir: this.#homeDir,
+      userDataDir: this.#userDataDir,
+    });
+  }
+
   async create(input: CreateGrantInput): Promise<Grant> {
     if (!isAbsolute(input.root)) {
       // The picker always hands us a realpath; guard against a caller that
       // bypasses it. Never echo the offending value (could be a host path).
       throw new Error("grant root must be an absolute path");
     }
-    // G2: refuse a grant over the filesystem root, the home dir, the app's own
-    // userData tree, or any well-known credential directory. This is the
-    // authoritative choke point — a caller bypassing the native picker is still
-    // blocked. Throws FsError('permission_denied') without echoing the path.
-    assertGrantableRoot(input.root, {
-      homeDir: this.#homeDir,
-      userDataDir: this.#userDataDir,
-    });
+    // G2: refuse a grant over a location no folder grant may cover — see
+    // `classifyForbiddenRoot`. This is the authoritative choke point; a caller
+    // bypassing the native picker is still blocked. Throws
+    // FsError('permission_denied') without echoing the path.
+    this.assertGrantable(input.root);
     await this.#ensureLoaded();
     const now = this.#clock();
     const rootIdentity =

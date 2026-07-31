@@ -24,6 +24,12 @@ function fakeSafeStorage(): SafeStorageLike {
   };
 }
 
+// Stated, not inherited from `os.homedir()`: the grant policy is relative to
+// the signed-in account, so a store that borrowed the developer's real home
+// would classify `/Users/me/proj` as another user's folder on a Mac and as an
+// ordinary one on a Linux runner.
+const TEST_HOME = "/Users/me";
+
 function makeService(
   showOpenDialog: () => Promise<ShowOpenDialogResult>,
   userDataDir: string,
@@ -31,6 +37,7 @@ function makeService(
 ) {
   const store = new GrantStore({
     userDataDir,
+    homeDir: TEST_HOME,
     safeStorage: fakeSafeStorage(),
   });
   const picker = new FolderPicker({
@@ -140,6 +147,7 @@ describe("CapabilityService", () => {
     let now = 1_000;
     const store = new GrantStore({
       userDataDir: tmp,
+      homeDir: TEST_HOME,
       safeStorage: fakeSafeStorage(),
       clock: () => now,
       grantTtlMs: 500,

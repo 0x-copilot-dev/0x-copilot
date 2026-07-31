@@ -24,12 +24,13 @@ export const GrantModeSchema = z.enum([
 // the widening this whole subsystem exists to prevent — they could land on the
 // parent, and the pill would then claim access to a tree nobody agreed to.
 //
-// It does not weaken main's ownership of authority. Main re-resolves the path
-// (realpath, must be a directory), re-derives the label from the resolved
-// basename, forces `read_only`, and still runs `assertGrantableRoot` — so a
-// renderer naming `/`, `~`, the app's own userData, or a credential directory
-// is refused exactly as a bypassed picker would be. See
-// `CapabilityService.requestFolderGrant`.
+// It does not weaken main's ownership of authority. Main confirms the path
+// (must be absolute, must be a directory and not a symlink, must realpath to
+// ITSELF), derives its own label from the basename, forces `read_only`, and
+// runs `assertGrantableRoot` twice — so a renderer naming `/`, `~`, a system
+// tree, a whole volume, an application bundle, another account's home, the
+// app's own userData, or a credential directory is refused exactly as a
+// bypassed picker would be. See `CapabilityService.requestFolderGrant`.
 export const RequestFolderGrantParamsSchema = z
   .object({
     mode: GrantModeSchema,
@@ -38,7 +39,15 @@ export const RequestFolderGrantParamsSchema = z
     // IGNORED entirely when `path` is present (see the service).
     label: z.string().min(1).max(120).optional(),
     // Optional exact folder. Omit → the native picker, unchanged.
-    path: z.string().min(1).max(1024).optional(),
+    //
+    // 1023, one BELOW the 1024 the runtime's approval projection truncates a
+    // `workspace_grant` path at (`_WORKSPACE_GRANT_PATH_MAX`). At exactly 1024
+    // a path is indistinguishable from a truncated one, and a truncated path is
+    // a PREFIX — an ANCESTOR of the folder the model asked about, silently
+    // widening the grant while the card showed no ellipsis to warn anyone. Any
+    // string that could have been cut is refused by the contract before main
+    // does any work.
+    path: z.string().min(1).max(1023).optional(),
   })
   .strict();
 export type RequestFolderGrantParams = z.infer<

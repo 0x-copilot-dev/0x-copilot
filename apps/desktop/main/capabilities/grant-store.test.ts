@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
 import { GrantStore } from "./grant-store";
+import { FORBIDDEN_ROOT_MESSAGES } from "./path-validation";
 
 // XOR "cipher" — enough to prove encryption happened + round-trips, exactly
 // like secret-storage.test.ts.
@@ -31,6 +32,13 @@ function seqUuid(): string {
   return `00000000-0000-4000-8000-${String(idCounter).padStart(12, "0")}`;
 }
 
+// The home directory these tests run AS. Declared rather than inherited from
+// `os.homedir()`: the grant policy is relative to the signed-in account (a
+// folder under a SIBLING of home is another user's, and refused), so a store
+// that inherits the developer's real home classifies `/Users/x/...` one way on
+// a Mac and another way on a Linux runner. Every store below states its home.
+const TEST_HOME = "/Users/x";
+
 describe("GrantStore", () => {
   let tmp: string;
 
@@ -46,6 +54,7 @@ describe("GrantStore", () => {
   function makeStore(available = true, allowPlaintextFallback = false) {
     return new GrantStore({
       userDataDir: tmp,
+      homeDir: TEST_HOME,
       safeStorage: makeFakeSafeStorage(available),
       allowPlaintextFallback,
       uuid: seqUuid,
@@ -174,6 +183,7 @@ describe("GrantStore", () => {
     const audit = { warn: vi.fn() };
     const store = new GrantStore({
       userDataDir: tmp,
+      homeDir: TEST_HOME,
       safeStorage: makeFakeSafeStorage(false),
       allowPlaintextFallback: true,
       audit,
@@ -242,6 +252,7 @@ describe("GrantStore", () => {
     let now = 1000;
     const store = new GrantStore({
       userDataDir: tmp,
+      homeDir: TEST_HOME,
       safeStorage: makeFakeSafeStorage(true),
       uuid: seqUuid,
       clock: () => now,
@@ -305,21 +316,21 @@ describe("GrantStore — sensitive-root policy (G2)", () => {
     const store = makeStoreWith("/Users/alice");
     await expect(
       store.create({ root: "/", mode: "read_only", label: "root" }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.filesystem_root);
   });
 
   it("rejects the home directory itself", async () => {
     const store = makeStoreWith("/Users/alice");
     await expect(
       store.create({ root: "/Users/alice", mode: "read_only", label: "home" }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.home_directory);
   });
 
   it("rejects an ancestor of the home directory", async () => {
     const store = makeStoreWith("/Users/alice");
     await expect(
       store.create({ root: "/Users", mode: "read_only", label: "users" }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.home_directory);
   });
 
   it("rejects the app userData directory (holds the grant store + secrets)", async () => {
@@ -330,7 +341,7 @@ describe("GrantStore — sensitive-root policy (G2)", () => {
         mode: "read_only",
         label: "ud",
       }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.user_data_directory);
   });
 
   it("rejects a credential directory anywhere in the path (.ssh / .aws)", async () => {
@@ -341,14 +352,14 @@ describe("GrantStore — sensitive-root policy (G2)", () => {
         mode: "read_only",
         label: "ssh",
       }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.sensitive_directory);
     await expect(
       store.create({
         root: "/Users/alice/.aws/cache",
         mode: "read_only",
         label: "aws",
       }),
-    ).rejects.toThrow(/sensitive/u);
+    ).rejects.toThrow(FORBIDDEN_ROOT_MESSAGES.sensitive_directory);
   });
 
   it("allows a normal project folder under home", async () => {

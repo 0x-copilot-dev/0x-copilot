@@ -61,15 +61,25 @@ export class CapabilityService {
    *   on Documents — a wrong claim of access, which is the defect rather than
    *   the fix.
    *
-   * `GrantStore.create` still applies `assertGrantableRoot` to the resolved
-   * root, so the filesystem root, the home directory, the app's own userData
-   * tree and every well-known credential directory are refused on this path
-   * exactly as they are on the picker's.
+   * * **the grant covers the string that was shown.** `FolderPicker.resolve`
+   *   confirms the named folder rather than resolving it: one realpath, and it
+   *   must be the identity. Nothing between the card and the grant is allowed
+   *   to move the answer, so the folder attached is the folder read. See that
+   *   method for why a second resolution is the defect and not a safeguard.
+   *
+   * `assertGrantableRoot` runs TWICE on this path — once here on the named
+   * string, before any filesystem lookup, and again inside `GrantStore.create`
+   * on the root about to be stored. Same pure function, so there is still one
+   * decision; the early call is what keeps a refused class (a system tree, a
+   * volume root, another account's home) from being probed at all, and keeps
+   * the sentence the user reads about the POLICY rather than about whether the
+   * folder happened to exist.
    */
   async requestFolderGrant(
     params: RequestFolderGrantParams,
   ): Promise<RendererGrant | null> {
     if (params.path !== undefined) {
+      this.#store.assertGrantable(params.path);
       const named = await this.#picker.resolve(params.path);
       const grant = await this.#store.create({
         root: named.root,
