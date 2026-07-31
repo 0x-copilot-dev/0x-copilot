@@ -207,6 +207,180 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     expect(defaultSelectedModelId(models)).toBe("");
   });
 
+  it("never auto-picks the most expensive row when the provider has a ladder", () => {
+    // The reported bug, in catalog order: an Anthropic-only user opened on
+    // "Claude Fable 5" — the creative-writing line, which is BOTH first
+    // alphabetically and the dearest model Anthropic sells. It is off the size
+    // ladder (`tier: null`), so it must never be the auto-pick while a real rung
+    // is usable. The mid rung (Sonnet) is the default; Fable stays one click
+    // away in the pill.
+    const anthropic: CatalogModel[] = [
+      {
+        id: "claude-fable-5",
+        provider: "anthropic",
+        model_name: "claude-fable-5",
+        name: "Claude Fable 5",
+        configured: true,
+        supports_streaming: true,
+        tier: null,
+        output_cost_per_mtok: 90,
+      },
+      {
+        id: "claude-haiku-4-5",
+        provider: "anthropic",
+        model_name: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        configured: true,
+        supports_streaming: true,
+        tier: "small",
+        output_cost_per_mtok: 5,
+      },
+      {
+        id: "claude-opus-5",
+        provider: "anthropic",
+        model_name: "claude-opus-5",
+        name: "Claude Opus 5",
+        configured: true,
+        supports_streaming: true,
+        tier: "big",
+        output_cost_per_mtok: 75,
+      },
+      {
+        id: "claude-sonnet-5",
+        provider: "anthropic",
+        model_name: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        configured: true,
+        supports_streaming: true,
+        tier: "medium",
+        output_cost_per_mtok: 15,
+      },
+    ];
+    expect(defaultSelectedModelId(anthropic)).toBe("claude-sonnet-5");
+    // Same ranking on the just-added-key path.
+    expect(
+      defaultSelectedModelId(anthropic, { preferProvider: "anthropic" }),
+    ).toBe("claude-sonnet-5");
+    // …and on the no-priority-provider fallback (here: an unranked provider).
+    expect(
+      defaultSelectedModelId(
+        anthropic.map((m) => ({ ...m, provider: "someone-else" })),
+      ),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("falls to the small rung when the provider ships no mid one", () => {
+    const models: CatalogModel[] = [
+      {
+        id: "specialty",
+        provider: "anthropic",
+        model_name: "specialty",
+        name: "Specialty",
+        configured: true,
+        supports_streaming: true,
+        output_cost_per_mtok: 120,
+      },
+      {
+        id: "flagship",
+        provider: "anthropic",
+        model_name: "flagship",
+        name: "Flagship",
+        configured: true,
+        supports_streaming: true,
+        tier: "big",
+        output_cost_per_mtok: 75,
+      },
+      {
+        id: "cheap",
+        provider: "anthropic",
+        model_name: "cheap",
+        name: "Cheap",
+        configured: true,
+        supports_streaming: true,
+        tier: "small",
+        output_cost_per_mtok: 5,
+      },
+    ];
+    expect(defaultSelectedModelId(models)).toBe("cheap");
+  });
+
+  it("auto-picks an off-ladder row only when nothing on the ladder is usable", () => {
+    const models: CatalogModel[] = [
+      {
+        id: "claude-opus-5",
+        provider: "anthropic",
+        model_name: "claude-opus-5",
+        name: "Claude Opus 5",
+        configured: false,
+        disabled: true,
+        supports_streaming: true,
+        tier: "big",
+      },
+      {
+        id: "claude-fable-5",
+        provider: "anthropic",
+        model_name: "claude-fable-5",
+        name: "Claude Fable 5",
+        configured: true,
+        supports_streaming: true,
+        tier: null,
+      },
+    ];
+    expect(defaultSelectedModelId(models)).toBe("claude-fable-5");
+  });
+
+  it("breaks a same-rung tie on output cost, and keeps catalog order when unpriced", () => {
+    const rung = (id: string, cost?: number): CatalogModel => ({
+      id,
+      provider: "openai",
+      model_name: id,
+      name: id,
+      configured: true,
+      supports_streaming: true,
+      tier: "medium",
+      output_cost_per_mtok: cost,
+    });
+    expect(defaultSelectedModelId([rung("dear", 30), rung("cheap", 8)])).toBe(
+      "cheap",
+    );
+    // A priced row beats an unpriced one; with neither priced, catalog order
+    // stands (the offline LiteLLM fallback publishes no costs at all).
+    expect(defaultSelectedModelId([rung("unpriced"), rung("priced", 30)])).toBe(
+      "priced",
+    );
+    expect(defaultSelectedModelId([rung("first"), rung("second")])).toBe(
+      "first",
+    );
+  });
+
+  it("still lets the backend default_model_id win inside the winning provider", () => {
+    // The deployment's declared default is an explicit choice; tier ranking is
+    // only the tiebreak for when there is none.
+    const models: CatalogModel[] = [
+      {
+        id: "gpt-mid",
+        provider: "openai",
+        model_name: "gpt-mid",
+        name: "GPT Mid",
+        configured: true,
+        supports_streaming: true,
+        tier: "medium",
+      },
+      {
+        id: "gpt-flagship",
+        provider: "openai",
+        model_name: "gpt-flagship",
+        name: "GPT Flagship",
+        configured: true,
+        supports_streaming: true,
+        tier: "big",
+      },
+    ];
+    expect(
+      defaultSelectedModelId(models, { defaultModelId: "gpt-flagship" }),
+    ).toBe("gpt-flagship");
+  });
+
   it("prefers defaultModelId within the winning priority provider", () => {
     const models: CatalogModel[] = [
       openaiDefault(true),
