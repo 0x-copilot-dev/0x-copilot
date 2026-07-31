@@ -725,6 +725,9 @@ class RuntimeRunHandler:
             granted_host_roots = await self._granted_host_roots_for_run(
                 workspace_backend
             )
+            await self._provision_agent_scratch(
+                command, workspace_backend=workspace_backend
+            )
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
@@ -1560,6 +1563,64 @@ class RuntimeRunHandler:
             return roots
         return await self._workspace_wiring().granted_host_roots()
 
+    async def _provision_agent_scratch(
+        self,
+        command: RuntimeRunCommand,
+        *,
+        workspace_backend: object | None,
+    ) -> None:
+        """Create ``$COPILOT_HOME/.tmp/<conversation_id>/`` for this run (D3/D5).
+
+        Runs before the graph does, so the agent's own working area exists the
+        first time it writes. Gated on the same desktop signal as the host
+        filesystem rules — a ``None`` workspace backend provisions nothing — and
+        never raises: a run must not fail for want of a working directory.
+
+        An EFFECT on disk, which is why it is not part of the dependency
+        composition next door: the granted roots there are a VALUE the
+        composition reads. It lives at the single ``handle`` call site so the
+        two run paths (initial + approval resume) cannot drift into one
+        provisioning and the other not. The directory it makes real is the one
+        ``factory._agent_scratch_root`` resolves from the same installation, so
+        this is not a second opinion about where the scratch is.
+        """
+
+        wiring = AgentScratchWorkerWiring(workspace_backend=workspace_backend)
+        if not wiring.enabled:
+            return
+        wiring.provision(
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+            title=await self._conversation_title(command),
+        )
+
+    async def _conversation_title(self, command: RuntimeRunCommand) -> str | None:
+        """This chat's human name, for the scratch's ``meta.json`` (D5).
+
+        Read from the conversation record on every run rather than carried on
+        the command: a command is a snapshot taken at enqueue time, so a chat
+        renamed between runs would keep announcing its old name, and
+        ``provision`` rewrites ``meta.json`` each run precisely so the scratch
+        reports the CURRENT one.
+
+        ``None`` on any failure. The title is orientation for a human browsing
+        ``.tmp/`` — every live ``meta.json`` read `"title": null` before this,
+        because the call site passed no title at all — and losing that
+        orientation is not worth failing a run over, so a store that cannot
+        answer degrades to the untitled scratch we already had.
+        """
+
+        try:
+            conversation = await self.persistence.get_conversation(
+                org_id=command.org_id,
+                user_id=command.user_id,
+                conversation_id=command.conversation_id,
+            )
+        except Exception:  # noqa: BLE001 — see the docstring; orientation only.
+            logging.getLogger(__name__).warning("agent_scratch.title_lookup_failed")
+            return None
+        return None if conversation is None else conversation.title
+
     async def _workspace_effect_backend_for_run(
         self,
         *,
@@ -1756,22 +1817,6 @@ class RuntimeRunHandler:
         # reading the workspace object.
         if granted_host_roots is not None:
             update["granted_host_roots"] = granted_host_roots
-        # PRD-FS-12 D3/D5 — create `$COPILOT_HOME/.tmp/<conversation_id>/` (and
-        # this run's tier) with its `meta.json` before the graph runs, so the
-        # agent's own working area exists the first time it writes. Gated on the
-        # same desktop signal as the host filesystem rules; a `None` workspace
-        # backend provisions nothing. Never raises.
-        #
-        # Not part of `update`, and deliberately: the granted roots above are a
-        # VALUE the composition reads, while this is an EFFECT on disk. The
-        # scratch the rules and floor are keyed on comes from
-        # `factory._agent_scratch_root`, which resolves the same
-        # `$COPILOT_HOME/.tmp` from the installation — so this call makes the
-        # directory real without becoming a second opinion about where it is.
-        AgentScratchWorkerWiring(workspace_backend=workspace_backend).provision(
-            conversation_id=command.conversation_id,
-            run_id=command.run_id,
-        )
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.
