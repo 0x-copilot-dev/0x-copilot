@@ -987,6 +987,13 @@ export interface RunEmptyComposerCtx {
    * while still allowing the user to turn it off afterward.
    */
   readonly autoActivateConnectorId?: string | null;
+  /**
+   * The model (`model_name`) this conversation last ran with; `null` when it
+   * has never run. Server truth, so a host can seed its model pill with what
+   * the chat actually used even on a machine that has never opened it —
+   * something a client-side "remembered pick" cannot do.
+   */
+  readonly conversationModel?: string | null;
 }
 
 export interface RunDestinationProps {
@@ -1092,6 +1099,12 @@ export interface RunDestinationProps {
      * it into its run-scoped Tools state as enabled.
      */
     readonly autoActivateConnectorId?: string | null;
+    /**
+     * The model (`model_name`) this conversation last ran with; `null` when it
+     * has never run. See {@link RunEmptyComposerCtx.conversationModel} — the
+     * same seam, so both composers seed their pill from the same server truth.
+     */
+    readonly conversationModel?: string | null;
   }) => ReactElement | null;
   /**
    * WC-P5a (AD-6/AD-7): host launcher for the mid-run `mcp_auth` Connect card.
@@ -3940,6 +3953,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               running,
               onCancel: handleCancel,
               autoActivateConnectorId: connectedConnectorServerId,
+              conversationModel: session.conversationModel,
             }),
     [
       renderComposer,
@@ -3947,6 +3961,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       running,
       handleCancel,
       connectedConnectorServerId,
+      session.conversationModel,
     ],
   );
 
@@ -4288,6 +4303,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
                   modelReady,
                   onOpenModelSettings,
                   autoActivateConnectorId: connectedConnectorServerId,
+                  conversationModel: session.conversationModel,
                 })}
               </div>
             </div>

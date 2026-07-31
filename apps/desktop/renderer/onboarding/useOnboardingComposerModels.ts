@@ -15,7 +15,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { QWEN3_4B_PRESET } from "@0x-copilot/chat-surface";
+import {
+  QWEN3_4B_PRESET,
+  createComposerModelPreference,
+  useKeyValueStore,
+} from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
 
@@ -61,6 +65,15 @@ export function useOnboardingComposerModels(
   transport: Transport,
   local: OnboardingLocalEngine,
 ): OnboardingComposerModels {
+  // The same memory the Run cockpit's pill uses, so the model chosen here is
+  // the one the cockpit opens on after the handoff instead of a fresh
+  // auto-default. Requires the `KeyValueStoreProvider` bootstrap mounts ABOVE
+  // the first-run gate — inside ChatShell alone this would silently no-op.
+  const keyValueStore = useKeyValueStore();
+  const modelPreference = useMemo(
+    () => createComposerModelPreference(keyValueStore),
+    [keyValueStore],
+  );
   const [cloudModels, setCloudModels] = useState<readonly ModelCatalogModel[]>(
     [],
   );
@@ -153,9 +166,18 @@ export function useOnboardingComposerModels(
   // Selection policy:
   //   • a provider key was JUST added (`preferProviderRef`) → jump to that
   //     provider's model, overriding a stale keyless / wrong-provider pick;
-  //   • otherwise preserve the user's pick when still present;
+  //   • otherwise preserve the current selection while it is still in the list;
+  //   • else the remembered last-used model, when it is usable, so the model the
+  //     user picks here is the one the Run cockpit opens on after the handoff;
   //   • else fall back to the provider-aware default (backend `default_model_id`
-  //     when usable, else first usable; the on-device entry leads on local).
+  //     when usable, else the provider's best rung).
+  //
+  // The remembered pick sits BELOW keep-current deliberately: on the local
+  // engine path the on-device row is the only model in the list on the first
+  // pass, so it is already selected by the time the catalog (or the memory)
+  // could compete, and keep-current is what protects it. Move the memory above
+  // that branch and a leftover cloud pick displaces the engine the user just
+  // chose — `useOnboardingComposerModels.test.tsx` pins exactly that ordering.
   useEffect(() => {
     const prefer = preferProviderRef.current;
     if (prefer !== null) {
@@ -173,16 +195,36 @@ export function useOnboardingComposerModels(
       setSelectedModel(picked);
       return;
     }
-    setSelectedModel((current) =>
-      current !== "" && models.some((m) => m.id === current)
-        ? current
-        : defaultSelectedModelId(models, { defaultModelId }),
-    );
-  }, [models, defaultModelId]);
+    setSelectedModel((current) => {
+      if (current !== "" && models.some((m) => m.id === current)) {
+        return current;
+      }
+      const rememberedId = modelPreference.lastUsed();
+      const remembered =
+        rememberedId === null
+          ? undefined
+          : models.find((m) => m.id === rememberedId);
+      if (
+        remembered !== undefined &&
+        remembered.configured &&
+        remembered.disabled !== true
+      ) {
+        return remembered.id;
+      }
+      return defaultSelectedModelId(models, { defaultModelId });
+    });
+  }, [models, defaultModelId, modelPreference]);
 
-  const onModelChange = useCallback((id: string): void => {
-    setSelectedModel(id);
-  }, []);
+  const onModelChange = useCallback(
+    (id: string): void => {
+      setSelectedModel(id);
+      // No conversation exists yet in the FTUE, so this records a last-used
+      // model only — which is exactly what the cockpit reads for the brand-new
+      // chat the handoff creates.
+      modelPreference.remember(id, null);
+    },
+    [modelPreference],
+  );
 
   return { models, selectedModel, onModelChange, refresh };
 }

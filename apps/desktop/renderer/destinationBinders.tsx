@@ -1263,6 +1263,11 @@ export function RunBinder({
         providerKeysPort={providerKeysPort}
         catalogRefreshKey={providerKeysRevision}
         onGetLocalModels={onOpenLocalModelSettings}
+        // The nav's conversation (not `boundConversationId`): a brand-new chat
+        // must stay `null` so its model pick is remembered as "last used"
+        // rather than filed under the synthetic "new" id every new chat shares.
+        conversationId={conversationId}
+        conversationModel={ctx.conversationModel}
       />
     ),
     [
@@ -1272,6 +1277,7 @@ export function RunBinder({
       connectorsPort,
       providerKeysPort,
       providerKeysRevision,
+      conversationId,
     ],
   );
 
@@ -1290,6 +1296,9 @@ export function RunBinder({
       readonly running: boolean;
       readonly onCancel: () => void;
       readonly autoActivateConnectorId?: string | null;
+      // What this chat last ran with — the composer's model-pill seed of last
+      // resort, derived by the cockpit from the run list it already fetched.
+      readonly conversationModel?: string | null;
     }) => (
       <RunComposer
         dispatch={ctx.dispatch}
@@ -1305,6 +1314,10 @@ export function RunBinder({
         providerKeysPort={providerKeysPort}
         catalogRefreshKey={providerKeysRevision}
         autoActivateConnectorId={ctx.autoActivateConnectorId}
+        // Scopes the remembered model pick to this chat — the composer still
+        // sends through the cockpit's dispatch, which owns the run target.
+        conversationId={conversationId}
+        conversationModel={ctx.conversationModel}
       />
     ),
     [
@@ -1315,6 +1328,7 @@ export function RunBinder({
       connectorsPort,
       providerKeysPort,
       providerKeysRevision,
+      conversationId,
     ],
   );
 
