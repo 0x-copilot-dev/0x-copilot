@@ -422,15 +422,31 @@ export function FirstRunSurfaceMount({
   // desktop (main denies `window.open`); the connect flow is owned by MAIN,
   // which binds a loopback + opens the system browser for the catalog slug
   // (mirrors `ConnectorsBinder.connect`). No token crosses the bridge.
+  //
+  // The promise is RETURNED, not swallowed. `connector.authorize` resolves only
+  // once the OAuth round-trip has completed (`ConnectorService.authorize` ->
+  // `ConnectorOAuthCoordinator.connectMcpServer` awaits the callback POST), so
+  // it is the completion signal the Tools popover needs to re-read its list.
+  // Dropping it with `void ... .catch(() => {})` is what left the row on
+  // "Connect" after a successful Linear connect: the backend had the server at
+  // `auth_state: authenticated` and the panel never asked again. The surface
+  // attaches its own catch, so a rejection here stays handled and simply does
+  // not refetch — first-use tool consent still lands as the run-time
+  // `mcp_auth_required` HITL card.
   const handleConnectCatalog = useCallback(
-    (entry: FirstRunInstallableConnector): void => {
-      void window.bridge.ipc
-        .invoke(CONNECTOR_CHANNELS.authorize, { slug: entry.slug })
-        .catch(() => {
-          // Workspace-authorize is best-effort here; first-use tool consent
-          // still lands as the run-time `mcp_auth_required` HITL card.
-        });
-    },
+    (entry: FirstRunInstallableConnector): Promise<unknown> =>
+      window.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+        slug: entry.slug,
+      }),
+    [],
+  );
+
+  // Cancel reaches MAIN, which closes the armed loopback so the `authorize`
+  // above rejects. Supplying this is what makes the popover render a Cancel
+  // beside the spinner at all.
+  const handleCancelConnect = useCallback(
+    (): Promise<unknown> =>
+      window.bridge.ipc.invoke(CONNECTOR_CHANNELS.cancelAuthorize, {}),
     [],
   );
 
@@ -562,6 +578,7 @@ export function FirstRunSurfaceMount({
         profilePort={profilePort}
         connectorsPort={connectorsPort}
         onConnectCatalog={handleConnectCatalog}
+        onCancelConnect={handleCancelConnect}
         // Skip / the surface's own engine-carrying `onComplete` slot both mean
         // "reveal the shell with NO created run" — the real first-run handoff
         // (carrying the conversation id) is fired by `useFirstRunLaunch` above,

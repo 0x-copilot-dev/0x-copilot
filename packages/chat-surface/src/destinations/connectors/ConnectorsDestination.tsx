@@ -35,7 +35,7 @@ import type {
   ConnectorStatus,
   SectionResult,
 } from "@0x-copilot/api-types";
-import { AppIcon, Button } from "@0x-copilot/design-system";
+import { AppIcon, Button, Spinner } from "@0x-copilot/design-system";
 
 import { PageLead, RowList, Row, SectionHeader } from "../_shared";
 import { EmptyState } from "../../shell/EmptyState";
@@ -177,6 +177,13 @@ export interface ConnectorsDestinationProps {
   readonly onConnectEntry?: (slug: ConnectorSlug) => void;
 
   /**
+   * Abort the in-flight connect (`ConnectFlow.cancelConnect`). Absent ⇒ the
+   * host cannot really stop its flow, so no Cancel is offered rather than one
+   * that only tidies the surface.
+   */
+  readonly onCancelConnect?: () => void;
+
+  /**
    * The slug whose OAuth round-trip is in flight, if any (`ConnectFlow.
    * connectingSlug`). Drives the row's own pending label.
    *
@@ -248,6 +255,7 @@ export function ConnectorsDestination(
     onConnect,
     catalog,
     onConnectEntry,
+    onCancelConnect,
     connectingSlug = null,
     connectError = null,
     onOpenConnector,
@@ -414,7 +422,11 @@ export function ConnectorsDestination(
                   <CatalogRow
                     entry={entry}
                     connecting={connectingSlug === entry.slug}
+                    otherConnecting={
+                      connectingSlug !== null && connectingSlug !== entry.slug
+                    }
                     onConnectEntry={onConnectEntry}
+                    onCancelConnect={onCancelConnect}
                   />
                 )}
               />
@@ -529,13 +541,19 @@ interface CatalogRowProps {
   readonly entry: ConnectorCatalogEntry;
   /** This row's OAuth round-trip is in flight. */
   readonly connecting: boolean;
+  /** A DIFFERENT row is connecting, so this one cannot start. */
+  readonly otherConnecting: boolean;
   readonly onConnectEntry?: (slug: ConnectorSlug) => void;
+  /** Abort the in-flight connect; absent ⇒ the host cannot cancel. */
+  readonly onCancelConnect?: () => void;
 }
 
 function CatalogRow({
   entry,
   connecting,
+  otherConnecting,
   onConnectEntry,
+  onCancelConnect,
 }: CatalogRowProps): ReactElement {
   const reason = unavailableReason(entry);
   const connectable = reason === undefined;
@@ -576,15 +594,39 @@ function CatalogRow({
         // still implies "click here when ready", which is not true of a state
         // the user cannot change from this surface.
         connectable && onConnectEntry !== undefined ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={connecting}
-            onClick={() => onConnectEntry(entry.slug)}
-            data-testid={`connector-available-connect-${entry.slug}`}
-          >
-            {connecting ? "Connecting…" : "Connect"}
-          </Button>
+          connecting ? (
+            // In flight: the same spinner + Cancel the composer's Tools popover
+            // shows. It used to be a disabled button reading "Connecting…",
+            // which said the right words but left the user with no way out of a
+            // five-minute wait.
+            <span style={connectingMetaStyle} role="status">
+              {/* The wrapper owns `role="status"`; the ring is decorative. */}
+              <Spinner />
+              <span style={connectingLabelStyle}>Connecting…</span>
+              {onCancelConnect === undefined ? null : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onCancelConnect}
+                  data-testid={`connector-available-cancel-${entry.slug}`}
+                >
+                  Cancel
+                </Button>
+              )}
+            </span>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              // One connect at a time — main holds a single pending flow, so a
+              // second start would abort the first.
+              disabled={otherConnecting}
+              onClick={() => onConnectEntry(entry.slug)}
+              data-testid={`connector-available-connect-${entry.slug}`}
+            >
+              Connect
+            </Button>
+          )
         ) : undefined
       }
       data-testid="connector-available-row"
@@ -866,3 +908,18 @@ function skeletonBarStyle(width: number): CSSProperties {
     background: "var(--color-border, #232325)",
   };
 }
+
+/** Tail of a connecting catalog row: spinner · label · Cancel. */
+const connectingMetaStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "var(--space-sm)",
+};
+
+/** Same quiet mono metadata register the row's sub-line uses. */
+const connectingLabelStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-10)",
+  whiteSpace: "nowrap",
+};

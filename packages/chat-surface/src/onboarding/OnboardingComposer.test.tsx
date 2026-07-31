@@ -57,7 +57,9 @@ function singleStageAdapter(): AttachmentAdapter {
       name: file.name,
       size: file.size,
       type: file.type,
-      content: [{ type: "text", text: `<attachment>${file.name}</attachment>` }],
+      content: [
+        { type: "text", text: `<attachment>${file.name}</attachment>` },
+      ],
       status: { type: "complete" as const },
     })),
     remove: vi.fn(),
@@ -181,8 +183,6 @@ describe("<OnboardingComposer>", () => {
       startError: { message: "Server error.", code: "internal_error" },
       onAddKey: vi.fn(),
     });
-    expect(
-      screen.queryByTestId("first-run-composer-error-cta"),
-    ).toBeNull();
+    expect(screen.queryByTestId("first-run-composer-error-cta")).toBeNull();
   });
 });

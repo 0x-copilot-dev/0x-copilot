@@ -63,6 +63,17 @@ export interface ConnectorConnectOptions {
    * connect for the same server can omit it.
    */
   readonly oauthClient?: McpOAuthClientConfigRequest;
+  /**
+   * Invoked with a cancel function as soon as the loopback is listening — the
+   * same shape the login flows use (`auth/google-login.ts`). Calling it aborts
+   * the pending connect: it rejects the delivery promise and frees the port.
+   *
+   * Handed out BEFORE `start-oauth` returns on purpose. That POST took over a
+   * second against a real provider, and a Cancel button that is inert for the
+   * first second of a spinner is the kind of "nothing happens" this whole
+   * change is about.
+   */
+  readonly onCancelAvailable?: (cancel: () => void) => void;
 }
 
 export class ConnectorOAuthError extends Error {
@@ -74,6 +85,15 @@ export class ConnectorOAuthError extends Error {
     this.stage = stage;
   }
 }
+
+/**
+ * Why a cancelled connect rejects. Only an Error MESSAGE survives the IPC hop,
+ * so the string is the contract — but the renderer does not parse it: the side
+ * that pressed Cancel already knows, and treats the rejection quietly (the same
+ * shape `SignInGate` uses). This exists so a cancel reads as a cancel in logs
+ * rather than as a mysterious redirect failure.
+ */
+export const CONNECT_CANCELLED = "connect cancelled";
 
 export interface ConnectorOAuthDeps {
   readonly facadeBaseUrl: string;
@@ -181,6 +201,17 @@ export class ConnectorOAuthCoordinator {
           randomPorts: {},
         });
 
+    // Same cancel contract as `connectMcpServer`. Deep-link mode has no
+    // loopback to close, so rejecting the delivery promise is the ONLY way to
+    // abort it — which is why cancel rejects rather than just closing a port.
+    let cancelled = false;
+    let rejectDelivery: (error: Error) => void = () => {};
+    options.onCancelAvailable?.(() => {
+      cancelled = true;
+      rejectDelivery(new ConnectorOAuthError("redirect", CONNECT_CANCELLED));
+      handle?.close();
+    });
+
     let registeredState: string | null = null;
     try {
       // -- 1. ask the facade to start the flow (backend mints state+PKCE) ----
@@ -193,7 +224,8 @@ export class ConnectorOAuthCoordinator {
 
       // -- 2. arm loopback + register the state for deep-link demux -----------
       const received = new Promise<{ code: string; state: string }>(
-        (resolve) => {
+        (resolve, reject) => {
+          rejectDelivery = reject;
           this.pending.set(start.state, { slug, resolve });
         },
       );
@@ -201,6 +233,11 @@ export class ConnectorOAuthCoordinator {
       handle?.armState(start.state);
 
       // -- 3. system browser round-trip --------------------------------------
+      // Never open a consent screen for a flow the user already cancelled —
+      // approving in that tab would complete an authorization they stopped.
+      if (cancelled) {
+        throw new ConnectorOAuthError("redirect", CONNECT_CANCELLED);
+      }
       await this.openExternal(start.authorization_url);
 
       // -- 4. first valid state wins: loopback OR deep-link delivery ----------
@@ -335,7 +372,10 @@ export class ConnectorOAuthCoordinator {
   // and the deep-link demux. `redirect_uri` is client-supplied and validated
   // server-side with `allow_localhost=True`, which is what makes the desktop
   // loopback a first-class callback rather than a workaround.
-  async connectMcpServer(serverId: string): Promise<void> {
+  async connectMcpServer(
+    serverId: string,
+    options: { readonly onCancelAvailable?: (cancel: () => void) => void } = {},
+  ): Promise<void> {
     const bearer = await this.getBearer();
     if (bearer === null) {
       throw new ConnectorOAuthError("start", "not signed in");
@@ -345,6 +385,19 @@ export class ConnectorOAuthCoordinator {
       callbackPath: DESKTOP_CONNECTOR_LOOPBACK_PATH,
       timeoutMs: this.timeoutMs,
       randomPorts: {},
+    });
+
+    // Cancellation is armed the moment the port exists — before `auth/start`,
+    // which is a real network round-trip. `rejectDelivery` starts as a no-op
+    // and is replaced once the delivery promise exists, so a cancel landing in
+    // that window still closes the loopback and still sets `cancelled`, which
+    // is what stops the browser from being opened at all.
+    let cancelled = false;
+    let rejectDelivery: (error: Error) => void = () => {};
+    options.onCancelAvailable?.(() => {
+      cancelled = true;
+      rejectDelivery(new ConnectorOAuthError("redirect", CONNECT_CANCELLED));
+      handle.close();
     });
 
     let registeredState: string | null = null;
@@ -357,13 +410,20 @@ export class ConnectorOAuthCoordinator {
       const state = extractOAuthState(start.auth_url);
 
       const received = new Promise<{ code: string; state: string }>(
-        (resolve) => {
+        (resolve, reject) => {
+          rejectDelivery = reject;
           this.pending.set(state, { slug: serverId, resolve });
         },
       );
       registeredState = state;
       handle.armState(state);
 
+      // Opening a consent screen for a flow the user already cancelled is worse
+      // than doing nothing: the tab is live, so approving in it would complete
+      // an authorization they explicitly stopped.
+      if (cancelled) {
+        throw new ConnectorOAuthError("redirect", CONNECT_CANCELLED);
+      }
       await this.openExternal(start.auth_url);
 
       let delivered: { code: string; state: string };

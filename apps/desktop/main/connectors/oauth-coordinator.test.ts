@@ -202,3 +202,109 @@ describe("ConnectorOAuthCoordinator — failures", () => {
     expect(controls.closed).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cancellation
+// ---------------------------------------------------------------------------
+//
+// A Cancel that only resets the renderer is a lie: main would keep the loopback
+// armed for its full timeout, so a user who cancelled and then approved anyway
+// in the still-open browser tab would find the connector silently connected.
+// These pin that cancelling actually reaches main and stops the flow.
+
+describe("ConnectorOAuthCoordinator — cancellation", () => {
+  it("rejects the pending connect and frees the port", async () => {
+    const { loopback, controls } = fakeLoopback();
+    // The browser opens and the user simply never returns to it.
+    const openExternal = vi.fn(async () => undefined);
+    const coordinator = makeCoordinator(fakeFetch(), loopback, openExternal);
+
+    let cancel: () => void = () => undefined;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+
+    // Let the flow reach the point where it is waiting on a redirect.
+    await Promise.resolve();
+    await Promise.resolve();
+    cancel();
+
+    await expect(pending).rejects.toThrow(/connect cancelled/);
+    expect(controls.closed).toBe(true);
+  });
+
+  it("never opens a consent screen for a connect cancelled while starting", async () => {
+    // `start-oauth` is a real network round-trip (over a second against a live
+    // provider). Cancelling inside that window must not then open a tab the
+    // user could still approve in — that would complete an authorization they
+    // explicitly stopped.
+    const { loopback } = fakeLoopback();
+    const openExternal = vi.fn(async () => undefined);
+
+    // Hold `start-oauth` open so the cancel provably lands DURING it.
+    let releaseStart: () => void = () => undefined;
+    const startHeld = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const inner = fakeFetch();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/desktop/start-oauth")) await startHeld;
+      return inner(input, init);
+    }) as unknown as typeof fetch;
+
+    const coordinator = makeCoordinator(fetchImpl, loopback, openExternal);
+
+    let cancel: (() => void) | null = null;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+
+    // The hook is handed out as soon as the port binds, which is before the
+    // held start POST resolves — so waiting for it puts us squarely inside the
+    // window this test is about.
+    await vi.waitFor(() => expect(cancel).not.toBeNull());
+    cancel!();
+    releaseStart();
+
+    await expect(pending).rejects.toThrow(/connect cancelled/);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("cancels an MCP-server connect the same way", async () => {
+    const { loopback, controls } = fakeLoopback();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/start")) {
+        return new Response(
+          JSON.stringify({
+            auth_url: `https://mcp.example/authorize?state=${START_STATE}`,
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as unknown as typeof fetch;
+    const coordinator = makeCoordinator(
+      fetchImpl,
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: () => void = () => undefined;
+    const pending = coordinator.connectMcpServer("seed:linear", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    cancel();
+
+    await expect(pending).rejects.toThrow(/connect cancelled/);
+    expect(controls.closed).toBe(true);
+  });
+});

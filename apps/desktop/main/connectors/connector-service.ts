@@ -33,6 +33,13 @@ export class ConnectorService {
   private readonly doFetch: typeof fetch;
   /** Profile-backed slugs, resolved once per boot. `null` = not yet known. */
   private profileSlugs: Set<string> | null = null;
+  /**
+   * Abort for the connect currently awaiting a redirect, or `null`. ONE slot,
+   * newest-connect-wins — the same mechanism `AuthService` uses for pending
+   * system-browser sign-ins, and for the same reason: a second connect makes
+   * the first unreachable, so leaving it holding a port helps nobody.
+   */
+  private cancelPendingConnect: (() => void) | null = null;
   readonly coordinator: ConnectorOAuthCoordinator;
 
   constructor(deps: ConnectorServiceDeps) {
@@ -116,11 +123,14 @@ export class ConnectorService {
   }): Promise<ConnectorAuthorizationResult> {
     const { slug, serverId, productScope, oauthClient, callbackMode } = target;
     if (slug !== undefined && (await this.hasDesktopProfile(slug))) {
-      const result = await this.coordinator.connect(slug, {
-        productScope,
-        ...(oauthClient !== undefined ? { oauthClient } : {}),
-        ...(callbackMode !== undefined ? { callbackMode } : {}),
-      });
+      const result = await this.runCancellable((onCancelAvailable) =>
+        this.coordinator.connect(slug, {
+          productScope,
+          onCancelAvailable,
+          ...(oauthClient !== undefined ? { oauthClient } : {}),
+          ...(callbackMode !== undefined ? { callbackMode } : {}),
+        }),
+      );
       return {
         server_id: result.server_id,
         connector_slug: result.connector_slug,
@@ -153,7 +163,9 @@ export class ConnectorService {
     // suggestion still falls through to install and still mints one.
     const resolvedId = await this.resolveServerId(slug, serverId);
     if (resolvedId !== undefined) {
-      await this.coordinator.connectMcpServer(resolvedId);
+      await this.runCancellable((onCancelAvailable) =>
+        this.coordinator.connectMcpServer(resolvedId, { onCancelAvailable }),
+      );
       // No `auth_state` to report: the MCP route resolves once the round-trip
       // completes and the server's OWN row is the record of what it granted.
       return {
@@ -166,6 +178,54 @@ export class ConnectorService {
       "start",
       `no desktop profile for "${slug ?? ""}" and no MCP server to authorize`,
     );
+  }
+
+  /**
+   * Run one connect while holding its abort in the single pending slot.
+   *
+   * Mirrors `AuthService.#runLinkViaSystemBrowser`, including the identity
+   * check on the way out: the slot is cleared only if it still holds THIS
+   * attempt's cancel. Without that check a finishing connect would clear a
+   * NEWER connect's abort, and the newer one would silently become
+   * uncancellable — the sort of bug that only shows up when someone connects
+   * two connectors quickly.
+   */
+  private async runCancellable<T>(
+    run: (onCancelAvailable: (cancel: () => void) => void) => Promise<T>,
+  ): Promise<T> {
+    // Newest wins: a second connect makes the first unreachable anyway, so it
+    // is aborted rather than left holding a loopback port for five minutes.
+    this.cancelPendingConnect?.();
+    this.cancelPendingConnect = null;
+    let mine: (() => void) | null = null;
+    try {
+      return await run((cancel) => {
+        mine = cancel;
+        this.cancelPendingConnect = cancel;
+      });
+    } finally {
+      if (mine !== null && this.cancelPendingConnect === mine) {
+        this.cancelPendingConnect = null;
+      }
+    }
+  }
+
+  /**
+   * Renderer-driven cancel for the connect awaiting a redirect — the Cancel on
+   * a connecting Tools row and in the Connect modal.
+   *
+   * Closes the armed loopback so the pending `authorize` rejects and the port
+   * frees. Idempotent, and a no-op when nothing is pending, so a Cancel that
+   * races the connect's own completion is harmless.
+   *
+   * NOTE it cannot un-grant an authorization the provider already completed. If
+   * the user approved in the browser microseconds before pressing Cancel, the
+   * backend may already hold the token; the surface re-reads the list after
+   * cancelling for exactly that reason and lets the server's answer win.
+   */
+  cancelPendingAuthorize(): void {
+    this.cancelPendingConnect?.();
+    this.cancelPendingConnect = null;
   }
 
   /**

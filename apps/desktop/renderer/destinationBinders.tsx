@@ -470,9 +470,19 @@ export function ConnectorsBinder({
     [accessPort],
   );
 
+  // Reaches MAIN, which closes the armed loopback so `authorize` above rejects.
+  // Without it the modal's Cancel only shut the dialog while the flow kept
+  // running for its full timeout.
+  const cancelAuthorize = useCallback(async (): Promise<void> => {
+    const win = window as unknown as { bridge?: Window["bridge"] };
+    if (win.bridge === undefined) return;
+    await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.cancelAuthorize, {});
+  }, []);
+
   const flow = useConnectFlow({
     authorize,
     onConnect: persistConnect,
+    cancelAuthorize,
   });
   markConnectedRef.current = flow.markConnected;
 
@@ -594,6 +604,7 @@ export function ConnectorsBinder({
         onConnect={flow.openConnect}
         catalog={catalog}
         onConnectEntry={(slug) => flow.connectEntry(slug)}
+        onCancelConnect={flow.cancelConnect}
         connectingSlug={flow.connectingSlug}
         connectError={flow.error}
         onReconnect={handleReconnect}
@@ -605,6 +616,7 @@ export function ConnectorsBinder({
       <ConnectModal
         open={flow.open}
         onClose={flow.closeConnect}
+        onCancelAuthorize={flow.cancelConnect}
         catalog={catalog}
         onSelectEntry={flow.onSelectEntry}
         onConnect={flow.onConnect}

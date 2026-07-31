@@ -1024,6 +1024,8 @@ function wireTransportAndIpc(
         : {
             listCatalog: () => connectorService!.listCatalog(),
             authorize: (target) => connectorService!.authorize(target),
+            cancelPendingAuthorize: () =>
+              connectorService!.cancelPendingAuthorize(),
           },
   });
 

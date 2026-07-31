@@ -190,3 +190,56 @@ describe("useConnectFlow — pre-registered OAuth client", () => {
     expect(view.result.current.clientRequiredSlug).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cancellation
+// ---------------------------------------------------------------------------
+//
+// The modal's Cancel used to only close the dialog. Main kept the loopback
+// armed for its full timeout, so a user who cancelled and then approved anyway
+// in the still-open tab ended up connected — having been told the opposite.
+
+describe("useConnectFlow — cancel", () => {
+  const SLUG = "atlassian" as ConnectorSlug;
+
+  it("is undefined when the host cannot abort, so no Cancel is offered", () => {
+    const { view } = setup();
+    // Expressed, not assumed: web's connect is a full-page redirect, and a
+    // Cancel that only tidies the dialog would misinform the user.
+    expect(view.result.current.cancelConnect).toBeUndefined();
+  });
+
+  it("calls the host abort and does not report the resulting rejection", async () => {
+    const attempt = deferred<void>();
+    const authorize = vi.fn(() => attempt.promise);
+    const cancelAuthorize = vi.fn(() => Promise.resolve());
+    const { view } = setup({ authorize, cancelAuthorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(SLUG);
+      await Promise.resolve();
+    });
+    expect(view.result.current.pending).toBe(true);
+
+    act(() => view.result.current.cancelConnect?.());
+    expect(cancelAuthorize).toHaveBeenCalledTimes(1);
+
+    // Main aborting is what rejects the attempt.
+    await act(async () => {
+      attempt.reject(new Error("connect cancelled"));
+      await Promise.resolve();
+    });
+
+    expect(view.result.current.pending).toBe(false);
+    expect(view.result.current.connectingSlug).toBeNull();
+    // The user asked for this; showing them an error for it would be noise.
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it("does nothing when no authorization is in flight", () => {
+    const cancelAuthorize = vi.fn(() => Promise.resolve());
+    const { view } = setup({ cancelAuthorize });
+    act(() => view.result.current.cancelConnect?.());
+    expect(cancelAuthorize).not.toHaveBeenCalled();
+  });
+});

@@ -51,6 +51,7 @@ import { CHANNELS } from "@0x-copilot/chat-transport";
 import { HashRouter } from "@0x-copilot/chat-surface";
 
 import type { WindowBridge } from "../preload/window-bridge-types";
+import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
 import { OLLAMA_DOWNLOAD_URL } from "../main/services/ollama-download";
 import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
@@ -267,6 +268,113 @@ describe("FirstRunSurfaceMount", () => {
     );
     expect(screen.getByTestId("first-run-composer")).not.toBeNull();
     expect(screen.queryByTestId("first-run-composer-placeholder")).toBeNull();
+  });
+
+  // The reported bug, end to end through the REAL desktop port: complete the
+  // OAuth round-trip and the Tools popover must re-read the connector list.
+  //
+  // What made this ship broken is that every individual piece was right. Main
+  // finished the flow (`connector.authorize` resolves only after the callback
+  // POST), the backend recorded `auth_state: authenticated`, and the popover
+  // renders a connected row correctly when it has one. Nothing joined them: the
+  // gate dropped the promise, so the panel kept the snapshot it fetched BEFORE
+  // the connector existed and said "Connect" until the app restarted.
+  //
+  // Hence the assertion is on the LIST BEING RE-READ, not on `connector.
+  // authorize` having been invoked — the invoke already happened before the fix
+  // and is exactly what made the flow look healthy.
+  it("re-reads the connector list once main reports the OAuth round-trip done", async () => {
+    const LINEAR_SERVER = {
+      server_id: "seed:linear",
+      name: "linear",
+      display_name: "Linear",
+      url: "https://mcp.linear.app/mcp",
+      transport: "http",
+      auth_mode: "oauth2",
+      auth_state: "authenticated",
+      health: "healthy",
+      enabled: true,
+      oauth_client_configured: true,
+      scopes_summary: "issues & projects",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    let serverListReads = 0;
+    // The backend only reports the connector once OAuth has actually landed.
+    let authenticated = false;
+    let completeOAuth: () => void = () => undefined;
+    const oauthRoundTrip = new Promise<void>((resolve) => {
+      completeOAuth = resolve;
+    });
+
+    stubWindowBridge(
+      makeBridge({
+        [CHANNELS.transportRequest]: async (payload) => {
+          const path = (payload as { path?: string }).path;
+          if (path === "/v1/mcp/servers") {
+            serverListReads += 1;
+            return { servers: authenticated ? [LINEAR_SERVER] : [] };
+          }
+          if (path === "/v1/mcp/catalog") {
+            return {
+              entries: [
+                {
+                  slug: "linear",
+                  display_name: "Linear",
+                  url: "https://mcp.linear.app/mcp",
+                  transport: "http",
+                  auth_mode: "oauth2",
+                  description: "issues & projects",
+                  requires_pre_registered_client: false,
+                  verified: true,
+                },
+              ],
+            };
+          }
+          return {}; // provider-keys / local-models probes
+        },
+        // Mirrors `ConnectorService.authorize` → `connectMcpServer`: it does not
+        // resolve when the system browser opens, only when the callback POST
+        // has completed.
+        [CONNECTOR_CHANNELS.authorize]: async () => {
+          await oauthRoundTrip;
+          authenticated = true;
+          return {
+            server_id: "seed:linear",
+            connector_slug: "linear",
+            auth_state: null,
+          };
+        },
+      }),
+    );
+
+    render(
+      <FirstRunSurfaceMount
+        workspaceId="org_acme"
+        onComplete={vi.fn()}
+        initialStage="ready"
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+
+    // Handing the system browser the URL is not completion — nothing has moved
+    // server-side yet, so the panel must not have re-read anything.
+    expect(serverListReads).toBe(1);
+
+    completeOAuth();
+
+    await waitFor(() => expect(serverListReads).toBe(2));
+    const row = await screen.findByTestId(
+      "first-run-tools-connected-seed:linear",
+    );
+    // A connected connector is live by default, so it lands already ON.
+    expect(row.getAttribute("aria-checked")).toBe("true");
+    // And it is gone from the installable section — no stale "Connect".
+    expect(screen.queryByTestId("first-run-tools-connect-linear")).toBeNull();
   });
 
   it("flips to the acknowledgment on send (create → onSent → ack)", async () => {

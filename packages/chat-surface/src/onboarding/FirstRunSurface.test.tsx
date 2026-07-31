@@ -16,7 +16,11 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { McpServer, ProviderKeySummary } from "@0x-copilot/api-types";
+import type {
+  McpCatalogEntry,
+  McpServer,
+  ProviderKeySummary,
+} from "@0x-copilot/api-types";
 
 import { FIRST_RUN_ACK_TITLES } from "./Acknowledgment";
 import { FirstRunSurface, type FirstRunSurfaceProps } from "./FirstRunSurface";
@@ -353,6 +357,90 @@ describe("<FirstRunSurface>", () => {
     fireEvent.click(screen.getByTestId("first-run-tools-button"));
     expect(screen.getByTestId("composer-tools-popover")).not.toBeNull();
     expect(screen.getByTestId("first-run-tools-websearch")).not.toBeNull();
+  });
+
+  // The reported bug, at the seam that actually broke it. The desktop FTUE
+  // overrides `onConnectCatalog` (main brokers OAuth in the system browser),
+  // and the override used to `return` before the surface's refetch. So the
+  // OAuth completed, the backend recorded `auth_state: authenticated`, and the
+  // popover kept rendering the list it read BEFORE the connector existed —
+  // "Connect" forever, until the app restarted.
+  //
+  // The assertion is deliberately "the list was re-read", not "the host was
+  // called": the host call already happened before the fix, which is exactly
+  // what made this look healthy.
+  it("re-reads the connector list after a host connect completes (P4)", async () => {
+    const linear: McpServer = {
+      ...connectedServer(),
+      server_id: "seed:linear",
+      name: "linear",
+      display_name: "Linear",
+      url: "https://mcp.linear.app/mcp",
+    };
+    const linearEntry: McpCatalogEntry = {
+      slug: "linear",
+      display_name: "Linear",
+      url: "https://mcp.linear.app/mcp",
+      transport: "http",
+      auth_mode: "oauth2",
+      description: "issues & projects",
+      requires_pre_registered_client: false,
+      verified: true,
+    };
+    // Before the connect the workspace has no servers; after it, Linear is
+    // authenticated — the same move the real backend makes.
+    const listServers = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([linear]);
+    // The host resolves only when the OAuth round-trip is done, which is the
+    // contract `connector.authorize` honours on desktop.
+    let completeOAuth: () => void = () => undefined;
+    const onConnectCatalog = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          completeOAuth = resolve;
+        }),
+    );
+
+    render(
+      <FirstRunSurface
+        providerKeys={fakePort()}
+        onSkip={() => undefined}
+        onComplete={() => undefined}
+        initialStage="ready"
+        connectorsPort={fakeConnectorsPort({
+          listServers,
+          listCatalog: vi.fn().mockResolvedValue([linearEntry]),
+        })}
+        onConnectCatalog={onConnectCatalog}
+        renderComposer={(ctx) => (
+          <div data-testid="p3-composer">{ctx.toolsTrigger}</div>
+        )}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(
+      await screen.findByTestId("first-run-tools-connect-linear"),
+    );
+    expect(onConnectCatalog).toHaveBeenCalledTimes(1);
+
+    // Handing the browser the URL is not completion: nothing has moved yet.
+    expect(listServers).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("first-run-tools-connected-seed:linear")).toBe(
+      null,
+    );
+
+    completeOAuth();
+
+    // The list is re-read, and the row lands already ON — a connected connector
+    // is live by default.
+    await waitFor(() => expect(listServers).toHaveBeenCalledTimes(2));
+    const row = await screen.findByTestId(
+      "first-run-tools-connected-seed:linear",
+    );
+    expect(row.getAttribute("aria-checked")).toBe("true");
   });
 
   it("footer-right is engine-keyed: key engine → keychain line, else → 'nothing leaves this machine' (P4)", async () => {

@@ -1,29 +1,25 @@
-// useDesktopComposerTools — per-run Tools pill state for desktop composers.
+// useDesktopComposerTools — the DESKTOP half of the composer's Tools pill.
 //
-// The pill is intentionally independent of the `+` attachment menu. Its shared
-// trigger uses a body portal, so the 300px controls panel remains clickable
-// above the overflow-hidden desktop composer frame.
+// Everything general moved to `useConnectorTools` in chat-surface: web-search,
+// the paused-connector set, the reload token, and the connect lifecycle. This
+// file is now only what is genuinely desktop — how a connect is performed —
+// because Electron main brokers OAuth in the system browser and the renderer is
+// denied `window.open` entirely. No token crosses IPC.
 //
-// State is the set of connectors the user PAUSED for this run — not the set they
-// activated. A connected connector is live by default, which is what Settings →
-// Tools already claims and what the runtime already does, and it means a
-// connector that just finished OAuth shows up on rather than silently off. The
-// paused ids ride the run body as `request_context.paused_connectors`, the field
-// the MCP gate actually reads; `connector_scopes` is left alone so the
-// conversation's persisted per-chat scope keeps applying.
+// It used to be a near-copy of the FTUE's machine and of the web composer's.
+// Three copies is how the FTUE shipped without the refetch this file already
+// had, so the machine is shared now and only the verb is bound per host.
+//
+// The pill stays independent of the `+` attachment menu; its shared trigger
+// portals through the body so the controls panel is clickable above the
+// overflow-hidden composer frame.
+
+import { useMemo } from "react";
 
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-
-import {
-  ComposerToolsTrigger,
+  useConnectorTools,
   type ComposerConnectorsPort,
-  type FirstRunInstallableConnector,
+  type ConnectorToolsHostPort,
 } from "@0x-copilot/chat-surface";
 
 import { CONNECTOR_CHANNELS } from "../../main/connectors/channels";
@@ -40,16 +36,16 @@ export interface UseDesktopComposerToolsOptions {
    */
   readonly onConnectError?: (displayName: string, message: string) => void;
   /**
-   * Connector whose OAuth flow just completed. Connected connectors are live by
-   * default, so this only needs to clear a stale pause on that id and refresh
-   * the list — there is no activation to seed.
+   * Connector whose OAuth flow just completed elsewhere (the in-chat consent
+   * card). Connected connectors are live by default, so this only clears a
+   * stale pause on that id and refreshes the list.
    */
   readonly autoActivateConnectorId?: string | null;
 }
 
 export interface DesktopComposerTools {
   /** Tools pill + portal-safe popover, omitted when the adapter is unavailable. */
-  readonly toolsTrigger: ReactNode | undefined;
+  readonly toolsTrigger: ReturnType<typeof useConnectorTools>["toolsTrigger"];
   readonly webSearchEnabled: boolean;
   /** Ids the user paused for this run → `request_context.paused_connectors`. */
   readonly pausedConnectorIds: readonly string[];
@@ -65,126 +61,51 @@ export function useDesktopComposerTools(
     onConnectError,
     autoActivateConnectorId = null,
   } = options;
-  const [webOn, setWebOn] = useState(true);
-  const [pausedConnectorIds, setPausedConnectorIds] = useState<
-    readonly string[]
-  >([]);
-  // Bumped whenever durable connector state moves under us, so the pill's badge
-  // and the open panel both refetch instead of showing a pre-connect world.
-  const [reloadToken, setReloadToken] = useState(0);
 
-  // A connector that just authorized must not stay paused from earlier in the
-  // session, and the list has to be re-read for it to appear at all. Derived
-  // during render rather than in an effect: an effect would paint one frame of
-  // the stale answer, which is the exact flicker this fix is about.
-  const effectivePausedIds = useMemo<readonly string[]>(
-    () =>
-      autoActivateConnectorId === null
-        ? pausedConnectorIds
-        : pausedConnectorIds.filter((id) => id !== autoActivateConnectorId),
-    [autoActivateConnectorId, pausedConnectorIds],
-  );
-
-  const handleToggleConnector = useCallback(
-    (serverId: string, active: boolean): void => {
-      setPausedConnectorIds((current) =>
-        active
-          ? current.filter((id) => id !== serverId)
-          : current.includes(serverId)
-            ? current
-            : [...current, serverId],
-      );
-    },
-    [],
-  );
-
-  // Electron MAIN brokers OAuth in the system browser. No token crosses IPC.
-  //
   // The popover lists `mcp_catalog` seeds, so a catalog row is installed as an
   // MCP SERVER first — that mint is what gives the connector a `server_id` to
   // authorize by. Both identities then go to `connector.authorize`, which picks
-  // the route: a seed has no `desktop_profiles.yaml` entry and authorizes over
-  // MCP OAuth, which is what this button needed to do all along for Linear and
-  // Notion.
+  // the topology: a seed has no `desktop_profiles.yaml` entry and authorizes
+  // over MCP OAuth, which is what this button needed to do all along for Linear
+  // and Notion.
   //
-  // Failures are reported. The original `.catch(() => {})` swallowed them, so a
-  // 404 presented as a button that did not respond, with no error anywhere and
-  // no request in the HTTP logs.
-  const handleConnectCatalog = useCallback(
-    (entry: FirstRunInstallableConnector): void => {
-      if (entry.requiresPreRegisteredClient) {
-        onAddCustom?.();
-        return;
-      }
-      const win = window as unknown as { bridge?: Window["bridge"] };
-      if (win.bridge === undefined || connectorsPort === undefined) return;
-      const bridge = win.bridge;
-      void (async () => {
-        try {
-          const server = await connectorsPort.installFromCatalog(entry.slug);
-          await bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
-            slug: entry.slug,
-            serverId: server.server_id,
-          });
-          // `connector.authorize` resolves only once the OAuth round-trip
-          // finishes (see `ConnectorService.authorize`), so this is the
-          // completion signal: refetch, and the row moves from "Add a
-          // connector" to "Connected" — already on — in place. A pause left
-          // over from an earlier turn would otherwise silently apply to a
-          // connector the user just chose to connect.
-          setPausedConnectorIds((current) =>
-            current.includes(server.server_id)
-              ? current.filter((id) => id !== server.server_id)
-              : current,
-          );
-          setReloadToken((n) => n + 1);
-        } catch (error: unknown) {
-          onConnectError?.(
-            entry.displayName,
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-      })();
-    },
-    [connectorsPort, onAddCustom, onConnectError],
+  // `connector.authorize` resolves only once the OAuth round-trip finishes (see
+  // `ConnectorService.authorize`), which is exactly the completion contract
+  // `ConnectorToolsHostPort.connect` requires — so the shared hook's refetch
+  // lands at the right moment without this file tracking anything itself.
+  const host = useMemo<ConnectorToolsHostPort>(
+    () => ({
+      async connect(entry) {
+        const win = window as unknown as { bridge?: Window["bridge"] };
+        if (win.bridge === undefined || connectorsPort === undefined) return;
+        const server = await connectorsPort.installFromCatalog(entry.slug);
+        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+          slug: entry.slug,
+          serverId: server.server_id,
+        });
+        return { serverId: server.server_id };
+      },
+      // Reaches MAIN, which closes the armed loopback so the `authorize` above
+      // rejects. A renderer-only reset would leave the provider's tab live and
+      // the flow running for its full timeout.
+      async cancel() {
+        const win = window as unknown as { bridge?: Window["bridge"] };
+        if (win.bridge === undefined) return;
+        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.cancelAuthorize, {});
+      },
+    }),
+    [connectorsPort],
   );
 
-  // A host-observed completion (the consent card's OAuth return) is the other
-  // way the list moves; refetch on it too.
-  useEffect(() => {
-    if (autoActivateConnectorId === null) return;
-    setReloadToken((n) => n + 1);
-  }, [autoActivateConnectorId]);
+  const { toolsTrigger, webSearchEnabled, pausedConnectorIds } =
+    useConnectorTools({
+      port: connectorsPort,
+      host,
+      autoActivateConnectorId,
+      onAddCustom,
+      onConnectError,
+      disabled,
+    });
 
-  const toolsTrigger = useMemo<ReactNode | undefined>(() => {
-    if (connectorsPort === undefined) return undefined;
-    return (
-      <ComposerToolsTrigger
-        port={connectorsPort}
-        reloadToken={reloadToken}
-        webSearchEnabled={webOn}
-        onToggleWebSearch={setWebOn}
-        pausedConnectorIds={effectivePausedIds}
-        onToggleConnector={handleToggleConnector}
-        onConnectCatalog={handleConnectCatalog}
-        onAddCustom={() => onAddCustom?.()}
-        disabled={disabled}
-      />
-    );
-  }, [
-    connectorsPort,
-    reloadToken,
-    webOn,
-    effectivePausedIds,
-    handleToggleConnector,
-    handleConnectCatalog,
-    onAddCustom,
-    disabled,
-  ]);
-
-  return {
-    toolsTrigger,
-    webSearchEnabled: webOn,
-    pausedConnectorIds: effectivePausedIds,
-  };
+  return { toolsTrigger, webSearchEnabled, pausedConnectorIds };
 }
