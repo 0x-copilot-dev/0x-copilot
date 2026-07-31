@@ -133,6 +133,15 @@ export type {
   ConnectorPopoverLoadState,
 } from "./useConnectorPopoverData";
 export type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
+export { useConnectorTools } from "./useConnectorTools";
+export type {
+  ConnectorTools,
+  UseConnectorToolsOptions,
+} from "./useConnectorTools";
+export type {
+  ConnectorToolsHostPort,
+  ConnectorConnectOutcome,
+} from "./ports/ConnectorToolsHostPort";
 // === end First-Run onboarding (P4 — tools popover) ===
 // === First-Run onboarding (P4 — wallet chip) ===
 export { WalletChip, truncateAddress } from "./WalletChip";

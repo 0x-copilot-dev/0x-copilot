@@ -2017,7 +2017,14 @@ export {
 // the pill badge and the rows count one projection; `projectFirstRunConnectors`
 // classifies it (a chat-surface copy of the web app's `projectChatConnectors`,
 // since `apps/*` can't be imported) and drops `access_mode: "off"` servers the
-// runtime would never see. Hosts bump `reloadToken` when a connect completes.
+// runtime would never see.
+//
+// `useConnectorTools` is the SSOT state machine behind the pill — web-search,
+// paused ids, the reload token and the connect lifecycle. Both Run composers and
+// the FTUE mount it and bind only `ConnectorToolsHostPort.connect`, whose one
+// hard rule is that it resolves when the round-trip COMPLETED (not when the
+// browser opened). This replaced three hand-maintained copies of the same
+// machine, whose drift is why the FTUE shipped with no refetch-on-connect.
 // Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
 export {
   ToolsPopover,
@@ -2030,6 +2037,11 @@ export {
   firstRunActiveToolCount,
   isFirstRunConnectorActive,
   useConnectorPopoverData,
+  useConnectorTools,
+  type ConnectorTools,
+  type UseConnectorToolsOptions,
+  type ConnectorToolsHostPort,
+  type ConnectorConnectOutcome,
   type ToolsPopoverProps,
   type ToolsPopoverContentProps,
   type ComposerToolsButtonProps,

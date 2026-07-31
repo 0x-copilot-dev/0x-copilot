@@ -60,7 +60,8 @@ import {
   type FirstRunKeyProvider,
   type FirstRunStage,
 } from "./firstRun";
-import { ComposerToolsTrigger } from "./ComposerToolsTrigger";
+import { useConnectorTools } from "./useConnectorTools";
+import type { ConnectorToolsHostPort } from "./ports/ConnectorToolsHostPort";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import type { FirstRunProfilePort } from "./ports/FirstRunProfilePort";
 import type { FirstRunInstallableConnector } from "./projectFirstRunConnectors";
@@ -328,81 +329,45 @@ export function FirstRunSurface({
   const [stage, setStage] = useState<FirstRunStage>(initialStage);
   const [engine, setEngine] = useState<FirstRunEngine>(null);
   const [sent, setSent] = useState(false);
-  // P4 — per-run Tools state owned by the surface (SPEC `webOn`, default true;
-  // `conn[]` held as PAUSED connector ids since the FTUE has no conversation to
-  // PATCH at toggle time). Both default to on: a connected connector is one the
-  // runtime can already call, so the toggle is the opt-out, not the opt-in.
-  const [webOn, setWebOn] = useState(true);
-  const [pausedConnectorIds, setPausedConnectorIds] = useState<
-    readonly string[]
-  >([]);
-  // Bumped after a 1-click connect so the row moves from "Add a connector" to
-  // "Connected" — already on — without reopening the popover.
-  const [reloadToken, setReloadToken] = useState(0);
-
-  const handleToggleConnector = useCallback(
-    (serverId: string, active: boolean): void => {
-      setPausedConnectorIds((prev) =>
-        active
-          ? prev.filter((id) => id !== serverId)
-          : prev.includes(serverId)
-            ? prev
-            : [...prev, serverId],
-      );
-    },
-    [],
-  );
-
-  // Default 1-click connect: mirror `ChatScreen.onMcpInstallCatalog` over the
-  // injected port (install → begin OAuth). A pre-registered vendor routes to
-  // `onAddCustom` — Manage MCP — because a keyless install 422s. Hosts may
-  // override both via `onConnectCatalog` / `onAddCustom` (desktop opens the
-  // system browser).
-  const handleConnectCatalog = useCallback(
-    (entry: FirstRunInstallableConnector): void => {
-      if (onConnectCatalog) {
-        // The host owns the connect, but the surface owns the DATA — so the
-        // refetch has to hang off the host's completion or nothing closes the
-        // loop. This override used to `return` here, which skipped the
-        // `setReloadToken` below: on desktop the OAuth completed, the backend
-        // recorded `auth_state: authenticated`, and the popover kept rendering
-        // the list it had fetched before the connect existed, until an app
-        // restart. Awaiting the host's promise is what connects the two.
-        const settled = onConnectCatalog(entry);
-        if (settled !== undefined) {
-          void Promise.resolve(settled)
-            .then(() => setReloadToken((n) => n + 1))
-            .catch(() => {
-              // Same swallow as the default path below: a failed connect
-              // surfaces at run time via the `mcp_auth_required` card, and the
-              // list has not moved, so there is nothing to refetch.
-            });
+  // P4 — per-run Tools state. The FTUE holds `conn[]` as PAUSED ids because it
+  // has no conversation to PATCH at toggle time, and both knobs default ON: a
+  // connected connector is one the runtime can already call, so the toggle is
+  // the opt-out, not the opt-in.
+  //
+  // The machine itself lives in `useConnectorTools` — shared with both Run
+  // composers. It used to be re-implemented here, which is precisely how the
+  // FTUE ended up missing the refetch-on-connect the desktop composer had.
+  //
+  // The host's connect verb is adapted, not re-specified: `onConnectCatalog`
+  // stays the public prop (hosts already bind it), and the default is the
+  // port-driven install → `beginAuth` for a host that supplies no override.
+  const connectHost = useMemo<ConnectorToolsHostPort>(
+    () => ({
+      async connect(entry) {
+        if (onConnectCatalog) {
+          // `void` from a host means "I cannot report completion" — correct for
+          // a full-page redirect, where the remount does the refresh.
+          await onConnectCatalog(entry);
+          return;
         }
-        return;
-      }
-      if (!connectorsPort) {
-        return;
-      }
-      if (entry.requiresPreRegisteredClient) {
-        onAddCustom?.();
-        return;
-      }
-      void connectorsPort
-        .installFromCatalog(entry.slug)
-        .then((server) => connectorsPort.beginAuth(server.server_id))
-        .then(() => setReloadToken((n) => n + 1))
-        .catch(() => {
-          // The popover's "connect" is workspace-authorize only; a failed
-          // install surfaces later via the run-time `mcp_auth_required` card,
-          // so a swallow here keeps the FTUE composer unblocked.
-        });
-    },
-    [onConnectCatalog, onAddCustom, connectorsPort],
+        if (!connectorsPort) return;
+        const server = await connectorsPort.installFromCatalog(entry.slug);
+        await connectorsPort.beginAuth(server.server_id);
+        return { serverId: server.server_id };
+      },
+    }),
+    [onConnectCatalog, connectorsPort],
   );
 
-  const handleAddCustom = useCallback((): void => {
-    onAddCustom?.();
-  }, [onAddCustom]);
+  const {
+    toolsTrigger,
+    webSearchEnabled: webOn,
+    pausedConnectorIds,
+  } = useConnectorTools({
+    port: connectorsPort,
+    host: connectHost,
+    onAddCustom,
+  });
 
   // Paused connector ids → the run's `request_context.paused_connectors`, the
   // one field the runtime's MCP gate reads for a per-run opt-out. Omitted
@@ -412,32 +377,6 @@ export function FirstRunSurface({
     () => (pausedConnectorIds.length === 0 ? undefined : pausedConnectorIds),
     [pausedConnectorIds],
   );
-
-  const toolsTrigger = useMemo<ReactNode | undefined>(() => {
-    if (connectorsPort === undefined) {
-      return undefined;
-    }
-    return (
-      <ComposerToolsTrigger
-        port={connectorsPort}
-        reloadToken={reloadToken}
-        webSearchEnabled={webOn}
-        onToggleWebSearch={setWebOn}
-        pausedConnectorIds={pausedConnectorIds}
-        onToggleConnector={handleToggleConnector}
-        onConnectCatalog={handleConnectCatalog}
-        onAddCustom={handleAddCustom}
-      />
-    );
-  }, [
-    connectorsPort,
-    reloadToken,
-    webOn,
-    pausedConnectorIds,
-    handleToggleConnector,
-    handleConnectCatalog,
-    handleAddCustom,
-  ]);
 
   // A local engine is usable once the pull reaches 100% — or immediately when
   // the preset was already installed (P8 §6's short-circuit issues no pull, so
