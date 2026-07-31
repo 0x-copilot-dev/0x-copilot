@@ -38,6 +38,16 @@ makes a future wiring mistake fail closed instead of silently succeeding. A run
 with zero grants still gets rules 1, 3 and 4 — so "you have granted nothing" is
 answered by a consent request, never by an empty listing.
 
+The one thing these patterns CANNOT say
+---------------------------------------
+deepagents matches with `wcmatch` under `BRACE | GLOBSTAR` and no `DOTGLOB`, so
+`*`/`**` never match a segment beginning with a dot: `/**` does not match
+`~/.ssh/id_rsa`, and unmatched means allow. No pattern fixes it (a literal dot
+covers one level; nothing covers `/a/.b/.c`), so the catch-all rules are total
+over VISIBLE absolute paths only. The residue is closed one layer down, by
+`host_floor.HostFilesystemFloor`, which is composed around the real filesystem
+backend by `factory._host_default_backend`.
+
 Scratch memory
 --------------
 Because rule 4 exists, the agent needs a real place to keep working files.
@@ -56,6 +66,15 @@ from typing import Final
 #: by `CompositeBackend` to real backends (memory, drafts, subagent artifacts),
 #: so they must be allowed BEFORE the catch-all interrupt rule or every ordinary
 #: memory read would prompt the user.
+#:
+#: Membership is not decorative — every entry here is an unconditional read AND
+#: write allow, so a prefix that is NOT actually routed away is a hole straight
+#: through to the host. `/tmp/` was exactly that: it is not a `CompositeBackend`
+#: route and `HostPathClassifier` classifies it as a HOST path, so rule 1 was
+#: granting blanket read+write over the machine's real `/tmp` — the only
+#: unqualified host-write allow in a rule set whose whole point is that host
+#: writes go through the staged, ledgered lane. Keep this list to prefixes the
+#: composite genuinely owns.
 VIRTUAL_NAMESPACES: Final[tuple[str, ...]] = (
     "/memories/",
     "/policies/",
@@ -64,7 +83,6 @@ VIRTUAL_NAMESPACES: Final[tuple[str, ...]] = (
     "/subagents/",
     "/large_tool_results/",
     "/workspace/",
-    "/tmp/",
 )
 
 #: The agent's durable scratch directory inside a granted root.
@@ -193,10 +211,13 @@ class HostFilesystemRules:
         #    typed workspace operation adapter; this rule set only ever widens
         #    READS.
         #
-        #    Together, rules 4 and 5 are total over absolute paths, so nothing
-        #    is left to deepagents' unmatched-means-allow default. No separate
-        #    terminal rule is possible anyway: deepagents rejects a rule path
-        #    that does not start with "/", so a bare `**` raises.
+        #    Together, rules 4 and 5 are total over every absolute path the
+        #    MATCHER CAN SEE, so nothing visible is left to deepagents'
+        #    unmatched-means-allow default. Hidden paths are not visible to it
+        #    (no `DOTGLOB`), and no pattern makes them so; `HostFilesystemFloor`
+        #    supplies those two verdicts instead. No separate terminal rule is
+        #    possible here anyway: deepagents rejects a rule path that does not
+        #    start with "/", so a bare `**` raises.
         rules.append(
             {
                 "operations": [_WRITE],

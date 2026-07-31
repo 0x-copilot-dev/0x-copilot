@@ -22,6 +22,7 @@ import {
 } from "../services/local-service-identity";
 import {
   toBrokerGrant,
+  toHostSessionGrant,
   type Grant,
   type GrantMode,
   type GrantProvider,
@@ -608,7 +609,10 @@ export class CapabilityBroker {
       const grantIds = new Set(host.grantIds);
       const grants = (await this.#grants.listAll())
         .filter((grant) => grantIds.has(grant.grantId))
-        .map((grant) => toBrokerGrant(grant, this.#mountId(grant.root)));
+        // NOT `toBrokerGrant`: this private C2 bootstrap is asserted path-free
+        // field-by-field on the other side, and a `root` here fails the whole
+        // session closed. See `HostSessionGrant`.
+        .map((grant) => toHostSessionGrant(grant, this.#mountId(grant.root)));
       respondJson(res, 201, {
         host_session_ref: hostSessionRef,
         expires_at: host.expiresAt,

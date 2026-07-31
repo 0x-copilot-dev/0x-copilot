@@ -220,6 +220,32 @@ describe("CapabilityBroker", () => {
     expect(g.mount).toMatch(/^mnt_/u);
   });
 
+  it("a grant that authorizes nothing hands out no host root", async () => {
+    // `/v1/grants/list` returns EVERY row on record, revoked ones included, and
+    // since the root reversal that projection carries the host path. A revoked
+    // (or expired — the store reports those revoked too) grant authorizes
+    // nothing, so its root buys the worker nothing and would name a folder the
+    // user has explicitly detached. Absent is exactly what an older broker sent:
+    // no allow rule, so that folder keeps asking.
+    grants.grants = [
+      makeGrant({ grantId: "live", root: "/data/live", status: "active" }),
+      makeGrant({ grantId: "gone", root: "/data/gone", status: "revoked" }),
+    ];
+
+    const res = await fetch(`${baseUrl}/v1/grants/list`, {
+      method: "POST",
+      headers: H(),
+      body: "{}",
+    });
+    const text = await res.text();
+    const body = JSON.parse(text) as { grants: Array<Record<string, unknown>> };
+
+    expect(body.grants.map((g) => g.grantId)).toEqual(["live", "gone"]);
+    expect(body.grants[0].root).toBe("/data/live");
+    expect(body.grants[1]).not.toHaveProperty("root");
+    expect(text).not.toContain("/data/gone");
+  });
+
   it("snapshots only active grants, path-free with a stable mount id", async () => {
     grants.grants = [
       makeGrant({ grantId: "a", status: "active" }),

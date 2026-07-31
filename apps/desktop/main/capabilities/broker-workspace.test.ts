@@ -436,18 +436,14 @@ async function bootstrapHostSession(
     "grants",
     "host_session_ref",
   ]);
-  // NARROWED, not loosened. This single regex guarded four distinct leak
-  // classes; only the grant's own `root` is now permitted, and it is permitted
-  // only because the worker performs the read and must be able to allow-list an
-  // attached folder (see `BrokeredGrant` in capabilities/types.ts). The C2
-  // capability tokens and prepared-effect refs must STILL never appear, so they
-  // keep their own assertion rather than riding along in a relaxed one.
+  // RE-TIGHTENED to the whole envelope, grants included. The root reversal is
+  // for the audience that performs the READ (`/v1/grants/*`); this is C2's
+  // private WRITE bootstrap, and the consumer asserts field-by-field that no
+  // root or path appears here — `broker_client._assert_host_session_wire_is_private`
+  // fails the entire session closed when one does. Relaxing this assertion to
+  // admit `root` did not widen a contract, it broke the channel.
   const serialized = JSON.stringify(body);
-  expect(serialized).not.toMatch(/wcp_|permit|prepared/u);
-  // `root` may appear ONLY as a grant field — never as a bare path elsewhere in
-  // the envelope, which is what the original `path` term was protecting.
-  const withoutGrants = JSON.stringify({ ...body, grants: undefined });
-  expect(withoutGrants).not.toMatch(/root|path/u);
+  expect(serialized).not.toMatch(/wcp_|permit|prepared|root|path/u);
   expect(typeof body.host_session_ref).toBe("string");
   return body.host_session_ref as string;
 }

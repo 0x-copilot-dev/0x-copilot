@@ -101,6 +101,8 @@ export class GrantStore implements GrantProvider {
 
   #grants: Map<string, Grant> = new Map();
   #loaded = false;
+  /** The single in-flight cold load; see `#ensureLoaded`. */
+  #loading: Promise<void> | null = null;
   #plaintextWarned = false;
 
   constructor(config: GrantStoreConfig) {
@@ -154,29 +156,69 @@ export class GrantStore implements GrantProvider {
       allowedPathPrefixes: normalizePrefixes(input.allowedPathPrefixes),
       expiresAt: input.expiresAt ?? now + this.#grantTtlMs,
     };
+    this.#supersedeSameRoot(input.root, now);
     this.#grants.set(grant.grantId, grant);
     await this.#persist();
     return grant;
   }
 
+  /**
+   * ONE FOLDER, ONE AUTHORITY. Re-picking a folder that is already attached
+   * retires the previous grant instead of adding a second one for the same
+   * tree.
+   *
+   * Accumulating them broke the only promise this subsystem exists to keep.
+   * Two live grants over one root are indistinguishable to every surface that
+   * shows them (same label, and the renderer projection deliberately carries no
+   * path), so the user sees two identical pills — and dismissing either one
+   * revokes a grant while the folder stays fully readable through the other. A
+   * dismissed pill that does not remove access is exactly the class of lie the
+   * grant model is here to eliminate. It also made the effective mode of a tree
+   * "whichever grant the caller happens to name" rather than the user's latest
+   * choice.
+   *
+   * Superseding rather than mutating in place keeps the trail auditable (the
+   * old grant is retired at a known time, the new one is issued with the new
+   * mode) and leaves any run that PINNED the old grant untouched — run contexts
+   * hold their own frozen copies.
+   */
+  #supersedeSameRoot(root: string, now: number): void {
+    for (const existing of this.#grants.values()) {
+      if (existing.root !== root || !isLive(existing, now)) continue;
+      this.#grants.set(existing.grantId, {
+        ...existing,
+        status: "revoked",
+        updatedAt: now,
+      });
+    }
+  }
+
+  /**
+   * Every grant on record, projected AS OF NOW: a grant past its expiry is
+   * reported `revoked`, because that is what it is for every authority check
+   * (see `Grant.expiresAt`). Reporting the stored literal instead left an
+   * expired grant looking active in the renderer's folder list and on
+   * `/v1/grants/list` while `snapshotActive` — the projection every read is
+   * actually authorized against — had already dropped it. The user saw a pill
+   * for a folder that answered `grant_required`, with nothing to explain it.
+   * `expiresAt` still rides along, so an auditor can tell expiry from revoke.
+   */
   async list(): Promise<readonly Grant[]> {
     await this.#ensureLoaded();
-    return [...this.#grants.values()];
+    const now = this.#clock();
+    return [...this.#grants.values()].map((g) => asOf(g, now));
   }
 
   async listActive(): Promise<readonly Grant[]> {
     await this.#ensureLoaded();
     const now = this.#clock();
-    return [...this.#grants.values()].filter(
-      (g) =>
-        g.status === "active" &&
-        (g.expiresAt === undefined || g.expiresAt > now),
-    );
+    return [...this.#grants.values()].filter((g) => isLive(g, now));
   }
 
   async get(grantId: string): Promise<Grant | null> {
     await this.#ensureLoaded();
-    return this.#grants.get(grantId) ?? null;
+    const grant = this.#grants.get(grantId);
+    return grant === undefined ? null : asOf(grant, this.#clock());
   }
 
   /**
@@ -230,8 +272,32 @@ export class GrantStore implements GrantProvider {
 
   // --- persistence ---
 
+  /**
+   * Load the grant file at most once, and at most once CONCURRENTLY.
+   *
+   * The read is awaited, so without memoization two callers that both arrive
+   * cold each start their own read and each assign `#grants` when it settles.
+   * If the slower read settles after the faster caller has already created and
+   * persisted a grant, the stale decode REPLACES the map and the next
+   * `#persist()` writes the clobbered set to disk: the folder the user just
+   * attached vanishes, after the UI has already been handed the grant. The same
+   * interleaving can resurrect a revoked grant in memory.
+   *
+   * Sharing one in-flight promise makes the assignment happen exactly once,
+   * before any caller proceeds, so no caller can mutate the map ahead of it. A
+   * failed read is not cached — the next call retries rather than inheriting a
+   * rejection forever.
+   */
   async #ensureLoaded(): Promise<void> {
     if (this.#loaded) return;
+    this.#loading ??= this.#load().catch((error: unknown) => {
+      this.#loading = null;
+      throw error;
+    });
+    await this.#loading;
+  }
+
+  async #load(): Promise<void> {
     let raw: Buffer;
     try {
       raw = await readFile(this.#path);
@@ -326,6 +392,20 @@ export class GrantStore implements GrantProvider {
     const parsed = JSON.parse(plaintext) as unknown;
     return normalizeGrants(parsed);
   }
+}
+
+/** Whether `grant` is authority at `now` — the ONE definition of "live". */
+function isLive(grant: Grant, now: number): boolean {
+  return (
+    grant.status === "active" &&
+    (grant.expiresAt === undefined || grant.expiresAt > now)
+  );
+}
+
+/** `grant` as it stands at `now`: past its expiry it reports as revoked. */
+function asOf(grant: Grant, now: number): Grant {
+  if (grant.status !== "active" || isLive(grant, now)) return grant;
+  return { ...grant, status: "revoked" };
 }
 
 function normalizeGrants(parsed: unknown): readonly Grant[] {

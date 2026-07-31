@@ -445,6 +445,86 @@ class TestWorkspaceMountTable:
         assert WorkspaceMountTable.from_broker_grants([]) == ()
 
 
+class TestOneBadRootDoesNotDropTheOtherGrants:
+    """A malformed ``root`` degrades ITS OWN grant, never the whole table.
+
+    ``root`` arrives over a process boundary, and ``WorkspaceMount`` rejects
+    anything that is not host-absolute. That rejection used to escape
+    ``from_broker_grants``, which is called OUTSIDE the ``except BrokerError``
+    in ``WorkspaceBackendWorkerWiring.workspace_backend`` — so one bad root
+    raised mid-run and every other folder the user had attached went with it.
+    """
+
+    @staticmethod
+    def _grant(grant_id: str, *, label: str, root: str | None) -> BrokerGrant:
+        return BrokerGrant(
+            grantId=grant_id,
+            mode="read_only",
+            label=label,
+            status="active",
+            mount=f"mnt_{grant_id}",
+            root=root,
+        )
+
+    @pytest.mark.parametrize(
+        "bad_root",
+        ["relative/path", "~/Documents", "/Users/ada/../etc", "/workspace/x"],
+    )
+    def test_the_good_grants_survive_a_bad_neighbour(self, bad_root: str) -> None:
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [
+                self._grant("g1", label="Projects", root="/Users/ada/Projects"),
+                self._grant("g2", label="Broken", root=bad_root),
+                self._grant("g3", label="Notes", root="/Users/ada/Notes"),
+            ]
+        )
+
+        assert [m.name for m in mounts] == ["projects", "broken", "notes"]
+        assert [m.host_root for m in mounts] == [
+            "/Users/ada/Projects",
+            None,  # dropped field, kept mount: this folder keeps ASKING
+            "/Users/ada/Notes",
+        ]
+
+    def test_the_bad_grant_is_never_widened_only_narrowed(self) -> None:
+        """The degraded mount must not reach the rules as an ``allow`` root."""
+
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [
+                self._grant("g1", label="Projects", root="/Users/ada/Projects"),
+                self._grant("g2", label="Broken", root="relative/path"),
+            ]
+        )
+
+        roots = WorkspaceMountTable.granted_roots(mounts)
+        assert [r.path for r in roots] == ["/Users/ada/Projects"]  # type: ignore[attr-defined]
+
+    def test_the_degraded_mount_still_serves_broker_reads(self) -> None:
+        """Losing the root must not lose the GRANT: ops key off ``grant_id``."""
+
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [self._grant("g2", label="Broken", root="relative/path")]
+        )
+        assert [m.grant_id for m in mounts] == ["g2"]
+
+    def test_a_windows_root_mounts_but_never_becomes_a_posix_allow_rule(self) -> None:
+        """Windows grants keep asking — and that is the correct outcome.
+
+        A Windows root IS host-shaped, so it binds a mount and the
+        ``/workspace/<name>/...`` route serves it. It is dropped only at
+        ``granted_roots``, because a rule built from ``C:\\...`` would match
+        nothing — and deepagents' own ``validate_path`` rejects Windows absolute
+        paths before any rule is consulted, so there is no host-absolute lane to
+        widen in the first place.
+        """
+
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [self._grant("g1", label="Win", root="C:\\Users\\ada\\Projects")]
+        )
+        assert [m.host_root for m in mounts] == ["C:\\Users\\ada\\Projects"]
+        assert WorkspaceMountTable.granted_roots(mounts) == ()
+
+
 class HostPathMixin:
     """A ``Downloads`` grant, optionally bound to a host root and a grant gate."""
 

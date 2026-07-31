@@ -240,6 +240,8 @@ export {
 export {
   toRendererGrant,
   toBrokerGrant,
+  toHostSessionGrant,
+  type HostSessionGrant,
   type Grant,
   type GrantMode,
   type GrantProvider,

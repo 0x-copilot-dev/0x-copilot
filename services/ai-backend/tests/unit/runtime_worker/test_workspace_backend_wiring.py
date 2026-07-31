@@ -8,6 +8,8 @@ virtual backend that would answer it with an empty listing.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -171,6 +173,10 @@ class TestSilentFallthroughRegression:
         from deepagents.backends.filesystem import FilesystemBackend
         from deepagents.backends.state import StateBackend
 
+        from agent_runtime.capabilities.desktop.host_floor import (
+            HostFilesystemFloor,
+        )
+
         broker = RecordingBroker(grants={})
         consent = RecordingConsent(resume={"decision": "rejected"})
         backend = await self._workspace_backend(broker, consent)
@@ -180,8 +186,14 @@ class TestSilentFallthroughRegression:
             "a host-absolute path would fall through to agent memory, which "
             "answers it with an empty listing and a green tick"
         )
-        assert isinstance(composite.default, FilesystemBackend)
-        assert composite.default.virtual_mode is False, (
+        # The real disk now sits BEHIND the hidden-path floor (the rule set
+        # cannot see a dot segment, so `~/.ssh/id_rsa` was read- and writable
+        # with no grant and no prompt). Unwrap it and make the same assertions
+        # about the object that actually touches the disk.
+        assert isinstance(composite.default, HostFilesystemFloor)
+        real = composite.default.backend
+        assert isinstance(real, FilesystemBackend)
+        assert real.virtual_mode is False, (
             "virtual_mode=True anchors absolute paths under root_dir, so a host "
             "path would resolve somewhere else entirely rather than be read"
         )
@@ -194,11 +206,21 @@ class TestSilentFallthroughRegression:
         the permission rules are applied in the tool layer before it runs. If a
         refactor ever installs the backend without the rules, the model gets
         the user's disk, and no other test in this file would notice.
+
+        This used to bail out early when the default was not a
+        `FilesystemBackend`, which silently turned the whole assertion into a
+        no-op the moment the disk moved behind the hidden-path floor. It now
+        FAILS instead: an exposed disk with no rules is the condition this test
+        exists to catch, and "I could not find the disk" is not evidence that
+        there isn't one.
         """
 
         from deepagents.backends.filesystem import FilesystemBackend
         from deepagents.middleware.filesystem import _check_fs_permission
 
+        from agent_runtime.capabilities.desktop.host_floor import (
+            HostFilesystemFloor,
+        )
         from agent_runtime.execution.factory import _host_filesystem_permissions
 
         broker = RecordingBroker(grants={})
@@ -207,8 +229,9 @@ class TestSilentFallthroughRegression:
         composite = _composed_deep_backend(None, workspace_backend=backend)
         assert composite is not None
 
-        if not isinstance(composite.default, FilesystemBackend):
-            return  # No real disk exposed; nothing to guard.
+        default = composite.default
+        assert isinstance(default, HostFilesystemFloor)
+        assert isinstance(default.backend, FilesystemBackend)
 
         rules = list(_host_filesystem_permissions(backend))
         assert rules, "a real filesystem is exposed with NO permission rules"
@@ -216,6 +239,69 @@ class TestSilentFallthroughRegression:
         assert _check_fs_permission(rules, "read", _DOWNLOADS) == "interrupt"
         # ...and no filesystem interrupt may ever authorize a host mutation (D7).
         assert _check_fs_permission(rules, "write", f"{_DOWNLOADS}/x") == "deny"
+        # ...and the half the rules cannot express is closed by the floor, over
+        # the SAME roots the rules were built from (one source, no drift).
+        assert default.permits_read(f"{_DOWNLOADS}/.env") is False
+        assert default.permits_write(f"{_DOWNLOADS}/.env") is False
+
+    async def test_the_floor_admits_exactly_the_granted_roots(self) -> None:
+        """Attaching folders must widen the floor, not just the rules.
+
+        Two grants in, two roots on the floor, and a hidden file in either one
+        reads while a hidden file outside both does not. If the factory ever
+        builds the floor from a different source than the rules, this diverges.
+        """
+
+        broker = RecordingBroker(
+            grants={"g1": FakeBrokerFs(files={}), "g2": FakeBrokerFs(files={})},
+            grant_meta={
+                "g1": {
+                    "label": "Projects",
+                    "mount": "m1",
+                    "root": "/Users/ada/Projects",
+                },
+                "g2": {"label": "Notes", "mount": "m2", "root": "/Users/ada/Notes"},
+            },
+        )
+        backend = await self._workspace_backend(broker)
+        composite = _composed_deep_backend(None, workspace_backend=backend)
+        assert composite is not None
+        floor = composite.default
+
+        assert [root.path for root in floor.roots] == [
+            "/Users/ada/Projects",
+            "/Users/ada/Notes",
+        ]
+        assert floor.permits_read("/Users/ada/Projects/.git/config") is True
+        assert floor.permits_read("/Users/ada/Notes/.hidden") is True
+        assert floor.permits_read("/Users/ada/Secrets/.env") is False
+
+    async def test_a_lane_without_granted_roots_says_so_out_loud(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Grants are inert in the ENFORCE lane, and that must not be silent.
+
+        `WorkspaceGatewayBackend` / `WorkspaceTombstoneBackend` — what
+        `RunHandler` returns when `workspace_effect_mode is ENFORCE` — do not
+        implement `granted_roots`, and their broker projection carries no host
+        root at all. So the capability read yields nothing and every attached
+        folder keeps asking, which is precisely the outcome the old isinstance
+        gate produced. Reading a capability instead of a class did not fix that;
+        it only made it a different kind of silent. A WARNING is the difference
+        between "the user's grants do nothing in this lane" being discoverable
+        from a packaged log and being discoverable only by re-deriving it.
+        """
+
+        from agent_runtime.execution.factory import _granted_host_roots
+
+        class EnforceLaneBackend:
+            """Stands in for the C3 objects: no `granted_roots` at all."""
+
+        with caplog.at_level(logging.WARNING):
+            assert _granted_host_roots(EnforceLaneBackend()) == ()
+
+        assert "host_filesystem.granted_roots_unavailable" in caplog.text
+        assert "EnforceLaneBackend" in caplog.text
 
     async def test_non_desktop_composition_is_unchanged(self) -> None:
         # With no workspace backend the default must stay the bare StateBackend,

@@ -129,6 +129,25 @@ class TestTheAgentsOwnNamespaces(RuleSetMixin):
         assert self.verdict(path, operation="write") == "allow"
 
 
+class TestTmpIsNotAnAgentNamespace(RuleSetMixin):
+    """`/tmp/` was listed as a virtual namespace. It is not one.
+
+    Rule 1 allows every `VIRTUAL_NAMESPACES` prefix for read AND write on the
+    grounds that the composite routes those paths to the agent's own backends.
+    `/tmp/` is not a route, and `HostPathClassifier` classifies it as a HOST
+    path — so the entry was an unqualified read+write allow over the machine's
+    real `/tmp`, inside a rule set whose stated contract is that every host
+    write is denied outright.
+    """
+
+    def test_the_real_host_tmp_asks_like_any_other_ungranted_folder(self) -> None:
+        assert self.verdict("/tmp/x.txt") == "interrupt"
+        assert self.verdict("/tmp/nested/deep.txt") == "interrupt"
+
+    def test_the_real_host_tmp_is_not_writable(self) -> None:
+        assert self.verdict("/tmp/x.txt", operation="write") == "deny"
+
+
 class TestGrantedRootValidation:
     def test_a_relative_root_is_refused(self) -> None:
         with pytest.raises(ValueError, match="POSIX-absolute"):
@@ -148,7 +167,19 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
     folder bought the user nothing. These pin that it now buys silence.
     """
 
-    def test_ls_in_an_attached_folder_does_not_prompt(self) -> None:
+    def test_reads_in_an_attached_folder_are_allowed_by_the_rules(self) -> None:
+        """Named for what it actually observes.
+
+        It was called `test_ls_in_an_attached_folder_does_not_prompt`, which is
+        a claim it cannot make: whether `ls` prompts is decided by
+        `_make_bulk_when_predicate`, not by `_check_fs_permission`. That
+        predicate fires whenever the call's subtree overlaps an interrupt
+        anchor, and rule 4's anchor is `/`, so `ls` over an ATTACHED folder does
+        still ask today. Only the exact-scope tools (`read_file`) go silent.
+        `test_host_floor.TestBulkOpsAreDelegatedBecauseConsentAlreadyFires` pins
+        that behaviour against deepagents' own predicate.
+        """
+
         roots = (GrantedRoot(path=GRANTED),)
         assert self.verdict(GRANTED, roots=roots) == "allow"
         assert self.verdict(f"{GRANTED}/sub/deep/file.txt", roots=roots) == "allow"
