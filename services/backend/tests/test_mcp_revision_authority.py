@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
@@ -126,6 +127,79 @@ def test_postgres_adapter_lock_prune_and_migration_grants_are_present() -> None:
         "GRANT USAGE, SELECT ON SEQUENCE mcp_descriptor_revision_idempotency_sequence_no_seq"
         in migration
     )
+
+
+def _ddl_columns(migration: str, table: str) -> tuple[str, ...]:
+    """Return the column names declared for ``table`` in a migration's DDL."""
+    body = migration.split(f"CREATE TABLE IF NOT EXISTS {table} (", 1)[1].split(
+        ");", 1
+    )[0]
+    columns = []
+    for line in body.splitlines():
+        token = line.strip().split(" ", 1)[0].rstrip(",")
+        if token and token not in {"PRIMARY", "UNIQUE", "CHECK", "FOREIGN", "--"}:
+            columns.append(token)
+    return tuple(columns)
+
+
+def test_postgres_rows_project_onto_body_free_views_without_tenant_columns() -> None:
+    """A ``SELECT *`` row must build its view, not raise ``extra_forbidden``.
+
+    Regression: the adapter splatted whole rows into the contracts, which are
+    ``extra="forbid"`` and carry no ``org_id`` / ``user_id``. Every publish and
+    every read raised ``ValidationError`` — a ``ValueError``, which the RPC
+    route turns into a ``400``, killing ``load_mcp_server`` at ``resources/list``
+    for every connector on Postgres. The in-memory adapter builds its views
+    field-by-field, so no existing test could see it.
+    """
+
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "migrations/0050_mcp_descriptor_revisions.sql"
+    ).read_text()
+    sample: dict[str, object] = {
+        "org_id": "org_123",
+        "user_id": "user_123",
+        "server_id": "server_123",
+        "idempotency_key": "one",
+        "profile_id": "user_123",
+        "subject_scope_hash": "b" * 64,
+        "revision": "c" * 64,
+        "notice_id": "n1",
+        "cursor": "cur1",
+        "sequence_no": 1,
+        "old_revision": None,
+        "new_revision": "c" * 64,
+        "reason": McpRevisionReason.DESCRIPTOR_OBSERVED.value,
+        "occurred_at": datetime.now(timezone.utc),
+        "config_generation": 0,
+        "auth_generation": 0,
+        "transport_generation": 0,
+        "tool_filter_generation": 0,
+        "tool_count": 2,
+        "resource_count": 0,
+        "descriptor_digest": "a" * 64,
+        "observed_at": datetime.now(timezone.utc),
+        "source": "pooled_mcp_pagination",
+    }
+
+    for table in ("mcp_descriptor_revisions", "mcp_descriptor_revision_idempotency"):
+        columns = _ddl_columns(migration, table)
+        assert {"org_id", "user_id"} <= set(columns), table
+        view = PostgresMcpRevisionStore._view_from_row(
+            {column: sample[column] for column in columns}
+        )
+        assert view.server_id == "server_123"
+        assert view.tool_count == 2
+        assert not hasattr(view, "org_id")
+
+    columns = _ddl_columns(migration, "mcp_descriptor_revision_notices")
+    assert {"org_id", "user_id"} <= set(columns)
+    notice = PostgresMcpRevisionStore._notice_from_row(
+        {column: sample[column] for column in columns}
+    )
+    assert notice.notice_id == "n1"
+    assert not hasattr(notice, "org_id")
 
 
 def test_complete_publish_is_idempotent_and_notices_are_body_free() -> None:
