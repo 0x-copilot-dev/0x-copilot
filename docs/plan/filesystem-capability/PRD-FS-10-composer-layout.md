@@ -77,7 +77,11 @@ first send it disappears for the life of that chat.
 - Grant exists + post-first-message → **hidden**. The grant is still live; the
   Attach-Folder capability remains reachable from Settings. Do NOT re-add a `+`
   menu row as a fallback — that is the thing being removed.
-- More than one grant → show the first by name and `+N` (e.g. `kaleidoscope +2`).
+- More than one grant → show **the most recently granted** by name, plus `+N`
+  (e.g. `kaleidoscope +2`). Most-recent, not the broker's list order: the hook
+  returns whatever order the broker happens to send, so relying on it would let
+  the bar silently name a different folder after an unrelated backend change.
+  The folder you just attached is the one you are thinking about.
 
 **Click** opens the OS folder picker via `WorkspaceGrantPort.requestGrant`.
 **A `granted` outcome replaces/adds the grant; `cancelled` and `failed` must stay
@@ -106,7 +110,11 @@ Gating is three-tier and the master switch is **off by default**:
 - master OFF (Settings) → pill renders **Manual, disabled**, with a tooltip
   pointing at Settings. It must **not** offer Bypass. Offered-but-ignored is
   worse than absent.
-- master ON → pill is a real menu: Manual · Bypass.
+- master ON → pill is a real menu: Manual · Bypass, plus a non-selectable
+  clarifier reading **"Ungranted still asks"** (sub-line: "bypass never widens
+  what you granted"). Keep it terse — it is a standing rule, and a sentence
+  there reads as a warning about the choice being made rather than a fact
+  about the system.
 - selection applies at **run** or **message** scope (PRD-FS-11 owns precedence:
   message > run > master).
 
