@@ -582,7 +582,7 @@ export function TcChat(props: TcChatProps): ReactElement {
   );
 
   const composer = (
-    <div style={composerSlotStyle}>
+    <div data-testid="tc-chat-composer-slot" style={composerSlotStyle}>
       {renderComposer !== undefined ? (
         renderComposer({ disabled: ghost, placeholder: composerPlaceholder })
       ) : (
@@ -1279,7 +1279,19 @@ const messageListStyle = (ghost: boolean): CSSProperties => ({
   pointerEvents: ghost ? "none" : "auto",
 });
 
+/** One shared reading rail for every conversation-owned surface. The outer
+ * chat remains full-width so scrolling and the Focus side panel keep working;
+ * only readable content is centered and capped. */
+const conversationRailStyle: CSSProperties = {
+  boxSizing: "border-box",
+  marginLeft: "auto",
+  marginRight: "auto",
+  maxWidth: "var(--chat-content-width, 68rem)",
+  width: "100%",
+};
+
 const ghostBannerStyle: CSSProperties = {
+  ...conversationRailStyle,
   background: PALETTE.ghostBg,
   border: `1px solid ${PALETTE.ghostBorder}`,
   borderRadius: 8,
@@ -1291,18 +1303,22 @@ const ghostBannerStyle: CSSProperties = {
 };
 
 const composerSlotStyle: CSSProperties = {
+  ...conversationRailStyle,
   flexShrink: 0,
 };
 
 const statusStyle: CSSProperties = {
+  ...conversationRailStyle,
   color: PALETTE.textLo,
   fontSize: "var(--font-size-xs)",
   padding: 12,
 };
 
 const ulStyle: CSSProperties = {
+  ...conversationRailStyle,
   listStyle: "none",
-  margin: 0,
+  marginBottom: 0,
+  marginTop: 0,
   padding: 0,
   display: "flex",
   flexDirection: "column",
@@ -1333,17 +1349,17 @@ const toolItemStyle: CSSProperties = {
   padding: 0,
 };
 
-// Focus mode: the SAME transcript + composer as Studio, in a centered reading
-// column (v3 `.fx-col` max-width 730). Flush pane; flex column so the transcript
-// scrolls and the composer pins to the bottom.
+// Focus mode: the SAME transcript + composer as Studio. The shell fills its
+// workspace column; conversationRailStyle centers the readable content inside
+// it so the transcript scroll and optional side panel remain structurally sound.
 const focusContainerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   height: "100%",
   minHeight: 0,
   width: "100%",
-  maxWidth: 760,
-  margin: "0 auto",
+  maxWidth: "none",
+  margin: 0,
   background: "transparent",
   padding: 12,
   color: PALETTE.textHi,
@@ -1355,6 +1371,7 @@ const focusContainerStyle: CSSProperties = {
 // success, ember danger — no lime, no hardcoded hex).
 
 const approvalsWrapStyle: CSSProperties = {
+  ...conversationRailStyle,
   flexShrink: 0,
   display: "flex",
   flexDirection: "column",
@@ -1393,6 +1410,7 @@ const approvalRejectButtonStyle: CSSProperties = {
 };
 
 const confCardsWrapStyle: CSSProperties = {
+  ...conversationRailStyle,
   display: "flex",
   flexDirection: "column",
   gap: 8,

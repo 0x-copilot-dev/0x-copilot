@@ -286,6 +286,31 @@ describe("TcChat", () => {
     expect(screen.queryByTestId("tc-chat-focus-tabs")).not.toBeInTheDocument();
   });
 
+  it("centers the conversation and composer on the shared 1088px rail", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="focus" />),
+    );
+
+    await screen.findByText("Sure — here is a draft.");
+    const messageRail = screen
+      .getByTestId("tc-chat-messages")
+      .querySelector("ul");
+    expect(messageRail).not.toBeNull();
+    expect(messageRail).toHaveStyle({
+      marginLeft: "auto",
+      marginRight: "auto",
+      maxWidth: "var(--chat-content-width, 68rem)",
+      width: "100%",
+    });
+    expect(screen.getByTestId("tc-chat-composer-slot")).toHaveStyle({
+      marginLeft: "auto",
+      marginRight: "auto",
+      maxWidth: "var(--chat-content-width, 68rem)",
+      width: "100%",
+    });
+  });
+
   // Regression: the transcript declared `overflow-y: auto` only, and CSS then
   // computes the untouched axis to `auto` as well — so one long token or a wide
   // tool payload panned the messages sideways under a stationary composer.
@@ -749,13 +774,17 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
     expect(card!).not.toHaveAttribute("open");
     const header = card!.querySelector("summary");
     expect(header).not.toBeNull();
-    expect(within(header!).getByText("web_search")).toBeInTheDocument();
+    expect(within(header!).getByText("Search the web")).toBeInTheDocument();
+    expect(within(header!).queryByText("web_search")).not.toBeInTheDocument();
+    expect(within(header!).getByText("Done")).toBeInTheDocument();
     expect(within(header!).getByText("MCP · Brave Search")).toBeInTheDocument();
     expect(within(header!).getByText("read + act")).toBeInTheDocument();
     expect(within(header!).getByText("1.2s")).toBeInTheDocument();
 
     fireEvent.click(header!);
     expect(card!).toHaveAttribute("open");
+    expect(within(card!).getByText("tool")).toBeInTheDocument();
+    expect(within(card!).getByText("web_search")).toBeInTheDocument();
     expect(within(card!).getByText("args")).toBeInTheDocument();
     expect(within(card!).getByText("result")).toBeInTheDocument();
     expect(within(card!).getByText("source")).toBeInTheDocument();

@@ -1349,6 +1349,16 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     await screen.findByTestId("rich-empty-composer");
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
+
+    // The initial mode is Studio, which keeps the centered block exact.
+    expect(screen.getByTestId("run-empty-composer")).toHaveStyle({
+      paddingBottom: "0px",
+    });
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
+    expect(screen.getByTestId("run-empty-composer")).toHaveStyle({
+      boxSizing: "border-box",
+      paddingBottom: "64px",
+    });
   });
 
   it("hands OAuth completion to the injected composer's Tools state", async () => {

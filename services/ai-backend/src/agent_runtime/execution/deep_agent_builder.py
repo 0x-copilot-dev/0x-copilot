@@ -182,6 +182,18 @@ SANDBOX_EXECUTE_GUIDANCE = (
     "for one-shot scripts or CLI tools that need a real shell; to read or write "
     "the user's files, use the filesystem tools instead."
 )
+FILESYSTEM_IS_NOT_SHELL_GUIDANCE = (
+    "Capability truth: filesystem tools such as `ls`, `read_file`, `glob`, "
+    "`grep`, `write_file`, and `edit_file`, when present, are bounded file APIs. "
+    "They are not shell or terminal access. Never describe them as the ability "
+    "to run arbitrary commands, bash, or ordinary Python processes."
+)
+NO_SHELL_EXECUTE_GUIDANCE = (
+    "This run has no shell/terminal command tool. If asked, say that directly "
+    "and describe only the specific tools that are actually available. Do not "
+    "claim you can execute shell commands or ask the user to rely on a command "
+    "having run."
+)
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 _UNIVERSAL_MIDDLEWARE_FACTORIES: ContextVar[

@@ -104,12 +104,12 @@ export const APPEARANCE_THEMES: ReadonlyArray<{
   readonly preview: string;
 }> = [
   { id: "dark", label: "Dark", preview: "#16161a" },
-  { id: "light", label: "Light", preview: "#f4f4f6" },
+  { id: "light", label: "Light", preview: "#ffffff" },
   {
     id: "system",
     label: "System",
     caption: "Match macOS",
-    preview: "linear-gradient(135deg, #16161a 0 50%, #f4f4f6 50% 100%)",
+    preview: "linear-gradient(135deg, #16161a 0 50%, #ffffff 50% 100%)",
   },
 ];
 

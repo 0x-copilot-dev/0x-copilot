@@ -695,6 +695,42 @@ class StreamMessageProcessor:
         "error": Values.Status.FAILED,
         "success": Values.Status.COMPLETED,
     }
+    _TOOL_ERROR_CONTENT_PARSE_CAP = 64 * 1024
+
+    @classmethod
+    def _structured_tool_error(
+        cls, output: Mapping[str, object]
+    ) -> tuple[JsonObject, Mapping[str, object]] | None:
+        """Return a normalised typed error that a tool returned as data.
+
+        LangChain marks a ``ToolMessage`` successful when the callable returns
+        normally, even if the returned value is our typed ``{"error": ...}``
+        envelope. On the common provider path that mapping is JSON-serialised
+        into ``content``. Parse only this bounded, explicit error shape; all
+        successful JSON output remains byte-for-byte in ``content``.
+        """
+
+        direct_error = output.get("error")
+        if isinstance(direct_error, Mapping):
+            return dict(output), direct_error
+
+        content = output.get(Keys.Field.CONTENT)
+        if (
+            not isinstance(content, str)
+            or not content
+            or len(content) > cls._TOOL_ERROR_CONTENT_PARSE_CAP
+        ):
+            return None
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, Mapping):
+            return None
+        embedded_error = parsed.get("error")
+        if not isinstance(embedded_error, Mapping):
+            return None
+        return dict(parsed), embedded_error
 
     @classmethod
     def tool_result_payload(cls, message: object) -> JsonObject:
@@ -727,16 +763,29 @@ class StreamMessageProcessor:
             status = cls._TOOL_MESSAGE_STATUS_MAP.get(raw_status.lower(), raw_status)
         else:
             status = Values.Status.COMPLETED
+        structured_error = cls._structured_tool_error(output)
+        if structured_error is not None:
+            output, error = structured_error
+            status = Values.Status.FAILED
         result: JsonObject = {
             Keys.Field.TOOL_NAME: tool_name,
             Keys.Field.CALL_ID: call_id,
             Keys.Field.STATUS: status,
             Keys.Field.OUTPUT: output or payload,
         }
+        if structured_error is not None:
+            error_code = StreamTextHelper.extract(error.get("code"))
+            safe_message = StreamTextHelper.extract(error.get("safe_message"))
+            if error_code is not None:
+                result["error_code"] = error_code
+            if safe_message is not None:
+                result["safe_message"] = safe_message
         # PRD-E3: the v1 ``surface`` / ``surface_uri`` hoist (``_lift_surface_fields``)
         # was retired here — the v1 ``result["surface"]`` appendage no longer exists,
-        # so a ``tool_result`` payload carries exactly {tool_name, call_id, status,
-        # output}. Surface data now flows to clients via the Work Ledger
+        # so ordinary successful ``tool_result`` payloads carry exactly
+        # {tool_name, call_id, status, output}. Typed failures additionally expose
+        # bounded error_code/safe_message metadata for truthful presentation.
+        # Surface data now flows to clients via the Work Ledger
         # (``surface.created`` / ``view.derived``) + ``payload_ref`` resolution.
         cls.apply_tool_visibility(result)
         return result
