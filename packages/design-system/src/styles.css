@@ -1362,6 +1362,50 @@ textarea {
   resize: vertical;
 }
 
+/* Code editor — a multiline surface for structured text the user EDITS
+   (Manage MCP's config document), as opposed to `.ui-textarea`, which is for
+   prose. The differences are all functional rather than decorative:
+
+     • --font-mono, because column alignment is what makes nested JSON
+       readable at a glance;
+     • --font-size-sm (13px), the app's own body rung. The mono micro-ladder
+       tops out at 10.5px because it exists for metadata chips, not for text
+       anyone types into — using it here would be legible-but-hostile;
+     • a recessed --color-surface-muted ground, so the editable region reads
+       as a distinct surface inside an already-elevated modal;
+     • white-space: pre + overflow-x, so a long url or arg scrolls instead of
+       wrapping mid-token and destroying the indentation that carries the
+       structure.
+
+   `tab-size` matters for pasted config: JSON copied from a README arrives
+   with real tabs about as often as spaces. */
+.ui-code-editor {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-base);
+  min-height: 18rem;
+  overflow-x: auto;
+  padding: var(--space-md);
+  resize: vertical;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.ui-code-editor:focus {
+  border-color: var(--color-accent);
+}
+
+/* Invalid state. Border-only, no fill: the ember tone marks the boundary
+   while leaving the text at normal contrast, because the user still has to
+   read and fix what is inside it. */
+.ui-code-editor[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
 .ui-field {
   color: var(--color-text-muted);
   display: grid;
