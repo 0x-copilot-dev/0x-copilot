@@ -96,6 +96,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEV_SHA: ${{ steps.refs.outputs.dev_sha }}
+          # This job's id, which is also the name of the check run it reports.
+          # Passed through env rather than interpolated into the script body --
+          # see the CI rules in CLAUDE.md.
+          PROMOTE_JOB_NAME: ${{ github.job }}
         run: |
           python3 << 'PY'
           import json, os, subprocess, sys
@@ -108,22 +112,28 @@ jobs:
           ).stdout
           runs = json.loads(raw).get("check_runs", [])
 
-          # Drop this job's OWN check run before judging anything. Dispatched
-          # against dev, this workflow reports a check run on the very commit it
-          # is inspecting, so without this it waits for itself to finish and can
-          # never succeed. The first dry run failed exactly that way, naming
-          # itself in "Still running: lint-and-secrets, promote, repo-gates".
-          # Matched on the run id rather than the job name, so renaming the job
-          # cannot quietly reintroduce the deadlock.
-          own_run_id = os.environ.get("GITHUB_RUN_ID", "")
+          # Drop EVERY check run produced by this workflow, not just this run's.
+          # Two distinct failures made the reason clear, both found by running it:
+          #
+          #  1. Dispatched against dev, this workflow reports a check run on the
+          #     very commit it inspects, so it waited for itself to finish:
+          #     "Still running: lint-and-secrets, promote, repo-gates".
+          #  2. Excluding only the CURRENT run was still wrong. A previous failed
+          #     promotion leaves a `failure` check run on that same commit, and
+          #     the next attempt reads it as evidence the code is broken:
+          #     "Not green: promote (failure)". One failed attempt would
+          #     permanently block every future promotion of that commit -- and
+          #     retrying after a fix is the normal case, not an edge case.
+          #
+          # A promotion attempt is not evidence about the code. Judge the code's
+          # checks only. Matched on this job's own id (github.job), so the filter
+          # follows a rename instead of going stale.
+          own_job = os.environ.get("PROMOTE_JOB_NAME", "").strip()
           before = len(runs)
-          runs = [
-              run
-              for run in runs
-              if own_run_id and own_run_id not in str(run.get("details_url") or "")
-          ]
-          if len(runs) != before:
-              print("(excluded this promotion run's own check from the gate)")
+          runs = [run for run in runs if run.get("name") != own_job]
+          dropped = before - len(runs)
+          if dropped:
+              print(f"(excluded {dropped} check run(s) from this promotion workflow)")
 
           if not runs:
               print(f"::error::No check runs found for dev@{sha[:8]}.")

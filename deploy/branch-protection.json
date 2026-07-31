@@ -53,8 +53,23 @@
     "require an ORG, and this repo is owned by a user. Same root cause as the CODEOWNERS",
     "teams problem.",
     "",
+    "required_linear_history is ABSENT from main for the same family of reason, found the",
+    "same way -- by running the promotion for real. It forbids merge commits, and every PR",
+    "merged into dev creates one, which promotion then fast-forwards onto main:",
+    "",
+    "  remote: - This branch must not contain merge commits.",
+    "  remote:   Found 1 violation: e9fe1436 (Merge pull request #474)",
+    "",
+    "The rule is structurally incompatible with this branching model. The alternative --",
+    "squash-only merges into dev -- would make dev linear and satisfy it, but it would also",
+    "collapse each PR to a single commit, and tools/cli_release.py builds the changelog from",
+    "the individual Conventional Commits inside a PR (it already skips merge commits with",
+    "--no-merges). Squashing would coarsen every release note to one line per PR. main also",
+    "already contains merge commits throughout its history, so the rule was aspirational,",
+    "never enforced.",
+    "",
     "So main keeps the rules that protect it without blocking its own workflows -- no",
-    "deletion, no force-push, linear history -- and its QUALITY gate is promote-to-main.yml,",
+    "deletion, no force-push -- and its QUALITY gate is promote-to-main.yml,",
     "which refuses to promote a dev commit whose checks are not all green and not all",
     "finished. That evaluates the whole commit rather than one diff, which is the stronger",
     "check anyway. The residual risk is honest and worth naming: a collaborator CAN still",
@@ -86,11 +101,7 @@
           "bypass_mode": "always"
         }
       ],
-      "rules": [
-        { "type": "deletion" },
-        { "type": "non_fast_forward" },
-        { "type": "required_linear_history" }
-      ]
+      "rules": [{ "type": "deletion" }, { "type": "non_fast_forward" }]
     },
 
     {
