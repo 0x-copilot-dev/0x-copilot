@@ -160,6 +160,36 @@ class FilesystemBypassDecision(_BypassContract):
 #: bypass must fall back to. Manual, master off, nothing offered.
 MANUAL_FILESYSTEM_BYPASS: FilesystemBypassDecision = FilesystemBypassDecision()
 
+#: Whether tier 1 OFFERS the control when a workspace has never said either way.
+#:
+#: Lives here, in the vocabulary module, because two layers have to agree about
+#: it and they reach the setting by different routes. ``WorkspaceBehaviorOverrides``
+#: (a pydantic model) applies it by CONSTRUCTION; ``RunCoordinator`` reads the
+#: persisted JSONB blob as a plain dict, where a pydantic default does not exist.
+#: When those two disagreed, the API and Settings reported the control as
+#: offered while every run sealed ``master_enabled=False`` — a pill the user
+#: could select that the server then silently ignored, with no feedback anywhere.
+#: Measured on a fresh install, which is the case with no persisted row at all.
+#:
+#: ABSENT is not FALSE. An explicit ``False`` is an operator turning the control
+#: off and must survive; only a missing key takes this default. Anything that
+#: collapses the two re-creates the split.
+DEFAULT_FILESYSTEM_BYPASS_OFFERED: bool = True
+
+
+def filesystem_bypass_offered(stored: object) -> bool:
+    """Resolve tier 1 from whatever a persistence layer happens to hold.
+
+    ``None`` (or a missing key) means "never configured" and takes the
+    deployment default; anything else is an explicit choice and is honoured as
+    written. Callers pass ``blob.get("filesystem_bypass_enabled")`` rather than
+    re-implementing this, so the absent-vs-false distinction exists once.
+    """
+
+    if stored is None:
+        return DEFAULT_FILESYSTEM_BYPASS_OFFERED
+    return stored is True
+
 
 class FilesystemBypassResolver:
     """Fold the three tiers into one decision. Pure, total, no I/O."""
@@ -255,6 +285,7 @@ class FilesystemBypassBound:
 
 
 __all__ = [
+    "DEFAULT_FILESYSTEM_BYPASS_OFFERED",
     "MANUAL_FILESYSTEM_BYPASS",
     "FilesystemBypassBound",
     "FilesystemBypassDecision",
@@ -264,4 +295,5 @@ __all__ = [
     "FilesystemBypassSelection",
     "FilesystemBypassSource",
     "FilesystemBypassTarget",
+    "filesystem_bypass_offered",
 ]

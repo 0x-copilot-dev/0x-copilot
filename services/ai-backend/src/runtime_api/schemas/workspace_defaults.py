@@ -35,6 +35,9 @@ from pydantic import (
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.execution.depth import ReasoningDepth
+from agent_runtime.execution.filesystem_bypass import (
+    DEFAULT_FILESYSTEM_BYPASS_OFFERED,
+)
 from agent_runtime.api.constants import Keys
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.conversations import (
@@ -275,7 +278,13 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     # switch makes the control VISIBLE, it does not turn bypass on. An operator
     # who wants bypass unavailable still sets this False explicitly, and an
     # explicit False is preserved — only absence now reads as "offer it".
-    filesystem_bypass_enabled: bool = True
+    #
+    # The default is IMPORTED, not spelled here, because the run-create seal
+    # reads this setting out of the persisted JSONB blob as a plain dict, where
+    # a pydantic default does not exist. Two copies of the literal is exactly
+    # how the API came to report the control as offered while every run sealed
+    # it off — see ``DEFAULT_FILESYSTEM_BYPASS_OFFERED``.
+    filesystem_bypass_enabled: bool = DEFAULT_FILESYSTEM_BYPASS_OFFERED
 
     @model_validator(mode="before")
     @classmethod

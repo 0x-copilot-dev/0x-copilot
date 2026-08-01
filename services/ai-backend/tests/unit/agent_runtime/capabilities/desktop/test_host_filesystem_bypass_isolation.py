@@ -39,6 +39,9 @@ posture, can conjure access to a folder nobody attached.
 from __future__ import annotations
 
 import pytest
+from deepagents.middleware._fs_interrupt import (
+    _build_interrupt_on_from_permissions,
+)
 from deepagents.middleware.filesystem import (
     FilesystemPermission,
     _check_fs_permission,
@@ -148,6 +151,60 @@ def test_the_one_cell_bypass_moves() -> None:
     assert _check_fs_permission(_rules(*roots, bypass=BYPASS), "write", target) == (
         "allow"
     )
+
+
+class TestTheInterruptIsActuallyGenerated:
+    """A rule that SAYS interrupt is not yet a rule that ASKS.
+
+    The verdict tests above assert `_check_fs_permission`, which is the
+    enforcement half. Whether a human is ever consulted is a second question,
+    answered by deepagents' `_build_interrupt_on_from_permissions`: it emits an
+    `interrupt_on` entry per filesystem tool, and only for tools whose OPERATION
+    some interrupt-mode rule covers.
+
+    That generator is worth pinning here rather than trusting, because it is the
+    seam where this change could have gone wrong in the direction nobody would
+    notice — a write that says `interrupt` but generates no entry would simply
+    execute, silently, exactly as if Bypass were on.
+    """
+
+    @staticmethod
+    def _tools(bypass: FilesystemBypassDecision) -> set[str]:
+        roots = (GrantedRoot(path=GRANTED, writable=True),)
+        return set(_build_interrupt_on_from_permissions(_rules(*roots, bypass=bypass)))
+
+    def test_manual_gates_both_write_tools(self) -> None:
+        assert {"write_file", "edit_file"} <= self._tools(MANUAL)
+
+    def test_bypass_gates_neither_write_tool(self) -> None:
+        """No entry at all — not an entry whose predicate happens to say no.
+
+        Under Bypass rule 3 answers `allow`, so no interrupt-mode rule covers
+        `write`, so the generator skips both tools entirely. The write runs
+        without the middleware ever being consulted.
+        """
+
+        assert not ({"write_file", "edit_file"} & self._tools(BYPASS))
+
+    @pytest.mark.parametrize("bypass", BOTH, ids=("manual", "bypass"))
+    def test_the_bulk_read_tools_are_gated_in_both_postures(
+        self, bypass: FilesystemBypassDecision
+    ) -> None:
+        """The regression this change could most easily have caused.
+
+        `_make_bulk_when_predicate` fires when a search subtree OVERLAPS an
+        interrupt rule, and rule 4 is anchored at `/` — which is why every `ls`
+        once asked, including inside a folder the user had just attached.
+
+        Adding a write interrupt anchored at a GRANTED root could have widened
+        that again. It does not, because the generator filters interrupt rules
+        by operation (`_fs_interrupt.py`), so a `write`-only rule is invisible to
+        the read-scoped tools. These three stay gated by rule 4 alone, and the
+        host-supplied `HostBulkReadScope` override is what actually confines
+        them — see `factory._with_host_bulk_read_scope`.
+        """
+
+        assert {"ls", "glob", "grep"} <= self._tools(bypass)
 
 
 def test_manual_is_what_a_caller_gets_by_default() -> None:
