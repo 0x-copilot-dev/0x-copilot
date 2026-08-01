@@ -25,13 +25,11 @@ agent_runtime.capabilities.tools.code_tool_adapter
 agent_runtime.capabilities.tools.privacy
 agent_runtime.capabilities.workspace.patch_plan
 agent_runtime.context.tool_result_admission_gate
-agent_runtime.effects.reconciliation
 agent_runtime.harness_quality.promotion_cohorts
 agent_runtime.observability.context_origin_conformance
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
 agent_runtime.surfaces_v2.retention
-runtime_adapters.in_memory.share_snapshot_store
 runtime_adapters.postgres.todo_extraction_store
 runtime_worker.jobs.approval_expiry_sweeper
 runtime_worker.jobs.encrypt_existing_columns
@@ -39,4 +37,3 @@ runtime_worker.jobs.proposal_extractor
 runtime_worker.jobs.routine_scheduler
 runtime_worker.jobs.todo_extractor
 runtime_worker.jobs.todo_recurrence_materializer
-runtime_worker.legacy_mcp_effect_executor
