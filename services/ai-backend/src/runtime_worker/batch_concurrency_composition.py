@@ -417,6 +417,10 @@ class BatchConcurrencyComposer:
             ConcurrencyKillSwitchGate,
         )
         from agent_runtime.capabilities.concurrency.permits import RunPermitManager
+        from agent_runtime.capabilities.concurrency.provider_hints import (
+            McpAnnotationProviderHints,
+            ProviderNarrowedPolicySource,
+        )
         from agent_runtime.control_plane.feature_modes import FeatureMode
 
         snapshot = control.snapshot
@@ -487,7 +491,18 @@ class BatchConcurrencyComposer:
         return RunBatchAdmission(
             recorder=BatchPlanRecorder(journal=journal, gate=gate),
             coordinator=coordinator,
-            policies=DeclaredConcurrencyPolicySource(declarations),
+            # PRODUCT_CATALOG is the one source that may *establish* a policy;
+            # a connector's own MCP annotations (readOnlyHint / destructiveHint /
+            # idempotentHint) enter here as the TRUSTED_PROVIDER tier, which may
+            # only *narrow* what the operator declared and can never widen it —
+            # an over-claim is recorded as a typed rejection and discarded. The
+            # hints are read from the per-run McpToolAnnotationsRegistry at plan
+            # time, not snapshotted now: this run's descriptors are built after
+            # compose, so a snapshot taken here would be empty.
+            policies=ProviderNarrowedPolicySource(
+                DeclaredConcurrencyPolicySource(declarations),
+                hints=McpAnnotationProviderHints(),
+            ),
             snapshot=snapshot,
             org_id=org_id,
             trace_id=trace_id,
