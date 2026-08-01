@@ -639,6 +639,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         toolCallCitations={toolCallCitations}
         approvals={visibleApprovals}
         approvalHandlers={approvalHandlers}
+        parked={oldestPending !== null}
         mode={mode}
         markdownComponents={markdownComponents}
         terminalBeat={terminalBeat}
@@ -1061,6 +1062,13 @@ interface MessageListBodyProps {
    */
   readonly approvals: readonly TcChatApproval[];
   readonly approvalHandlers: ApprovalHandlers;
+  /**
+   * The run is parked on a pending approval, so every still-`running` tool card
+   * reads waiting rather than running. Same flag and same reasoning as
+   * `TcTodoList`'s `blocked`; both surfaces were asserting motion that had
+   * stopped.
+   */
+  readonly parked: boolean;
   readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
   readonly terminalBeat?: ReactNode;
@@ -1076,6 +1084,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     toolCallCitations,
     approvals,
     approvalHandlers,
+    parked,
     mode,
     markdownComponents,
     terminalBeat,
@@ -1125,7 +1134,12 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
             return renderFleetCard(item.fleet, subagentActivitiesByTask);
           }
           if (item.kind === "tool") {
-            return renderToolCard(item.toolCall, mode, toolCallCitations);
+            return renderToolCard(
+              item.toolCall,
+              mode,
+              toolCallCitations,
+              parked,
+            );
           }
           if (item.kind === "approval") {
             return (
@@ -1240,6 +1254,7 @@ function renderToolCard(
   toolCall: ToolCallEntry,
   mode: TcChatMode,
   citations: readonly CitationSourceRef[],
+  parked: boolean,
 ): ReactNode {
   return (
     <li
@@ -1248,7 +1263,7 @@ function renderToolCard(
       data-testid={`tc-chat-tool-${toolCall.id}`}
       data-tool-status={toolCall.status}
     >
-      <ToolCallCard toolCall={toolCall} />
+      <ToolCallCard toolCall={toolCall} parked={parked} />
       {mode === "studio" ? (
         <InlineToolResultCard toolCall={toolCall} citations={citations} />
       ) : null}
