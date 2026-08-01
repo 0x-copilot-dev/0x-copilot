@@ -105,12 +105,12 @@ already `linear.create_issue`.
 Resolved per call from `action` (descriptor), `trust` (is the connector authenticated?),
 and `posture` (Manual = "Writes wait for you" / Bypass = "writes auto").
 
-| action ＼ posture                      | **Manual** ("writes wait")                   | **Bypass** ("writes auto")    |
-| -------------------------------------- | -------------------------------------------- | ----------------------------- |
-| **READ** — trusted connector           | ALLOW (auto)                                 | ALLOW (auto)                  |
-| **READ** — untrusted / `openWorldHint` | ALLOW + visible card _(configurable → GATE)_ | ALLOW                         |
-| **WRITE**                              | **GATE** (interrupt · Focus **and** Studio)  | **ALLOW** (auto)              |
-| **DESTRUCTIVE**                        | **GATE** (always)                            | **ALLOW** (auto) — _see note_ |
+| action ＼ posture                      | **Manual** ("writes wait")                        | **Bypass** ("writes auto")    |
+| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| **READ** — trusted connector           | ALLOW (auto)                                      | ALLOW (auto)                  |
+| **READ** — untrusted / `openWorldHint` | **GATE** _(fail-closed default; → ALLOW-visible)_ | ALLOW                         |
+| **WRITE**                              | **GATE** (interrupt · Focus **and** Studio)       | **ALLOW** (auto)              |
+| **DESTRUCTIVE**                        | **GATE** (always)                                 | **ALLOW** (auto) — _see note_ |
 
 - **Trust tiers** (per MCP 2026-07-28 "untrusted unless from a trusted server"): catalog /
   first-party and OAuth-authenticated connectors are _trusted_ → their affirmative
@@ -280,7 +280,7 @@ cannot break policy / observability / errors.
 
 ## 9. Open decisions
 
-- [ ] Untrusted-connector reads (esp. `openWorldHint`): auto-run+visible (default) vs GATE?
+- [x] Untrusted-connector reads (esp. `openWorldHint`): **DECIDED — GATE by default** (fail-closed per §7; `untrusted_read_gate=True`), relaxable per deployment. Trusted reads always flow.
 - [ ] Keep a durable approval **receipt** (compliance) after deleting A4/A5? Recommended: yes,
       thin.
 - [ ] Web direct-connect timing: ship desktop first, gate web behind multi-tenant tests.

@@ -119,12 +119,12 @@ per-connector fact — authenticated / first-party — set by the source at
 `load()`, so `decide()` takes no loose `trust` arg), and `posture` (Manual =
 "Writes wait for you" / Bypass = "writes auto"). Faithful to master plan §2:
 
-| action ＼ posture                      | **Manual** ("writes wait")                   | **Bypass** ("writes auto")       |
-| -------------------------------------- | -------------------------------------------- | -------------------------------- |
-| **READ** — trusted connector           | ALLOW (auto)                                 | ALLOW (auto)                     |
-| **READ** — untrusted / `openWorldHint` | ALLOW + visible card _(configurable → GATE)_ | ALLOW                            |
-| **WRITE**                              | **GATE** (interrupt · Focus **and** Studio)  | **ALLOW** (auto)                 |
-| **DESTRUCTIVE**                        | **GATE** (always)                            | **ALLOW** (auto) — _bypass note_ |
+| action ＼ posture                      | **Manual** ("writes wait")                        | **Bypass** ("writes auto")       |
+| -------------------------------------- | ------------------------------------------------- | -------------------------------- |
+| **READ** — trusted connector           | ALLOW (auto)                                      | ALLOW (auto)                     |
+| **READ** — untrusted / `openWorldHint` | **GATE** _(fail-closed default; → ALLOW-visible)_ | ALLOW                            |
+| **WRITE**                              | **GATE** (interrupt · Focus **and** Studio)       | **ALLOW** (auto)                 |
+| **DESTRUCTIVE**                        | **GATE** (always)                                 | **ALLOW** (auto) — _bypass note_ |
 
 - **Move 1.** A _trusted_ connector's affirmative `readOnlyHint:true` auto-runs.
   This is the read-gated-as-write fix: no per-op catalog curation is required
@@ -354,8 +354,9 @@ descriptor:
 
 ## 9. Open decisions (master plan §9)
 
-- Untrusted-connector reads (esp. `openWorldHint`): auto-run + visible card
-  (default) vs GATE?
+- Untrusted-connector reads (esp. `openWorldHint`): **DECIDED — GATE by
+  default** (fail-closed per §7, `untrusted_read_gate=True`); a deployment may
+  relax to auto-run + visible card. A trusted read always flows regardless.
 - Keep a durable approval **receipt** (compliance) after deleting the staging
   subsystem? Recommended: yes, thin.
 - Web direct-connect timing: ship desktop first, gate web behind multi-tenant
