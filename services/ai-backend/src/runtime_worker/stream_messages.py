@@ -311,6 +311,23 @@ class StreamMessageParser:
         return getattr(message, _Fields.CONTENT, None)
 
     @classmethod
+    def raw_args(cls, tool_call: object) -> object:
+        """Return a tool call's ``args`` without ``payload_mapping``'s flattening.
+
+        Same reason as :meth:`raw_content`, on the argument side. A tool argument
+        that is a list of objects — ``write_todos``' ``todos``, any ``rows`` or
+        ``filters`` list — hits ``json_value``'s content-block fallback and comes
+        back as one concatenated string, because those objects happen to carry a
+        ``content`` key. That is lossless enough for a display payload and
+        useless to anything that must read the structure, so structured consumers
+        take the value from here instead.
+        """
+
+        if isinstance(tool_call, Mapping):
+            return tool_call.get(_Fields.ARGS)
+        return getattr(tool_call, _Fields.ARGS, None)
+
+    @classmethod
     def reasoning_delta(cls, message: object) -> str | None:
         """Extract reasoning text from one parsed ``AIMessageChunk``.
 

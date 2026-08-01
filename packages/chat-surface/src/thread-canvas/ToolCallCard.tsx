@@ -22,6 +22,16 @@ import type { ToolCallEntry } from "./eventProjector";
  */
 export interface ToolCallCardProps {
   readonly toolCall: ToolCallEntry;
+  /**
+   * The run is parked on a decision the user owes. A `running` card is then not
+   * running: the graph is interrupted, so nothing is executing and the call is
+   * not "taking a while" — it is stopped, on them.
+   *
+   * Same reasoning as `TcTodoList`'s `blocked`, and it applies to EVERY running
+   * card rather than only the gated one: a call still in `running` while the
+   * graph is interrupted is, by definition, not progressing.
+   */
+  readonly parked?: boolean;
 }
 
 /**
@@ -29,10 +39,15 @@ export interface ToolCallCardProps {
  * detail to reveal. Keeping the entire visual header inside `summary` makes
  * pointer, keyboard Enter, and keyboard Space target the same element.
  */
-export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
+export function ToolCallCard({
+  toolCall,
+  parked = false,
+}: ToolCallCardProps): ReactElement {
   const hasDetails = hasToolDetails(toolCall);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const header = renderHeader(toolCall, hasDetails);
+  // Only a call that is still running can be parked; a finished one is history.
+  const waiting = parked && toolCall.status === "running";
+  const header = renderHeader(toolCall, hasDetails, waiting);
 
   if (!hasDetails) {
     return (
@@ -42,7 +57,9 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
         role="group"
         aria-label={`Tool: ${toolCall.title}`}
         data-tool-status={toolCall.status}
+        data-tool-waiting={waiting ? "true" : "false"}
       >
+        <style>{TOOL_CALL_CARD_CSS}</style>
         {header}
       </div>
     );
@@ -54,6 +71,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
       style={activityCardFrameStyle}
       aria-label={`Tool: ${toolCall.title}`}
       data-tool-status={toolCall.status}
+      data-tool-waiting={waiting ? "true" : "false"}
       onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
     >
       <style>{`${ACTIVITY_CARD_INTERACTION_CSS}\n${TOOL_CALL_CARD_CSS}`}</style>
@@ -72,14 +90,18 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
 function renderHeader(
   toolCall: ToolCallEntry,
   discloseable: boolean,
+  waiting: boolean,
 ): ReactElement {
-  const running = toolCall.status === "running";
-  const statusLabel = statusText(toolCall.status);
+  const running = toolCall.status === "running" && !waiting;
+  const statusLabel = waiting ? "Waiting" : statusText(toolCall.status);
   const provenance = provenanceLabel(toolCall);
   const access = accessLabel(toolCall.accessMode);
   const duration = formatDuration(toolCall.durationMs);
+  // A declined capability carries its explanation on `safe_message` exactly
+  // like a failure does — and that sentence is the whole value of the card,
+  // since it says what to do instead. It renders in the neutral style below.
   const summary =
-    toolCall.status === "error"
+    toolCall.status === "error" || toolCall.status === "unavailable"
       ? (toolCall.errorMessage ?? toolCall.summary)
       : toolCall.summary;
 
@@ -118,16 +140,30 @@ function renderHeader(
         aria-label={statusLabel}
         data-testid={`tc-chat-tool-${toolCall.id}-status`}
       >
-        <span style={statusMarkStyle(toolCall.status)} aria-hidden="true">
-          {running ? (
+        <span
+          style={waiting ? waitingMarkStyle : statusMarkStyle(toolCall.status)}
+          aria-hidden="true"
+        >
+          {waiting ? (
+            // Still, not spinning — the whole point. Same amber arc the parked
+            // todo row uses, so one glance reads the same across both surfaces.
+            <span
+              data-testid="tc-tool-card-waiting"
+              style={waitingGlyphStyle}
+            />
+          ) : running ? (
             <span className="tc-tool-card__spinner" style={spinnerStyle} />
           ) : toolCall.status === "error" ? (
             "!"
+          ) : toolCall.status === "unavailable" ? (
+            "—"
           ) : (
             "✓"
           )}
         </span>
-        <span style={statusLabelStyle}>{statusLabel}</span>
+        <span style={waiting ? waitingLabelStyle : statusLabelStyle}>
+          {statusLabel}
+        </span>
       </span>
       {discloseable ? (
         <span
@@ -323,6 +359,9 @@ function statusText(status: ToolCallEntry["status"]): string {
       return "Done";
     case "error":
       return "Failed";
+    case "unavailable":
+      // Neither "Done" (no work happened) nor "Failed" (nothing broke).
+      return "Not available";
   }
 }
 
@@ -439,6 +478,11 @@ const statusLabelStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const waitingLabelStyle: CSSProperties = {
+  ...statusLabelStyle,
+  color: "var(--color-warning, #e8b45e)",
+};
+
 const statusMarkStyle = (status: ToolCallEntry["status"]): CSSProperties => ({
   alignItems: "center",
   color:
@@ -465,6 +509,26 @@ const spinnerStyle: CSSProperties = {
   boxSizing: "border-box",
   height: 14,
   width: 14,
+};
+
+/** The parked mark: the same amber the parked todo row uses, and no animation. */
+const waitingMarkStyle: CSSProperties = {
+  alignItems: "center",
+  color: "var(--color-warning, #e8b45e)",
+  display: "inline-flex",
+  flex: "0 0 auto",
+  height: 14,
+  justifyContent: "center",
+  width: 14,
+};
+
+const waitingGlyphStyle: CSSProperties = {
+  border: "1.5px solid var(--color-warning, #e8b45e)",
+  borderRadius: "50%",
+  borderTopColor: "transparent",
+  boxSizing: "border-box",
+  height: 12,
+  width: 12,
 };
 
 const detailRowStyle: CSSProperties = {

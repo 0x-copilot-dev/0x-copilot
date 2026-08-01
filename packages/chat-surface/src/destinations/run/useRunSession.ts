@@ -100,6 +100,11 @@ export interface RunSession {
    * its model pill from it when the user has no local pick for this chat.
    */
   readonly conversationModel: string | null;
+  /**
+   * The bound conversation's title, from the conversation head. PRD-02 makes it
+   * the header's visible line; `null` while resolving or when untitled.
+   */
+  readonly conversationTitle: string | null;
   /** Session lifecycle status (see {@link RunSessionStatus}). */
   readonly status: RunSessionStatus;
   /**
@@ -138,6 +143,8 @@ const EMPTY_RUNS: readonly RunListItem[] = [];
 interface ConversationHead {
   readonly latest_run_id?: string | null;
   readonly latest_run_id_any_status?: string | null;
+  /** The thread's title — what the Threads panel shows for the same row. */
+  readonly title?: string | null;
 }
 
 /** GET /v1/agent/conversations/{id}/runs — the multi-run selector's data (Phase 6). */
@@ -168,9 +175,16 @@ function parseRuns(payload: RunListPayload): readonly RunListItem[] {
     }
     out.push({
       runId,
-      // The summary carries no goal text; use the model name as a lightweight
-      // label when present (the selector falls back to a generic run label).
-      goal: typeof entry.model_name === "string" ? entry.model_name : null,
+      // PRD-02 — this endpoint (`/v1/agent/conversations/{id}/runs`) genuinely
+      // carries no title: its rows are `run_id · status · model_name ·
+      // created_at · started_at`. It used to put `model_name` here, which was
+      // survivable ONLY because the header rendered the goal inside
+      // `clip: rect(0,0,0,0)` — nobody could see the run titled "gpt-5.4-mini".
+      //
+      // The honest title comes from the conversation head this hook already
+      // fetches (see `conversationTitle` below), so this field stays null and
+      // `derivedGoal` composes the two.
+      goal: null,
       modelName: typeof entry.model_name === "string" ? entry.model_name : null,
       status: asRunStatus(entry.status),
       startedAt:
@@ -292,6 +306,14 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
         if (cancelled) {
           return;
         }
+        // PRD-02 — the header's title. Taken from the conversation the cockpit
+        // is already fetching, so it costs no extra request and always agrees
+        // with what the Threads panel shows for the same thread.
+        setConversationTitle(
+          typeof conv.title === "string" && conv.title.trim() !== ""
+            ? conv.title
+            : null,
+        );
         const head =
           conv.latest_run_id ?? conv.latest_run_id_any_status ?? null;
         if (head !== null) {
@@ -461,6 +483,9 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
 
   // Derived, not fetched: the run list already carries each run's model, so the
   // composer's "what did this chat run with" seed costs no extra request.
+  const [conversationTitle, setConversationTitle] = useState<string | null>(
+    null,
+  );
   const conversationModel = useMemo(
     () => conversationModelName(runs, activeRunId),
     [runs, activeRunId],
@@ -471,6 +496,7 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     runId: activeRunId,
     runs,
     conversationModel,
+    conversationTitle,
     status,
     runStatus,
     events,

@@ -43,7 +43,18 @@ function payloadText(event: RuntimeEventEnvelope): string {
   const payload = event.payload;
   if (payload !== null && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
-    for (const key of ["text", "delta"] as const) {
+    // `message` is what `RuntimeTextPayload` actually declares, and what the
+    // worker writes: `final_payload = {MESSAGE: final_text}` and the same
+    // `final_text` is passed as the event summary
+    // (`runtime_worker/handlers/run.py:839-863`).
+    //
+    // `text` is read FIRST only for historical tolerance — no runtime event
+    // has ever carried it. Before this list included `message`, every
+    // `final_response` fell through to the `|| event.summary` fallback in
+    // `projectChatMessages`. That happens to render the right string, because
+    // summary IS final_text — but the correct answer was arriving in a field
+    // nothing read, and the fallback was silently load-bearing.
+    for (const key of ["text", "message", "delta"] as const) {
       const value = record[key];
       if (typeof value === "string" && value !== "") {
         return value;

@@ -607,6 +607,14 @@ class RuntimeEventPresentationProjector:
             return RuntimeActivityKind.MCP_AUTH
         if event_type is RuntimeApiEventType.DRAFT_UPDATED:
             return RuntimeActivityKind.DRAFT
+        if event_type is RuntimeApiEventType.TODO_LIST_UPDATED:
+            # The agent's checklist is state the todo panel folds, not a card
+            # per revision — a five-step plan would otherwise put five
+            # near-identical rows on the timeline. Explicit rather than left to
+            # the default because the emit is TOOL-sourced (it is projected off
+            # a ``write_todos`` frame), and the source fallback would route it
+            # into the tool bucket, which is the very rendering this replaces.
+            return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             # Generative-UI (PRD-01) — an out-of-band "prepared a view" note.
             # Explicit so a TOOL-sourced emit can't reroute it into the tool
@@ -2396,13 +2404,22 @@ class RuntimeEventPresentation(RuntimeContract):
 
     title: str = Field(min_length=1, max_length=80)
     summary: str | None = Field(default=None, max_length=240)
-    status_label: Literal["Running", "Waiting for permission", "Done", "Failed"]
+    status_label: Literal[
+        "Running", "Waiting for permission", "Done", "Failed", "Not available"
+    ]
     kind: Literal["progress", "result", "approval", "auth", "error"]
     group_key: str | None = Field(default=None, max_length=160)
     primary_entity: str | None = Field(default=None, max_length=80)
     action_label: str | None = Field(default=None, max_length=60)
     result_preview: tuple[RuntimeEventPresentationPreviewRow, ...] = ()
     debug_label: str | None = Field(default="Tool details", max_length=40)
+    #: The typed failure code behind this card, so a client can key a remedy to
+    #: the actual cause instead of guessing from prose.
+    code: str | None = Field(default=None, max_length=80)
+    #: Whether repeating the operation could change the outcome. A client draws
+    #: a remedy ONLY when this is true — an action the system cannot honour is
+    #: worse than none. ``None`` on non-failure cards.
+    retryable: bool | None = None
 
     @field_validator(
         _Fields.TITLE,

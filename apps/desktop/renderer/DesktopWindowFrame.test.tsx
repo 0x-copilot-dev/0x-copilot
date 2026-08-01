@@ -74,4 +74,20 @@ describe("DesktopWindowFrame", () => {
       /\.desktop-window-frame\s*>\s*\[data-testid="destination-outlet"\]\s*>\s*\.run-destination/,
     );
   });
+
+  it("clears the native title-bar band above the topbar-less Settings nav", () => {
+    // Every other destination gets a topbar, which is padded left to clear the
+    // traffic lights and the translated turbine. Settings suppresses the topbar,
+    // so its nav column takes the inset instead — vertically, because the column
+    // is too narrow for a 100px left inset. Without this the "Settings" title
+    // renders beneath both the window controls and the z-index:2 brand mark.
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    expect(desktopCss).toMatch(
+      /\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-settings-nav\]\s*\{[^}]*padding-top:[^}]*--desktop-titlebar-height[^}]*!important/,
+    );
+  });
 });

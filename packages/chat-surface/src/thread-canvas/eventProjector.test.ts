@@ -511,6 +511,46 @@ describe("eventProjector.projectToolCalls", () => {
     expect(projectToolCalls([])).toEqual([]);
   });
 
+  // A live desktop journey caught this: the backend had stopped calling a
+  // declined capability a failure, but the client collapsed every non-success
+  // status into `error`, so `ls` with no folder shared still rendered "Failed".
+  it("keeps a declined capability out of the error status", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "call-1", tool_name: "ls" },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-1",
+          tool_name: "ls",
+          status: "unavailable",
+          error_code: "workspace_no_grants",
+          safe_message:
+            "No host folders have been shared with this workspace yet.",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe("unavailable");
+    // The explanation survives — it is the whole value of the card.
+    expect(entries[0].errorMessage).toBe(
+      "No host folders have been shared with this workspace yet.",
+    );
+  });
+
+  it("still reports a genuine tool failure as an error", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_result", {
+        payload: { call_id: "call-2", tool_name: "ls", status: "failed" },
+      }),
+    ]);
+
+    expect(entries[0].status).toBe("error");
+  });
+
   it("collapses a started→result pair into one complete card with the right fields", () => {
     nextSeq = 0;
     const entries = projectToolCalls([
@@ -799,6 +839,43 @@ describe("eventProjector.projectToolCalls", () => {
       }),
     ]);
     expect(entries.map((e) => e.id)).toEqual(["mc-1"]);
+  });
+
+  it("excludes tools the server marked internal", () => {
+    // THE regression behind the raw "Calling write_todos" tile: the backend
+    // already stamps `visibility: "internal"` on both frames of every tool in
+    // its internal set, and `project()` honoured it — this pass did not, so the
+    // card rendered anyway, beside the surface built to replace it.
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        visibility: "internal",
+        payload: { call_id: "todo-1", tool_name: "write_todos" },
+      }),
+      makeEnvelope("tool_result", {
+        visibility: "internal",
+        payload: {
+          call_id: "todo-1",
+          tool_name: "write_todos",
+          status: "completed",
+        },
+      }),
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "mc-1", tool_name: "web_search" },
+      }),
+    ]);
+    expect(entries.map((e) => e.id)).toEqual(["mc-1"]);
+  });
+
+  it("excludes audit-visibility tools alongside internal ones", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        visibility: "audit",
+        payload: { call_id: "aud-1", tool_name: "record_something" },
+      }),
+    ]);
+    expect(entries).toEqual([]);
   });
 
   it("is idempotent on replay (deduplicates by event_id)", () => {

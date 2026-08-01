@@ -73,6 +73,16 @@ describe("SettingsSurface — shell & layout (FR-5.1 / FR-5.2 / FR-5.6)", () => 
     );
   });
 
+  it("emits the nav hook hosts with native window chrome inset against", () => {
+    // Settings suppresses the shell topbar, so on desktop this column is what
+    // sits under the traffic lights and the windowed brand mark. The desktop
+    // host selects it to reserve the title-bar band (apps/desktop/renderer/
+    // desktop.css); dropping the attribute silently re-opens that collision.
+    renderSurface();
+    const tablist = screen.getByRole("tablist", { name: "Settings sections" });
+    expect(tablist).toHaveAttribute("data-settings-nav");
+  });
+
   it("renders the solo nav groups with their section tabs", () => {
     renderSurface();
     expect(screen.getByText("Account")).toBeInTheDocument();

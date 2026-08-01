@@ -110,6 +110,15 @@ _SKIP_DIRS = {
     "dist",
     "node_modules",
     "out",
+    # The desktop staged runtime (``apps/desktop/resources/``, gitignored via
+    # apps/desktop/.gitignore and written by tools/desktop-runtime/stage.mjs).
+    # It holds a COPY of the built web assets, so every package selector in the
+    # bundle reads as an app-side shadow of itself and the guard fires with
+    # hundreds of findings about files that are not source. Staging is a
+    # documented step — it is what the desktop journeys in
+    # tools/desktop-journeys/ require — so this fired for anyone who ran them
+    # and then tried to commit anything at all.
+    "resources",
     "storybook-static",
     "venv",
 }

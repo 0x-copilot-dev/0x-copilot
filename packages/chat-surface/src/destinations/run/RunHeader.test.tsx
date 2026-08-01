@@ -25,10 +25,20 @@ describe("RunHeader", () => {
       gap: "12px",
       padding: "0px 13px",
     });
-    expect(screen.getByTestId("run-header-title").textContent).toBe(
-      "0xCopilot—Studio",
-    );
     expect(screen.queryByTestId("run-header-window-dots")).toBeNull();
+
+    // PRD-02 — the goal is VISIBLE, not clipped to 1x1. This is the whole
+    // finding: the bar computed the goal and then rendered it into
+    // `clip: rect(0,0,0,0)`.
+    const goal = screen.getByTestId("run-header-goal");
+    expect(getComputedStyle(goal).clip).not.toBe("rect(0px, 0px, 0px, 0px)");
+    expect(getComputedStyle(goal).position).not.toBe("absolute");
+
+    // D-2.3 — the mode is stated ONCE, by the control that owns it. The old bar
+    // said it twice on one 38px row.
+    expect(screen.getByTestId("run-header").textContent).not.toContain(
+      "0xCopilot",
+    );
   });
 
   it("falls back to idle copy when the goal is null/empty (never a blank h2, and the kicker never claims a run)", () => {
@@ -100,24 +110,95 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("probe").textContent).toBe("working");
   });
 
-  it("keeps the design window identity centred while the mode control owns the command edge", () => {
-    const { container } = render(
+  // PRD-02 FR-2.7 — the goal absorbs the row; nothing else may shrink.
+  it("gives the goal the flexible track and pins the status + mode clusters", () => {
+    render(
       <RunHeader
         goal="A deliberately long run goal that must not move the mode control"
         mode="studio"
         onModeChange={() => {}}
+        runStatus="running"
+        status={<span data-testid="probe">viewing 11:43</span>}
       />,
     );
 
     expect(screen.queryByTestId("run-header-window-dots")).toBeNull();
-    expect(screen.getByTestId("run-header-title")).toHaveStyle({
-      position: "absolute",
-      pointerEvents: "none",
+
+    // The goal is the ONLY thing that gives way, and it ellipsises rather than
+    // wrapping (a wrapping title would break the 38px row, FR-2.8).
+    expect(screen.getByTestId("run-header-goal")).toHaveStyle({
+      flex: "1",
+      minWidth: "0px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
     });
+
+    // Everything to its right is fixed — a long goal cannot push the mode
+    // control off the row.
+    expect(screen.getByTestId("run-header-status")).toHaveStyle({
+      flex: "none",
+    });
+    expect(screen.getByTestId("run-header-status-pulse")).toHaveStyle({
+      flexShrink: "0",
+    });
+    expect(screen.getByTestId("run-mode-switcher")).toHaveStyle({
+      flexShrink: "0",
+      marginLeft: "auto",
+    });
+  });
+
+  // PRD-02 D-2.6 — the accessible name must not repeat what is now visible.
+  it("announces the goal once, not twice", () => {
+    render(
+      <RunHeader
+        goal="Ship the renewal batch"
+        mode="studio"
+        onModeChange={() => {}}
+      />,
+    );
+    const occurrences = screen.getAllByText("Ship the renewal batch");
+    expect(occurrences).toHaveLength(1);
+    // The kicker has no visible equivalent now, so it stays hidden-but-present.
+    const kicker = screen.getByTestId("run-header-kicker");
+    expect(kicker.textContent).toBe("ACTIVE RUN");
+    expect(getComputedStyle(kicker).clip).toBe("rect(0px, 0px, 0px, 0px)");
+  });
+
+  // PRD-02 D-2.2 / FR-2.9 — narrow surface behaviour.
+  it("shortens the mode control and hides the pulse LABEL at compact", () => {
+    const { rerender } = render(
+      <RunHeader
+        goal="G"
+        mode="focus"
+        onModeChange={() => {}}
+        runStatus="running"
+      />,
+    );
+    expect(screen.getByTestId("run-mode-focus").textContent).toBe("Focus");
+    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
+      "working",
+    );
+
+    rerender(
+      <RunHeader
+        goal="G"
+        mode="focus"
+        onModeChange={() => {}}
+        runStatus="running"
+        compact
+      />,
+    );
+    expect(screen.getByTestId("run-mode-focus").textContent).toBe("F");
+    // The full label is still in the accessible name — a lone dot means nothing.
     expect(
-      container.querySelector("[data-testid='run-header-goal']")?.parentElement,
-    ).toHaveStyle({ position: "absolute" });
-    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
+      screen.getByTestId("run-mode-focus").getAttribute("aria-label"),
+    ).toBe("Focus mode");
+    // The dot survives; only its label is visually hidden.
+    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
+    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
+      "working",
+    );
   });
 
   // WC-P6b — the `● working` pulse chip is driven by `runStatus`.

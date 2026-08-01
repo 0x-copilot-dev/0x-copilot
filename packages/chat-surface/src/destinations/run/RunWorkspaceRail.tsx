@@ -88,7 +88,6 @@ import { COLLAPSED_RAIL_WIDTH } from "../../thread-canvas";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
-import { FocusPlan, type FocusPlanProjection } from "./FocusPlan";
 import type { RunMode } from "./useRunMode";
 
 /** The four rail tabs, in v3 order — Chat · Agents · Approvals · Sources
@@ -264,12 +263,6 @@ export interface RunWorkspaceRailProps {
    * Omit for a non-persistent, session-only collapse.
    */
   readonly onStudioCollapsedChange?: (collapsed: boolean) => void;
-  /**
-   * The compact plan for Focus. It is derived by the cockpit from the same run
-   * event stream as the transcript, so it is never a second subscription or a
-   * client-side guess from the user's prompt.
-   */
-  readonly focusPlan?: FocusPlanProjection;
   /** Whether the bound run is currently live; controls the honest activity cue. */
   readonly focusActivityLive?: boolean;
 }
@@ -305,7 +298,6 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     onPanelCollapsedChange,
     studioCollapsed,
     onStudioCollapsedChange,
-    focusPlan,
     focusActivityLive = false,
   } = props;
 
@@ -716,7 +708,6 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
               onSelect: (id) => setActiveTab(id),
               onCollapse: () => setCollapsed(true),
               body: focusPanelBody,
-              plan: focusPlan,
               live: focusActivityLive,
             })
         : null}
@@ -737,13 +728,12 @@ interface FocusPanelArgs {
   readonly onSelect: (id: FocusPanelTab) => void;
   readonly onCollapse: () => void;
   readonly body: ReactNode;
-  readonly plan?: FocusPlanProjection;
   readonly live: boolean;
 }
 
 /** Expanded (340px) Focus Activity panel (`.sd` in copilot-v3.css). */
 function renderFocusPanel(args: FocusPanelArgs): ReactElement {
-  const { tabItems, activeTab, onSelect, onCollapse, body, plan, live } = args;
+  const { tabItems, activeTab, onSelect, onCollapse, body, live } = args;
   return (
     <aside
       data-testid="tc-focus-panel"
@@ -784,7 +774,6 @@ function renderFocusPanel(args: FocusPanelArgs): ReactElement {
         style={focusPanelBodyStyle}
       >
         {body}
-        {plan !== undefined ? <FocusPlan projection={plan} /> : null}
       </div>
     </aside>
   );

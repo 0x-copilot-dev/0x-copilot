@@ -31,11 +31,11 @@ from agent_runtime.capabilities.workspace.effects import (
 )
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
 from agent_runtime.capabilities.workspace.operation_port import WorkspaceOperationPort
+from agent_runtime.capabilities.workspace.policy_answers import WorkspacePolicyAnswers
 
-_UNAVAILABLE = (
-    "Local workspace access is unavailable. Create an artifact or download "
-    "instead; no local file was changed."
-)
+# A declared policy answer, not a fault. The text lives in the registry so the
+# tool_result classifier can recognise it as a decision; see policy_answers.py.
+_UNAVAILABLE = WorkspacePolicyAnswers.UNAVAILABLE
 
 
 class WorkspaceGatewayBackend(BackendProtocol):

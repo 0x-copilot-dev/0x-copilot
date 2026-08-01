@@ -960,12 +960,14 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     expect(onReject).toHaveBeenCalledWith("appr-1");
   });
 
-  it("does not pin a resolved approval above the composer", () => {
-    // A resolved approval is HISTORY, not a live decision. Once approved, the
-    // run continues and its result is already in the transcript, so a
-    // "✓ Approved · <name>" line pinned above the input adds nothing and pushes
-    // the conversation up. The record is not lost — the Approvals tab projects
-    // every decision from the same event stream.
+  it("keeps a resolved approval in the transcript, never pinned above the composer", async () => {
+    // The original rule here was "a resolved approval is history, so drop it" —
+    // right while approvals were PINNED (a "✓ Approved" line above the input
+    // added nothing and pushed the conversation up), and wrong once they are
+    // anchored in the transcript. Inline, dropping it would reflow the thread
+    // mid-conversation and erase the record of who decided what, in place.
+    //
+    // The half that still holds is the half about pinning, so both are asserted.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const { rerender } = render(
       withTransport(
@@ -977,9 +979,13 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
-    // ...and no pending card either: it is resolved.
+    const receipt = await screen.findByTestId(
+      "tc-chat-approval-receipt-appr-1",
+    );
+    expect(screen.getByTestId("tc-chat-messages").contains(receipt)).toBe(true);
+    // Resolved ⇒ no live decision surface, and nothing pinned.
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
 
     rerender(
       withTransport(
@@ -991,7 +997,9 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
+    expect(
+      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toHaveAttribute("data-decision", "rejected");
   });
 
   it("renders a pending approval as a `.conf-card` in Focus mode", () => {
@@ -1587,5 +1595,291 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(
       screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
     ).toHaveAttribute("data-state", "pending");
+  });
+});
+
+describe("TcChat — agent todos", () => {
+  const TODOS = {
+    listId: "run-1:todos:1",
+    generation: 1,
+    todos: [
+      { content: "Pull the Q3 export", status: "completed" as const },
+      { content: "Reconcile ids", status: "in_progress" as const },
+    ],
+    completedCount: 1,
+    isComplete: false,
+    sequenceNo: 4,
+  };
+
+  it("pins the checklist directly above the composer in Studio", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" todos={TODOS} />,
+      ),
+    );
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(panel.nextElementSibling).toBe(
+      screen.getByTestId("tc-chat-composer-slot"),
+    );
+  });
+
+  it("pins the same checklist above the composer in Focus", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" todos={TODOS} />,
+      ),
+    );
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(panel.nextElementSibling).toBe(
+      screen.getByTestId("tc-chat-composer-slot"),
+    );
+  });
+
+  it("renders no panel for a run that never opened a checklist", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="studio" />),
+    );
+
+    await screen.findByTestId("tc-chat");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
+  });
+
+  it("hides the checklist while the transcript is scrubbed", async () => {
+    // The snapshot carries no per-row timestamps, so there is nothing to rewind
+    // it to. Showing today's list beside a time-travelled transcript would
+    // assert a state that did not hold at the cut.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat conversationId="c" mode="studio" todos={TODOS} />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+
+    await screen.findByTestId("tc-chat-ghost-banner");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
+  });
+});
+
+describe("TcChat — inline approvals", () => {
+  it("anchors the card in the transcript, not in a pinned strip", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[approval()]} />,
+      ),
+    );
+
+    const card = await screen.findByTestId("tc-chat-approval-item-appr-1");
+    expect(screen.getByTestId("tc-chat-messages").contains(card)).toBe(true);
+    // The two strips are gone, in BOTH modes.
+    expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
+    expect(screen.queryByTestId("tc-chat-conf-cards")).toBeNull();
+  });
+
+  it("renders a pending approval even while the messages are still loading", async () => {
+    // The regression the strip was structurally immune to: approvals used to
+    // live outside the load state. Inline, an early return on `loading` hid a
+    // parked run's only way out.
+    let release: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const { transport } = makeTransport(() => pending as Promise<unknown>);
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[approval()]} />,
+      ),
+    );
+
+    expect(screen.getByTestId("tc-chat-loading")).toBeInTheDocument();
+    expect(
+      await screen.findByTestId("tc-chat-approval-item-appr-1"),
+    ).toBeInTheDocument();
+    release(SAMPLE_RESPONSE);
+  });
+
+  it("offers one waiting affordance per pending approval count, and none when resolved", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[
+            approval(),
+            approval({ approvalId: "appr-2", title: "Second ask" }),
+          ]}
+        />,
+      ),
+    );
+
+    const waiting = await screen.findByTestId("tc-chat-approvals-waiting");
+    expect(waiting).toHaveAttribute("data-pending-count", "2");
+    expect(waiting).toHaveTextContent("2 approvals waiting");
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[approval({ resolved: true, decision: "approved" })]}
+        />,
+      ),
+    );
+    expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
+  });
+
+  it("marks the in-progress todo as waiting while an approval is pending", async () => {
+    // The spinner asserts motion; a parked run has none. `SUBAGENT_PAUSED`
+    // exists because paused-ness must never be inferred from the ABSENCE of a
+    // completion — a pending approval is a positive fact, so this is sound.
+    const todos = {
+      listId: "run-1:todos:1",
+      generation: 1,
+      todos: [
+        { content: "Read the folder", status: "in_progress" as const },
+        { content: "Summarise it", status: "pending" as const },
+      ],
+      completedCount: 0,
+      isComplete: false,
+      sequenceNo: 3,
+    };
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          todos={todos}
+          approvals={[approval()]}
+        />,
+      ),
+    );
+
+    await screen.findByTestId("tc-todo-list");
+    expect(screen.getByTestId("tc-todo-list")).toHaveAttribute(
+      "data-blocked",
+      "true",
+    );
+    const row = screen.getAllByTestId("tc-todo-row")[0];
+    expect(row).toHaveAttribute("data-waiting", "true");
+    expect(within(row).getByTestId("tc-todo-waiting")).toBeInTheDocument();
+    expect(within(row).queryByTestId("tc-todo-spinner")).toBeNull();
+
+    // Resolve it and the row goes back to spinning: work has resumed.
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          todos={todos}
+          approvals={[approval({ resolved: true, decision: "approved" })]}
+        />,
+      ),
+    );
+    const resumed = screen.getAllByTestId("tc-todo-row")[0];
+    expect(resumed).toHaveAttribute("data-waiting", "false");
+    expect(within(resumed).getByTestId("tc-todo-spinner")).toBeInTheDocument();
+  });
+
+  it("leaves the checklist unblocked when nothing is pending", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          todos={{
+            listId: "run-1:todos:1",
+            generation: 1,
+            todos: [{ content: "Working", status: "in_progress" as const }],
+            completedCount: 0,
+            isComplete: false,
+            sequenceNo: 1,
+          }}
+        />,
+      ),
+    );
+
+    await screen.findByTestId("tc-todo-list");
+    expect(screen.getByTestId("tc-todo-list")).toHaveAttribute(
+      "data-blocked",
+      "false",
+    );
+    expect(screen.getByTestId("tc-todo-spinner")).toBeInTheDocument();
+  });
+});
+
+// PRD-03 (D-3.1) — the fold is unit-tested in `groupActivity.test.ts`, but that
+// proves only the pure function. These assert the WIRING: that `TcChat` passes
+// an `isGroupable` which leaves an approval outside the collapsed group.
+//
+// The hazard is specific and this file already documents its cousin: an
+// approval buried in a collapsed group is a parked run with no visible way out.
+describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () => {
+  it("renders a pending approval OUTSIDE the tool-run group", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({ id: "call-1", createdAtMs: 1716000010000 }),
+            toolCall({ id: "call-2", createdAtMs: 1716000020000 }),
+          ]}
+          approvals={[approval({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    // Assert the group EXISTS first — otherwise a fold that grouped nothing at
+    // all would satisfy the containment check vacuously.
+    const groups = screen.getAllByTestId("tool-run-group");
+    expect(groups).toHaveLength(1);
+    for (const group of groups) {
+      expect(group.contains(card)).toBe(false);
+    }
+    // And the approve control is actually clickable, not just present.
+    expect(screen.getByTestId("tc-chat-approval-approve-appr-1")).toBeVisible();
+  });
+
+  it("splits a run of tool calls in two when an approval lands between them", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({ id: "call-1", createdAtMs: 1716000010000 }),
+            toolCall({ id: "call-2", createdAtMs: 1716000020000 }),
+            toolCall({ id: "call-3", createdAtMs: 1716000040000 }),
+            toolCall({ id: "call-4", createdAtMs: 1716000050000 }),
+          ]}
+          approvals={[approval({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    expect(screen.getAllByTestId("tool-run-group")).toHaveLength(2);
   });
 });
