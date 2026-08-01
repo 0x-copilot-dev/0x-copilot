@@ -293,20 +293,27 @@ describe("desktop Run cockpit — the mid-run folder ask", () => {
       expect(decisionPosts(recorder)).toHaveLength(1);
     });
     expect(decisionPosts(recorder)[0]?.body).toEqual({ decision: "approved" });
-    // The ask is settled, not left hanging. It used to be observed via an
-    // approved RECEIPT, but a resolved approval is no longer pinned above the
-    // composer: by then the run has continued and its result is in the
-    // transcript, so the receipt carried no information and only cost height.
-    // The invariant it was really protecting — the card gives way and nothing
-    // is left dangling — is what is asserted now.
+    // The ask is settled, not left hanging: the decision surface gives way.
+    //
+    // Where the receipt goes has now flipped twice, so the reasoning is worth
+    // keeping. It was dropped when approvals were PINNED above the composer —
+    // by then the run had continued, so a "✓ Approved" line carried no
+    // information and only cost height. Approvals are now anchored in the
+    // transcript instead, and there the receipt is the opposite: the only
+    // record of who decided what, at the point it was decided. So it is back,
+    // and it must be INSIDE the transcript rather than pinned.
     await waitFor(() => {
       expect(card(container)).toBeNull();
     });
+    const receipt = container.querySelector(
+      `[data-testid='tc-chat-approval-receipt-${APPROVAL_ID}']`,
+    );
+    expect(receipt).not.toBeNull();
     expect(
-      container.querySelector(
-        `[data-testid='tc-chat-approval-receipt-${APPROVAL_ID}']`,
-      ),
-    ).toBeNull();
+      container
+        .querySelector("[data-testid='tc-chat-messages']")
+        ?.contains(receipt as Node),
+    ).toBe(true);
   });
 
   it("shows the failure and leaves the run paused when the capability is opted out", async () => {
