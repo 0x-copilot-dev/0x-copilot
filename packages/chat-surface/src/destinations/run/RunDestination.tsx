@@ -174,6 +174,8 @@ import { CanvasFocusCards } from "./CanvasFocusCards";
 import { CanvasLifecyclePanel } from "./CanvasLifecyclePanel";
 import { EffectStageCard } from "./EffectStageCard";
 import { projectCanvasLifecycle } from "./canvasLifecycle";
+import { projectRunTerminalBeat } from "./runTerminalBeat";
+import { RunTerminalBeatCard } from "./RunTerminalBeatCard";
 import {
   useConversationCanvas,
   type ConversationCanvasSubject,
@@ -2169,6 +2171,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     () => (surfacesV2 ? projectCanvasLifecycle(session.events) : null),
     [surfacesV2, session.events],
   );
+  // The run's own verdict — projected off the SAME event array as everything
+  // else (FR-3.3). It renders in the chat stream, not on the canvas, so a run
+  // has exactly one statement about how it ended. Suppressed while scrubbed:
+  // a verdict about the end of the run is a lie at an earlier cursor.
+  const runTerminalBeat = useMemo(
+    () =>
+      scrubbedSeq === null ? projectRunTerminalBeat(session.events) : null,
+    [scrubbedSeq, session.events],
+  );
+
   const displayedCanvasLifecycle = useMemo(() => {
     if (!surfacesV2) return null;
     if (scrubbedSeq === null) return canvasLifecycle;
@@ -4008,6 +4020,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // by the point each tool ran (running spinner → done/error).
         toolCalls={conversationToolCalls.toolCalls}
         toolCallCitations={toolCallCitations}
+        // The run's terminal verdict, last in the stream. Only drawn when the
+        // run actually died without answering, and only actionable when the
+        // runtime said a retry could change the outcome.
+        terminalBeat={
+          runTerminalBeat === null ? undefined : (
+            <RunTerminalBeatCard
+              beat={runTerminalBeat}
+              goal={derivedGoal}
+              starting={isStartingRun}
+              {...(derivedGoal !== null && derivedGoal.trim() !== ""
+                ? {
+                    onStartNewRun: () => {
+                      void handleStartRun({ goal: derivedGoal });
+                    },
+                  }
+                : {})}
+            />
+          )
+        }
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}
         onApprove={handleApprove}
