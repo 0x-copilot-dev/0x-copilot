@@ -82,7 +82,9 @@ from tests.unit.agent_runtime.capabilities.middleware.test_runtime_tool_control_
 #: so every child that *was* admitted alongside this one has arrived. Widening
 #: it can never merge two waves that genuinely did not overlap, because under an
 #: exclusive permit the next child is not merely late — it is not running.
-_QUIESCENCE_YIELDS = 32
+#: Widened 32 -> 1024 after CI flaked under load; kept identical in value to
+#: ``_ConcurrencyProbe.YIELDS``. Widening is always safe, so do not lower it.
+_QUIESCENCE_YIELDS = 1024
 
 
 class _WaveClock:

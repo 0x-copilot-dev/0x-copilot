@@ -74,7 +74,9 @@ from tests.unit.agent_runtime.capabilities.middleware.test_runtime_tool_control_
 #: more turns than the admission path spends between the gate and the tool body.
 #: Widening it can never manufacture overlap, because under an exclusive permit
 #: the next child is not merely late — it is not running.
-_QUIESCENCE_YIELDS = 32
+#: Widened 32 -> 1024 after CI flaked under load; kept identical in value to
+#: ``_ConcurrencyProbe.YIELDS``. Widening is always safe, so do not lower it.
+_QUIESCENCE_YIELDS = 1024
 
 _CAPABILITY_REF = graph_capability_ref(_TOOL)
 
