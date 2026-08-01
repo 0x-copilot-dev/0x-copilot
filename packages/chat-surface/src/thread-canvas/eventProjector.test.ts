@@ -511,6 +511,46 @@ describe("eventProjector.projectToolCalls", () => {
     expect(projectToolCalls([])).toEqual([]);
   });
 
+  // A live desktop journey caught this: the backend had stopped calling a
+  // declined capability a failure, but the client collapsed every non-success
+  // status into `error`, so `ls` with no folder shared still rendered "Failed".
+  it("keeps a declined capability out of the error status", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "call-1", tool_name: "ls" },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-1",
+          tool_name: "ls",
+          status: "unavailable",
+          error_code: "workspace_no_grants",
+          safe_message:
+            "No host folders have been shared with this workspace yet.",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe("unavailable");
+    // The explanation survives — it is the whole value of the card.
+    expect(entries[0].errorMessage).toBe(
+      "No host folders have been shared with this workspace yet.",
+    );
+  });
+
+  it("still reports a genuine tool failure as an error", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_result", {
+        payload: { call_id: "call-2", tool_name: "ls", status: "failed" },
+      }),
+    ]);
+
+    expect(entries[0].status).toBe("error");
+  });
+
   it("collapses a started→result pair into one complete card with the right fields", () => {
     nextSeq = 0;
     const entries = projectToolCalls([

@@ -6,16 +6,23 @@ import type { CanvasLifecycleState } from "./canvasLifecycle";
 export const CHAT_ONLY_CANVAS_COPY =
   "This run completed in chat. No artifact was created.";
 
+/**
+ * The canvas' empty state. It reports on the CANVAS — never on the run.
+ *
+ * It carries no failure state and no action. It previously rendered a
+ * "This run needs attention" alarm with a "Retry run" button; both are gone.
+ * The alarm contradicted the chat pane whenever the agent recovered, and the
+ * button was wired to an SSE reconnect, so it could not retry anything. A
+ * terminal run failure is now reported once, in the chat stream.
+ */
 export function CanvasLifecyclePanel(props: {
   readonly lifecycle: CanvasLifecycleState;
-  readonly failure: string | null;
-  readonly onRetry?: () => void;
 }): ReactElement | null {
-  const content = contentFor(props.lifecycle, props.failure);
+  const content = contentFor(props.lifecycle);
   if (content === null) return null;
   return (
     <section
-      aria-live={props.lifecycle === "failed" ? "assertive" : "polite"}
+      aria-live="polite"
       data-testid="canvas-lifecycle-panel"
       data-lifecycle={props.lifecycle}
       style={panelStyle}
@@ -23,18 +30,12 @@ export function CanvasLifecyclePanel(props: {
       <p style={eyebrowStyle}>{content.eyebrow}</p>
       <h2 style={titleStyle}>{content.title}</h2>
       <p style={copyStyle}>{content.copy}</p>
-      {props.lifecycle === "failed" && props.onRetry !== undefined ? (
-        <button type="button" onClick={props.onRetry} style={retryStyle}>
-          Retry run
-        </button>
-      ) : null}
     </section>
   );
 }
 
 function contentFor(
   lifecycle: CanvasLifecycleState,
-  failure: string | null,
 ): { eyebrow: string; title: string; copy: string } | null {
   switch (lifecycle) {
     case "assembling":
@@ -54,12 +55,6 @@ function contentFor(
         eyebrow: "WAITING",
         title: "Waiting for your approval or access",
         copy: "Review the compact cards in Focus or open Studio to continue.",
-      };
-    case "failed":
-      return {
-        eyebrow: "RUN INTERRUPTED",
-        title: "This run needs attention",
-        copy: failure ?? "The run could not finish. You can retry safely.",
       };
     case "complete_empty":
       return {
@@ -100,13 +95,4 @@ const titleStyle: CSSProperties = {
 const copyStyle: CSSProperties = {
   margin: 0,
   color: "var(--color-text-muted, #9aa1af)",
-};
-const retryStyle: CSSProperties = {
-  justifySelf: "start",
-  border: "1px solid var(--color-border, #30343d)",
-  borderRadius: "var(--radius-sm, 6px)",
-  padding: "var(--space-2, 8px) var(--space-3, 12px)",
-  color: "var(--color-text, #f4f5f6)",
-  background: "var(--color-surface-raised, #202530)",
-  cursor: "pointer",
 };

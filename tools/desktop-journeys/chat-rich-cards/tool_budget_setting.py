@@ -50,9 +50,18 @@ JS_ASSISTANT_COUNT = (
     '[data-role=assistant]").length'
 )
 
+# What a run-interrupted state looks like NOW. The canvas no longer renders a
+# run verdict at all ("RUN INTERRUPTED" / "This run needs attention" were
+# deleted with the panel's retry button), so matching on those strings would
+# make this detector permanently silent — a guard that cannot fire reports
+# nothing. A dead run now shows the terminal beat in the chat stream, so we
+# check for that element AND still match the failure copy a tool card can
+# legitimately carry.
 JS_INTERRUPT_TEXT = """(()=>{
+  const beat=document.querySelector('[data-testid="run-terminal-beat"]');
+  if(beat) return ('RUN TERMINAL BEAT: '+(beat.innerText||'')).slice(0,400);
   const body=document.body?document.body.innerText:'';
-  return /RUN INTERRUPTED|This run needs attention|didn't return a result/i
+  return /didn't return a result|Run interrupted|Run timed out/i
     .test(body) ? body.slice(0,400) : '';
 })()"""
 

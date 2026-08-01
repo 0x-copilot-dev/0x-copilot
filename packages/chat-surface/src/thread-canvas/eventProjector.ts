@@ -163,7 +163,7 @@ export interface ToolCallEntry {
   /** Display label — backend `display_title`, falling back to `toolName`. */
   readonly title: string;
   /** Lifecycle: `running` until a result frame lands, then `complete`/`error`. */
-  readonly status: "running" | "complete" | "error";
+  readonly status: "running" | "complete" | "error" | "unavailable";
   /** Latest streamed call arguments, when present. */
   readonly args?: Record<string, unknown>;
   /** Result output from the `tool_result` payload, when present. */
@@ -889,7 +889,7 @@ interface MutableToolCall {
   key: string;
   toolName: string;
   title: string | null;
-  status: "running" | "complete" | "error";
+  status: "running" | "complete" | "error" | "unavailable";
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
   summary?: string;
@@ -1086,12 +1086,18 @@ function agentToolDisplayValue(
 
 /** A completed result frame flips the card to `complete`; anything else (failed,
  *  timed_out, abandoned, cancelled, …) reads as `error`. The mere presence of a
- *  result frame with no status means the tool returned — treat as complete. */
+ *  result frame with no status means the tool returned — treat as complete.
+ *
+ *  `unavailable` is its own outcome, not a flavour of either: the capability
+ *  was declined by policy, so no work happened (`complete` would overstate it)
+ *  and nothing broke (`error` would invent a fault). Collapsing it into `error`
+ *  here is what kept a declined `ls` rendering as a failed step even after the
+ *  backend had stopped calling it one. */
 function mapResultStatus(
   event: RuntimeEventEnvelope,
   priorStatus: MutableToolCall["status"] | undefined,
   hasStructuredError = false,
-): "complete" | "error" {
+): "complete" | "error" | "unavailable" {
   if (hasStructuredError) {
     return "error";
   }
@@ -1107,6 +1113,9 @@ function mapResultStatus(
       return "error";
     }
     return "complete";
+  }
+  if (raw.toLowerCase() === "unavailable" || raw === "Not available") {
+    return "unavailable";
   }
   if (
     raw.toLowerCase() === "completed" ||

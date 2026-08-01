@@ -85,6 +85,7 @@ def snapshot(projection: CanvasLifecycleProjection) -> dict[str, object]:
         "failure": value.failure,
         "hasFinalResponse": value.has_final_response,
         "terminal": value.terminal,
+        "terminalStatus": value.terminal_status,
     }
 
 

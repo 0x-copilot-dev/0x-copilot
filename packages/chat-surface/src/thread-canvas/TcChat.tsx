@@ -296,6 +296,14 @@ export interface TcChatProps {
    */
   readonly toolCalls?: readonly ToolCallEntry[];
   /**
+   * The run's terminal verdict, rendered as the final beat of the stream. The
+   * host projects and owns it (`projectRunTerminalBeat` +
+   * `RunTerminalBeatCard`); the chat only places it last. It lives here rather
+   * than on the canvas so a run has exactly ONE statement about how it ended,
+   * in the column the user is already reading.
+   */
+  readonly terminalBeat?: ReactNode;
+  /**
    * Run-scoped citations supplied by the cockpit's canonical event projection.
    * Inline source cards select only citations whose backend-issued
    * `source_tool_call_id` matches their tool call; no source is inferred.
@@ -468,6 +476,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
     renderComposer,
+    terminalBeat,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -577,6 +586,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         toolCallCitations={toolCallCitations}
         mode={mode}
         markdownComponents={markdownComponents}
+        terminalBeat={terminalBeat}
       />
     </div>
   );
@@ -956,6 +966,7 @@ interface MessageListBodyProps {
   readonly toolCallCitations: readonly CitationSourceRef[];
   readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
+  readonly terminalBeat?: ReactNode;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -968,6 +979,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     toolCallCitations,
     mode,
     markdownComponents,
+    terminalBeat,
   } = props;
   if (state.status === "loading" || state.status === "idle") {
     return (
@@ -983,7 +995,12 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       </div>
     );
   }
-  if (messages.length === 0 && fleets.length === 0 && toolCalls.length === 0) {
+  if (
+    messages.length === 0 &&
+    fleets.length === 0 &&
+    toolCalls.length === 0 &&
+    terminalBeat === undefined
+  ) {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-empty">
         No messages yet.
@@ -1005,6 +1022,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
         }
         return renderMessage(item.message, markdownComponents);
       })}
+      {terminalBeat}
     </ul>
   );
 }

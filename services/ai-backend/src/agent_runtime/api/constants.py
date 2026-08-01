@@ -298,6 +298,11 @@ class Values:
         RUNNING = "running"
         SKIPPED = "skipped"
         STARTED = "started"
+        # A capability declined by policy rather than a fault: the operation
+        # was answered correctly ("not available here, do X instead"), so it
+        # must stay out of the failure taxonomy. See
+        # agent_runtime.capabilities.workspace.policy_answers.
+        UNAVAILABLE = "unavailable"
         WAITING = "waiting"
 
     class AgentRole:

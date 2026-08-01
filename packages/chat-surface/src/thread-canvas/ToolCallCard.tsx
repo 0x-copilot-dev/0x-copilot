@@ -78,8 +78,11 @@ function renderHeader(
   const provenance = provenanceLabel(toolCall);
   const access = accessLabel(toolCall.accessMode);
   const duration = formatDuration(toolCall.durationMs);
+  // A declined capability carries its explanation on `safe_message` exactly
+  // like a failure does — and that sentence is the whole value of the card,
+  // since it says what to do instead. It renders in the neutral style below.
   const summary =
-    toolCall.status === "error"
+    toolCall.status === "error" || toolCall.status === "unavailable"
       ? (toolCall.errorMessage ?? toolCall.summary)
       : toolCall.summary;
 
@@ -123,6 +126,8 @@ function renderHeader(
             <span className="tc-tool-card__spinner" style={spinnerStyle} />
           ) : toolCall.status === "error" ? (
             "!"
+          ) : toolCall.status === "unavailable" ? (
+            "—"
           ) : (
             "✓"
           )}
@@ -323,6 +328,9 @@ function statusText(status: ToolCallEntry["status"]): string {
       return "Done";
     case "error":
       return "Failed";
+    case "unavailable":
+      // Neither "Done" (no work happened) nor "Failed" (nothing broke).
+      return "Not available";
   }
 }
 

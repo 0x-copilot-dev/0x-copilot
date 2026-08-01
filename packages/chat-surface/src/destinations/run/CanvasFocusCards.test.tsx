@@ -23,6 +23,7 @@ const terminalReceipt: CanvasLifecycleProjection = {
   failure: null,
   hasFinalResponse: true,
   terminal: true,
+  terminalStatus: "completed",
 };
 
 describe("CanvasFocusCards", () => {
