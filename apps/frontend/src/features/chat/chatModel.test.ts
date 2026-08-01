@@ -1164,6 +1164,50 @@ describe("applyRuntimeEvent", () => {
     });
   });
 
+  it("keeps a folder ask out of the raw approval args strip", () => {
+    // `workspace_grant` and `grant_scope` name a real host folder, and the
+    // whole point of a folder ask is that the path appears in ONE place: a
+    // consent card that frames what agreeing to it means. `argsText` is the
+    // "Visible args" debug strip — no framing, no consent, just JSON — so a
+    // path spilled there is the user's filesystem printed into the transcript
+    // for no decision at all. FAILS before both keys were hidden.
+    const items = applyRuntimeEvent(
+      [],
+      event({
+        event_id: "approval_fs",
+        event_type: "approval_requested",
+        activity_kind: "approval",
+        payload: {
+          approval_id: "approval_fs_1",
+          approval_kind: "filesystem",
+          message: "Let the agent read Downloads?",
+          grant_options: ["allow_once", "allow_always"],
+          workspace_grant: {
+            path: "/Users/ada/Very-Private-Client-Files",
+            folder_name: "Very-Private-Client-Files",
+            mode: "read_only",
+          },
+          grant_scope: {
+            path: "/Users/ada/Very-Private-Client-Files",
+            folder_name: "Very-Private-Client-Files",
+            mode: "read_only",
+          },
+        },
+      }),
+    );
+
+    const approval = toolPart(items, "approval_request");
+    // Still on `args`, because the CARD reads it from there.
+    expect(approval?.args).toMatchObject({
+      workspace_grant: { path: "/Users/ada/Very-Private-Client-Files" },
+    });
+    // …and nowhere in the rendered args text.
+    expect(approval?.argsText ?? "").not.toContain("Very-Private-Client-Files");
+    expect(approval?.argsText ?? "").not.toContain("grant_scope");
+    expect(approval?.argsText ?? "").not.toContain("workspace_grant");
+    expect(approval?.argsText ?? "").not.toContain("grant_options");
+  });
+
   it("keeps approval and MCP auth as action tool parts", () => {
     let items: ChatItem[] = [];
 

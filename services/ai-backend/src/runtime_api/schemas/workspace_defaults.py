@@ -61,6 +61,7 @@ class _Fields:
     TOOL_CALLS_PER_RUN = "tool_calls_per_run"
     DEFAULT_LOCAL_MODEL = "default_local_model"
     TRAINING_DATA_OPT_OUT = "training_data_opt_out"
+    FILESYSTEM_BYPASS_ENABLED = "filesystem_bypass_enabled"
 
 
 # PR 4.3 — three small, well-known enums that gate the workspace-policy
@@ -254,6 +255,13 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
         max_length=_DEFAULT_LOCAL_MODEL_MAX_CHARS,
     )
     training_data_opt_out: bool = False
+    # PRD-FS-10 §4.3 tier 1 — the filesystem-bypass MASTER switch, and the
+    # only tier that is persisted. Default False, and the default is the
+    # product decision: until an operator turns this on, the composer must not
+    # OFFER a run/message bypass at all, and a request that carries one anyway
+    # resolves to manual (``FilesystemBypassResolver``). It rides the closed
+    # JSONB blob, so there is no column and no migration.
+    filesystem_bypass_enabled: bool = False
 
     @model_validator(mode="before")
     @classmethod

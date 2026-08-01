@@ -18,6 +18,7 @@ import {
 } from "@0x-copilot/chat-surface";
 
 import { modelSelectionForId } from "./desktopModelCatalog";
+import { useDesktopComposerBypass } from "./useDesktopComposerBypass";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
@@ -213,6 +214,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       autoActivateConnectorId,
     });
 
+  // Execution mode (PRD-FS-10 §4.3). Renders a disabled Manual pill until the
+  // Settings master switch is on, and yields the run-body field on submit.
+  const {
+    bypassTrigger,
+    filesystemBypass,
+    spend: spendBypass,
+  } = useDesktopComposerBypass({ disabled });
+
   // Older hosts without the connector adapter keep their single flat link.
   // Normal desktop runs render the richer Tools pill.
   const connectorsTrigger =
@@ -256,6 +265,10 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // request_context.paused_connectors (buildRunCreateBody applies both).
         webSearchEnabled,
         pausedConnectorIds,
+        // Composer bypass pill. `undefined` for the default Manual posture and
+        // whenever the master switch is off, so an ordinary send posts the
+        // byte-identical body it always did.
+        filesystemBypass,
       };
       // Route through the cockpit's ONE dispatch (§D3): it starts the run AND
       // binds the live session, so this 2nd/Nth message streams exactly like the
@@ -263,6 +276,10 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       // rejection propagates to `onSubmitError` (handleSubmitError) — the single
       // error channel — rather than being caught here; success clears any notice.
       await dispatch(request);
+      // Only after the send actually succeeded: a rejected run-create leaves
+      // the pill where the user put it, so a retry does not silently drop the
+      // bypass they chose.
+      spendBypass();
       setStartError(null);
     },
     [
@@ -272,6 +289,8 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       selectedModel,
       webSearchEnabled,
       pausedConnectorIds,
+      filesystemBypass,
+      spendBypass,
     ],
   );
 
@@ -311,9 +330,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         attachmentAdapter={attachmentAdapter}
         dictationPort={desktopDictationPort}
         filePicker={filePicker}
-        // Real host folders, granted not assumed: adds the `+` menu's folder row
-        // and a pill per active grant, whose dismiss REVOKES the access.
+        // Real host folders, granted not assumed. The capability also gates the
+        // execution-mode pill — with no grant port there is nothing to ask about.
         workspaceGrantPort={workspaceGrantPort}
+        // This composer only exists once a run is bound (the cockpit shows
+        // `RunEmptyComposer` until then), so the chat has always started by the
+        // time it mounts: no folder bar here, by the visibility rule in
+        // PRD-FS-10 §4.1. Stated rather than left to the default so the reader
+        // sees WHY the bar is missing mid-conversation.
+        hasSentFirstMessage
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}
         mcpServerInstructionPrompt={mcpServerInstructionPrompt}
@@ -326,6 +351,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onClearSkills={handleClearSkills}
         connectorsTrigger={connectorsTrigger}
         toolsTrigger={toolsTrigger}
+        bypassTrigger={bypassTrigger}
         // "Add a provider key" navigates to Settings → Provider keys (the one
         // surface); takes precedence over the inline port below.
         onAddProviderKey={onOpenModelSettings}

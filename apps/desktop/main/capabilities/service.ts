@@ -39,14 +39,55 @@ export class CapabilityService {
   }
 
   /**
-   * Open the native picker and, if the user selects a folder, mint a grant.
-   * Returns null when the user cancels. The renderer-supplied label is only a
-   * display hint (sanitized); the authoritative path is the picker's realpath
-   * and never leaves main.
+   * Mint a grant for a folder — chosen in the native picker, or NAMED by the
+   * caller for the mid-run "always allow" ask.
+   *
+   * Returns null when the user cancels the picker. The authoritative path is
+   * always a realpath resolved here and never leaves main.
+   *
+   * THE NAMED-PATH BRANCH is the durable half of a filesystem approval: the
+   * backend raised a card naming one folder, the user chose to attach it, and
+   * the grant must cover THAT folder — not a parent they might have picked by
+   * accident, and not a wider tree. It is deliberately more constrained than
+   * the picker branch on both axes a caller could otherwise abuse:
+   *
+   * * **read_only, always.** The named-path lane is reachable only from a
+   *   filesystem READ approval, and a filesystem interrupt must never authorize
+   *   a mutation — host writes go through the staged/attested workspace
+   *   protocol, not through a grant minted off a read card. So the requested
+   *   mode is ignored here rather than trusted.
+   * * **main derives the label.** A caller-supplied label WINS over the
+   *   basename, so honouring it would let a pill read "Downloads" over a grant
+   *   on Documents — a wrong claim of access, which is the defect rather than
+   *   the fix.
+   *
+   * * **the grant covers the string that was shown.** `FolderPicker.resolve`
+   *   confirms the named folder rather than resolving it: one realpath, and it
+   *   must be the identity. Nothing between the card and the grant is allowed
+   *   to move the answer, so the folder attached is the folder read. See that
+   *   method for why a second resolution is the defect and not a safeguard.
+   *
+   * `assertGrantableRoot` runs TWICE on this path — once here on the named
+   * string, before any filesystem lookup, and again inside `GrantStore.create`
+   * on the root about to be stored. Same pure function, so there is still one
+   * decision; the early call is what keeps a refused class (a system tree, a
+   * volume root, another account's home) from being probed at all, and keeps
+   * the sentence the user reads about the POLICY rather than about whether the
+   * folder happened to exist.
    */
   async requestFolderGrant(
     params: RequestFolderGrantParams,
   ): Promise<RendererGrant | null> {
+    if (params.path !== undefined) {
+      this.#store.assertGrantable(params.path);
+      const named = await this.#picker.resolve(params.path);
+      const grant = await this.#store.create({
+        root: named.root,
+        mode: "read_only",
+        label: named.label,
+      });
+      return toRendererGrant(grant);
+    }
     const picked = await this.#picker.pick();
     if (picked === null) return null;
     const label =

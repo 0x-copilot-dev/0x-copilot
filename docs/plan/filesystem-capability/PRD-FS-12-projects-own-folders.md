@@ -128,11 +128,44 @@ project, so moving it must not revoke them.
 
 - [ ] A project owns ≥1 folder; opening it makes those folders readable without prompting
 - [ ] Deleting a project revokes its grants, with the confirm dialog saying so
-- [ ] `.tmp/<conversation_id>/` created on first need, with `meta.json`
+- [x] `.tmp/<conversation_id>/` created on first need, with `meta.json`
 - [ ] Tool results, subagent artifacts and drafts are inspectable files at the paths in §3
-- [ ] Deleting a chat removes its `.tmp` directory
-- [ ] `.copilot` creation removed; read-only grants no longer a special case
-- [ ] A test proves the `.tmp` allow survives the dotted-segment matching trap (§5)
-- [ ] No chat title appears in any path, log line or error message
+- [x] Deleting a chat removes its `.tmp` directory
+- [x] `.copilot` creation removed; read-only grants no longer a special case
+- [x] A test proves the `.tmp` allow survives the dotted-segment matching trap (§5)
+- [x] No chat title appears in any path, log line or error message
 - [ ] Moving a chat between projects changes access forward-only and states what changes
 - [ ] Ad-hoc grants survive a project move
+
+### 7.1 What shipped, and what §3 still needs
+
+The `.tmp` foundation is in: `agent_runtime/capabilities/desktop/agent_scratch.py`
+owns the layout, the naming rule (D4 enforced structurally — an id that is not
+opaque RAISES rather than being sanitised), the `meta.json` (D5), the deletion
+verb (D6) and the literal allow rule (§5). `host_filesystem` no longer sites a
+`.copilot` anywhere (D7); `host_floor` admits the scratch for read and write and
+nothing beside it. Provisioning runs from `runtime_worker/agent_scratch_wiring.py`
+on the desktop gate only; deletion cascades from BOTH file-store deletion sites.
+
+**One correction to §5 worth recording**, found by mutating the rule and watching
+the tests stay green: because `COPILOT_HOME` is itself dotted (`~/.0xcopilot`),
+_every_ path beneath it is matcher-blind, so on the default configuration
+`_check_fs_permission` answers `allow` for the scratch whether or not the rule
+exists. `HostFilesystemFloor` is what genuinely decides there. The literal rule is
+still load-bearing — for a visible scratch name, and for the day upstream adds
+`DOTGLOB` — but the PRD's framing ("write the rule with a literal path and pin it
+with a test") is only half the job. The other half is that the floor must be
+keyed on the same root, which it now is. Tests assert each half against the layer
+that actually owns it.
+
+**The three namespace re-rootings are NOT done.** Each is its own change:
+
+| Namespace              | What blocks it                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/large_tool_results/` | The writer is `OffloadWriter = Callable[[str], str]` with no run scope, and the `/large_tool_results/<sha>` locator is parsed by `file/repair.py`, `file/_deletion.py`, `file/migration.py` and the object GC. Re-rooting means threading run scope through `ToolResultAdmissionAdapter` AND keeping the ledger's existing references resolvable. |
+| `/subagents/`          | `FileSubagentTraceBackend` is conversation-scoped over hashed JSONL and is read by the Run cockpit's Agents panel. Re-rooting to `<run>/subagents/` changes a read path the UI depends on.                                                                                                                                                        |
+| `/drafts/`             | `FileDraftStore` carries versioning plus `DRAFT_UPDATED` events and feeds the drafts→artifact lane. Moving the bytes must preserve both.                                                                                                                                                                                                          |
+
+The `.tmp` run/conversation tier directories (`<run>/tool-results/`,
+`<run>/subagents/`, `<conv>/drafts/`) are created and permission-correct, so each
+re-rooting is a write-site change rather than a foundation change.

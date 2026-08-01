@@ -462,6 +462,27 @@ export {
 } from "./composer";
 // === end Phase 1 (PR-1.3) ===
 
+// === Filesystem bypass (PRD-FS-10 §4.3) ===
+// The composer's execution-mode pill and the client half of the three-tier
+// decision. Hosts mount `<BypassPill>` into `AssistantComposer.bypassTrigger`,
+// gate `enabled` on the Settings master switch they already load, and map the
+// state onto `RunStartRequest.filesystemBypass` with `bypassSelectionForSend`.
+export {
+  BypassPill,
+  type BypassPillProps,
+  BYPASS_BOUND_NOTE,
+  BYPASS_BOUND_SUB,
+  BYPASS_DISABLED_TOOLTIP,
+  MANUAL_BYPASS_STATE,
+  bypassSelectionForSend,
+  bypassStateAfterSend,
+  type FilesystemBypassMode,
+  type FilesystemBypassScope,
+  type FilesystemBypassSelection,
+  type FilesystemBypassState,
+} from "./composer";
+// === end Filesystem bypass ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
@@ -1146,6 +1167,8 @@ export {
   createToolUsePolicyPort,
   approvalPolicyFromResponse,
   toolUsePolicyRequestFromValue,
+  filesystemBypassPatch,
+  withFilesystemBypass,
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
   type ApprovalPolicyProps,
@@ -2110,10 +2133,10 @@ export {
 //     upload and exposes no path, while a grant is a durable capability whose
 //     whole subject is a path. Web implements NEITHER — every consumer treats
 //     the port as optional and renders nothing without it.
-//   · `useWorkspaceFolderGrants` — the "what is attached" list behind the
-//     composer's Attach Folder row and the same list in Settings. The broker is
-//     the source of truth (every change re-reads `listGrants`) and a failed read
-//     is never rendered as an empty list.
+//   · `useWorkspaceFolderGrants` (+ `mostRecentFirst`) — the "what is attached"
+//     list behind `WorkspaceFolderBar` (the folder line above the composer) and
+//     the same list in Settings. The broker is the source of truth (every change
+//     re-reads `listGrants`) and a failed read is never rendered as an empty list.
 //   · `WorkspaceGrantCard` + `parseWorkspaceGrantRequest` — the mid-run ask,
 //     raised by the backend stamping `WORKSPACE_GRANT_PAYLOAD_KEY` on an
 //     interrupt payload, routed by `TcChat` and driven by
@@ -2131,9 +2154,16 @@ export type {
   WorkspaceRevokeOutcome,
 } from "./ports/WorkspaceGrantPort";
 export {
+  mostRecentFirst,
   useWorkspaceFolderGrants,
+  WorkspaceFolderBar,
+  WORKSPACE_FOLDER_BAR_EMPTY_LABEL,
+  type WorkspaceFolderBarProps,
   type WorkspaceFolderGrantsState,
 } from "./composer";
+// `BypassPill` and its vocabulary are hoisted once, in the Filesystem-bypass
+// block above — PRD-FS-11's shape (mode + scope + host-owned mount) supersedes
+// the FS-10 selection-only export that stood here.
 export {
   WorkspaceGrantCard,
   type WorkspaceGrantCardProps,

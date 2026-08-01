@@ -12,16 +12,45 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CAPABILITY_CHANNELS } from "../../main/capabilities/channels";
+import type { WindowBridge } from "../../preload/window-bridge-types";
 import { RunEmptyComposer } from "./RunEmptyComposer";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
 afterEach(() => {
   cleanup();
+  // The grant port memoizes per BRIDGE, so dropping it between tests is what
+  // keeps one test's grant list out of the next one's composer.
+  delete (globalThis.window as unknown as { bridge?: WindowBridge }).bridge;
 });
+
+/** The Electron bridge, answering the capability channels however a test says. */
+function installBridge(answers: Record<string, unknown>): {
+  readonly invoke: ReturnType<typeof vi.fn>;
+} {
+  const invoke = vi.fn(async (channel: string, _payload: unknown) => {
+    const answer = answers[channel];
+    if (typeof answer === "function") return (answer as () => unknown)();
+    return answer ?? null;
+  });
+  (globalThis.window as unknown as { bridge?: WindowBridge }).bridge = {
+    ipc: {
+      invoke: invoke as unknown as WindowBridge["ipc"]["invoke"],
+      on: () => () => {},
+    },
+  };
+  return { invoke };
+}
 
 // jsdom ships no IntersectionObserver; the composer's caret path wants one.
 class NoopIntersectionObserver {
@@ -330,5 +359,58 @@ describe("RunEmptyComposer", () => {
     ).toBe("No model configured — connect one to run.");
     fireEvent.click(cta);
     expect(ctx.onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // PRD-FS-10 §7. This is the cockpit's PRE-first-message composer, so it is
+  // one of the two mounts that must carry the folder-grant port. The port is
+  // bridged off `window.bridge`, so this drives the real capability channel
+  // rather than injecting a port — a wire that only exists when a test supplies
+  // it is exactly the wire that goes missing in the app.
+  it("names the granted folder above the composer (folder bar)", async () => {
+    const { invoke } = installBridge({
+      [CAPABILITY_CHANNELS.listGrants]: [
+        {
+          grantId: "grant_ke",
+          label: "kaleidoscope",
+          mode: "read_only",
+          status: "active",
+        },
+      ],
+    });
+    renderEmpty(makeCtx());
+
+    expect(
+      await screen.findByRole("button", { name: /^kaleidoscope/ }),
+    ).not.toBeNull();
+    expect(invoke).toHaveBeenCalledWith(
+      CAPABILITY_CHANNELS.listGrants,
+      expect.anything(),
+    );
+  });
+
+  it("offers the empty affordance when no folder is granted yet", async () => {
+    installBridge({ [CAPABILITY_CHANNELS.listGrants]: [] });
+    renderEmpty(makeCtx());
+
+    expect(
+      await screen.findByRole("button", { name: /Attach a folder/i }),
+    ).not.toBeNull();
+  });
+
+  it("keeps Attach Folder out of the `+` menu — one entry point, not two", async () => {
+    installBridge({ [CAPABILITY_CHANNELS.listGrants]: [] });
+    const { container } = renderEmpty(makeCtx());
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        "button[aria-label='Open attachment and tools menu']",
+      ) as HTMLButtonElement,
+    );
+
+    expect(
+      screen.queryByRole("menuitem", { name: /Attach Folder/i }),
+    ).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Attach File/i })).toBeTruthy();
   });
 });

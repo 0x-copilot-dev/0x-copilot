@@ -101,6 +101,17 @@ function buildEnv() {
 }
 
 // ---------------------------------------------------------------------------
+// How long Playwright waits for Electron to come up. A FIRST boot on a fresh
+// userData dir runs `initdb`, the migrations and three uvicorns before the
+// window exists, and on a loaded machine that can outlast the 120s default —
+// which surfaces as `electron.launch: Timeout exceeded` with a perfectly
+// healthy supervisor log, i.e. a harness timeout wearing a product failure's
+// clothes. Overridable so a slow host can be told the truth; the default is
+// unchanged, so nothing that passes today starts waiting longer.
+const LAUNCH_TIMEOUT_MS = Number(
+  process.env.DRIVER_LAUNCH_TIMEOUT_MS || 120_000,
+);
+
 let app = null;
 let page = null;
 const capturedUrls = [];
@@ -126,7 +137,7 @@ async function launch() {
     args: [APP_DIR],
     cwd: REPO_ROOT,
     env,
-    timeout: 120_000,
+    timeout: LAUNCH_TIMEOUT_MS,
   });
 
   // Pipe the electron main-process stdout/stderr (incl. supervisor + service
@@ -150,7 +161,7 @@ async function launch() {
   });
   logMain("[driver] shell.openExternal intercept installed");
 
-  page = await app.firstWindow({ timeout: 120_000 });
+  page = await app.firstWindow({ timeout: LAUNCH_TIMEOUT_MS });
   wireWindow(page);
   logMain(`[driver] firstWindow url=${page.url()}`);
 
@@ -236,6 +247,25 @@ async function rpc(cmd, args) {
       });
       return { filled: args.selector };
     }
+    // `fill`/`click` above go through `page.fill`/`page.click`, which are
+    // STRICT: two matches is an error, not a choice. The chat surface can
+    // legitimately mount more than one composer (the cockpit's and a
+    // destination's), and a journey driving "the one I am looking at" wants the
+    // last one in document order rather than a failure.
+    case "fillLast": {
+      await p
+        .locator(args.selector)
+        .last()
+        .fill(args.value, { timeout: args.timeoutMs ?? 15_000 });
+      return { filled: args.selector };
+    }
+    case "clickLast": {
+      await p
+        .locator(args.selector)
+        .last()
+        .click({ timeout: args.timeoutMs ?? 15_000 });
+      return { clicked: args.selector };
+    }
     case "waitFor": {
       await p.waitForSelector(args.selector, {
         timeout: args.timeoutMs ?? 30_000,
@@ -252,6 +282,34 @@ async function rpc(cmd, args) {
     case "pageEval": {
       const val = await p.evaluate(args.js);
       return { value: val };
+    }
+    case "mainEval": {
+      // Evaluate in the MAIN process. `args.js` is the source of a function
+      // taking (electron, arg) — the same shape `resizeWindow` below uses,
+      // just caller-supplied.
+      //
+      // Exists to stub NATIVE MODAL DIALOGS. A journey that has to open
+      // `dialog.showOpenDialog` cannot proceed: the dialog is OS chrome, not
+      // page content, so Playwright cannot see it, and driving it through
+      // System Events needs Accessibility permission the runner does not have
+      // (`osascript is not allowed assistive access (-25211)`, every attempt).
+      // Stubbing the dialog is the standard Electron testing answer and is
+      // HONEST here — the picker's only job is to return a path, and every
+      // interesting step (realpath, the grant store, the IPC back to the
+      // renderer, the bar re-render) still runs for real.
+      // Wrapped in a real function rather than handed to Playwright as a
+      // string: a bare string is evaluated as an EXPRESSION, so a function
+      // source evaluates to the function and is never called — the probe that
+      // caught this got `{ok:true}` with no value while every side effect
+      // silently did not happen. `new Function` closes over nothing, so the
+      // source still serializes into the main process intact.
+      const fn = new Function(
+        "electron",
+        "arg",
+        `return (${args.js})(electron, arg);`,
+      );
+      const val = await app.evaluate(fn, args.arg);
+      return { value: val ?? null };
     }
     case "resizeWindow": {
       // Resize the REAL BrowserWindow (not a Playwright viewport override) so

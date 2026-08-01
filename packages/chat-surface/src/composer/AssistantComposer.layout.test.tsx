@@ -1,10 +1,16 @@
-// v3 composer parity — the bottom row's SHAPE (punch-list rows 4-9, 16-22).
+// v3 composer parity — the bottom row's SHAPE (punch-list rows 4-9, 16-22),
+// plus the PRD-FS-10 §4.2 reorder (test 8).
 //
 // These lock the owner's rulings against the design-parity findings for
 // tools/design-parity/surfaces/composer:
 //
-//   row 4  bottom-row order is [+] [model] … [mic] [send]; per-run tools live
-//          inside the `+` menu rather than as a second composer control
+//   row 4  bottom-row order is [+] … [model] [mic] [send]; per-run tools live
+//          inside the `+` menu rather than as a second composer control.
+//          PRD-FS-10 moved the model pill OUT of the left cluster: execution
+//          mode (bypass) takes the slot right of Tools because it is the
+//          decision a user re-makes per task, while model choice is
+//          set-and-forget. Model still sits LEFT of the mic — mic and send are
+//          the trailing pair and nothing goes between them.
 //   row 5  no divider between the icon cluster and the pill cluster
 //   row 6+7 NO static hint row at all (neither the host's nor Composer's
 //          built-in fallback), while the transient "/" slash cue survives
@@ -31,10 +37,24 @@ import type {
 import { TransportProvider } from "../providers/TransportProvider";
 import type { DictationCallbacks, DictationPort } from "../ports/DictationPort";
 import type { FilePickerPort } from "../ports/FilePickerPort";
+import type {
+  WorkspaceGrant,
+  WorkspaceGrantPort,
+} from "../ports/WorkspaceGrantPort";
 import {
   AssistantComposer,
   type AssistantComposerProps,
 } from "./AssistantComposer";
+import { BypassPill } from "./BypassPill";
+
+/** A host that HAS the folder capability — what gates the bypass pill. */
+function makeGrantPort(): WorkspaceGrantPort {
+  return {
+    requestGrant: vi.fn(async () => ({ status: "cancelled" as const })),
+    listGrants: vi.fn(async () => [] as ReadonlyArray<WorkspaceGrant>),
+    revokeGrant: vi.fn(async () => ({ status: "revoked" as const })),
+  };
+}
 
 function makeTransport(): Transport {
   return {
@@ -100,7 +120,7 @@ function orderOf(container: HTMLElement, el: Element): number {
 }
 
 describe("AssistantComposer bottom row (v3 parity)", () => {
-  it("orders the row [+] → model … mic → send (row 4)", () => {
+  it("orders the row [+] → model → mic → send (row 4)", () => {
     const container = renderComposer();
 
     const plus = screen.getByRole("button", {
@@ -116,7 +136,44 @@ describe("AssistantComposer bottom row (v3 parity)", () => {
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 
-  it("puts mic + send in the right cluster, everything else on the left (row 4/7)", () => {
+  // PRD-FS-10 §8 test 8. The order is the product decision, so it is asserted
+  // on the RENDERED document rather than on which cluster div a control landed
+  // in: a future layout change may move the boxes, but bypass must stay left of
+  // the mic and the model must stay between them.
+  it("orders [+] → bypass → model → mic → send (PRD-FS-10 §4.2)", async () => {
+    // The pill arrives through the host-owned `bypassTrigger` slot (PRD-FS-11
+    // moved the mount out of this component — see `BypassPill.tsx`), but WHERE
+    // the slot renders is still this component's decision, which is what this
+    // asserts. `workspaceGrantPort` is the capability gate on that slot.
+    const container = renderComposer({
+      workspaceGrantPort: makeGrantPort(),
+      hasSentFirstMessage: true,
+      bypassTrigger: (
+        <BypassPill mode="manual" enabled onChange={() => undefined} />
+      ),
+    });
+
+    const plus = screen.getByRole("button", {
+      name: /Open attachment and tools menu/i,
+    });
+    const bypass = await screen.findByRole("button", {
+      name: /Execution mode/i,
+    });
+    const model = screen.getByRole("button", { name: /Model: GPT-5\.4/ });
+    const mic = screen.getByRole("button", { name: /Voice input/i });
+    const send = screen.getByRole("button", { name: /Send message/i });
+
+    const positions = [plus, bypass, model, mic, send].map((el) =>
+      orderOf(container, el),
+    );
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    // Stated separately so a failure names the rule it broke.
+    expect(orderOf(container, bypass)).toBeLessThan(orderOf(container, mic));
+    expect(orderOf(container, model)).toBeLessThan(orderOf(container, mic));
+    expect(orderOf(container, bypass)).toBeLessThan(orderOf(container, model));
+  });
+
+  it("puts model + mic + send in the right cluster, the rest on the left (row 4/7)", () => {
     const container = renderComposer();
 
     const left = container.querySelector(".aui-composer-tools");
@@ -128,15 +185,18 @@ describe("AssistantComposer bottom row (v3 parity)", () => {
 
     const mic = screen.getByRole("button", { name: /Voice input/i });
     const send = screen.getByRole("button", { name: /Send message/i });
+    const model = screen.getByRole("button", { name: /Model: GPT-5\.4/ });
     expect(right?.contains(mic)).toBe(true);
     expect(right?.contains(send)).toBe(true);
+    // Moved here from the left cluster (PRD-FS-10 §4.2) — and it is the one
+    // control in this cluster that may shrink, which composer.css relies on.
+    expect(right?.contains(model)).toBe(true);
 
     const plus = screen.getByRole("button", {
       name: /Open attachment and tools menu/i,
     });
-    const model = screen.getByRole("button", { name: /Model: GPT-5\.4/ });
     expect(left?.contains(plus)).toBe(true);
-    expect(left?.contains(model)).toBe(true);
+    expect(left?.contains(model)).toBe(false);
   });
 
   it("wires the host dictation port into the microphone control", () => {

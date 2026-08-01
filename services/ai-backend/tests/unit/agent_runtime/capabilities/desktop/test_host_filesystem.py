@@ -9,34 +9,52 @@ packaged app answered `ls ~/Downloads` with an empty listing.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from deepagents.middleware.filesystem import (
     FilesystemPermission,
     _check_fs_permission,
 )
 
+from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
 from agent_runtime.capabilities.desktop.host_filesystem import (
-    SCRATCH_DIR_NAME,
+    VIRTUAL_NAMESPACES,
     GrantedRoot,
     HostFilesystemRules,
 )
 
 GRANTED = "/Users/ada/Projects"
 UNGRANTED = "/Users/ada/Downloads"
+#: The `.copilot` scratch PRD-FS-12 D7 removed. Named here (rather than imported
+#: from the module, which no longer defines it) so the tests below can prove it
+#: is gone without keeping the constant alive.
+DROPPED_SCRATCH_DIR = ".copilot"
 
 
 class RuleSetMixin:
     """Builds real `FilesystemPermission` objects from our plain dicts."""
 
     @staticmethod
-    def rules(*roots: GrantedRoot) -> list[FilesystemPermission]:
+    def rules(
+        *roots: GrantedRoot, scratch: AgentScratchRoot | None = None
+    ) -> list[FilesystemPermission]:
         return [
             FilesystemPermission(**rule)  # type: ignore[arg-type]
-            for rule in HostFilesystemRules.build(roots)
+            for rule in HostFilesystemRules.build(roots, scratch=scratch)
         ]
 
-    def verdict(self, path: str, *, operation: str = "read", roots: tuple = ()) -> str:
-        return _check_fs_permission(self.rules(*roots), operation, path)
+    def verdict(
+        self,
+        path: str,
+        *,
+        operation: str = "read",
+        roots: tuple = (),
+        scratch: AgentScratchRoot | None = None,
+    ) -> str:
+        return _check_fs_permission(
+            self.rules(*roots, scratch=scratch), operation, path
+        )
 
 
 class TestTheDefectThisReplaces(RuleSetMixin):
@@ -97,16 +115,20 @@ class TestGrantedRoots(RuleSetMixin):
         assert self.verdict(UNGRANTED, roots=roots) == "interrupt"
         assert self.verdict("/Users/ada/ProjectsSecret/x", roots=roots) == "interrupt"
 
-    def test_the_scratch_dir_lives_inside_the_granted_root(self) -> None:
-        root = GrantedRoot(path=GRANTED)
-        assert root.scratch_path == f"{GRANTED}/{SCRATCH_DIR_NAME}"
-        assert (
-            self.verdict(
-                f"{root.scratch_path}/notes.json",
-                operation="write",
-                roots=(root,),
-            )
-            == "allow"
+    def test_a_granted_root_no_longer_sites_a_scratch_directory(self) -> None:
+        """D7: nothing is written into the folder the user attached.
+
+        `GrantedRoot` used to expose `scratch_path` and the rule set used to
+        emit a write allow for `<root>/.copilot`. Both are gone: the agent's
+        working area moved to `$COPILOT_HOME/.tmp`, which is ours.
+        """
+
+        root = GrantedRoot(path=GRANTED, writable=True)
+        assert not hasattr(root, "scratch_path")
+        assert not any(
+            DROPPED_SCRATCH_DIR in path
+            for rule in HostFilesystemRules.build((root,))
+            for path in rule["paths"]  # type: ignore[union-attr]
         )
 
 
@@ -127,6 +149,42 @@ class TestTheAgentsOwnNamespaces(RuleSetMixin):
 
         assert self.verdict(path) == "allow"
         assert self.verdict(path, operation="write") == "allow"
+
+    @pytest.mark.parametrize("prefix", VIRTUAL_NAMESPACES)
+    def test_listing_the_namespace_itself_never_prompts_either(
+        self, prefix: str
+    ) -> None:
+        """`/workspace/**` matches the CONTENTS, not the directory.
+
+        Every one of these roots interrupted while every path beneath it
+        allowed, and the two live symptoms both came out of that gap: an
+        attached folder that "still asks" (the agent's first move is to list
+        `/workspace` and see what it has), and a consent card whose only
+        detail was `PATH /workspace` — a virtual mount the user has never
+        heard of and cannot judge.
+
+        Parametrized over the constant so a namespace added later cannot be
+        added in the broken form.
+        """
+
+        bare = prefix.rstrip("/")
+        assert self.verdict(bare) == "allow"
+        assert self.verdict(bare, operation="write") == "allow"
+
+    @pytest.mark.parametrize(
+        "path", ["/workspacex", "/workspace-other", "/memories2", "/skillsets"]
+    )
+    def test_a_lookalike_neighbour_still_asks(self, path: str) -> None:
+        """The bare form must be an exact segment, not a prefix.
+
+        Allowing `/workspace` by prefix would hand over `/workspaces` and
+        anything else that merely starts with the same letters — a real risk
+        for `/skills` and `/drafts`, which are ordinary English words a user
+        could plausibly have a folder named after.
+        """
+
+        assert self.verdict(path) == "interrupt"
+        assert self.verdict(path, operation="write") == "deny"
 
 
 class TestTmpIsNotAnAgentNamespace(RuleSetMixin):
@@ -156,6 +214,96 @@ class TestGrantedRootValidation:
     def test_a_traversal_root_is_refused(self) -> None:
         with pytest.raises(ValueError, match=r"'\.\.'"):
             GrantedRoot(path="/Users/ada/../ada/Projects")
+
+
+class TestGrantsInEitherPlatformsGrammar(RuleSetMixin):
+    r"""A grant has to be spelled the way a tool call is, or it buys nothing.
+
+    `__post_init__` demands a POSIX-absolute path. A grant lane that handed it
+    `C:\Users\ada\Projects` would raise; one that stripped the drive letter
+    would produce a rule matching a DIFFERENT folder. `from_host_path` is the
+    single conversion, and these pin that the rule it produces matches what the
+    tool layer actually asks about.
+    """
+
+    WINDOWS = "C:\\Users\\ada\\Projects"
+
+    def test_a_windows_grant_stops_the_windows_folder_from_asking(self) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        # The spelling a tool call carries once the translator has run.
+        assert self.verdict("/C:/Users/ada/Projects", roots=roots) == "allow"
+        assert self.verdict("/C:/Users/ada/Projects/notes.md", roots=roots) == "allow"
+
+    def test_a_windows_grant_does_not_open_its_siblings(self) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        assert self.verdict("/C:/Users/ada/Downloads", roots=roots) == "interrupt"
+        assert (
+            self.verdict("/C:/Users/ada/ProjectsSecret/x", roots=roots) == "interrupt"
+        )
+
+    def test_a_windows_grant_does_not_open_the_posix_path_of_the_same_name(
+        self,
+    ) -> None:
+        roots = (GrantedRoot.from_host_path(self.WINDOWS),)
+        assert self.verdict("/Users/ada/Projects/notes.md", roots=roots) == "interrupt"
+
+    def test_a_unc_grant_is_spelled_single_rooted(self) -> None:
+        root = GrantedRoot.from_host_path("\\\\server\\share\\reports")
+        assert root.path == "/UNC:/server/share/reports"
+        assert not root.path.startswith("//")
+        assert self.verdict(f"{root.path}/q4.csv", roots=(root,)) == "allow"
+
+    def test_a_posix_grant_is_unchanged_by_the_conversion(self) -> None:
+        assert GrantedRoot.from_host_path(GRANTED) == GrantedRoot(path=GRANTED)
+
+    def test_a_windows_grant_gets_no_writable_scratch_inside_it(self) -> None:
+        """D7 again, in the platform where this rule was easiest to get wrong.
+
+        The `.copilot` lane sited the scratch at `<root>/.copilot` and had to
+        spell it in the canonical POSIX encoding so the matcher could see it.
+        That machinery is gone with the location: a Windows grant now opens no
+        direct host write at all — not the scratch that used to live inside it,
+        and not (as ever) the user's own content.
+
+        Note WHICH layer each half is asserted against. `.copilot` is a hidden
+        segment, so rule 5 cannot see it and the rule set has no verdict to
+        give: the honest statement here is that no rule NAMES it, and the
+        refusal itself belongs to `HostFilesystemFloor` (see
+        `test_host_floor` and `test_workspace_effect_wiring`). Asserting a
+        `deny` verdict for it would have been asserting the unmatched default.
+        """
+
+        root = GrantedRoot.from_host_path(self.WINDOWS)
+        assert not any(
+            DROPPED_SCRATCH_DIR in path
+            for rule in HostFilesystemRules.build((root,))
+            for path in rule["paths"]  # type: ignore[union-attr]
+        )
+        assert (
+            self.verdict(
+                "/C:/Users/ada/Projects/out.csv", operation="write", roots=(root,)
+            )
+            == "deny"
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "C:\\Users\\ada\\..\\etc",
+            "\\\\.\\PhysicalDrive0",
+            "C:\\Users\\ada\\NUL",
+            "C:relative",
+            "~/Projects",
+            "\\\\server",
+            "/memories",
+            "relative/dir",
+        ],
+    )
+    def test_a_path_that_names_no_host_folder_is_never_granted(self, path: str) -> None:
+        """An unusable grant must degrade to "still asks", never to a wider rule."""
+
+        with pytest.raises(ValueError, match="not a host folder"):
+            GrantedRoot.from_host_path(path)
 
 
 class TestAttachedFolderStopsAsking(RuleSetMixin):
@@ -204,12 +352,15 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
         assert (
             self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots) == "deny"
         )
-        # The one exception: the agent's own scratch, which holds no user content.
+        # Since D7 there is no exception inside a granted folder at all. The one
+        # writable host location is `$COPILOT_HOME/.tmp`, which is not here.
+        scratch = AgentScratchRoot(Path("/Users/ada/.0xcopilot/.tmp"))
         assert (
             self.verdict(
-                f"{GRANTED}/{SCRATCH_DIR_NAME}/notes.json",
+                f"{GRANTED}/subdir/out.csv",
                 operation="write",
                 roots=roots,
+                scratch=scratch,
             )
-            == "allow"
+            == "deny"
         )

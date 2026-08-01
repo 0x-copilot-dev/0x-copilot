@@ -22,6 +22,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
 )
 from agent_runtime.execution.depth import ReasoningDepth
+from agent_runtime.execution.filesystem_bypass import FilesystemBypassSelection
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
@@ -256,6 +257,13 @@ class CreateRunRequest(RuntimeContract):
     # coalesces ``None`` → historic always-on ``True`` before sealing the strict
     # ``AgentRuntimeContext.web_search_enabled`` (never receives ``None``).
     web_search_enabled: bool | None = None
+    # Composer bypass pill (PRD-FS-10 §4.3), tiers 2 and 3. ``None`` == the
+    # user made no selection, which is NOT the same as selecting Manual: only
+    # an explicit selection is recorded as a run/message source. The field is
+    # advisory in the strict sense — the coordinator folds it against the
+    # workspace master switch, and a selection that arrives while the master is
+    # off resolves to manual. A client can therefore never opt itself in.
+    filesystem_bypass: FilesystemBypassSelection | None = None
     content: tuple[RunContentPartRequest, ...] = ()
     attachments: tuple[RunAttachmentRequest, ...] = ()
     quote: RunQuoteRequest | None = None

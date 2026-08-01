@@ -91,6 +91,14 @@ export function createFirstRunRunsPort(transport: Transport): FirstRunRunsPort {
           paused_connectors: input.pausedConnectorIds,
         };
       }
+      // PRD-FS-10 §4.3 — the composer bypass pill. Same wire field and same
+      // snake_case shape `buildRunCreateBody` posts for the in-chat composer,
+      // so the FTUE and the cockpit ask the runtime for the identical thing.
+      // Absent for Manual / master-switch-off, keeping the ordinary first-run
+      // body byte-identical.
+      if (input.filesystemBypass !== undefined) {
+        body.filesystem_bypass = input.filesystemBypass;
+      }
 
       const run = await transport.request<CreateRunResponseLite>({
         method: "POST",

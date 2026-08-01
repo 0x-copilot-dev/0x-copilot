@@ -182,6 +182,7 @@ from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
     compose_capability_discovery,
 )
+from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -287,6 +288,7 @@ class RuntimeRunHandler:
         sandbox_patch_collector: object | None = None,
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
+        workspace_broker_http_client: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
         run_control_decision_store: object | None = None,
@@ -321,6 +323,13 @@ class RuntimeRunHandler:
         self._sandbox_patch_collector = sandbox_patch_collector
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
+        # Test/extension seam for the desktop capability broker. ``None`` — the
+        # only value production ever supplies — leaves the wiring on the
+        # process-shared loopback pool exactly as before. It exists because the
+        # broker lanes (the ``/workspace/`` route and the attached-folder roots)
+        # were otherwise unreachable from a handler-level test, which is how the
+        # ENFORCE lane shipped with grants that did nothing.
+        self._workspace_broker_http_client = workspace_broker_http_client
         self._run_control_builder = run_control_builder
         self._prompt_observation_store = prompt_observation_store
         self.settings = settings or RuntimeSettings.load()
@@ -713,10 +722,17 @@ class RuntimeRunHandler:
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
             )
+            granted_host_roots = await self._granted_host_roots_for_run(
+                workspace_backend
+            )
+            await self._provision_agent_scratch(
+                command, workspace_backend=workspace_backend
+            )
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
                 workspace_backend=workspace_backend,
+                granted_host_roots=granted_host_roots,
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
             )
@@ -1501,7 +1517,109 @@ class RuntimeRunHandler:
                 mcp_gateway_services=mcp_gateway_services,
             )
 
-        return await WorkspaceBackendWorkerWiring().workspace_backend()
+        return await self._workspace_wiring().workspace_backend()
+
+    def _workspace_wiring(self) -> WorkspaceBackendWorkerWiring:
+        """The desktop capability-broker wiring for this run.
+
+        One construction site for both broker lanes — the ``/workspace/`` route
+        and the attached-folder roots — so a test can drive the real handler
+        branches over a fake broker transport instead of the loopback socket.
+        """
+
+        return WorkspaceBackendWorkerWiring(
+            http_client=self._workspace_broker_http_client  # type: ignore[arg-type]
+        )
+
+    async def _granted_host_roots_for_run(
+        self, workspace_backend: object | None
+    ) -> tuple[object, ...] | None:
+        """The host folders the user attached, for this run's filesystem rules.
+
+        ``None`` off the desktop path — there is no workspace object at all, the
+        factory builds no host rules, and the composition stays byte-identical.
+
+        Otherwise the answer comes from the capability broker, and which lane
+        asks it is an implementation detail:
+
+        * the compatibility lane's ``BrokeredWorkspaceBackend`` was itself built
+          from this run's grant snapshot and already exposes ``granted_roots``,
+          so we read it and issue no second broker call;
+        * ENFORCE's ``WorkspaceGatewayBackend`` / ``WorkspaceTombstoneBackend``
+          structurally cannot answer — their host-session projection is path-free,
+          and that channel is C2's private WRITE bootstrap, not something to widen
+          — so the wiring asks the broker directly, over the same
+          ``/v1/grants/snapshot`` projection and the same mount-table mapping.
+
+        Both branches therefore produce roots from one broker fact through one
+        mapping. Before this, the ENFORCE branch produced nothing, so a folder the
+        user had explicitly attached interrupted on every single read.
+        """
+
+        if workspace_backend is None:
+            return None
+        roots = getattr(workspace_backend, "granted_roots", None)
+        if isinstance(roots, tuple):
+            return roots
+        return await self._workspace_wiring().granted_host_roots()
+
+    async def _provision_agent_scratch(
+        self,
+        command: RuntimeRunCommand,
+        *,
+        workspace_backend: object | None,
+    ) -> None:
+        """Create ``$COPILOT_HOME/.tmp/<conversation_id>/`` for this run (D3/D5).
+
+        Runs before the graph does, so the agent's own working area exists the
+        first time it writes. Gated on the same desktop signal as the host
+        filesystem rules — a ``None`` workspace backend provisions nothing — and
+        never raises: a run must not fail for want of a working directory.
+
+        An EFFECT on disk, which is why it is not part of the dependency
+        composition next door: the granted roots there are a VALUE the
+        composition reads. It lives at the single ``handle`` call site so the
+        two run paths (initial + approval resume) cannot drift into one
+        provisioning and the other not. The directory it makes real is the one
+        ``factory._agent_scratch_root`` resolves from the same installation, so
+        this is not a second opinion about where the scratch is.
+        """
+
+        wiring = AgentScratchWorkerWiring(workspace_backend=workspace_backend)
+        if not wiring.enabled:
+            return
+        wiring.provision(
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+            title=await self._conversation_title(command),
+        )
+
+    async def _conversation_title(self, command: RuntimeRunCommand) -> str | None:
+        """This chat's human name, for the scratch's ``meta.json`` (D5).
+
+        Read from the conversation record on every run rather than carried on
+        the command: a command is a snapshot taken at enqueue time, so a chat
+        renamed between runs would keep announcing its old name, and
+        ``provision`` rewrites ``meta.json`` each run precisely so the scratch
+        reports the CURRENT one.
+
+        ``None`` on any failure. The title is orientation for a human browsing
+        ``.tmp/`` — every live ``meta.json`` read `"title": null` before this,
+        because the call site passed no title at all — and losing that
+        orientation is not worth failing a run over, so a store that cannot
+        answer degrades to the untitled scratch we already had.
+        """
+
+        try:
+            conversation = await self.persistence.get_conversation(
+                org_id=command.org_id,
+                user_id=command.user_id,
+                conversation_id=command.conversation_id,
+            )
+        except Exception:  # noqa: BLE001 — see the docstring; orientation only.
+            logging.getLogger(__name__).warning("agent_scratch.title_lookup_failed")
+            return None
+        return None if conversation is None else conversation.title
 
     async def _workspace_effect_backend_for_run(
         self,
@@ -1598,6 +1716,12 @@ class RuntimeRunHandler:
                 scope=scope,
             ),
             grants=session.grants,
+            # Read from the PERSISTED run context, not re-derived here. The
+            # decision was sealed once at run-create against the workspace
+            # master switch; re-resolving it in the worker would let a
+            # Settings change mid-flight retro-authorize a run the user
+            # started under a different posture.
+            bypass=run.runtime_context.filesystem_bypass,
         )
         return WorkspaceGatewayBackend(
             merged=merged,
@@ -1650,6 +1774,7 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex,
         *,
         workspace_backend: object | None = None,
+        granted_host_roots: tuple[object, ...] | None = None,
         run: RunRecord | None = None,
         mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> RuntimeDependencies:
@@ -1686,6 +1811,12 @@ class RuntimeRunHandler:
         # granted, so those paths stay on the default `StateBackend`.
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
+        # The folders the user attached, for the host filesystem rule set. Set
+        # even when EMPTY: `()` says "resolved, nothing attached", which is not
+        # the same claim as `None` ("nobody resolved") and must not fall back to
+        # reading the workspace object.
+        if granted_host_roots is not None:
+            update["granted_host_roots"] = granted_host_roots
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.

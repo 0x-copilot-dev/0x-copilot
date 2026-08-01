@@ -75,17 +75,47 @@ export {
 export { AttachmentPill } from "./AttachmentPill";
 export { fileAttachmentAccept } from "./fileAttachmentAccept";
 // === end Phase 1 (PR-1.3) ===
-// === Workspace folder grants — the composer's Attach Folder affordance ===
-// The `+` menu's folder row and the granted-folder pills are inside
-// `AssistantComposer`, driven by the optional `workspaceGrantPort` prop. This
-// hook is the state half, exported because Settings shows the same list: the
+// === Workspace folder grants — the folder bar above the composer ===
+// The folder affordance is the BAR on the composer frame (PRD-FS-10), not a `+`
+// menu row: a grant copies nothing into the message and outlives it. Both are
+// mounted by `AssistantComposer` from the optional `workspaceGrantPort` prop.
+// The hook is the state half, exported because Settings shows the same list: the
 // broker stays the source of truth (every change re-reads `listGrants`) and a
 // failure is never rendered as an empty list. The port itself is host-owned.
 export {
+  WorkspaceFolderBar,
+  WORKSPACE_FOLDER_BAR_EMPTY_LABEL,
+  type WorkspaceFolderBarProps,
+} from "./WorkspaceFolderBar";
+export {
+  mostRecentFirst,
   useWorkspaceFolderGrants,
   type WorkspaceFolderGrantsState,
 } from "./useWorkspaceFolderGrants";
 // === end Workspace folder grants ===
+// === Filesystem bypass (PRD-FS-10 §4.3 the control, PRD-FS-11 the behaviour) ===
+// The composer's execution-mode pill plus the two client-side questions it
+// implies: may the control be offered (master switch), and is a selection
+// spent after a send (scope). The AUTHORITY is server-side — the runtime folds
+// master ▸ run ▸ message and re-checks the grant bound — so nothing exported
+// here can widen anything.
+export {
+  BypassPill,
+  type BypassPillProps,
+  BYPASS_BOUND_NOTE,
+  BYPASS_BOUND_SUB,
+  BYPASS_DISABLED_TOOLTIP,
+} from "./BypassPill";
+export {
+  MANUAL_BYPASS_STATE,
+  bypassSelectionForSend,
+  bypassStateAfterSend,
+  type FilesystemBypassMode,
+  type FilesystemBypassScope,
+  type FilesystemBypassSelection,
+  type FilesystemBypassState,
+} from "./filesystemBypass";
+// === end Filesystem bypass ===
 // === Model-pill memory — the pick survives a remount ===
 // `KeyValueStore`-backed memory of the model the user picked (per chat + a
 // last-used fallback). The pill itself stays presentational: the HOST binder

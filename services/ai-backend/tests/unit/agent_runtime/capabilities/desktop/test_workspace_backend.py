@@ -507,21 +507,63 @@ class TestOneBadRootDoesNotDropTheOtherGrants:
         )
         assert [m.grant_id for m in mounts] == ["g2"]
 
-    def test_a_windows_root_mounts_but_never_becomes_a_posix_allow_rule(self) -> None:
-        """Windows grants keep asking — and that is the correct outcome.
+    @pytest.mark.parametrize(
+        ("root", "canonical"),
+        [
+            ("C:\\Users\\ada\\Projects", "/C:/Users/ada/Projects"),
+            ("\\\\server\\share\\reports", "/UNC:/server/share/reports"),
+            ("\\\\?\\C:\\Users\\ada", "/C:/Users/ada"),
+        ],
+    )
+    def test_a_windows_root_becomes_an_allow_rule_in_canonical_spelling(
+        self, root: str, canonical: str
+    ) -> None:
+        r"""Windows grants must widen the rules, in the spelling the rules match.
 
-        A Windows root IS host-shaped, so it binds a mount and the
-        ``/workspace/<name>/...`` route serves it. It is dropped only at
-        ``granted_roots``, because a rule built from ``C:\\...`` would match
-        nothing — and deepagents' own ``validate_path`` rejects Windows absolute
-        paths before any rule is consulted, so there is no host-absolute lane to
-        widen in the first place.
+        This test used to assert the OPPOSITE — that a Windows grant is dropped
+        here — on the reasoning that "deepagents' ``validate_path`` rejects
+        Windows absolute paths before any rule is consulted, so there is no
+        host-absolute lane to widen". That reasoning was correct when it was
+        written and is now false: ``HostPathToolMiddleware`` rewrites every
+        filesystem tool argument into the canonical POSIX spelling BEFORE
+        ``validate_path`` runs, so ``C:\Users\ada\Projects`` reaches the rules
+        as ``/C:/Users/ada/Projects``.
+
+        Leaving the old assertion in place would have locked a real defect into
+        the suite: on Windows every attached folder would be dropped here, build
+        no ``allow`` rule and no floor root, and ask again on every read — the
+        exact behaviour the grant lane exists to remove, surviving on one
+        platform because a test asserted it.
         """
 
         mounts = WorkspaceMountTable.from_broker_grants(
-            [self._grant("g1", label="Win", root="C:\\Users\\ada\\Projects")]
+            [self._grant("g1", label="Win", root=root)]
         )
-        assert [m.host_root for m in mounts] == ["C:\\Users\\ada\\Projects"]
+
+        assert [m.host_root for m in mounts] == [root]
+        assert [r.path for r in WorkspaceMountTable.granted_roots(mounts)] == [  # type: ignore[attr-defined]
+            canonical
+        ]
+
+    @pytest.mark.parametrize(
+        "root",
+        ["C:relative", "\\\\.\\PIPE\\x", "C:\\Users\\ada\\..\\etc", "\\\\server"],
+    )
+    def test_an_unresolvable_windows_root_is_still_never_widened(
+        self, root: str
+    ) -> None:
+        """The half of the old assertion that was always right.
+
+        A drive-relative remainder, a device namespace, a traversal — none of
+        these names a folder the user could have agreed to, so none may become
+        an ``allow`` rule. Recognising Windows grammar widened WHICH roots
+        resolve, not WHETHER an unresolvable one is admitted.
+        """
+
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [self._grant("g1", label="Win", root=root)]
+        )
+
         assert WorkspaceMountTable.granted_roots(mounts) == ()
 
 

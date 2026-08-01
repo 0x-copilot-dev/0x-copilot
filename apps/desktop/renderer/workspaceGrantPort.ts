@@ -66,24 +66,26 @@ export function createDesktopWorkspaceGrantPort(
       input?: WorkspaceGrantRequestInput,
     ): Promise<WorkspaceGrantOutcome> {
       const mode = input?.mode ?? DEFAULT_MODE;
-      // `input.path` and `input.reason` are deliberately NOT forwarded. The
-      // channel's schema is `.strict()` on `{ mode, label? }`, and the two
-      // fields it would accept are the wrong homes for them:
-      //   * a path is not accepted at all — main owns the selection, so the
-      //     mid-run ask opens the picker rather than pre-selecting the folder
-      //     the model named. The card is what shows the user that folder.
-      //   * `label` would be worse than useless: a supplied label WINS over the
-      //     basename main derives from the folder actually chosen
-      //     (`CapabilityService.requestFolderGrant`), so passing the asked path
-      //     here would let a pill read "Downloads" over a grant on Documents —
-      //     a wrong claim of access, which is the defect, not the fix.
-      // Targeting the picker at the asked folder needs a `path` on that schema
-      // plus a `defaultPath` on `FolderPicker` (both main-owned, neither in this
-      // file's reach).
+      // `input.path` IS forwarded, and it is the whole point of the mid-run ask.
+      // The card named one folder; the user agreed to THAT folder. Dropping the
+      // path here sent them to a free picker instead, where the answer could
+      // land on the parent — and the resulting pill would claim access to a tree
+      // nobody agreed to. Main re-resolves it (realpath, must be a directory),
+      // forces `read_only`, derives its own label and still runs
+      // `assertGrantableRoot`, so naming a folder cannot widen what main is
+      // willing to grant. Absent (the composer's "attach a folder" button) main
+      // opens the picker exactly as before.
+      //
+      // `label` is still NOT forwarded: a supplied label WINS over the basename
+      // main derives (`CapabilityService.requestFolderGrant`), so it could make
+      // a pill read "Downloads" over a grant on Documents — a wrong claim of
+      // access, which is the defect rather than the fix. `reason` has no home on
+      // the channel; the card already showed it.
+      const path = typeof input?.path === "string" ? input.path : undefined;
       try {
         const raw = await bridge.ipc.invoke<unknown>(
           CAPABILITY_CHANNELS.requestFolderGrant,
-          { mode },
+          path === undefined ? { mode } : { mode, path },
         );
         // Main returns null for exactly one thing: the user dismissed the
         // native dialog. That is a decision, not a failure.

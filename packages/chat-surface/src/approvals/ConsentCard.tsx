@@ -66,6 +66,9 @@ export function ConsentCard({
   rejectTestId = "apc-reject",
 }: ConsentCardProps): ReactElement {
   const layout = presentation?.layout ?? "params";
+  // Referenced by `aria-describedby` below, so it must be unique per card on a
+  // page that can show several at once.
+  const reassuranceId = `${testId ?? "apc"}-reassurance`;
   return (
     <div
       className="apc"
@@ -73,7 +76,19 @@ export function ConsentCard({
       data-testid={testId}
       role="group"
       aria-label={`Approval: ${title}`}
+      // The standing rule is no longer a visible row (see below); keep it
+      // available to assistive tech so the claim is not simply deleted.
+      //
+      // `aria-describedby` → a visually-hidden node, NOT `aria-description`.
+      // The latter is ARIA 1.3 and thinly implemented: with it the card's
+      // computed accessible description was measurably EMPTY
+      // (`toHaveAccessibleDescription` received ""), i.e. the reassurance had
+      // been deleted for screen readers too rather than merely unpainted.
+      aria-describedby={reassuranceId}
     >
+      <span id={reassuranceId} className="apc__a11y-only">
+        {reassurance}
+      </span>
       <div className="apc__head">
         <span className="apc__icon" aria-hidden="true">
           {icon ?? <ShieldGlyph />}
@@ -139,12 +154,14 @@ export function ConsentCard({
         </button>
       </div>
 
-      <p className="apc__foot">
-        <span className="apc__foot-icon" aria-hidden="true">
-          <ShieldGlyph />
-        </span>
-        <span>{reassurance}</span>
-      </p>
+      {/* The standing "you're always asked…" line is NOT rendered. It repeated
+          the same sentence on every card, so it stopped being read and only
+          cost height in the chat column. Removed as an ELEMENT rather than
+          hidden by CSS: a `display:none` override sat above the original
+          `.apc__foot { display:flex }` in the same stylesheet, lost the
+          cascade to it, and shipped twice looking fixed. `reassurance` is kept
+          as the card's accessible description so the claim survives for
+          screen readers without occupying a row. */}
     </div>
   );
 }

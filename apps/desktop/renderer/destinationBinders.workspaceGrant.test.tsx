@@ -267,20 +267,25 @@ describe("desktop Run cockpit — the mid-run folder ask", () => {
       grant?.click();
     });
 
-    // The picker was opened over the capability channel, carrying the requested
-    // mode and NOT the path (main owns the selection; the dialog is the consent).
+    // The grant was asked for over the capability channel, carrying the mode AND
+    // the folder the card named. The path used to be dropped here, which sent
+    // the user to a free picker: they had to find the folder again and could
+    // land on its parent, and the pill would then claim access to a tree nobody
+    // agreed to. Main re-resolves it, forces read_only and still applies
+    // `assertGrantableRoot`, so naming a folder cannot widen what it grants.
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith(
         CAPABILITY_CHANNELS.requestFolderGrant,
-        { mode: "read_only" },
+        { mode: "read_only", path: ASKED_PATH },
       );
     });
     const grantPayloads = invoke.mock.calls
       .filter(([channel]) => channel === CAPABILITY_CHANNELS.requestFolderGrant)
-      .map(([, payload]) => JSON.stringify(payload));
+      .map(([, payload]) => payload);
+    // The path travels toward CONSENT and nothing else: no label (it would win
+    // over the basename main derives and mislabel the pill), no reason.
     for (const payload of grantPayloads) {
-      expect(payload).not.toContain("Downloads");
-      expect(payload).not.toContain("/Users");
+      expect(Object.keys(payload as object).sort()).toEqual(["mode", "path"]);
     }
 
     // …and ONLY now does the run resume, with a single approve.

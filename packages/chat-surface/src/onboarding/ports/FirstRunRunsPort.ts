@@ -15,6 +15,8 @@ import type {
   RunAttachmentRequest,
 } from "@0x-copilot/api-types";
 
+import type { FilesystemBypassSelection } from "../../composer/filesystemBypass";
+
 export interface FirstRunCreateRunInput {
   /** The composed prompt (chip prompt or typed text). */
   readonly userInput: string;
@@ -44,6 +46,21 @@ export interface FirstRunCreateRunInput {
    * nothing is paused, which is the common case.
    */
   readonly pausedConnectorIds?: readonly string[];
+  /**
+   * PRD-FS-10 §4.3 — the composer bypass pill at send time. Omitted for the
+   * default Manual posture and whenever the workspace master switch is off, so
+   * an ordinary first run posts the byte-identical body it always did.
+   *
+   * The FTUE is where this matters most and where it was missing longest: the
+   * first message of a chat is exactly when a user decides how much asking they
+   * want, and the pill only existed from the second message onwards.
+   *
+   * ADVISORY, like every other carrier of this value. The runtime folds it
+   * against the master switch it holds server-side and re-checks the grant
+   * before skipping any approval pause; it can neither widen a grant nor
+   * authorize a write.
+   */
+  readonly filesystemBypass?: FilesystemBypassSelection;
 }
 
 export interface FirstRunLaunchResult {

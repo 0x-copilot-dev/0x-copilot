@@ -23,6 +23,16 @@ Privacy: the assertion runs against a journey-owned fixture directory, not the
 user's real Downloads. A separate count-only probe touches Downloads to show
 real host reach WITHOUT putting anyone's personal filenames into a screenshot
 or a log. Same code path, no data exposure.
+
+Only half of ENFORCE
+--------------------
+`JOURNEY_ENVIRONMENT` sets `WORKSPACE_EFFECT_MODE=enforce`, and for a long time
+that was a lane where GRANTS DID NOTHING — the runtime factory read the run's
+granted roots off the C3 workspace object, which cannot name a host root, so an
+attached folder raised a consent card on every single read. This journey passed
+throughout, because a folder that always asks is exactly what it asserts. The
+other half — an ATTACHED folder must stop asking — is `attached_folder_stops_asking.py`
+(FS3). Run them together; either alone is satisfiable by a broken lane.
 """
 
 from __future__ import annotations

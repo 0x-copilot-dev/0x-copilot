@@ -316,6 +316,8 @@ export {
   createToolUsePolicyPort,
   approvalPolicyFromResponse,
   toolUsePolicyRequestFromValue,
+  filesystemBypassPatch,
+  withFilesystemBypass,
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
 } from "./data/toolUsePolicy";

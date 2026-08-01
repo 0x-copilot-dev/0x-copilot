@@ -111,6 +111,14 @@ export const hiddenToolArgKeysForVisibleDisplay = new Set([
   "tool_name",
 ]);
 
+// Approval payloads carry blocks that a CARD renders and a raw args dump must
+// not. `grant_options` was already here; `grant_scope` and `workspace_grant`
+// are its two subjects — the folder a durable "always allow" would attach, and
+// the folder a Grant card asks for. Both are objects holding a host-absolute
+// path, and this surface (the legacy ChatScreen's "Visible args") prints
+// whatever it is given as JSON. Leaving them out spills the user's real
+// filesystem path into a debug strip that has no consent framing around it at
+// all — the exact opposite of the one place a host path is allowed to appear.
 export const hiddenApprovalArgKeys = new Set([
   ...hiddenToolArgKeys,
   "api_event_type",
@@ -118,8 +126,10 @@ export const hiddenApprovalArgKeys = new Set([
   "approval_kind",
   "event",
   "grant_options",
+  "grant_scope",
   "kind",
   "source_tool_call_id",
+  "workspace_grant",
 ]);
 
 export const hiddenSubagentArgKeys = new Set([

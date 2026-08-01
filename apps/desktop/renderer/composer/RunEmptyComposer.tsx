@@ -28,6 +28,7 @@ import {
 
 import { modelSelectionForId } from "./desktopModelCatalog";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
+import { useDesktopComposerBypass } from "./useDesktopComposerBypass";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
 import { desktopDictationPort } from "./DesktopSpeechRecognitionDictationPort";
@@ -36,6 +37,7 @@ import {
   skillInstructionPrompt,
 } from "./composerPrompts";
 import { useRunComposerBindings } from "./useRunComposerBindings";
+import { bridgeWorkspaceGrantPort } from "../workspaceGrantPort";
 import {
   AIRDROP_CLAIMS_CSV_ATTACHMENT_ID,
   resolveAirdropClaimsCsv,
@@ -168,6 +170,21 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       autoActivateConnectorId: ctx.autoActivateConnectorId,
     });
 
+  // Execution mode (PRD-FS-10 §4.3) — the same pill the in-chat RunComposer
+  // mounts. This surface needs it MORE, not less: the first message of a chat
+  // is where a user decides how much asking they want, and until now the choice
+  // was only offered from the second message onwards.
+  //
+  // No `spend()` here, deliberately. Message scope is spent after a SUCCESSFUL
+  // send, and this composer cannot observe one — `ctx.onStartRun` returns void
+  // because the cockpit owns the empty→live swap, which unmounts this composer
+  // on success anyway. The only lifetime where spending could matter is a
+  // FAILED send, and there the pill must stay where the user put it so a retry
+  // does not silently drop the bypass they chose (RunComposer does the same).
+  const { bypassTrigger, filesystemBypass } = useDesktopComposerBypass({
+    disabled: ctx.submitting,
+  });
+
   // Send → start the first run through the cockpit seam. The model pill's
   // selection and the composer attachments become the run body; the Tools pill
   // threads the per-run web-search toggle + the paused connectors
@@ -190,9 +207,20 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
         attachments: runAttachments.length > 0 ? runAttachments : undefined,
         webSearchEnabled,
         pausedConnectorIds,
+        // `undefined` for the default Manual posture and whenever the master
+        // switch is off, so an ordinary first send posts the byte-identical
+        // body it always did.
+        filesystemBypass,
       });
     },
-    [models, selectedModel, onStartRun, webSearchEnabled, pausedConnectorIds],
+    [
+      models,
+      selectedModel,
+      onStartRun,
+      webSearchEnabled,
+      pausedConnectorIds,
+      filesystemBypass,
+    ],
   );
 
   const connectorsTrigger =
@@ -212,6 +240,11 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       attachmentAdapter={attachmentAdapter}
       dictationPort={desktopDictationPort}
       filePicker={filePicker}
+      // The folder bar belongs HERE above all (PRD-FS-10 §7): this is the
+      // composer a user sees before their first message, which is exactly when
+      // the bar renders. `bridgeWorkspaceGrantPort` memoizes per bridge, so the
+      // in-chat RunComposer and this mount share ONE port, not two.
+      workspaceGrantPort={bridgeWorkspaceGrantPort()}
       renderPlusMenu={renderPlusMenu}
       skillInstructionPrompt={skillInstructionPrompt}
       mcpServerInstructionPrompt={mcpServerInstructionPrompt}
@@ -224,6 +257,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onClearSkills={onClearSkills}
       connectorsTrigger={connectorsTrigger}
       toolsTrigger={toolsTrigger}
+      bypassTrigger={bypassTrigger}
       // Settings is the one provider-key setup surface. Keep the inline port as
       // a defensive fallback for a host that does not implement navigation, but
       // the supplied deep-link below always wins in the desktop app.

@@ -62,6 +62,11 @@ from agent_runtime.capabilities.desktop.host_route import (
     HostPathGuardBackend,
     guarded_default,
 )
+from agent_runtime.capabilities.desktop.host_tool_paths import (
+    HostFsToolArgs,
+    HostPathToolMiddleware,
+    NativeHostPathBackend,
+)
 from agent_runtime.capabilities.desktop.workspace_authority import (
     BrokerWorkspaceAuthority,
     ImmutableWorkspaceContentResolver,
@@ -116,15 +121,18 @@ __all__ = [
     "DesktopBrokerClient",
     "HostFilesystemFloor",
     "HostFloorMessages",
+    "HostFsToolArgs",
     "HostPathClassifier",
     "HostPathFlavour",
     "HostPathGuardBackend",
     "HostPathKind",
     "HostPathMessages",
     "HostPathRefusal",
+    "HostPathToolMiddleware",
     "HostRootIndex",
     "HostRootMatch",
     "ImmutableWorkspaceContentResolver",
+    "NativeHostPathBackend",
     "WorkspaceBackendConfig",
     "WorkspaceAuthorityContractError",
     "WorkspaceAuthorityDeniedError",

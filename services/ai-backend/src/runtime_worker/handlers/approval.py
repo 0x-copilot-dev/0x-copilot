@@ -218,9 +218,14 @@ class RuntimeApprovalHandler:
         terminal_run_observer: TerminalRunObserverPort | None = None,
         batch_concurrency_composer: BatchConcurrencyComposer | None = None,
         live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
+        workspace_broker_http_client: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # Test/extension seam for the desktop capability broker, mirroring
+        # ``RuntimeRunHandler``. ``None`` in production leaves the wiring on the
+        # process-shared loopback pool.
+        self._workspace_broker_http_client = workspace_broker_http_client
         self.settings = settings or RuntimeSettings.load()
         # F6 batch concurrency. ``None`` is both the default and what an
         # unconfigured deployment gets: a resumed run then installs no
@@ -504,6 +509,9 @@ class RuntimeApprovalHandler:
         dependencies = self._dependencies_for_resume(
             running,
             workspace_backend=workspace_backend,
+            granted_host_roots=await self._granted_host_roots_for_resume(
+                workspace_backend
+            ),
             control_binding=(
                 prepared_run_control.control
                 if prepared_run_control is not None
@@ -899,7 +907,34 @@ class RuntimeApprovalHandler:
 
             return WorkspaceTombstoneBackend()
 
-        return await WorkspaceBackendWorkerWiring().workspace_backend()
+        return await self._workspace_wiring().workspace_backend()
+
+    def _workspace_wiring(self) -> WorkspaceBackendWorkerWiring:
+        """The desktop capability-broker wiring for this resumed run."""
+
+        return WorkspaceBackendWorkerWiring(
+            http_client=self._workspace_broker_http_client  # type: ignore[arg-type]
+        )
+
+    async def _granted_host_roots_for_resume(
+        self, workspace_backend: object | None
+    ) -> tuple[object, ...] | None:
+        """The attached folders this resumed turn's filesystem rules admit.
+
+        A resume rebuilds the agent, so it rebuilds the rule set — which means
+        omitting this here would make an approved run start asking again about
+        folders it had stopped asking about, mid-conversation. Mirrors
+        :meth:`RuntimeRunHandler._granted_host_roots_for_run`: read the backend's
+        own capability when it has one, otherwise ask the broker, because the
+        ENFORCE lane resumes into a tombstone that can never name a host root.
+        """
+
+        if workspace_backend is None:
+            return None
+        roots = getattr(workspace_backend, "granted_roots", None)
+        if isinstance(roots, tuple):
+            return roots
+        return await self._workspace_wiring().granted_host_roots()
 
     def _compose_batch_admission(
         self,
@@ -933,6 +968,7 @@ class RuntimeApprovalHandler:
         run: RunRecord,
         *,
         workspace_backend: object | None = None,
+        granted_host_roots: tuple[object, ...] | None = None,
         control_binding: RunControlBinding | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` for a resumed run with per-run backends.
@@ -972,6 +1008,10 @@ class RuntimeApprovalHandler:
             )
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
+        # `()` ("resolved: nothing attached") is a different claim from `None`
+        # ("nobody resolved"), so an empty tuple must still be carried.
+        if granted_host_roots is not None:
+            update["granted_host_roots"] = granted_host_roots
         subagent_backend = self._file_store_wiring.subagent_artifacts_backend(
             org_id=run.org_id,
             conversation_id=run.conversation_id,

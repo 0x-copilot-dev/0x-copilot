@@ -39,16 +39,23 @@ The rules stay the boundary. This wrapper only supplies the verdicts the
 matcher structurally cannot reach, and it is careful never to overrule a
 decision a human already made:
 
-* **write / edit** on a host path — allowed only inside a writable granted
-  root's ``.copilot`` scratch. This mirrors rules 2 + 5 exactly: no host write
-  is ever interruptible, so there is no approval this can be trampling. It also
-  closes the read-only-grant case, where ``<root>/.copilot`` is hidden and so
-  evaluated ``allow`` for write even though the grant forbade writing.
+* **write / edit** on a host path — allowed only inside the agent's own scratch
+  root, ``$COPILOT_HOME/.tmp`` (:mod:`~agent_runtime.capabilities.desktop.agent_scratch`).
+  This mirrors rules 2 + 5 exactly: no host write is ever interruptible, so
+  there is no approval this can be trampling. Before PRD-FS-12 D7 the writable
+  location was ``<granted root>/.copilot``, which made a read-only grant a
+  special case this module had to re-close by hand; the scratch is now
+  somewhere that is ours, so a grant's writability no longer decides anything
+  here and NOTHING is ever written inside a folder the user attached.
 * **read** on a *matcher-blind* host path (any segment starting with ``.``) —
-  allowed only inside a granted root. The exact-scope predicate
-  (``read_file``) fires an interrupt only when ``_check_fs_permission`` says
-  ``"interrupt"``, which for a hidden path it never does, so nothing asked and
-  nothing may be assumed approved.
+  allowed only inside a granted root or inside the scratch. The exact-scope
+  predicate (``read_file``) fires an interrupt only when
+  ``_check_fs_permission`` says ``"interrupt"``, which for a hidden path it
+  never does, so nothing asked and nothing may be assumed approved. The scratch
+  needs naming here as well as in the rule set precisely because ``.tmp`` is
+  itself a dotted segment: the literal rule covers it only as far as the
+  matcher can see, and a further hidden segment beneath it
+  (``.tmp/<conv>/.hidden``) is decided here.
 * **ls / glob / grep are delegated untouched.** Their HITL predicate is
   ``_make_bulk_when_predicate``, which fires whenever the call's subtree
   overlaps an interrupt anchor — and rule 4's anchor is ``/``. Those calls
@@ -82,6 +89,7 @@ from deepagents.backends.protocol import (
 from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
 
 if TYPE_CHECKING:
+    from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
     from agent_runtime.capabilities.desktop.host_filesystem import GrantedRoot
 
 
@@ -95,7 +103,7 @@ class HostFloorMessages:
         "has attached. Ask the user to attach the folder it lives in, then read "
         "it again."
     )
-    #: Every host write, except the agent's own scratch inside a writable grant.
+    #: Every host write, except the agent's own scratch root.
     HOST_WRITE: Final = (
         "Permission denied: the agent cannot write directly to the host "
         "filesystem. Stage the change so the user can review and apply it."
@@ -105,8 +113,11 @@ class HostFloorMessages:
 class HostFilesystemFloor:
     """Wraps the real filesystem backend with the verdicts globs cannot express.
 
-    ``roots`` is the same ``GrantedRoot`` tuple the rule set was built from, so
-    the floor and the rules cannot disagree about which folders are attached.
+    ``roots`` is the same ``GrantedRoot`` tuple the rule set was built from, and
+    ``scratch`` is the same ``AgentScratchRoot``, so the floor and the rules
+    cannot disagree about which folders are attached or where the agent's own
+    working area is. ``scratch=None`` means the run has no scratch, and then
+    NO host write is permitted at all — the strictly safer degradation.
     """
 
     #: Deep Agents' own ``read`` defaults, mirrored so a delegated call that
@@ -119,10 +130,12 @@ class HostFilesystemFloor:
         backend: object,
         *,
         roots: tuple[GrantedRoot, ...] = (),
+        scratch: AgentScratchRoot | None = None,
     ) -> None:
         """Guard ``backend`` for the host paths ``roots`` does not cover."""
         self._backend = backend
         self._roots = roots
+        self._scratch_path = None if scratch is None else scratch.posix
 
     @property
     def backend(self) -> object:
@@ -133,6 +146,11 @@ class HostFilesystemFloor:
     def roots(self) -> tuple[GrantedRoot, ...]:
         """The granted roots this floor admits."""
         return self._roots
+
+    @property
+    def scratch_path(self) -> str | None:
+        """The agent's scratch root as a POSIX path, or ``None`` if it has none."""
+        return self._scratch_path
 
     def __getattr__(self, name: str) -> Any:
         """Delegate every op this floor does not guard (see the module header)."""
@@ -158,10 +176,15 @@ class HostFilesystemFloor:
         """Whether a READ of ``path`` may proceed past the floor.
 
         Everything the rule set can see is delegated to it; a matcher-blind
-        host path is admitted only from inside a folder the user attached.
+        host path is admitted only from inside a folder the user attached, or
+        from inside the agent's own scratch — which is itself matcher-blind
+        (``$COPILOT_HOME/.tmp``), so without naming it here the agent could not
+        read back the working files it had just written.
         """
 
         if not self._is_host(path) or not self.is_matcher_blind(path):
+            return True
+        if self._within_scratch(path):
             return True
         return any(self._within(path, root.path) for root in self._roots)
 
@@ -171,15 +194,22 @@ class HostFilesystemFloor:
         Unlike reads this covers EVERY host path, not only the matcher-blind
         ones: no host write is ever interruptible, so a second enforcement of
         the same verdict can never contradict a user decision.
+
+        The agent's scratch is the ONLY host location that passes. A granted
+        folder does not — granting a folder widens reads, never writes, and host
+        mutations stay on the staged C3 → ledger → C2 lane.
         """
 
         if not self._is_host(path):
             return True
-        return any(
-            self._within(path, root.scratch_path)
-            for root in self._roots
-            if root.writable
-        )
+        return self._within_scratch(path)
+
+    def _within_scratch(self, path: str | None) -> bool:
+        """True when ``path`` is the scratch root or lies beneath it."""
+
+        if self._scratch_path is None:
+            return False
+        return self._within(path, self._scratch_path)
 
     @staticmethod
     def _is_host(path: str | None) -> bool:

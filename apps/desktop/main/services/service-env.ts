@@ -24,6 +24,14 @@ export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   "TMPDIR",
   "LANG",
   "LC_ALL",
+  // Where the app keeps its own data. The Python side resolves it in
+  // `agent_scratch.copilot_home()`, defaulting to ~/.0xcopilot when unset —
+  // and it was never forwarded, so the supervised services ALWAYS took the
+  // default. A run launched against an explicit COPILOT_HOME provisioned its
+  // `.tmp/<conversation_id>/` scratch under ~/.0xcopilot instead: the tree the
+  // caller asked for stayed empty while a second one filled up elsewhere.
+  // Caught by the FS-F live journey, which looked where it had launched.
+  "COPILOT_HOME",
   // Google sign-in. The distributed app ships a bundled-default "Desktop app"
   // OAuth client (id + secret) — see google-oauth-default.ts, which seeds these
   // two vars into process.env at boot from a gitignored google-oauth.json when

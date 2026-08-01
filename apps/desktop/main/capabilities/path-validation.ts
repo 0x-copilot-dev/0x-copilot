@@ -46,10 +46,22 @@ export type FsErrorCode =
  */
 export class FsError extends Error {
   readonly code: FsErrorCode;
-  constructor(code: FsErrorCode, message?: string) {
+  /**
+   * Machine category for a refused grant root, when that is what failed. The
+   * `message` is the sentence a consent card shows a person; this is the label
+   * an audit row or a test asserts on, so improving the copy never silently
+   * changes what a caller matched.
+   */
+  readonly reason: ForbiddenRootReason | undefined;
+  constructor(
+    code: FsErrorCode,
+    message?: string,
+    reason?: ForbiddenRootReason,
+  ) {
     super(message ?? code);
     this.name = "FsError";
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -310,12 +322,169 @@ export const SENSITIVE_ROOT_SEGMENTS: readonly string[] = [
   "keychains", // macOS ~/Library/Keychains
 ];
 
+// ---------------------------------------------------------------------------
+// WHY THIS LIST GREW (the mid-run "always allow" lane).
+//
+// Until that lane, every grant root came from a native folder DIALOG: a person
+// navigated to a folder and picked it, so the denylist only had to stop the
+// handful of catastrophic choices a person might make by accident. The mid-run
+// card changed the producer — the folder is now named by the MODEL, shown on a
+// card, and attached with one click and no OS dialog. The question the list has
+// to answer is therefore no longer "what might someone pick by mistake" but
+// "what could a model name that a hurried person would approve", which is a
+// much wider set and includes several folders that read as innocuous.
+//
+// Each list below is a CLASS, closed over the platforms we ship, not a sample
+// of examples. Every one of them only ever REDUCES authority.
+// ---------------------------------------------------------------------------
+
+/**
+ * Top-level trees owned by the operating system or its package manager: system
+ * configuration, binaries, libraries, kernel interfaces, boot state, and the
+ * superuser's home. Matched against the FIRST segment of the tree being judged
+ * (for Windows, the first after the drive), so everything beneath goes with it —
+ * `/etc/ssl/private`, `/usr/local/bin`, `C:\Windows\System32`. On a mounted
+ * volume the tree being judged is each subtree of the volume in turn, so the
+ * same names are refused there too (see `classifyForbiddenRoot`).
+ *
+ * `private` is here because macOS firmlinks `/etc`, `/var` and `/tmp` into it,
+ * so `/private/etc` is the same directory as `/etc` and must classify the same
+ * way. `tmp` is here because a world-writable directory is the cheapest place
+ * for anything on the machine to plant a folder worth naming on a card.
+ */
+export const SYSTEM_ROOT_SEGMENTS: readonly string[] = [
+  // POSIX
+  "bin",
+  "sbin",
+  "usr",
+  "etc",
+  "var",
+  "opt",
+  "lib",
+  "lib32",
+  "lib64",
+  "libexec",
+  "boot",
+  "proc",
+  "sys",
+  "dev",
+  "run",
+  "srv",
+  "root",
+  "cores",
+  "private",
+  "tmp",
+  // macOS
+  "system",
+  "library",
+  // Windows (after the drive root)
+  "windows",
+  "winnt",
+  "program files",
+  "program files (x86)",
+  "programdata",
+  "$recycle.bin",
+  "system volume information",
+  "perflogs",
+  "recovery",
+];
+
+/**
+ * Directories whose CHILDREN are whole mounted volumes. A grant on one of these
+ * (`/Volumes`) covers every disk on the machine; a grant one level in
+ * (`/Volumes/Backup`) covers an entire disk. Neither is a folder — "name the
+ * folder you need" is the same refusal `HostPathMessages.VOLUME_ROOT` makes on
+ * the backend, kept in step here.
+ *
+ * These also mark where THIS machine's namespace ends and a foreign one begins;
+ * see `mountedVolumeContentStart`.
+ */
+export const VOLUME_PARENT_SEGMENTS: readonly string[] = [
+  "volumes", // macOS
+  "mnt", // Linux
+  "media", // Linux (removable)
+  "net", // autofs
+  "network", // macOS
+];
+
+/**
+ * What a machine calls the directory its user accounts live in.
+ *
+ * FOREIGN FILESYSTEMS ONLY. The `other_user_home` rule below derives the
+ * container from `ctx.homeDir`, and on this machine that derivation is exact —
+ * a hard-coded list could only add wrong answers to it, refusing `/home/…` on a
+ * Mac and `/Users/…` on Linux. On a MOUNTED volume there is nothing to derive
+ * from: the disk came off another machine, which may keep its accounts under
+ * `home` (Linux) or `Documents and Settings` (old Windows) and is a sibling of
+ * nothing this process knows. So the list names the class, and is consulted
+ * only where the derivation has no answer.
+ */
+export const HOME_CONTAINER_SEGMENTS: readonly string[] = [
+  "users", // macOS, Windows
+  "home", // Linux, BSD
+  "documents and settings", // Windows (legacy)
+];
+
+/**
+ * Where installed applications keep their own state INSIDE a user's home — and
+ * therefore where session cookies, OAuth refresh tokens and credential
+ * databases live. Matched against the segment directly under the home
+ * directory, which is the only place these conventions apply.
+ *
+ * Nothing else in this file refuses them: they are inside the home (so the
+ * home rule allows them, correctly — the home rule is about breadth) and they
+ * are not top-level (so the system rule never sees them). `~/Library/Application
+ * Support/<some app>` is exactly the kind of specific, plausible-looking path a
+ * model can name and a person will approve without reading past the app name.
+ */
+export const APPLICATION_STATE_SEGMENTS: readonly string[] = [
+  "library", // macOS
+  "appdata", // Windows
+  ".config", // XDG
+  ".local", // XDG
+  ".cache", // XDG
+];
+
 /** Machine-readable reason a candidate grant root was rejected. */
 export type ForbiddenRootReason =
   | "filesystem_root"
+  | "volume_root"
+  | "device_path"
   | "home_directory"
+  | "other_user_home"
   | "user_data_directory"
-  | "sensitive_directory";
+  | "system_directory"
+  | "application_bundle"
+  | "application_state_directory"
+  | "sensitive_directory"
+  | "deceptive_path";
+
+/**
+ * What a person is told when a folder cannot be granted, one sentence per
+ * reason. Declared as a total `Record` over the union so a new reason cannot be
+ * added without copy — a refusal with no message is the silent no-op this
+ * whole gate exists to avoid.
+ *
+ * None of these echoes the path. They name only the CATEGORY, which is derived
+ * purely from the string the caller already supplied and from no filesystem
+ * access at all, so a refusal still cannot become a path oracle.
+ */
+export const FORBIDDEN_ROOT_MESSAGES: Record<ForbiddenRootReason, string> = {
+  filesystem_root: "The whole disk can't be shared. Name a folder on it.",
+  volume_root: "A whole drive can't be shared. Name a folder on it.",
+  device_path: "That path names a device, not a folder.",
+  home_directory:
+    "Your whole home folder can't be shared. Name a folder inside it.",
+  other_user_home: "That folder belongs to another user account.",
+  user_data_directory: "That folder holds this app's own data and keys.",
+  system_directory: "That's a system folder, not one of yours.",
+  application_bundle: "That's an installed application, not a folder of files.",
+  application_state_directory:
+    "That folder holds installed apps' saved logins and data.",
+  sensitive_directory: "That folder holds credentials.",
+  deceptive_path:
+    "That folder's name contains hidden characters, so it can't be shown honestly.",
+};
 
 export interface GrantRootContext {
   /** The user's home directory (canonical). */
@@ -342,6 +511,62 @@ function isFilesystemRoot(rawRoot: string): boolean {
   return /^[/\\]+$/u.test(rawRoot) || /^[A-Za-z]:[/\\]*$/u.test(rawRoot);
 }
 
+/** `\\.\PhysicalDrive0`, `\\?\Volume{…}` — a namespace, never a folder. */
+function isDeviceNamespace(rawRoot: string): boolean {
+  return /^\\\\[.?]\\/u.test(rawRoot);
+}
+
+/** `\\server\share` (and nothing below it) — a whole network volume. */
+function isUncShareRoot(rawRoot: string): boolean {
+  return /^\\\\[^\\/]+[\\/]+[^\\/]+[\\/]*$/u.test(rawRoot);
+}
+
+/**
+ * Characters that change what a path LOOKS like without changing what it is:
+ * C0/C1 controls, the soft hyphen, zero-width spaces and joiners, and the
+ * explicit bidirectional overrides/isolates that can render `…/reports/txt.exe`
+ * as something else entirely.
+ *
+ * This is the readability half of "what is displayed is exactly what is
+ * granted". A path is granted BECAUSE a person read it on a card, so a string
+ * whose rendering is not its content cannot be consented to at all.
+ *
+ * Deliberately NOT a homoglyph check. Refusing a segment that mixes Latin with
+ * Cyrillic or Greek would reject `Проект-v2` — an ordinary folder name — and
+ * doing it correctly needs a full confusables table. Full-script confusables
+ * are out of scope here and are recorded as such rather than half-implemented.
+ */
+const DECEPTIVE_CHARACTERS =
+  /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+
+function isDeceptivePath(rawRoot: string): boolean {
+  if (DECEPTIVE_CHARACTERS.test(rawRoot)) return true;
+  if (typeof rawRoot.isWellFormed === "function" && !rawRoot.isWellFormed()) {
+    return true;
+  }
+  // A compatibility form that BECOMES a separator or a traversal once
+  // normalized (U+FF0F FULLWIDTH SOLIDUS, U+FF0E FULLWIDTH FULL STOP) reads as
+  // one folder and means another. Same rule `assertSegmentSafe` applies to a
+  // virtual path segment, applied here to a grant root's own segments.
+  return splitPathSegments(rawRoot).some((segment) => {
+    const folded = segment.normalize("NFKC");
+    return (
+      folded !== segment &&
+      (folded.includes("/") ||
+        folded.includes("\\") ||
+        folded === "." ||
+        folded === "..")
+    );
+  });
+}
+
+/** The path's own top-level segment, skipping a Windows drive root. */
+function topLevelSegment(segments: readonly string[]): string {
+  const first = segments[0] ?? "";
+  if (/^[a-z]:$/u.test(first)) return segments[1] ?? "";
+  return first;
+}
+
 // True iff `descendant` is `ancestor` itself or lives strictly beneath it.
 // Both must already be `normalizeRootForCompare`-normalized.
 function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
@@ -352,16 +577,91 @@ function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
 /**
  * Classify a candidate grant root, or return null when it is safe to grant.
  * Pure — takes the home/userData context explicitly so it stays testable.
+ *
+ * TWO PASSES, because a path has two meanings.
+ *
+ * The first pass reads the path as THIS machine spells it. That is the whole
+ * answer for a path on this machine's own filesystem.
+ *
+ * The second exists because a mount point is not a folder: it is the root of an
+ * entire other filesystem, which contains the very same classes under the very
+ * same names. Every rule keyed on a first segment or on `ctx.homeDir` therefore
+ * evaporated one level below `/Volumes/<disk>` — `/Volumes/Backup/etc`,
+ * `/Volumes/Backup/System/Library`, `/Volumes/Backup/Users/bob/Documents` were
+ * all granted, while their host-namespace spellings were refused. A grant on a
+ * Time Machine disk could hand over a snapshot of the whole machine, this user's
+ * home included, one indirection away from every rule written to stop exactly
+ * that. So below a mount point the classes are re-tested MOUNT-RELATIVELY, and
+ * a path lands on the same rule whichever way it is spelled.
+ *
+ * At EVERY depth, not just directly below the mount. A backup re-roots a
+ * filesystem at a depth we cannot know
+ * (`/Volumes/X/Backups.backupdb/<Mac>/<snapshot>/Users/bob`), a restored copy at
+ * another, a disk image at another still, and none of it is decidable from the
+ * string. Assuming any directory on a mounted volume could be a filesystem root
+ * is the only assumption that closes the class rather than one spelling of it.
+ * The price is paid on mounted volumes only, and it is over-REFUSAL: a folder
+ * named `dev` or `lib` on an external disk is refused as if it were `/dev` or
+ * `/lib`, and the person names a different folder. That is the deliberate
+ * direction — the alternative is a denylist that a mount point walks around.
  */
 export function classifyForbiddenRoot(
   root: string,
   ctx: GrantRootContext,
 ): ForbiddenRootReason | null {
+  // First, because a string that does not render as itself cannot be judged —
+  // by this function or by the person reading it on a card.
+  if (isDeceptivePath(root)) return "deceptive_path";
+  if (isDeviceNamespace(root)) return "device_path";
   if (isFilesystemRoot(root)) return "filesystem_root";
+  if (isUncShareRoot(root)) return "volume_root";
+  // `~` is not expanded anywhere in this process (the backend refuses it too,
+  // `HostPathMessages.HOME_RELATIVE`). Reaching here it is either a literal
+  // directory named `~` or an unexpanded home path; both are refused, and the
+  // second is what the card would have shown the user.
+  if (root.startsWith("~")) return "home_directory";
 
-  const norm = normalizeRootForCompare(root);
+  const segments = splitPathSegments(root).map((s) => s.toLowerCase());
+
+  // Pass 1 — the path in this machine's own namespace.
+  const own = classifyResolvedTree(segments, ctx, { foreign: false });
+  if (own !== null) return own;
+
+  // Pass 2 — the same path read as content of a mounted volume.
+  const start = mountedVolumeContentStart(root, segments, ctx);
+  if (start === null) return null;
+  for (let index = start; index < segments.length; index += 1) {
+    const reason = classifyResolvedTree(segments.slice(index), ctx, {
+      foreign: true,
+    });
+    if (reason !== null) return reason;
+  }
+  return null;
+}
+
+/**
+ * Classify one already-lower-cased segment list AS A FILESYSTEM PATH — the tree
+ * it names, judged by containment against the trees that may not be granted.
+ *
+ * Called twice by `classifyForbiddenRoot`: once on the path itself, and once per
+ * subtree of a mounted volume, where the same segments name the same classes on
+ * a different filesystem. Every rule here is therefore written to hold for both
+ * callers; none of them may consult the original string.
+ *
+ * `foreign` says which caller this is. It gates exactly one rule — the one whose
+ * answer `ctx` cannot supply for another machine's disk — and nothing else, so a
+ * path on this machine keeps the classification it has always had.
+ */
+function classifyResolvedTree(
+  segments: readonly string[],
+  ctx: GrantRootContext,
+  { foreign }: { readonly foreign: boolean },
+): ForbiddenRootReason | null {
+  const norm = segments.join("/");
   const home = normalizeRootForCompare(ctx.homeDir);
   const userData = normalizeRootForCompare(ctx.userDataDir);
+  const insideHome = home !== "" && isAncestorOrEqual(home, norm);
+  const top = topLevelSegment(segments);
 
   // The home directory itself, or any ancestor of it (`/Users`, `/home`, …):
   // far too broad, and an ancestor exposes every user.
@@ -374,25 +674,141 @@ export function classifyForbiddenRoot(
     return "user_data_directory";
   }
 
+  // Another account's home, or anything inside one: a sibling of this home
+  // under the same parent. Derived from `homeDir` rather than from a list of
+  // home-parent names, so it holds wherever accounts actually live. (The
+  // parent itself — `/Users`, `/home` — is already refused just above as an
+  // ancestor of this home.)
+  const homeParent = parentOf(home);
+  if (homeParent !== null && isAncestorOrEqual(homeParent, norm) && !insideHome)
+    return "other_user_home";
+
+  // A home container this process could NOT derive, and every account tree in
+  // it. Only on a foreign filesystem: the rule above is exact for this machine
+  // and a list can only add wrong answers to it, but a mounted disk carries
+  // another machine's container, which may be spelled differently (`/home` on a
+  // Linux disk read from a Mac, `Documents and Settings` on an old Windows
+  // image). Still skipped inside this user's own home, so a snapshot of their
+  // OWN home keeps the answers the derived rules gave it.
+  if (foreign && !insideHome && HOME_CONTAINER_SEGMENTS.includes(top)) {
+    return "other_user_home";
+  }
+
+  // A mount parent (`/Volumes`) or a whole volume one level in
+  // (`/Volumes/Backup`). Deeper is an ordinary folder on an external disk and
+  // is judged by the mount-relative pass instead.
+  if (VOLUME_PARENT_SEGMENTS.includes(top) && depthBelowTop(segments) <= 1) {
+    return "volume_root";
+  }
+
+  // An installed application: `/Applications`, and any `.app` bundle at any
+  // depth (a user's own `~/Applications/Thing.app` is still an application).
+  // Granting one shares executable code, not documents.
+  if (top === "applications" || segments.some((s) => s.endsWith(".app"))) {
+    return "application_bundle";
+  }
+
+  // An OS-owned tree — UNLESS it contains this user's home. A service or
+  // container account can legitimately live at `/var/lib/<app>`, and refusing
+  // every folder in that person's own home would leave them with no grantable
+  // folder at all. No system tree is inside a home on the desktops we ship, so
+  // outside that case this exemption never fires.
+  if (!insideHome && SYSTEM_ROOT_SEGMENTS.includes(top)) {
+    return "system_directory";
+  }
+
+  // Installed applications' saved state, directly under the home directory.
+  if (insideHome) {
+    const below = norm.slice(home.length + 1).split("/");
+    const first = below[0] ?? "";
+    if (first !== "" && APPLICATION_STATE_SEGMENTS.includes(first)) {
+      return "application_state_directory";
+    }
+  }
+
   // Any well-known credential directory anywhere along the path.
-  const segments = splitPathSegments(root).map((s) => s.toLowerCase());
   if (segments.some((s) => SENSITIVE_ROOT_SEGMENTS.includes(s))) {
     return "sensitive_directory";
   }
   return null;
 }
 
+/** A path's leading `c:` drive segment, lower-cased; null when it has none. */
+function driveLetterOf(segments: readonly string[]): string | null {
+  const first = segments[0] ?? "";
+  return /^[a-z]:$/u.test(first) ? first : null;
+}
+
+/**
+ * Index of the first segment that is CONTENT OF A MOUNTED VOLUME, or null when
+ * the path is not on one. Everything from that index down belongs to a
+ * filesystem this process did not create and cannot describe with `ctx`.
+ *
+ * Three shapes count as a mount:
+ *   - `/Volumes/<disk>/…`, `/mnt/<disk>/…`, `/media/<disk>/…`, … — content
+ *     starts two segments in (the mount parent, then the volume's own name).
+ *   - `\\server\share\…` — a share is a volume on another machine; the share
+ *     root itself was already refused as `volume_root`.
+ *   - a drive root OTHER than the one the home directory is on. `D:\Users\bob`
+ *     is the same tree as `/Volumes/Backup/Users/bob`, spelled for Windows.
+ *
+ * The home's OWN drive is deliberately excluded: it is this machine's
+ * filesystem, already fully judged by the first pass, and re-scanning it would
+ * refuse `C:\Users\alice\code\dev` for containing a segment named `dev`.
+ */
+function mountedVolumeContentStart(
+  rawRoot: string,
+  segments: readonly string[],
+  ctx: GrantRootContext,
+): number | null {
+  // `\\server\share\…`, and the forward-slash spelling of the same path, which
+  // Node also reads as UNC. Device namespaces (`\\.\`, `\\?\`) never reach here
+  // — `classifyForbiddenRoot` refuses them before calling this. On POSIX a
+  // leading `//` is just `/`, where this only skips two segments the first pass
+  // already judged.
+  if (/^[/\\]{2}[^/\\]/u.test(rawRoot)) return 2;
+
+  const drive = driveLetterOf(segments);
+  const homeDrive = driveLetterOf(
+    splitPathSegments(ctx.homeDir).map((s) => s.toLowerCase()),
+  );
+  if (drive !== null && drive !== homeDrive) return 1;
+
+  const offset = drive === null ? 0 : 1;
+  if (VOLUME_PARENT_SEGMENTS.includes(segments[offset] ?? "")) {
+    return offset + 2;
+  }
+  return null;
+}
+
+/** The containing directory of a normalized path; null at the top level. */
+function parentOf(normalized: string): string | null {
+  const cut = normalized.lastIndexOf("/");
+  return cut <= 0 ? null : normalized.slice(0, cut);
+}
+
+/** How many segments sit below the top-level one (drive root not counted). */
+function depthBelowTop(segments: readonly string[]): number {
+  const first = segments[0] ?? "";
+  const offset = /^[a-z]:$/u.test(first) ? 2 : 1;
+  return Math.max(segments.length - offset, 0);
+}
+
 /**
  * Throw `FsError('permission_denied')` when `root` is not a safe folder to
- * grant. The message carries only the machine reason category — never the
- * offending host path, so a rejection cannot become a path oracle.
+ * grant. The message is the SENTENCE a consent card shows the person who asked
+ * — never the offending host path, so a rejection cannot become a path oracle,
+ * and never a bare category name, because a refusal nobody can read is the
+ * silent no-op this gate exists to avoid. The machine category rides along on
+ * `FsError.reason`.
  */
 export function assertGrantableRoot(root: string, ctx: GrantRootContext): void {
   const reason = classifyForbiddenRoot(root, ctx);
   if (reason !== null) {
     throw new FsError(
       "permission_denied",
-      `grant root is a sensitive location (${reason})`,
+      FORBIDDEN_ROOT_MESSAGES[reason],
+      reason,
     );
   }
 }

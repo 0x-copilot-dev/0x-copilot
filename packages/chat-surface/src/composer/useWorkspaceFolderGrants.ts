@@ -27,8 +27,19 @@ import type {
 } from "../ports/WorkspaceGrantPort";
 
 export interface WorkspaceFolderGrantsState {
-  /** Active grants, newest read of the broker's own list. */
+  /** Active grants, newest read of the broker's own list, IN THE BROKER'S ORDER. */
   readonly grants: readonly WorkspaceGrant[];
+  /**
+   * The grant this surface most recently watched the user create, or null.
+   *
+   * `WorkspaceGrant` carries no timestamp — the broker's renderer projection is
+   * deliberately `grantId` / `mount` / `label` / `mode` and nothing else — so
+   * "most recent" cannot be read off the list, and the list's ORDER is not a
+   * promise anyone made (see `mostRecentFirst`). What we do know for certain is
+   * which grant WE just watched appear, so that is what is recorded, and it is
+   * cleared the moment the broker stops reporting it.
+   */
+  readonly lastGrantedId: string | null;
   /** A port call is in flight (the native dialog may be up). */
   readonly busy: boolean;
   /**
@@ -62,6 +73,7 @@ export function useWorkspaceFolderGrants(
   port: WorkspaceGrantPort | null | undefined,
 ): WorkspaceFolderGrantsState {
   const [grants, setGrants] = useState<readonly WorkspaceGrant[]>(NO_GRANTS);
+  const [lastGranted, setLastGranted] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,8 +128,14 @@ export function useWorkspaceFolderGrants(
         }
         if (outcome.status === "cancelled") {
           // Nothing to say. The user closed a dialog they opened; an error line
-          // here would turn their own decision into an app failure.
+          // here would turn their own decision into an app failure. Note what is
+          // NOT touched: the list, the error line, and `lastGranted` all stay
+          // exactly as they were, so a dismissed dialog leaves the surface
+          // unchanged (PRD-FS-10 §4.1).
           return;
+        }
+        if (alive.current) {
+          setLastGranted(outcome.grant.grantId);
         }
         try {
           const active = await port.listGrants();
@@ -180,8 +198,18 @@ export function useWorkspaceFolderGrants(
 
   const clearError = useCallback((): void => setError(null), []);
 
+  // A remembered id outlives its grant when the folder is revoked (here or in
+  // Settings) — report it only while the broker still lists it, so nothing
+  // downstream can feature a grant that no longer exists.
+  const lastGrantedId =
+    lastGranted !== null &&
+    grants.some((grant) => grant.grantId === lastGranted)
+      ? lastGranted
+      : null;
+
   return {
     grants,
+    lastGrantedId,
     busy,
     error,
     requestGrant,
@@ -189,6 +217,36 @@ export function useWorkspaceFolderGrants(
     refresh,
     clearError,
   };
+}
+
+/**
+ * The grant to NAME first, then the rest.
+ *
+ * Callers that show one folder out of several must not take `grants[0]`: the
+ * hook hands back whatever order the broker sent, so an unrelated change to how
+ * the broker stores or sorts grants would silently rename the folder on screen.
+ * The folder a user is thinking about is the one they just attached, so a known
+ * `lastGrantedId` leads; everything else keeps its relative order.
+ *
+ * Returns the input array itself when there is nothing to move, so a caller can
+ * keep it in a `useMemo` without churning identity on every render.
+ */
+export function mostRecentFirst(
+  grants: readonly WorkspaceGrant[],
+  lastGrantedId: string | null,
+): readonly WorkspaceGrant[] {
+  if (lastGrantedId === null || grants.length < 2) {
+    return grants;
+  }
+  const index = grants.findIndex((grant) => grant.grantId === lastGrantedId);
+  if (index <= 0) {
+    return grants;
+  }
+  const head = grants[index];
+  if (head === undefined) {
+    return grants;
+  }
+  return [head, ...grants.filter((_, at) => at !== index)];
 }
 
 /** A thrown port becomes a sentence, never an empty state. */

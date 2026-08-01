@@ -51,7 +51,9 @@ import {
   createProviderKeysPort,
   createSpendGuardrailPort,
   createToolUsePolicyPort,
+  filesystemBypassPatch,
   localModelInstalledTag,
+  withFilesystemBypass,
   DEFAULT_APPROVAL_POLICY,
   type ApprovalPolicyPort,
   type ApprovalPolicyValue,
@@ -89,6 +91,7 @@ import {
 } from "@0x-copilot/chat-transport";
 import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
+import { publishWorkspaceDefaults } from "./workspaceDefaultsStore";
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
 import { mergeCatalog } from "./composer/desktopModelCatalog";
 
@@ -522,6 +525,10 @@ export function SettingsMount({
       behavior_overrides: workspaceDefaults.behavior_overrides,
     };
     try {
+      // NOTE: the response is published to `workspaceDefaultsStore` below —
+      // a PUT response is the most current reading of this endpoint there is,
+      // and publishing it is what lets a live composer see the switch move
+      // without a renderer reload.
       const updated = await transport.request<WorkspaceDefaultsResponse>({
         method: "PUT",
         path: "/v1/agent/workspace/defaults",
@@ -678,6 +685,10 @@ export function SettingsMount({
         body,
       });
       setWorkspaceDefaults(updated);
+      // Announce it. Without this the composer's bypass pill keeps the value it
+      // read when it mounted, so turning the switch on here left the pill
+      // disabled until a renderer reload (measured by the FS-D journey).
+      publishWorkspaceDefaults(updated);
       toast(okMessage);
     } catch {
       toast("Saving that setting failed — retry in a moment.");
@@ -777,12 +788,34 @@ export function SettingsMount({
     };
   }, [toolUsePolicyPort]);
 
+  // PRD-FS-10 §4.3 tier 1 — the card also carries the filesystem-bypass master
+  // switch, which lives in the workspace blob rather than the per-user policy.
+  // Seeded here so the toggle reflects what is actually persisted; without this
+  // it would read off after every reload no matter what was saved.
+  const bypassEnabled =
+    workspaceDefaults?.behavior_overrides?.filesystem_bypass_enabled === true;
+  useEffect(() => {
+    setApprovalPolicy((prev) => withFilesystemBypass(prev, bypassEnabled));
+  }, [bypassEnabled]);
+
   const persistApprovalPolicy = async (
     next: ApprovalPolicyValue,
     toast: (message: string) => void,
   ): Promise<void> => {
     const previous = approvalPolicy;
     setApprovalPolicy(next); // optimistic
+    // Two stores, so two saves. The bypass patch is null unless the switch
+    // actually moved, so an ordinary axis edit still writes exactly once.
+    const bypassPatch = filesystemBypassPatch(previous, next);
+    if (bypassPatch !== null) {
+      void persistBehaviorOverride(
+        bypassPatch,
+        toast,
+        bypassPatch.filesystem_bypass_enabled
+          ? "Bypass can now be turned on per run."
+          : "File changes always ask again.",
+      );
+    }
     try {
       await toolUsePolicyPort.save(next);
       toast("Approval policy saved.");

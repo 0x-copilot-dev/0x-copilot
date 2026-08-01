@@ -41,6 +41,10 @@ import type { FilePickerPort } from "../../ports/FilePickerPort";
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
+import {
+  bypassSelectionForSend,
+  MANUAL_BYPASS_STATE,
+} from "../../composer/filesystemBypass";
 import { RunDestination, buildRunCreateBody } from "./RunDestination";
 import { runModeKey } from "./useRunMode";
 
@@ -1052,20 +1056,23 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     );
   });
 
-  it("approving in chat flips the card to a signed receipt, clears the count, and POSTs the decision", async () => {
+  it("approving in chat retires the card, clears the count, and POSTs the decision", async () => {
     const transport = await renderWithApproval();
 
     act(() => {
       fireEvent.click(screen.getByTestId(approvalApproveTid("appr-1")));
     });
 
-    // Optimistic: card → receipt (approved); pending card + badge gone.
+    // Optimistic: the card LEAVES the strip, badge with it. It does not flip to
+    // a "✓ Approved · <title>" receipt pinned above the composer — by the time
+    // one would render, the run has continued and its result is in the
+    // transcript, so the line adds nothing and costs the scarcest vertical space
+    // on the surface. The decision is still recorded; the Approvals tab projects
+    // it from the same event stream.
     await waitFor(() =>
-      expect(
-        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
-      ).toHaveAttribute("data-decision", "approved"),
+      expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
     expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
     // The host POSTed the decision through the Transport port (host owns POST).
     await waitFor(() =>
@@ -1079,34 +1086,35 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     );
   });
 
-  it("rejecting in chat flips the card to a rejected receipt", async () => {
+  it("rejecting in chat retires the card the same way approving does", async () => {
     await renderWithApproval();
 
     act(() => {
       fireEvent.click(screen.getByTestId(approvalRejectTid("appr-1")));
     });
 
+    // Resolved is resolved: the strip above the composer holds LIVE decisions,
+    // and which way the user decided does not change that this one is over.
     await waitFor(() =>
-      expect(
-        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
-      ).toHaveAttribute("data-decision", "rejected"),
+      expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
   });
 
-  it("reconciles the server `approval_resolved` frame into a receipt", async () => {
+  it("retires the card on a server `approval_resolved` frame, not just a local click", async () => {
     const transport = await renderWithApproval();
 
+    // The same decision can arrive from ANOTHER surface (the Approvals tab, a
+    // second window) or from the runtime resolving it itself. The strip must
+    // react to the event, not only to this component's own button.
     act(() => {
       transport.emit(approvalResolved("appr-1", "approved"));
     });
 
     await waitFor(() =>
-      expect(
-        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
-      ).toHaveAttribute("data-decision", "approved"),
+      expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
   });
 
   it("hides in-chat approvals + the count while scrubbed off-now, restoring on snap-to-now (FR-3.15)", async () => {
@@ -2174,6 +2182,32 @@ describe("buildRunCreateBody", () => {
     expect(
       buildRunCreateBody(CONV, { goal: "x" }).web_search_enabled,
     ).toBeUndefined();
+  });
+
+  it("only sends filesystem_bypass when the composer actually selected one", () => {
+    // PRD-FS-10 §4.3. A host that never surfaces the pill must produce the
+    // byte-identical body it produced before bypass existed — the whole reason
+    // `bypassSelectionForSend` returns undefined for the default posture.
+    expect(
+      buildRunCreateBody(CONV, { goal: "x" }).filesystem_bypass,
+    ).toBeUndefined();
+    expect(
+      buildRunCreateBody(CONV, {
+        goal: "x",
+        filesystemBypass: bypassSelectionForSend(MANUAL_BYPASS_STATE, {
+          masterEnabled: true,
+        }),
+      }).filesystem_bypass,
+    ).toBeUndefined();
+    expect(
+      buildRunCreateBody(CONV, {
+        goal: "x",
+        filesystemBypass: bypassSelectionForSend(
+          { mode: "bypass", scope: "run" },
+          { masterEnabled: true },
+        ),
+      }).filesystem_bypass,
+    ).toEqual({ run: "bypass" });
   });
 
   it("nests active connector scopes under request_context, omitting an empty map", () => {
