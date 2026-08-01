@@ -99,7 +99,7 @@ are the ones whose **names describe enforcement**, each verified by grep:
 
 | Symbol                                      | Tests | Location                                            |
 | ------------------------------------------- | ----- | --------------------------------------------------- |
-| `MemoryAccessPolicy.ensure_authorized`      | 4     | `context/memory/policy.py:166`                      |
+| `MemoryPolicyAuthorizer.ensure_authorized`  | 4     | `context/memory/policy.py:166`                      |
 | `ToolUsePolicySnapshot.mode_for_tool`       | 3     | `capabilities/tools/permissions.py:88`              |
 | `admit_tool_return`                         | 22    | `context/tool_result_admission_gate.py:302`         |
 | `verify_audit_log`                          | 6     | `runtime_adapters/file/runtime_api_store.py:2654`   |
@@ -107,26 +107,50 @@ are the ones whose **names describe enforcement**, each verified by grep:
 | `build_permission_context_from_scope_lists` | 8     | `runtime_worker/jobs/routine_pre_fire_gate.py:389`  |
 | `widening_rejections`                       | 3     | `capabilities/concurrency/descriptor_policy.py:423` |
 
-### 2a — `MemoryAccessPolicy` is enforced nowhere
+### 2a — memory role policy and prompt-injection rejection never evaluate
 
-`ensure_authorized` has no callers, and the underlying `authorize` is called **only from
-inside `ensure_authorized` itself** (`policy.py:178`). Every other `.authorize(` in `src`
-belongs to a different object — connector, upload authorizer, effect executor. So the class is
-unreachable, and with it the memory path policy and its prompt-injection rejection.
+**Correction to an earlier draft of this document, which named a class
+`MemoryAccessPolicy` that does not exist and called it "unreachable". The real class is
+`MemoryPolicyAuthorizer` and it _is_ imported and used.** The unwired part is narrower and
+still real:
 
-CLAUDE.md lists memory content as untrusted precisely because a previous turn wrote it. The
-component that acts on that rule does not run.
+- `MemoryPolicyAuthorizer.default_policies()` **is** called
+  (`context/memory/backends.py:66`) — the path policies are built and attached to each
+  `MemoryBackendRoute`.
+- `authorize()` — which evaluates those policies — is called **only from inside
+  `ensure_authorized`** (`policy.py:178`).
+- `ensure_authorized` has no callers.
 
-### 2b — `mode_for_tool` explains why `write=ask` blocks reads
+So policies are loaded onto routes and then never evaluated. Confirming that nothing else
+evaluates them: `read_roles` / `write_roles` / `approval_required` appear only in their own
+contract, the key-name constants, and inside `authorize`. `PromptInjectionDetector` has
+exactly one call site — `policy.py:159`, inside `authorize`.
 
-`mode_for_tool` maps a tool's `side_effects` / `risk_level` onto read / write / destructive —
-the per-tool classifier. It is never called. What _is_ called is `mode_for(kind)`, and
-`tool_use_enforcement.py` gates the single `call_mcp_tool` dispatcher as one blob.
+**Net: the memory role checks and the prompt-injection rejection do not run.** CLAUDE.md
+lists memory content as untrusted precisely because a previous turn wrote it; the component
+that acts on that rule is attached but never asked.
 
-**So the approval gate cannot tell a read-only MCP call from a destructive one.** Under the
-default `write=ask`, a read-only connector call is gated identically to a delete. This makes
-the MCPMark PRD's §4.3 gate _worse_ than estimated — `G_approval` was scored on writes needing
-approval; in fact every MCP call does.
+### 2b — the per-tool classifier is unwired, so reads gate as writes
+
+**Also corrected.** Classification is not absent — it happens at a coarser grain than the
+code suggests.
+
+The live path is `ToolUsePolicyGate.decide_for_side_effects`
+(`runtime_gate.py:126`), which calls the wired `kind_for_side_effects(...)`. Its own
+docstring says why: it "exists for callers that gate an umbrella model tool (e.g.
+`call_mcp_tool`) at run-start, where the concrete per-invocation `LoadedToolSpec` is not yet
+resolved but the tool's coarse side-effect class is known."
+
+What is unwired is the **per-tool-spec** classifier: `mode_for_tool`
+(`permissions.py:88`) and the `_kind_for_tool_policy` it delegates to, which map a _resolved_
+tool's `side_effects` / `risk_level` onto read / write / destructive. `_kind_for_tool_policy`
+has exactly one caller — `mode_for_tool` — which has none.
+
+**Consequence: the axis is decided once, at run-start, from the umbrella tool's coarse
+side-effect class**, which must cover writes because some connector tool writes. So under the
+default `write=ask` a read-only connector call is gated identically to a delete. This makes
+the MCPMark PRD's §4.3 gate _worse_ than estimated — `G_approval` was scored as "writes need
+approval"; in practice every MCP call does.
 
 It is also a product bug independent of any benchmark: users are asked to approve reads.
 
@@ -151,7 +175,7 @@ detector means resolving attribute access, not counting strings.
 ## What to fix first
 
 1. **`mode_for_tool` (2b)** — a user-visible bug today, and it moves an MCPMark gate.
-2. **`MemoryAccessPolicy` (2a)** — an untrusted-input control that does not run.
+2. **Memory policy evaluation (2a)** — an untrusted-input control that is attached but never asked.
 3. **`tool_result_admission_gate` (1a)** — wire it before scheduling PRD P2-2, which would
    otherwise rebuild it.
 4. **`approval_expiry_sweeper` (1b)** — confirm the consequence, then schedule it.
