@@ -27,6 +27,7 @@ from agent_runtime.capabilities.actions.contracts import (
 )
 from agent_runtime.capabilities.actions.policy import EffectiveActionPolicyResolver
 from agent_runtime.capabilities.mcp.cards import McpLoadError, McpServerCard
+from agent_runtime.capabilities.mcp.constants import Limits
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
@@ -77,6 +78,7 @@ from agent_runtime.capabilities.operations.presentation_boundary import (
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicyMode
 from agent_runtime.effects.contracts import EffectPolicySnapshot, ProposedEffect
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.execution.tool_error_sanitizer import ErrorSanitizer
 from agent_runtime.surfaces_v2.canonical_json import (
     canonical_json_bytes,
     sha256_hex,
@@ -172,12 +174,30 @@ class McpOperationAdapter(OperationAdapter):
         self._execution = execution
         self._tool_call_id = tool_call_id
         self._stored_result: McpOperationStoredResult | None = None
+        self._protocol_error: str | None = None
 
     @property
     def stored_result(self) -> McpOperationStoredResult | None:
         """Return the persisted read projection after a successful read."""
 
         return self._stored_result
+
+    @property
+    def protocol_error(self) -> str | None:
+        """Return the connector's own error text after a protocol failure.
+
+        Set only when a dispatched read came back flagged ``isError`` by the
+        server, and already sanitized (secrets, connection strings, internal
+        ids stripped; resource ids the server returned kept). ``CallMcpTool``
+        reads it to surface the connector's real message on the failure
+        result. It travels on this side-channel — mirroring ``stored_result``
+        for the success case — and never through the gateway disposition,
+        whose failure summary is contractually generic (see
+        ``OperationDisposition.failure_code``: nothing from an exception body
+        reaches the model).
+        """
+
+        return self._protocol_error
 
     async def execute_read(self, request: OperationRequest) -> OperationRawResult:
         """Revalidate, gate, dispatch exactly once, and persist the result."""
@@ -190,6 +210,23 @@ class McpOperationAdapter(OperationAdapter):
             0, int((time.perf_counter() - dispatch_started) * 1000)
         )
         if McpToolCallOutcome.is_protocol_error(output):
+            # Preserve the connector's OWN error text so the model can read what
+            # the server actually rejected — an invalid argument, a missing
+            # field, a "column does not exist" — and self-correct, instead of
+            # seeing only a generic "the connector reported an error" and
+            # retrying the same bad call. The raw envelope is untrusted (it may
+            # carry a connection string or an internal id), so it is scrubbed
+            # before it can reach the model, and it is stashed on the adapter
+            # side-channel rather than the raised error: the gateway's failure
+            # disposition stays generic by contract, and CallMcpTool lifts this
+            # sanitized text onto the failure result.
+            self._protocol_error = (
+                ErrorSanitizer.sanitize_text(
+                    McpToolCallOutcome.extract_error_text(output),
+                    max_length=Limits.SAFE_MESSAGE_MAX_LENGTH,
+                ).strip()
+                or _CONNECTOR_PROTOCOL_ERROR
+            )
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
                 _CONNECTOR_PROTOCOL_ERROR,

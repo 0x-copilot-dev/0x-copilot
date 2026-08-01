@@ -263,7 +263,12 @@ class Limits:
     METADATA_LATENCY_MAX_MS = 600_000
     RESOURCE_NAME_MAX_LENGTH = 120
     MIME_TYPE_MAX_LENGTH = 200
-    SAFE_MESSAGE_MAX_LENGTH = 500
+    # Raised from 500: a safe_message now also carries the connector's own
+    # (sanitized) error text on a protocol failure, and a Postgres/validation
+    # error with its DETAIL/HINT/CONTEXT lines routinely runs past 500. The cap
+    # still bounds model-facing context; it matches the sanitizer's own ceiling
+    # so the scrubbed text and this field agree on one limit.
+    SAFE_MESSAGE_MAX_LENGTH = 2048
 
 
 class Defaults:
@@ -376,7 +381,6 @@ class Messages:
             "The MCP server returned a tool name that collides with a local tool."
         )
         LOCAL_TOOL_NAMES_INVALID = "MCP local tool names are invalid."
-        PROTOCOL_ERROR = "The MCP server reported an error for this tool call."
         PROTOCOL_ERROR_FALLBACK = (
             "The MCP server returned an error without a readable message."
         )
