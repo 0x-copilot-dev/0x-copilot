@@ -156,16 +156,38 @@ class ToolInvocationOutcome:
         """Prefer the payload's message; else render the redacted output as evidence."""
         message = payload.get(cls.Keys.ERROR_MESSAGE)
         if isinstance(message, str) and message.strip():
-            return message[: cls._MAX_ERROR_MESSAGE_LENGTH]
+            return cls._clip(message)
         if summary:
-            return str(summary)[: cls._MAX_ERROR_MESSAGE_LENGTH]
+            return cls._clip(str(summary))
         return _UNREPORTED_TOOL_FAILURE
+
+    @classmethod
+    def _clip(cls, text: str) -> str:
+        """Clip a model-facing error message to the budget, marking any cut.
+
+        A bare ``text[:400]`` slice left the model unable to tell a message
+        that genuinely ended at the budget from one the runtime severed
+        mid-clause, so it could act on a sentence that stops partway through.
+        Appending an explicit marker — the same one
+        :class:`~agent_runtime.execution.tool_error_sanitizer.ErrorSanitizer`
+        uses — lets the model see truncation happened and ask for a tighter
+        call instead of guessing.
+        """
+        if len(text) <= cls._MAX_ERROR_MESSAGE_LENGTH:
+            return text
+        cutoff = cls._MAX_ERROR_MESSAGE_LENGTH - len(_TRUNCATION_MARKER)
+        return text[:cutoff] + _TRUNCATION_MARKER
 
 
 # Used when a tool settles as failed but carries no message anywhere. Says so
 # plainly rather than leaving the column null, which is indistinguishable from
 # "never closed" — the exact ambiguity that made the old ledger unreadable.
 _UNREPORTED_TOOL_FAILURE = "The tool failed without reporting a reason."
+
+# Appended when a model-facing error message is clipped to the length budget,
+# matching ``ErrorSanitizer._truncate`` byte-for-byte so the model reads one
+# consistent truncation signal wherever a runtime message is severed.
+_TRUNCATION_MARKER = "…[truncated]"
 
 
 # Non-success terminal statuses used for filtering / metrics queries.
