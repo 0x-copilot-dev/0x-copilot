@@ -90,4 +90,24 @@ describe("DesktopWindowFrame", () => {
       /\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-settings-nav\]\s*\{[^}]*padding-top:[^}]*--desktop-titlebar-height[^}]*!important/,
     );
   });
+
+  it("insets RunHeader for the traffic lights on the same rule as the topbar", () => {
+    // RunHeader carried an exemption from this inset, justified by a centred
+    // product identity. PRD-02 made the goal the title — left-aligned, with a
+    // `leading` slot — and the exemption outlived the layout it described, so
+    // the turbine painted over the leading control and the goal's first
+    // characters. Asserting the two selectors share ONE declaration is the part
+    // that matters: separate rules are how they drifted apart before.
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    expect(desktopCss).toMatch(
+      /\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-testid="run-header"\]\s*\{[^}]*padding-left:[^}]*--desktop-traffic-light-clearance[^}]*!important/,
+    );
+    expect(desktopCss).toMatch(
+      /\[data-component="topbar"\],\s*\.desktop-window-frame\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-testid="run-header"\]\s*\{\s*padding-left:/,
+    );
+  });
 });
