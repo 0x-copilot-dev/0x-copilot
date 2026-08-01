@@ -228,6 +228,12 @@ class ModelCatalog:
             supports_attachments=record.supports_attachments,
             supports_reasoning=record.supports_reasoning
             and record.provider in cls.NATIVE_REASONING_PROVIDERS,
+            # Gated on the same condition as ``supports_reasoning``: advertising
+            # a ladder for a provider whose reasoning we do not expose would
+            # offer the client a control the run path then ignores.
+            reasoning_efforts=tuple(record.reasoning_efforts) or None
+            if record.provider in cls.NATIVE_REASONING_PROVIDERS
+            else None,
             context_window=record.context_window,
             max_output_tokens=record.max_output_tokens,
             input_cost_per_mtok=record.input_cost_per_mtok,

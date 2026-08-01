@@ -134,7 +134,14 @@ StreamSource = StreamEventSource
 
 
 class ModelReasoningEffort(StrEnum):
-    """Provider-neutral reasoning effort controls."""
+    """Provider-neutral reasoning effort controls.
+
+    Ordered cheapest-first. No model advertises every rung — ``minimal`` is an
+    older GPT-5 spelling and ``max`` arrived with GPT-5.6 — so the valid set is
+    a per-model property carried on ``CatalogModelRecord.reasoning_efforts``,
+    never a constant. This enum is the union of every rung we can *express*;
+    the catalog says which ones a given model will *accept*.
+    """
 
     NONE = "none"
     MINIMAL = "minimal"
@@ -142,6 +149,7 @@ class ModelReasoningEffort(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
 
 
 class ModelReasoningSummary(StrEnum):

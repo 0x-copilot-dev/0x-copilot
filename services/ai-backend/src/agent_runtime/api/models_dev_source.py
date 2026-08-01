@@ -45,6 +45,7 @@ from agent_runtime.api.litellm_model_source import (
     CatalogModelSource,
     LitellmModelSource,
 )
+from agent_runtime.execution.contracts import ModelReasoningEffort
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -262,6 +263,60 @@ class ModelsDevCatalogPolicy:
             return ()
         return tuple(item for item in value if isinstance(item, str))
 
+    @classmethod
+    def reasoning_efforts(
+        cls, model: Mapping[str, Any]
+    ) -> tuple[ModelReasoningEffort, ...]:
+        """Return the effort rungs this model accepts, in source order.
+
+        models.dev carries the ladder in a key that is a *sibling* of
+        ``reasoning``, not nested inside it::
+
+            "reasoning": true,
+            "reasoning_options": [
+              {"type": "effort", "values": ["none","low","medium","high","xhigh","max"]}
+            ]
+
+        ``reasoning`` really is a boolean, which is why reading it alone looks
+        correct and still loses the ladder.
+
+        ``reasoning_options`` is a *typed option list* — entries also appear with
+        ``budget_tokens`` and ``toggle`` types. Only ``effort`` is mapped here;
+        the others earn their own typed fields once their wire shape is verified,
+        rather than a ``dict`` bag that would outlive the verification.
+
+        Unrecognised rungs are dropped rather than fatal. models.dev adds rungs on
+        the vendor's schedule (``xhigh`` and ``max`` both arrived after this
+        parser's vocabulary was written), and an unknown rung must cost that rung,
+        never the whole model.
+        """
+
+        options = model.get(cls._Reasoning.OPTIONS)
+        if not isinstance(options, Sequence) or isinstance(options, (str, bytes)):
+            return ()
+        efforts: list[ModelReasoningEffort] = []
+        for option in options:
+            if not isinstance(option, Mapping):
+                continue
+            if option.get(cls._Reasoning.TYPE) != cls._Reasoning.TYPE_EFFORT:
+                continue
+            for value in cls._string_list(option.get(cls._Reasoning.VALUES)):
+                try:
+                    effort = ModelReasoningEffort(value)
+                except ValueError:
+                    continue
+                if effort not in efforts:
+                    efforts.append(effort)
+        return tuple(efforts)
+
+    class _Reasoning:
+        """models.dev key names for the reasoning option list."""
+
+        OPTIONS: Final[str] = "reasoning_options"
+        TYPE: Final[str] = "type"
+        TYPE_EFFORT: Final[str] = "effort"
+        VALUES: Final[str] = "values"
+
 
 class ModelsDevCatalogParser:
     """Map the models.dev payload onto :class:`CatalogModelRecord` values."""
@@ -320,6 +375,7 @@ class ModelsDevCatalogParser:
             input_cost_per_mtok=cls._float(cost.get("input")),
             output_cost_per_mtok=cls._float(cost.get("output")),
             supports_reasoning=bool(model.get("reasoning")),
+            reasoning_efforts=ModelsDevCatalogPolicy.reasoning_efforts(model),
             supports_tools=bool(model.get("tool_call")),
             supports_attachments=cls._has_attachment_input(model),
             release_date=ModelsDevCatalogPolicy.release_date(model),

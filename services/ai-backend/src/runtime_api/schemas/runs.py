@@ -85,6 +85,12 @@ class ModelCatalogItem(RuntimeContract):
     supports_attachments: bool = False
     supports_reasoning: bool = False
     reasoning: JsonObject | None = None
+    # The effort rungs THIS model accepts, cheapest-first, straight from the
+    # catalog source. ``None``/empty means the source published no ladder —
+    # "unknown", not "none" — so a client must fall back to its own default
+    # rungs rather than hiding the control. Only models.dev carries it; the
+    # LiteLLM fallback publishes no reasoning options at all.
+    reasoning_efforts: tuple[str, ...] | None = None
     # Source-derived metadata (see agent_runtime.api.models_dev_source). All
     # optional: entries whose source carries no supplement (e.g. the
     # settings-driven default model placeholder, or any record while the

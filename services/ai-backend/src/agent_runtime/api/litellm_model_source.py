@@ -25,7 +25,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Final, Protocol, runtime_checkable
 
-from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.execution.contracts import ModelReasoningEffort, RuntimeContract
 
 
 # LiteLLM returns cost as USD per single token; the picker shows USD per 1M
@@ -52,6 +52,12 @@ class CatalogModelRecord(RuntimeContract):
     input_cost_per_mtok: float | None = None
     output_cost_per_mtok: float | None = None
     supports_reasoning: bool = False
+    # The effort rungs THIS model accepts, cheapest-first, as advertised by the
+    # source. Empty means the source carried no ladder — "unknown", never "none":
+    # LiteLLM publishes no reasoning options at all, so every record from that
+    # fallback leaves this empty while still being a reasoning model. Consumers
+    # that need a control fall back to their own default rungs when it is empty.
+    reasoning_efforts: tuple[ModelReasoningEffort, ...] = ()
     supports_tools: bool = False
     supports_attachments: bool = False
     # ISO ``YYYY-MM-DD``. Drives newest-first ordering in Settings -> Models and
