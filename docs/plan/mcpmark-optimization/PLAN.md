@@ -247,6 +247,104 @@ Strictly riskier than 2.3 (drops data before the model ever sees it) and lower v
 
 ---
 
+## Phase 2.5 — The LangChain middleware set, one seam at a time
+
+[RESEARCH.md](RESEARCH.md) §2: LangChain took `deepagents-cli` from **52.8% → 66.5%** on
+Terminal-Bench 2.0 with no model change, using the middleware below. This phase ports the
+same ideas.
+
+**It is also the phase most likely to lose points.** HARBOR stacked published techniques on a
+production harness and scored **+2, −4, −5**; its self-evaluation gate "corrected passing
+answers into failing ones", which is precisely what 2.5c risks. So every item here ships as
+a **separate seam with a null control**, none is on by default, and **none is adopted without
+its own ablation arm** ([COMPONENTS.md](COMPONENTS.md) §5.3). Shipping this set as a block is
+the documented way to go backwards.
+
+Order is by expected value per unit of risk, not by the order LangChain lists them.
+
+### 2.5a `EnvironmentContextMiddleware` — inject what the run can reach
+
+LangChain's `LocalContextMiddleware` maps the directory tree and discovers available tooling
+at startup, so the agent stops burning turns finding its own environment. Our equivalent is
+not a directory tree — it is **the connected MCP servers and their tool inventory**, which the
+agent currently discovers through `load_mcp_server` / `load_tool_spec` round-trips.
+
+Injecting a compact server+tool inventory at run start trades resident tokens (`T`,
+elasticity 0.20) for turns (`N`, 1.65 — see PRD §3.1b). That is the same trade as PRD §4.7's
+adaptive exposure and it obeys the same byte threshold, so **build them together or not at
+all** — two independent mechanisms that both decide "how much tool schema is resident" will
+fight.
+
+**Seam:** `RunContextPrimer` — `NullPrimer` / `McpInventoryPrimer(byte_budget)`
+**Effort:** M · **Predicted:** accuracy +3–10pp · cost −10–20% · latency −10–20%
+
+### 2.5b `LoopDetectionMiddleware` — notice the agent is stuck
+
+Counts repeated operations and nudges the agent to reconsider after N. LangChain counts file
+edits; **our analogue is the same MCP tool called with the same arguments**, which is exactly
+the blind-retry signature PRD §3.3 predicts under opaque errors.
+
+This composes with P1-1 rather than duplicating it: P1-1 makes the error informative so the
+retry is different; 2.5b catches the case where it is not. **Measure it after P1-1**, or its
+effect is confounded by the errors P1-1 already fixed.
+
+Note it partially overlaps the tool budget (P0-2) — a budget also stops a loop, just bluntly
+and without telling the model why. If P0-2's ECDF shows repeats are rare, skip this.
+
+**Seam:** `RepeatCallPolicy` — `NullPolicy` / `NudgeAfterN(n)`
+**Effort:** S · **Predicted:** accuracy +2–8pp · cost −5–15% · latency −5–15%
+
+### 2.5c `PreCompletionChecklistMiddleware` — verify before declaring done
+
+Intercepts the agent before it exits and forces a verification pass against the task spec.
+
+**This is the highest-upside and highest-risk item in the whole plan.** Upside: MCPMark scores
+by running `verify.py` against **final environment state**, so an agent that re-reads the
+state it claims to have written is checking the exact thing the grader will. Nothing else in
+the plan targets the grading criterion directly.
+
+Risk: HARBOR's self-evaluation gate is the same shape and cost it **4 passes**, by overturning
+correct answers. The difference we should preserve is that a checklist which **re-reads state**
+is an observation, whereas a gate which **re-judges the answer** is a second opinion — and it
+was the second opinion that failed. Build the observing kind; do not let it revise a
+conclusion.
+
+**Seam:** `PreCompletionPolicy` — `NullPolicy` / `StateReReadChecklist`
+**Effort:** M · **Predicted:** accuracy **−5 to +15pp** · cost +10–20% · latency +10–20%
+**Risk: high — pre-register the direction and stop if the first arm is negative.**
+
+### 2.5d Phase-structured prompt + time-budget warning
+
+LangChain restructured the system prompt into **Planning & Discovery → Build → Verify → Fix**
+and injected time-budget warnings.
+
+Cheapest item here and the least separable: prompt changes cannot be cleanly ablated against
+a fixed control the way a middleware can, because the prompt is one string. Ship it as a
+`prompt_plan_revision` on the variant ([COMPONENTS.md](COMPONENTS.md) §2) so at least the two
+revisions are addressable and the digest records which ran.
+
+**Effort:** S · **Predicted:** accuracy +2–8pp · cost ~0 · latency ~0
+
+### 2.5e Reasoning sandwich (`xhigh` → `high` → `xhigh`) — blocked
+
+Max effort for planning, moderate for implementation, max for verification. On Luna pricing
+output is ~84% of spend (PRD §3.1a), so this is simultaneously the accuracy and the cost play
+— the single best-shaped item in the research.
+
+**We cannot express it.** Effort is fixed per run; the catalog ladder shipped in `1287f5a7` is
+a precondition, not the feature. Needs per-phase effort selection
+([model-catalog-effort DESIGN.md](../model-catalog-effort/DESIGN.md) Phase 2, which splits
+`reasoning_effort` from `resource_profile`).
+
+**Blocked on that split.** Predicted: accuracy +3–10pp · cost **−20–40%** · latency −10–20%
+
+### 2.5 phase gate
+
+Each of 2.5a–2.5d gets its own arm. **Adopt only the ones whose arm is positive** — HARBOR's
+finding is that net-positive harness features are a small, class-specific subset, and the
+default expectation for any individual item here should be "no effect" rather than "the
+published number".
+
 ## Phase 3 — Adaptive tool exposure (defer)
 
 ### 3.1 Native-vs-umbrella threshold — _P3-1_

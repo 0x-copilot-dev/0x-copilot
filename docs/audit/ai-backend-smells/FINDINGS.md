@@ -26,7 +26,22 @@ method produced three errors in one session:
 The common failure is trusting prose over execution. **Every finding below was produced by
 running a scanner and confirmed with a targeted grep**, never by reading a docstring.
 
-## Finding 0 — the exclusion set removes both write tools and shell
+## Finding 0 — ~~the exclusion set removes both write tools and shell~~ FIXED UPSTREAM
+
+> **Superseded by `f0c84471` ("feat(filesystem): the agent can finally edit files in a folder
+> you attached").** The set is now `frozenset({"execute"})` — `edit_file` and `write_file` were
+> removed, so the agent has workspace write and only shell remains excluded. Re-verified after
+> merging `origin/dev` on the date of this edit.
+>
+> Two things survive. The **docstring in `tool_surface.py` is still wrong** — it still says the
+> surface reaches the model as `ls`/`read`/`glob`/`grep`/`write`/`edit` when the deepagents
+> names are `read_file`/`write_file`/`edit_file`; that mismatch is what made this finding hard
+> to reason about in the first place. And the PRD's `T` estimate is still unmeasured.
+>
+> The original finding is kept below because the reasoning is what a reader needs to evaluate
+> whether `execute` should also come back.
+
+## Finding 0 (original) — the exclusion set removes both write tools and shell
 
 `DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES = {"edit_file", "execute", "write_file"}`
 ([tool_surface.py:21](../../../services/ai-backend/src/agent_runtime/execution/tool_surface.py:21)),

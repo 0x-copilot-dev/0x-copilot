@@ -38,13 +38,13 @@ one:
 - **`EvaluationRepositoryPort`** — `put_harness_manifest`,
   `compare_and_set_active_harness_manifest`, plus `PromotionThresholds` / `PromotionDecision`.
 
-Our nine components map onto the existing revision axes rather than adding new ones:
+Our eleven components map onto the existing revision axes rather than adding new ones:
 
 | Axis                         | Components it versions                                                 |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | `capability_policy_revision` | tool exposure, budget keying, descriptor admission, error presentation |
 | `context_policy_revision`    | compaction, result projection                                          |
-| `prompt_plan_revision`       | (unused by this programme)                                             |
+| `prompt_plan_revision`       | phase-structured prompt + time-budget warning (P2.5d)                  |
 | `model_route_revision`       | pinned model — held constant across all arms                           |
 
 **An arm is a `HarnessVariant`. An ablation is a set of variants. A sweep enumerates them.**
@@ -73,6 +73,20 @@ runtime composition.
 | C5  | `ContextCompactionPolicy`   | `NullCompaction`        | `ResultScopedCompaction(t)`                  | P2-1    |
 | C6  | `ResultProjectionPolicy`    | `NullProjection`        | `FieldProjection`                            | P2-2    |
 | C7  | `ToolExposureStrategy`      | `UmbrellaDispatcher`    | `NativePassthrough` / `AdaptiveThreshold(b)` | P3-1    |
+| C8  | `TruncationNotice`          | `SilentSlice`           | `MarkedTruncation`                           | P1-4    |
+| C9  | `RunContextPrimer`          | `NullPrimer`            | `McpInventoryPrimer(bytes)`                  | P2.5a   |
+| C10 | `RepeatCallPolicy`          | `NullPolicy`            | `NudgeAfterN(n)`                             | P2.5b   |
+| C11 | `PreCompletionPolicy`       | `NullPolicy`            | `StateReReadChecklist`                       | P2.5c   |
+
+C8–C11 are the [RESEARCH.md](RESEARCH.md) §2 ports of LangChain's middleware set. They are
+listed as seams rather than as a shipped block on purpose: HARBOR's rounds C and D were
+exactly this kind of stack and cost 9 passes between them, and its self-evaluation gate is
+C11's nearest relative. **The default for each is the control implementation.**
+
+Two of them carry parameters that matter more than their on/off state — `NudgeAfterN(n)` and
+`McpInventoryPrimer(bytes)` — which is HARBOR's central finding: its only clean win came
+largely from moving two thresholds (0.30→0.85, 0.50→0.80), not from adding features. Treat
+those numbers as the thing under test, not the component.
 
 C1–C4 and C6 are **pure functions** — value resolution, a key derivation, an error→text map,
 a validation fold, a payload transform. They are trivially pluggable and trivially testable
@@ -113,7 +127,7 @@ as a latency observation, not a clean ablation arm.
 
 ### 5.1 Why leave-one-out, not add-one-in
 
-Full factorial over 7 pluggable components is 2⁷ = 128 arms. Two reduced designs are
+Full factorial over 11 pluggable components is 2¹¹ = 2,048 arms. Two reduced designs are
 available and they answer different questions:
 
 - **Add-one-in (AOI)** — baseline + one component. Measures **standalone** effect.
@@ -165,6 +179,33 @@ deterministic given the trajectory. This is the same counterfactual method as
 
 `A1` doubles as the P1-1 paired A/B in [EXPERIMENTS.md](EXPERIMENTS.md) §3 — **the same two
 arms serve both the hypothesis test and the ablation**, so it is run once, not twice.
+
+#### The C8–C11 middleware arms are add-one-in, not leave-one-out
+
+The LOO design above answers "can we drop this?" for components we intend to ship. For the
+LangChain middleware ports the question is the opposite — **"is this worth adopting at all?"**
+— and HARBOR's evidence says the prior should be _no_ for most of them. So they are measured
+**add-one-in against the post-P1 harness**, each alone:
+
+| Arm  | Added to the post-P1 baseline | Purpose                                     |
+| ---- | ----------------------------- | ------------------------------------------- |
+| `M0` | nothing                       | post-P1 control                             |
+| `M1` | C8 marked truncation          | cheapest; NVIDIA measured 0/3 → 3/3 on this |
+| `M2` | C9 MCP inventory primer       | turn reduction vs resident-token cost       |
+| `M3` | C10 repeat-call nudge         | **run after P1-1**, else confounded         |
+| `M4` | C11 pre-completion checklist  | highest upside, HARBOR's failure shape      |
+
+AOI is also the honest design here for a second reason: these four are **not multiplicative
+the way the P0 gates are**, so unlike §5.1 there is no reason to expect AOI to read ~0. If it
+does, that is the answer.
+
+`M4` gets a **pre-registered stopping rule**: HARBOR's equivalent gate turned passing answers
+into failures, so if `M4` is negative on the first arm it is dropped, not tuned. Only a
+positive first arm earns a threshold sweep.
+
+**Adopt the union of the positive arms, then re-run `A0` with that union on.** Individually
+positive components can still be jointly negative — which is the whole content of HARBOR's
+rounds C and D — so the union needs its own confirmation before it ships.
 
 ### 5.4 Ablating the non-pluggable ones
 

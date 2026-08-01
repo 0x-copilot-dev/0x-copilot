@@ -255,7 +255,8 @@ arm-sweep**, range $17–48 depending on the reasoning-token rate.
 | P1-1 A/B                           | 2    | ~$70      |
 | Post-P0 gate ablation              | 3    | ~$105     |
 | P2-1 dose-response                 | 3    | ~$105     |
-| **Total through Phase 2**          |      | **~$315** |
+| C8–C11 middleware AOI (M0–M4)      | 5    | ~$175     |
+| **Total through Phase 2.5**        |      | **~$490** |
 
 Roughly **6× cheaper than the frontier-pricing figure this table previously carried**
 (~$1.8k). Two caveats that push the other way: failing runs cost _more_ than passing ones
