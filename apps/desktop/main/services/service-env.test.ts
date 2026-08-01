@@ -776,6 +776,38 @@ describe("resolveDesktopStudioRuntimeEnv — the desktop's own E2 cohort", () =>
     });
   });
 
+  it("also turns each capability's MODE on, without which the rule is dead", () => {
+    // `RolloutCohortPolicy.admit` returns GLOBAL_OFF when a capability's mode
+    // is OFF, BEFORE it consults any rule. Setting only
+    // `OPERATION_GATEWAY_MODE=enforce` marked one capability explicitly
+    // controlled — flipping the whole group from legacy passthrough to cohort
+    // admission — while the other five stayed off and denied unconditionally.
+    // The live symptom was indistinguishable from a missing cohort.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true, localPrincipal: principal },
+    );
+
+    expect(env.MCP_GATEWAY_MODE).toBe("enforce");
+    expect(env.EFFECT_STAGER_MODE).toBe("enforce");
+    expect(env.EFFECT_COMMIT_MODE).toBe("enforce");
+    expect(env.WORKSPACE_OVERLAY_MODE).toBe("enforce");
+    expect(env.WORKSPACE_COMMIT_MODE).toBe("enforce");
+  });
+
+  it("never emits modes without the cohort that admits somebody", () => {
+    // Modes alone are WORSE than nothing: they mark capabilities controlled
+    // with no one admitted, which denies where legacy passthrough allowed.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true },
+    );
+
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+    expect(env.WORKSPACE_OVERLAY_MODE).toBeUndefined();
+    expect(env.WORKSPACE_COMMIT_MODE).toBeUndefined();
+  });
+
   it("emits nothing at all when the install has no principal yet", () => {
     // The honest first-run state before one is minted. The lane then degrades
     // to read-only and SAYS so, rather than half-enabling itself.

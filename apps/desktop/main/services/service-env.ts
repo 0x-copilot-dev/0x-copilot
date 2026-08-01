@@ -1,6 +1,7 @@
 import { delimiter, join } from "node:path";
 
 import type { BootSecrets } from "./boot-secrets";
+import { resolveLocalPrincipal } from "./local-principal";
 import {
   LOCAL_SERVICE_IDENTITY_ENV,
   LOCAL_SERVICE_IDENTITY_PROTOCOL,
@@ -242,6 +243,29 @@ const DESKTOP_COHORT_CAPABILITIES = Object.freeze([
 ] as const);
 
 /**
+ * The per-capability MODE variable each of those reads.
+ *
+ * A cohort rule is necessary but NOT sufficient: `RolloutCohortPolicy.admit`
+ * returns `GLOBAL_OFF` when `modes.mode_for(capability)` is OFF, and it does so
+ * BEFORE consulting any rule. Setting only `OPERATION_GATEWAY_MODE=enforce`
+ * therefore marked that one capability explicitly controlled — which switches
+ * the whole dependency group from legacy passthrough to cohort admission —
+ * while the other five stayed OFF and denied unconditionally. The lane could
+ * never open, and the reason looked identical to a missing cohort.
+ */
+const CAPABILITY_MODE_ENV = Object.freeze({
+  operation_gateway: "OPERATION_GATEWAY_MODE",
+  mcp_gateway: "MCP_GATEWAY_MODE",
+  effect_stager: "EFFECT_STAGER_MODE",
+  effect_commit: "EFFECT_COMMIT_MODE",
+  workspace_overlay: "WORKSPACE_OVERLAY_MODE",
+  workspace_commit: "WORKSPACE_COMMIT_MODE",
+} as const satisfies Record<
+  (typeof DESKTOP_COHORT_CAPABILITIES)[number],
+  string
+>);
+
+/**
  * `E2_ROLLOUT_COHORTS_JSON` naming this install's own principal, or nothing.
  *
  * WHY THIS IS NOT SELF-DEALING. E2 cohorts are a FLEET staged-rollout tool:
@@ -268,7 +292,16 @@ function cohortPolicy(
 ): Readonly<Record<string, string>> {
   if (workspaceEffect !== "enforce" || principal === undefined) return {};
   if (principal.orgId === "" || principal.userId === "") return {};
+  const modes: Record<string, string> = {};
+  for (const capability of DESKTOP_COHORT_CAPABILITIES) {
+    modes[CAPABILITY_MODE_ENV[capability]] = "enforce";
+  }
+  // Modes and cohort are emitted TOGETHER, never separately. Modes alone mark
+  // capabilities explicitly controlled with nobody admitted — strictly worse
+  // than legacy passthrough. A cohort alone names a principal for lanes that
+  // are globally off. Only the pair opens the lane, so only the pair ships.
   return {
+    ...modes,
     E2_ROLLOUT_COHORTS_JSON: JSON.stringify(
       DESKTOP_COHORT_CAPABILITIES.map((capability) => ({
         capability,
@@ -449,6 +482,11 @@ export function buildServiceEnv(
         env,
         resolveDesktopStudioRuntimeEnv(inputs.processEnv, {
           workspaceBrokerEnabled: inputs.workspaceBroker?.enabled === true,
+          // The install's own principal, when it has one. Absent on a fresh
+          // install's first boot — see `resolveLocalPrincipal`: it ADOPTS an
+          // existing id and never mints, because fresh ids would orphan the
+          // conversations an existing install keys by org/user.
+          localPrincipal: resolveLocalPrincipal(inputs.userDataDir),
         }),
       );
       const browser = inputs.browserBroker;
