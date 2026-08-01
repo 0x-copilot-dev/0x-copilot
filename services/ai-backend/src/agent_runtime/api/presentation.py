@@ -21,7 +21,9 @@ from agent_runtime.api.presentation_templates import (
     PayloadProjector,
     ToolTemplateRenderer,
     _ErrorMessage,
+    _ErrorRetryability,
 )
+from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
 from agent_runtime.capabilities.middleware.display_metadata import (
@@ -243,12 +245,30 @@ class PresentationGenerator:
         )
         status = self._payload_status(payload)
         is_failed = status in TOOL_FAILURE_STATUSES or status == "error"
-        is_result = not is_failed and (
-            event_type in self._RESULT_EVENT_TYPES
-            or status in {"completed", "complete", "done", "success", "succeeded"}
+        # A capability declined by policy is neither a failure nor a success:
+        # calling it "Failed" invents a fault, calling it "Done" claims work
+        # that never happened. It gets its own neutral label and carries the
+        # backend's own sentence, which already says what to do instead.
+        is_unavailable = not is_failed and status == Values.Status.UNAVAILABLE
+        is_result = (
+            not is_failed
+            and not is_unavailable
+            and (
+                event_type in self._RESULT_EVENT_TYPES
+                or status in {"completed", "complete", "done", "success", "succeeded"}
+            )
         )
         error_summary: str | None = None
-        if is_failed:
+        if is_unavailable:
+            status_label = "Not available"
+            kind = "result"
+            error_summary = self._first_text(payload, ("safe_message", "error_message"))
+            # Deliberately not interpolating the tool name: humanising `ls`
+            # yields "Ls isn’t available here", and the summary underneath —
+            # the backend's own sentence — already says what is unavailable and
+            # what to do instead.
+            default_title = "Not available here"
+        elif is_failed:
             status_label = "Failed"
             kind = "error"
             error_code = self._first_text(payload, ("error_code",))
@@ -277,6 +297,16 @@ class PresentationGenerator:
         }
         if error_summary is not None:
             envelope["summary"] = error_summary[:240]
+        # A named cause plus whether repeating could change the outcome. The
+        # client draws a remedy only when `retryable` is true; without these it
+        # can do no better than a generic string and an unconditional button.
+        if is_failed or is_unavailable:
+            code = self._first_text(payload, ("error_code", "code"))
+            if code is not None:
+                envelope["code"] = code
+            envelope["retryable"] = _ErrorRetryability.for_code(
+                code, payload.get("retryable")
+            )
         if group_key is not None:
             envelope["group_key"] = group_key
         if humanized_tool:

@@ -45,11 +45,11 @@ more tool calls than the per-run budget allows:
 python3 tools/desktop-journeys/chat-rich-cards/budget_overrun.py
 ```
 
-| ID  | Exact user action                                                                | Desktop assertions                                                                           | Priority |
-| --- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
-| B1  | “Catch me up on this week's AI agent releases, then draft a short update …”      | The turn reaches a real assistant answer: no errored tool card, no `RUN INTERRUPTED` banner. | P0       |
-| B2  | “Check what shipped in Ethereum's latest upgrade, then draft a community update” | Same, sent as a follow-up in the existing conversation rather than a first run.              | P0       |
-| B3  | Eight distinct topics, each demanded with its own search.                        | Same, under a turn that deliberately wants more searches than a tight cap allows.            | P0       |
+| ID  | Exact user action                                                                | Desktop assertions                                                                                    | Priority |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------- |
+| B1  | “Catch me up on this week's AI agent releases, then draft a short update …”      | The turn reaches a real assistant answer: no errored tool card, no `run-terminal-beat` in the stream. | P0       |
+| B2  | “Check what shipped in Ethereum's latest upgrade, then draft a community update” | Same, sent as a follow-up in the existing conversation rather than a first run.                       | P0       |
+| B3  | Eight distinct topics, each demanded with its own search.                        | Same, under a turn that deliberately wants more searches than a tight cap allows.                     | P0       |
 
 These reproduce the reported failure where exceeding the tool budget raised a
 run-fatal error out of the stream and the user lost every result the run had

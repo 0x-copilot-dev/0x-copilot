@@ -179,6 +179,43 @@ describe("projectCanvasLifecycle (PRD-B3)", () => {
     expect(projectCanvasLifecycle(events).lifecycle).toBe("presenting");
   });
 
+  // The original defect: `ls` was answered by the tombstone backend ("no folder
+  // attached"), stamped failed, and — because `failure` outranked
+  // `hasFinalResponse` — repainted the whole canvas as "This run needs
+  // attention", beside a chat pane holding a complete, correct answer.
+  it("reports a recovered step failure as answered in chat, not as an alarm", () => {
+    const events = [
+      event(1, "tool_call_started"),
+      event(2, "tool_result", {
+        status: "failed",
+        safe_message: "Retry later",
+      }),
+      event(3, "final_response"),
+      event(4, "run_completed", { status: "completed" }),
+    ];
+
+    const projection = projectCanvasLifecycle(events);
+
+    expect(projection.lifecycle).toBe("chat_only");
+    // The failure text survives for the chat stream's terminal beat; it just
+    // no longer steers the canvas.
+    expect(projection.failure).toBe("Retry later");
+  });
+
+  it("does not let a dead run invent a canvas state either", () => {
+    const events = [
+      event(1, "tool_call_started"),
+      event(2, "run_failed", { safe_message: "Worker lost" }),
+    ];
+
+    const projection = projectCanvasLifecycle(events);
+
+    // Nothing was produced, so the canvas says exactly that — the verdict on
+    // the run itself is the chat stream's job.
+    expect(projection.lifecycle).toBe("complete_empty");
+    expect(projection.terminalStatus).toBe("failed");
+  });
+
   it("differentially matches the Python fold for every shared corpus prefix", () => {
     // This is deliberately not a checked-in expected projection. The Python
     // projection is executed now, over the same raw event corpus, so a

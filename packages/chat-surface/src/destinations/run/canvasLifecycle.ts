@@ -12,12 +12,22 @@ import {
   type RuntimeEventEnvelope,
 } from "@0x-copilot/api-types";
 
+/**
+ * What the canvas can say about itself — and ONLY about itself.
+ *
+ * There is deliberately no `failed` state. The canvas answers one question:
+ * "is there something to look at, and if not, why not?" A run-level verdict is
+ * not an answer to that question, and rendering one here put a second, often
+ * contradictory opinion beside the chat pane — a run that recovered from a
+ * failed step and answered correctly still read "This run needs attention".
+ * Step failures belong on the step that failed; a terminal run failure belongs
+ * in the chat stream, where the user is already reading.
+ */
 export type CanvasLifecycleState =
   | "assembling"
   | "presenting"
   | "chat_only"
   | "parked"
-  | "failed"
   | "complete_empty";
 
 export type CanvasSubjectKind = "artifact" | "surface" | "effect" | "receipt";
@@ -40,9 +50,21 @@ export interface CanvasLifecycleProjection {
   readonly pendingSubjectKeys: readonly string[];
   readonly terminalReceipt: CanvasLifecycleSubject | null;
   readonly activityCount: number;
+  /**
+   * The most recent failure text seen anywhere in the run — including a step
+   * the agent recovered from. Exposed for presentation; it does NOT steer
+   * {@link CanvasLifecycleProjection.lifecycle}.
+   */
   readonly failure: string | null;
   readonly hasFinalResponse: boolean;
   readonly terminal: boolean;
+  /**
+   * The run's own terminal status (`failed` / `cancelled` / `timed_out`, or
+   * whatever `run_completed` reported), or `null` while it is still running.
+   * This — not {@link CanvasLifecycleProjection.failure} — is what tells a run
+   * that actually died from one that hit a bad step and carried on.
+   */
+  readonly terminalStatus: string | null;
 }
 
 interface SubjectAccumulator {
@@ -327,11 +349,9 @@ export function projectCanvasLifecycle(
   ].sort();
   const lifecycle = lifecycleState({
     terminal,
-    terminalStatus,
     hasFinalResponse,
     hasSubject: tabs.length > 0,
     hasPending: pendingSubjectKeys.length > 0,
-    failure,
   });
   return {
     lifecycle,
@@ -343,22 +363,24 @@ export function projectCanvasLifecycle(
     failure,
     hasFinalResponse,
     terminal,
+    terminalStatus,
   };
 }
 
 function lifecycleState(input: {
   readonly terminal: boolean;
-  readonly terminalStatus: string | null;
   readonly hasFinalResponse: boolean;
   readonly hasSubject: boolean;
   readonly hasPending: boolean;
-  readonly failure: string | null;
 }): CanvasLifecycleState {
   if (input.hasPending) return "parked";
   if (input.hasSubject) return "presenting";
   if (!input.terminal) return "assembling";
-  if (input.failure !== null || input.terminalStatus === "failed")
-    return "failed";
+  // `failure` is deliberately NOT consulted. Whether a step (or the run) failed
+  // says nothing about whether the canvas has a subject, and reading it here is
+  // what let one failed tool call — including a recovered one — repaint the
+  // whole canvas as an alarm. The projection still EXPOSES `failure` for the
+  // chat stream's terminal beat; it just no longer steers this state.
   return input.hasFinalResponse ? "chat_only" : "complete_empty";
 }
 

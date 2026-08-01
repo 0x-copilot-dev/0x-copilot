@@ -305,6 +305,14 @@ export interface TcChatProps {
    */
   readonly todos?: RunTodosProjection | null;
   /**
+   * The run's terminal verdict, rendered as the final beat of the stream. The
+   * host projects and owns it (`projectRunTerminalBeat` +
+   * `RunTerminalBeatCard`); the chat only places it last. It lives here rather
+   * than on the canvas so a run has exactly ONE statement about how it ended,
+   * in the column the user is already reading.
+   */
+  readonly terminalBeat?: ReactNode;
+  /**
    * Run-scoped citations supplied by the cockpit's canonical event projection.
    * Inline source cards select only citations whose backend-issued
    * `source_tool_call_id` matches their tool call; no source is inferred.
@@ -478,6 +486,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
     renderComposer,
+    terminalBeat,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -632,6 +641,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         approvalHandlers={approvalHandlers}
         mode={mode}
         markdownComponents={markdownComponents}
+        terminalBeat={terminalBeat}
       />
     </div>
   );
@@ -1053,6 +1063,7 @@ interface MessageListBodyProps {
   readonly approvalHandlers: ApprovalHandlers;
   readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
+  readonly terminalBeat?: ReactNode;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1067,6 +1078,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     approvalHandlers,
     mode,
     markdownComponents,
+    terminalBeat,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1088,7 +1100,8 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     messages.length === 0 &&
     fleets.length === 0 &&
     toolCalls.length === 0 &&
-    approvals.length === 0;
+    approvals.length === 0 &&
+    terminalBeat === undefined;
   if (notice !== null && nothingToShow) {
     return notice;
   }
@@ -1130,6 +1143,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           }
           return renderMessage(item.message, markdownComponents);
         })}
+        {terminalBeat}
       </ul>
     </>
   );

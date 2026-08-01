@@ -462,6 +462,10 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // Run route); a new chat's first send that resolved to a real id
             // navigates the same way. Both bind the cockpit onto that id.
             onOpenConversation={openConversation}
+            // PRD-01/PRD-09 — the 48px rail can only show an initial; the
+            // docked Threads panel has room for the name. Same source as
+            // `railIdentity` so the two never disagree.
+            identityName={props.session.displayName ?? null}
             onConversationCreated={openConversation}
             // Activity's retention link + Tools' approval-policy note deep-link
             // into the real Settings sections (reachable today, PR-5.9 / 6.4).

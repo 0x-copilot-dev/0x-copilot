@@ -355,8 +355,18 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("run-empty-state")).not.toBeNull();
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
     expect(screen.queryByTestId("run-error-banner")).toBeNull();
-    // No run → no SSE subscription opened.
-    expect(transport.subs).toHaveLength(0);
+    // No run → no RUN SSE subscription opened.
+    //
+    // Asserted by path rather than by total count: since PRD-01 the cockpit's
+    // Threads panel (open by default at `wide`) owns its own conversations
+    // subscription via the shared `useChatsArchive` controller. That is a
+    // different stream and does not touch the single run-event projection
+    // (FR-3.3 / NFR-1.3) — so the invariant this test guards is "an idle
+    // cockpit does not stream a run", which a bare length check no longer
+    // expresses.
+    expect(
+      transport.subs.filter((s) => s.path.includes("/runs/")),
+    ).toHaveLength(0);
   });
 
   // === PR-3.6 — tabbed right rail wiring ===

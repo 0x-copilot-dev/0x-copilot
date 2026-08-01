@@ -1,6 +1,6 @@
 import type { Transport } from "@0x-copilot/chat-transport";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PresenceSignal } from "../presence/presence-signal";
 import {
@@ -469,5 +469,91 @@ describe("ChatShell", () => {
     // …and Run (the active destination) is NOT highlighted while in Settings.
     const run = screen.getByRole("button", { name: "Run" });
     expect(run).toHaveAttribute("data-state", "inactive");
+  });
+});
+
+// ===========================================================================
+// PRD-00 — responsive width class published on the shell root
+// ===========================================================================
+
+describe("ChatShell width class (PRD-00)", () => {
+  /** Drive `ResizeObserver` directly: jsdom does layout-free rendering, so the
+   *  observer never fires on its own. This is the same shim strategy the Inbox
+   *  layout tests use, and it is why the hook takes a ResizeObserver rather
+   *  than a window listener. */
+  function stubResizeObserver(): (width: number) => void {
+    const callbacks: ResizeObserverCallback[] = [];
+    class Stub implements ResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        callbacks.push(cb);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", Stub);
+    return (width: number) => {
+      const entry = {
+        contentRect: { width } as DOMRectReadOnly,
+        borderBoxSize: [{ inlineSize: width, blockSize: 0 }],
+      } as unknown as ResizeObserverEntry;
+      for (const cb of callbacks) {
+        act(() => cb([entry], {} as ResizeObserver));
+      }
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts at `wide` so the first paint is the historical layout", () => {
+    stubResizeObserver();
+    mount({});
+    expect(
+      screen
+        .getByTestId("chat-shell-main")
+        .closest("[data-component='chat-shell']"),
+    ).toHaveAttribute("data-width", "wide");
+  });
+
+  it("tracks the observed container width across all three classes", () => {
+    const resizeTo = stubResizeObserver();
+    mount({});
+    const shell = screen
+      .getByTestId("chat-shell-main")
+      .closest("[data-component='chat-shell']") as HTMLElement;
+
+    resizeTo(1400);
+    expect(shell).toHaveAttribute("data-width", "wide");
+    resizeTo(900);
+    expect(shell).toHaveAttribute("data-width", "regular");
+    resizeTo(640);
+    expect(shell).toHaveAttribute("data-width", "compact");
+    resizeTo(1400);
+    expect(shell).toHaveAttribute("data-width", "wide");
+  });
+
+  it("does not remount the main subtree when the class changes (FR-0.9)", () => {
+    const resizeTo = stubResizeObserver();
+    mount({ children: <span data-testid="probe" /> });
+    const before = screen.getByTestId("probe");
+
+    resizeTo(640);
+    resizeTo(1400);
+
+    // Same DOM node throughout: a remount here would restart any stream the
+    // cockpit holds, which is the whole reason this is asserted.
+    expect(screen.getByTestId("probe")).toBe(before);
+  });
+
+  it("renders at the default class when ResizeObserver is absent (FR-0.8)", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    mount({});
+    expect(
+      screen
+        .getByTestId("chat-shell-main")
+        .closest("[data-component='chat-shell']"),
+    ).toHaveAttribute("data-width", "wide");
   });
 });
