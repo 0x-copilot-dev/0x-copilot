@@ -22,6 +22,7 @@ from agent_runtime.api.presentation_templates import (
     ToolTemplateRenderer,
     _ErrorMessage,
 )
+from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
 from agent_runtime.capabilities.middleware.display_metadata import (
@@ -243,12 +244,30 @@ class PresentationGenerator:
         )
         status = self._payload_status(payload)
         is_failed = status in TOOL_FAILURE_STATUSES or status == "error"
-        is_result = not is_failed and (
-            event_type in self._RESULT_EVENT_TYPES
-            or status in {"completed", "complete", "done", "success", "succeeded"}
+        # A capability declined by policy is neither a failure nor a success:
+        # calling it "Failed" invents a fault, calling it "Done" claims work
+        # that never happened. It gets its own neutral label and carries the
+        # backend's own sentence, which already says what to do instead.
+        is_unavailable = not is_failed and status == Values.Status.UNAVAILABLE
+        is_result = (
+            not is_failed
+            and not is_unavailable
+            and (
+                event_type in self._RESULT_EVENT_TYPES
+                or status in {"completed", "complete", "done", "success", "succeeded"}
+            )
         )
         error_summary: str | None = None
-        if is_failed:
+        if is_unavailable:
+            status_label = "Not available"
+            kind = "result"
+            error_summary = self._first_text(payload, ("safe_message", "error_message"))
+            default_title = (
+                f"{humanized_tool} isn’t available here"
+                if humanized_tool
+                else "Not available here"
+            )
+        elif is_failed:
             status_label = "Failed"
             kind = "error"
             error_code = self._first_text(payload, ("error_code",))

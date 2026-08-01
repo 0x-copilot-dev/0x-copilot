@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+from agent_runtime.capabilities.workspace.policy_answers import WorkspacePolicyAnswers
 from agent_runtime.execution.contracts import (
     ConnectorAccessMode,
     JsonObject,
@@ -767,13 +768,24 @@ class StreamMessageProcessor:
         if structured_error is not None:
             output, error = structured_error
             status = Values.Status.FAILED
+        # A declared policy answer reaches us wearing a fault's clothes: the Deep
+        # Agents backend protocol has one ``error`` channel, so "not available
+        # here, do X instead" and "I broke" arrive identically as (text,
+        # "error"). Re-establish the distinction before the status is published,
+        # or a working policy decision propagates as a run-level failure.
+        policy_code = WorkspacePolicyAnswers.code_for(output.get(Keys.Field.CONTENT))
         result: JsonObject = {
             Keys.Field.TOOL_NAME: tool_name,
             Keys.Field.CALL_ID: call_id,
-            Keys.Field.STATUS: status,
+            Keys.Field.STATUS: (
+                Values.Status.UNAVAILABLE if policy_code is not None else status
+            ),
             Keys.Field.OUTPUT: output or payload,
         }
-        if structured_error is not None:
+        if policy_code is not None:
+            result["error_code"] = str(policy_code)
+            result["safe_message"] = str(output.get(Keys.Field.CONTENT)).strip()
+        elif structured_error is not None:
             error_code = StreamTextHelper.extract(error.get("code"))
             safe_message = StreamTextHelper.extract(error.get("safe_message"))
             if error_code is not None:

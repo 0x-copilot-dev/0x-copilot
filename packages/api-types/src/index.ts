@@ -2547,7 +2547,10 @@ export type RuntimeEventPresentationStatus =
   | "Running"
   | "Waiting for permission"
   | "Done"
-  | "Failed";
+  | "Failed"
+  // A capability declined by policy — answered correctly, but no work was
+  // done. Neither "Done" (overstates) nor "Failed" (invents a fault).
+  | "Not available";
 
 export interface RuntimeEventPresentationPreviewRow {
   title: string;

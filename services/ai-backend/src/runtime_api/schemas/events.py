@@ -2396,7 +2396,9 @@ class RuntimeEventPresentation(RuntimeContract):
 
     title: str = Field(min_length=1, max_length=80)
     summary: str | None = Field(default=None, max_length=240)
-    status_label: Literal["Running", "Waiting for permission", "Done", "Failed"]
+    status_label: Literal[
+        "Running", "Waiting for permission", "Done", "Failed", "Not available"
+    ]
     kind: Literal["progress", "result", "approval", "auth", "error"]
     group_key: str | None = Field(default=None, max_length=160)
     primary_entity: str | None = Field(default=None, max_length=80)
