@@ -1,9 +1,25 @@
-// RunHeader — the desktop Run cockpit's window bar (PR-3.5).
+// RunHeader — the desktop Run cockpit's window bar (PR-3.5, revised by PRD-02).
 //
-// Source: docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §2
-//   Header `.mw-bar`: a centred `0xCopilot — mode` identity and a right-aligned
-//   **mode segmented control** (Focus / Studio). Native window controls belong
-//   to the desktop host, never to this shared surface.
+// Source: docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §2 +
+//         docs/plan/windowed-mode/PRD-02-run-header.md
+//
+// Layout, left to right:
+//   [leading slot] [ goal ……… ] [scrub label] [● working] [ Focus | Studio ]
+//
+// PRD-02 replaced the original composition, which was a centred
+// `0xCopilot — {mode}` overlay with the goal, kicker, status pulse and scrub
+// label all rendered into `visuallyHiddenStyle`'s 1x1 `clip()` box. That bar
+// stated the app's name (which the user knows) and the mode (which the
+// segmented control on the same row shows selected), while the one fact only
+// this bar could carry — what the run is doing — was computed and invisible.
+//
+// The wordmark is gone entirely rather than width-gated: the desktop host
+// already sets the OS window title (`apps/desktop/main/window.ts:32`), and the
+// app rail's `BrandMark` carries visible brand presence. A third copy on a 38px
+// row bought nothing. (Note the host uses `titleBarStyle: "hiddenInset"`, so
+// that title serves the OS — ⌘-tab, Mission Control — not the drawn frame.)
+//
+// Native window controls belong to the desktop host, never to this surface.
 //
 // Ownership: RunHeader is presentation only. The *mode value* is owned by
 // `useRunMode` (KeyValueStore-backed); this component renders the current mode
@@ -89,12 +105,21 @@ export interface RunHeaderProps {
    * identity layer. The cockpit mounts its Threads toggle here, matching where
    * both reference products put their sidebar control.
    *
-   * The slot exists because the left of this bar was empty: `titleLayerStyle`
-   * is an absolutely-positioned, `pointer-events: none` overlay across the
-   * whole header, and the mode control is `margin-left: auto` on the right.
+   * The slot exists because the left of this bar was empty: the old identity
+   * layer was an absolutely-positioned, `pointer-events: none` overlay across
+   * the whole header, and the mode control is `margin-left: auto` on the right.
    * Rendered only when supplied, so a header without it is byte-identical.
    */
   readonly leading?: ReactNode;
+  /**
+   * PRD-02 D-2.2 — the surface is narrow. Drops the pulse chip's LABEL (the dot
+   * survives, still announced) and shortens the mode control to single letters.
+   * The goal keeps the whole remaining row.
+   *
+   * A prop, not a `useShellWidthClass()` call: this component is presentation
+   * only, and a test must be able to render both widths without a provider.
+   */
+  readonly compact?: boolean;
 }
 
 /** Active (in-flight) run states that pulse the header dot; every other status
@@ -129,6 +154,7 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
     status,
     runStatus = null,
     leading,
+    compact = false,
   } = props;
 
   // A run is "active" only when it carries a real goal. Deriving BOTH the goal
@@ -141,40 +167,55 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
   // An explicit `kicker` prop overrides both states.
   const resolvedKicker =
     kicker ?? (activeGoal !== null ? ACTIVE_KICKER : IDLE_KICKER);
-  const modeLabel = MODE_LABELS[mode];
 
   return (
     <header data-testid="run-header" style={headerStyle}>
-      {/* Above the identity overlay in z-order and outside its
-          `pointer-events: none`, so the control is actually clickable. */}
       {leading !== undefined && leading !== null ? (
         <div data-testid="run-header-leading" style={leadingSlotStyle}>
           {leading}
         </div>
       ) : null}
-      <div data-testid="run-header-title" style={titleLayerStyle}>
-        <b style={productNameStyle}>
-          <span style={productMarkStyle}>0x</span>Copilot
-        </b>
-        <span aria-hidden="true">—</span>
-        <span>{modeLabel}</span>
-      </div>
-      {/* Preserve the run’s useful semantic summary without competing with the
-          authoritative compact window-bar composition. The visually rendered
-          identity is the product + selected workspace mode; assistive tech
-          retains the active/standby state, goal, and live run status. */}
-      <div style={visuallyHiddenStyle}>
-        <span data-testid="run-header-kicker">{resolvedKicker}</span>
-        <h2 data-testid="run-header-goal">{goalText}</h2>
-        <RunStatusPulse runStatus={runStatus} />
-        {status !== undefined && status !== null ? (
-          <span data-testid="run-header-status">{status}</span>
-        ) : null}
-      </div>
+
+      {/* PRD-02 D-2.1 — the GOAL is the title.
+          The bar used to render a centred `0xCopilot — {mode}` overlay while the
+          goal, kicker, pulse and scrub label all sat in a 1x1 `clip()` box. Two
+          of those three facts were already on screen (the app's name, and the
+          mode the segmented control shows selected); the one thing only this bar
+          could say was invisible. */}
+      <h2
+        data-testid="run-header-goal"
+        style={goalStyle(activeGoal === null)}
+        title={goalText}
+      >
+        {goalText}
+      </h2>
+
+      {/* D-2.5 — a user looking at the past must be TOLD, in chrome. The
+          scrubber's own `↩ Now` pill is too quiet for a mode this consequential
+          (PRD-08 D-8.6 adds the second signal on the strip itself). */}
+      {status !== undefined && status !== null ? (
+        <span data-testid="run-header-status" style={statusSlotStyle}>
+          {status}
+        </span>
+      ) : null}
+
+      {/* D-2.4 — the highest-value thing the bar can show: whether the agent is
+          working. Self-hides on a terminal status, so a settled run costs
+          nothing. */}
+      <RunStatusPulse runStatus={runStatus} compact={compact} />
+
+      {/* D-2.6 — the kicker has no visible equivalent now that the goal is the
+          title, so it stays for assistive tech. NOTHING rendered visibly is
+          duplicated here: the goal used to be announced twice. */}
+      <span style={visuallyHiddenStyle} data-testid="run-header-kicker">
+        {resolvedKicker}
+      </span>
+
       <ModeSegmentedControl
         agentName={agentName}
         mode={mode}
         onModeChange={onModeChange}
+        compact={compact}
       />
     </header>
   );
@@ -188,10 +229,11 @@ interface ModeSegmentedControlProps {
   readonly agentName: string;
   readonly mode: RunMode;
   readonly onModeChange: (mode: RunMode) => void;
+  readonly compact?: boolean;
 }
 
 function ModeSegmentedControl(props: ModeSegmentedControlProps): ReactElement {
-  const { mode, onModeChange } = props;
+  const { mode, onModeChange, compact = false } = props;
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
@@ -218,6 +260,9 @@ function ModeSegmentedControl(props: ModeSegmentedControlProps): ReactElement {
       {MODE_ORDER.map((value) => {
         const selected = value === mode;
         const label = MODE_LABELS[value];
+        // D-2.2 — single letters at compact. `aria-label` below still carries
+        // the full "Focus mode" / "Studio mode", so nothing is lost to AT.
+        const shown = compact ? label.charAt(0) : label;
         return (
           <button
             key={value}
@@ -229,9 +274,9 @@ function ModeSegmentedControl(props: ModeSegmentedControlProps): ReactElement {
             data-testid={`run-mode-${value}`}
             data-mode-value={value}
             onClick={() => onModeChange(value)}
-            style={segmentButtonStyle(selected)}
+            style={segmentButtonStyle(selected, compact)}
           >
-            {label}
+            {shown}
           </button>
         );
       })}
@@ -266,8 +311,10 @@ const PULSE_STYLE = `
 
 function RunStatusPulse({
   runStatus,
+  compact = false,
 }: {
   readonly runStatus: AgentRunStatus | null;
+  readonly compact?: boolean;
 }): ReactElement | null {
   if (runStatus === null || !ACTIVE_PULSE_STATUSES.has(runStatus)) {
     return null;
@@ -286,7 +333,9 @@ function RunStatusPulse({
         data-testid="run-header-pulse-dot"
         style={pulseDotStyle}
       />
-      {label}
+      {/* At compact the label is visually hidden rather than removed, so the
+          state is still announced — the dot alone means nothing to a reader. */}
+      <span style={compact ? visuallyHiddenStyle : undefined}>{label}</span>
     </span>
   );
 }
@@ -337,26 +386,39 @@ const leadingSlotStyle: CSSProperties = {
   alignItems: "center",
 };
 
-const titleLayerStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-  top: 0,
-  display: "flex",
+/**
+ * The goal line. Deliberately the SAME recipe as `Topbar.tsx`'s `titleStyle`
+ * (--font-display / --font-size-sm / semibold / -0.01em / lh 1.2 / ellipsis):
+ * the shell already had one header-title treatment, and minting a second would
+ * be the drift this codebase keeps paying for.
+ *
+ * `flex: 1` + `minWidth: 0` is what lets the goal ellipsise instead of shoving
+ * the status and mode clusters off the row — those are `flex: none` (FR-2.7).
+ */
+const goalStyle = (idle: boolean): CSSProperties => ({
+  flex: 1,
+  minWidth: 0,
+  margin: 0,
+  fontFamily: "var(--font-display)",
+  fontSize: "var(--font-size-sm)",
+  fontWeight: (idle
+    ? 500
+    : "var(--font-weight-semibold)") as CSSProperties["fontWeight"],
+  letterSpacing: "-0.01em",
+  lineHeight: 1.2,
+  // Idle is quieter: "Standing by" is a state, not a thing the user named.
+  color: idle ? "var(--color-text-muted)" : "var(--color-text)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+});
+
+/** The scrub label sits beside the goal and never shrinks. */
+const statusSlotStyle: CSSProperties = {
+  flex: "none",
+  display: "inline-flex",
   alignItems: "center",
-  justifyContent: "center",
-  gap: 7,
-  fontSize: 12,
-  color: "var(--color-text-muted)",
-  pointerEvents: "none",
-};
-
-const productNameStyle: CSSProperties = {
-  color: "var(--color-text-secondary, var(--color-text))",
-  fontWeight: 600,
-};
-
-const productMarkStyle: CSSProperties = {
-  color: "var(--color-accent)",
+  minWidth: 0,
 };
 
 const visuallyHiddenStyle: CSSProperties = {
@@ -382,12 +444,15 @@ const segmentedStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
 };
 
-const segmentButtonStyle = (selected: boolean): CSSProperties => ({
+const segmentButtonStyle = (
+  selected: boolean,
+  compact = false,
+): CSSProperties => ({
   background: selected ? "var(--color-surface-elevated)" : "transparent",
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   border: 0,
   borderRadius: 5,
-  padding: "5px 12px",
+  padding: compact ? "5px 8px" : "5px 12px",
   fontSize: 12,
   fontWeight: 500,
   cursor: "pointer",
