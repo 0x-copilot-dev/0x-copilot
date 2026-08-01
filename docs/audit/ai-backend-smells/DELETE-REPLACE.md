@@ -143,8 +143,12 @@ Stage it behind the existing port so both can run during migration.
 
 Stated explicitly so the audit is not read as "delete ai-backend":
 
-- **MCP** (`capabilities/mcp`) — the framework has no equivalent; the registry, OAuth, token
-  vault and scope model are genuine product surface.
+- ~~**MCP** (`capabilities/mcp`) — the framework has no equivalent~~ **WRONG, see
+  [the consolidation plan](../../plan/ai-backend-consolidation/PLAN.md) §0.** MCP is 11% of
+  `capabilities/`, not most of it; `capabilities/mcp` is a client for our own
+  `/internal/v1` proxy rather than an MCP client; and `langchain-mcp-adapters` +
+  the official `mcp` SDK — neither installed — provide what both services hand-rolled.
+  What survives as genuinely ours: the **registry, OAuth, token vault and scope model**.
 - **Tenant isolation, audit chain, retention** — compliance surface, not framework territory.
 - **`runtime_api` / `runtime_worker`** — the durable queue, event sequencing and SSE resume
   contract are ours by design and are the product's differentiator.
