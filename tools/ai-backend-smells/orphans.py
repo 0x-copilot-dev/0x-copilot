@@ -52,6 +52,39 @@ def imported_names(path: pathlib.Path) -> set[str]:
     return found
 
 
+def has_main_guard(path: pathlib.Path) -> bool:
+    """True when the module has a top-level ``if __name__ == "__main__":`` guard.
+
+    Such a module is a ``python -m`` entry point — a CLI, or a boot-time job the
+    desktop supervisor spawns — not dead code, even when nothing in ``src``
+    imports it. ``ENTRY_HINTS`` only catches entry points by leaf name; this
+    catches the ones named anything else (``migrate``, ``*_cli``), which would
+    otherwise scan as orphans. AST, not a text match, so the guard string in a
+    docstring or comment does not count.
+    """
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return False
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "__main__"
+        ):
+            return True
+    return False
+
+
 def main() -> None:
     src_mods = modules(SRC)
 
@@ -79,6 +112,10 @@ def main() -> None:
             continue
         # any src file importing a submodule of it, or naming it lazily?
         if any(other.startswith(mod + ".") for other in imported_by_src):
+            continue
+        # a ``python -m`` entry point is reachable off the import graph — a CLI
+        # or a boot-time job — so it is not an orphan even when nothing imports it.
+        if has_main_guard(path):
             continue
         # count real (non-docstring-ish) mentions of the leaf module name in src
         # excluding its own file
