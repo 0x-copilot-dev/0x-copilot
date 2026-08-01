@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -57,9 +58,15 @@ import type { ApprovalsQueueItem } from "../workspace";
 // stream (`projectToolCalls(session.events)`) and interleaved into the
 // transcript at the point each tool ran. The projection is the single source of
 // truth; TcChat never re-derives tool state from raw events.
-import type { ToolCallEntry } from "./eventProjector";
+import type { RunTodosProjection, ToolCallEntry } from "./eventProjector";
+import { ToolRunGroup } from "../activity/ToolRunGroup";
+// PRD-03 FR-3.10 — reuse the formatter that already exists rather than adding a
+// third. PRD-07 renames/consolidates it; this call site moves with it.
+import { formatSubagentDuration } from "../subagents/labels";
+import { groupActivityStream, summariseGroup } from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
+import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 
 export type TcChatMode = "studio" | "focus";
@@ -296,6 +303,25 @@ export interface TcChatProps {
    */
   readonly toolCalls?: readonly ToolCallEntry[];
   /**
+   * The agent's working checklist (`projectRunTodos(session.events)`), pinned
+   * above the composer in BOTH modes so it never scrolls away mid-run. `null`
+   * — the common case — renders nothing: most requests are too small for the
+   * agent to open a list, and an empty frame would be worse than no panel.
+   */
+  readonly todos?: RunTodosProjection | null;
+  /**
+   * The run's terminal verdict, rendered as the final beat of the stream. The
+   * host projects and owns it (`projectRunTerminalBeat` +
+   * `RunTerminalBeatCard`); the chat only places it last. It lives here rather
+   * than on the canvas so a run has exactly ONE statement about how it ended,
+   * in the column the user is already reading.
+   */
+  readonly terminalBeat?: ReactNode;
+  /** PRD-03 D-3.5 — the RUN's terminal failure keeps its group open. */
+  readonly runFailed?: boolean;
+  /** PRD-03 D-3.6 — narrow surface; shortens the group's summary label. */
+  readonly compact?: boolean;
+  /**
    * Run-scoped citations supplied by the cockpit's canonical event projection.
    * Inline source cards select only citations whose backend-issued
    * `source_tool_call_id` matches their tool call; no source is inferred.
@@ -452,6 +478,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     fleets = EMPTY_FLEETS,
     subagentActivitiesByTask = EMPTY_SUBAGENT_ACTIVITIES,
     toolCalls = EMPTY_TOOL_CALLS,
+    todos = null,
     toolCallCitations = EMPTY_TOOL_CALL_CITATIONS,
     approvals = EMPTY_APPROVALS,
     onApprove,
@@ -468,6 +495,9 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
     renderComposer,
+    terminalBeat,
+    runFailed = false,
+    compact = false,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -504,6 +534,7 @@ export function TcChat(props: TcChatProps): ReactElement {
   // PR-3.10 — approvals are HIDDEN while scrubbed off-now (you cannot approve a
   // past state). The host also drops them from `approvals` when scrubbed, but
   // guarding on the scrub cursor here keeps standalone usage correct too.
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
   const scrubbedOffNow = scrub.scrubbedTo !== "now";
   // A RESOLVED approval is history, not a live decision, so it does not belong
   // in the strip directly above the composer. Once the user has approved, the
@@ -515,8 +546,23 @@ export function TcChat(props: TcChatProps): ReactElement {
   // Question cards are exempt because a resolved question still shows the
   // answer the user gave, which the transcript does not repeat.
   const liveApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
-  const visibleApprovals = liveApprovals.filter(
-    (approval) => !approval.resolved || approval.question !== null,
+  // Inline, EVERY approval renders — resolved ones as their receipt, in place.
+  // The old strip filtered resolved ones out because a receipt pinned above the
+  // composer was noise; anchored in the transcript it is the opposite, the only
+  // record of who decided what and when, sitting where it happened.
+  const visibleApprovals = liveApprovals;
+  // The decision surface can now scroll away, which is exactly what the pinned
+  // strip prevented. This is the replacement: one line of chrome, not a card,
+  // that says how many are waiting and jumps to the oldest.
+  const pendingApprovals = liveApprovals.filter(
+    (approval) => !approval.resolved,
+  );
+  const oldestPending = pendingApprovals.reduce<TcChatApproval | null>(
+    (oldest, approval) =>
+      oldest === null || approvalAt(approval) < approvalAt(oldest)
+        ? approval
+        : oldest,
+    null,
   );
   const projectedConnectedReceipt =
     connectedConnectorReceipt !== null &&
@@ -566,8 +612,35 @@ export function TcChat(props: TcChatProps): ReactElement {
       </div>
     ) : null;
 
+  // Scoped to the transcript's own node, not `document` — the substrate
+  // boundary bans bare globals, and a ref subtree query needs none.
+  const jumpToApproval = (approvalId: string): void => {
+    transcriptRef.current
+      ?.querySelector(`[data-testid="tc-chat-approval-item-${approvalId}"]`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const approvalHandlers: ApprovalHandlers = {
+    onApprove,
+    onReject,
+    onAnswer,
+    mcpAuthPort,
+    connectorConsentStates,
+    onConnectorConsentCancel,
+    onConnectorMute,
+    workspaceGrantStates,
+    workspaceGrantFailures,
+    onWorkspaceGrant,
+    onWorkspaceGrantDeny,
+    onWorkspaceGrantCancel,
+  };
+
   const transcript = (
-    <div data-testid="tc-chat-messages" style={messageListStyle(ghost)}>
+    <div
+      ref={transcriptRef}
+      data-testid="tc-chat-messages"
+      style={messageListStyle(ghost)}
+    >
       <MessageListBody
         state={state}
         messages={filteredMessages}
@@ -575,11 +648,56 @@ export function TcChat(props: TcChatProps): ReactElement {
         subagentActivitiesByTask={subagentActivitiesByTask}
         toolCalls={filteredToolCalls}
         toolCallCitations={toolCallCitations}
+        approvals={visibleApprovals}
+        approvalHandlers={approvalHandlers}
+        parked={oldestPending !== null}
         mode={mode}
         markdownComponents={markdownComponents}
+        terminalBeat={terminalBeat}
+        runFailed={runFailed}
+        compact={compact}
       />
     </div>
   );
+
+  // The reachability line + the OAuth-success receipt are the only things left
+  // pinned besides the checklist: both are transient chrome with no place in
+  // the conversation (the receipt outlives the run it belongs to, by design).
+  const pinnedNotices =
+    oldestPending !== null || connectedReceipt !== null ? (
+      <div data-testid="tc-chat-notices" style={noticesStyle}>
+        {oldestPending !== null ? (
+          <button
+            type="button"
+            data-testid="tc-chat-approvals-waiting"
+            data-pending-count={pendingApprovals.length}
+            style={waitingStyle}
+            onClick={() => jumpToApproval(oldestPending.approvalId)}
+          >
+            <span aria-hidden="true" style={waitingDotStyle} />
+            {pendingApprovals.length === 1
+              ? "1 approval waiting"
+              : `${pendingApprovals.length} approvals waiting`}
+            <span aria-hidden="true" style={waitingArrowStyle}>
+              ↓
+            </span>
+          </button>
+        ) : null}
+        {connectedReceipt}
+      </div>
+    ) : null;
+
+  // The ONLY pinned element above the composer now that approvals interleave
+  // into the transcript — so it never shifts, which is what made pinning it
+  // worth doing. Single-mount like the transcript itself, so a Focus↔Studio
+  // switch never remounts it. Hidden while
+  // scrubbed: the checklist snapshot has no per-row timestamps to rewind to, so
+  // showing today's list beside a time-travelled transcript would assert a
+  // state that did not hold at the cut.
+  const todoList =
+    todos !== null && !ghost ? (
+      <TcTodoList projection={todos} blocked={oldestPending !== null} />
+    ) : null;
 
   const composer = (
     <div data-testid="tc-chat-composer-slot" style={composerSlotStyle}>
@@ -596,96 +714,21 @@ export function TcChat(props: TcChatProps): ReactElement {
     </div>
   );
 
-  if (mode === "focus") {
-    return (
-      <div
-        data-testid="tc-chat"
-        data-mode="focus"
-        data-ghost={ghost ? "true" : "false"}
-        style={focusContainerStyle}
-        aria-live="polite"
-      >
-        {ghostBanner}
-        {transcript}
-        {/* Focus surfaces a pending approval as a `.conf-card` (resolved → its
-            receipt), between the transcript and the composer. */}
-        {visibleApprovals.length > 0 || connectedReceipt !== null ? (
-          <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
-            {visibleApprovals.map((approval) =>
-              approval.question !== null
-                ? renderQuestionCard(approval, onAnswer)
-                : approval.resolved
-                  ? renderApprovalReceipt(approval)
-                  : isWorkspaceGrantApproval(approval)
-                    ? renderWorkspaceGrantCard(
-                        approval,
-                        workspaceGrantStates,
-                        workspaceGrantFailures,
-                        onWorkspaceGrant,
-                        onWorkspaceGrantDeny,
-                        onWorkspaceGrantCancel,
-                      )
-                    : isMcpAuthApproval(approval)
-                      ? renderMcpAuthConnectCard(
-                          approval,
-                          mcpAuthPort,
-                          connectorConsentStates,
-                          onConnectorConsentCancel,
-                          onConnectorMute,
-                        )
-                      : renderConfCard(approval, onApprove, onReject),
-            )}
-            {connectedReceipt}
-          </div>
-        ) : null}
-        {composer}
-      </div>
-    );
-  }
-
+  // Both modes now render the SAME tail. The two blocks used to differ only in
+  // their approvals strip — one conf-card list, one 4-zone list — and that
+  // difference moved inside `renderApprovalItem`, so the duplicate went with it.
   return (
     <div
       data-testid="tc-chat"
       data-mode={mode}
       data-ghost={ghost ? "true" : "false"}
-      style={chatContainerStyle()}
+      style={mode === "focus" ? focusContainerStyle : chatContainerStyle()}
       aria-live="polite"
     >
       {ghostBanner}
       {transcript}
-      {/* PR-3.10 (FR-3.22) — in-chat approvals sit between the transcript and
-          the composer: pending ones render the 4-zone ApprovalCard, resolved
-          ones their receipt. Outside the ghost-dimmed message list so they stay
-          interactive. */}
-      {visibleApprovals.length > 0 || connectedReceipt !== null ? (
-        <div data-testid="tc-chat-approvals" style={approvalsWrapStyle}>
-          {visibleApprovals.map((approval) =>
-            approval.question !== null
-              ? renderQuestionCard(approval, onAnswer)
-              : approval.resolved
-                ? renderApprovalReceipt(approval)
-                : isWorkspaceGrantApproval(approval)
-                  ? renderWorkspaceGrantCard(
-                      approval,
-                      workspaceGrantStates,
-                      workspaceGrantFailures,
-                      onWorkspaceGrant,
-                      onWorkspaceGrantDeny,
-                      onWorkspaceGrantCancel,
-                    )
-                  : isMcpAuthApproval(approval)
-                    ? renderMcpAuthConnectCard(
-                        approval,
-                        mcpAuthPort,
-                        connectorConsentStates,
-                        onConnectorConsentCancel,
-                        onConnectorMute,
-                      )
-                    : renderStudioApprovalCard(approval, onApprove, onReject),
-          )}
-          {connectedReceipt}
-        </div>
-      ) : null}
+      {pinnedNotices}
+      {todoList}
       {composer}
     </div>
   );
@@ -695,6 +738,74 @@ export function TcChat(props: TcChatProps): ReactElement {
 // projection: Studio uses the hoisted 4-zone `ApprovalCard`, Focus a local
 // `.conf-card` confirmation card; a resolved approval collapses to the hoisted
 // `ApprovalReceipt`. Resolution is the injected onApprove/onReject (D28).
+
+/**
+ * The ONE approval renderer. Every card kind is chosen here, and `mode` picks
+ * only between the two confirmation shapes (Studio's 4-zone `ApprovalCard`,
+ * Focus's `.conf-card`) — the question / receipt / workspace-grant / mcp-auth
+ * branches are mode-independent.
+ *
+ * This used to be a 16-call-site conditional written out TWICE, once per mode
+ * block. Approvals now interleave into the transcript like every other card
+ * family, which leaves one call site and made the duplicate unnecessary.
+ */
+function renderApprovalItem(
+  approval: TcChatApproval,
+  mode: TcChatMode,
+  handlers: ApprovalHandlers,
+): ReactNode {
+  if (approval.question !== null) {
+    return renderQuestionCard(approval, handlers.onAnswer);
+  }
+  if (approval.resolved) {
+    return renderApprovalReceipt(approval);
+  }
+  if (isWorkspaceGrantApproval(approval)) {
+    return renderWorkspaceGrantCard(
+      approval,
+      handlers.workspaceGrantStates,
+      handlers.workspaceGrantFailures,
+      handlers.onWorkspaceGrant,
+      handlers.onWorkspaceGrantDeny,
+      handlers.onWorkspaceGrantCancel,
+    );
+  }
+  if (isMcpAuthApproval(approval)) {
+    return renderMcpAuthConnectCard(
+      approval,
+      handlers.mcpAuthPort,
+      handlers.connectorConsentStates,
+      handlers.onConnectorConsentCancel,
+      handlers.onConnectorMute,
+    );
+  }
+  return mode === "focus"
+    ? renderConfCard(approval, handlers.onApprove, handlers.onReject)
+    : renderStudioApprovalCard(approval, handlers.onApprove, handlers.onReject);
+}
+
+/** Everything `renderApprovalItem` needs, bundled so the interleave pass can carry it. */
+interface ApprovalHandlers {
+  readonly onApprove?: (approvalId: string) => void;
+  readonly onReject?: (approvalId: string) => void;
+  readonly onAnswer?: (approvalId: string, answer: QuestionAnswer) => void;
+  readonly mcpAuthPort?: McpAuthPort;
+  readonly connectorConsentStates?: Readonly<
+    Record<string, ConnectorConsentState>
+  >;
+  readonly onConnectorConsentCancel?: (serverId: string) => void;
+  readonly onConnectorMute?: (catalogSlug: string) => void;
+  readonly workspaceGrantStates?: Readonly<
+    Record<string, WorkspaceGrantCardState>
+  >;
+  readonly workspaceGrantFailures?: Readonly<Record<string, string>>;
+  readonly onWorkspaceGrant?: (
+    approvalId: string,
+    request: WorkspaceGrantRequest,
+  ) => void;
+  readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
+  readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
+}
 
 function renderStudioApprovalCard(
   approval: TcChatApproval,
@@ -954,8 +1065,30 @@ interface MessageListBodyProps {
   >;
   readonly toolCalls: readonly ToolCallEntry[];
   readonly toolCallCitations: readonly CitationSourceRef[];
+  /**
+   * Approvals interleaved into the transcript at the point they were asked, so
+   * the decision sits beside the tool call that provoked it and STAYS there
+   * once resolved. In the pinned-strip model a resolved approval was dropped —
+   * correct then (a receipt above the composer was noise) and wrong now: a card
+   * that vanishes from the middle of the conversation reflows the transcript
+   * and erases the record of who decided what, mid-thread.
+   */
+  readonly approvals: readonly TcChatApproval[];
+  readonly approvalHandlers: ApprovalHandlers;
+  /**
+   * The run is parked on a pending approval, so every still-`running` tool card
+   * reads waiting rather than running. Same flag and same reasoning as
+   * `TcTodoList`'s `blocked`; both surfaces were asserting motion that had
+   * stopped.
+   */
+  readonly parked: boolean;
   readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
+  readonly terminalBeat?: ReactNode;
+  /** PRD-03 D-3.5 — the RUN's terminal failure keeps its group open. */
+  readonly runFailed?: boolean;
+  /** PRD-03 D-3.6 — narrow surface; shortens the group's summary label. */
+  readonly compact?: boolean;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -966,46 +1099,135 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     subagentActivitiesByTask,
     toolCalls,
     toolCallCitations,
+    approvals,
+    approvalHandlers,
+    parked,
     mode,
     markdownComponents,
+    terminalBeat,
+    runFailed = false,
+    compact = false,
   } = props;
-  if (state.status === "loading" || state.status === "idle") {
-    return (
+  // The message-load notice never SUPPRESSES the live cards any more. It used
+  // to be an early return, which was harmless while approvals lived in a strip
+  // outside this component — inline, it meant a slow or failed message fetch
+  // hid a pending approval completely, and the run would sit parked with no
+  // visible way to unblock it. The notice is now a row above the stream.
+  const notice =
+    state.status === "loading" || state.status === "idle" ? (
       <div role="status" style={statusStyle} data-testid="tc-chat-loading">
         Loading messages…
       </div>
-    );
-  }
-  if (state.status === "error") {
-    return (
+    ) : state.status === "error" ? (
       <div role="alert" style={statusStyle} data-testid="tc-chat-error">
         Failed to load messages.
       </div>
-    );
+    ) : null;
+
+  const nothingToShow =
+    messages.length === 0 &&
+    fleets.length === 0 &&
+    toolCalls.length === 0 &&
+    approvals.length === 0 &&
+    terminalBeat === undefined;
+  if (notice !== null && nothingToShow) {
+    return notice;
   }
-  if (messages.length === 0 && fleets.length === 0 && toolCalls.length === 0) {
+  if (nothingToShow) {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-empty">
         No messages yet.
       </div>
     );
   }
-  // Messages (GET) plus the two projected-off-the-run-stream card families —
-  // fleet cards (PR-3.8) and tool-call cards (Workstream D) — are interleaved by
-  // timestamp so each lands where it happened in the flow.
-  const items = mergeStream(messages, fleets, toolCalls);
+  // Messages (GET) plus the three projected-off-the-run-stream card families —
+  // fleet cards (PR-3.8), tool-call cards (Workstream D) and approvals — are
+  // interleaved by timestamp so each lands where it happened in the flow.
+  const items = mergeStream(messages, fleets, toolCalls, approvals);
+
+  const renderItem = (item: StreamItem): ReactNode => {
+    if (item.kind === "fleet") {
+      return renderFleetCard(item.fleet, subagentActivitiesByTask);
+    }
+    if (item.kind === "tool") {
+      return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
+    }
+    if (item.kind === "approval") {
+      return (
+        <li
+          key={`approval-item-${item.approval.approvalId}`}
+          style={approvalItemStyle}
+          data-testid={`tc-chat-approval-item-${item.approval.approvalId}`}
+          data-approval-pending={item.approval.resolved ? "false" : "true"}
+        >
+          {renderApprovalItem(item.approval, mode, approvalHandlers)}
+        </li>
+      );
+    }
+    return renderMessage(item.message, markdownComponents);
+  };
+
+  // PRD-03 — fold consecutive ACTIVITY into one collapsible group. Pure view
+  // layer: `items` order is untouched, only its framing changes.
+  //
+  // Only tool + fleet opt in. Messages and approvals pass through, and so does
+  // any kind added later — an approval buried inside a collapsed group would
+  // hide a parked run's only way out.
+  const grouped = groupActivityStream(items, {
+    isGroupable: (item) => item.kind === "tool" || item.kind === "fleet",
+    idOf: (item) =>
+      item.kind === "fleet"
+        ? `fleet-${item.fleet.fleetId}`
+        : item.kind === "tool"
+          ? item.toolCall.id
+          : "group",
+  });
+
   return (
-    <ul style={ulStyle}>
-      {items.map((item) => {
-        if (item.kind === "fleet") {
-          return renderFleetCard(item.fleet, subagentActivitiesByTask);
-        }
-        if (item.kind === "tool") {
-          return renderToolCard(item.toolCall, mode, toolCallCitations);
-        }
-        return renderMessage(item.message, markdownComponents);
-      })}
-    </ul>
+    <>
+      {notice}
+      <ul style={ulStyle}>
+        {grouped.map((entry) => {
+          if (entry.kind !== "group") {
+            return renderItem(entry.item);
+          }
+          const summary = summariseGroup(
+            entry.members.map((m) =>
+              m.kind === "tool"
+                ? {
+                    status: m.toolCall.status,
+                    createdAtMs: m.toolCall.createdAtMs,
+                    durationMs: m.toolCall.durationMs,
+                  }
+                : {
+                    createdAtMs:
+                      m.kind === "fleet" ? m.fleet.createdAtMs : null,
+                  },
+            ),
+            runFailed,
+          );
+          return (
+            <li key={`group-${entry.id}`} style={fleetItemStyle}>
+              <ToolRunGroup
+                state={summary.state}
+                done={summary.done}
+                total={summary.total}
+                retried={summary.retried}
+                elapsed={
+                  summary.elapsedMs === null
+                    ? null
+                    : formatSubagentDuration(summary.elapsedMs)
+                }
+                compact={compact}
+              >
+                {entry.members.map(renderItem)}
+              </ToolRunGroup>
+            </li>
+          );
+        })}
+        {terminalBeat}
+      </ul>
+    </>
   );
 }
 
@@ -1100,6 +1322,7 @@ function renderToolCard(
   toolCall: ToolCallEntry,
   mode: TcChatMode,
   citations: readonly CitationSourceRef[],
+  parked: boolean,
 ): ReactNode {
   return (
     <li
@@ -1108,7 +1331,7 @@ function renderToolCard(
       data-testid={`tc-chat-tool-${toolCall.id}`}
       data-tool-status={toolCall.status}
     >
-      <ToolCallCard toolCall={toolCall} />
+      <ToolCallCard toolCall={toolCall} parked={parked} />
       {mode === "studio" ? (
         <InlineToolResultCard toolCall={toolCall} citations={citations} />
       ) : null}
@@ -1119,7 +1342,8 @@ function renderToolCard(
 type StreamItem =
   | { readonly kind: "message"; readonly message: TcChatMessage }
   | { readonly kind: "fleet"; readonly fleet: FleetProjection }
-  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry };
+  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry }
+  | { readonly kind: "approval"; readonly approval: TcChatApproval };
 
 /** A non-message card anchored to a timestamp, for the interleave pass. */
 interface AnchoredItem {
@@ -1133,14 +1357,17 @@ interface AnchoredItem {
  * may lack timestamps), and each card slots in just before the first message
  * dated after its anchor. Any card with no earlier-dated message anchor falls
  * to the end. Fleets are pushed before tool calls, so cards sharing a timestamp
- * keep a stable fleet-then-tool order (ES sort is stable).
+ * keep a stable fleet-then-tool order (ES sort is stable). Approvals anchor on
+ * `createdAtMs` — the field has always been documented as "the conversation
+ * anchor" and went unused while approvals lived in a pinned strip.
  */
 function mergeStream(
   messages: ReadonlyArray<TcChatMessage>,
   fleets: readonly FleetProjection[],
   toolCalls: readonly ToolCallEntry[],
+  approvals: readonly TcChatApproval[],
 ): readonly StreamItem[] {
-  if (fleets.length === 0 && toolCalls.length === 0) {
+  if (fleets.length === 0 && toolCalls.length === 0 && approvals.length === 0) {
     return messages.map((message) => ({ kind: "message", message }));
   }
   const anchored: AnchoredItem[] = [];
@@ -1149,6 +1376,12 @@ function mergeStream(
   }
   for (const toolCall of toolCalls) {
     anchored.push({ at: toolAt(toolCall), item: { kind: "tool", toolCall } });
+  }
+  for (const approval of approvals) {
+    anchored.push({
+      at: approvalAt(approval),
+      item: { kind: "approval", approval },
+    });
   }
   anchored.sort((a, b) => a.at - b.at);
   const out: StreamItem[] = [];
@@ -1175,6 +1408,10 @@ function fleetAt(fleet: FleetProjection): number {
 
 function toolAt(toolCall: ToolCallEntry): number {
   return toolCall.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+}
+
+function approvalAt(approval: TcChatApproval): number {
+  return approval.createdAtMs ?? Number.MAX_SAFE_INTEGER;
 }
 
 function filterFleetsByScrub(
@@ -1370,13 +1607,47 @@ const focusContainerStyle: CSSProperties = {
 // PR-3.10 — in-chat approvals (design-system tokens only; sky accent, jade
 // success, ember danger — no lime, no hardcoded hex).
 
-const approvalsWrapStyle: CSSProperties = {
+/** One transcript row holding an approval card, anchored where it was asked. */
+const approvalItemStyle: CSSProperties = {
+  listStyle: "none",
+  margin: "8px 0",
+  padding: 0,
+};
+
+/** The pinned strip's replacement: chrome, not cards. */
+const noticesStyle: CSSProperties = {
   ...conversationRailStyle,
   flexShrink: 0,
   display: "flex",
   flexDirection: "column",
+  gap: 6,
+  padding: "0 8px 8px",
+};
+
+const waitingStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
   gap: 8,
-  padding: "0 8px",
+  alignSelf: "flex-start",
+  padding: "5px 10px",
+  border: "1px solid var(--color-border-strong)",
+  borderRadius: "var(--radius-full, 999px)",
+  background: "var(--color-surface)",
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 11,
+  cursor: "pointer",
+};
+
+const waitingDotStyle: CSSProperties = {
+  width: 6,
+  height: 6,
+  borderRadius: "50%",
+  background: "var(--color-warning, #e8b45e)",
+};
+
+const waitingArrowStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
 };
 
 const approvalApproveButtonStyle: CSSProperties = {
@@ -1407,13 +1678,6 @@ const approvalRejectButtonStyle: CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
   fontFamily: "inherit",
-};
-
-const confCardsWrapStyle: CSSProperties = {
-  ...conversationRailStyle,
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
 };
 
 const confCardStyle: CSSProperties = {

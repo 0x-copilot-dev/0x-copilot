@@ -195,14 +195,29 @@ class HostFilesystemFloor:
         ones: no host write is ever interruptible, so a second enforcement of
         the same verdict can never contradict a user decision.
 
-        The agent's scratch is the ONLY host location that passes. A granted
-        folder does not — granting a folder widens reads, never writes, and host
-        mutations stay on the staged C3 → ledger → C2 lane.
+        Two host locations pass, and no others:
+
+        * the agent's own scratch, which needs no grant because it is ours;
+        * a root the user attached AND marked WRITABLE.
+
+        The second is not a relaxation of the rule set — it is the same verdict
+        rule 3 reaches, restated where globs cannot see. `wcmatch` runs without
+        `DOTGLOB`, so a granted folder under a dotted segment (`~/.config/app`,
+        or any path below one) is invisible to every pattern; without this the
+        rules would allow the write and the floor would silently refuse it. The
+        two layers must agree, and this is where they are made to.
+
+        A read-only grant still fails here, which is the whole point of asking
+        the question when the folder is attached.
         """
 
         if not self._is_host(path):
             return True
-        return self._within_scratch(path)
+        if self._within_scratch(path):
+            return True
+        return any(
+            root.writable and self._within(path, root.path) for root in self._roots
+        )
 
     def _within_scratch(self, path: str | None) -> bool:
         """True when ``path`` is the scratch root or lies beneath it."""

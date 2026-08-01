@@ -16,11 +16,22 @@ from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
 
 class CanvasLifecycleState(StrEnum):
+    """What the canvas can say about itself — and ONLY about itself.
+
+    There is deliberately no ``FAILED``. The canvas answers one question: "is
+    there something to look at, and if not, why not?" A run-level verdict is not
+    an answer to that question, and rendering one here put a second, often
+    contradictory opinion beside the chat pane. Step failures belong on the step
+    that failed; a terminal run failure belongs in the chat stream.
+
+    Kept byte-equivalent with the client twin in ``canvasLifecycle.ts``; the
+    differential corpus asserts both folds agree.
+    """
+
     ASSEMBLING = "assembling"
     PRESENTING = "presenting"
     CHAT_ONLY = "chat_only"
     PARKED = "parked"
-    FAILED = "failed"
     COMPLETE_EMPTY = "complete_empty"
 
 
@@ -53,9 +64,15 @@ class CanvasProjection:
     pending_subject_keys: tuple[str, ...]
     terminal_receipt: CanvasSubject | None
     activity_count: int
+    #: Most recent failure text anywhere in the run, including a step the agent
+    #: recovered from. Exposed for presentation; does NOT steer ``lifecycle``.
     failure: str | None
     has_final_response: bool
     terminal: bool
+    #: The run's own terminal status, or ``None`` while it is still running.
+    #: This — not ``failure`` — distinguishes a run that died from one that hit
+    #: a bad step and carried on.
+    terminal_status: str | None = None
 
 
 @dataclass(slots=True)
@@ -355,11 +372,9 @@ class CanvasLifecycleProjection:
         )
         lifecycle = cls._lifecycle(
             terminal=terminal,
-            terminal_status=terminal_status,
             final_response=final_response,
             has_subject=bool(ordered),
             has_pending=bool(pending),
-            failure=failure,
         )
         return CanvasProjection(
             lifecycle=lifecycle,
@@ -371,17 +386,16 @@ class CanvasLifecycleProjection:
             failure=failure,
             has_final_response=final_response,
             terminal=terminal,
+            terminal_status=terminal_status,
         )
 
     @staticmethod
     def _lifecycle(
         *,
         terminal: bool,
-        terminal_status: str | None,
         final_response: bool,
         has_subject: bool,
         has_pending: bool,
-        failure: str | None,
     ) -> CanvasLifecycleState:
         if has_pending:
             return CanvasLifecycleState.PARKED
@@ -389,8 +403,11 @@ class CanvasLifecycleProjection:
             return CanvasLifecycleState.PRESENTING
         if not terminal:
             return CanvasLifecycleState.ASSEMBLING
-        if failure is not None or terminal_status == "failed":
-            return CanvasLifecycleState.FAILED
+        # ``failure`` / ``terminal_status`` are deliberately NOT consulted.
+        # Whether a step (or the run) failed says nothing about whether the
+        # canvas has a subject, and reading them here is what let one failed
+        # tool call — including a recovered one — repaint the canvas as an
+        # alarm. Both stay EXPOSED on the projection for presentation.
         if final_response:
             return CanvasLifecycleState.CHAT_ONLY
         return CanvasLifecycleState.COMPLETE_EMPTY

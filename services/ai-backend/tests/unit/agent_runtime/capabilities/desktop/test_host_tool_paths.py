@@ -536,7 +536,12 @@ class TestWindowsAndPosixGetTheSameVerdicts(RuleVerdictMixin):
         assert posix[0] == "interrupt"
 
     def test_a_host_write_is_denied_in_either_grammar(self) -> None:
-        """D7: no filesystem interrupt may authorize a host mutation."""
+        """Both grammars reach the SAME verdict — the parity this class holds.
+
+        `from_host_path` defaults to writable, so a write inside the grant is
+        allowed on both platforms; the assertion that matters is that neither
+        grammar is more permissive than the other.
+        """
 
         roots_posix = (GrantedRoot.from_host_path("/Users/p/Downloads"),)
         roots_windows = (GrantedRoot.from_host_path(WINDOWS_DOWNLOADS),)
@@ -555,7 +560,7 @@ class TestWindowsAndPosixGetTheSameVerdicts(RuleVerdictMixin):
         )
 
         assert posix == windows
-        assert posix[0] == "deny"
+        assert posix[0] == "allow"
 
     def test_a_windows_grant_never_covers_the_posix_path_of_the_same_name(
         self,

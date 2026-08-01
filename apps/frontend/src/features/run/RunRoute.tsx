@@ -86,6 +86,16 @@ export interface RunRouteProps {
    * never navigates directly.
    */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * PRD-01 — open another conversation from the cockpit's Threads switcher.
+   * Host-owned because it is navigation (App owns the hash router); the package
+   * only reports which id the user picked.
+   */
+  readonly onOpenConversation?: (conversationId: ConversationId) => void;
+  /** PRD-01 — the switcher's "New run" action. Same intent as ⌘N. */
+  readonly onNewConversation?: () => void;
+  /** PRD-01/PRD-09 — display name for the Threads panel foot. */
+  readonly identityName?: string | null;
   /** Signed-in identity — threaded to the empty composer's live model catalog. */
   readonly identity: RequestIdentity;
   /**
@@ -110,6 +120,9 @@ export function RunRoute({
   conversationId: propConversationId = null,
   onConversationCreated,
   onOpenModelSettings,
+  onOpenConversation,
+  onNewConversation,
+  identityName = null,
   identity,
   completedMcpAuthAction = null,
 }: RunRouteProps): ReactElement {
@@ -389,6 +402,12 @@ export function RunRoute({
       <RunDestination
         key={boundConversationId}
         conversationId={boundConversationId}
+        // PRD-01 — Threads switcher wiring. Navigation only; the list is the
+        // shared `useChatsArchive` controller inside the package, so web and
+        // desktop show the same threads from the same fetch path.
+        onOpenConversation={onOpenConversation}
+        onNewConversation={onNewConversation}
+        identityName={identityName}
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}

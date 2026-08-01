@@ -384,11 +384,18 @@ export function SettingsSurface({
         data-surface="settings"
         style={rootStyle}
       >
+        {/* `data-settings-nav` is a stable hook for hosts that own window chrome
+            (same role as the rail's `data-rail-brand`). Settings suppresses the
+            shell topbar, so on desktop this column — not a topbar — is what sits
+            under the native window controls, and the host reserves the title-bar
+            band here. The package stays substrate-agnostic: it emits the hook and
+            knows nothing about traffic lights. */}
         <div
           ref={navRef}
           role="tablist"
           aria-label="Settings sections"
           aria-orientation="vertical"
+          data-settings-nav=""
           onKeyDown={handleNavKeyDown}
           style={navStyle}
         >

@@ -163,6 +163,15 @@ class RuntimeApiEventType(StrEnum):
     # successful awrite/aedit and by ConversationCoordinator on user PATCH /
     # POST send / POST discard.
     DRAFT_UPDATED = "draft_updated"
+    # The agent's working checklist. LangChain's ``TodoListMiddleware`` replaces
+    # the whole list on every ``write_todos`` call, so the raw tool frames are a
+    # diff the client would have to reconstruct; this event carries the resolved
+    # list instead. ``StreamMessageProcessor`` is its sole producer, projecting
+    # the tool arguments into ``TodoListSnapshot`` (list_id / generation /
+    # todos). The ``write_todos`` tool frames stay INTERNAL — the panel is the
+    # only rendering of them. Projects to ``RuntimeActivityKind.EVENT``: a
+    # checklist is state to merge, not a card per revision.
+    TODO_LIST_UPDATED = "todo_list_updated"
     # AC5 slice 3b — host write-through. Emitted by the workspace backend's
     # snapshot-before-write step: BEFORE an approved overwrite/edit mutates a
     # user's host file, the pre-image bytes are put into the content-addressed

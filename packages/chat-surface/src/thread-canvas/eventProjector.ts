@@ -163,7 +163,7 @@ export interface ToolCallEntry {
   /** Display label — backend `display_title`, falling back to `toolName`. */
   readonly title: string;
   /** Lifecycle: `running` until a result frame lands, then `complete`/`error`. */
-  readonly status: "running" | "complete" | "error";
+  readonly status: "running" | "complete" | "error" | "unavailable";
   /** Latest streamed call arguments, when present. */
   readonly args?: Record<string, unknown>;
   /** Result output from the `tool_result` payload, when present. */
@@ -187,6 +187,31 @@ export interface ToolCallEntry {
   readonly sequenceNo: number;
   /** Anchor timestamp (epoch ms) for interleave; null if unparseable. */
   readonly createdAtMs: number | null;
+}
+
+export type RunTodoStatus = "pending" | "in_progress" | "completed";
+
+/** One row of the agent's checklist, exactly as it wrote it. */
+export interface RunTodoEntry {
+  readonly content: string;
+  readonly status: RunTodoStatus;
+}
+
+/**
+ * The checklist the todo panel renders — the newest `todo_list_updated`
+ * snapshot, with the two counts every consumer would otherwise recompute.
+ */
+export interface RunTodosProjection {
+  /** Stable across revisions of one list; changes when the agent starts a new one. */
+  readonly listId: string;
+  /** 1-based. `> 1` means an earlier list in this run was finished first. */
+  readonly generation: number;
+  readonly todos: readonly RunTodoEntry[];
+  readonly completedCount: number;
+  /** True only when the list has rows and every one is done. */
+  readonly isComplete: boolean;
+  /** `sequence_no` of the snapshot, so a later one always wins. */
+  readonly sequenceNo: number;
 }
 
 /** Safe, display-ready origin projected from `payload.provenance`. */
@@ -382,6 +407,15 @@ export function projectToolCalls(
       continue;
     }
     seen.add(event.event_id);
+    // Honour the server's visibility call, exactly as `project()` does. This
+    // pass had never checked it, so every tool the backend classifies as
+    // INTERNAL still rendered a card here: `write_todos` (whose checklist the
+    // todo panel owns) and `ask_a_question` (whose approval card is the real
+    // surface) both showed a raw args/result tile beside the surface meant to
+    // replace them.
+    if (!isVisibleToUser(event)) {
+      continue;
+    }
     // Main-agent only — a subagent's tool calls render inside the subagent
     // views (FR-3.17), never the main transcript.
     if (event.subagent_id) {
@@ -402,6 +436,84 @@ export function projectToolCalls(
     return EMPTY_TOOL_CALLS;
   }
   return order.map((key) => buildToolCall(byCall.get(key)!));
+}
+
+/**
+ * Pure selector: the agent's working checklist, off the SAME canonical
+ * `RuntimeEventEnvelope[]` every other cockpit consumer reads (FR-3.3).
+ *
+ * `write_todos` replaces the whole list per call, and the server resolves each
+ * write into a `todo_list_updated` snapshot carrying list identity, so the
+ * newest snapshot IS the state — this walks to the last one rather than folding
+ * a sequence of diffs. Main-agent only, matching `projectToolCalls`: a
+ * subagent's checklist belongs to the subagent views, not the main transcript.
+ *
+ * Returns `null` when the run has no checklist, which is the common case — most
+ * requests are too small for the agent to open one, and the panel must not
+ * appear until it does.
+ */
+export function projectRunTodos(
+  events: readonly RuntimeEventEnvelope[],
+): RunTodosProjection | null {
+  let latest: RunTodosProjection | null = null;
+  for (const event of events) {
+    if (event.event_type !== "todo_list_updated" || event.subagent_id) {
+      continue;
+    }
+    const snapshot = readTodoSnapshot(event);
+    // Keep the highest sequence rather than the last seen: replay and a live
+    // tail can interleave, and a stale snapshot arriving late must not roll the
+    // panel backwards.
+    if (
+      snapshot !== null &&
+      (latest === null || snapshot.sequenceNo >= latest.sequenceNo)
+    ) {
+      latest = snapshot;
+    }
+  }
+  return latest;
+}
+
+function readTodoSnapshot(
+  event: RuntimeEventEnvelope,
+): RunTodosProjection | null {
+  const payload = readRecord(event.payload);
+  const rawTodos = payload?.todos;
+  const listId = pickString(payload, "list_id");
+  if (listId === null || !Array.isArray(rawTodos)) {
+    return null;
+  }
+  const todos: RunTodoEntry[] = [];
+  for (const item of rawTodos) {
+    const row = readRecord(item);
+    const content = pickString(row, "content");
+    const status = row?.status;
+    // Drop the snapshot whole on an unreadable row. A row the client cannot
+    // place would render as pending and read as work still to come.
+    if (content === null || !isRunTodoStatus(status)) {
+      return null;
+    }
+    todos.push({ content, status });
+  }
+  const generation =
+    typeof payload?.generation === "number" ? payload.generation : 1;
+  const completedCount = todos.filter(
+    (todo) => todo.status === "completed",
+  ).length;
+  return {
+    listId,
+    generation,
+    todos,
+    completedCount,
+    isComplete: todos.length > 0 && completedCount === todos.length,
+    sequenceNo: event.sequence_no,
+  };
+}
+
+function isRunTodoStatus(value: unknown): value is RunTodoStatus {
+  return (
+    value === "pending" || value === "in_progress" || value === "completed"
+  );
 }
 
 /**
@@ -582,7 +694,15 @@ function projectChatEntry(
   const createdAt = event.created_at;
   switch (event.event_type) {
     case "final_response": {
-      const text = pickString(event.payload, "text") ?? event.summary ?? "";
+      // Same contract point as `chatProjection.payloadText`: the worker writes
+      // the answer to `payload.message` (RuntimeTextPayload declares `message`,
+      // never `text`) and mirrors it into `summary`. Reading only `text` meant
+      // this always fell through to the summary fallback.
+      const text =
+        pickString(event.payload, "text") ??
+        pickString(event.payload, "message") ??
+        event.summary ??
+        "";
       return {
         id: event.event_id,
         sequenceNo: event.sequence_no,
@@ -889,7 +1009,7 @@ interface MutableToolCall {
   key: string;
   toolName: string;
   title: string | null;
-  status: "running" | "complete" | "error";
+  status: "running" | "complete" | "error" | "unavailable";
   args?: Record<string, unknown>;
   result?: Record<string, unknown>;
   summary?: string;
@@ -1086,12 +1206,18 @@ function agentToolDisplayValue(
 
 /** A completed result frame flips the card to `complete`; anything else (failed,
  *  timed_out, abandoned, cancelled, …) reads as `error`. The mere presence of a
- *  result frame with no status means the tool returned — treat as complete. */
+ *  result frame with no status means the tool returned — treat as complete.
+ *
+ *  `unavailable` is its own outcome, not a flavour of either: the capability
+ *  was declined by policy, so no work happened (`complete` would overstate it)
+ *  and nothing broke (`error` would invent a fault). Collapsing it into `error`
+ *  here is what kept a declined `ls` rendering as a failed step even after the
+ *  backend had stopped calling it one. */
 function mapResultStatus(
   event: RuntimeEventEnvelope,
   priorStatus: MutableToolCall["status"] | undefined,
   hasStructuredError = false,
-): "complete" | "error" {
+): "complete" | "error" | "unavailable" {
   if (hasStructuredError) {
     return "error";
   }
@@ -1107,6 +1233,9 @@ function mapResultStatus(
       return "error";
     }
     return "complete";
+  }
+  if (raw.toLowerCase() === "unavailable" || raw === "Not available") {
+    return "unavailable";
   }
   if (
     raw.toLowerCase() === "completed" ||

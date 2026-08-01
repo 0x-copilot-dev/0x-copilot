@@ -185,3 +185,46 @@ describe("projectChatMessages", () => {
     expect(projectChatMessages([dup, dup])[0].parts[0].text).toBe("once");
   });
 });
+
+// ===========================================================================
+// Payload-contract regression (found while investigating PRD-03)
+// ===========================================================================
+//
+// `RuntimeTextPayload` declares `message` / `delta` / `summary` — never `text`.
+// The worker writes the answer to BOTH `payload.message` and the event summary
+// (`runtime_worker/handlers/run.py:839-863`), so reading only `text` fell
+// through to the summary fallback on every single run. It rendered the right
+// string, which is exactly why nobody noticed: the fallback was load-bearing
+// and the declared field was unread.
+describe("final_response payload contract", () => {
+  const finalEvent = (payload: Record<string, unknown>, summary?: string) =>
+    ({
+      event_id: "e1",
+      sequence_no: 1,
+      event_type: "final_response",
+      created_at: "2026-08-01T10:00:00Z",
+      payload,
+      summary,
+    }) as unknown as Parameters<typeof projectChatMessages>[0][number];
+
+  it("reads the answer from payload.message, not just the summary fallback", () => {
+    const [msg] = projectChatMessages([
+      finalEvent({ message: "the real answer" }),
+    ]);
+    expect(msg?.parts.at(-1)?.text).toBe("the real answer");
+  });
+
+  it("still honours summary when a payload carries no message", () => {
+    const [msg] = projectChatMessages([finalEvent({}, "summary only")]);
+    expect(msg?.parts.at(-1)?.text).toBe("summary only");
+  });
+
+  it("prefers the payload over the summary when they disagree", () => {
+    // They are the same string in production. If they ever diverge, the
+    // payload is the declared carrier and must win.
+    const [msg] = projectChatMessages([
+      finalEvent({ message: "payload wins" }, "stale summary"),
+    ]);
+    expect(msg?.parts.at(-1)?.text).toBe("payload wins");
+  });
+});

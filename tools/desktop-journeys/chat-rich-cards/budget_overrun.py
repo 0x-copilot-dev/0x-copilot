@@ -8,6 +8,10 @@ gathered. The cause was a hard-cap rejection raised as a run-fatal exception
 that escaped through ``astream_runtime``, even though its own message told
 the model to "finalize".
 
+(The banner quoted above no longer exists: the canvas stopped rendering a
+verdict on the run, so a dead run now shows the terminal beat in the chat
+stream instead. The detector below tracks that surface, not the old strings.)
+
 This drives the real supervised app with the two prompts from the report
 (plus one that deliberately demands many distinct searches), and requires:
 
@@ -62,9 +66,18 @@ JS_ASSISTANT_COUNT = (
 )
 
 # The failure banner a user saw instead of an answer.
+# What a run-interrupted state looks like NOW. The canvas no longer renders a
+# run verdict at all ("RUN INTERRUPTED" / "This run needs attention" were
+# deleted with the panel's retry button), so matching on those strings would
+# make this detector permanently silent — a guard that cannot fire reports
+# nothing. A dead run now shows the terminal beat in the chat stream, so we
+# check for that element AND still match the failure copy a tool card can
+# legitimately carry.
 JS_INTERRUPT_TEXT = """(()=>{
+  const beat=document.querySelector('[data-testid="run-terminal-beat"]');
+  if(beat) return ('RUN TERMINAL BEAT: '+(beat.innerText||'')).slice(0,400);
   const body=document.body?document.body.innerText:'';
-  return /RUN INTERRUPTED|This run needs attention|didn't return a result/i
+  return /didn't return a result|Run interrupted|Run timed out/i
     .test(body) ? body.slice(0,400) : '';
 })()"""
 

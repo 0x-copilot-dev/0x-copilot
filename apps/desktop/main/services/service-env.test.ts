@@ -744,3 +744,123 @@ describe("COPILOT_HOME reaches the supervised services", () => {
     expect(env.COPILOT_HOME).toBeUndefined();
   });
 });
+
+describe("resolveDesktopStudioRuntimeEnv — the desktop's own E2 cohort", () => {
+  // `enforce` is cohort-gated and `RolloutCohortRule` requires an exact
+  // org/user selector, so before this the enforced workspace lane was
+  // unsatisfiable on desktop: it denied every run, and the tombstone it
+  // returned refused READS as well as writes.
+  const principal = { orgId: "org_abc123", userId: "usr_def456" };
+
+  it("names this install's principal for every capability the lane needs", () => {
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
+    );
+
+    const rules = JSON.parse(env.E2_ROLLOUT_COHORTS_JSON ?? "[]");
+    // The union of what `_workspace_effect_backend_for_run` demands and what
+    // `_build_mcp_operation_gateway_services` demands — the latter's absence
+    // tombstones the workspace lane too, so naming fewer denies invisibly.
+    expect(rules.map((r: { capability: string }) => r.capability)).toEqual([
+      "operation_gateway",
+      "mcp_gateway",
+      "effect_stager",
+      "effect_commit",
+      "workspace_overlay",
+      "workspace_commit",
+    ]);
+    expect(rules[0]).toMatchObject({
+      org_id: "org_abc123",
+      user_id: "usr_def456",
+    });
+  });
+
+  it("also turns each capability's MODE on, without which the rule is dead", () => {
+    // `RolloutCohortPolicy.admit` returns GLOBAL_OFF when a capability's mode
+    // is OFF, BEFORE it consults any rule. Setting only
+    // `OPERATION_GATEWAY_MODE=enforce` marked one capability explicitly
+    // controlled — flipping the whole group from legacy passthrough to cohort
+    // admission — while the other five stayed off and denied unconditionally.
+    // The live symptom was indistinguishable from a missing cohort.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
+    );
+
+    expect(env.MCP_GATEWAY_MODE).toBe("enforce");
+    expect(env.EFFECT_STAGER_MODE).toBe("enforce");
+    expect(env.EFFECT_COMMIT_MODE).toBe("enforce");
+    expect(env.WORKSPACE_OVERLAY_MODE).toBe("enforce");
+    expect(env.WORKSPACE_COMMIT_MODE).toBe("enforce");
+  });
+
+  it("never emits modes without the cohort that admits somebody", () => {
+    // Modes alone are WORSE than nothing: they mark capabilities controlled
+    // with no one admitted, which denies where legacy passthrough allowed.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true },
+    );
+
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+    expect(env.WORKSPACE_OVERLAY_MODE).toBeUndefined();
+    expect(env.WORKSPACE_COMMIT_MODE).toBeUndefined();
+  });
+
+  it("emits nothing at all when the install has no principal yet", () => {
+    // The honest first-run state before one is minted. The lane then degrades
+    // to read-only and SAYS so, rather than half-enabling itself.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true },
+    );
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+  });
+
+  it("emits nothing on an UNPACKAGED build, which cannot attest C2", () => {
+    // The startup validator refuses `WORKSPACE_COMMIT_MODE=enforce` without
+    // native attestation, so requesting it on a CLI install turned a graceful
+    // read-only degradation into "Application startup failed. Exiting."
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true, localPrincipal: principal },
+    );
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+    expect(env.WORKSPACE_COMMIT_MODE).toBeUndefined();
+  });
+
+  it("emits nothing outside enforce, so the shipped default is unchanged", () => {
+    const env = resolveDesktopStudioRuntimeEnv(
+      {},
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
+    );
+    expect(env.WORKSPACE_EFFECT_MODE).not.toBe("enforce");
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+  });
+
+  it("refuses a blank id rather than writing an unmatchable rule", () => {
+    // A rule naming "" matches no verified subject, so the lane would deny for
+    // a reason indistinguishable from having no policy at all.
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: { orgId: "", userId: "usr_def456" },
+      },
+    );
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+  });
+});

@@ -2198,3 +2198,45 @@ export {
   type ComposerModelPreferenceOptions,
 } from "./composer";
 // === end Model-pill memory ===
+
+// === Windowed mode (PRD-00 substrate + PRD-01 thread switcher) ===
+// The width-class scale + its provider/hook are the shell's responsive seam:
+// ChatShell installs ONE ResizeObserver and publishes the class here, and any
+// descendant reads it with `useShellWidthClass()`. Hosts do NOT feed it — a
+// host prop is exactly how the desktop rail badge once shipped dark.
+//
+// `ThreadSwitcher` is presentation over a structural `ThreadListSource`; the
+// cockpit's `ThreadSwitcherHost` is what calls `useChatsArchive()`. Hosts wire
+// only navigation (`onOpenConversation` / `onNewConversation` on RunDestination).
+export {
+  DEFAULT_SHELL_WIDTH_CLASS,
+  SHELL_BREAKPOINTS,
+  widthClassFor,
+  type ShellWidthClass,
+} from "./shell/layout";
+export {
+  ShellWidthProvider,
+  useShellWidthClass,
+} from "./shell/ShellWidthProvider";
+export {
+  useContainerWidth,
+  useObservedWidthClass,
+} from "./shell/useContainerWidth";
+export {
+  ThreadSwitcher,
+  ThreadSwitcherToggle,
+  THREAD_SECTION_ORDER,
+  THREAD_SWITCHER_OVERLAY_WIDTH,
+  type ThreadListSource,
+  type ThreadSectionKey,
+  type ThreadSwitcherProps,
+  type ThreadSwitcherToggleProps,
+  type ThreadSwitcherVariant,
+} from "./shell/ThreadSwitcher";
+export {
+  defaultThreadSwitcherOpen,
+  threadSwitcherOpenKey,
+  useThreadSwitcherOpen,
+  type UseThreadSwitcherOpenResult,
+} from "./destinations/run/useThreadSwitcherOpen";
+// === end Windowed mode ===

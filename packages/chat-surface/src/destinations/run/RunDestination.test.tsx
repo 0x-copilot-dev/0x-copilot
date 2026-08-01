@@ -355,8 +355,18 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("run-empty-state")).not.toBeNull();
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
     expect(screen.queryByTestId("run-error-banner")).toBeNull();
-    // No run → no SSE subscription opened.
-    expect(transport.subs).toHaveLength(0);
+    // No run → no RUN SSE subscription opened.
+    //
+    // Asserted by path rather than by total count: since PRD-01 the cockpit's
+    // Threads panel (open by default at `wide`) owns its own conversations
+    // subscription via the shared `useChatsArchive` controller. That is a
+    // different stream and does not touch the single run-event projection
+    // (FR-3.3 / NFR-1.3) — so the invariant this test guards is "an idle
+    // cockpit does not stream a run", which a bare length check no longer
+    // expresses.
+    expect(
+      transport.subs.filter((s) => s.path.includes("/runs/")),
+    ).toHaveLength(0);
   });
 
   // === PR-3.6 — tabbed right rail wiring ===
@@ -409,12 +419,6 @@ describe("RunDestination — shell composition", () => {
     expect(
       screen.queryByRole("tablist", { name: "Run workspace tabs" }),
     ).toBeNull();
-    // The compact Activity panel is derived from this same run's events. With
-    // no tool yet scheduled it is deliberately an honest pending plan, not a
-    // client-side invention from the goal text.
-    expect(screen.getByTestId("focus-plan")).toHaveTextContent(
-      "Awaiting the agent plan",
-    );
   });
 
   // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===
@@ -1063,17 +1067,19 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
       fireEvent.click(screen.getByTestId(approvalApproveTid("appr-1")));
     });
 
-    // Optimistic: the card LEAVES the strip, badge with it. It does not flip to
-    // a "✓ Approved · <title>" receipt pinned above the composer — by the time
-    // one would render, the run has continued and its result is in the
-    // transcript, so the line adds nothing and costs the scarcest vertical space
-    // on the surface. The decision is still recorded; the Approvals tab projects
-    // it from the same event stream.
+    // Optimistic: the live decision surface goes, and the rail badge with it.
+    // What it leaves behind changed with inline approvals — the card no longer
+    // sits in a pinned strip where a "✓ Approved" line would cost the scarcest
+    // vertical space, so the receipt now stays put in the transcript as the
+    // record of the decision, at the point it was made.
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
+    expect(
+      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toHaveAttribute("data-decision", "approved");
     expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
     // The host POSTed the decision through the Transport port (host owns POST).
     await waitFor(() =>
       expect(
@@ -1093,20 +1099,23 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
       fireEvent.click(screen.getByTestId(approvalRejectTid("appr-1")));
     });
 
-    // Resolved is resolved: the strip above the composer holds LIVE decisions,
-    // and which way the user decided does not change that this one is over.
+    // Resolved is resolved: the live decision surface retires either way, and
+    // the receipt records WHICH way — a rejection is the more important of the
+    // two to keep, since nothing downstream in the transcript will show it.
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
+    expect(
+      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toHaveAttribute("data-decision", "rejected");
   });
 
   it("retires the card on a server `approval_resolved` frame, not just a local click", async () => {
     const transport = await renderWithApproval();
 
     // The same decision can arrive from ANOTHER surface (the Approvals tab, a
-    // second window) or from the runtime resolving it itself. The strip must
-    // react to the event, not only to this component's own button.
+    // second window) or from the runtime resolving it itself. The transcript
+    // must react to the event, not only to this component's own button.
     act(() => {
       transport.emit(approvalResolved("appr-1", "approved"));
     });
@@ -1114,7 +1123,9 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(screen.queryByTestId("tc-chat-approval-receipt-appr-1")).toBeNull();
+    expect(
+      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toBeInTheDocument();
   });
 
   it("hides in-chat approvals + the count while scrubbed off-now, restoring on snap-to-now (FR-3.15)", async () => {
@@ -2797,6 +2808,230 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
             r.path === "/v1/agent/approvals/appr-1/decision",
         ),
       ).toBe(true),
+    );
+  });
+});
+
+describe("RunDestination — agent todos", () => {
+  function todoListUpdated(
+    todos: readonly { content: string; status: string }[],
+    opts: { readonly generation?: number } = {},
+  ): Record<string, unknown> {
+    const generation = opts.generation ?? 1;
+    return event({
+      event_type: "todo_list_updated",
+      source: "tool",
+      activity_kind: "event",
+      payload: {
+        list_id: `run-1:todos:${generation}`,
+        generation,
+        todos,
+      },
+    });
+  }
+
+  async function renderStreamingRun(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Reconcile the pipeline");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("renders the checklist from the run's own event stream", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "in_progress" },
+          { content: "Reconcile opportunity ids", status: "pending" },
+        ]),
+      );
+    });
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(within(panel).getByTestId("tc-todo-list-count")).toHaveTextContent(
+      "0/2",
+    );
+    expect(within(panel).getAllByTestId("tc-todo-row")).toHaveLength(2);
+  });
+
+  it("advances a row from spinner to tick as the agent completes it", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "in_progress" },
+          { content: "Reconcile opportunity ids", status: "pending" },
+        ]),
+      );
+    });
+    const firstRow = (await screen.findAllByTestId("tc-todo-row"))[0];
+    expect(within(firstRow).getByTestId("tc-todo-spinner")).toBeInTheDocument();
+
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+          { content: "Reconcile opportunity ids", status: "in_progress" },
+        ]),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("tc-todo-row")[0]).toHaveAttribute(
+        "data-status",
+        "completed",
+      ),
+    );
+    expect(screen.getByTestId("tc-todo-list-count")).toHaveTextContent("1/2");
+  });
+
+  it("appends work the agent discovered mid-run without restarting the list", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+        ]),
+      );
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+          { content: "Resolve 14 orphan ids", status: "in_progress" },
+        ]),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(2),
+    );
+    // Still list 1 — the badge only appears from the second generation on.
+    expect(screen.queryByTestId("tc-todo-list-generation")).toBeNull();
+  });
+
+  it("opens a second list once the first is finished", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+        ]),
+      );
+    });
+    expect(await screen.findByTestId("tc-todo-list-summary")).toHaveTextContent(
+      "All 1 todos complete",
+    );
+
+    act(() => {
+      transport.emit(
+        todoListUpdated(
+          [{ content: "Draft the exec note", status: "in_progress" }],
+          { generation: 2 },
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByTestId("tc-todo-list-generation"),
+    ).toHaveTextContent("List 2");
+    expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(1);
+  });
+
+  it("renders no checklist for a run the agent never opened one on", async () => {
+    await renderStreamingRun();
+
+    await screen.findByTestId("tc-chat");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
+  });
+});
+
+describe("RunDestination — the checklist survives steering", () => {
+  it("keeps the checklist when the user sends a follow-up and a new run binds", async () => {
+    // THE reported bug: "the todo list disappears once I send a new message or
+    // try to steer the conversation". `projectRunTodos` reads the BOUND run's
+    // events, so rebinding to a fresh run emptied it — the plan vanished at the
+    // exact moment the user reached for the composer. Tool cards hit this first
+    // and grew a conversation-level archive; the checklist now holds the last
+    // snapshot the same way.
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const store = makeStore();
+    const view = render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-a" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
+    );
+
+    act(() => {
+      transport.emit(
+        event({
+          event_type: "todo_list_updated",
+          run_id: "run-a",
+          source: "tool",
+          activity_kind: "event",
+          payload: {
+            list_id: "run-a:todos:1",
+            generation: 1,
+            todos: [
+              { content: "Pull the export", status: "completed" },
+              { content: "Reconcile ids", status: "in_progress" },
+            ],
+          },
+        }),
+      );
+    });
+    await screen.findByTestId("tc-todo-list");
+    expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(2);
+
+    // The follow-up. Rebinding through the runId seam is what sending a message
+    // does: `useRunSession` clears `events` and opens the new run's tail, so the
+    // projection genuinely goes empty here — which is why the panel vanished.
+    view.rerender(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-b" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-b/stream"),
+    );
+
+    // Still there. It is the last plan the agent had, and it holds until the
+    // new run writes one of its own.
+    expect(screen.getByTestId("tc-todo-list")).toBeInTheDocument();
+    expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(2);
+
+    // …and the new run's first snapshot supersedes it.
+    act(() => {
+      transport.emit(
+        event({
+          event_type: "todo_list_updated",
+          run_id: "run-b",
+          source: "tool",
+          activity_kind: "event",
+          payload: {
+            list_id: "run-b:todos:1",
+            generation: 1,
+            todos: [{ content: "Draft the note", status: "in_progress" }],
+          },
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(1),
     );
   });
 });

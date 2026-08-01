@@ -277,14 +277,25 @@ class TestScopedToTheScratchAndNothingAbove:
             is False
         )
 
-    def test_the_scratch_allow_does_not_widen_a_granted_folder(self) -> None:
-        """A grant still buys READS only — host writes stay on the staged lane."""
+    def test_the_scratch_allow_does_not_widen_an_UNGRANTED_folder(self) -> None:
+        """The scratch is its own allowance and grants nothing beyond itself.
+
+        A writable grant is writable on its own merits (see
+        `test_host_filesystem`); what must never happen is the SCRATCH rule
+        leaking write access to somewhere the user never attached.
+        """
 
         granted = GrantedRoot(path="/Users/ada/Projects", writable=True)
         rules = _rules(self.SCRATCH, granted)
 
         assert _check_fs_permission(rules, "read", f"{granted.path}/a.md") == "allow"
-        assert _effective_write(self.SCRATCH, f"{granted.path}/a.md", granted) == "deny"
+        assert (
+            _effective_write(self.SCRATCH, f"{granted.path}/a.md", granted) == "allow"
+        )
+        assert (
+            _effective_write(self.SCRATCH, "/Users/ada/Downloads/a.md", granted)
+            == "deny"
+        )
 
     def test_the_scratch_is_writable_with_zero_grants(self) -> None:
         """The point of moving it out of a granted folder (D7).

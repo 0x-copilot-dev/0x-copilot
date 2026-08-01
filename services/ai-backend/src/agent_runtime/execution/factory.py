@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import logging
+from types import MappingProxyType
 from typing import Any, Final
 
 from langchain_core.tools import StructuredTool
@@ -367,7 +368,10 @@ async def _assemble_harness(
         # This remains the graph-construction input and temporary legacy/golden
         # diagnostic. The effective request is rebuilt for every supervisor and
         # local-child provider call by RuntimeControlMiddleware.
-        model_instructions = prompt_assembly_plan.rendered_prompt
+        model_instructions = _instructions_with_granted_folders(
+            instructions=prompt_assembly_plan.rendered_prompt,
+            roots=granted_host_roots,
+        )
         prompt_observer = runtime_dependencies.prompt_assembly_observer
         if prompt_observer is not None and not isinstance(
             prompt_observer, PromptAssemblyObserver
@@ -456,7 +460,12 @@ async def _assemble_harness(
                 ),
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
-                interrupt_on=enforced_tools.interrupt_on,
+                interrupt_on=_with_host_bulk_read_scope(
+                    enforced_tools.interrupt_on,
+                    workspace_backend,
+                    granted_host_roots=granted_host_roots,
+                    agent_scratch=agent_scratch,
+                ),
                 # Host filesystem rules. D7 still holds and is now enforced by
                 # the rule set itself rather than by having none: every host
                 # WRITE is `deny`, so a generic filesystem interrupt cannot
@@ -1769,6 +1778,136 @@ def _host_filesystem_permissions(
     )
 
 
+#: deepagents' bulk filesystem tools: the path argument is a search ROOT and the
+#: call may surface any descendant. Mirrored here (rather than imported) for the
+#: same reason the operation list is: a deepagents change should surface as a
+#: failing test, not as a silently narrower override.
+_BULK_READ_TOOL_PATH_ARGS: Final[Mapping[str, tuple[str, str | None]]] = (
+    MappingProxyType(
+        {"ls": ("path", None), "glob": ("path", "pattern"), "grep": ("path", None)}
+    )
+)
+
+
+def _with_host_bulk_read_scope(
+    interrupt_on: Mapping[str, object],
+    workspace_backend: object | None,
+    *,
+    granted_host_roots: tuple[object, ...] | None = None,
+    agent_scratch: object | None = None,
+) -> dict[str, object]:
+    """Let a bulk read that is FULLY inside granted ground proceed silently.
+
+    deepagents decides `ls`/`glob`/`grep` with `_make_bulk_when_predicate`,
+    which fires whenever the search subtree OVERLAPS an interrupt-mode rule. It
+    consults interrupt rules only — never the allow rules, never rule order — so
+    with rule 4 anchored at ``/`` every bulk call fired, including inside a
+    folder the user had just attached. That was the whole of the "an attached
+    folder still asks" report; no change to the rules could have fixed it.
+
+    deepagents documents that a host-supplied ``interrupt_on`` entry takes
+    precedence over its generated one for the same tool, which is the seam used
+    here. The override only ever SUPPRESSES, and only on containment:
+
+    * the path argument must be a string — a pathless bulk call can touch
+      anything, so it keeps asking;
+    * every descendant of that path must already be granted, so `ls("/Users")`
+      still asks when the grant is `/Users/ada/Projects`;
+    * `glob`'s pattern must not redirect the search out of the root, or
+      `glob(pattern="/secrets/**", path="/granted")` would go silent.
+
+    A host entry the CALLER supplied always wins over ours — that is a
+    deliberate policy decision by the tool-use policy, not something to override
+    from here.
+    """
+
+    merged = dict(interrupt_on)
+    if workspace_backend is None:
+        return merged
+    from agent_runtime.capabilities.desktop.host_filesystem import (  # noqa: PLC0415
+        HostBulkReadScope,
+    )
+
+    try:
+        from deepagents.middleware._fs_interrupt import (  # noqa: PLC0415
+            _FS_TOOL_PATH_ARGS,
+            _build_interrupt_on_from_permissions,
+        )
+        from langchain.agents.middleware import InterruptOnConfig  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - version skew guard
+        _LOGGER.warning("host_filesystem.bulk_interrupt_seam_unavailable")
+        return merged
+
+    permissions = _host_filesystem_permissions(
+        workspace_backend,
+        granted_host_roots=granted_host_roots,
+        agent_scratch=agent_scratch,
+    )
+    if not permissions:
+        return merged
+    generated = _build_interrupt_on_from_permissions(list(permissions))
+    scope = HostBulkReadScope.build(
+        _granted_host_roots(workspace_backend, resolved=granted_host_roots),
+        scratch=_agent_scratch_root(resolved=agent_scratch),
+    )
+
+    for tool_name, (path_arg, pattern_arg) in _BULK_READ_TOOL_PATH_ARGS.items():
+        if tool_name in merged or tool_name not in generated:
+            # Already gated by the tool-use policy, or deepagents does not gate
+            # it at all this run. Either way, not ours to relax.
+            continue
+        if tool_name not in _FS_TOOL_PATH_ARGS:  # pragma: no cover - skew guard
+            continue
+        base = generated[tool_name]
+        merged[tool_name] = InterruptOnConfig(
+            allowed_decisions=base.get("allowed_decisions"),
+            when=_bulk_when_outside_granted_ground(
+                base.get("when"), scope, path_arg, pattern_arg
+            ),
+        )
+    return merged
+
+
+def _bulk_when_outside_granted_ground(
+    generated_when: object,
+    scope: object,
+    path_arg: str,
+    pattern_arg: str | None,
+) -> Callable[[object], bool]:
+    """deepagents' own predicate, minus the calls proven to be confined."""
+
+    def when(request: object) -> bool:
+        if callable(generated_when) and not generated_when(request):
+            return False
+        tool_call = getattr(request, "tool_call", None)
+        args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+        if not isinstance(args, dict):
+            return True
+        raw_path = args.get(path_arg)
+        if not isinstance(raw_path, str):
+            return True
+        if pattern_arg is not None and not scope.pattern_stays_inside(
+            args.get(pattern_arg)
+        ):
+            return True
+        try:
+            from deepagents.middleware.filesystem import (  # noqa: PLC0415
+                validate_path,
+            )
+
+            normalized = validate_path(raw_path)
+        except (ImportError, ValueError):  # pragma: no cover - skew/bad input
+            return True
+        # `validate_path` maps `.`/``/`./` to `/.` — the whole accessible tree,
+        # which is never confined. Normalising here keeps `path="."` from
+        # reading as a concrete folder.
+        if normalized == "/.":
+            normalized = "/"
+        return not scope.confines(normalized)
+
+    return when
+
+
 def _agent_scratch_root(*, resolved: object | None = None) -> object | None:
     """The agent's own writable area, ``$COPILOT_HOME/.tmp`` (PRD-FS-12 D3).
 
@@ -2138,6 +2277,65 @@ def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:
         if isinstance(prefix, str) and prefix and backend is not None
     }
     return routes or None
+
+
+def _instructions_with_granted_folders(
+    *,
+    instructions: str,
+    roots: tuple[object, ...] | None,
+) -> str:
+    """Name the folders the user attached, by their REAL paths.
+
+    Permission without instruction is not a capability. The rules and the floor
+    both allow a write inside a writable grant, and the model still refused —
+    verbatim: "I can't write to /Users/…/seed.csv from here because I only have
+    read access to that filesystem path." It never called `write_file`. The
+    `/workspace/` guidance says that mount is read-only, and nothing told the
+    model that the attached folder ALSO has a host path it may write to, so it
+    reasonably concluded it could not.
+
+    Real paths on purpose. They are what the user recognises, what the model
+    must narrate back ("saved to ~/Projects/notes.md", not "/workspace/mnt_3"),
+    and what a shell tool would need later. The model already reads them — this
+    only stops it from being wrong about what it may do with them.
+
+    Empty or absent roots append NOTHING, so a run with no grants keeps a
+    byte-identical prompt and pays no token tax.
+    """
+
+    attached = tuple(roots or ())
+    if not attached:
+        return instructions
+
+    def _line(root: object) -> str:
+        path = str(getattr(root, "path", ""))
+        access = "read and write" if getattr(root, "writable", False) else "read only"
+        return f"- {path} ({access})"
+
+    lines = [_line(root) for root in attached if getattr(root, "path", "")]
+    if not lines:
+        return instructions
+
+    writable = any(getattr(root, "writable", False) for root in attached)
+    block = [
+        "The user has attached these folders on this computer. Use these exact "
+        "paths with your filesystem tools, and refer to them this way when you "
+        "report what you did:",
+        "",
+        *lines,
+        "",
+        "Everything outside them still asks the user first, and writing outside "
+        "them is refused.",
+    ]
+    if writable:
+        block.append(
+            "In a folder marked read and write you may create and modify files "
+            "directly — no staging, no separate approval. The user granted that "
+            "when they attached it. `write_file` CREATES a new file and refuses "
+            "a path that already exists; to change a file that is already there, "
+            "use `edit_file`."
+        )
+    return "\n\n".join((instructions, "\n".join(block)))
 
 
 def _instructions_with_workspace(

@@ -49,3 +49,7 @@ Never expose unauthorized tools, MCP servers, memories, or skills to the model. 
 ## Streaming model
 
 Events persist with monotonic `sequence_no` per run. Clients open `GET /v1/agent/runs/{run_id}/stream?after_sequence=N` and reconnect with the highest received `sequence_no` to resume without replay. Replay-only is `GET /v1/agent/runs/{run_id}/events`. Backend projects events into `activity_kind` / `display_title` / `summary` / `status` for the frontend; do not derive activity types from event-name prefixes.
+
+A tool whose raw frames are noise for the client is listed in `StreamMessageProcessor.internal_tool_names`, which stamps `visibility: "internal"` on them, and its useful content is published as its own typed event instead. `write_todos` is the worked example: `TodoListProjector` (`agent_runtime/capabilities/todo_list.py`) resolves each call into a `todo_list_updated` snapshot carrying `list_id` / `generation` / `todos`, which is what the cockpit's todo panel renders.
+
+Reading structured tool arguments requires `StreamMessageParser.raw_args`, not the display payload. `payload_mapping` → `json_value` collapses any list-of-mappings into concatenated text (a content-block fallback that also swallows ordinary arguments), so a `todos`/`rows`/`filters` argument arrives as one run-on string. `raw_args` is the argument-side sibling of the existing `raw_content` escape hatch.

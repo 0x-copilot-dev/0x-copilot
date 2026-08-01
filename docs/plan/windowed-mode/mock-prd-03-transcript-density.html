@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="sky" data-reduce-motion="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRD-03 mock — the answer wins</title>
+
+    <!--
+      ============================================================================
+      PROVENANCE — copied from source, not invented.
+      ============================================================================
+      Tokens       packages/design-system/src/styles.css
+      Card frame   activity/ActivityCardChrome.ts  activityCardFrameStyle
+                     bg --color-surface · 1px --color-border · r10 · fs13 · lh19.5
+                   activityCardHeaderStyle   padding 9px 11px · gap 9
+                   activityCardTileStyle     22x22 · r6 · --color-surface-elevated
+                                             --color-accent · 9px · w700 · font-sans
+                   activityCardMetaStyle     mono · 9px · lh13.5 · --color-text-subtle
+                   activityCardChevronStyle  --color-text-subtle · 11px · width 10
+                   activityCardDetailStyle   --color-surface-muted · top hairline
+                                             padding 10px 12px
+      Card content thread-canvas/ToolCallCard.tsx
+                     toolTitleStyle    font-sans · --font-size-sm · w500 · lh18 · ellipsis
+                     statusLabelStyle  font-sans · --font-size-2xs · w500 · --color-text-muted
+                     statusMarkStyle   14x14 · mono 11px w700 · success / danger
+                     summaryTextStyle  --font-size-mono-10-5 · lh15.75 · mt3
+      Accordion    messages/ReasoningGroup.tsx — the SHIPPED precedent this
+                   generalises: <details> + status-driven label flip + elapsed.
+                   ⚠️ Its CSS lives in apps/frontend/src/styles.css:2270 (web host
+                   only). PRD-03 FR-3.11 forbids repeating that: all group CSS
+                   ships INSIDE packages/chat-surface.
+      Transcript   Real content captured from the live app at 640px during PRD-02
+                   (4x `Calling ls` + the assistant's reply), so the "before"
+                   column is what the product actually renders today.
+
+      Chrome outside the simulated transcript is mock scaffolding, not product UI.
+    -->
+
+    <style>
+      :root {
+        --font-display:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          system-ui, sans-serif;
+        --font-sans:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+        --font-size-2xs: 0.7rem;
+        --font-size-xs: 0.78rem;
+        --font-size-sm: 0.8125rem;
+        --font-size-mono-9-5: 0.59375rem;
+        --font-size-mono-10: 0.625rem;
+        --font-size-mono-10-5: 0.65625rem;
+        --radius-sm: 0.375rem;
+        --radius-lg: 0.75rem;
+        --radius-full: 999px;
+        --duration-fast: 120ms;
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+        --accent-seed: #5fb2ec;
+      }
+      :root,
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --color-bg: #09090b;
+        --color-bg-elevated: #0d0d10;
+        --color-surface: #111114;
+        --color-surface-muted: #16161a;
+        --color-surface-elevated: #1d1d23;
+        --color-border: rgba(255, 255, 255, 0.06);
+        --color-border-strong: rgba(255, 255, 255, 0.1);
+        --color-text: #ececf1;
+        --color-text-strong: #d4d4db;
+        --color-text-muted: #98989f;
+        --color-text-subtle: #64646d;
+        --color-accent: var(--accent-seed);
+        --color-success: #57c785;
+        --color-danger: #f0764f;
+        --color-warning: #e8b45e;
+      }
+
+      /* ---- mock scaffolding (NOT product UI) ---- */
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        background: #050506;
+        color: var(--color-text);
+        font-family: var(--font-sans);
+        font-size: var(--font-size-sm);
+        -webkit-font-smoothing: antialiased;
+        padding: 32px 20px 80px;
+        display: flex;
+        justify-content: center;
+      }
+      .wrap {
+        width: 100%;
+        max-width: 1060px;
+        display: flex;
+        flex-direction: column;
+        gap: 36px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-family: var(--font-display);
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      h2 {
+        margin: 0 0 6px;
+        font-family: var(--font-display);
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .kick {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-9-5);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-subtle);
+        margin: 0 0 10px;
+      }
+      .lede,
+      .note {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
+        line-height: 1.62;
+        max-width: 80ch;
+      }
+      .note {
+        color: var(--color-text-subtle);
+      }
+      code {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-muted);
+      }
+      .sec {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .ctl {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .seg {
+        display: flex;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 7px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+      }
+      .seg button,
+      .btn {
+        appearance: none;
+        border: 0;
+        border-radius: 5px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        background: transparent;
+        color: var(--color-text-muted);
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--color-surface-elevated);
+        color: var(--color-text);
+      }
+      .btn {
+        border: 1px solid var(--color-border);
+        color: var(--color-text);
+        background: var(--color-surface);
+      }
+      .btn:hover {
+        background: var(--color-surface-muted);
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+      @media (max-width: 900px) {
+        .cols {
+          grid-template-columns: 1fr;
+        }
+      }
+      .pane {
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--radius-lg);
+        background: var(--color-bg);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        height: 320px;
+      }
+      .pane__bar {
+        flex: none;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 13px;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-elevated);
+        font-family: var(--font-display);
+        font-size: var(--font-size-sm);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      /* TcChat focusContainerStyle padding 12 */
+      .pane__body {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .bad {
+        color: var(--color-danger);
+      }
+      .good {
+        color: var(--color-accent);
+      }
+      .ratio {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-subtle);
+      }
+
+      /* ================= transcript pieces ================= */
+      .msg-user {
+        align-self: flex-end;
+        max-width: 88%;
+        background: var(--color-surface-muted);
+        border: 1px solid var(--color-border);
+        border-radius: 10px 10px 3px 10px;
+        padding: 8px 11px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .msg-agent {
+        align-self: stretch;
+        font-size: 13px;
+        line-height: 1.55;
+        color: var(--color-text);
+      }
+      .msg-agent code {
+        background: var(--color-surface);
+        border-radius: var(--radius-sm);
+        padding: 1px 4px;
+        color: var(--color-text-strong);
+      }
+
+      /* --- ONE card, geometry from ActivityCardChrome --- */
+      .card {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 10px;
+        font-size: 13px;
+        line-height: 19.5px;
+        overflow: hidden;
+      }
+      .card__head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 11px;
+        width: 100%;
+        cursor: pointer;
+        user-select: none;
+      }
+      .card__head:hover {
+        background: var(--color-surface-muted);
+      }
+      .tile {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-surface-elevated);
+        border-radius: 6px;
+        color: var(--color-accent);
+        font-family: var(--font-sans);
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 1;
+      }
+      .copy {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        min-width: 0;
+      }
+      .title {
+        font-family: var(--font-sans);
+        font-size: var(--font-size-sm);
+        font-weight: 500;
+        line-height: 18px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sub {
+        font-family: var(--font-sans);
+        font-size: var(--font-size-mono-10-5);
+        line-height: 15.75px;
+        margin-top: 3px;
+        color: var(--color-text-strong);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* PRD-06 D-6.1 — metadata is ONE right-anchored cluster */
+      .meta {
+        flex: 0 0 auto;
+        margin-left: auto;
+        display: inline-flex;
+        align-items: baseline;
+        gap: 7px;
+      }
+      .dur {
+        font-family: var(--font-mono);
+        font-size: 9px;
+        line-height: 13.5px;
+        color: var(--color-text-subtle);
+      }
+      .status {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .mark {
+        width: 14px;
+        display: inline-flex;
+        justify-content: center;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--color-success);
+      }
+      .mark[data-outcome="recovered"] {
+        color: var(--color-text-muted);
+      }
+      .mark[data-outcome="failed"] {
+        color: var(--color-danger);
+      }
+      .status__label {
+        font-family: var(--font-sans);
+        font-size: var(--font-size-2xs);
+        font-weight: 500;
+        line-height: 14px;
+        color: var(--color-text-muted);
+      }
+      .chev {
+        flex: 0 0 auto;
+        width: 10px;
+        font-size: 11px;
+        line-height: 1;
+        color: var(--color-text-subtle);
+        transition: transform var(--duration-fast) ease;
+      }
+      details[open] > .card__head .chev {
+        transform: rotate(180deg);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .chev {
+          transition: none;
+        }
+      }
+      .card__detail {
+        background: var(--color-surface-muted);
+        border-top: 1px solid var(--color-border);
+        padding: 10px 12px;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-subtle);
+      }
+
+      /* --- THE GROUP (new). Same frame + head, so it reads as one system. --- */
+      .group {
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .group > summary {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 11px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .group > summary::-webkit-details-marker {
+        display: none;
+      }
+      .group > summary:hover {
+        background: var(--color-surface-muted);
+      }
+      .group__label {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .group__tag {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: 9px;
+        color: var(--color-text-subtle);
+      }
+      .group__body {
+        border-top: 1px solid var(--color-border);
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        /* D-3.13 — at compact an expanded group scrolls instead of growing */
+        max-height: none;
+        overflow: visible;
+      }
+      .spin {
+        display: inline-block;
+        width: 11px;
+        height: 11px;
+        border: 1.5px solid var(--color-border-strong);
+        border-top-color: var(--color-accent);
+        border-radius: 50%;
+        animation: sp 0.7s linear infinite;
+      }
+      @keyframes sp {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spin {
+          animation: none;
+        }
+      }
+
+      /* inner steps: the same card, minus its own frame */
+      .group__body .card {
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+      }
+      .group__body .card__head {
+        padding: 6px 5px;
+      }
+
+      /* interleaved members: reasoning + interim narration.
+         Rendered as quiet inline lines, NOT cards — matching how
+         ReasoningGroup already presents thinking. */
+      .think,
+      .say {
+        display: flex;
+        gap: 8px;
+        padding: 4px 6px;
+        font-size: var(--font-size-xs);
+        line-height: 1.55;
+      }
+      .think {
+        color: var(--color-text-subtle);
+        font-style: italic;
+      }
+      .say {
+        color: var(--color-text-muted);
+      }
+      .think::before {
+        content: "◇";
+        flex: none;
+        font-style: normal;
+        color: var(--color-text-subtle);
+      }
+      .say::before {
+        content: "›";
+        flex: none;
+        color: var(--color-text-subtle);
+      }
+      .frag {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      /* D-3.6 / FR-3.9 — compact drops the summary line */
+      .pane[data-w="compact"] .sub {
+        display: none;
+      }
+      .pane[data-w="compact"] .status__label {
+        display: none;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <header>
+        <p class="kick">PRD-03 · windowed mode</p>
+        <h1>Transcript density: the answer wins</h1>
+        <p class="lede">
+          The agent did one small thing and reported it in one line. Above that
+          line sat six tool cards taking roughly 55% of the visible transcript.
+          Codex collapses the identical thing to <code>Worked for 26s ›</code>;
+          Claude renders a tool call as a one-line <code>Read depth.py ›</code>.
+          The individual card here is already compact — what is missing is any
+          layer <em>above</em> it.
+        </p>
+      </header>
+
+      <!-- ============ 1 · before / after ============ -->
+      <section class="sec">
+        <h2>1 · The same run, before and after</h2>
+        <div class="ctl">
+          <button class="btn" type="button" id="replay">
+            ▶ Replay the run
+          </button>
+          <span class="ratio" id="ratio"></span>
+        </div>
+
+        <div class="cols">
+          <div>
+            <p class="kick bad" style="margin-bottom: 6px">
+              Today — 640px, Focus
+            </p>
+            <div class="pane" data-w="compact">
+              <div class="pane__bar">Manual file creation</div>
+              <div class="pane__body" id="beforeBody"></div>
+            </div>
+          </div>
+          <div>
+            <p class="kick good" style="margin-bottom: 6px">PRD-03</p>
+            <div class="pane" data-w="compact">
+              <div class="pane__bar">Manual file creation</div>
+              <div class="pane__body" id="afterBody"></div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          <strong>D-3.2 is the whole trick, and it is what Codex does:</strong>
+          the group is <em>expanded while running</em> — you watch the work
+          happen — and folds to one line once the last step settles and the
+          answer arrives. Hit replay to see it. Nothing is hidden: the
+          disclosure is one click, and once you touch it your choice sticks
+          (D-3.3).
+        </p>
+      </section>
+
+      <!-- ============ 2 · interleaved text ============ -->
+      <section class="sec">
+        <h2>2 · What about reasoning and text between the steps?</h2>
+        <p class="lede">
+          Real runs interleave: think → call → &ldquo;let me check the
+          folder&rdquo; → call → answer. D-3.1 as written bounded a group at
+          <em>any</em> assistant text, which would shatter a chatty run into
+          group · text · group · text and leave you worse off than today.
+        </p>
+        <p class="lede">
+          The projector already tells them apart, so this does not need a
+          heuristic: <code>model_delta</code> and
+          <code>reasoning_summary_delta</code> project to
+          <code>kind: "stream_delta"</code>, while <code>final_response</code> —
+          and only that — projects to <code>kind: "assistant_message"</code>.
+          <strong
+            >The group is terminated by the final response, not by text.</strong
+          >
+          Interim reasoning and narration are part of the work and live inside
+          it, which is exactly what Codex&rsquo;s
+          <code>Worked for 26s ›</code> swallows.
+        </p>
+        <div class="cols">
+          <div>
+            <p class="kick bad" style="margin-bottom: 6px">
+              D-3.1 as written — text breaks the group
+            </p>
+            <div class="pane" style="height: 340px">
+              <div class="pane__body" id="fragBody"></div>
+            </div>
+          </div>
+          <div>
+            <p class="kick good" style="margin-bottom: 6px">
+              D-3.1 revised — only the final response ends it
+            </p>
+            <div class="pane" style="height: 340px">
+              <div class="pane__body" id="absorbBody"></div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          Expand the right-hand group to see the thinking and the interim line
+          sitting between the calls, in reading order. Approvals still break a
+          group — an approval needs <em>you</em>, so it must never be buried
+          inside a collapsed summary.
+        </p>
+      </section>
+
+      <!-- ============ 3 · the four summary states ============ -->
+      <section class="sec">
+        <h2>3 · What the summary line says</h2>
+        <div class="ctl">
+          <div class="seg" role="group" aria-label="Group state">
+            <button type="button" data-s="running" aria-pressed="true">
+              Running
+            </button>
+            <button type="button" data-s="settled" aria-pressed="false">
+              Settled
+            </button>
+            <button type="button" data-s="recovered" aria-pressed="false">
+              Recovered
+            </button>
+            <button type="button" data-s="failed" aria-pressed="false">
+              Failed
+            </button>
+          </div>
+          <span class="ratio" id="stateNote"></span>
+        </div>
+        <div style="max-width: 560px" id="stateHost"></div>
+        <p class="note">
+          Elapsed comes from the shared duration formatter PRD-07 consolidates —
+          <code>max(updatedAt) − min(startedAt)</code>, the same synthesis
+          <code>ReasoningGroup</code> already does for reasoning parts. A
+          <strong>failed</strong> run does not collapse (D-3.5): you need the
+          detail, so the group stays open on the failing step. A
+          <strong>recovered</strong> one collapses like any success and carries
+          a muted <code>1 retried</code> — PRD-04 governs what that step looks
+          like inside.
+        </p>
+      </section>
+
+      <!-- ============ 3 · the rules that are easy to get wrong ============ -->
+      <section class="sec">
+        <h2>4 · Three rules worth checking</h2>
+        <div class="cols">
+          <div>
+            <p class="kick" style="margin-bottom: 6px">
+              D-3.4 · one call gets no wrapper
+            </p>
+            <div class="pane" style="height: 150px">
+              <div class="pane__body" id="singleHost"></div>
+            </div>
+            <p class="note" style="margin-top: 8px">
+              Wrapping a single card in a group adds a frame to save nothing.
+              Threshold is <code>&gt;= 2</code> members.
+            </p>
+          </div>
+          <div>
+            <p class="kick" style="margin-bottom: 6px">
+              D-3.3 · your toggle sticks
+            </p>
+            <div class="pane" style="height: 150px">
+              <div class="pane__body" id="stickyHost"></div>
+            </div>
+            <p class="note" style="margin-top: 8px">
+              Open this one, then hit <em>Replay</em> above. Auto-collapse only
+              applies to groups you have not touched — a transcript that
+              re-closes something you deliberately opened is hostile.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <p
+        class="note"
+        style="border-top: 1px solid var(--color-border); padding-top: 16px"
+      >
+        <strong>⚠️ The one implementation hazard.</strong>
+        <code>ReasoningGroup</code> is the exact accordion this generalises —
+        but its CSS lives in <code>apps/frontend/src/styles.css:2270</code>, the
+        web host only, so it is unstyled on desktop. FR-3.11 requires every rule
+        for this group to ship inside <code>packages/chat-surface</code> and to
+        be verified in the packaged desktop bundle. Card geometry, tokens and
+        the transcript content are lifted from source — see the provenance block
+        in this file.
+      </p>
+    </div>
+
+    <script>
+      // ---------- data: the REAL run captured from the live app ----------
+      const STEPS = [
+        { t: "L", n: "ls", d: "241ms", s: "workspace root", o: "ok" },
+        { t: "L", n: "ls", d: "6ms", s: "no match", o: "ok" },
+        {
+          t: "R",
+          n: "read_file",
+          d: "2.1s",
+          s: "could not read",
+          o: "recovered",
+        },
+        { t: "L", n: "ls", d: "198ms", s: "attached folder", o: "ok" },
+        {
+          t: "W",
+          n: "write_file",
+          d: "292ms",
+          s: "manual-156ea66f.txt",
+          o: "ok",
+        },
+        { t: "W", n: "write_todos", d: "387ms", s: "1 item closed", o: "ok" },
+      ];
+      const USER =
+        "Create a file named manual-156ea66f.txt inside the attached folder containing the single word MANUAL.";
+      const ANSWER =
+        "Created <code>manual-156ea66f.txt</code> containing <code>MANUAL</code> in the artifact library.";
+
+      const MARK = { ok: "✓", recovered: "↻", failed: "!" };
+      const LABEL = { ok: "Done", recovered: "Retried", failed: "Failed" };
+
+      const card = (st, running = false) => `
+        <details class="card">
+          <summary class="card__head">
+            <span class="tile" aria-hidden="true">${st.t}</span>
+            <span class="copy">
+              <span class="title">${st.n}</span>
+              <span class="sub">${st.s}</span>
+            </span>
+            <span class="meta"><span class="dur">${running ? "" : st.d}</span></span>
+            <span class="status">
+              ${running ? '<span class="spin"></span>' : `<span class="mark" data-outcome="${st.o}">${MARK[st.o]}</span><span class="status__label">${LABEL[st.o]}</span>`}
+            </span>
+            <span class="chev" aria-hidden="true">▾</span>
+          </summary>
+          <div class="card__detail">args · { path: "." }</div>
+        </details>`;
+
+      const userMsg = `<div class="msg-user">${USER}</div>`;
+      const answerMsg = `<div class="msg-agent">${ANSWER}</div>`;
+
+      // ---------- 1. before / after ----------
+      const beforeBody = document.getElementById("beforeBody");
+      const afterBody = document.getElementById("afterBody");
+      const ratio = document.getElementById("ratio");
+
+      const groupLabel = (state, done, total) => {
+        if (state === "running") return `Working · ${done} of ${total}`;
+        if (state === "failed") return `Failed after 4.1s · ${done} steps`;
+        const retried = STEPS.some((s) => s.o === "recovered");
+        return `Worked for 3.2s · ${total} steps${retried ? "" : ""}`;
+      };
+
+      function renderGroup({ state, done, open, sticky }) {
+        const total = STEPS.length;
+        const shown = state === "running" ? STEPS.slice(0, done) : STEPS;
+        const retried = STEPS.filter((s) => s.o === "recovered").length;
+        const tag =
+          state === "settled" && retried
+            ? `<span class="group__tag">${retried} retried</span>`
+            : "";
+        return `
+          <details class="group" ${open ? "open" : ""} ${sticky ? 'data-sticky="1"' : ""}>
+            <summary>
+              <span class="tile" aria-hidden="true">${state === "running" ? '<span class="spin"></span>' : "⚙"}</span>
+              <span class="group__label">${groupLabel(state, done, total)}</span>
+              ${tag}
+              <span class="chev" aria-hidden="true">▾</span>
+            </summary>
+            <div class="group__body">
+              ${shown.map((s, i) => card(s, state === "running" && i === shown.length - 1)).join("")}
+            </div>
+          </details>`;
+      }
+
+      const contentH = (el) =>
+        [...el.children].reduce(
+          (h, c) => h + c.getBoundingClientRect().height,
+          0,
+        ) +
+        Math.max(0, el.children.length - 1) * 12;
+      function measure() {
+        const b = Math.round(contentH(beforeBody));
+        const a = Math.round(contentH(afterBody));
+        const cap = beforeBody.clientHeight;
+        ratio.textContent = `content height — today ${b}px · PRD-03 ${a}px  (pane shows ${cap}px)`;
+      }
+
+      function paintSettled() {
+        beforeBody.innerHTML =
+          userMsg + STEPS.map((s) => card(s)).join("") + answerMsg;
+        afterBody.innerHTML =
+          userMsg +
+          renderGroup({ state: "settled", done: STEPS.length, open: false }) +
+          answerMsg;
+        measure();
+      }
+
+      let timer = null;
+      function replay() {
+        if (timer) clearInterval(timer);
+        let n = 1;
+        const step = () => {
+          beforeBody.innerHTML =
+            userMsg +
+            STEPS.slice(0, n)
+              .map((s, i) => card(s, i === n - 1))
+              .join("");
+          afterBody.innerHTML =
+            userMsg + renderGroup({ state: "running", done: n, open: true });
+          beforeBody.scrollTop = beforeBody.scrollHeight;
+          afterBody.scrollTop = afterBody.scrollHeight;
+          measure();
+          n += 1;
+          if (n > STEPS.length) {
+            clearInterval(timer);
+            timer = null;
+            setTimeout(paintSettled, 700);
+          }
+        };
+        step();
+        timer = setInterval(step, 620);
+      }
+      document.getElementById("replay").addEventListener("click", replay);
+      paintSettled();
+
+      // ---------- 2. the four states ----------
+      const stateHost = document.getElementById("stateHost");
+      const stateNote = document.getElementById("stateNote");
+      const NOTES = {
+        running: "any member running → expanded, live",
+        settled: "all settled + answer arrived → collapses to one line",
+        recovered: "collapses like a success; the red lives inside (PRD-04)",
+        failed: "run terminated failed → stays OPEN on the failing step",
+      };
+      function paintState(s) {
+        const open = s === "running" || s === "failed";
+        stateHost.innerHTML = renderGroup({
+          state: s === "recovered" ? "settled" : s,
+          done: s === "running" ? 3 : STEPS.length,
+          open,
+        });
+        stateNote.textContent = NOTES[s];
+      }
+      document.querySelectorAll("[data-s]").forEach((b) =>
+        b.addEventListener("click", () => {
+          document
+            .querySelectorAll("[data-s]")
+            .forEach((x) => x.setAttribute("aria-pressed", "false"));
+          b.setAttribute("aria-pressed", "true");
+          paintState(b.dataset.s);
+        }),
+      );
+      paintState("running");
+
+      // ---------- 2. interleaved reasoning / narration ----------
+      // A realistic run: think · call · call · say · call · ANSWER.
+      // `think` / `say` are both `kind: "stream_delta"` in the projector;
+      // only the ANSWER is `kind: "assistant_message"` (from final_response).
+      const MIXED = [
+        {
+          k: "think",
+          x: "The folder is attached but I need its real path first.",
+        },
+        { k: "tool", s: STEPS[0] },
+        { k: "tool", s: STEPS[1] },
+        { k: "say", x: "Found it — writing the file now." },
+        { k: "tool", s: STEPS[4] },
+      ];
+      const line = (m) =>
+        m.k === "think"
+          ? `<div class="think">${m.x}</div>`
+          : m.k === "say"
+            ? `<div class="say">${m.x}</div>`
+            : card(m.s);
+
+      // (a) NAIVE — any text ends the group. Chatty run → group·text·group·text.
+      const fragGroup = (members, label) => `
+        <details class="group">
+          <summary>
+            <span class="tile" aria-hidden="true">⚙</span>
+            <span class="group__label">${label}</span>
+            <span class="chev" aria-hidden="true">▾</span>
+          </summary>
+          <div class="group__body">${members.map((m) => card(m.s)).join("")}</div>
+        </details>`;
+
+      document.getElementById("fragBody").innerHTML =
+        userMsg +
+        `<div class="frag">` +
+        `<div class="think">${MIXED[0].x}</div>` +
+        fragGroup([MIXED[1], MIXED[2]], "Worked for 0.2s · 2 steps") +
+        `<div class="say">${MIXED[3].x}</div>` +
+        // a lone call after the text gets no wrapper at all (D-3.4)
+        card(MIXED[4].s) +
+        `</div>` +
+        answerMsg;
+
+      // (b) REVISED — stream_delta is a MEMBER; only final_response ends it.
+      document.getElementById("absorbBody").innerHTML =
+        userMsg +
+        `<details class="group">
+           <summary>
+             <span class="tile" aria-hidden="true">⚙</span>
+             <span class="group__label">Worked for 1.4s · 3 steps · 2 notes</span>
+             <span class="chev" aria-hidden="true">▾</span>
+           </summary>
+           <div class="group__body">${MIXED.map(line).join("")}</div>
+         </details>` +
+        answerMsg;
+
+      // ---------- 4. the rules ----------
+      document.getElementById("singleHost").innerHTML = card(STEPS[4]);
+      document.getElementById("stickyHost").innerHTML = renderGroup({
+        state: "settled",
+        done: 2,
+        open: false,
+        sticky: true,
+      });
+    </script>
+  </body>
+</html>

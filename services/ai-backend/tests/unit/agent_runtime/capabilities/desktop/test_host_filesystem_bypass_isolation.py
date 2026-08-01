@@ -68,19 +68,19 @@ def test_the_permission_module_does_not_import_the_bypass_vocabulary() -> None:
         )
 
 
-def test_a_granted_writable_root_still_denies_a_direct_host_write() -> None:
-    """The rule bypass is most likely to be asked to relax. It does not.
+def test_a_write_needs_a_writable_grant_and_bypass_cannot_substitute() -> None:
+    """What bypass may and may not do to a host write.
 
-    A fully granted, writable root, judged by deepagents' OWN matcher: a direct
-    ``write_file`` outside the agent's ``.copilot`` scratch directory is
-    ``deny``, not ``interrupt`` and not ``allow``. An approval on a filesystem
-    interrupt must never be able to authorize a host mutation, so the mutation
-    verdict has to be a refusal rather than a question.
+    A writable grant makes its own folder writable — the user answered that
+    when they attached it. Bypass does NOT stand in for a grant: with zero
+    grants the same path is `deny`, not `interrupt`, so no approval on a
+    filesystem card can conjure write access to a folder nobody attached.
     """
 
     roots = (GrantedRoot(path=GRANTED, writable=True),)
     assert (
-        _check_fs_permission(_rules(*roots), "write", f"{GRANTED}/report.csv") == "deny"
+        _check_fs_permission(_rules(*roots), "write", f"{GRANTED}/report.csv")
+        == "allow"
     )
     # …and with zero grants, which is the first-run case.
     assert _check_fs_permission(_rules(), "write", f"{GRANTED}/report.csv") == "deny"
