@@ -3597,8 +3597,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         return (
           <CanvasLifecyclePanel
             lifecycle={displayedCanvasLifecycle.lifecycle}
-            failure={displayedCanvasLifecycle.failure}
-            onRetry={session.retry}
           />
         );
       }

@@ -15,12 +15,18 @@
         {
           "sequence_no": 4,
           "event_type": "artifact.revised",
-          "payload": { "artifact_id": "art_brief", "revision": 2 }
+          "payload": {
+            "artifact_id": "art_brief",
+            "revision": 2
+          }
         },
         {
           "sequence_no": 2,
           "event_type": "artifact.presentation_decided",
-          "payload": { "artifact_id": "art_brief", "decision": "canvas" }
+          "payload": {
+            "artifact_id": "art_brief",
+            "decision": "canvas"
+          }
         },
         {
           "sequence_no": 1,
@@ -52,13 +58,21 @@
         {
           "sequence_no": 5,
           "event_type": "view.derived",
-          "payload": { "surface_id": "surface://deals" }
+          "payload": {
+            "surface_id": "surface://deals"
+          }
         },
-        { "sequence_no": 6, "event_type": "final_response", "payload": {} },
+        {
+          "sequence_no": 6,
+          "event_type": "final_response",
+          "payload": {}
+        },
         {
           "sequence_no": 7,
           "event_type": "run_completed",
-          "payload": { "status": "completed" }
+          "payload": {
+            "status": "completed"
+          }
         }
       ]
     },
@@ -75,7 +89,10 @@
         {
           "sequence_no": 4,
           "event_type": "effect.decision_recorded",
-          "payload": { "stage_id": "stage_delete", "decision": "reject" }
+          "payload": {
+            "stage_id": "stage_delete",
+            "decision": "reject"
+          }
         },
         {
           "sequence_no": 1,
@@ -107,13 +124,22 @@
         {
           "sequence_no": 4,
           "event_type": "effect.decision_recorded",
-          "payload": { "stage_id": "stage_delete", "decision": "reject" }
+          "payload": {
+            "stage_id": "stage_delete",
+            "decision": "reject"
+          }
         },
-        { "sequence_no": 5, "event_type": "final_response", "payload": {} },
+        {
+          "sequence_no": 5,
+          "event_type": "final_response",
+          "payload": {}
+        },
         {
           "sequence_no": 6,
           "event_type": "run_completed",
-          "payload": { "status": "completed" }
+          "payload": {
+            "status": "completed"
+          }
         }
       ]
     },
@@ -124,22 +150,153 @@
         {
           "sequence_no": 2,
           "event_type": "artifact.presentation_decided",
-          "payload": { "artifact_id": "art_z", "decision": "canvas" }
+          "payload": {
+            "artifact_id": "art_z",
+            "decision": "canvas"
+          }
         },
         {
           "sequence_no": 1,
           "event_type": "artifact.created",
-          "payload": { "artifact_id": "art_z", "kind": "code", "revision": 1 }
+          "payload": {
+            "artifact_id": "art_z",
+            "kind": "code",
+            "revision": 1
+          }
         },
         {
           "sequence_no": 1,
           "event_type": "artifact.created",
-          "payload": { "artifact_id": "art_a", "kind": "code", "revision": 1 }
+          "payload": {
+            "artifact_id": "art_a",
+            "kind": "code",
+            "revision": 1
+          }
         },
         {
           "sequence_no": 2,
           "event_type": "artifact.presentation_decided",
-          "payload": { "artifact_id": "art_a", "decision": "canvas" }
+          "payload": {
+            "artifact_id": "art_a",
+            "decision": "canvas"
+          }
+        }
+      ]
+    },
+    {
+      "id": "recovered-step-failure-still-answers-in-chat",
+      "transitions": ["tool_failed", "recovered", "narrated", "terminal"],
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "tool_call_started",
+          "payload": {
+            "tool_name": "ls"
+          }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "tool_result",
+          "payload": {
+            "status": "failed",
+            "safe_message": "Retry later"
+          }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "tool_result",
+          "payload": {
+            "status": "completed"
+          }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "final_response",
+          "payload": {}
+        },
+        {
+          "sequence_no": 5,
+          "event_type": "run_completed",
+          "payload": {
+            "status": "completed"
+          }
+        }
+      ]
+    },
+    {
+      "id": "step-failure-with-a-canvas-subject-stays-presenting",
+      "transitions": ["tool_failed", "subject_created", "terminal_failed"],
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "tool_result",
+          "payload": {
+            "status": "failed",
+            "error_message": "boom"
+          }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "surface.created",
+          "payload": {
+            "surface_id": "surface://rows",
+            "kind": "table",
+            "title": "Rows"
+          }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "run_failed",
+          "payload": {
+            "error_code": "RUN_WORKER_LOST"
+          }
+        }
+      ]
+    },
+    {
+      "id": "run-failed-with-no-subject-and-no-narrative",
+      "transitions": ["tool_started", "run_failed"],
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "tool_call_started",
+          "payload": {
+            "tool_name": "reconcile"
+          }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "run_failed",
+          "payload": {
+            "error_code": "RUN_WORKER_LOST",
+            "safe_message": "Worker lost"
+          }
+        }
+      ]
+    },
+    {
+      "id": "declined-capability-is-not-a-failure",
+      "transitions": ["policy_declined", "narrated", "terminal"],
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "tool_result",
+          "payload": {
+            "status": "unavailable",
+            "error_code": "workspace_unavailable"
+          }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "final_response",
+          "payload": {}
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "run_completed",
+          "payload": {
+            "status": "completed"
+          }
         }
       ]
     }

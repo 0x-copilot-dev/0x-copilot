@@ -90,14 +90,17 @@ def test_stage_and_gate_park_then_terminal_receipt_never_steals_active_subject()
     assert completed.terminal_receipt.kind is CanvasSubjectKind.RECEIPT
 
 
-def test_chat_only_complete_empty_and_failed_are_explicit_terminal_states() -> None:
+def test_chat_only_and_complete_empty_are_explicit_terminal_states() -> None:
     chat_only = CanvasLifecycleProjection.fold(
         [_event(1, "final_response"), _event(2, "run_completed", status="completed")]
     )
     empty = CanvasLifecycleProjection.fold(
         [_event(1, "run_completed", status="completed")]
     )
-    failed = CanvasLifecycleProjection.fold(
+    # A run that died is still only "nothing to open" AS FAR AS THE CANVAS IS
+    # CONCERNED. The verdict on the run belongs to the chat stream; the failure
+    # text and terminal status ride along for it.
+    dead = CanvasLifecycleProjection.fold(
         [
             _event(1, "operation.failed", safe_message="Safe failure"),
             _event(2, "run_failed"),
@@ -105,10 +108,27 @@ def test_chat_only_complete_empty_and_failed_are_explicit_terminal_states() -> N
     )
     assert chat_only.lifecycle is CanvasLifecycleState.CHAT_ONLY
     assert empty.lifecycle is CanvasLifecycleState.COMPLETE_EMPTY
-    assert (failed.lifecycle, failed.failure) == (
-        CanvasLifecycleState.FAILED,
-        "Safe failure",
+    assert dead.lifecycle is CanvasLifecycleState.COMPLETE_EMPTY
+    assert (dead.failure, dead.terminal_status) == ("Safe failure", "failed")
+
+
+def test_a_recovered_step_failure_still_reads_as_answered_in_chat() -> None:
+    """The original defect, pinned in the twin.
+
+    A failed step plus a narrative used to yield FAILED, which painted the
+    canvas as an alarm beside a chat pane holding a correct answer.
+    """
+    projection = CanvasLifecycleProjection.fold(
+        [
+            _event(1, "tool_call_started"),
+            _event(2, "tool_result", status="failed", error_message="Tool unavailable"),
+            _event(3, "final_response"),
+            _event(4, "run_completed", status="completed"),
+        ]
     )
+    assert projection.lifecycle is CanvasLifecycleState.CHAT_ONLY
+    assert projection.failure == "Tool unavailable"
+    assert projection.tabs == ()
 
 
 def test_retry_error_is_replay_safe_and_does_not_make_a_canvas_subject() -> None:
@@ -119,7 +139,7 @@ def test_retry_error_is_replay_safe_and_does_not_make_a_canvas_subject() -> None
             _event(3, "run_completed", status="failed"),
         ]
     )
-    assert projection.lifecycle is CanvasLifecycleState.FAILED
+    assert projection.lifecycle is CanvasLifecycleState.COMPLETE_EMPTY
     assert projection.failure == "Tool unavailable"
     assert projection.tabs == ()
 
