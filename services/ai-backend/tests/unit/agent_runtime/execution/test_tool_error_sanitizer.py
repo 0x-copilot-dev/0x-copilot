@@ -83,6 +83,85 @@ class TestErrorSanitizerStripsInternals:
         assert "line 10" not in msg
 
 
+class TestSanitizeTextForConnectorErrors:
+    """`sanitize_text` scrubs connector-provided error text for the model.
+
+    The narrowing this pins: an internal id (labeled, or canonical UUID) is
+    still removed, but a resource id the *server* returned survives — a
+    connector's error is usually *about* that resource, and redacting it blinds
+    the model to the object it must fix its call around.
+    """
+
+    def test_a_postgres_column_error_reaches_the_model(self) -> None:
+        # The actionable half: the model can only fix "column does not exist"
+        # by reading which column, so the text must survive verbatim.
+        msg = ErrorSanitizer.sanitize_text('ERROR: column "assignee_id" does not exist')
+        assert 'column "assignee_id" does not exist' in msg
+
+    def test_a_connection_string_in_the_same_payload_is_redacted(self) -> None:
+        # The dangerous half, in the same string as the actionable half: the
+        # column error survives while the DSN and its password do not.
+        msg = ErrorSanitizer.sanitize_text(
+            'ERROR: column "assignee_id" does not exist\n'
+            "dsn=postgresql://svc:s3cr3t_pw@db.internal.example:5432/prod"
+        )
+        assert 'column "assignee_id" does not exist' in msg
+        assert "postgresql://" not in msg
+        assert "s3cr3t_pw" not in msg
+
+    def test_a_server_resource_id_survives(self) -> None:
+        # A Notion-style page id (undashed 32-hex) is the server's own resource
+        # id; the connector's "not found" is about it, so it must reach the model.
+        page_id = "2fd1e2a3b4c5d6e7f8091a2b3c4d5e6f"
+        msg = ErrorSanitizer.sanitize_text(f"Could not find page {page_id}")
+        assert page_id in msg
+
+    def test_an_org_uuid_is_still_redacted(self) -> None:
+        # A canonical dashed UUID is how our internal org/run/conversation ids
+        # appear; it stays redacted even though bare resource ids now survive.
+        org_uuid = "550e8400-e29b-41d4-a716-446655440000"
+        msg = ErrorSanitizer.sanitize_text(f"not permitted for org {org_uuid}")
+        assert org_uuid not in msg
+        assert ErrorSanitizer._REDACTED in msg
+
+    def test_a_labeled_internal_hex_id_is_still_redacted(self) -> None:
+        # The narrowing keeps redacting a long hex run when a label marks it as
+        # one of ours, so an internal id echoed back in connector text stays out.
+        run_id = "8475dbace42f4e34a2d2fb1555a542e0"
+        msg = ErrorSanitizer.sanitize_text(f"failed for run_id={run_id}")
+        assert run_id not in msg
+        assert "run_id" in msg  # the label is kept as context
+        assert ErrorSanitizer._REDACTED in msg
+
+    def test_all_four_survive_or_redact_in_one_payload(self) -> None:
+        page_id = "2fd1e2a3b4c5d6e7f8091a2b3c4d5e6f"
+        org_uuid = "550e8400-e29b-41d4-a716-446655440000"
+        msg = ErrorSanitizer.sanitize_text(
+            'relation query failed: column "assignee_id" does not exist\n'
+            "dsn=postgresql://svc:s3cr3t_pw@db.internal.example:5432/prod\n"
+            f"while resolving page {page_id} for org {org_uuid}"
+        )
+        assert 'column "assignee_id" does not exist' in msg  # (a) actionable
+        assert "postgresql://" not in msg and "s3cr3t_pw" not in msg  # (b) secret
+        assert page_id in msg  # (c) resource id
+        assert org_uuid not in msg  # (d) internal id
+
+    def test_multiline_detail_is_preserved_not_reduced_to_one_line(self) -> None:
+        # Unlike `sanitize`, connector text keeps every surviving line — a
+        # Postgres error's DETAIL/HINT are as actionable as its first line.
+        msg = ErrorSanitizer.sanitize_text(
+            'ERROR: column "x" does not exist\n'
+            'HINT: Perhaps you meant to reference the column "team_id".'
+        )
+        assert "HINT:" in msg
+        assert 'reference the column "team_id"' in msg
+
+    def test_the_field_cap_bounds_a_runaway_connector_message(self) -> None:
+        msg = ErrorSanitizer.sanitize_text("z" * 5000, max_length=2048)
+        assert len(msg) <= 2048
+        assert msg.endswith("…[truncated]")
+
+
 class TestErrorHintExtractor:
     def test_pydantic_validation_error_yields_field_hints(self) -> None:
         with pytest.raises(ValidationError) as caught:

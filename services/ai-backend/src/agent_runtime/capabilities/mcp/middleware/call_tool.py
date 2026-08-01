@@ -298,6 +298,26 @@ class CallMcpTool:
             output["status"] = "blocked"
         else:
             output["status"] = "failed"
+            connector_error = (
+                mcp_adapter.protocol_error if mcp_adapter is not None else None
+            )
+            if connector_error is not None:
+                # The server answered this read with ``isError``. Surface its own
+                # sanitized message on a typed failure result so the model reads
+                # what was actually rejected — an invalid argument, a missing
+                # field — and self-corrects rather than retrying the same call.
+                # Only the scrubbed text is returned; the raw envelope is never
+                # echoed back, so an untrusted payload cannot smuggle a secret
+                # through ``output``.
+                return McpToolCallResult.fail(
+                    McpLoadErrorCode.MCP_PROTOCOL_ERROR,
+                    connector_error,
+                    retryable=False,
+                    server_name=parsed_input.server_name,
+                    tool_name=parsed_input.tool_name,
+                    correlation_id=self.runtime_context.trace_id,
+                    output=output,
+                ).model_dump(mode="json", exclude_none=True)
         return McpToolCallResult.ok(
             server_name=parsed_input.server_name,
             tool_name=parsed_input.tool_name,
