@@ -493,6 +493,12 @@ class RuntimeWorker:
             mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
+            # P1b: an approved MCP write executes on resume through the same
+            # durable gateway the run path composed — the approval handler needs
+            # the same stores + queue to rebuild it.
+            queue=self.queue,
+            artifact_blob_store=artifact_blob_store,
+            artifact_reference_store=artifact_reference_store,
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
             run_control_decision_store=self.run_control_decision_store,

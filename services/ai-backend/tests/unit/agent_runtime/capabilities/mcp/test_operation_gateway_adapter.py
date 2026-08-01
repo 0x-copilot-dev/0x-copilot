@@ -433,14 +433,25 @@ def test_unbound_gateway_holds_before_client_construction() -> None:
     }
 
 
-def test_catalog_write_stages_exact_arguments_without_creating_an_mcp_client() -> None:
+def test_catalog_write_is_gated_and_refused_without_an_approval_channel() -> None:
+    """P1b: MCP writes no longer stage; the PDP GATEs them.
+
+    The retired ``call_mcp_tool`` MCP write-staging path (the ledger-hang source)
+    is replaced by a PDP GATE -> park-on-interrupt. With no ``ToolAccessGate``
+    wired (``gate=None``), a GATE cannot be satisfied and fails closed to a typed
+    refusal — never a dispatch, never a stage. The park -> approve -> execute
+    loop with a real gate is proved end-to-end in
+    ``tests/unit/runtime_worker/test_mcp_write_gate_e2e.py`` (T2).
+    """
+
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
-    _context, events, ledger, _result_store, operation_token, service_token = (
+    _context, _events, ledger, _result_store, operation_token, service_token = (
         fixture.bind_enforced()
     )
     arguments = {"issue_id": "L-1", "title": "Approved title", "labels": ["p1"]}
     annotation_token = McpToolAnnotationsRegistry.bind_for_run({})
+    # A contradictory provider ``readOnlyHint`` may never loosen a catalog write.
     McpToolAnnotationsRegistry.register(
         _SERVER,
         "update_issue",
@@ -453,29 +464,22 @@ def test_catalog_write_stages_exact_arguments_without_creating_an_mcp_client() -
         McpOperationGatewayContext.unbind(service_token)
         OperationContext.unbind(operation_token)
 
+    # No external change: no client, no stage, and a typed refusal (not "staged").
     assert provider.created_clients == []
-    assert result["output"]["status"] == "staged"
-    # A contradictory provider `readOnlyHint` may never loosen catalog write.
-    assert provider.created_clients == []
-    assert result["output"]["summary"] == (
-        "Proposed update_issue on linear; no external change has been made."
-    )
-    staged = next(iter(ledger.events_by_stage.values()))[0].payload
-    assert staged["capability"] == _SERVER
-    assert staged["op"] == "update_issue"
-    assert staged["proposal_content_ref"].startswith("operation://op_")
-    assert staged["proposal_digest"]
-    assert arguments["title"] not in str(staged)
-    assert [event_type for event_type, _payload in events.rows] == [
-        LedgerEventType.OPERATION_REQUESTED.value,
-        LedgerEventType.OPERATION_CLASSIFIED.value,
-        LedgerEventType.OPERATION_COMPLETED.value,
-    ]
+    assert ledger.events_by_stage == {}
+    assert "output" not in result
+    assert result["error"]["code"] == "permission_denied"
 
 
-def test_unknown_and_destructive_mcp_operations_stage_fail_closed_without_dispatch() -> (
+def test_unknown_and_destructive_mcp_operations_gate_fail_closed_without_dispatch() -> (
     None
 ):
+    """P1b: an unknown op (fail-closed WRITE) and a destructive op both GATE.
+
+    Neither dispatches nor stages; with no approval channel they refuse. This is
+    the fail-closed replacement of the retired unknown/destructive staging path.
+    """
+
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
     _context, _events, ledger, _result_store, operation_token, service_token = (
@@ -489,16 +493,16 @@ def test_unknown_and_destructive_mcp_operations_stage_fail_closed_without_dispat
         OperationContext.unbind(operation_token)
 
     assert provider.created_clients == []
-    assert unknown["output"]["status"] == "staged"
-    assert destructive["output"]["status"] == "staged"
-    staged = [events[0].payload for events in ledger.events_by_stage.values()]
-    assert {row["effect_class"] for row in staged} == {
-        "unknown",
-        "external_destructive",
-    }
+    assert ledger.events_by_stage == {}
+    assert "output" not in unknown
+    assert "output" not in destructive
+    assert unknown["error"]["code"] == "permission_denied"
+    assert destructive["error"]["code"] == "permission_denied"
 
 
 def test_gateway_mode_off_cannot_restore_direct_write_or_unknown_dispatch() -> None:
+    """Write + unknown are GATEd and refused (no dispatch, no stage) in any mode."""
+
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
     _context, _events, ledger, _result_store, operation_token, service_token = (
@@ -512,9 +516,9 @@ def test_gateway_mode_off_cannot_restore_direct_write_or_unknown_dispatch() -> N
         OperationContext.unbind(operation_token)
 
     assert provider.created_clients == []
-    assert write["output"]["status"] == "staged"
-    assert unknown["output"]["status"] == "staged"
-    assert len(ledger.events_by_stage) == 2
+    assert ledger.events_by_stage == {}
+    assert write["error"]["code"] == "permission_denied"
+    assert unknown["error"]["code"] == "permission_denied"
 
 
 def test_missing_auth_parks_the_classified_read_before_client_creation() -> None:

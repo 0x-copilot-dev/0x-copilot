@@ -215,10 +215,7 @@ class OperationGateway:
                 return disposition
 
             with OperationContext.operation_scope(request.operation_id):
-                if classification.effect_class in {
-                    EffectClass.NONE,
-                    EffectClass.INTERNAL_REVERSIBLE,
-                }:
+                if self._executes_now(adapter, classification):
                     raw_result = await adapter.execute_read(request)
                     proposed = None
                 else:
@@ -350,6 +347,32 @@ class OperationGateway:
                 # on instead of parsing that sentence.
                 failure_code=failure_code,
             )
+
+    @staticmethod
+    def _executes_now(
+        adapter: OperationAdapter,
+        classification: OperationClassification,
+    ) -> bool:
+        """Route between execute-now and stage.
+
+        A no-effect / internal-reversible operation always executes (the
+        historical rule, unchanged — this is what keeps browser ``REQUIRE``
+        staging byte-identical). An adapter may additionally declare
+        ``authorized_to_execute`` when its caller has already resolved the
+        approval decision upstream (the MCP dispatch boundary consults the PDP
+        and, for a write, parks + resumes an interrupt *before* the gateway is
+        reached), in which case the gateway executes rather than stages. The
+        directive is read by ``getattr`` so the fork stays capability-agnostic
+        and default-preserving: an adapter that does not expose it (browser)
+        keeps the ``effect_class`` staging rule.
+        """
+
+        if classification.effect_class in {
+            EffectClass.NONE,
+            EffectClass.INTERNAL_REVERSIBLE,
+        }:
+            return True
+        return bool(getattr(adapter, "authorized_to_execute", False))
 
     @staticmethod
     def _validate_request(request: OperationRequest) -> None:

@@ -29,11 +29,20 @@ from agent_runtime.capabilities.mcp.material_resolver import (
     McpOperationArgumentMaterialResolver,
 )
 from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
+from agent_runtime.capabilities.mcp.gateway_context import McpOperationGatewayServices
+from agent_runtime.capabilities.mcp.operation_adapter import McpOperationGateResolver
 from agent_runtime.capabilities.mcp.target_ref import McpTargetRefCodec
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.contracts import OperationRequest
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.coordinator import EffectCoordinator
 from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.executor_registry import EffectExecutorRegistry
+from agent_runtime.effects.staging import EffectStager
+from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
+from agent_runtime.surfaces_v2.ledger_models import EffectActor
 from agent_runtime.capabilities.workspace.ports import WorkspaceOverlayStorePort
 from agent_runtime.api.effect_ledger import RuntimeEffectLedger
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
@@ -428,7 +437,104 @@ class _EffectImmutableReferences:
         return _stream()
 
 
+class McpOperationGatewayComposer:
+    """Compose the model-facing MCP operation gateway for one run.
+
+    Extracted so BOTH the initial run handler and the approval-resume handler
+    build the *same* gateway. A write approved through the P1b GATE parks on the
+    run-handler's gateway and must re-enter an identical gateway on resume to
+    execute in the same run — otherwise the resumed ``call_mcp_tool`` finds no
+    canonical operation context and holds instead of dispatching (the effect
+    would never complete, re-opening the very orphan the interrupt closed).
+
+    The E2 rollout cohort admission stays with the run handler: it is the
+    one-time gate at run admission, and a run that already parked through the
+    gateway was necessarily admitted. This composer therefore takes the resolved
+    ``surfaces_v2`` flag plus the durable stores directly and re-derives the same
+    services deterministically.
+    """
+
+    @classmethod
+    def compose(
+        cls,
+        *,
+        surfaces_v2: bool,
+        queue: object | None,
+        blobs: object | None,
+        references: object | None,
+        event_producer: RuntimeEventProducer,
+        run: RunRecord,
+    ) -> McpOperationGatewayServices | None:
+        """Return the trusted gateway services, or ``None`` when unavailable.
+
+        ``None`` is fail-closed: a missing store, queue, or the flag being off
+        yields no gateway, and the model-facing tool then holds work rather than
+        degrading to a non-durable path.
+        """
+
+        if not surfaces_v2 or queue is None or blobs is None or references is None:
+            return None
+        enqueue = getattr(queue, "enqueue_effect_commit", None)
+        put_stream = getattr(blobs, "put_stream", None)
+        acquire = getattr(references, "acquire", None)
+        list_edges = getattr(references, "list_edges", None)
+        if not all(
+            callable(value) for value in (enqueue, put_stream, acquire, list_edges)
+        ):
+            return None
+        owner_ref = f"principal://users/{run.user_id}"
+        scope = EffectExecutionScope(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            owner_ref=owner_ref,
+        )
+        descriptors = DEFAULT_OPERATION_DESCRIPTORS
+        classifier = OperationClassifier(descriptors=descriptors)
+        browser_plans = RuntimeBrowserActionPlanStore(
+            blobs=blobs,  # type: ignore[arg-type]
+            references=references,  # type: ignore[arg-type]
+            org_id=run.org_id,
+            user_id=run.user_id,
+        )
+        return McpOperationGatewayServices(
+            gateway=OperationGateway(
+                descriptors=descriptors,
+                classifier=classifier,
+                gates=McpOperationGateResolver(),
+            ),
+            descriptors=descriptors,
+            classifier=classifier,
+            stager=EffectStager(
+                ledger=RuntimeEffectLedger(
+                    event_producer=event_producer,
+                    run=run,
+                    owner_ref=owner_ref,
+                ),
+                outbox=RuntimeEffectCommitOutbox(queue=queue, scope=scope),  # type: ignore[arg-type]
+            ),
+            stage_scope=EffectStageScope(run_id=run.run_id, owner_ref=owner_ref),
+            stage_author=EffectActorIdentity(
+                actor=EffectActor.SYSTEM,
+                principal_ref="principal://system/mcp-operation-gateway",
+            ),
+            result_store=RuntimeMcpOperationResultStore(
+                event_producer=event_producer,
+                run=run,
+            ),
+            argument_store=RuntimeMcpOperationArgumentStore(
+                blobs=blobs,  # type: ignore[arg-type]
+                references=references,  # type: ignore[arg-type]
+                org_id=run.org_id,
+                user_id=run.user_id,
+            ),
+            browser_plans=browser_plans,
+        )
+
+
 __all__ = [
+    "McpOperationGatewayComposer",
     "RuntimeMcpOperationArgumentStore",
     "RuntimeMcpEffectCoordinatorFactory",
     "RuntimeMcpOperationResultStore",

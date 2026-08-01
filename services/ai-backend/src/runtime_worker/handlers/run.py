@@ -88,14 +88,7 @@ from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
-from agent_runtime.capabilities.mcp.operation_adapter import McpOperationGateResolver
-from agent_runtime.capabilities.operations.classifier import OperationClassifier
-from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.executor import EffectExecutionScope
-from agent_runtime.effects.staging import EffectStager
-from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
-from agent_runtime.api.effect_ledger import RuntimeEffectLedger
-from agent_runtime.surfaces_v2.ledger_models import EffectActor
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
@@ -113,9 +106,6 @@ from agent_runtime.rollout_shadow import (
     ShadowComparisonService,
 )
 from agent_runtime.rollout_shadow_adapters import ShadowRunProjectionObserver
-from runtime_worker.browser_operation_storage import (
-    RuntimeBrowserActionPlanStore,
-)
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     ArtifactContentPartPublisher,
     PublishArtifactTool,
@@ -199,8 +189,7 @@ from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
 from runtime_worker.mcp_operation_storage import (
-    RuntimeMcpOperationArgumentStore,
-    RuntimeMcpOperationResultStore,
+    McpOperationGatewayComposer,
 )
 from agent_runtime.context.memory.subagent_trace import SubagentArtifactsBackend
 from runtime_worker.tool_observations import (
@@ -2068,78 +2057,27 @@ class RuntimeRunHandler:
         cache: the model-facing tool holds work until the cohort is complete.
         """
 
-        if (
-            not self.settings.execution.surfaces_v2
-            or self._queue is None
-            or self._artifact_blob_store is None
-            or self._artifact_reference_store is None
-            or not self._e2_rollout_admission.permits_all(
-                capabilities=(
-                    RolloutCapability.OPERATION_GATEWAY,
-                    RolloutCapability.MCP_GATEWAY,
-                    RolloutCapability.EFFECT_STAGER,
-                    RolloutCapability.EFFECT_COMMIT,
-                ),
-                facts_provider=self._rollout_facts_for_run(run),
-            )
+        if not self._e2_rollout_admission.permits_all(
+            capabilities=(
+                RolloutCapability.OPERATION_GATEWAY,
+                RolloutCapability.MCP_GATEWAY,
+                RolloutCapability.EFFECT_STAGER,
+                RolloutCapability.EFFECT_COMMIT,
+            ),
+            facts_provider=self._rollout_facts_for_run(run),
         ):
             return None
-        enqueue = getattr(self._queue, "enqueue_effect_commit", None)
-        put_stream = getattr(self._artifact_blob_store, "put_stream", None)
-        acquire = getattr(self._artifact_reference_store, "acquire", None)
-        list_edges = getattr(self._artifact_reference_store, "list_edges", None)
-        if not all(
-            callable(value) for value in (enqueue, put_stream, acquire, list_edges)
-        ):
-            return None
-        owner_ref = f"principal://users/{run.user_id}"
-        scope = EffectExecutionScope(
-            org_id=run.org_id,
-            user_id=run.user_id,
-            conversation_id=run.conversation_id,
-            run_id=run.run_id,
-            owner_ref=owner_ref,
-        )
-        descriptors = DEFAULT_OPERATION_DESCRIPTORS
-        classifier = OperationClassifier(descriptors=descriptors)
-        browser_plans = RuntimeBrowserActionPlanStore(
-            blobs=self._artifact_blob_store,  # type: ignore[arg-type]
-            references=self._artifact_reference_store,  # type: ignore[arg-type]
-            org_id=run.org_id,
-            user_id=run.user_id,
-        )
-        return McpOperationGatewayServices(
-            gateway=OperationGateway(
-                descriptors=descriptors,
-                classifier=classifier,
-                gates=McpOperationGateResolver(),
-            ),
-            descriptors=descriptors,
-            classifier=classifier,
-            stager=EffectStager(
-                ledger=RuntimeEffectLedger(
-                    event_producer=self.event_producer,
-                    run=run,
-                    owner_ref=owner_ref,
-                ),
-                outbox=RuntimeEffectCommitOutbox(queue=self._queue, scope=scope),  # type: ignore[arg-type]
-            ),
-            stage_scope=EffectStageScope(run_id=run.run_id, owner_ref=owner_ref),
-            stage_author=EffectActorIdentity(
-                actor=EffectActor.SYSTEM,
-                principal_ref="principal://system/mcp-operation-gateway",
-            ),
-            result_store=RuntimeMcpOperationResultStore(
-                event_producer=self.event_producer,
-                run=run,
-            ),
-            argument_store=RuntimeMcpOperationArgumentStore(
-                blobs=self._artifact_blob_store,  # type: ignore[arg-type]
-                references=self._artifact_reference_store,  # type: ignore[arg-type]
-                org_id=run.org_id,
-                user_id=run.user_id,
-            ),
-            browser_plans=browser_plans,
+        # The construction is shared with the approval-resume path so an approved
+        # write re-enters a byte-identical gateway on resume (P1b). The rollout
+        # cohort gate above stays here: it is the one-time admission check, and a
+        # resumed run was necessarily admitted when it first parked.
+        return McpOperationGatewayComposer.compose(
+            surfaces_v2=self.settings.execution.surfaces_v2,
+            queue=self._queue,
+            blobs=self._artifact_blob_store,
+            references=self._artifact_reference_store,
+            event_producer=self.event_producer,
+            run=run,
         )
 
     def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:

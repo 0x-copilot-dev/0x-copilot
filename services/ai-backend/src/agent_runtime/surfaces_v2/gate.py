@@ -61,6 +61,7 @@ class _PayloadKey:
     AUTH_URL = "auth_url"
     EXPIRES_AT = "expires_at"
     MESSAGE = "message"
+    STATUS = "status"
     # The additive v2 block. Present ONLY when the flag is on (the caller only
     # builds the gate when ``SurfacesV2Flag.enabled()``), so its mere presence is
     # the flag signal downstream (``stream_events`` emits ``gate.opened`` iff it
@@ -96,6 +97,17 @@ class _Values:
     # Decisions that count as "connect" (mirrors the APPROVE_WITH_EDITS→APPROVED
     # coercion the approval batch uses — approval.py L238).
     APPROVED_DECISIONS = frozenset({"approved", "approve", "approve_with_edits"})
+    # The write-approval GATE (distinct from the OAuth-connect gate). The
+    # projection at ``runtime_worker/stream_events.py`` recognises an interrupt
+    # as a resolvable approval batch by its ``api_event_type`` +
+    # ``approval_kind``; reusing the ``approval_requested`` / ``ask_a_question``
+    # shape (the pair proven end-to-end by ``test_multi_interrupt_run_resume_e2e``)
+    # routes the write gate through the SAME ApprovalCoordinator resume plumbing
+    # without a new projection branch. The resume value is the flat
+    # ``{approval_id, decision, answer}`` dict ``_interpret_resume`` already reads.
+    APPROVAL_REQUESTED = "approval_requested"
+    APPROVAL_KIND_WRITE = "ask_a_question"
+    STATUS_PENDING = "pending"
 
 
 class _Messages:
@@ -104,6 +116,10 @@ class _Messages:
     @staticmethod
     def connect(display_name: str) -> str:
         return f"Authenticate {display_name} to continue using this MCP server."
+
+    @staticmethod
+    def approve(*, display_name: str, op: str) -> str:
+        return f"Allow {display_name} to run {op}?"
 
 
 class GateResume(RuntimeContract):
@@ -259,6 +275,77 @@ class ToolAccessGate:
         the ledger, approval record, and client Connect-card join on one key."""
 
         return f"mcp_auth:{self.runtime_context.run_id}:{server_id}"
+
+    # -- park_for_approval (write gate, NOT the OAuth-connect gate) ----------
+
+    async def park_for_approval(
+        self,
+        *,
+        card: McpServerCard,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        op_class: str,
+        approval_id: str,
+    ) -> GateResume:
+        """Park the run on a WRITE-approval interrupt; resume on the decision.
+
+        This is the effect-approval sibling of :meth:`park`. It raises the SAME
+        ``langgraph.types.interrupt`` seam but with the ``approval_requested`` /
+        ``ask_a_question`` payload shape (so the existing ApprovalCoordinator
+        projection + resume path drive it end-to-end), and it deliberately does
+        NOT create an OAuth auth session — a write approval is "may this effect
+        run", not "connect this server". At most one ``interrupt`` per
+        invocation; on resume the tool node re-executes from the top and the
+        stored decision is returned in place, so an approved write executes in
+        the SAME run and a rejected one fails closed without dispatching.
+        """
+
+        payload = self._approval_interrupt_payload(
+            approval_id=approval_id,
+            card=card,
+            tool_name=tool_name,
+            arguments=arguments,
+            op_class=op_class,
+        )
+        resume = self.interrupt_handler(payload)
+        return self._interpret_resume(resume)
+
+    def _approval_interrupt_payload(
+        self,
+        *,
+        approval_id: str,
+        card: McpServerCard,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        op_class: str,
+    ) -> dict[str, Any]:
+        """Build the ``approval_requested`` payload + additive gate block."""
+
+        display_name = card.display_name or card.name
+        message = _Messages.approve(display_name=display_name, op=tool_name)
+        return {
+            _PayloadKey.API_EVENT_TYPE: _Values.APPROVAL_REQUESTED,
+            _PayloadKey.EVENT_TYPE: _Values.APPROVAL_REQUESTED,
+            _PayloadKey.APPROVAL_ID: approval_id,
+            _PayloadKey.ACTION_ID: approval_id,
+            _PayloadKey.APPROVAL_KIND: _Values.APPROVAL_KIND_WRITE,
+            _PayloadKey.SERVER_NAME: card.name,
+            _PayloadKey.DISPLAY_NAME: display_name,
+            _PayloadKey.MESSAGE: message,
+            "question": message,
+            _PayloadKey.STATUS: _Values.STATUS_PENDING,
+            _PayloadKey.GATE: {
+                _GateKey.V: _Values.PAYLOAD_V,
+                _GateKey.PURPOSE: GatePurposeBuilder.build(
+                    op=tool_name,
+                    display_name=display_name,
+                    arguments=arguments,
+                ),
+                _GateKey.SCOPES: sorted(card.required_scopes),
+                _GateKey.OP: tool_name,
+                _GateKey.OP_CLASS: op_class,
+            },
+        }
 
     def _interrupt_payload(
         self,
