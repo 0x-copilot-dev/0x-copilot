@@ -106,8 +106,23 @@ So the fold is over `StreamItem`:
 
 ```
 a group = a maximal consecutive run of { kind: "tool" | "fleet" }
-          bounded by { kind: "message" } on either side
 ```
+
+**And the fold is OPT-IN, not boundary-enumerating.** `groupActivityStream` takes
+`{ isGroupable, idOf }` from the caller; anything it does not opt in passes through
+untouched. Stating the rule as _"groupable until a message breaks it"_ would have
+been equivalent on the day it was written and wrong a week later: while this PRD was
+being implemented, `dev` moved and `mergeStream` gained a fourth argument, so
+`StreamItem` gained `{ kind: "approval" }`. A fold that listed its boundaries would
+have swallowed that new kind into a collapsed group — burying the only control a
+parked run gives the user, which is exactly the hazard `TcChat`'s own comment already
+warns about ("must never early-return past the cards — inline, that hid a parked
+run's only way out").
+
+Opt-in makes the failure mode safe by default: an unrecognised kind renders visibly
+and ungrouped. Two tests pin it — one that an approval splits a run of tool calls
+into two groups without changing order, one that a synthetic unknown kind passes
+through.
 
 Consequences that follow, and are worth stating because they are easy to get wrong:
 
