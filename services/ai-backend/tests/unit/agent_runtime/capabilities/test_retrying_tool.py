@@ -2,18 +2,22 @@
 
 Covers: happy path (no retry), transient exception with eventual success,
 exhaustion re-raises the last exception, configured exception narrowing,
-``CancelledError`` is never retried, and the sync ``_run`` path matches
-the async ``_arun`` path.
+``CancelledError`` is never retried, the sync ``_run`` path matches the async
+``_arun`` path, the tenacity-driven full-jitter exponential backoff schedule,
+and the structured ``tool_retry`` log emitted before each backoff.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
+from tenacity import wait_random_exponential
 
 from agent_runtime.capabilities.retrying_tool import RetryingTool
 
@@ -114,3 +118,70 @@ class TestSurfacePropagation:
         )
         assert wrapped.name == inner.name
         assert wrapped.description == "custom"
+
+
+class TestBackoffSchedule:
+    """The retry loop uses tenacity's full-jitter exponential backoff.
+
+    ``wait_random_exponential`` yields ``uniform(0, min(initial * 2 ** (n-1),
+    max))``. The assertions below pin that exact envelope — capped, jittered,
+    and geometrically widening — so a regression to a fixed or un-jittered wait
+    (or a wrong multiplier/cap) fails loudly.
+    """
+
+    def test_wait_strategy_is_full_jitter_exponential(self) -> None:
+        wrapped = _wrap(
+            _FlakyTool(),
+            initial_backoff_seconds=0.5,
+            max_backoff_seconds=4.0,
+        )
+        wait = wrapped._wait()
+        assert isinstance(wait, wait_random_exponential)
+        assert wait.multiplier == 0.5
+        assert wait.max == 4.0
+
+    def test_backoff_envelope_is_capped_jittered_and_growing(self) -> None:
+        wrapped = _wrap(
+            _FlakyTool(),
+            initial_backoff_seconds=0.5,
+            max_backoff_seconds=4.0,
+        )
+        wait = wrapped._wait()
+        # (attempt_number, previous cap, this attempt's cap).
+        schedule = [
+            (1, 0.0, 0.5),
+            (2, 0.5, 1.0),
+            (3, 1.0, 2.0),
+            (4, 2.0, 4.0),
+            (5, 4.0, 4.0),  # capped: initial * 2**4 == 8.0 clamps to max.
+        ]
+        for attempt, prev_cap, cap in schedule:
+            samples = [
+                wait(SimpleNamespace(attempt_number=attempt)) for _ in range(200)
+            ]
+            # Every draw sits inside the exponential cap for this attempt.
+            assert all(0.0 <= s <= cap for s in samples)
+            # Jittered, not a fixed wait: draws vary across the window.
+            assert len({round(s, 9) for s in samples}) > 1
+            # The window widened this attempt (until the cap is reached).
+            if cap > prev_cap:
+                assert max(samples) > prev_cap
+
+
+class TestRetryLogging:
+    """The ``before_sleep`` hook emits a structured ``tool_retry`` event."""
+
+    async def test_logs_tool_retry_before_each_backoff(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        inner = _FlakyTool(fail_first=2)
+        wrapped = _wrap(inner, max_attempts=3)
+        with caplog.at_level(
+            logging.INFO, logger="agent_runtime.capabilities.retrying_tool"
+        ):
+            assert await wrapped._arun() == "ok"
+        retries = [r for r in caplog.records if r.msg == "tool_retry"]
+        # One log per retried (failed-then-slept) attempt — not the final success.
+        assert [r.metadata["attempt"] for r in retries] == [1, 2]
+        assert all(r.metadata["max_attempts"] == 3 for r in retries)
+        assert all(r.metadata["error_class"] == "ValueError" for r in retries)
