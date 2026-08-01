@@ -48,7 +48,15 @@ _WEB_HARNESS_PROFILE_KEYS = (
 # wording requires the checkpoint to ride in the same AIMessage as the next
 # tool call so the loop continues, and reserves a tool-call-free message for
 # the explicit final answer.
-_DEFAULT_TOOL_CALL_BUDGET = 5  # Aligns with the historical literal "5" used here.
+# The per-tool cap the model is TOLD in the suffix below. It must equal the
+# enforced seed cap ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10): telling the
+# model a smaller number than ``ToolBudgetMiddleware`` admits is the
+# prompt-vs-enforced drift the SSOT gate
+# (tests/unit/architecture/test_named_default_ssot.py) exists to catch. It was
+# ``5`` against an enforced ``10``; T0.3 closed the gap. A literal, not an
+# import, to keep this execution module off the persistence layer — the gate
+# keeps the two in step.
+_DEFAULT_TOOL_CALL_BUDGET = 10
 
 
 def format_web_subagent_suffix(
