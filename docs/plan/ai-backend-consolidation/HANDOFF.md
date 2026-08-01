@@ -7,15 +7,84 @@ Written so someone with no context can pick it up.
 
 ---
 
+## 0. Environment — read before running anything
+
+**All work is merged to `dev`.** Nothing is pending on a branch. `dev` HEAD at handoff:
+`4f5807b6`.
+
+### Running the verification target
+
+```bash
+make verify-ai-backend          # from the MAIN checkout
+```
+
+**This fails inside a git worktree**, and that is expected, not a bug to fix in the Makefile:
+
+```
+cd services/ai-backend && ... .venv/bin/python -m pytest tests/ -q
+/bin/bash: .venv/bin/python: No such file or directory
+```
+
+Each Python service owns a `.venv` that lives **only in the main checkout**. A worktree has no
+`.venv` and should not get one — `make setup` there builds a second multi-hundred-MB tree, and
+two interpreter trees for one repo is its own class of confusion.
+
+**From a worktree, borrow the main checkout's interpreter and point `PYTHONPATH` at the
+worktree's `src`:**
+
+```bash
+MAIN=/absolute/path/to/enterprise-search       # the main checkout, not the worktree
+WT=$PWD                                        # the worktree
+
+cd "$WT/services/ai-backend" && \
+  PYTHONPATH="$WT/services/ai-backend/src:$WT/packages/service-contracts/src" \
+  "$MAIN/services/ai-backend/.venv/bin/python" -m pytest tests/ -q
+```
+
+The interpreter comes from the main checkout; **every path that resolves source comes from the
+worktree**. Get that backwards and you will test the wrong code and not notice.
+
+### `gh` identity
+
+`gh` must report **`0x-copilot-dev`** — the machine default is a different account, and that
+account is the ruleset bypass actor. The config directory lives in the **main checkout** and
+worktrees do not inherit it:
+
+```bash
+export GH_CONFIG_DIR="/absolute/path/to/enterprise-search/.gh-cli-0x-copilot-dev"
+gh auth status    # must say 0x-copilot-dev
+```
+
+### Formatting
+
+Use pinned `prettier@3.8.3` (`npx --yes prettier@3.8.3 --write <paths>`). Any other version
+reformats untouched files and reds `lint-and-secrets`.
+
+### Scanners
+
+```bash
+python3 tools/ai-backend-smells/orphans.py services/ai-backend
+python3 tools/ai-backend-smells/smells.py  services/ai-backend
+```
+
+No venv needed — stdlib only. `smells.py` is slow (regex over ~300k LOC); give it a few minutes
+or run `orphans.py` alone, which is the higher-signal one.
+
+### MCPMark is not installed
+
+Not in this repo, not in either service. The benchmark programme's Phase 0 includes standing it
+up. Nothing in `docs/plan/mcpmark-optimization/` has been run — **every number there is
+modelled, not measured.**
+
 ## 1. What shipped
 
-| Commit      | What                                                                                                                                                                     |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `1287f5a7`  | **Only production code change.** Parse each model's reasoning-effort ladder from models.dev; add `max` to `ModelReasoningEffort`. `xhigh` is now expressible end to end. |
-| `98432285`  | PR #492 merged to `dev` — the above plus all planning/audit docs                                                                                                         |
-| `8ec77b16`  | Step-by-step execution plan                                                                                                                                              |
-| `b8b95208`  | The orphan-reading correction (see §4)                                                                                                                                   |
-| this commit | **T0.1** — `make verify-ai-backend`                                                                                                                                      |
+| Commit     | What                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `1287f5a7` | **Only production code change.** Parse each model's reasoning-effort ladder from models.dev; add `max` to `ModelReasoningEffort`. `xhigh` is now expressible end to end. |
+| `98432285` | PR #492 merged to `dev` — the above plus all planning/audit docs                                                                                                         |
+| `8ec77b16` | Step-by-step execution plan                                                                                                                                              |
+| `b8b95208` | The orphan-reading correction (see §4)                                                                                                                                   |
+| `f2aa2e0a` | **T0.1** — `make verify-ai-backend`; `4f5807b6` merged it to dev                                                                                                         |
 
 ## 2. The documents, and what each is for
 
@@ -68,7 +137,7 @@ Written so someone with no context can pick it up.
 
 ## 4. Where I was wrong — read this before trusting the rest
 
-Six corrections, all recorded in place rather than edited away.
+Seven corrections, all recorded in place rather than edited away.
 
 | Claim                                                   | Reality                                                                                                                    |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -114,6 +183,19 @@ Ordered. `TASKS.md` has the detail.
 Then Stage 4 (MCP consolidation) and Stage 5 (adapter collapse), each needing its own
 breakdown. Stage 4 opens with a question, not code: **is descriptor-revision tracking a product
 requirement, or just cache coherence for the proxy we are removing?**
+
+## 6a. Open decisions that need a human
+
+None of these are blocked on engineering; they are choices the programme cannot make for itself.
+
+| Decision                                                                | Why it matters                                                                                                                                                                                                                                                                        | Where      |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **Benchmark model: `gpt-5.6-luna` @ `xhigh`, or `gpt-5.6-sol`?**        | Luna is the cheap high-volume tier; MCPMark's board is topped by frontier models, so Luna may measure Luna's ceiling rather than our harness. Luna is also **not in models.dev**, so it is unselectable in the picker — pinnable via `RUNTIME_DEFAULT_MODEL` for benchmark runs only. | PRD §3.1a  |
+| **Accept ~2× per-task cost from P0?**                                   | Removing the three gates means paying for full 17-turn tasks, including failures. There is no version where accuracy reaches ~40% and cost does not roughly double.                                                                                                                   | PRD §5.1   |
+| **Raise `recursion_limit` globally or only under a benchmark profile?** | 25 is arguably too low for real product work too.                                                                                                                                                                                                                                     | PLAN 1.1   |
+| **Sign off `write=auto` under an unattended posture**                   | Security-relevant. Must be unreachable from a request body.                                                                                                                                                                                                                           | PLAN 1.3   |
+| **Is descriptor-revision tracking a product requirement?**              | 2,253 LOC + store adapters + a worker poller. Gates all of Stage 4. Answer before writing code.                                                                                                                                                                                       | PLAN §2b   |
+| **Has the `encrypt_existing_columns` backfill run everywhere?**         | Decides delete vs schedule.                                                                                                                                                                                                                                                           | TASKS T1.2 |
 
 ## 7. Rules learned the hard way
 
