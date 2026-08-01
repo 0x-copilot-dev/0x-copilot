@@ -140,9 +140,9 @@ _guard inside the file_, so these read as unreachable when they are not.
   [FINDINGS.md](FINDINGS.md) §L85 already flagged it as "a genuine CLI, correctly excluded."
   **Not deletable.**
 
-**Recommended scanner fix (own change, not T1.1):** teach `orphans.py` to skip any
-module whose source contains an `if __name__ == "__main__":` guard, then prune these two
-from `orphan_ratchet_baseline.txt` (the grow-only ratchet tolerates the stale lines until then).
+**Scanner fix — done.** `orphans.py` now skips any module with a top-level
+`if __name__ == "__main__":` guard (AST-detected, so a docstring mention does not count),
+and these two are pruned from `orphan_ratchet_baseline.txt`. The scan reports 21 orphans, not 23.
 
 ---
 

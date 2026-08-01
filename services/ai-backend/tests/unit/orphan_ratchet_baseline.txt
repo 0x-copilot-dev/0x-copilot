@@ -32,7 +32,6 @@ agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
 agent_runtime.surfaces_v2.retention
 runtime_adapters.in_memory.share_snapshot_store
-runtime_adapters.migrate
 runtime_adapters.postgres.todo_extraction_store
 runtime_worker.jobs.approval_expiry_sweeper
 runtime_worker.jobs.encrypt_existing_columns
@@ -41,4 +40,3 @@ runtime_worker.jobs.routine_scheduler
 runtime_worker.jobs.todo_extractor
 runtime_worker.jobs.todo_recurrence_materializer
 runtime_worker.legacy_mcp_effect_executor
-runtime_worker.local_release_control_cli
