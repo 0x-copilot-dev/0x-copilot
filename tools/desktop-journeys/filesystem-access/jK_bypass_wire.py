@@ -76,7 +76,10 @@ def _create_run(
 ) -> dict[str, Any]:
     """POST one run, with or without a bypass selection, and read it back."""
 
-    body: dict[str, Any] = {"conversation_id": conversation_id, "goal": GOAL}
+    # `user_input`, not `goal`. The composer's RunStartRequest calls it `goal`
+    # and `buildRunCreateBody` renames it on the way out; posting the client-side
+    # name straight at the API is a 422.
+    body: dict[str, Any] = {"conversation_id": conversation_id, "user_input": GOAL}
     if selection is not None:
         body["filesystem_bypass"] = selection
     created = transport_json(session, "POST", "/v1/agent/runs", body=body)
