@@ -210,13 +210,14 @@ class TestAttachedFoldersKeepWorking(ProductionStackMixin):
     def test_a_granted_folder_is_never_written_into_at_all(
         self, tmp_path: Path, writable: bool
     ) -> None:
-        """D7: `.copilot` inside a granted root is gone, for BOTH grant modes.
+        """The grant's MODE decides, end to end through the real tool stack.
 
-        This used to be two tests with two answers — writable grants wrote,
-        read-only grants were refused — and the difference had to be re-decided
-        in the floor because `.copilot` is hidden and the rule set could not see
-        it. One answer now: nothing is written into the user's folder, whatever
-        the grant said.
+        The path deliberately carries a HIDDEN segment. That is the case the
+        rule set cannot express — `wcmatch` runs without DOTGLOB, so no pattern
+        sees `.copilot` — which makes this the test that proves the FLOOR agrees
+        with rule 3 rather than quietly overruling it. When the two disagreed,
+        the rule allowed and the floor refused, and the write vanished with a
+        message about a lane the user had never heard of.
         """
 
         root = tmp_path / "Projects"
@@ -230,8 +231,12 @@ class TestAttachedFoldersKeepWorking(ProductionStackMixin):
             content="{}",
         )
 
-        assert HostFloorMessages.HOST_WRITE in content
-        assert not target.exists()
+        if writable:
+            assert HostFloorMessages.HOST_WRITE not in content
+            assert target.read_text() == "{}"
+        else:
+            assert HostFloorMessages.HOST_WRITE in content
+            assert not target.exists()
 
     def test_the_agent_scratch_writes_and_reads_back_through_the_real_stack(
         self, tmp_path: Path
@@ -378,10 +383,12 @@ class TestFloorVerdicts:
 
         assert floor.permits_write(f"{self.SCRATCH.posix}/conv/run/x.json") is True
         assert floor.permits_write(self.SCRATCH.posix) is True
-        # A WRITABLE grant buys no direct write, and neither does its old
-        # `.copilot` (D7). Host mutations stay on the staged/ledgered lane.
-        assert floor.permits_write(f"{self.ROOT}/notes.md") is False
-        assert floor.permits_write(f"{self.ROOT}/{DROPPED_SCRATCH_DIR}/n.json") is False
+        # A WRITABLE grant IS writable — the floor must agree with rule 3 or
+        # the two layers contradict each other and the rule silently loses.
+        assert floor.permits_write(f"{self.ROOT}/notes.md") is True
+        # …including a hidden segment inside it, which is the case the rule set
+        # structurally cannot express (no DOTGLOB) and the floor exists for.
+        assert floor.permits_write(f"{self.ROOT}/{DROPPED_SCRATCH_DIR}/n.json") is True
         assert floor.permits_write("/tmp/anything.txt") is False
         assert floor.permits_write("/Users/ada/Downloads/x") is False
         # ...and a sibling that merely starts with the same characters is not
@@ -389,12 +396,26 @@ class TestFloorVerdicts:
         assert floor.permits_write("/Users/ada/.0xcopilot/.tmp-evil/x") is False
         assert floor.permits_write("/Users/ada/.0xcopilot/secrets.json") is False
 
-    def test_a_run_with_no_scratch_can_write_nowhere_on_the_host(self) -> None:
-        """An unusable scratch degrades to "no host write", never to "open"."""
+    def test_a_run_with_no_scratch_still_writes_only_where_it_was_granted(
+        self,
+    ) -> None:
+        """An unusable scratch degrades to "no scratch", never to "open".
+
+        It must not take the user's own grant down with it: the two allowances
+        are independent, and losing ours is not a reason to revoke theirs.
+        """
 
         floor = self.floor(GrantedRoot(path=self.ROOT, writable=True), scratch=None)
 
         assert floor.permits_write(f"{self.SCRATCH.posix}/conv/x.json") is False
+        assert floor.permits_write(f"{self.ROOT}/notes.md") is True
+        assert floor.permits_write("/Users/ada/Downloads/x") is False
+
+    def test_a_read_only_grant_is_refused_by_the_floor_too(self) -> None:
+        """The grant's MODE is honoured at BOTH layers, or it is honoured at neither."""
+
+        floor = self.floor(GrantedRoot(path=self.ROOT, writable=False), scratch=None)
+
         assert floor.permits_write(f"{self.ROOT}/notes.md") is False
 
     def test_a_hidden_segment_beneath_the_scratch_is_still_admitted(self) -> None:

@@ -549,13 +549,20 @@ async def test_final_model_visible_tools_have_one_universal_controller(
     finally:
         RunControlContext.unbind(run_token)
 
+    # `write_file` / `edit_file` are model-visible again. They were withheld by
+    # `DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES` while host writes were meant to
+    # route through the staged lane — a lane that never ran on desktop — so the
+    # agent could not write anywhere, including its own scratch. What bounds a
+    # write is now the rule set (writable grant only) plus the floor.
     expected_local_tools = frozenset(
         {
             "catalog_read",
+            "edit_file",
             "glob",
             "grep",
             "ls",
             "read_file",
+            "write_file",
             "write_todos",
         }
     )

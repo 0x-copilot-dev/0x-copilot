@@ -132,7 +132,12 @@ def _boot(*, provider: str, key: str, folder: Path, send_write: bool) -> dict[st
     """One full boot. Returns what that boot observed."""
 
     observed: dict[str, Any] = {}
-    session = DriverSession(name=NAME, fresh=False)
+    # INSTALLED PAYLOAD, not the source tree. C2 write authority requires a
+    # signed-build attestation (`unsafe_dev_workspace_tcb` must be false and
+    # the helper must pass Apple's designated-requirement check), which a
+    # source launch cannot produce BY DESIGN. Proving writes therefore has to
+    # happen against the artifact `copilot install` stages.
+    session = DriverSession(name=NAME, fresh=False, installed_payload=True)
     with session:
         observed["target"] = session.rpc("status").get("target")
         # SETTLE FIRST, then branch. Probing `present()` the instant the driver

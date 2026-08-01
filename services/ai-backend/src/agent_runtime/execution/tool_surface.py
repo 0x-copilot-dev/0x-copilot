@@ -18,13 +18,29 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 _LOGGER = logging.getLogger(__name__)
 
 
-DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES = frozenset(
-    {
-        "edit_file",
-        "execute",
-        "write_file",
-    }
-)
+#: Deep Agents tools withheld from the model surface.
+#:
+#: `write_file` / `edit_file` USED to be here, and their absence is why no run
+#: in this program ever recorded a write: the permission rules, the floor, the
+#: staged lane and the approval card all governed a tool the model was never
+#: given. Evidence was in every journey — `write_attempted: false`, every time,
+#: whatever the supposed cause — and the model said so plainly: "I don't have a
+#: `write_file` tool available in this session."
+#:
+#: They were withheld when host writes were meant to route exclusively through
+#: the staged C3 → ledger → C2 lane. That lane has never run on a desktop
+#: install (it needs an attestation only a signed packaged build can produce),
+#: so the practical effect was that the agent could not write anywhere at all —
+#: not even into its own scratch.
+#:
+#: What now bounds a write is the RULE SET, which is where the decision belongs:
+#: allow inside a folder the user attached read-write, deny in a read-only one,
+#: deny everywhere else, and `HostFilesystemFloor` for the dotted paths globs
+#: cannot see.
+#:
+#: `execute` STAYS. It is shell, a materially larger grant than editing files in
+#: a folder the user chose, and it is a separate decision that has not been made.
+DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES = frozenset({"execute"})
 
 
 class ModelToolOwner(StrEnum):

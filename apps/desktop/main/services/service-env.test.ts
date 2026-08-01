@@ -755,7 +755,11 @@ describe("resolveDesktopStudioRuntimeEnv — the desktop's own E2 cohort", () =>
   it("names this install's principal for every capability the lane needs", () => {
     const env = resolveDesktopStudioRuntimeEnv(
       { OPERATION_GATEWAY_MODE: "enforce" },
-      { workspaceBrokerEnabled: true, localPrincipal: principal },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
     );
 
     const rules = JSON.parse(env.E2_ROLLOUT_COHORTS_JSON ?? "[]");
@@ -785,7 +789,11 @@ describe("resolveDesktopStudioRuntimeEnv — the desktop's own E2 cohort", () =>
     // The live symptom was indistinguishable from a missing cohort.
     const env = resolveDesktopStudioRuntimeEnv(
       { OPERATION_GATEWAY_MODE: "enforce" },
-      { workspaceBrokerEnabled: true, localPrincipal: principal },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
     );
 
     expect(env.MCP_GATEWAY_MODE).toBe("enforce");
@@ -818,10 +826,26 @@ describe("resolveDesktopStudioRuntimeEnv — the desktop's own E2 cohort", () =>
     expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
   });
 
+  it("emits nothing on an UNPACKAGED build, which cannot attest C2", () => {
+    // The startup validator refuses `WORKSPACE_COMMIT_MODE=enforce` without
+    // native attestation, so requesting it on a CLI install turned a graceful
+    // read-only degradation into "Application startup failed. Exiting."
+    const env = resolveDesktopStudioRuntimeEnv(
+      { OPERATION_GATEWAY_MODE: "enforce" },
+      { workspaceBrokerEnabled: true, localPrincipal: principal },
+    );
+    expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();
+    expect(env.WORKSPACE_COMMIT_MODE).toBeUndefined();
+  });
+
   it("emits nothing outside enforce, so the shipped default is unchanged", () => {
     const env = resolveDesktopStudioRuntimeEnv(
       {},
-      { workspaceBrokerEnabled: true, localPrincipal: principal },
+      {
+        workspaceBrokerEnabled: true,
+        localPrincipal: principal,
+        packaged: true,
+      },
     );
     expect(env.WORKSPACE_EFFECT_MODE).not.toBe("enforce");
     expect(env.E2_ROLLOUT_COHORTS_JSON).toBeUndefined();

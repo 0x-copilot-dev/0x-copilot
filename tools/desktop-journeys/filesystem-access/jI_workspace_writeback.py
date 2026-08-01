@@ -44,7 +44,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _fs_journey_lib import (  # noqa: E402
-    ENFORCE_LANE,
+    DEFAULT_LANE,
     DriverSession,
     PreflightSkip,
     _byok_provider,
@@ -148,7 +148,7 @@ def main() -> int:
         "bytes_before": SEED_CSV,
     }
 
-    with lane(ENFORCE_LANE):
+    with lane(DEFAULT_LANE):
         session = DriverSession(name="fs-i-workspace-writeback")
         try:
             with session:
@@ -170,11 +170,15 @@ def main() -> int:
                 # model to work: list the mounts, then act under
                 # `/workspace/<mount>/`. The spike is about the write path, not
                 # about whether the model can guess a route it was never given.
+                # The HOST path, deliberately. The previous phrasing pointed at
+                # `/workspace/<mount>/…`, the VIRTUAL route — which still lands
+                # on the read-only workspace backend, so the model read the file
+                # and reached for `publish_artifact`. The grant-honouring write
+                # rule governs HOST paths, so that is what this must exercise.
                 session.send_first_run_message(
-                    "Run `ls /workspace/` to find the mounted folder, read "
-                    "seed.csv inside it, then write the file back to that same "
-                    "path with one extra column named `note` whose value is "
-                    "`checked` on every row. Use your filesystem tools."
+                    f"Read the file at {target} and then write it back to that "
+                    "exact same path with one extra column named `note` whose "
+                    "value is `checked` on every row. Use your filesystem tools."
                 )
                 conversation_id = wait_for_conversation_id(session)
                 run_id = wait_for_new_run(session, conversation_id, 0)

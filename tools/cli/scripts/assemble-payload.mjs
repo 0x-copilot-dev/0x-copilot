@@ -249,6 +249,49 @@ if (fs.existsSync(wfsPrebuilds)) {
   );
 }
 
+// --- 6b. write-side native commit helper ---------------------------------
+// C2 — the ONLY path that mutates a user's real file. Without it in the
+// payload, `createProductionWorkspaceAuthority` cannot launch a verified
+// helper, no attestation is signed, and the ai-backend REFUSES TO START under
+// `WORKSPACE_COMMIT_MODE=enforce`. Reads still work, so the symptom is a
+// filesystem that can look but never touch.
+//
+// Copied to `native/workspace-commit-helper/bin/` — the unpackaged layout —
+// because mac-shell.mjs re-homes it into the bundle's Resources, which is where
+// `resolveNativeWorkspaceCommitHelperPath({packaged: true})` looks.
+//
+// Absent is not fatal here: a payload assembled without having built the helper
+// still installs and reads. It says so rather than shipping a silent read-only
+// install nobody can explain.
+const helperFrom = path.join(
+  REPO_ROOT,
+  "apps",
+  "desktop",
+  "native",
+  "workspace-commit-helper",
+  "bin",
+  "workspace-commit-helper",
+);
+if (fs.existsSync(helperFrom)) {
+  const helperDest = path.join(
+    appDest,
+    "native",
+    "workspace-commit-helper",
+    "bin",
+  );
+  fs.mkdirSync(helperDest, { recursive: true });
+  const target = path.join(helperDest, "workspace-commit-helper");
+  fs.copyFileSync(helperFrom, target);
+  fs.chmodSync(target, 0o755);
+  log("copied workspace-commit-helper (C2 write authority)");
+} else {
+  log(
+    "NO workspace-commit-helper in this payload — the install will be " +
+      "READ-ONLY for host files; run " +
+      "`npm run build:workspace-commit-helper --workspace @0x-copilot/desktop`",
+  );
+}
+
 // --- 6b. bundled-default Google OAuth client -----------------------------
 // Ships next to the app (app.getAppPath()) so "Continue with Google" works
 // with zero user setup. Source of truth is a gitignored google-oauth.json

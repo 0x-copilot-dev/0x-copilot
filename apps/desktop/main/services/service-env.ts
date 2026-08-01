@@ -182,6 +182,8 @@ export function resolveDesktopStudioRuntimeEnv(
       readonly orgId: string;
       readonly userId: string;
     };
+    /** `app.isPackaged`. Unpackaged builds cannot attest C2 — see `cohortPolicy`. */
+    readonly packaged?: boolean;
   },
 ): Readonly<Record<string, string>> {
   const readBoolean = (name: string, defaultValue: boolean): boolean => {
@@ -220,7 +222,11 @@ export function resolveDesktopStudioRuntimeEnv(
     ARTIFACT_DRAFTS_V2: artifactDrafts ? "true" : "false",
     OPERATION_GATEWAY_MODE: operationGateway,
     WORKSPACE_EFFECT_MODE: workspaceEffect,
-    ...cohortPolicy(workspaceEffect, opts.localPrincipal),
+    ...cohortPolicy(
+      workspaceEffect,
+      opts.localPrincipal,
+      opts.packaged === true,
+    ),
   });
 }
 
@@ -289,9 +295,17 @@ const CAPABILITY_MODE_ENV = Object.freeze({
 function cohortPolicy(
   workspaceEffect: string,
   principal: { readonly orgId: string; readonly userId: string } | undefined,
+  packaged: boolean,
 ): Readonly<Record<string, string>> {
   if (workspaceEffect !== "enforce" || principal === undefined) return {};
   if (principal.orgId === "" || principal.userId === "") return {};
+  // NEVER emit a mode the runtime will refuse to boot under. The startup
+  // validator rejects `WORKSPACE_COMMIT_MODE=enforce` without C2 native
+  // attestation, which an UNPACKAGED build cannot produce — so emitting these
+  // on a CLI install turns a graceful read-only degradation into
+  // "Application startup failed. Exiting." A capability that cannot be
+  // satisfied must not be requested.
+  if (!packaged) return {};
   const modes: Record<string, string> = {};
   for (const capability of DESKTOP_COHORT_CAPABILITIES) {
     modes[CAPABILITY_MODE_ENV[capability]] = "enforce";
@@ -322,6 +336,8 @@ export interface ServiceEnvInputs {
   readonly processEnv: Readonly<Record<string, string | undefined>>;
   /** app.getPath("userData") — used to derive the file store root. */
   readonly userDataDir: string;
+  /** `app.isPackaged` — gates capabilities an unpackaged build cannot attest. */
+  readonly packaged?: boolean;
   /**
    * Built frontend web dir (wallet.html + assets/). When set, the facade serves
    * the SIWE wallet page from here. Optional so unit tests without a staged web
@@ -487,6 +503,7 @@ export function buildServiceEnv(
           // existing id and never mints, because fresh ids would orphan the
           // conversations an existing install keys by org/user.
           localPrincipal: resolveLocalPrincipal(inputs.userDataDir),
+          packaged: inputs.packaged === true,
         }),
       );
       const browser = inputs.browserBroker;

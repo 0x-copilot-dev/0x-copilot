@@ -91,16 +91,32 @@ class TestGrantedRoots(RuleSetMixin):
         assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
         assert self.verdict(GRANTED, roots=roots) == "allow"
 
-    def test_granting_a_folder_does_not_make_it_directly_writable(self) -> None:
-        """D7: a generic filesystem interrupt must never authorize a mutation.
+    def test_a_writable_grant_is_writable(self) -> None:
+        """The grant's MODE decides, which is what `writable` was always for.
 
-        Host writes belong to the staged C3 overlay + C2's commit authority —
-        the only path that records what changed and can undo it. If this were
-        `interrupt`, approving a read-shaped prompt would become a side door to
-        the user's disk. Granting widens READS only.
+        It carried no meaning while D7 routed every host write through the
+        staged overlay — a lane that has never run on a desktop install,
+        because it needs a C2 attestation only a signed packaged build can
+        produce and this app ships as an unpackaged CLI payload. "Writes are
+        audited" therefore meant "writes never happen".
+
+        The consent question D7 protected is not dropped, it MOVED: the user
+        answers read-only vs read-and-write when attaching the folder, once,
+        knowing what they decide — rather than through per-write cards that are
+        indistinguishable from read cards and get clicked through unread.
         """
 
         roots = (GrantedRoot(path=GRANTED, writable=True),)
+        assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
+        assert (
+            self.verdict(f"{GRANTED}/notes.md", operation="write", roots=roots)
+            == "allow"
+        )
+
+    def test_a_read_only_grant_still_refuses_writes(self) -> None:
+        """The other half of the same answer — and why the question is worth asking."""
+
+        roots = (GrantedRoot(path=GRANTED, writable=False),)
         assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
         assert (
             self.verdict(f"{GRANTED}/notes.md", operation="write", roots=roots)
@@ -279,9 +295,19 @@ class TestGrantsInEitherPlatformsGrammar(RuleSetMixin):
             for rule in HostFilesystemRules.build((root,))
             for path in rule["paths"]  # type: ignore[union-attr]
         )
+        # A Windows grant reaches the SAME verdict as a POSIX one — that is the
+        # parity this class exists to hold. `from_host_path` defaults to
+        # writable, so the write inside it is allowed, and a sibling outside it
+        # is not.
         assert (
             self.verdict(
                 "/C:/Users/ada/Projects/out.csv", operation="write", roots=(root,)
+            )
+            == "allow"
+        )
+        assert (
+            self.verdict(
+                "/C:/Users/ada/Secrets/out.csv", operation="write", roots=(root,)
             )
             == "deny"
         )
@@ -340,24 +366,42 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
         # ...and attaching two folders still does not open a third.
         assert self.verdict(UNGRANTED, roots=roots) == "interrupt"
 
-    def test_writes_still_route_through_the_ledgered_lane(self) -> None:
-        """Attaching does NOT open a direct write path (D7 / bypass spec).
+    def test_a_writable_grant_opens_that_folder_and_only_that_folder(self) -> None:
+        """Attaching writable opens a direct write path INSIDE the grant only.
 
-        Host writes stay `deny` at the tool layer so there is exactly one write
-        lane: staged -> ledger -> commit. Bypass mode removes that lane's PAUSE,
-        never its record, so it must not be implemented by relaxing this rule.
+        The boundary is the grant, not the operation: everything outside stays
+        `deny` and is never even a question, so a widened grant cannot leak into
+        a neighbour.
         """
 
         roots = (GrantedRoot(path=GRANTED, writable=True),)
         assert (
-            self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots) == "deny"
+            self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots)
+            == "allow"
         )
-        # Since D7 there is no exception inside a granted folder at all. The one
-        # writable host location is `$COPILOT_HOME/.tmp`, which is not here.
+        assert (
+            self.verdict(f"{UNGRANTED}/out.csv", operation="write", roots=roots)
+            == "deny"
+        )
+        assert (
+            self.verdict(f"{GRANTED}Secret/out.csv", operation="write", roots=roots)
+            == "deny"
+        )
+        # The grant covers its whole subtree, and the scratch is a SEPARATE
+        # allowance that needs no grant — so composing the two changes neither.
         scratch = AgentScratchRoot(Path("/Users/ada/.0xcopilot/.tmp"))
         assert (
             self.verdict(
                 f"{GRANTED}/subdir/out.csv",
+                operation="write",
+                roots=roots,
+                scratch=scratch,
+            )
+            == "allow"
+        )
+        assert (
+            self.verdict(
+                f"{UNGRANTED}/out.csv",
                 operation="write",
                 roots=roots,
                 scratch=scratch,
