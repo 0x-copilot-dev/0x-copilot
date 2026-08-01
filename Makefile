@@ -17,7 +17,7 @@ SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 CLI_DIR := tools/cli
 BUMP ?= patch
 
-.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall desktop-supervised cli-version cli-publish test test-merge-live
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall desktop-supervised cli-version cli-publish test test-merge-live verify-ai-backend
 
 help:
 	@echo "0xCopilot make targets"
@@ -251,3 +251,20 @@ test:
 	cd services/backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_mcp_api_flow.py tests/test_skills_api_flow.py
 	cd services/backend-facade && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_facade_settings.py
 	cd services/ai-backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/unit/agent_runtime/mcp/test_mcp_auth_tool.py tests/unit/agent_runtime/skills/test_virtual_skills.py tests/unit/agent_runtime/memory/test_context_memory_management.py tests/unit/agent_runtime/agent/test_runtime_factory.py tests/unit/agent_runtime/agent/test_skills_runtime_factory.py
+
+# The whole-service gate the ai-backend consolidation work checks itself against
+# (docs/plan/ai-backend-consolidation/TASKS.md). `make test` above is a curated
+# cross-service smoke; this is every ai-backend test plus lint and the public
+# TS contract, in the one command a task has to be able to point at.
+#
+# Baseline at dev 98432285: 9861 passed, 141 skipped, 2 deselected.
+#
+# The count is expected to MOVE — a task that deletes a module deletes its tests
+# too. The rule is that the delta is explained, not that it is zero, so this
+# target prints the summary rather than asserting a number: a hard-coded count
+# here would just be edited to whatever the run produced.
+verify-ai-backend:
+	cd services/ai-backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/ -q
+	cd services/ai-backend && .venv/bin/python -m ruff check src tests
+	cd services/ai-backend && .venv/bin/python -m ruff format --check src tests
+	npm run typecheck --workspace @0x-copilot/api-types
