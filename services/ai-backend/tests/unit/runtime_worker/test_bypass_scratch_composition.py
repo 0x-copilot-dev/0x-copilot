@@ -387,10 +387,11 @@ class TestBypassInsideAGrantedFolderWithScratch:
         was actually handed. Bypass must not open it, and the scratch must not
         drag a granted folder open with it.
 
-        Read as a set, the four assertions say: the agent may write in its own
-        `.tmp` and nowhere else on the host; the folder the user attached is
-        readable and not writable — not its content, and not the `.copilot`
-        subdirectory PRD-FS-12 D7 stopped siting there.
+        Read as a set, the assertions say: the agent may write in its own
+        `.tmp` without any grant; a folder attached READ_WRITE is writable
+        because the user answered that question when attaching it; and BYPASS
+        changes none of it — an ungranted path is refused with bypass on, so
+        the mode can never stand in for a grant.
         """
 
         self._broker_env(monkeypatch)
@@ -415,10 +416,14 @@ class TestBypassInsideAGrantedFolderWithScratch:
 
         # The one host location the agent may write — and it needed no grant.
         assert floor.permits_write(f"{scratch.posix}/conv-c3/run-c3/notes.md") is True
-        # The attached folder: readable, never directly writable, under bypass.
+        # The attached folder was granted READ_WRITE, so it is both.
         assert floor.permits_read(f"{ATTACHED}/.git/config") is True
-        assert floor.permits_write(f"{ATTACHED}/report.csv") is False
-        assert floor.permits_write(f"{ATTACHED}/.copilot/notes.md") is False
+        assert floor.permits_write(f"{ATTACHED}/report.csv") is True
+        # …including hidden segments inside it, which no rule pattern can see.
+        assert floor.permits_write(f"{ATTACHED}/.copilot/notes.md") is True
+        # And bypass is NOT a grant: somewhere the user never attached stays
+        # refused even with the mode on.
+        assert floor.permits_write("/Users/ada/Secrets/report.csv") is False
 
 
 class TestTheScratchReachesTheRulesTheFactoryHandsDeepagents:

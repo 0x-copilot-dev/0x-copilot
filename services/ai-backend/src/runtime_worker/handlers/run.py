@@ -1621,6 +1621,68 @@ class RuntimeRunHandler:
             return None
         return None if conversation is None else conversation.title
 
+    @staticmethod
+    def _tombstone(reason: str) -> None:
+        """Record WHY the enforced workspace route fell closed.
+
+        The tombstone is correct — refusing beats silently reading the wrong
+        filesystem — but a refusal nobody can explain is a support ticket and a
+        wasted live run per hypothesis.
+        """
+
+        logging.getLogger(__name__).warning("workspace_effect.tombstone %s", reason)
+
+    def _missing_workspace_dependencies(
+        self, mcp_gateway_services: McpOperationGatewayServices | None
+    ) -> tuple[str, ...]:
+        """Which collaborators the enforced workspace route did not get.
+
+        Named individually rather than folded into one boolean: "the workspace
+        lane needs the MCP gateway" and "the desktop broker minted no host
+        session" are different problems with opposite fixes, and the previous
+        `or`-chain made them indistinguishable from outside.
+        """
+
+        candidates = (
+            ("mcp_gateway_services", mcp_gateway_services),
+            ("workspace_host_sessions", self._workspace_host_sessions),
+            ("workspace_overlay_store", self._workspace_overlay_store),
+            ("artifact_blob_store", self._artifact_blob_store),
+            ("artifact_reference_store", self._artifact_reference_store),
+        )
+        return tuple(name for name, value in candidates if value is None)
+
+    async def _workspace_read_only(self, reason: str) -> object:
+        """No write authority — keep READS working instead of refusing both.
+
+        The enforced lane used to answer every one of its five fail-closed
+        conditions with `WorkspaceTombstoneBackend`, which refuses reads too. So
+        switching enforce on made a folder the user had just attached LESS
+        usable than leaving it off, and the model was told "Local workspace
+        access is unavailable. Create an artifact or download instead" — which
+        is exactly why it reached for `publish_artifact` instead of the file.
+
+        Losing the commit authority should cost the user WRITES. It should never
+        cost them the ability to look at their own folder. The broker can serve
+        reads without a host session, so that is what a missing write authority
+        degrades to now.
+
+        The tombstone survives for the case it was actually built for: nothing
+        is available at all, and a `StateBackend` fallthrough would answer with
+        an empty listing and a green tick.
+        """
+
+        from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+            WorkspaceTombstoneBackend,
+        )
+
+        readable = await self._workspace_wiring().workspace_backend()
+        if readable is None:
+            self._tombstone(f"{reason}+no_broker_reads")
+            return WorkspaceTombstoneBackend()
+        self._tombstone(f"{reason}+degraded_to_read_only")
+        return readable
+
     async def _workspace_effect_backend_for_run(
         self,
         *,
@@ -1658,6 +1720,16 @@ class RuntimeRunHandler:
         # If an explicitly enabled E2 cohort or a targeted rollback does not
         # admit this persisted run, the model receives the tombstone route and
         # cannot stage an overlay or enqueue a workspace effect.
+        # Every `return WorkspaceTombstoneBackend()` below SAYS WHY. The branch
+        # used to be five silent conditions, and the model's only clue was
+        # "Local workspace access is unavailable" — which is what the user sees
+        # too, and which cost a full live-run cycle per guess to narrow down.
+        # A fail-closed path that records nothing is the same shape as the
+        # original defect this whole program started from: `ls ~/Downloads`
+        # answering `[]` with a green tick.
+        #
+        # Reasons only — no paths, no run content. Which DEPENDENCY is missing
+        # is deployment truth, not user data.
         if not self._e2_rollout_admission.permits_all(
             capabilities=(
                 RolloutCapability.OPERATION_GATEWAY,
@@ -1668,15 +1740,12 @@ class RuntimeRunHandler:
             ),
             facts_provider=self._rollout_facts_for_run(run),
         ):
-            return WorkspaceTombstoneBackend()
-        if (
-            mcp_gateway_services is None
-            or self._workspace_host_sessions is None
-            or self._workspace_overlay_store is None
-            or self._artifact_blob_store is None
-            or self._artifact_reference_store is None
-        ):
-            return WorkspaceTombstoneBackend()
+            return await self._workspace_read_only("rollout_admission_denied")
+        missing = self._missing_workspace_dependencies(mcp_gateway_services)
+        if missing:
+            return await self._workspace_read_only(
+                f"missing_dependencies={'+'.join(missing)}"
+            )
         scope = EffectExecutionScope(
             org_id=run.org_id,
             user_id=run.user_id,
@@ -1693,6 +1762,11 @@ class RuntimeRunHandler:
             scope,
         )
         if session is None or session.base_read is None:
+            self._tombstone(
+                "no_host_session"
+                if session is None
+                else "host_session_has_no_base_read"
+            )
             return WorkspaceTombstoneBackend()
         merged = MergedWorkspaceBackend(
             run_id=run.run_id,

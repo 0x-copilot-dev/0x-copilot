@@ -1,6 +1,7 @@
 import { delimiter, join } from "node:path";
 
 import type { BootSecrets } from "./boot-secrets";
+import { resolveLocalPrincipal } from "./local-principal";
 import {
   LOCAL_SERVICE_IDENTITY_ENV,
   LOCAL_SERVICE_IDENTITY_PROTOCOL,
@@ -170,7 +171,20 @@ export function aiFileStoreV1Root(userDataDir: string): string {
  */
 export function resolveDesktopStudioRuntimeEnv(
   processEnv: Readonly<Record<string, string | undefined>>,
-  opts: { readonly workspaceBrokerEnabled: boolean },
+  opts: {
+    readonly workspaceBrokerEnabled: boolean;
+    /**
+     * The install's OWN principal, persisted beside the identity store it
+     * names. Present ⇒ this deployment can name its single user in a cohort
+     * rule, which is the only way `enforce` is satisfiable on desktop.
+     */
+    readonly localPrincipal?: {
+      readonly orgId: string;
+      readonly userId: string;
+    };
+    /** `app.isPackaged`. Unpackaged builds cannot attest C2 — see `cohortPolicy`. */
+    readonly packaged?: boolean;
+  },
 ): Readonly<Record<string, string>> {
   const readBoolean = (name: string, defaultValue: boolean): boolean => {
     const raw = processEnv[name]?.trim().toLowerCase();
@@ -208,7 +222,108 @@ export function resolveDesktopStudioRuntimeEnv(
     ARTIFACT_DRAFTS_V2: artifactDrafts ? "true" : "false",
     OPERATION_GATEWAY_MODE: operationGateway,
     WORKSPACE_EFFECT_MODE: workspaceEffect,
+    ...cohortPolicy(
+      workspaceEffect,
+      opts.localPrincipal,
+      opts.packaged === true,
+    ),
   });
+}
+
+/**
+ * Capabilities the enforced workspace lane admits for this install's own user.
+ *
+ * The exact union the runtime demands: `_workspace_effect_backend_for_run`
+ * requires the last five, and `_build_mcp_operation_gateway_services` — whose
+ * absence tombstones the workspace lane too — additionally requires
+ * `mcp_gateway`. Naming fewer produces a lane that denies for a reason nobody
+ * can see from here.
+ */
+const DESKTOP_COHORT_CAPABILITIES = Object.freeze([
+  "operation_gateway",
+  "mcp_gateway",
+  "effect_stager",
+  "effect_commit",
+  "workspace_overlay",
+  "workspace_commit",
+] as const);
+
+/**
+ * The per-capability MODE variable each of those reads.
+ *
+ * A cohort rule is necessary but NOT sufficient: `RolloutCohortPolicy.admit`
+ * returns `GLOBAL_OFF` when `modes.mode_for(capability)` is OFF, and it does so
+ * BEFORE consulting any rule. Setting only `OPERATION_GATEWAY_MODE=enforce`
+ * therefore marked that one capability explicitly controlled — which switches
+ * the whole dependency group from legacy passthrough to cohort admission —
+ * while the other five stayed OFF and denied unconditionally. The lane could
+ * never open, and the reason looked identical to a missing cohort.
+ */
+const CAPABILITY_MODE_ENV = Object.freeze({
+  operation_gateway: "OPERATION_GATEWAY_MODE",
+  mcp_gateway: "MCP_GATEWAY_MODE",
+  effect_stager: "EFFECT_STAGER_MODE",
+  effect_commit: "EFFECT_COMMIT_MODE",
+  workspace_overlay: "WORKSPACE_OVERLAY_MODE",
+  workspace_commit: "WORKSPACE_COMMIT_MODE",
+} as const satisfies Record<
+  (typeof DESKTOP_COHORT_CAPABILITIES)[number],
+  string
+>);
+
+/**
+ * `E2_ROLLOUT_COHORTS_JSON` naming this install's own principal, or nothing.
+ *
+ * WHY THIS IS NOT SELF-DEALING. E2 cohorts are a FLEET staged-rollout tool:
+ * `RolloutCohortRule` requires an exact org/user/device selector, and the
+ * subject is built only from a run record's verified identity. A hosted
+ * operator names a subset of their users; a single-user desktop has exactly one
+ * user, and the deployment provisioning its own tenant is the same act as any
+ * operator writing their own cohort file. It is deployment configuration, not a
+ * caller asserting who it is — the runtime still matches against the VERIFIED
+ * identity on the run, so a wrong id here fails closed rather than admitting a
+ * stranger.
+ *
+ * Emitted only under `enforce`, so the compatibility lane's behaviour — and
+ * every hosted image — is byte-identical.
+ *
+ * Absent principal ⇒ absent policy ⇒ the lane degrades to read-only and says so
+ * (`workspace_effect.tombstone rollout_admission_denied+degraded_to_read_only`).
+ * That is the honest first-run state on an install that has not yet minted one,
+ * never a silent half-enabled lane.
+ */
+function cohortPolicy(
+  workspaceEffect: string,
+  principal: { readonly orgId: string; readonly userId: string } | undefined,
+  packaged: boolean,
+): Readonly<Record<string, string>> {
+  if (workspaceEffect !== "enforce" || principal === undefined) return {};
+  if (principal.orgId === "" || principal.userId === "") return {};
+  // NEVER emit a mode the runtime will refuse to boot under. The startup
+  // validator rejects `WORKSPACE_COMMIT_MODE=enforce` without C2 native
+  // attestation, which an UNPACKAGED build cannot produce — so emitting these
+  // on a CLI install turns a graceful read-only degradation into
+  // "Application startup failed. Exiting." A capability that cannot be
+  // satisfied must not be requested.
+  if (!packaged) return {};
+  const modes: Record<string, string> = {};
+  for (const capability of DESKTOP_COHORT_CAPABILITIES) {
+    modes[CAPABILITY_MODE_ENV[capability]] = "enforce";
+  }
+  // Modes and cohort are emitted TOGETHER, never separately. Modes alone mark
+  // capabilities explicitly controlled with nobody admitted — strictly worse
+  // than legacy passthrough. A cohort alone names a principal for lanes that
+  // are globally off. Only the pair opens the lane, so only the pair ships.
+  return {
+    ...modes,
+    E2_ROLLOUT_COHORTS_JSON: JSON.stringify(
+      DESKTOP_COHORT_CAPABILITIES.map((capability) => ({
+        capability,
+        org_id: principal.orgId,
+        user_id: principal.userId,
+      })),
+    ),
+  };
 }
 
 export interface ServiceEnvInputs {
@@ -221,6 +336,8 @@ export interface ServiceEnvInputs {
   readonly processEnv: Readonly<Record<string, string | undefined>>;
   /** app.getPath("userData") — used to derive the file store root. */
   readonly userDataDir: string;
+  /** `app.isPackaged` — gates capabilities an unpackaged build cannot attest. */
+  readonly packaged?: boolean;
   /**
    * Built frontend web dir (wallet.html + assets/). When set, the facade serves
    * the SIWE wallet page from here. Optional so unit tests without a staged web
@@ -381,6 +498,12 @@ export function buildServiceEnv(
         env,
         resolveDesktopStudioRuntimeEnv(inputs.processEnv, {
           workspaceBrokerEnabled: inputs.workspaceBroker?.enabled === true,
+          // The install's own principal, when it has one. Absent on a fresh
+          // install's first boot — see `resolveLocalPrincipal`: it ADOPTS an
+          // existing id and never mints, because fresh ids would orphan the
+          // conversations an existing install keys by org/user.
+          localPrincipal: resolveLocalPrincipal(inputs.userDataDir),
+          packaged: inputs.packaged === true,
         }),
       );
       const browser = inputs.browserBroker;

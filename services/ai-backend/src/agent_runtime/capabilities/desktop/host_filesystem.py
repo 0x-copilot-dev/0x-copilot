@@ -227,13 +227,28 @@ class HostFilesystemRules:
         if scratch is not None:
             rules.extend(scratch.allow_rules())
 
-        # 3. Granted roots — READ only, deliberately. Granting a folder makes it
-        #    readable without prompting; it does not make it directly writable.
-        #    See rule 5 for why.
+        # 3. Granted roots. A grant carries its own MODE, and this rule is
+        #    where that mode finally means something again.
+        #
+        #    It used to be READ-only regardless: `writable` was carried on every
+        #    grant and decided nothing, because D7 routed all host writes through
+        #    the staged overlay. That lane has never once run on a desktop
+        #    install — it needs a C2 attestation only a signed, packaged build
+        #    can produce, and this app ships as an unpackaged CLI payload. So
+        #    the practical effect of "writes are audited" was "writes never
+        #    happen", while `writable` sat in the contract looking meaningful.
+        #
+        #    The consent argument that motivated D7 is kept, and MOVED to where
+        #    it belongs: the user answers read-only vs read-and-write when they
+        #    attach the folder, once, knowing what they are deciding. That is a
+        #    better moment than a per-write card the user cannot distinguish
+        #    from a read card — and far better than thirty such cards in one
+        #    task, which is how consent prompts get clicked through unread.
         for root in roots:
+            operations = [_READ, _WRITE] if root.writable else [_READ]
             rules.append(
                 {
-                    "operations": [_READ],
+                    "operations": operations,
                     "paths": [root.path, root.glob()],
                     "mode": _Mode.ALLOW,
                 }
@@ -255,14 +270,15 @@ class HostFilesystemRules:
 
         # 5. Every other WRITE is denied outright — NOT interrupted.
         #
-        #    This is D7, and it is the reason `permissions` was empty before:
-        #    "generic filesystem interrupts never authorize a host mutation."
-        #    If this rule were `interrupt`, approving a read-shaped prompt would
-        #    quietly become a way to mutate the user's disk outside the staged
-        #    C3 overlay and C2's commit authority — the one path that records
-        #    what changed and can undo it. Host writes keep going through the
-        #    typed workspace operation adapter; this rule set only ever widens
-        #    READS.
+        #    Still deny, and for the ORIGINAL reason: a generic filesystem
+        #    interrupt must never authorize a mutation. Reads and writes share
+        #    one consent card, so if this were `interrupt`, approving something
+        #    that reads like "Allow reading /path?" could silently overwrite
+        #    that path. Denial is the only answer that cannot be misread.
+        #
+        #    What changed in rule 3 does not weaken this: a write is allowed
+        #    ONLY inside a root the user attached AND marked writable. Outside
+        #    that, the answer is still no, and it is never a question.
         #
         #    Together, rules 4 and 5 are total over every absolute path the
         #    MATCHER CAN SEE, so nothing visible is left to deepagents'

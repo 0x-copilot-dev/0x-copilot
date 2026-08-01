@@ -71,7 +71,7 @@ import binascii
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Final, Literal, cast
@@ -90,6 +90,7 @@ from deepagents.backends.protocol import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_runtime.capabilities.desktop.broker_client import (
+    FsStatResult,
     BrokerClientConfig,
     BrokerError,
     BrokerGrant,
@@ -100,6 +101,12 @@ from agent_runtime.capabilities.desktop.broker_client import (
     DesktopBrokerClient,
     FsDirEntry,
     FsReadResult,
+)
+from agent_runtime.capabilities.workspace.contracts import (
+    WorkspaceBaseEntry,
+    WorkspaceBaseMatch,
+    WorkspaceEntryKind,
+    normalize_virtual_path,
 )
 from agent_runtime.capabilities.desktop.host_path import (
     ClassifiedPath,
@@ -611,6 +618,74 @@ class BrokeredWorkspaceBackend(BackendProtocol):
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Synchronous file read (delegates to :meth:`aread`)."""
         return _run_sync(self.aread(file_path, offset, limit))
+
+    def base_read_port(self) -> "BrokerBaseRead":
+        """This backend seen as a `WorkspaceBaseReadPort`.
+
+        The seam that lets `MergedWorkspaceBackend` layer a staged overlay over
+        broker-served reads when C2's host session is unavailable — so the
+        absence of write authority costs the user writes, not reads.
+        """
+
+        return BrokerBaseRead(self)
+
+    async def astat_entry(self, path: str) -> FsStatResult | None:
+        """Leaf metadata over `/v1/fs/stat`, or ``None`` when unavailable.
+
+        Exists because `WorkspaceBaseEntry` REQUIRES `byte_size` on a file, and
+        `/v1/fs/list` returns only a name and a type. The size is not cosmetic:
+        the overlay and the blob store size their reads from it.
+        """
+
+        try:
+            resolution = await self._aresolve(path, scope=_GrantScope.CONTAINER)
+        except (_WorkspaceRootError, _UnknownMountError, _WorkspaceRefusalError):
+            return None
+        if not resolution.relative:
+            return None
+        try:
+            return await self._client.stat(
+                resolution.mount.grant_id, resolution.relative
+            )
+        except BrokerError:
+            return None
+
+    async def abytes(
+        self, path: str, *, start: int | None = None, end: int | None = None
+    ) -> bytes:
+        """Raw bytes of a grant-relative file, unsliced by any text layer.
+
+        `aread` exists for the MODEL and returns line-sliced text (base64 for
+        binary). The overlay and the artifact blob store need the file itself:
+        a CSV re-wrapped by a line slicer is a different file, and a digest
+        taken over it would not match the one the host holds.
+
+        Refusals return empty rather than raising: this feeds a read port whose
+        callers merge base content with staged content, and a raise would take
+        the staged half down with the base half.
+        """
+
+        try:
+            resolution = await self._aresolve(path, scope=_GrantScope.CONTAINER)
+        except (_WorkspaceRootError, _UnknownMountError, _WorkspaceRefusalError):
+            return b""
+        if not resolution.relative:
+            return b""
+        try:
+            result = await self._client.read(
+                resolution.mount.grant_id,
+                resolution.relative,
+                offset=start,
+                max_bytes=(end - start)
+                if (start is not None and end is not None)
+                else self._read_max_bytes,
+            )
+        except BrokerError:
+            return b""
+        try:
+            return base64.b64decode(result.base64, validate=True)
+        except (binascii.Error, ValueError):
+            return b""
 
     async def aread(
         self, file_path: str, offset: int = 0, limit: int = 2000
@@ -1159,3 +1234,183 @@ def _run_sync(coro: object) -> object:
     except RuntimeError:
         return asyncio.run(cast("object", coro))  # type: ignore[arg-type]
     return asyncio.run_coroutine_threadsafe(cast("object", coro), loop).result()  # type: ignore[arg-type]
+
+
+class BrokerBaseRead:
+    """A :class:`WorkspaceBaseReadPort` served by the capability broker.
+
+    WHY THIS EXISTS. `MergedWorkspaceBackend` — the only object that can layer a
+    staged overlay over the user's real files — takes its base reads as a PORT,
+    not as a host session. Until now the sole implementation came from C2's
+    private host session, so a run without one fell to
+    `WorkspaceTombstoneBackend`, which refuses READS as well as writes. Turning
+    the enforced lane on therefore made attached folders LESS usable, not more.
+
+    With this, losing the write authority degrades to read-only instead of to
+    nothing — the invariant the two-lane split kept violating.
+
+    WHAT IT DELIBERATELY CANNOT DO. The broker's `/v1/fs/list` returns a name
+    and a type and nothing else: no digest, no generation, no mtime. Those are
+    exactly the fields the overlay compares to prove a staged write's
+    precondition still holds. So every entry here reports them as ``None``, and
+    a caller that needs a precondition must obtain the host session instead.
+    That is not a gap to be filled later by inventing values — a fabricated
+    generation would let a write claim a precondition nobody checked.
+
+    Lives beside the backend that already owns mount resolution and the broker
+    client rather than in a module of its own, so there is one place that knows
+    how a virtual path becomes a grant-relative one.
+    """
+
+    def __init__(self, backend: "BrokeredWorkspaceBackend") -> None:
+        self._backend = backend
+
+    #: `normalize_virtual_path` demands the full `/workspace/<mount>/...` form,
+    #: while the backend routes on `/<mount>/...` because the composite mounts
+    #: it AT `/workspace`. This adapter is the seam between those two spellings.
+    _ROOT = "/workspace"
+
+    @classmethod
+    def _to_route(cls, virtual_path: str) -> str:
+        """`/workspace/<mount>/x` -> `/<mount>/x` for the backend's own router."""
+
+        normalized = normalize_virtual_path(virtual_path, allow_mount_root=True)
+        return normalized[len(cls._ROOT) :] or "/"
+
+    @classmethod
+    def _to_virtual(cls, route_path: str) -> str:
+        """The inverse, so every entry we hand back is canonical."""
+
+        suffix = route_path if route_path.startswith("/") else f"/{route_path}"
+        return normalize_virtual_path(f"{cls._ROOT}{suffix}", allow_mount_root=True)
+
+    async def _entry(
+        self, route_path: str, *, is_dir: bool
+    ) -> WorkspaceBaseEntry | None:
+        """One entry, or ``None`` when its metadata cannot be established.
+
+        A directory needs nothing further. A FILE needs `byte_size`, which
+        `/v1/fs/list` does not return — hence the extra `/v1/fs/stat` per file
+        child. That is one loopback round-trip per file in a listing, which is
+        the price of not fabricating a size; an entry whose size was invented
+        would mis-size every read taken against it.
+        """
+
+        virtual_path = self._to_virtual(route_path)
+        if is_dir:
+            return WorkspaceBaseEntry(
+                virtual_path=virtual_path, entry_kind=WorkspaceEntryKind.DIRECTORY
+            )
+        stat = await self._backend.astat_entry(route_path)
+        if stat is None:
+            # Listed but unreadable: omit it rather than claim a size. The
+            # caller merges this with staged content and must not be told a
+            # file is 0 bytes when nobody could measure it.
+            return None
+        return self._entry_from_stat(route_path, stat)
+
+    def _entry_from_stat(
+        self, route_path: str, stat: FsStatResult
+    ) -> WorkspaceBaseEntry:
+        """Build an entry from metadata already in hand — never re-stat.
+
+        `stat()` holds the result the moment it asks; routing it back through
+        `_entry` would issue a second identical `/v1/fs/stat` per call.
+        """
+
+        return WorkspaceBaseEntry(
+            virtual_path=self._to_virtual(route_path),
+            entry_kind=(
+                WorkspaceEntryKind.DIRECTORY
+                if stat.type == "dir"
+                else WorkspaceEntryKind.FILE
+            ),
+            byte_size=stat.size,
+            mtime_ns=int(stat.mtime_ms * 1_000_000),
+        )
+
+    async def _entries(self, infos: object) -> tuple[WorkspaceBaseEntry, ...]:
+        built = [
+            await self._entry(
+                str(info.get("path") or ""), is_dir=bool(info.get("is_dir"))
+            )
+            for info in infos or ()
+            if info.get("path")
+        ]
+        return tuple(entry for entry in built if entry is not None)
+
+    async def stat(self, virtual_path: str) -> WorkspaceBaseEntry | None:
+        """Metadata for one base path, or ``None`` when it is not there.
+
+        Straight from `/v1/fs/stat`, which carries the size and mtime a
+        `WorkspaceBaseEntry` needs. Unreachable metadata reads as absent — the
+        honest answer for a port whose caller merges base with staged content.
+        """
+
+        route = self._to_route(virtual_path)
+        stat = await self._backend.astat_entry(route)
+        return None if stat is None else self._entry_from_stat(route, stat)
+
+    async def list(self, virtual_path: str) -> Sequence[WorkspaceBaseEntry]:
+        """Direct children. A refusal lists NOTHING rather than raising.
+
+        The overlay merges this with staged entries, and a raise there would
+        take the staged half down with the base half.
+        """
+
+        listing = await self._backend.als(self._to_route(virtual_path))
+        if listing.error:
+            return ()
+        return await self._entries(listing.entries)
+
+    async def read(
+        self,
+        virtual_path: str,
+        *,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> AsyncIterator[bytes]:
+        """A bounded byte window, as a single-chunk stream.
+
+        Bytes, not the line-sliced text `aread` returns: this port feeds the
+        overlay and the artifact blob store, and a CSV that came back re-wrapped
+        by a text slicer would be a different file.
+        """
+
+        route = self._to_route(virtual_path)
+        payload = await self._backend.abytes(route, start=start, end=end)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            yield payload
+
+        return _stream()
+
+    async def glob(self, pattern: str) -> Sequence[WorkspaceBaseEntry]:
+        result = await self._backend.aglob(pattern)
+        if result.error:
+            return ()
+        return await self._entries(result.entries)
+
+    async def grep(
+        self, query: str, paths: Sequence[str] | None = None
+    ) -> Sequence[WorkspaceBaseMatch]:
+        """Literal search hits. ``paths`` narrows the search root when given."""
+
+        route = self._to_route(paths[0]) if paths else None
+        result = await self._backend.agrep(query, path=route)
+        if result.error:
+            return ()
+        matches: list[WorkspaceBaseMatch] = []
+        for hit in result.matches or ():
+            path = str(hit.get("path") or "")
+            line_number = hit.get("line")
+            if not path or not isinstance(line_number, int) or line_number < 1:
+                continue
+            matches.append(
+                WorkspaceBaseMatch(
+                    virtual_path=self._to_virtual(path),
+                    line_number=line_number,
+                    line_text=str(hit.get("text") or ""),
+                )
+            )
+        return tuple(matches)

@@ -368,7 +368,10 @@ async def _assemble_harness(
         # This remains the graph-construction input and temporary legacy/golden
         # diagnostic. The effective request is rebuilt for every supervisor and
         # local-child provider call by RuntimeControlMiddleware.
-        model_instructions = prompt_assembly_plan.rendered_prompt
+        model_instructions = _instructions_with_granted_folders(
+            instructions=prompt_assembly_plan.rendered_prompt,
+            roots=granted_host_roots,
+        )
         prompt_observer = runtime_dependencies.prompt_assembly_observer
         if prompt_observer is not None and not isinstance(
             prompt_observer, PromptAssemblyObserver
@@ -2274,6 +2277,65 @@ def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:
         if isinstance(prefix, str) and prefix and backend is not None
     }
     return routes or None
+
+
+def _instructions_with_granted_folders(
+    *,
+    instructions: str,
+    roots: tuple[object, ...] | None,
+) -> str:
+    """Name the folders the user attached, by their REAL paths.
+
+    Permission without instruction is not a capability. The rules and the floor
+    both allow a write inside a writable grant, and the model still refused —
+    verbatim: "I can't write to /Users/…/seed.csv from here because I only have
+    read access to that filesystem path." It never called `write_file`. The
+    `/workspace/` guidance says that mount is read-only, and nothing told the
+    model that the attached folder ALSO has a host path it may write to, so it
+    reasonably concluded it could not.
+
+    Real paths on purpose. They are what the user recognises, what the model
+    must narrate back ("saved to ~/Projects/notes.md", not "/workspace/mnt_3"),
+    and what a shell tool would need later. The model already reads them — this
+    only stops it from being wrong about what it may do with them.
+
+    Empty or absent roots append NOTHING, so a run with no grants keeps a
+    byte-identical prompt and pays no token tax.
+    """
+
+    attached = tuple(roots or ())
+    if not attached:
+        return instructions
+
+    def _line(root: object) -> str:
+        path = str(getattr(root, "path", ""))
+        access = "read and write" if getattr(root, "writable", False) else "read only"
+        return f"- {path} ({access})"
+
+    lines = [_line(root) for root in attached if getattr(root, "path", "")]
+    if not lines:
+        return instructions
+
+    writable = any(getattr(root, "writable", False) for root in attached)
+    block = [
+        "The user has attached these folders on this computer. Use these exact "
+        "paths with your filesystem tools, and refer to them this way when you "
+        "report what you did:",
+        "",
+        *lines,
+        "",
+        "Everything outside them still asks the user first, and writing outside "
+        "them is refused.",
+    ]
+    if writable:
+        block.append(
+            "In a folder marked read and write you may create and modify files "
+            "directly — no staging, no separate approval. The user granted that "
+            "when they attached it. `write_file` CREATES a new file and refuses "
+            "a path that already exists; to change a file that is already there, "
+            "use `edit_file`."
+        )
+    return "\n\n".join((instructions, "\n".join(block)))
 
 
 def _instructions_with_workspace(

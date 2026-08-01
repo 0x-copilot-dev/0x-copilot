@@ -88,13 +88,19 @@ describe("requestGrant", () => {
     });
   });
 
-  it("asks for read-only when the ask named no access", async () => {
+  it("asks for create-and-modify — but not delete — when the ask named no access", async () => {
+    // Attaching a folder means "work in here". The runtime maps any
+    // non-`read_only` mode to a WRITABLE grant, so a `read_only` default made
+    // the write rules unreachable: the floor refused with "the agent cannot
+    // write directly to the host filesystem" three layers from anything that
+    // looked like the cause. Delete stays out — it is the one operation a user
+    // cannot undo by re-editing.
     const h = harness({
       [CAPABILITY_CHANNELS.requestFolderGrant]: rendererGrant(),
     });
     await createDesktopWorkspaceGrantPort(h.bridge).requestGrant();
     expect(payloadOf(h, CAPABILITY_CHANNELS.requestFolderGrant)).toEqual({
-      mode: "read_only",
+      mode: "read_write_no_delete",
     });
   });
 

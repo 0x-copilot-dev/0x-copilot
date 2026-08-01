@@ -43,7 +43,19 @@ const GRANT_MODES: readonly WorkspaceGrantMode[] = [
 ];
 
 /** The access a grant request defaults to when the ask named none. */
-const DEFAULT_MODE: WorkspaceGrantMode = "read_only";
+// Attaching a folder means "work in here", so the default permits create and
+// modify — but NOT delete. `read_write_no_delete` is the honest middle: the
+// runtime maps any non-`read_only` mode to a writable grant
+// (`writable = mount.mode != "read_only"`), so this is what makes the write
+// rules reachable at all, while still refusing the one operation a user cannot
+// undo by re-editing.
+//
+// It was `read_only`, and that is why a granted folder still refused writes
+// after the rules, the floor and the tool surface had all been fixed: the floor
+// answered "Permission denied: the agent cannot write directly to the host
+// filesystem" because `writable` was false, three layers away from anything
+// that looked like the cause.
+const DEFAULT_MODE: WorkspaceGrantMode = "read_write_no_delete";
 
 export class DesktopWorkspaceGrantPortError extends Error {
   constructor(message: string) {

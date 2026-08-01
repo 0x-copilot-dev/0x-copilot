@@ -12,6 +12,9 @@ import pytest
 
 from agent_runtime.capabilities.desktop.agent_scratch import agent_scratch_root
 from agent_runtime.capabilities.desktop.host_floor import HostFilesystemFloor
+from agent_runtime.capabilities.desktop.workspace_backend import (
+    BrokeredWorkspaceBackend,
+)
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.workspace.contracts import (
     WorkspaceBaseEntry,
@@ -601,18 +604,17 @@ class TestEnforceLaneGrantedRoots:
     async def test_a_writable_grant_gets_no_direct_host_write_at_all(
         self, monkeypatch: pytest.MonkeyPatch, fake_dependencies: RuntimeDependencies
     ) -> None:
-        """The writable half of D7 — and it says the same thing as the read-only half.
+        """The grant's MODE decides again, and both layers must say so.
 
-        This test used to assert the opposite: that `read_write` bought the
-        agent one direct write location, `<attached>/.copilot`. PRD-FS-12 D7
-        moved the scratch to `$COPILOT_HOME/.tmp`, so the grant's MODE now
-        decides nothing about writes at all. Read-only and read-write compose
-        the same host-write posture, which is the point — "attaching a folder
-        widens reads" is finally true without a footnote.
+        History worth keeping: `read_write` once bought exactly one write
+        location, `<attached>/.copilot`. D7 removed that and made the mode
+        decide NOTHING — every host write routed to a staged lane that, on a
+        desktop install, has never run. So "writes are audited" meant "writes
+        never happen", and `writable` sat in the contract looking meaningful.
 
-        Both layers are asserted because they answer different halves: rule 5
-        denies what the matcher can see, and `.copilot` (hidden) it cannot, so
-        only the floor can refuse that one.
+        Both layers are asserted because they answer different halves: the rule
+        set covers what the matcher can see, and hidden segments it cannot — so
+        only the floor can answer for `.copilot`.
         """
 
         from deepagents.middleware.filesystem import _check_fs_permission
@@ -635,11 +637,12 @@ class TestEnforceLaneGrantedRoots:
         rules = list(builder.calls[0].permissions)
         floor = builder.calls[0].memory_backend.default
 
-        # Nothing is written inside the folder the user attached — not their
-        # content, and not the scratch that used to be sited there.
-        assert _check_fs_permission(rules, "write", f"{_ATTACHED}/notes.md") == "deny"
-        assert floor.permits_write(f"{_ATTACHED}/notes.md") is False
-        assert floor.permits_write(f"{_ATTACHED}/.copilot/notes.md") is False
+        # A READ_WRITE grant is writable at BOTH layers. They have to agree:
+        # when they did not, the rule allowed and the floor refused, and the
+        # write disappeared citing a lane the user had never heard of.
+        assert _check_fs_permission(rules, "write", f"{_ATTACHED}/notes.md") == "allow"
+        assert floor.permits_write(f"{_ATTACHED}/notes.md") is True
+        assert floor.permits_write(f"{_ATTACHED}/.copilot/notes.md") is True
         # No rule names the dropped location either, so it is gone from the
         # policy and not merely overruled by the floor.
         assert not any(
@@ -669,7 +672,14 @@ class TestEnforceLaneGrantedRoots:
         backend = await handler._workspace_backend_for_run(
             _command(), run=run, mcp_gateway_services=services
         )
-        assert isinstance(backend, WorkspaceTombstoneBackend)
+        # The name of this test was always the contract; the assertion used to
+        # contradict it. A denied run got `WorkspaceTombstoneBackend`, which
+        # refuses READS as well as effects — so a folder the user had just
+        # attached became unreadable, and the model was told to make an artifact
+        # instead. It now degrades to the broker's read-only backend: the run
+        # can stage nothing and can still look at what it was given.
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        assert backend.supports_writes is False
 
         roots = await handler._granted_host_roots_for_run(backend)
         assert [root.path for root in roots or ()] == [_ATTACHED]
