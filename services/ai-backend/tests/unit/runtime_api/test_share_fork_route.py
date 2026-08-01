@@ -17,7 +17,6 @@ from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.in_memory.share_snapshot_store import InMemoryShareSnapshotStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import (
     CreateConversationRequest,
@@ -26,6 +25,40 @@ from runtime_api.schemas import (
 )
 from runtime_api.schemas.common import MessageRole, MessageStatus
 from runtime_worker.audit import WorkerAuditEmitter
+
+
+class _FakeShareSnapshotStore:
+    """Inline ``ShareSnapshotPort`` double: token-keyed lookup with revocation + expiry."""
+
+    def __init__(self) -> None:
+        self._by_token: dict[str, ShareSnapshot] = {}
+        self._revoked: set[str] = set()
+        self._expires_at: dict[str, datetime] = {}
+
+    def register(
+        self,
+        *,
+        token: str,
+        snapshot: ShareSnapshot,
+        expires_at: datetime | None = None,
+    ) -> None:
+        self._by_token[token] = snapshot
+        if expires_at is not None:
+            self._expires_at[token] = expires_at
+
+    def revoke(self, token: str) -> None:
+        self._revoked.add(token)
+
+    async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:
+        if share_token in self._revoked:
+            return None
+        snapshot = self._by_token.get(share_token)
+        if snapshot is None:
+            return None
+        expires_at = self._expires_at.get(share_token)
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            return None
+        return snapshot
 
 
 class _RouteFixtureMixin:
@@ -39,7 +72,7 @@ class _RouteFixtureMixin:
 
     def make_client(
         self, *, wire_fork: bool = True
-    ) -> tuple[TestClient, InMemoryRuntimeApiStore, InMemoryShareSnapshotStore]:
+    ) -> tuple[TestClient, InMemoryRuntimeApiStore, _FakeShareSnapshotStore]:
         sync_store = InMemoryRuntimeApiStore()
         settings = RuntimeSettings.load(
             environ={
@@ -48,7 +81,7 @@ class _RouteFixtureMixin:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
-        share_store = InMemoryShareSnapshotStore()
+        share_store = _FakeShareSnapshotStore()
         ports = RuntimeAdapterFactory.from_store(sync_store)
         app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
         if wire_fork:
@@ -90,7 +123,7 @@ class _RouteFixtureMixin:
                 )
             )
 
-    def register_share(self, share_store: InMemoryShareSnapshotStore) -> None:
+    def register_share(self, share_store: _FakeShareSnapshotStore) -> None:
         share_store.register(
             token=self.Values.SHARE_TOKEN,
             snapshot=ShareSnapshot(
