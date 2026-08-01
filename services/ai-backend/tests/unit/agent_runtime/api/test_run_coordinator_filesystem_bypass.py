@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from agent_runtime.execution.filesystem_bypass import (
     FilesystemBypassMode,
+    FilesystemBypassResolver,
     FilesystemBypassSelection,
     FilesystemBypassSource,
 )
@@ -58,10 +59,34 @@ def _run_request(
     return CreateRunRequest(**kwargs)
 
 
-def test_the_master_switch_defaults_to_off() -> None:
-    """The product decision, asserted on the contract rather than on prose."""
+def test_the_master_switch_defaults_to_offering_the_control() -> None:
+    """The product decision, asserted on the contract rather than on prose.
 
-    assert WorkspaceBehaviorOverrides().filesystem_bypass_enabled is False
+    Flipped from False once the pill began deciding whether a host write pauses.
+    While it decided nothing observable, hiding it cost nothing; now, False would
+    mean every write in a folder the user explicitly attached as writable asks
+    forever, with no control on screen to say otherwise.
+
+    The switch makes the control VISIBLE. It does not turn bypass on — that is
+    the next test, and it is the assertion that keeps this one safe.
+    """
+
+    assert WorkspaceBehaviorOverrides().filesystem_bypass_enabled is True
+
+
+def test_offering_the_control_is_not_the_same_as_using_it() -> None:
+    """Master on, nobody picked: still Manual.
+
+    The pair of these two tests IS the safety argument for the default above. If
+    this one ever flips, turning on a Settings toggle would silently start
+    auto-approving writes.
+    """
+
+    decision = FilesystemBypassResolver.resolve(master_enabled=True)
+
+    assert decision.offered is True
+    assert decision.mode is FilesystemBypassMode.MANUAL
+    assert decision.skips_approval_pause is False
 
 
 def test_a_run_request_without_a_selection_reads_as_none() -> None:

@@ -34,6 +34,11 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.deep_agent_builder import (
     WORKSPACE_STAGED_WRITE_GUIDANCE,
 )
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+    FilesystemBypassMode,
+)
 from agent_runtime.execution.factory import (
     _composed_deep_backend,
     _instructions_with_workspace,
@@ -615,33 +620,55 @@ class TestEnforceLaneGrantedRoots:
         Both layers are asserted because they answer different halves: the rule
         set covers what the matcher can see, and hidden segments it cannot — so
         only the floor can answer for `.copilot`.
+
+        Run under BOTH bypass postures, because they divide the work differently
+        and only one division is correct. The rules are the CONSENT layer and
+        move with the pill (`interrupt` under Manual, `allow` under Bypass). The
+        floor is not a consent layer at all — it is the containment beneath the
+        real filesystem backend — so it must permit in both. A floor that
+        refused under Manual would let the user approve a write that then
+        silently did nothing, which is the exact failure this test's comment
+        describes, re-created one layer down.
         """
 
         from deepagents.middleware.filesystem import _check_fs_permission
 
         self._broker_env(monkeypatch)
-        handler, _store = _handler(
-            sessions=self._bound_sessions(), broker=_attach(mode="read_write")
-        )
-        backend = await self._enforce_backend(handler, _run())
-        roots = await handler._granted_host_roots_for_run(backend)
 
-        builder = CapturingAgentBuilder()
-        await acreate_agent_runtime(
-            context=_context(),
-            dependencies=fake_dependencies.model_copy(
-                update={"workspace_backend": backend, "granted_host_roots": roots}
+        for bypass, expected in (
+            (MANUAL_FILESYSTEM_BYPASS, "interrupt"),
+            (
+                FilesystemBypassDecision(
+                    master_enabled=True, mode=FilesystemBypassMode.BYPASS
+                ),
+                "allow",
             ),
-            agent_builder=builder,
-        )
-        rules = list(builder.calls[0].permissions)
-        floor = builder.calls[0].memory_backend.default
+        ):
+            handler, _store = _handler(
+                sessions=self._bound_sessions(), broker=_attach(mode="read_write")
+            )
+            backend = await self._enforce_backend(handler, _run())
+            roots = await handler._granted_host_roots_for_run(backend)
 
-        # A READ_WRITE grant is writable at BOTH layers. They have to agree:
-        # when they did not, the rule allowed and the floor refused, and the
-        # write disappeared citing a lane the user had never heard of.
-        assert _check_fs_permission(rules, "write", f"{_ATTACHED}/notes.md") == "allow"
-        assert floor.permits_write(f"{_ATTACHED}/notes.md") is True
+            builder = CapturingAgentBuilder()
+            await acreate_agent_runtime(
+                context=_context().model_copy(update={"filesystem_bypass": bypass}),
+                dependencies=fake_dependencies.model_copy(
+                    update={"workspace_backend": backend, "granted_host_roots": roots}
+                ),
+                agent_builder=builder,
+            )
+            rules = list(builder.calls[0].permissions)
+            floor = builder.calls[0].memory_backend.default
+
+            # A READ_WRITE grant is writable at BOTH layers. They have to agree:
+            # when they did not, the rule allowed and the floor refused, and the
+            # write disappeared citing a lane the user had never heard of.
+            assert (
+                _check_fs_permission(rules, "write", f"{_ATTACHED}/notes.md")
+                == expected
+            )
+            assert floor.permits_write(f"{_ATTACHED}/notes.md") is True
         assert floor.permits_write(f"{_ATTACHED}/.copilot/notes.md") is True
         # No rule names the dropped location either, so it is gone from the
         # policy and not merely overruled by the floor.

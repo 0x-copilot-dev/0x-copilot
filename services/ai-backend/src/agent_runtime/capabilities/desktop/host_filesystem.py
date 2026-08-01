@@ -28,16 +28,33 @@ whole design, and it hangs on one detail of deepagents' matcher:
 Unmatched-means-allow is a footgun for us, so the rule list always ends with a
 catch-all `deny`. First match wins, so the ordering below is load-bearing:
 
-    1. the agent's own virtual namespaces      -> allow  (memories, drafts, ...)
-    1b. the agent's own scratch on disk        -> allow  ($COPILOT_HOME/.tmp)
-    2. every granted host root                 -> allow  (read + write)
-    3. everything else                         -> interrupt  (ask the user)
-    4. nothing reaches here                    -> deny  (the floor)
+    1. the agent's own virtual namespaces      -> allow      (memories, drafts, ...)
+    2. the agent's own scratch on disk         -> allow      ($COPILOT_HOME/.tmp)
+    3. a granted host root, READ               -> allow
+    3. a granted host root, WRITE              -> allow      under Bypass
+                                               -> interrupt  under Manual
+    4. every other read                        -> interrupt  (ask the user)
+    5. every other write                       -> deny       (the floor)
 
-Rule 3 is what makes an ungranted path ASK instead of lying, and rule 4 is what
+Rule 4 is what makes an ungranted path ASK instead of lying, and rule 5 is what
 makes a future wiring mistake fail closed instead of silently succeeding. A run
-with zero grants still gets rules 1, 3 and 4 — so "you have granted nothing" is
+with zero grants still gets rules 1, 4 and 5 — so "you have granted nothing" is
 answered by a consent request, never by an empty listing.
+
+Where the bypass pill lands
+---------------------------
+Rule 3's write half is the ONLY thing the filesystem-bypass decision moves, and
+that is deliberate: bypass removes the PAUSE, never widens the SET. Rules 4 and
+5 are identical in both modes, so an ungranted write is refused rather than
+asked in every posture — one click on a generic card can therefore never become
+write access to the machine. This is
+:class:`~agent_runtime.execution.filesystem_bypass.FilesystemBypassBound`'s
+invariant (granted ∧ writable), now enforced where host writes actually happen.
+
+Before this, the decision was consumed only by the ``/workspace/`` staged lane
+(``WorkspaceGatewayServices``), which needs a C2 attestation an unpackaged build
+cannot produce — so on the lane that does land bytes, Manual and Bypass were
+byte-identical and the composer pill decided nothing observable.
 
 The one thing these patterns CANNOT say
 ---------------------------------------
@@ -82,6 +99,10 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
 
 from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+)
 
 if TYPE_CHECKING:
     from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
@@ -186,7 +207,15 @@ class HostFilesystemRules:
         roots: tuple[GrantedRoot, ...],
         *,
         scratch: AgentScratchRoot | None = None,
+        bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS,
     ) -> tuple[dict[str, object], ...]:
+        """The ordered rules for one run, under that run's sealed bypass mode.
+
+        ``bypass`` defaults to Manual so a caller that forgets to thread the
+        run's decision gets the ASKING posture, never the silent one. Every
+        wrong answer here should cost a prompt, not an unannounced write.
+        """
+
         rules: list[dict[str, object]] = []
 
         # 1. The agent's own namespaces. Without these, an ordinary
@@ -238,19 +267,43 @@ class HostFilesystemRules:
         #    the practical effect of "writes are audited" was "writes never
         #    happen", while `writable` sat in the contract looking meaningful.
         #
-        #    The consent argument that motivated D7 is kept, and MOVED to where
-        #    it belongs: the user answers read-only vs read-and-write when they
-        #    attach the folder, once, knowing what they are deciding. That is a
-        #    better moment than a per-write card the user cannot distinguish
-        #    from a read card — and far better than thirty such cards in one
-        #    task, which is how consent prompts get clicked through unread.
+        #    The consent argument that motivated D7 is kept, and SPLIT across
+        #    the two questions it was always conflating:
+        #
+        #      * WHICH folders may be written — answered once, at attach time,
+        #        by `writable`. A read-only grant emits no write rule at all and
+        #        falls through to rule 5's `deny`, so a write there is refused
+        #        and is never even a question. Approving something the user
+        #        already said no to is not a decision worth offering.
+        #      * WHETHER EACH WRITE PAUSES — answered per run by the composer's
+        #        bypass pill. Manual asks; Bypass proceeds.
+        #
+        #    Manual is the default, and the asking half is what makes the
+        #    attach-time answer safe to give: saying "yes, writable" no longer
+        #    means "and never tell me again", so the wide grant stops being the
+        #    only way to get work done. Bypass then exists for the case that
+        #    would otherwise produce thirty cards in one task, which is how
+        #    consent prompts get clicked through unread.
+        #
+        #    READ and WRITE are separate rules because they now carry separate
+        #    modes. Interleaving them per root is safe — deepagents matches on
+        #    (operation, path), so a read rule can never answer a write.
+        write_mode = _Mode.ALLOW if bypass.skips_approval_pause else _Mode.INTERRUPT
         for root in roots:
-            operations = [_READ, _WRITE] if root.writable else [_READ]
             rules.append(
                 {
-                    "operations": operations,
+                    "operations": [_READ],
                     "paths": [root.path, root.glob()],
                     "mode": _Mode.ALLOW,
+                }
+            )
+            if not root.writable:
+                continue
+            rules.append(
+                {
+                    "operations": [_WRITE],
+                    "paths": [root.path, root.glob()],
+                    "mode": write_mode,
                 }
             )
 
@@ -268,17 +321,26 @@ class HostFilesystemRules:
             }
         )
 
-        # 5. Every other WRITE is denied outright — NOT interrupted.
+        # 5. Every other WRITE is denied outright — NOT interrupted. This is the
+        #    rule that keeps bypass a statement about PAUSING rather than about
+        #    REACH, and it is identical in both modes.
         #
-        #    Still deny, and for the ORIGINAL reason: a generic filesystem
-        #    interrupt must never authorize a mutation. Reads and writes share
-        #    one consent card, so if this were `interrupt`, approving something
-        #    that reads like "Allow reading /path?" could silently overwrite
-        #    that path. Denial is the only answer that cannot be misread.
+        #    The original argument for `deny` was that reads and writes share a
+        #    consent card, so an `interrupt` could let "Allow reading /path?" be
+        #    the click that overwrites that path. Rule 3 now does raise write
+        #    interrupts, so that half is answered elsewhere and must stay
+        #    answered: `_FilesystemApproval` renders a write as "Allow writing
+        #    to <file>?" with `operation: "write"` and high risk, so the two
+        #    cards are not interchangeable. A regression there would make Manual
+        #    strictly MORE dangerous than Bypass, which is why that projection
+        #    has its own tests.
         #
-        #    What changed in rule 3 does not weaken this: a write is allowed
-        #    ONLY inside a root the user attached AND marked writable. Outside
-        #    that, the answer is still no, and it is never a question.
+        #    What keeps THIS rule at `deny` is the other half: an ungranted path
+        #    has no attach-time decision behind it, so a single click would be
+        #    the entire authorization for a write anywhere on the machine. A
+        #    write inside a granted writable root is the user's second answer
+        #    about a folder they already chose; a write outside one would be
+        #    their first and only. Those do not deserve the same control.
         #
         #    Together, rules 4 and 5 are total over every absolute path the
         #    MATCHER CAN SEE, so nothing visible is left to deepagents'

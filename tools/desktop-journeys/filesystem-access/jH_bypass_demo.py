@@ -284,16 +284,31 @@ def main() -> int:
                 assert session.wait_for(PILL, timeout_s=90), (
                     "the execution-mode pill never rendered on the run composer"
                 )
-                evidence["pill_master_off"] = session.evaluate(PILL_STATE_JS)
+                evidence["pill_on_arrival"] = session.evaluate(PILL_STATE_JS)
 
-                # --- master switch ON, through the real Settings surface ----
+                # --- the master switch is ON out of the box, and it must be --
+                #
+                # This step used to CLICK the toggle, because the switch used to
+                # default off. It now defaults on, so clicking would turn bypass
+                # OFF and the rest of this journey would silently prove the
+                # opposite of what it claims. Read it instead.
+                #
+                # Worth visiting Settings rather than trusting the pill alone:
+                # the pill is fed by the same GET, so a pill that looks enabled
+                # proves the renderer agrees with itself, not that the shipped
+                # DEFAULT reached the real surface. Run 1 above already had to
+                # ask under Manual — which is what makes "on" safe here: the
+                # switch offers the control, it does not use it.
                 session.click(SETTINGS_TRIGGER)
                 assert session.wait_for("[data-testid=settings-surface]", 30)
                 session.click(MODEL_BEHAVIOR_NAV)
                 assert session.wait_for(BYPASS_TOGGLE, 30)
-                session.click(BYPASS_TOGGLE_HIT)
-                time.sleep(3.5)
-                session.shot("h-04-settings-bypass-on")
+                evidence["master_toggle_checked"] = session.evaluate(
+                    "(() => { const el = document.querySelector('"
+                    + BYPASS_TOGGLE
+                    + "'); return el ? !!el.checked : null; })()"
+                )
+                session.shot("h-04-settings-bypass-default-on")
                 evidence["master_persisted"] = transport_json(
                     session, "GET", "/v1/agent/workspace/defaults"
                 ).get("behavior_overrides", {})
@@ -365,6 +380,11 @@ def main() -> int:
             out = dump(session.run_dir, "fs-h-evidence.json", evidence)
 
     failures: list[str] = []
+    if evidence.get("master_toggle_checked") is not True:
+        failures.append(
+            "MASTER: the bypass control is not offered out of the box, so a user "
+            "left in Manual has no way to reach Bypass"
+        )
     if evidence.get("manual_asked") is not True:
         failures.append("MANUAL: the write into the attached folder did not ask")
     if evidence.get("manual_file_exists") is not True:
