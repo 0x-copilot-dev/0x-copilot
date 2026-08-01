@@ -1855,6 +1855,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     if (listed !== null) {
       return listed;
     }
+    // PRD-02 — the conversation's own title, from the head this session already
+    // fetched. It is what the Threads panel shows for the same row, so the
+    // header and the panel name the thread identically. Preferred over the
+    // generic fallbacks below, which exist only for a genuinely untitled run.
+    if (
+      session.conversationTitle !== null &&
+      session.conversationTitle.trim() !== ""
+    ) {
+      return session.conversationTitle;
+    }
     if (session.runId !== null && session.runId === startedRunId) {
       // An attachment-only start has no goal text (`startedGoal === null`); a
       // run IS attached, so the header must still claim it — "STANDBY" over a
@@ -4352,7 +4362,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // projection's run status (no second subscription — FR-3.3). Live →
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
+        // PRD-02 — this seam's real payload today is the v2 chip bar (posture +
+        // pending counter). It was passed into the header's visually-hidden div
+        // and therefore clipped along with everything else; it now renders.
         status={v2HeaderStatus}
+        // PRD-02 D-2.2 / FR-2.9 — single-letter mode labels and a label-less
+        // pulse dot when the surface is narrow. The goal keeps the rest of the row.
+        compact={shellWidthClass === "compact"}
         leading={
           <ThreadSwitcherToggle
             open={threadSwitcherOpen}
