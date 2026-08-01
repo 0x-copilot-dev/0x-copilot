@@ -219,11 +219,16 @@ class ModelConfig(RuntimeContract):
     supports_streaming: bool = True
     reasoning: ModelReasoningConfig | None = None
     # Per-run cap on repeat invocations of any single tool, scaled by
-    # reasoning depth. Default of ``5`` mirrors the historical literal used
-    # in ``deep_agent_builder.format_web_subagent_suffix`` (the constant
-    # ``_DEFAULT_TOOL_CALL_BUDGET``); keeping the same number here means
-    # existing call sites that omit a value see identical prompt wording.
-    tool_call_budget: PositiveInt = Field(default=5, le=100)
+    # reasoning depth. The default MUST equal the enforced seed cap
+    # ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10) — the number
+    # ``ToolBudgetMiddleware`` actually admits against — so the budget the
+    # model is told never undershoots what is enforced. It was ``5`` while the
+    # middleware enforced ``10``; T0.3 reconciled them. Held as a literal, not
+    # an import, because ``tool_budgets`` imports this module for
+    # ``RuntimeContract`` and importing it back would cycle; the SSOT gate in
+    # ``tests/unit/architecture/test_named_default_ssot.py`` fails if this
+    # literal drifts from the enforced value.
+    tool_call_budget: PositiveInt = Field(default=10, le=100)
     # The depth selection that produced this config, when one was supplied.
     # Stored as a string so it round-trips cleanly through ``model_dump``
     # / persistence without importing the enum here (which would create

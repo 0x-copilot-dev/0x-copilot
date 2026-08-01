@@ -165,7 +165,8 @@ class TestModelConfigResolverAppliesDepth:
             ModelSelection(reasoning_depth=ReasoningDepth.FAST),
             require_credentials=False,
         )
-        # Default settings ``tool_call_budget=6`` × 0.5 = 3.
+        # Default settings ``tool_call_budget`` is the enforced seed cap
+        # ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10); fast halves it: 10 × 0.5 = 5.
         assert config.tool_call_budget == max(1, round(base_budget * 0.5))
 
     def test_resolver_none_depth_is_no_op(self) -> None:
