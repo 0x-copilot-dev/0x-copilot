@@ -20,7 +20,6 @@
 # Format: one dotted module path per line, sorted.
 
 agent_runtime.api.inbox_fallback
-agent_runtime.capabilities.concurrency.provider_hints
 agent_runtime.capabilities.tools.code_tool_adapter
 agent_runtime.capabilities.tools.privacy
 agent_runtime.capabilities.workspace.patch_plan
