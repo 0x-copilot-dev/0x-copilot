@@ -170,7 +170,18 @@ export function aiFileStoreV1Root(userDataDir: string): string {
  */
 export function resolveDesktopStudioRuntimeEnv(
   processEnv: Readonly<Record<string, string | undefined>>,
-  opts: { readonly workspaceBrokerEnabled: boolean },
+  opts: {
+    readonly workspaceBrokerEnabled: boolean;
+    /**
+     * The install's OWN principal, persisted beside the identity store it
+     * names. Present ⇒ this deployment can name its single user in a cohort
+     * rule, which is the only way `enforce` is satisfiable on desktop.
+     */
+    readonly localPrincipal?: {
+      readonly orgId: string;
+      readonly userId: string;
+    };
+  },
 ): Readonly<Record<string, string>> {
   const readBoolean = (name: string, defaultValue: boolean): boolean => {
     const raw = processEnv[name]?.trim().toLowerCase();
@@ -208,7 +219,64 @@ export function resolveDesktopStudioRuntimeEnv(
     ARTIFACT_DRAFTS_V2: artifactDrafts ? "true" : "false",
     OPERATION_GATEWAY_MODE: operationGateway,
     WORKSPACE_EFFECT_MODE: workspaceEffect,
+    ...cohortPolicy(workspaceEffect, opts.localPrincipal),
   });
+}
+
+/**
+ * Capabilities the enforced workspace lane admits for this install's own user.
+ *
+ * The exact union the runtime demands: `_workspace_effect_backend_for_run`
+ * requires the last five, and `_build_mcp_operation_gateway_services` — whose
+ * absence tombstones the workspace lane too — additionally requires
+ * `mcp_gateway`. Naming fewer produces a lane that denies for a reason nobody
+ * can see from here.
+ */
+const DESKTOP_COHORT_CAPABILITIES = Object.freeze([
+  "operation_gateway",
+  "mcp_gateway",
+  "effect_stager",
+  "effect_commit",
+  "workspace_overlay",
+  "workspace_commit",
+] as const);
+
+/**
+ * `E2_ROLLOUT_COHORTS_JSON` naming this install's own principal, or nothing.
+ *
+ * WHY THIS IS NOT SELF-DEALING. E2 cohorts are a FLEET staged-rollout tool:
+ * `RolloutCohortRule` requires an exact org/user/device selector, and the
+ * subject is built only from a run record's verified identity. A hosted
+ * operator names a subset of their users; a single-user desktop has exactly one
+ * user, and the deployment provisioning its own tenant is the same act as any
+ * operator writing their own cohort file. It is deployment configuration, not a
+ * caller asserting who it is — the runtime still matches against the VERIFIED
+ * identity on the run, so a wrong id here fails closed rather than admitting a
+ * stranger.
+ *
+ * Emitted only under `enforce`, so the compatibility lane's behaviour — and
+ * every hosted image — is byte-identical.
+ *
+ * Absent principal ⇒ absent policy ⇒ the lane degrades to read-only and says so
+ * (`workspace_effect.tombstone rollout_admission_denied+degraded_to_read_only`).
+ * That is the honest first-run state on an install that has not yet minted one,
+ * never a silent half-enabled lane.
+ */
+function cohortPolicy(
+  workspaceEffect: string,
+  principal: { readonly orgId: string; readonly userId: string } | undefined,
+): Readonly<Record<string, string>> {
+  if (workspaceEffect !== "enforce" || principal === undefined) return {};
+  if (principal.orgId === "" || principal.userId === "") return {};
+  return {
+    E2_ROLLOUT_COHORTS_JSON: JSON.stringify(
+      DESKTOP_COHORT_CAPABILITIES.map((capability) => ({
+        capability,
+        org_id: principal.orgId,
+        user_id: principal.userId,
+      })),
+    ),
+  };
 }
 
 export interface ServiceEnvInputs {
