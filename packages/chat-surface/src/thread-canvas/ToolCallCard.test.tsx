@@ -95,3 +95,49 @@ describe("ToolCallCard", () => {
     expect(within(summary).queryByText("✓")).toBeNull();
   });
 });
+
+describe("ToolCallCard — parked on an approval", () => {
+  const running: ToolCallEntry = {
+    createdAtMs: 0,
+    id: "call-ls-1",
+    sequenceNo: 1,
+    status: "running",
+    title: "Calling ls",
+    toolName: "ls",
+  };
+
+  it("reads Waiting with a still glyph instead of Running with a spinner", () => {
+    // The lie this fixes: a parked run has no motion, but the card asserted it.
+    const { container } = render(<ToolCallCard toolCall={running} parked />);
+
+    expect(screen.getByTestId("tc-tool-card-waiting")).toBeInTheDocument();
+    expect(container.querySelector(".tc-tool-card__spinner")).toBeNull();
+    expect(
+      screen.getByTestId("tc-chat-tool-call-ls-1-status"),
+    ).toHaveTextContent("Waiting");
+  });
+
+  it("spins again once the approval resolves", () => {
+    const { container, rerender } = render(
+      <ToolCallCard toolCall={running} parked />,
+    );
+    expect(screen.getByTestId("tc-tool-card-waiting")).toBeInTheDocument();
+
+    rerender(<ToolCallCard toolCall={running} />);
+    expect(screen.queryByTestId("tc-tool-card-waiting")).toBeNull();
+    expect(container.querySelector(".tc-tool-card__spinner")).not.toBeNull();
+    expect(
+      screen.getByTestId("tc-chat-tool-call-ls-1-status"),
+    ).toHaveTextContent("Running");
+  });
+
+  it("leaves a settled call alone — only a running one can be parked", () => {
+    // A completed call is history; the run being parked says nothing about it.
+    render(<ToolCallCard toolCall={detailedToolCall} parked />);
+
+    expect(screen.queryByTestId("tc-tool-card-waiting")).toBeNull();
+    expect(
+      screen.getByTestId("tc-chat-tool-call-linear-1-status"),
+    ).toHaveTextContent("Done");
+  });
+});

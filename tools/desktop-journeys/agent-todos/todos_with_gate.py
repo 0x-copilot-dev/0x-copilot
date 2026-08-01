@@ -65,6 +65,13 @@ def observe(s: DriverSession) -> dict:
         waitingLine:(document.querySelector('[data-testid=tc-chat-approvals-waiting]')||{}).innerText||null,
         todoBlocked:root&&root.getAttribute('data-blocked'),
         todoRows:rows,
+        toolCards:[...document.querySelectorAll('.tc-activity-card[data-tool-status]')].map((n)=>({
+          status:n.getAttribute('data-tool-status'),
+          waiting:n.getAttribute('data-tool-waiting'),
+          spinner:!!n.querySelector('.tc-tool-card__spinner'),
+          stillGlyph:!!n.querySelector('[data-testid=tc-tool-card-waiting]'),
+          text:n.innerText,
+        })),
       });
     })()"""
     raw = s.evaluate(js)
@@ -135,6 +142,17 @@ def main() -> int:
             assert row["stillGlyph"], f"the waiting glyph is missing: {row!r}"
             assert "waiting for you" in row["text"], row
         log(f"PASS  T6c {len(active)} parked row(s) read waiting, not working")
+
+        # 4. The tool card above tells the same truth. It was the last surface
+        #    still saying "Running" over a run that was doing nothing.
+        stalled = [c for c in view["toolCards"] if c["status"] == "running"]
+        assert stalled, f"no running tool card to check: {view['toolCards']!r}"
+        for card in stalled:
+            assert card["waiting"] == "true", card
+            assert not card["spinner"], f"a parked tool card still spins: {card!r}"
+            assert card["stillGlyph"], f"the waiting glyph is missing: {card!r}"
+            assert "Waiting" in card["text"], card
+        log(f"PASS  T6d {len(stalled)} parked tool card(s) read Waiting, not Running")
 
         log("")
         log("JOURNEY PASSED — checklist and consent coexist honestly")
