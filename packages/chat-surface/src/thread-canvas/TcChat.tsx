@@ -57,9 +57,10 @@ import type { ApprovalsQueueItem } from "../workspace";
 // stream (`projectToolCalls(session.events)`) and interleaved into the
 // transcript at the point each tool ran. The projection is the single source of
 // truth; TcChat never re-derives tool state from raw events.
-import type { ToolCallEntry } from "./eventProjector";
+import type { RunTodosProjection, ToolCallEntry } from "./eventProjector";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
+import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 
 export type TcChatMode = "studio" | "focus";
@@ -296,6 +297,13 @@ export interface TcChatProps {
    */
   readonly toolCalls?: readonly ToolCallEntry[];
   /**
+   * The agent's working checklist (`projectRunTodos(session.events)`), pinned
+   * above the composer in BOTH modes so it never scrolls away mid-run. `null`
+   * — the common case — renders nothing: most requests are too small for the
+   * agent to open a list, and an empty frame would be worse than no panel.
+   */
+  readonly todos?: RunTodosProjection | null;
+  /**
    * Run-scoped citations supplied by the cockpit's canonical event projection.
    * Inline source cards select only citations whose backend-issued
    * `source_tool_call_id` matches their tool call; no source is inferred.
@@ -452,6 +460,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     fleets = EMPTY_FLEETS,
     subagentActivitiesByTask = EMPTY_SUBAGENT_ACTIVITIES,
     toolCalls = EMPTY_TOOL_CALLS,
+    todos = null,
     toolCallCitations = EMPTY_TOOL_CALL_CITATIONS,
     approvals = EMPTY_APPROVALS,
     onApprove,
@@ -581,6 +590,14 @@ export function TcChat(props: TcChatProps): ReactElement {
     </div>
   );
 
+  // Pinned between the approvals strip and the composer, single-mount like the
+  // transcript itself so a Focus↔Studio switch never remounts it. Hidden while
+  // scrubbed: the checklist snapshot has no per-row timestamps to rewind to, so
+  // showing today's list beside a time-travelled transcript would assert a
+  // state that did not hold at the cut.
+  const todoList =
+    todos !== null && !ghost ? <TcTodoList projection={todos} /> : null;
+
   const composer = (
     <div data-testid="tc-chat-composer-slot" style={composerSlotStyle}>
       {renderComposer !== undefined ? (
@@ -638,6 +655,7 @@ export function TcChat(props: TcChatProps): ReactElement {
             {connectedReceipt}
           </div>
         ) : null}
+        {todoList}
         {composer}
       </div>
     );
@@ -686,6 +704,7 @@ export function TcChat(props: TcChatProps): ReactElement {
           {connectedReceipt}
         </div>
       ) : null}
+      {todoList}
       {composer}
     </div>
   );

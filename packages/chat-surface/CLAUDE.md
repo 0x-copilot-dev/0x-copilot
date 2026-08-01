@@ -143,11 +143,24 @@ that wires three already-built pieces:
 **One event projection (FR-3.3).** The whole cockpit reads exactly one event source —
 `useRunSession.events` — projected once inside `ThreadCanvas`. The out-of-canvas
 consumers use PURE selectors over that same array, never a second SSE subscription or
-projector: `projectSubagents` (fleets + the Agents-tab "N live" count) and
+projector: `projectSubagents` (fleets + the Agents-tab "N live" count),
 `projectApprovals`/`toApprovalsQueue` (the in-chat `ApprovalCard`/conf-card + the
-Approvals-tab count). `RunWorkspaceRail` recomposes the workspace `[Chat · Sources ·
-Agents · Approvals]` tabs and receives the single `TcChat` as an injected `chatSlot`,
-so mode/tab switches never spawn a second chat mount.
+Approvals-tab count), and `projectRunTodos` (the pinned checklist). `RunWorkspaceRail`
+recomposes the workspace `[Chat · Sources · Agents · Approvals]` tabs and receives the
+single `TcChat` as an injected `chatSlot`, so mode/tab switches never spawn a second
+chat mount.
+
+**The agent todo panel.** `TcTodoList` renders the agent's working checklist, pinned
+above the composer inside `TcChat` so it is single-mount and identical in Focus and
+Studio. It reads `projectRunTodos(session.events)` — the server's `todo_list_updated`
+snapshots, which the worker resolves from `write_todos` (LangChain's
+`TodoListMiddleware` replaces the whole list per call and carries no list identity, so
+the backend assigns `list_id`/`generation`: a write landing on an already-complete list
+opens the next one). The panel is **read-only** — the list is agent-owned, so there is
+no host callback surface. It replaced `FocusPlan`, which was **deleted**: that surface
+invented steps from tool-call frames, so it showed tool names where a plan belonged.
+Do not reintroduce a client-derived plan; if the cockpit needs to show intent, it comes
+from an event the agent actually produced.
 
 Seams the shell owns: scrub cursor (`scrubbedSeq`; `null` = live) + the "Viewing…"
 banner (approvals hidden while scrubbed); the empty/idle `RunEmptyState` goal composer

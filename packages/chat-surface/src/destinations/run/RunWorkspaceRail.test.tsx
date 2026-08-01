@@ -538,19 +538,9 @@ describe("RunWorkspaceRail — Focus Run-details panel (WS-F)", () => {
     );
   });
 
-  it("renders the event-derived plan and truthful live cue in the Activity panel", () => {
+  it("renders the truthful live cue in the Activity panel", () => {
     render(
-      <RunWorkspaceRail
-        mode="focus"
-        chatSlot={chatSlot()}
-        focusActivityLive
-        focusPlan={{
-          steps: [
-            { id: "read", label: "Read the issue", state: "complete" },
-            { id: "search", label: "Search linked sources", state: "active" },
-          ],
-        }}
-      />,
+      <RunWorkspaceRail mode="focus" chatSlot={chatSlot()} focusActivityLive />,
     );
 
     const panel = screen.getByTestId("tc-focus-panel");
@@ -558,12 +548,6 @@ describe("RunWorkspaceRail — Focus Run-details panel (WS-F)", () => {
     expect(within(panel).getByTestId("tc-focus-panel-live")).toHaveTextContent(
       "live",
     );
-    expect(within(panel).getByTestId("focus-plan")).toHaveTextContent(
-      "Read the issue",
-    );
-    expect(
-      within(panel).getByText("Search linked sources").parentElement,
-    ).toHaveAttribute("data-state", "active");
   });
 
   it("reuses the hoisted Agents/Approvals/Sources bodies in the Run-details panel", () => {

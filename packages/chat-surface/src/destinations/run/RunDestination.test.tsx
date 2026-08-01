@@ -409,12 +409,6 @@ describe("RunDestination — shell composition", () => {
     expect(
       screen.queryByRole("tablist", { name: "Run workspace tabs" }),
     ).toBeNull();
-    // The compact Activity panel is derived from this same run's events. With
-    // no tool yet scheduled it is deliberately an honest pending plan, not a
-    // client-side invention from the goal text.
-    expect(screen.getByTestId("focus-plan")).toHaveTextContent(
-      "Awaiting the agent plan",
-    );
   });
 
   // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===
@@ -2798,5 +2792,143 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
         ),
       ).toBe(true),
     );
+  });
+});
+
+describe("RunDestination — agent todos", () => {
+  function todoListUpdated(
+    todos: readonly { content: string; status: string }[],
+    opts: { readonly generation?: number } = {},
+  ): Record<string, unknown> {
+    const generation = opts.generation ?? 1;
+    return event({
+      event_type: "todo_list_updated",
+      source: "tool",
+      activity_kind: "event",
+      payload: {
+        list_id: `run-1:todos:${generation}`,
+        generation,
+        todos,
+      },
+    });
+  }
+
+  async function renderStreamingRun(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Reconcile the pipeline");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("renders the checklist from the run's own event stream", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "in_progress" },
+          { content: "Reconcile opportunity ids", status: "pending" },
+        ]),
+      );
+    });
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(within(panel).getByTestId("tc-todo-list-count")).toHaveTextContent(
+      "0/2",
+    );
+    expect(within(panel).getAllByTestId("tc-todo-row")).toHaveLength(2);
+  });
+
+  it("advances a row from spinner to tick as the agent completes it", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "in_progress" },
+          { content: "Reconcile opportunity ids", status: "pending" },
+        ]),
+      );
+    });
+    const firstRow = (await screen.findAllByTestId("tc-todo-row"))[0];
+    expect(within(firstRow).getByTestId("tc-todo-spinner")).toBeInTheDocument();
+
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+          { content: "Reconcile opportunity ids", status: "in_progress" },
+        ]),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("tc-todo-row")[0]).toHaveAttribute(
+        "data-status",
+        "completed",
+      ),
+    );
+    expect(screen.getByTestId("tc-todo-list-count")).toHaveTextContent("1/2");
+  });
+
+  it("appends work the agent discovered mid-run without restarting the list", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+        ]),
+      );
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+          { content: "Resolve 14 orphan ids", status: "in_progress" },
+        ]),
+      );
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(2),
+    );
+    // Still list 1 — the badge only appears from the second generation on.
+    expect(screen.queryByTestId("tc-todo-list-generation")).toBeNull();
+  });
+
+  it("opens a second list once the first is finished", async () => {
+    const transport = await renderStreamingRun();
+    act(() => {
+      transport.emit(
+        todoListUpdated([
+          { content: "Pull the Q3 export", status: "completed" },
+        ]),
+      );
+    });
+    expect(await screen.findByTestId("tc-todo-list-summary")).toHaveTextContent(
+      "All 1 todos complete",
+    );
+
+    act(() => {
+      transport.emit(
+        todoListUpdated(
+          [{ content: "Draft the exec note", status: "in_progress" }],
+          { generation: 2 },
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByTestId("tc-todo-list-generation"),
+    ).toHaveTextContent("List 2");
+    expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(1);
+  });
+
+  it("renders no checklist for a run the agent never opened one on", async () => {
+    await renderStreamingRun();
+
+    await screen.findByTestId("tc-chat");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
   });
 });

@@ -1589,3 +1589,75 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     ).toHaveAttribute("data-state", "pending");
   });
 });
+
+describe("TcChat — agent todos", () => {
+  const TODOS = {
+    listId: "run-1:todos:1",
+    generation: 1,
+    todos: [
+      { content: "Pull the Q3 export", status: "completed" as const },
+      { content: "Reconcile ids", status: "in_progress" as const },
+    ],
+    completedCount: 1,
+    isComplete: false,
+    sequenceNo: 4,
+  };
+
+  it("pins the checklist directly above the composer in Studio", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" todos={TODOS} />,
+      ),
+    );
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(panel.nextElementSibling).toBe(
+      screen.getByTestId("tc-chat-composer-slot"),
+    );
+  });
+
+  it("pins the same checklist above the composer in Focus", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" todos={TODOS} />,
+      ),
+    );
+
+    const panel = await screen.findByTestId("tc-todo-list");
+    expect(panel.nextElementSibling).toBe(
+      screen.getByTestId("tc-chat-composer-slot"),
+    );
+  });
+
+  it("renders no panel for a run that never opened a checklist", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="studio" />),
+    );
+
+    await screen.findByTestId("tc-chat");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
+  });
+
+  it("hides the checklist while the transcript is scrubbed", async () => {
+    // The snapshot carries no per-row timestamps, so there is nothing to rewind
+    // it to. Showing today's list beside a time-travelled transcript would
+    // assert a state that did not hold at the cut.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat conversationId="c" mode="studio" todos={TODOS} />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+
+    await screen.findByTestId("tc-chat-ghost-banner");
+    expect(screen.queryByTestId("tc-todo-list")).toBeNull();
+  });
+});

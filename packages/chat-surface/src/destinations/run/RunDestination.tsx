@@ -118,6 +118,7 @@ import {
   ViewUpgradeToast,
   projectSurfaceTabs,
   projectToolCalls,
+  projectRunTodos,
   projectLedger,
   projectCanonicalRowsetReviewModel,
   surfaceIdForTabUri,
@@ -216,7 +217,6 @@ import { RunEmptyState, type StartRunError } from "./RunEmptyState";
 import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
-import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
 import {
@@ -1831,11 +1831,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     toolCalls,
   );
 
-  // Focus exposes an honest, compact plan from the same canonical events as the
-  // transcript. It never opens a second subscription and never infers future
-  // work from the user's prompt.
-  const focusPlan = useMemo(
-    () => projectFocusPlan(session.events),
+  // The agent's checklist, projected off the SAME `session.events` (FR-3.3 — a
+  // pure selector, never a second subscription). Replaces the invented Focus
+  // "Plan": every row here is a todo the agent wrote through `write_todos`.
+  const runTodos = useMemo(
+    () => projectRunTodos(session.events),
     [session.events],
   );
 
@@ -4009,6 +4009,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={conversationToolCalls.toolCalls}
+        // The pinned checklist above the composer — the surface that replaced
+        // both the raw `write_todos` card and the Focus "Plan".
+        todos={runTodos}
         toolCallCitations={toolCallCitations}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}
@@ -4083,7 +4086,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // persistence, its own key. The canvas below narrows the column to match.
       studioCollapsed={studioRailCollapsed}
       onStudioCollapsedChange={setStudioRailCollapsed}
-      focusPlan={focusPlan}
       focusActivityLive={
         session.runStatus !== null &&
         CANCELLABLE_RUN_STATUSES.has(session.runStatus)

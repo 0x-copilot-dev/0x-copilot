@@ -607,6 +607,14 @@ class RuntimeEventPresentationProjector:
             return RuntimeActivityKind.MCP_AUTH
         if event_type is RuntimeApiEventType.DRAFT_UPDATED:
             return RuntimeActivityKind.DRAFT
+        if event_type is RuntimeApiEventType.TODO_LIST_UPDATED:
+            # The agent's checklist is state the todo panel folds, not a card
+            # per revision — a five-step plan would otherwise put five
+            # near-identical rows on the timeline. Explicit rather than left to
+            # the default because the emit is TOOL-sourced (it is projected off
+            # a ``write_todos`` frame), and the source fallback would route it
+            # into the tool bucket, which is the very rendering this replaces.
+            return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             # Generative-UI (PRD-01) — an out-of-band "prepared a view" note.
             # Explicit so a TOOL-sourced emit can't reroute it into the tool
