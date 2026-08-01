@@ -2183,9 +2183,25 @@ export interface MessageListResponse {
  * override the default Fast/Balanced/Deep wording. Falls back to the FE's
  * built-in label table when absent.
  */
+/**
+ * One rung of the provider-neutral reasoning ladder, cheapest-first. This is the
+ * union of every rung the runtime can *express* (`ModelReasoningEffort` in
+ * `agent_runtime.execution.contracts`) — no model accepts all of them. Which
+ * rungs a given model accepts is a per-model property, carried on
+ * `ModelCatalogModel.reasoning_efforts`, never assumed from this type.
+ */
+export type ModelReasoningEffortValue =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
 export interface ModelReasoningHints {
   enabled?: boolean;
-  effort?: "low" | "medium" | "high";
+  effort?: ModelReasoningEffortValue;
   summary?: "auto" | "off";
   depth_label?: string;
   [key: string]: unknown;
@@ -2233,6 +2249,14 @@ export interface ModelCatalogModel {
   supports_attachments?: boolean;
   supports_reasoning?: boolean;
   reasoning?: ModelReasoningHints | null;
+  /**
+   * The effort rungs THIS model accepts, cheapest-first, as published by the
+   * catalog source. Absent or empty means the source carried no ladder —
+   * **"unknown", not "none"** — so a client must fall back to its own default
+   * rungs rather than hiding the reasoning control. Only the models.dev source
+   * supplies it; the offline LiteLLM fallback publishes no reasoning options.
+   */
+  reasoning_efforts?: ModelReasoningEffortValue[] | null;
   /**
    * Source-derived metadata (optional additions — entries whose source carries
    * no supplement, e.g. the runtime default model placeholder or any record
