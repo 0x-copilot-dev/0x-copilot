@@ -1,0 +1,1522 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="sky" data-reduce-motion="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRD-01 mock — Thread switcher</title>
+
+    <!--
+      ============================================================================
+      PROVENANCE — every value here is copied, not invented.
+      ============================================================================
+      Tokens            packages/design-system/src/styles.css  (:root + [data-theme="dark"] + [data-accent="sky"])
+      Rail geometry     shell/AppRail.tsx        RAIL_WIDTH 48 · BUTTON_SIZE 34 · ICON_SIZE 17
+                                                 BRAND_SIZE 32 · AVATAR_SIZE 26 · pad 10 · gap 2
+                                                 items marginTop 12 · foot gap 5
+                                                 active = --color-surface-muted + 2px accent bar at left:-8, h16, r 0 2 2 0
+      Panel geometry    shell/ContextPanel.tsx   PANEL_WIDTH 224 · head 16px/14px/12px · search r7 p 5px 10px
+                                                 primaryAction p 6px 10px r6 · body p 8px 0 · footer p 8px 14px
+      Run header        destinations/run/RunHeader.tsx  h38 · p 0 13px · gap 12 · bg --color-bg-elevated
+                                                 segmented: p2 r7 gap2 · button p 5px 12px r5 fs12 w500
+                                                 pulse dot 7px accent · chip mono --font-size-2xs ls .06em uppercase
+      Activity card     activity/ActivityCardChrome.ts + thread-canvas/ToolCallCard.tsx
+                                                 frame r10 1px --color-border bg --color-surface fs13 lh19.5
+                                                 head p 9px 11px gap 9 · tile 22 r6 fs9 w700 --color-accent
+                                                 title --font-size-sm w500 lh18 · meta mono 9px --color-text-subtle
+      Composer          composer/composer.css    --composer-radius 11px · 1px --color-border-strong
+      Content gutter    thread-canvas/TcChat.tsx focusContainerStyle padding 12 (see PRD-05 §1.3)
+      Icons             icons/paths.tsx          viewBox 0 0 24 24 · fill none · stroke currentColor · sw 1.7
+
+      Applies: PRD-01 (thread switcher) · PRD-02 (header goal + pulse) · PRD-03 (tool-run group)
+               PRD-05 (gutter) · PRD-08 (timeline label) · PRD-09 (message actions, panel-foot identity)
+
+      The chrome OUTSIDE the app frame (the width-class switcher strip) is mock
+      scaffolding, not product UI.
+    -->
+
+    <style>
+      /* ---- design-system tokens (verbatim subset) ------------------------- */
+      :root {
+        --font-display:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          system-ui, sans-serif;
+        --font-sans:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+          system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+        --font-size-3xs: 0.5625rem;
+        --font-size-2xs: 0.7rem;
+        --font-size-xs: 0.78rem;
+        --font-size-sm: 0.8125rem;
+        --font-size-md: 0.875rem;
+        --font-size-mono-8-5: 0.53125rem;
+        --font-size-mono-9-5: 0.59375rem;
+        --font-size-mono-10: 0.625rem;
+
+        --line-height-tight: 1.2;
+
+        --space-xs: 0.25rem;
+        --space-sm: 0.5rem;
+        --space-md: 0.75rem;
+        --space-lg: 1rem;
+
+        --radius-sm: 0.375rem;
+        --radius-md: 0.5rem;
+        --radius-lg: 0.75rem;
+        --radius-full: 999px;
+
+        --duration-fast: 120ms;
+        --duration-normal: 180ms;
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+        --chat-content-width: 68rem;
+        --composer-radius: 11px;
+
+        /* [data-accent="sky"] — styles.css:448 */
+        --accent-seed: #5fb2ec;
+        --accent-seed-strong: #8cc8f4;
+        --accent-seed-ink: #08131d;
+      }
+
+      :root,
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --color-bg: #09090b;
+        --color-bg-elevated: #0d0d10;
+        --color-surface: #111114;
+        --color-surface-muted: #16161a;
+        --color-surface-elevated: #1d1d23;
+        --color-border: rgba(255, 255, 255, 0.06);
+        --color-border-strong: rgba(255, 255, 255, 0.1);
+        --color-border-stronger: rgba(255, 255, 255, 0.18);
+        --color-text: #ececf1;
+        --color-text-strong: #d4d4db;
+        --color-text-muted: #98989f;
+        --color-text-subtle: #64646d;
+        --color-accent: var(--accent-seed);
+        --color-accent-strong: var(--accent-seed-strong);
+        --color-accent-contrast: var(--accent-seed-ink);
+        --color-danger: #f0764f;
+        --color-success: #57c785;
+        --color-warning: #e8b45e;
+      }
+
+      :root {
+        --color-accent-soft: color-mix(
+          in srgb,
+          var(--color-accent) 18%,
+          transparent
+        );
+        --color-accent-line: color-mix(
+          in srgb,
+          var(--color-accent) 35%,
+          transparent
+        );
+      }
+
+      /* ---- mock scaffolding (NOT product UI) ------------------------------ */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #050506; /* the mock STAGE — styles.css comment at :bg */
+        color: var(--color-text);
+        font-family: var(--font-sans);
+        font-size: var(--font-size-sm);
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-lg);
+        padding: 28px 16px 56px;
+        min-height: 100vh;
+      }
+      .mockbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      .mockbar__label {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-9-5);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-subtle);
+      }
+      .mockbar__seg {
+        display: flex;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 7px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+      }
+      .mockbar__seg button {
+        appearance: none;
+        border: 0;
+        border-radius: 5px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        background: transparent;
+        color: var(--color-text-muted);
+      }
+      .mockbar__seg button[aria-pressed="true"] {
+        background: var(--color-surface-elevated);
+        color: var(--color-text);
+      }
+      .mocknote {
+        max-width: 62ch;
+        text-align: center;
+        color: var(--color-text-subtle);
+        font-size: var(--font-size-xs);
+        line-height: 1.55;
+      }
+      .mocknote code {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-muted);
+      }
+
+      /* ---- the app window ------------------------------------------------- */
+      .win {
+        position: relative;
+        height: 620px;
+        background: var(--color-bg);
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: 100%;
+        transition: width var(--duration-normal) var(--ease-standard);
+      }
+      .win[data-width="wide"] {
+        width: 1180px;
+      }
+      .win[data-width="regular"] {
+        width: 900px;
+      }
+      .win[data-width="compact"] {
+        width: 640px;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-rows: 100%;
+        height: 100%;
+        min-height: 0;
+      }
+      /* ChatShell.tsx:282 — "Built from what is actually rendered, so an absent
+         column costs no track." A hidden panel must therefore also drop its
+         track, or the main column inherits a 0px one. */
+      .shell {
+        grid-template-columns: 48px 1fr;
+      }
+      .win[data-width="wide"][data-panel="open"] .shell,
+      .win[data-width="regular"][data-panel="open"] .shell {
+        grid-template-columns: 48px 224px 1fr;
+      }
+      /* docked panel exists only at wide/regular while open */
+      .shell > .panel {
+        display: none;
+      }
+      .win[data-width="wide"][data-panel="open"] .shell > .panel,
+      .win[data-width="regular"][data-panel="open"] .shell > .panel {
+        display: flex;
+      }
+
+      /* ---- AppRail (shell/AppRail.tsx) ------------------------------------ */
+      .rail {
+        width: 48px;
+        min-width: 48px;
+        height: 100%;
+        background: var(--color-bg-elevated);
+        border-right: 1px solid var(--color-border);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 10px 0;
+      }
+      .rail__items {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        flex: 1;
+        margin-top: 12px;
+      }
+      .rail__foot {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 5px;
+        width: 34px;
+      }
+      .rail-btn {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: var(--radius-md);
+        color: var(--color-text-subtle);
+        cursor: pointer;
+        padding: 0;
+        transition:
+          background-color var(--duration-fast) ease,
+          color var(--duration-fast) ease;
+      }
+      .rail-btn:hover {
+        background: var(--color-surface-muted);
+      }
+      .rail-btn:not(.rail-brand):hover {
+        color: var(--color-text);
+      }
+      .rail-btn:focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
+      }
+      .rail-btn[data-active="true"] {
+        background: var(--color-surface-muted);
+        color: var(--color-text);
+      }
+      .rail-btn[data-active="true"]::before {
+        content: "";
+        position: absolute;
+        left: -8px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 2px;
+        height: 16px;
+        border-radius: 0 2px 2px 0;
+        background: var(--color-accent);
+      }
+      .rail-brand {
+        width: 32px;
+        height: 32px;
+        color: var(--color-accent);
+      }
+      .rail-avatar {
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-surface-elevated);
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--radius-full);
+        color: var(--color-text-strong);
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0;
+      }
+      .rbadge {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        min-width: 13px;
+        height: 13px;
+        padding: 0 3px;
+        border-radius: 7px;
+        background: var(--color-accent);
+        color: var(--color-accent-contrast);
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-8-5);
+        font-weight: 700;
+        line-height: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* ---- Threads panel (built on ContextPanel geometry) ------------------ */
+      .panel {
+        width: 224px;
+        min-width: 224px;
+        height: 100%;
+        background: var(--color-bg-elevated);
+        border-right: 1px solid var(--color-border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .panel__head {
+        padding: 16px 14px 12px;
+        border-bottom: 1px solid var(--color-border);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        flex: none;
+      }
+      .panel__title {
+        font-size: var(--font-size-sm);
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        color: var(--color-text);
+      }
+      .panel__search {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        border-radius: 7px;
+        padding: 5px 10px;
+        color: var(--color-text-muted);
+      }
+      .panel__search input {
+        flex: 1;
+        min-width: 0;
+        border: none;
+        background: transparent;
+        color: var(--color-text);
+        font-family: inherit;
+        font-size: var(--font-size-xs);
+        outline: none;
+      }
+      .panel__new {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: transparent;
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: var(--font-size-xs);
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .panel__new:hover {
+        background: var(--color-surface-muted);
+      }
+      .panel__body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 8px 0;
+      }
+      .panel__foot {
+        flex: none;
+        border-top: 1px solid var(--color-border);
+        padding: 8px 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--color-text-muted);
+        font-size: var(--font-size-2xs);
+      }
+
+      /* section head — mono micro-label, --font-size-mono-9-5 rung */
+      .sect-h {
+        padding: 10px 14px 4px;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-9-5);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-subtle);
+      }
+      .trow {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        background: transparent;
+        border: 0;
+        text-align: left;
+        font: inherit;
+        font-size: var(--font-size-xs);
+        color: var(--color-text-muted);
+        cursor: pointer;
+      }
+      .trow:hover {
+        background: var(--color-surface-muted);
+        color: var(--color-text);
+      }
+      .trow:focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: -2px;
+      }
+      .trow[aria-current="true"] {
+        background: var(--color-surface-muted);
+        color: var(--color-text);
+      }
+      .trow[aria-current="true"] .trow__dot {
+        background: var(--color-accent);
+      }
+      .trow__dot {
+        flex: none;
+        width: 5px;
+        height: 5px;
+        border-radius: var(--radius-full);
+        background: var(--color-text-subtle);
+      }
+      .trow__dot[data-state="running"] {
+        background: var(--color-accent);
+      }
+      .trow__name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .trow__time {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-subtle);
+      }
+
+      /* ---- compact overlay ------------------------------------------------ */
+      .scrim {
+        position: absolute;
+        inset: 0 0 0 48px;
+        background: color-mix(in srgb, var(--color-bg) 60%, transparent);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity var(--duration-fast) var(--ease-standard);
+        z-index: 2;
+      }
+      .overlay {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 48px;
+        width: 260px;
+        transform: translateX(-100%);
+        /* `visibility` (not just transform) — a translated-out panel still
+           paints over the 48px rail, which is exactly where it slides from. */
+        visibility: hidden;
+        transition:
+          transform 140ms var(--ease-standard),
+          visibility 0s linear 140ms;
+        z-index: 3;
+        box-shadow: 0 18px 50px -12px rgb(0 0 0 / 0.75);
+      }
+      .win[data-width="compact"][data-panel="open"] .scrim {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .win[data-width="compact"][data-panel="open"] .overlay {
+        transform: translateX(0);
+        visibility: visible;
+        transition:
+          transform 140ms var(--ease-standard),
+          visibility 0s;
+      }
+      .overlay .panel {
+        width: 260px;
+        min-width: 260px;
+        display: flex;
+      }
+      /* the overlay copy is inert unless compact */
+      .win:not([data-width="compact"]) .overlay,
+      .win:not([data-width="compact"]) .scrim {
+        display: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .overlay,
+        .scrim,
+        .win {
+          transition: none;
+        }
+      }
+      :root[data-reduce-motion="always"] .overlay,
+      :root[data-reduce-motion="always"] .scrim,
+      :root[data-reduce-motion="always"] .win {
+        transition: none;
+      }
+
+      /* ---- main column ---------------------------------------------------- */
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        background: var(--color-bg);
+      }
+
+      /* RunHeader — h38, PRD-02 layout */
+      .runhead {
+        flex: none;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 13px;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-bg-elevated);
+        color: var(--color-text);
+      }
+      .runhead__toggle {
+        flex: none;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 0;
+        border-radius: var(--radius-sm);
+        color: var(--color-text-subtle);
+        cursor: pointer;
+        padding: 0;
+      }
+      .runhead__toggle:hover {
+        background: var(--color-surface-muted);
+        color: var(--color-text);
+      }
+      .runhead__toggle:focus-visible {
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
+      }
+      .runhead__toggle[aria-expanded="true"] {
+        color: var(--color-text);
+      }
+      .runhead__brand {
+        flex: none;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--color-text-secondary, var(--color-text));
+      }
+      .runhead__brand b {
+        color: var(--color-accent);
+        font-weight: 600;
+      }
+      .win:not([data-width="wide"]) .runhead__brand {
+        display: none;
+      }
+      .runhead__goal {
+        flex: 1;
+        min-width: 0;
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: var(--font-size-sm);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        line-height: var(--line-height-tight);
+        color: var(--color-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .pulse {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-2xs);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--color-text-muted);
+      }
+      .pulse__dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--color-accent);
+        animation: run-header-pulse 1.6s ease-out infinite;
+      }
+      @keyframes run-header-pulse {
+        0% {
+          box-shadow: 0 0 0 0 var(--color-accent-soft);
+        }
+        70% {
+          box-shadow: 0 0 0 5px rgba(95, 178, 236, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(95, 178, 236, 0);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pulse__dot {
+          animation: none;
+        }
+      }
+      .win[data-width="compact"] .pulse__label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+      }
+      .modeseg {
+        flex: none;
+        display: flex;
+        gap: 2px;
+        margin-left: auto;
+        padding: 2px;
+        border-radius: 7px;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+      }
+      .modeseg button {
+        background: transparent;
+        color: var(--color-text-muted);
+        border: 0;
+        border-radius: 5px;
+        padding: 5px 12px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .modeseg button[aria-selected="true"] {
+        background: var(--color-surface-elevated);
+        color: var(--color-text);
+      }
+      .win[data-width="compact"] .modeseg button {
+        padding: 5px 8px;
+      }
+      .win[data-width="compact"] .modeseg .modeseg__long {
+        display: none;
+      }
+      .win:not([data-width="compact"]) .modeseg .modeseg__short {
+        display: none;
+      }
+
+      /* transcript — TcChat focusContainerStyle padding 12 (PRD-05 §1.3) */
+      .canvas {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 12px;
+        gap: 10px;
+        overflow: hidden;
+      }
+      .rail-measure {
+        margin-left: auto;
+        margin-right: auto;
+        max-width: var(--chat-content-width);
+        width: 100%;
+      }
+      .ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .msg--user {
+        align-self: flex-end;
+        max-width: 88%;
+        background: var(--color-surface-muted);
+        border: 1px solid var(--color-border);
+        border-radius: 10px 10px 3px 10px;
+        padding: 8px 11px;
+        color: var(--color-text);
+        font-size: 13px;
+      }
+      .win[data-width="compact"] .msg--user {
+        max-width: 94%; /* PRD-05 D-5.1 */
+      }
+      .msg--agent {
+        align-self: stretch;
+        max-width: 100%;
+        color: var(--color-text);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .msg--agent code {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10-5, 0.65625rem);
+        background: var(--color-surface);
+        border-radius: var(--radius-sm);
+        padding: 1px 4px;
+      }
+
+      /* PRD-03 tool-run group, collapsed */
+      .group {
+        border: 1px solid var(--color-border);
+        border-radius: 10px;
+        background: var(--color-surface);
+        overflow: hidden;
+      }
+      .group > summary {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 11px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .group > summary::-webkit-details-marker {
+        display: none;
+      }
+      .group__tile {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-surface-elevated);
+        border-radius: 6px;
+        color: var(--color-accent);
+      }
+      .group__label {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .group__chev {
+        flex: none;
+        color: var(--color-text-subtle);
+        display: flex;
+      }
+      .group[open] .group__chev {
+        transform: rotate(180deg);
+      }
+      .group__body {
+        border-top: 1px solid var(--color-border);
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .step {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 6px 5px;
+      }
+      .step__tile {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-surface-elevated);
+        border-radius: 6px;
+        color: var(--color-accent);
+        font-family: var(--font-sans);
+        font-size: 9px;
+        font-weight: 700;
+      }
+      .step__name {
+        flex: 1;
+        min-width: 0;
+        font-family: var(--font-sans);
+        font-size: var(--font-size-sm);
+        font-weight: 500;
+        line-height: 18px;
+        color: var(--color-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* PRD-06 D-6.1 — metadata is ONE anchored cluster, never mid-row */
+      .step__meta {
+        flex: none;
+        margin-left: auto;
+        display: inline-flex;
+        align-items: baseline;
+        gap: 7px;
+      }
+      .step__dur {
+        font-family: var(--font-mono);
+        font-size: 9px;
+        line-height: 13.5px;
+        color: var(--color-text-subtle);
+      }
+      .step__mark {
+        flex: none;
+        width: 14px;
+        display: inline-flex;
+        justify-content: center;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--color-success);
+      }
+      .step__mark[data-outcome="recovered"] {
+        color: var(--color-text-muted);
+      }
+
+      /* PRD-09 message actions */
+      .msgacts {
+        display: flex;
+        gap: 4px;
+        margin-top: 6px;
+      }
+      .msgacts button {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: transparent;
+        border: 0;
+        border-radius: var(--radius-sm);
+        padding: 3px 6px;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-subtle);
+        cursor: pointer;
+      }
+      .msgacts button:hover {
+        background: var(--color-surface-muted);
+        color: var(--color-text-muted);
+      }
+
+      /* composer */
+      .composer {
+        flex: none;
+        border: 1px solid var(--color-border-strong);
+        border-radius: var(--composer-radius);
+        background: var(--color-bg-elevated);
+      }
+      .composer__input {
+        padding: 10px 12px;
+        color: var(--color-text-subtle);
+        font-size: 13px;
+      }
+      .composer__row {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 6px 8px 8px;
+        color: var(--color-text-subtle);
+      }
+      .composer__row .spacer {
+        margin-left: auto;
+      }
+      .cchip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 7px;
+        border-radius: var(--radius-sm);
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        color: var(--color-text-muted);
+      }
+      .cchip:hover {
+        background: var(--color-surface-muted);
+      }
+      .cdot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--color-success);
+      }
+
+      /* PRD-08 mini timeline */
+      .mini {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-top: 1px solid var(--color-border);
+        background: var(--color-bg-elevated);
+      }
+      .mini__label {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-9-5);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-text-subtle);
+      }
+      .mini__strip {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        overflow: hidden;
+      }
+      /* PRD-08 D-8.4 — 8px visual bead inside a >=24px transparent target */
+      .bead {
+        flex: none;
+        width: 24px;
+        height: 24px;
+        margin: 0 -8px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .bead::after {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--color-text-subtle);
+      }
+      .bead[data-lane="subagent"]::after {
+        background: var(--color-accent);
+      }
+      .bead[data-lane="error"]::after {
+        background: var(--color-danger);
+      }
+      .bead[data-lane="answer"]::after {
+        background: var(--color-success);
+      }
+      .bead[data-lane="approval"]::after {
+        background: var(--color-warning);
+      }
+      .mini__pill {
+        flex: none;
+        border-radius: var(--radius-full);
+        padding: 2px 10px;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-text-muted);
+        font-family: var(--font-mono);
+        font-size: var(--font-size-mono-10);
+        cursor: pointer;
+      }
+
+      .svg {
+        display: block;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="mockbar">
+      <span class="mockbar__label">window width</span>
+      <div class="mockbar__seg" role="group" aria-label="Width class">
+        <button type="button" data-w="compact" aria-pressed="false">
+          compact · 640
+        </button>
+        <button type="button" data-w="regular" aria-pressed="true">
+          regular · 900
+        </button>
+        <button type="button" data-w="wide" aria-pressed="false">
+          wide · 1180
+        </button>
+      </div>
+    </div>
+
+    <div class="win" data-width="regular" data-panel="closed" id="win">
+      <div class="shell">
+        <!-- ============ AppRail — 48px, unchanged by PRD-01 ============ -->
+        <nav class="rail" aria-label="Copilot destinations">
+          <button class="rail-btn rail-brand" type="button" title="0xCopilot">
+            <svg
+              class="svg"
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M12 3.5v5M12 15.5v5M3.5 12h5M15.5 12h5" />
+            </svg>
+          </button>
+          <div class="rail__items">
+            <button
+              class="rail-btn"
+              type="button"
+              data-active="true"
+              title="Run"
+            >
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="4" />
+                <path d="M10 9l5 3-5 3z" />
+              </svg>
+            </button>
+            <button class="rail-btn" type="button" title="Chats">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M4 5h16v10H9l-4 4z" />
+              </svg>
+            </button>
+            <button class="rail-btn" type="button" title="Projects">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+                />
+              </svg>
+            </button>
+            <button class="rail-btn" type="button" title="Activity">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 12h4l2.5 7 5-14L17 12h4" />
+              </svg>
+            </button>
+            <button class="rail-btn" type="button" title="Tools">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0zM12 18v3" />
+              </svg>
+            </button>
+            <button class="rail-btn" type="button" title="Skills">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M12 3l2.1 5.3L20 10l-5.9 1.7L12 17l-2.1-5.3L4 10l5.9-1.7z"
+                />
+              </svg>
+            </button>
+          </div>
+          <div class="rail__foot">
+            <button class="rail-btn" type="button" title="Settings">
+              <svg
+                class="svg"
+                width="17"
+                height="17"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="3.2" />
+                <path
+                  d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"
+                />
+              </svg>
+            </button>
+            <button class="rail-avatar" type="button" title="Sarah Chen">
+              S
+            </button>
+          </div>
+        </nav>
+
+        <!-- ============ Threads panel — DOCKED (wide / regular) ============ -->
+        <aside
+          class="panel"
+          id="dockPanel"
+          aria-label="Threads panel"
+          data-variant="docked"
+        ></aside>
+
+        <!-- ============ main ============ -->
+        <div class="main">
+          <header class="runhead">
+            <button
+              class="runhead__toggle"
+              type="button"
+              id="toggle"
+              aria-expanded="false"
+              aria-controls="dockPanel"
+              aria-label="Show threads"
+              title="Threads"
+            >
+              <svg
+                class="svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+              </svg>
+            </button>
+            <span class="runhead__brand"><b>0x</b>Copilot</span>
+            <h2
+              class="runhead__goal"
+              title="Create a file named manual-156ea66f.txt inside the attached folder"
+            >
+              Create a file named manual-156ea66f.txt inside the attached folder
+            </h2>
+            <span class="pulse">
+              <span class="pulse__dot" aria-hidden="true"></span>
+              <span class="pulse__label">working</span>
+            </span>
+            <div class="modeseg" role="tablist" aria-label="Run cockpit mode">
+              <button role="tab" aria-selected="true" aria-label="Focus mode">
+                <span class="modeseg__long">Focus</span
+                ><span class="modeseg__short">F</span>
+              </button>
+              <button role="tab" aria-selected="false" aria-label="Studio mode">
+                <span class="modeseg__long">Studio</span
+                ><span class="modeseg__short">S</span>
+              </button>
+            </div>
+          </header>
+
+          <div class="canvas">
+            <ul class="ul rail-measure">
+              <li class="msg--user">
+                Create a file named manual-156ea66f.txt inside the folder I
+                attached containing the single word MANUAL. Use your filesystem
+                tools.
+              </li>
+
+              <li>
+                <details class="group">
+                  <summary>
+                    <span class="group__tile" aria-hidden="true">
+                      <svg
+                        class="svg"
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.7"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <circle cx="12" cy="12" r="3.2" />
+                        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                      </svg>
+                    </span>
+                    <span class="group__label"
+                      >Worked for 8.3s · 6 steps · 1 retried</span
+                    >
+                    <span class="group__chev" aria-hidden="true">
+                      <svg
+                        class="svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.7"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </span>
+                  </summary>
+                  <div class="group__body">
+                    <div class="step">
+                      <span class="step__tile" aria-hidden="true">L</span
+                      ><span class="step__name">ls</span>
+                      <span class="step__meta"
+                        ><span class="step__dur">2.2s</span></span
+                      ><span class="step__mark">✓</span>
+                    </div>
+                    <div class="step">
+                      <span class="step__tile" aria-hidden="true">W</span
+                      ><span class="step__name">write_todos</span>
+                      <span class="step__meta"
+                        ><span class="step__dur">320ms</span></span
+                      ><span class="step__mark">✓</span>
+                    </div>
+                    <div class="step">
+                      <span class="step__tile" aria-hidden="true">R</span
+                      ><span class="step__name">read_file</span>
+                      <span class="step__meta"
+                        ><span class="step__dur">2.1s</span></span
+                      ><span class="step__mark" data-outcome="recovered"
+                        >↻</span
+                      >
+                    </div>
+                    <div class="step">
+                      <span class="step__tile" aria-hidden="true">W</span
+                      ><span class="step__name">write_file</span>
+                      <span class="step__meta"
+                        ><span class="step__dur">645ms</span></span
+                      ><span class="step__mark">✓</span>
+                    </div>
+                  </div>
+                </details>
+              </li>
+
+              <li class="msg--agent">
+                Created <code>manual-156ea66f.txt</code> containing
+                <code>MANUAL</code> in the artifact library.
+                <div class="msgacts" role="group" aria-label="Message actions">
+                  <button type="button">⧉ Copy</button>
+                  <button type="button">↻ Retry</button>
+                </div>
+              </li>
+            </ul>
+
+            <div class="composer rail-measure">
+              <div class="composer__input">Type a message…</div>
+              <div class="composer__row">
+                <span class="cchip">+</span>
+                <span class="cchip">Tools 1</span>
+                <span class="cchip">Manual</span>
+                <span class="spacer"></span>
+                <span class="cchip"
+                  ><span class="cdot" aria-hidden="true"></span>GPT-5.4</span
+                >
+              </div>
+            </div>
+          </div>
+
+          <div class="mini" role="region" aria-label="Run timeline (mini)">
+            <span class="mini__label" aria-hidden="true">6 steps</span>
+            <div class="mini__strip">
+              <button class="bead" data-lane="tool" aria-label="ls"></button>
+              <button
+                class="bead"
+                data-lane="tool"
+                aria-label="write_todos"
+              ></button>
+              <button
+                class="bead"
+                data-lane="subagent"
+                aria-label="Manual file"
+              ></button>
+              <button
+                class="bead"
+                data-lane="error"
+                aria-label="read_file failed"
+              ></button>
+              <button
+                class="bead"
+                data-lane="tool"
+                aria-label="write_file"
+              ></button>
+              <button
+                class="bead"
+                data-lane="answer"
+                aria-label="Final response"
+              ></button>
+            </div>
+            <button class="mini__pill" type="button" aria-pressed="true">
+              Live
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ compact overlay ============ -->
+      <div class="scrim" id="scrim"></div>
+      <div class="overlay" id="overlay">
+        <aside
+          class="panel"
+          aria-label="Threads panel"
+          role="dialog"
+          aria-modal="true"
+          data-variant="overlay"
+        ></aside>
+      </div>
+    </div>
+
+    <p class="mocknote">
+      Toggle <code>▤</code> in the header, or switch the width class above.
+      <code>wide</code> docks the panel open, <code>regular</code> docks it
+      closed, <code>compact</code> makes it an overlay with a scrim (Esc or
+      picking a thread closes it). Rail, panel, header and card geometry are
+      lifted from the components — see the provenance block in the source.
+    </p>
+
+    <script>
+      const PANEL_HTML = `
+        <div class="panel__head">
+          <div class="panel__title">Threads</div>
+          <div class="panel__search">
+            <svg class="svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" />
+            </svg>
+            <input type="search" placeholder="Search…" aria-label="Search threads" />
+          </div>
+          <button class="panel__new" type="button">
+            <svg class="svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            <span>New run</span>
+          </button>
+        </div>
+        <div class="panel__body">
+          <div class="sect-h">Pinned</div>
+          <ul style="list-style:none;margin:0;padding:0">
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Windowed-mode PRD suite</span><span class="trow__time">2d</span></button></li>
+          </ul>
+          <div class="sect-h">Today</div>
+          <ul style="list-style:none;margin:0;padding:0">
+            <li><button class="trow" type="button" aria-current="true"><span class="trow__dot" data-state="running"></span><span class="trow__name">Manual file creation</span><span class="trow__time">now</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Fix Linear MCP 401</span><span class="trow__time">1h</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Model pill selection persistence</span><span class="trow__time">3h</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Activity panel text overflow</span><span class="trow__time">5h</span></button></li>
+          </ul>
+          <div class="sect-h">Earlier</div>
+          <ul style="list-style:none;margin:0;padding:0">
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">App failure diagnosis</span><span class="trow__time">1d</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Connect buttons functionality</span><span class="trow__time">1d</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Add a stranded-CSS shadowing gate</span><span class="trow__time">2d</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">FTUE composer size</span><span class="trow__time">3d</span></button></li>
+            <li><button class="trow" type="button"><span class="trow__dot"></span><span class="trow__name">Research lab naming</span><span class="trow__time">4d</span></button></li>
+          </ul>
+        </div>
+        <div class="panel__foot">
+          <span class="rail-avatar" style="cursor:default" aria-hidden="true">S</span>
+          <span>Sarah Chen</span>
+        </div>`;
+
+      const win = document.getElementById("win");
+      const toggle = document.getElementById("toggle");
+      const scrim = document.getElementById("scrim");
+
+      document.getElementById("dockPanel").innerHTML = PANEL_HTML;
+      document.querySelector("#overlay .panel").innerHTML = PANEL_HTML;
+
+      // FR-1.4 — open state persists PER WIDTH CLASS. compact never persists.
+      const openByClass = { wide: true, regular: false, compact: false };
+
+      function apply() {
+        const w = win.dataset.width;
+        const open = openByClass[w];
+        win.dataset.panel = open ? "open" : "closed";
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.setAttribute(
+          "aria-label",
+          open ? "Hide threads" : "Show threads",
+        );
+      }
+
+      toggle.addEventListener("click", () => {
+        openByClass[win.dataset.width] = !openByClass[win.dataset.width];
+        apply();
+      });
+
+      // FR-1.9 — Esc / scrim close the overlay, focus returns to the toggle.
+      function closeOverlay() {
+        if (win.dataset.width !== "compact") return;
+        openByClass.compact = false;
+        apply();
+        toggle.focus();
+      }
+      scrim.addEventListener("click", closeOverlay);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeOverlay();
+      });
+
+      // FR-1.8 — activation closes at compact, keeps the panel open otherwise.
+      // FR-1.6 — the active row is marked, and the mark moves.
+      document.addEventListener("click", (e) => {
+        const row = e.target.closest(".trow");
+        if (!row) return;
+        const panel = row.closest(".panel");
+        panel
+          .querySelectorAll('.trow[aria-current="true"]')
+          .forEach((n) => n.removeAttribute("aria-current"));
+        row.setAttribute("aria-current", "true");
+        // keep both copies of the list in sync (mock-only detail)
+        const name = row.querySelector(".trow__name").textContent;
+        document.querySelectorAll(".panel").forEach((p) => {
+          p.querySelectorAll(".trow").forEach((r) => {
+            const match = r.querySelector(".trow__name").textContent === name;
+            if (match) r.setAttribute("aria-current", "true");
+            else r.removeAttribute("aria-current");
+          });
+        });
+        document.querySelector(".runhead__goal").textContent = name;
+        if (win.dataset.width === "compact") closeOverlay();
+      });
+
+      document.querySelectorAll(".mockbar__seg button").forEach((b) => {
+        b.addEventListener("click", () => {
+          document
+            .querySelectorAll(".mockbar__seg button")
+            .forEach((x) => x.setAttribute("aria-pressed", "false"));
+          b.setAttribute("aria-pressed", "true");
+          win.dataset.width = b.dataset.w;
+          if (b.dataset.w === "compact") openByClass.compact = false;
+          apply();
+        });
+      });
+
+      apply();
+    </script>
+  </body>
+</html>

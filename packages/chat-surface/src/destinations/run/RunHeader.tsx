@@ -84,6 +84,17 @@ export interface RunHeaderProps {
    * from the single event projection, never a second subscription (FR-3.3).
    */
   readonly runStatus?: AgentRunStatus | null;
+  /**
+   * PRD-01 D-1.3 — leading slot at the LEFT of the bar, before the centred
+   * identity layer. The cockpit mounts its Threads toggle here, matching where
+   * both reference products put their sidebar control.
+   *
+   * The slot exists because the left of this bar was empty: `titleLayerStyle`
+   * is an absolutely-positioned, `pointer-events: none` overlay across the
+   * whole header, and the mode control is `margin-left: auto` on the right.
+   * Rendered only when supplied, so a header without it is byte-identical.
+   */
+  readonly leading?: ReactNode;
 }
 
 /** Active (in-flight) run states that pulse the header dot; every other status
@@ -117,6 +128,7 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
     onModeChange,
     status,
     runStatus = null,
+    leading,
   } = props;
 
   // A run is "active" only when it carries a real goal. Deriving BOTH the goal
@@ -133,6 +145,13 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
 
   return (
     <header data-testid="run-header" style={headerStyle}>
+      {/* Above the identity overlay in z-order and outside its
+          `pointer-events: none`, so the control is actually clickable. */}
+      {leading !== undefined && leading !== null ? (
+        <div data-testid="run-header-leading" style={leadingSlotStyle}>
+          {leading}
+        </div>
+      ) : null}
       <div data-testid="run-header-title" style={titleLayerStyle}>
         <b style={productNameStyle}>
           <span style={productMarkStyle}>0x</span>Copilot
@@ -308,6 +327,14 @@ const headerStyle: CSSProperties = {
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
+};
+
+const leadingSlotStyle: CSSProperties = {
+  position: "relative",
+  zIndex: 1,
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
 };
 
 const titleLayerStyle: CSSProperties = {

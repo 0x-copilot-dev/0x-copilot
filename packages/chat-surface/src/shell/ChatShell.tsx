@@ -1,5 +1,6 @@
 import type { Transport } from "@0x-copilot/chat-transport";
 import {
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -31,10 +32,13 @@ import {
   type ShellDestination,
   type ShellDestinationSlug,
 } from "./destinations";
+import { DEFAULT_SHELL_WIDTH_CLASS } from "./layout";
 import { RIGHT_RAIL_WIDTH, RightRail } from "./RightRail";
 import { RunActivityBusProvider } from "./runActivityBus";
+import { ShellWidthProvider } from "./ShellWidthProvider";
 import { TOPBAR_HEIGHT, Topbar } from "./Topbar";
 import { useActiveRunCount } from "./useActiveRunCount";
+import { useObservedWidthClass } from "./useContainerWidth";
 
 // PRD-09 D5 — the two shell decisions are INDEPENDENT, matching the design:
 // `showTopbar = dest !== "workspace" && dest !== "settings"` (copilot-app.jsx:739),
@@ -247,6 +251,12 @@ function ShellGrid({
   // hook, fed to the rail's Run badge. No host passes it — deleting the prop
   // makes the desktop "badge never wired" gap structurally impossible.
   const activeRunCount = useActiveRunCount();
+  // PRD-00 FR-0.3 — ONE ResizeObserver for the whole surface, on the shell root,
+  // published via context. Descendants read `useShellWidthClass()`; nothing
+  // threads a width prop. `wide` until the first observer callback, so the first
+  // paint is the historical layout (FR-0.5) and narrowing is one transition.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const widthClass = useObservedWidthClass(rootRef, DEFAULT_SHELL_WIDTH_CLASS);
   // Right rail starts closed. It only exists at all when a host passed content
   // for it (see `showRightRail`), so this is the first-open state of a real
   // rail rather than the old "collapsed empty scaffolding".
@@ -312,64 +322,71 @@ function ShellGrid({
   };
 
   return (
-    <div
-      data-component="chat-shell"
-      // PRD-12 D7 — the shell root emits `data-active-destination`, leaving the
-      // plainer per-element attribute to mean "a button/section FOR a
-      // destination". A shipped web rule (`apps/frontend/src/styles.css`) selects
-      // this root by the new name, updated in the same change.
-      data-active-destination={activeDestination}
-      // Absent when there is no rail at all, so "closed" keeps meaning "there is
-      // a rail and it is collapsed" rather than doubling as "no rail exists".
-      data-right-rail-open={
-        showRightRail ? (rightOpen ? "open" : "closed") : undefined
-      }
-      style={outerStyle}
-    >
-      <AppRail
-        activeDestination={activeDestination}
-        destinations={destinations}
-        onNavigate={onNavigate}
-        onOpenSettings={onOpenSettings}
-        settingsActive={settingsActive}
-        // AppRail takes the raw display name and derives the glyph/title itself
-        // (PRD-12 D5). `null` → the neutral glyph.
-        identity={railIdentity ?? undefined}
-        badges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
-      />
-      {showContextPanel ? (
-        <ContextPanelSlot
+    <ShellWidthProvider value={widthClass}>
+      <div
+        ref={rootRef}
+        data-component="chat-shell"
+        // PRD-12 D7 — the shell root emits `data-active-destination`, leaving the
+        // plainer per-element attribute to mean "a button/section FOR a
+        // destination". A shipped web rule (`apps/frontend/src/styles.css`) selects
+        // this root by the new name, updated in the same change.
+        data-active-destination={activeDestination}
+        // PRD-00 D-0.2 — publish the width class as a data attribute so plain CSS
+        // in any descendant can respond without a prop. Same pattern as the
+        // shipped `data-right-rail-open` below and the `[data-reduce-motion]` gate.
+        data-width={widthClass}
+        // Absent when there is no rail at all, so "closed" keeps meaning "there is
+        // a rail and it is collapsed" rather than doubling as "no rail exists".
+        data-right-rail-open={
+          showRightRail ? (rightOpen ? "open" : "closed") : undefined
+        }
+        style={outerStyle}
+      >
+        <AppRail
           activeDestination={activeDestination}
-          destinationLabel={activeLabel ?? activeDestination}
-          contextPanel={contextPanel}
+          destinations={destinations}
+          onNavigate={onNavigate}
+          onOpenSettings={onOpenSettings}
+          settingsActive={settingsActive}
+          // AppRail takes the raw display name and derives the glyph/title itself
+          // (PRD-12 D5). `null` → the neutral glyph.
+          identity={railIdentity ?? undefined}
+          badges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
         />
-      ) : null}
-      <div style={mainColumnStyle}>
-        {suppressTopbar ? null : (
-          <Topbar
+        {showContextPanel ? (
+          <ContextPanelSlot
             activeDestination={activeDestination}
-            title={activeLabel}
-            leaf={topbarLeaf ?? null}
-            onOpenCommandPalette={onOpenCommandPalette}
-            walletChip={walletChip}
+            destinationLabel={activeLabel ?? activeDestination}
+            contextPanel={contextPanel}
           />
-        )}
-        <div style={mainBodyStyle} data-testid="chat-shell-main">
-          {children}
+        ) : null}
+        <div style={mainColumnStyle}>
+          {suppressTopbar ? null : (
+            <Topbar
+              activeDestination={activeDestination}
+              title={activeLabel}
+              leaf={topbarLeaf ?? null}
+              onOpenCommandPalette={onOpenCommandPalette}
+              walletChip={walletChip}
+            />
+          )}
+          <div style={mainBodyStyle} data-testid="chat-shell-main">
+            {children}
+          </div>
         </div>
+        {/* Full-bleed surfaces own their right panel via the main content
+            (ChatScreen's workspace pane; the Run cockpit's right rail), so the
+            shell RightRail is suppressed there to avoid a duplicate, un-obvious
+            panel — and everywhere else it now needs `rightRail` content to exist
+            at all. Mounting it unfed left an edge toggle whose only outcome was a
+            380px empty state. */}
+        {showRightRail ? (
+          <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)}>
+            {rightRail}
+          </RightRail>
+        ) : null}
       </div>
-      {/* Full-bleed surfaces own their right panel via the main content
-          (ChatScreen's workspace pane; the Run cockpit's right rail), so the
-          shell RightRail is suppressed there to avoid a duplicate, un-obvious
-          panel — and everywhere else it now needs `rightRail` content to exist
-          at all. Mounting it unfed left an edge toggle whose only outcome was a
-          380px empty state. */}
-      {showRightRail ? (
-        <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)}>
-          {rightRail}
-        </RightRail>
-      ) : null}
-    </div>
+    </ShellWidthProvider>
   );
 }
 
