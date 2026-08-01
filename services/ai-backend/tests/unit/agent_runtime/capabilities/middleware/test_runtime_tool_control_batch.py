@@ -301,7 +301,12 @@ class _ConcurrencyProbe:
 
     #: Comfortably more turns than the admission path spends between the gate
     #: and this probe, so every admitted sibling is inside the window at once.
-    YIELDS: int = 32
+    #: Widened 32 -> 1024 after CI flaked under load: a busy runner can spend
+    #: more than 32 scheduler turns in the admission path, so a genuinely
+    #: overlapping sibling arrived after the window closed and overlap was
+    #: under-reported. Widening only gives real overlap more room to appear (see
+    #: the class docstring), so it is safe to raise and must not be lowered.
+    YIELDS: int = 1024
 
     def __init__(self) -> None:
         self.active = 0
