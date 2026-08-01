@@ -48,6 +48,29 @@ class TestWorkspacePolicyAnswers:
             f"Error: {WorkspacePolicyAnswers.UNAVAILABLE}"
         )
 
+    def test_covers_the_answer_the_desktop_app_actually_emits(self) -> None:
+        """The tombstone is NOT the backend a real desktop chat uses.
+
+        A live journey found this: `ls /workspace/` on a fresh desktop chat is
+        answered by the host backend's ``NO_GRANTS``, not the enforce-mode
+        tombstone, so a registry holding only the tombstone's message left the
+        reported path still classified as a failure.
+        """
+        from agent_runtime.capabilities.desktop.workspace_backend import (
+            _SafeMessage,
+        )
+
+        assert (
+            WorkspacePolicyAnswers.code_for(_SafeMessage.NO_GRANTS)
+            is WorkspacePolicyAnswerCode.NO_GRANTS
+        )
+        assert (
+            WorkspacePolicyAnswers.code_for(_SafeMessage.PERMISSION_DENIED)
+            is WorkspacePolicyAnswerCode.PERMISSION_DENIED
+        )
+        # A transient host fault is NOT a policy answer and keeps failing.
+        assert not WorkspacePolicyAnswers.is_policy_answer(_SafeMessage.UNAVAILABLE)
+
     def test_matches_the_real_middleware_rendering(self) -> None:
         """Read the INSTALLED middleware, not an assumption about it.
 

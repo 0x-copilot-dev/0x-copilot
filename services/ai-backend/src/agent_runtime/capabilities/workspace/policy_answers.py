@@ -26,12 +26,26 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping
 
+# The desktop host backend owns the wording of its own answers. Referencing the
+# constants keeps ONE copy of each user-facing string; transcribing them here
+# would let the two drift until the classifier silently stopped matching — which
+# is precisely the failure a live journey caught.
+from agent_runtime.capabilities.desktop.workspace_backend import (
+    _SafeMessage as _DesktopSafeMessage,
+)
+
 
 class WorkspacePolicyAnswerCode(StrEnum):
     """Typed codes for workspace answers that are decisions, not failures."""
 
-    #: No folder is attached to this chat, so local files cannot be reached.
+    #: The enforce-mode tombstone: no workspace capability is mounted at all.
     UNAVAILABLE = "workspace_unavailable"
+    #: Host access is on, but the user has shared no folder yet. This is the
+    #: one the desktop app actually emits for `ls /workspace/` on a fresh chat.
+    NO_GRANTS = "workspace_no_grants"
+    #: The user's grants do not cover the requested path. Denied by policy —
+    #: the remedy is granting access, never repeating the call.
+    PERMISSION_DENIED = "workspace_permission_denied"
 
 
 class WorkspacePolicyAnswers:
@@ -45,8 +59,20 @@ class WorkspacePolicyAnswers:
         "instead; no local file was changed."
     )
 
+    #: The desktop host backend's own copy, referenced rather than duplicated —
+    #: a second transcription of user-facing text is exactly how these two
+    #: drift apart and the classifier silently stops matching. Imported at
+    #: module scope below; `capabilities/desktop` imports nothing from here, so
+    #: there is no cycle.
+    NO_GRANTS = _DesktopSafeMessage.NO_GRANTS
+    PERMISSION_DENIED = _DesktopSafeMessage.PERMISSION_DENIED
+
     _BY_TEXT: Mapping[str, WorkspacePolicyAnswerCode] = MappingProxyType(
-        {UNAVAILABLE: WorkspacePolicyAnswerCode.UNAVAILABLE}
+        {
+            UNAVAILABLE: WorkspacePolicyAnswerCode.UNAVAILABLE,
+            NO_GRANTS: WorkspacePolicyAnswerCode.NO_GRANTS,
+            PERMISSION_DENIED: WorkspacePolicyAnswerCode.PERMISSION_DENIED,
+        }
     )
 
     #: The Deep Agents filesystem middleware renders a backend error two ways

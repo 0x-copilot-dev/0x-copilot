@@ -113,7 +113,13 @@ class _ErrorRetryability:
     #: and TOOL_CANCELLED was the user's own decision — re-running is a new
     #: instruction, not a retry.
     _NOT_RETRYABLE = frozenset(
-        {"PERMISSION_DENIED", "WORKSPACE_UNAVAILABLE", "TOOL_CANCELLED"}
+        {
+            "PERMISSION_DENIED",
+            "TOOL_CANCELLED",
+            "WORKSPACE_UNAVAILABLE",
+            "WORKSPACE_NO_GRANTS",
+            "WORKSPACE_PERMISSION_DENIED",
+        }
     )
 
     @classmethod
