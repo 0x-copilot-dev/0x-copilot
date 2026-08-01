@@ -964,6 +964,12 @@ export function CopilotApp({
         conversationId={(route.subPath ?? null) as ConversationId | null}
         onConversationCreated={openConversation}
         onOpenModelSettings={openModelSettings}
+        // PRD-01 — the cockpit's Threads switcher reuses the SAME navigation
+        // handlers Chats already uses, so this host has one "open a
+        // conversation" path rather than a second one for the switcher.
+        onOpenConversation={openConversation}
+        onNewConversation={openNewRun}
+        identityName={profile?.data?.display_name ?? null}
         identity={identity}
         oauthStatus={oauthStatus}
         completedMcpAuthAction={completedMcpAuthAction}

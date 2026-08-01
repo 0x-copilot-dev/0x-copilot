@@ -1056,6 +1056,9 @@ function mintNewChatIdempotencyKey(): string {
 export function RunBinder({
   conversationId,
   onConversationCreated,
+  onOpenConversation,
+  onNewChat,
+  identityName = null,
   onOpenModelSettings,
   onOpenLocalModelSettings,
   onOpenConnectors,
@@ -1070,6 +1073,12 @@ export function RunBinder({
    * host navigates to it (the outlet then re-keys + remounts this binder).
    */
   readonly onConversationCreated?: (id: ConversationId) => void;
+  /** PRD-01 — open another conversation from the cockpit's Threads switcher. */
+  readonly onOpenConversation?: (id: ConversationId) => void;
+  /** PRD-01 — the switcher's "New run" action; same intent as ⌘N. */
+  readonly onNewChat?: () => void;
+  /** PRD-01/PRD-09 — display name for the Threads panel foot. */
+  readonly identityName?: string | null;
   /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
   readonly onOpenModelSettings?: () => void;
   /** Open Settings → Local models (model popover's "Get local models →"). */
@@ -1347,6 +1356,11 @@ export function RunBinder({
   return (
     <RunDestination
       conversationId={boundConversationId}
+      // PRD-01 — Threads switcher wiring. Navigation only; the list itself is
+      // the shared `useChatsArchive` controller inside the package.
+      onOpenConversation={onOpenConversation}
+      onNewConversation={onNewChat}
+      identityName={identityName}
       onStartRun={handleStartRun}
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}

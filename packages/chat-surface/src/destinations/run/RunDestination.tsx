@@ -215,6 +215,15 @@ import { RunEmptyState, type StartRunError } from "./RunEmptyState";
 // in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
 import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
+import { useShellWidthClass } from "../../shell/ShellWidthProvider";
+import {
+  THREAD_SWITCHER_DOCK_FLOOR,
+  ThreadSwitcherToggle,
+  threadSwitcherDockWidth,
+} from "../../shell/ThreadSwitcher";
+import { useContainerWidth } from "../../shell/useContainerWidth";
+import { ThreadSwitcherHost } from "./ThreadSwitcherHost";
+import { useThreadSwitcherOpen } from "./useThreadSwitcherOpen";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
@@ -1012,6 +1021,25 @@ export interface RunDestinationProps {
   /** Conversation whose active/selected run the cockpit binds to. */
   readonly conversationId: ConversationId;
   /**
+   * PRD-01 — open another conversation from the Threads switcher. The host
+   * translates id → its own route (web hash route / desktop native route), which
+   * re-keys this binder onto the picked conversation. When unset, the switcher
+   * still renders and lists threads but rows are inert, so a host that has not
+   * wired navigation degrades to a read-only list rather than a dead click.
+   */
+  readonly onOpenConversation?: (id: ConversationId) => void;
+  /**
+   * PRD-01 — the switcher's "New run" primary action. Same intent as ⌘N; the
+   * host owns where a new conversation lands. Omitted → no button.
+   */
+  readonly onNewConversation?: () => void;
+  /**
+   * PRD-09 D-9.5 — signed-in display name for the switcher's foot. The 48px app
+   * rail can only show an initial; the docked panel has room for the name.
+   * `null` → no foot row.
+   */
+  readonly identityName?: string | null;
+  /**
    * Explicit target run. Wins over auto-resolution and is streamed even before
    * it appears in the run list — the seam PR-3.11 uses to bind the empty→live
    * transition to a freshly-created run without a shell remount (FR-3.25).
@@ -1218,6 +1246,9 @@ export interface RunDestinationProps {
 export function RunDestination(props: RunDestinationProps): ReactElement {
   const {
     conversationId,
+    onOpenConversation,
+    onNewConversation,
+    identityName = null,
     runId: explicitRunId = null,
     enabled = true,
     agentName,
@@ -1352,6 +1383,87 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   } = useRunStudioRailCollapsed({ conversationId });
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
+
+  // PRD-01 — the Threads switcher. `run` is full-bleed so the shell gives the
+  // cockpit no context column and no topbar; the cockpit owns this one.
+  //
+  // The width class comes from the shell's single ResizeObserver (PRD-00), so a
+  // Studio split that shrinks the canvas resolves to `compact` even inside a
+  // 1600px window — the observer is on the container, not the viewport.
+  const shellWidthClass = useShellWidthClass();
+  const threadSwitcherCompact = shellWidthClass === "compact";
+  // Presentation is decided by the cockpit's OWN width in px, not by the class.
+  //
+  // The class is a coarse chrome-density signal; whether a 200px panel can share
+  // the row with a usable composer is an arithmetic question about this
+  // container. Deciding it from the class put a modal scrim over the composer of
+  // an ordinary 640px window — see THREAD_SWITCHER_DOCK_FLOOR.
+  const cockpitRef = useRef<HTMLDivElement | null>(null);
+  const cockpitWidth = useContainerWidth(cockpitRef, DEFAULT_COCKPIT_WIDTH);
+  const threadSwitcherOverlay = cockpitWidth < THREAD_SWITCHER_DOCK_FLOOR;
+
+  const {
+    open: threadSwitcherOpen,
+    setOpen: setThreadSwitcherOpen,
+    toggle: toggleThreadSwitcher,
+  } = useThreadSwitcherOpen(shellWidthClass);
+  // NFR-1.1 — once the panel has been shown, `ThreadSwitcherHost` stays mounted
+  // (holding ONE archive subscription) even while the panel is hidden. Before
+  // the first open it is not mounted at all, so a cockpit whose user never opens
+  // Threads pays nothing.
+  const [threadSwitcherMounted, setThreadSwitcherMounted] =
+    useState(threadSwitcherOpen);
+  useEffect(() => {
+    if (threadSwitcherOpen) {
+      setThreadSwitcherMounted(true);
+    }
+  }, [threadSwitcherOpen]);
+  // PRD-00 FR-0.7 — the Focus Run-details rail must not squeeze the chat column
+  // to nothing. `ThreadCanvas`'s Focus grid is
+  // `minmax(0, 1fr) 1px ${railWidthPx}px`: the chat track can shrink to ZERO
+  // while the rail track is fixed. With the Threads panel also docked, a 640px
+  // window left the chat ~49px wide — one character per line, and a composer
+  // you cannot type in.
+  //
+  // Rather than let both panels fight over one row, the Run-details rail yields
+  // first: it is the secondary surface, and the composer is the primary one.
+  // Reuse the EXISTING collapse flag so there is one notion of "panel hidden"
+  // — the user's persisted choice OR the layout having no room for it.
+  const canvasWidth =
+    cockpitWidth -
+    (threadSwitcherOpen && !threadSwitcherOverlay
+      ? threadSwitcherDockWidth(threadSwitcherCompact)
+      : 0);
+  const focusPanelFitsBesideChat = canvasWidth >= FOCUS_DETAILS_MIN_CANVAS;
+
+  // PRD-00 FR-0.7 (the other half) — clamp the persisted Studio rail to what the
+  // canvas can actually give it.
+  //
+  // `useRailWidth` is a GLOBAL preference (default 584) with no upper bound tied
+  // to the container. In a 640px window the canvas is 392px, so the Studio grid
+  // (`surface | 1px handle | rail`) laid out a 584px chat column inside 392px:
+  // the transcript overflowed the window and the composer ran off the right
+  // edge with its send button clipped.
+  //
+  // The clamp is applied HERE, at the consumer, not inside `useRailWidth` — the
+  // stored preference must survive a narrow window and come back when the user
+  // widens again. Persist what they chose; render what fits.
+  const effectiveRailWidth = Math.min(
+    railWidth,
+    Math.max(STUDIO_RAIL_MIN, canvasWidth - STUDIO_HANDLE_PX),
+  );
+  const closeThreadSwitcher = useCallback(() => {
+    setThreadSwitcherOpen(false);
+  }, [setThreadSwitcherOpen]);
+  // FR-1.7 — activation goes through the host's navigation, which re-keys this
+  // binder onto the picked conversation. The cockpit never mutates its own
+  // `conversationId` prop, so there is exactly one owner of "which thread".
+  const handleOpenConversation = useCallback(
+    (next: ConversationId): void => {
+      onOpenConversation?.(next);
+    },
+    [onOpenConversation],
+  );
 
   // Surface-tab strip (PRD-04). `ThreadCanvas` takes `tabs`/`activeUri` as
   // host-controlled props; the shell DERIVES them from the single projection —
@@ -4077,7 +4189,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // cockpit behavior, not a v2 surface feature.
       focusSourcesSignal={sourcesFocusSignal}
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
-      panelCollapsed={focusPanelCollapsed}
+      panelCollapsed={focusPanelCollapsed || !focusPanelFitsBesideChat}
       onPanelCollapsedChange={setFocusPanelCollapsed}
       // Studio rail fold — the chevron in the tabset; same per-conversation
       // persistence, its own key. The canvas below narrows the column to match.
@@ -4160,7 +4272,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       rightRail={rightRail}
       showModeSwitcher={false}
       // Draggable, persisted Studio rail width (useRailWidth → KV).
-      railWidth={railWidth}
+      railWidth={effectiveRailWidth}
       onRailWidthChange={setRailWidth}
       // …and its folded state, so the grid narrows the rail column to the icon
       // strip and the surface column takes the width back.
@@ -4223,6 +4335,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   return (
     <div
+      ref={cockpitRef}
       className="run-destination"
       data-testid="run-destination"
       data-run-status={session.status}
@@ -4240,102 +4353,159 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
         status={v2HeaderStatus}
+        leading={
+          <ThreadSwitcherToggle
+            open={threadSwitcherOpen}
+            onToggle={toggleThreadSwitcher}
+            controls={THREAD_SWITCHER_PANEL_ID}
+          />
+        }
       />
+      <div style={cockpitBodyRowStyle}>
+        {/* Docked (wide / regular). Not rendered at compact — the overlay below
+            is the compact presentation, and rendering both would double the
+            list in the DOM. */}
+        {threadSwitcherMounted && !threadSwitcherOverlay ? (
+          <ThreadSwitcherHost
+            id={THREAD_SWITCHER_PANEL_ID}
+            open={threadSwitcherOpen}
+            variant="docked"
+            compact={threadSwitcherCompact}
+            activeConversationId={
+              conversationId === "new" ? null : conversationId
+            }
+            onOpenConversation={handleOpenConversation}
+            onNewRun={onNewConversation}
+            identityName={identityName}
+          />
+        ) : null}
+        <div style={cockpitMainColumnStyle}>
+          {/* No multi-run selector strip. The cockpit shows ONE run — the active
+            one — in both Studio and Focus; a "3 RUNS" chip rail above the canvas
+            was chrome the user never asked for and it competed with the header
+            for the same glance. Rebinding to another run is still possible, but
+            only from a surface whose whole job is choosing a run: the Pending
+            Work card (`handleReviewPendingWorkV2`) and the Agents stage. Do not
+            reinstate a persistent selector rail here. */}
 
-      {/* No multi-run selector strip. The cockpit shows ONE run — the active
-          one — in both Studio and Focus; a "3 RUNS" chip rail above the canvas
-          was chrome the user never asked for and it competed with the header
-          for the same glance. Rebinding to another run is still possible, but
-          only from a surface whose whole job is choosing a run: the Pending
-          Work card (`handleReviewPendingWorkV2`) and the Agents stage. Do not
-          reinstate a persistent selector rail here. */}
-
-      {session.error !== null ? (
-        <RunErrorBanner
-          // A streamed run/resolution failure surfaces its safe_message when it
-          // carries an envelope, else a cleaned line — NEVER the raw IPC string
-          // (which on desktop names the remote method 'transport.request'),
-          // so the banner is honest too (Issue 2 / NFR-2.1).
-          message={humanTransportMessage(session.error.message)}
-          onRetry={session.retry}
-        />
-      ) : null}
-
-      {/* PR-3.7 (FR-3.15): off-now time-travel banner. It names the moment
-          being viewed and its "Return to live →" is the snap-to-now affordance
-          (FR-3.16). Complements the in-chat ghost banner (which dims the
-          transcript + disables the composer via the SwimlaneScrubProvider that
-          ThreadCanvas already threads from `scrubbedSeq`). */}
-      {isScrubbed ? (
-        <RunViewingBanner atMs={viewingAtMs} onReturnToLive={handleSnapToNow} />
-      ) : null}
-
-      {/* PRD-04: "follow live" affordance — the user pinned an older surface tab
-          while the run moved on to a newer one. Reuses the scrub-banner pattern;
-          "Follow live →" un-pins and resumes auto-follow. */}
-      {showFollowLive ? (
-        <RunFollowLiveBanner
-          pinnedTitle={pinnedTabTitle}
-          onFollowLive={handleFollowLive}
-        />
-      ) : null}
-
-      <div data-testid="run-cockpit-canvas-slot" style={canvasSlotStyle}>
-        {/* PR-3.11 (FR-3.25): no active run → the empty/idle composer (never a
-            blank ThreadCanvas / placeholder string). When the host injects
-            `renderEmptyComposer`, the cockpit shows the design's "What should we
-            run first?" rich composer (hero + starter chips + AssistantComposer);
-            otherwise the plain `RunEmptyState` goal card. Either way, submitting
-            starts a run and binds it via the ONE sink (`handleStartRun` →
-            `session.bindRun`, §D3), so the live layout below mounts IN PLACE — the
-            shell (this outer div + header) never remounts.
-
-            Gate on transcript-emptiness, NOT just `runId === null` (§D3): reopening
-            a FINISHED conversation loads its transcript (by conversationId) while the
-            head run is still resolving, so it shows the thread — never a false "NO
-            ACTIVE RUN" over a conversation that already has messages. */}
-        {session.runId === null && transcriptMessages.length === 0 ? (
-          renderEmptyComposer !== undefined ? (
-            <div
-              data-testid="run-empty-composer"
-              style={emptyComposerOuterStyle(mode)}
-            >
-              {/* Readiness is NOT a standing notice here: the rich composer
-                  stays live with no model configured, and a send answers in the
-                  composer's own inline error strip (handleStartRun sets a
-                  `configuration_error` start error → "Add a key" CTA). The
-                  plain `RunEmptyState` fallback below keeps its own setup
-                  notice, since it has no inline-error idiom of its own. */}
-              <div style={emptyComposerColumnStyle}>
-                {renderEmptyComposer({
-                  onStartRun: handleStartRun,
-                  submitting: isStartingRun,
-                  startError,
-                  dismissError: clearStartError,
-                  modelReady,
-                  onOpenModelSettings,
-                  autoActivateConnectorId: connectedConnectorServerId,
-                  conversationModel: session.conversationModel,
-                })}
-              </div>
-            </div>
-          ) : (
-            <RunEmptyState
-              agentName={agentName}
-              onSubmitGoal={handleStartGoal}
-              submitting={isStartingRun}
-              error={startError}
-              setupRequired={!modelReady}
-              onOpenModelSettings={onOpenModelSettings}
+          {session.error !== null ? (
+            <RunErrorBanner
+              // A streamed run/resolution failure surfaces its safe_message when it
+              // carries an envelope, else a cleaned line — NEVER the raw IPC string
+              // (which on desktop names the remote method 'transport.request'),
+              // so the banner is honest too (Issue 2 / NFR-2.1).
+              message={humanTransportMessage(session.error.message)}
+              onRetry={session.retry}
             />
-          )
-        ) : surfacesV2 ? (
-          // v2 canvas: the extracted ThreadCanvas wrapped with the parked-gate
-          // region + upgrade toast. Flag off falls to the bare `canvasEl` below.
-          v2CanvasBody
-        ) : (
-          canvasEl
-        )}
+          ) : null}
+
+          {/* PR-3.7 (FR-3.15): off-now time-travel banner. It names the moment
+            being viewed and its "Return to live →" is the snap-to-now affordance
+            (FR-3.16). Complements the in-chat ghost banner (which dims the
+            transcript + disables the composer via the SwimlaneScrubProvider that
+            ThreadCanvas already threads from `scrubbedSeq`). */}
+          {isScrubbed ? (
+            <RunViewingBanner
+              atMs={viewingAtMs}
+              onReturnToLive={handleSnapToNow}
+            />
+          ) : null}
+
+          {/* PRD-04: "follow live" affordance — the user pinned an older surface tab
+            while the run moved on to a newer one. Reuses the scrub-banner pattern;
+            "Follow live →" un-pins and resumes auto-follow. */}
+          {showFollowLive ? (
+            <RunFollowLiveBanner
+              pinnedTitle={pinnedTabTitle}
+              onFollowLive={handleFollowLive}
+            />
+          ) : null}
+
+          <div data-testid="run-cockpit-canvas-slot" style={canvasSlotStyle}>
+            {/* PR-3.11 (FR-3.25): no active run → the empty/idle composer (never a
+              blank ThreadCanvas / placeholder string). When the host injects
+              `renderEmptyComposer`, the cockpit shows the design's "What should we
+              run first?" rich composer (hero + starter chips + AssistantComposer);
+              otherwise the plain `RunEmptyState` goal card. Either way, submitting
+              starts a run and binds it via the ONE sink (`handleStartRun` →
+              `session.bindRun`, §D3), so the live layout below mounts IN PLACE — the
+              shell (this outer div + header) never remounts.
+
+              Gate on transcript-emptiness, NOT just `runId === null` (§D3): reopening
+              a FINISHED conversation loads its transcript (by conversationId) while the
+              head run is still resolving, so it shows the thread — never a false "NO
+              ACTIVE RUN" over a conversation that already has messages. */}
+            {session.runId === null && transcriptMessages.length === 0 ? (
+              renderEmptyComposer !== undefined ? (
+                <div
+                  data-testid="run-empty-composer"
+                  style={emptyComposerOuterStyle(mode)}
+                >
+                  {/* Readiness is NOT a standing notice here: the rich composer
+                    stays live with no model configured, and a send answers in the
+                    composer's own inline error strip (handleStartRun sets a
+                    `configuration_error` start error → "Add a key" CTA). The
+                    plain `RunEmptyState` fallback below keeps its own setup
+                    notice, since it has no inline-error idiom of its own. */}
+                  <div style={emptyComposerColumnStyle}>
+                    {renderEmptyComposer({
+                      onStartRun: handleStartRun,
+                      submitting: isStartingRun,
+                      startError,
+                      dismissError: clearStartError,
+                      modelReady,
+                      onOpenModelSettings,
+                      autoActivateConnectorId: connectedConnectorServerId,
+                      conversationModel: session.conversationModel,
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <RunEmptyState
+                  agentName={agentName}
+                  onSubmitGoal={handleStartGoal}
+                  submitting={isStartingRun}
+                  error={startError}
+                  setupRequired={!modelReady}
+                  onOpenModelSettings={onOpenModelSettings}
+                />
+              )
+            ) : surfacesV2 ? (
+              // v2 canvas: the extracted ThreadCanvas wrapped with the parked-gate
+              // region + upgrade toast. Flag off falls to the bare `canvasEl` below.
+              v2CanvasBody
+            ) : (
+              canvasEl
+            )}
+          </div>
+        </div>
+        {/* Compact overlay + scrim. The scrim starts at the panel's own left
+            edge (the cockpit has no rail of its own — the app rail is outside
+            this component), so it dims exactly the canvas it covers. */}
+        {threadSwitcherMounted &&
+        threadSwitcherOverlay &&
+        threadSwitcherOpen ? (
+          <>
+            <div
+              data-testid="thread-switcher-scrim"
+              style={threadSwitcherScrimStyle}
+              onClick={closeThreadSwitcher}
+              aria-hidden="true"
+            />
+            <ThreadSwitcherHost
+              id={THREAD_SWITCHER_PANEL_ID}
+              open
+              variant="overlay"
+              activeConversationId={
+                conversationId === "new" ? null : conversationId
+              }
+              onOpenConversation={handleOpenConversation}
+              onNewRun={onNewConversation}
+              onRequestClose={closeThreadSwitcher}
+              identityName={identityName}
+            />
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -4658,6 +4828,68 @@ const emptyComposerColumnStyle: CSSProperties = {
   width: "min(640px, 92%)",
   margin: "0 auto",
   padding: "22px 0",
+};
+
+// PRD-01 — stable id so the header toggle's `aria-controls` resolves to the
+// panel in both presentations.
+const THREAD_SWITCHER_PANEL_ID = "run-thread-switcher";
+
+/**
+ * Canvas width (cockpit minus a docked Threads panel) below which Focus mode
+ * stops rendering the Run-details rail beside the chat.
+ *
+ * `360 (chat + composer) + 340 (Run-details rail)`. Below this the two cannot
+ * share a row, and the Focus grid resolves the conflict by crushing the chat —
+ * its track is `minmax(0, 1fr)` against the rail's fixed width, so the chat
+ * loses every time. The rail yields instead: it is the secondary surface, the
+ * composer is the primary one, and the rail is one ⌘-toggle away.
+ */
+const FOCUS_DETAILS_MIN_CANVAS = 700;
+
+/**
+ * Pre-observer cockpit width.
+ *
+ * PRD-00's stance: default to the WIDEST layout so the first paint is the
+ * historical one and narrowing is a single opt-in transition (FR-0.5). Seeding
+ * this with the dock floor instead made every pre-measurement render assume the
+ * narrowest case — which collapsed the Focus Run-details panel in every
+ * environment where `ResizeObserver` never fires, jsdom included.
+ */
+const DEFAULT_COCKPIT_WIDTH = 1200;
+
+/** The 1px drag divider between the Studio surface and rail columns. */
+const STUDIO_HANDLE_PX = 1;
+/** Floor for the clamped Studio rail — below this the chat is unreadable, and
+ *  letting the surface column win instead would hide the composer entirely. */
+const STUDIO_RAIL_MIN = 280;
+
+// The cockpit body: [Threads panel?] [everything else]. `position: relative` so
+// the compact overlay + scrim anchor to this row rather than the viewport.
+const cockpitBodyRowStyle: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  flex: "1 1 auto",
+  minHeight: 0,
+  minWidth: 0,
+  overflow: "hidden",
+};
+
+// Everything that used to be a direct flex-column child of the root. Keeping it
+// a column preserves the previous layout exactly when the panel is closed.
+const cockpitMainColumnStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  flex: "1 1 auto",
+  minWidth: 0,
+  minHeight: 0,
+  overflow: "hidden",
+};
+
+const threadSwitcherScrimStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  zIndex: 2,
+  background: "color-mix(in srgb, var(--color-bg) 60%, transparent)",
 };
 
 const rootStyle: CSSProperties = {
