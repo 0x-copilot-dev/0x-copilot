@@ -9,6 +9,10 @@ from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
 from agent_runtime.capabilities.desktop.workspace_attestation import (
     DesktopWorkspaceAttestationRegistry,
 )
+from agent_runtime.execution.deep_agent_builder import (
+    setup_runtime_checkpointer,
+    teardown_runtime_checkpointer,
+)
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
@@ -99,6 +103,11 @@ class RuntimeWorkerEntrypoint:
             )
         await async_ports.lifecycle.open()
         await async_ports.lifecycle.migrate()
+        # Durable graph checkpointer: on RUNTIME_STORE_BACKEND=postgres this
+        # opens the AsyncPostgresSaver pool and creates its checkpoint tables so
+        # graph state / paused approvals survive a worker restart. A no-op on
+        # every other backend (this standalone worker never runs the file store).
+        await setup_runtime_checkpointer()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         artifact_cleanup_execution_loop: ArtifactCleanupExecutionLoop | None = None
@@ -490,6 +499,8 @@ class RuntimeWorkerEntrypoint:
                 await retention_loop.stop()
             if rollup_loop is not None:
                 await rollup_loop.stop()
+            # Close the AsyncPostgresSaver pool opened above (no-op otherwise).
+            await teardown_runtime_checkpointer()
             await async_ports.lifecycle.close()
             # Idempotent — closes the pooled backend client used by the
             # BYOK policy resolver (and any capability HTTP callers).
