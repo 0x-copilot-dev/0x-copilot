@@ -12,6 +12,9 @@ import pytest
 
 from agent_runtime.capabilities.desktop.agent_scratch import agent_scratch_root
 from agent_runtime.capabilities.desktop.host_floor import HostFilesystemFloor
+from agent_runtime.capabilities.desktop.workspace_backend import (
+    BrokeredWorkspaceBackend,
+)
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.workspace.contracts import (
     WorkspaceBaseEntry,
@@ -669,7 +672,14 @@ class TestEnforceLaneGrantedRoots:
         backend = await handler._workspace_backend_for_run(
             _command(), run=run, mcp_gateway_services=services
         )
-        assert isinstance(backend, WorkspaceTombstoneBackend)
+        # The name of this test was always the contract; the assertion used to
+        # contradict it. A denied run got `WorkspaceTombstoneBackend`, which
+        # refuses READS as well as effects — so a folder the user had just
+        # attached became unreadable, and the model was told to make an artifact
+        # instead. It now degrades to the broker's read-only backend: the run
+        # can stage nothing and can still look at what it was given.
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        assert backend.supports_writes is False
 
         roots = await handler._granted_host_roots_for_run(backend)
         assert [root.path for root in roots or ()] == [_ATTACHED]

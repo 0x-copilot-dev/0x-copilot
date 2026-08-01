@@ -1652,6 +1652,37 @@ class RuntimeRunHandler:
         )
         return tuple(name for name, value in candidates if value is None)
 
+    async def _workspace_read_only(self, reason: str) -> object:
+        """No write authority — keep READS working instead of refusing both.
+
+        The enforced lane used to answer every one of its five fail-closed
+        conditions with `WorkspaceTombstoneBackend`, which refuses reads too. So
+        switching enforce on made a folder the user had just attached LESS
+        usable than leaving it off, and the model was told "Local workspace
+        access is unavailable. Create an artifact or download instead" — which
+        is exactly why it reached for `publish_artifact` instead of the file.
+
+        Losing the commit authority should cost the user WRITES. It should never
+        cost them the ability to look at their own folder. The broker can serve
+        reads without a host session, so that is what a missing write authority
+        degrades to now.
+
+        The tombstone survives for the case it was actually built for: nothing
+        is available at all, and a `StateBackend` fallthrough would answer with
+        an empty listing and a green tick.
+        """
+
+        from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+            WorkspaceTombstoneBackend,
+        )
+
+        readable = await self._workspace_wiring().workspace_backend()
+        if readable is None:
+            self._tombstone(f"{reason}+no_broker_reads")
+            return WorkspaceTombstoneBackend()
+        self._tombstone(f"{reason}+degraded_to_read_only")
+        return readable
+
     async def _workspace_effect_backend_for_run(
         self,
         *,
@@ -1709,12 +1740,12 @@ class RuntimeRunHandler:
             ),
             facts_provider=self._rollout_facts_for_run(run),
         ):
-            self._tombstone("rollout_admission_denied")
-            return WorkspaceTombstoneBackend()
+            return await self._workspace_read_only("rollout_admission_denied")
         missing = self._missing_workspace_dependencies(mcp_gateway_services)
         if missing:
-            self._tombstone(f"missing_dependencies={'+'.join(missing)}")
-            return WorkspaceTombstoneBackend()
+            return await self._workspace_read_only(
+                f"missing_dependencies={'+'.join(missing)}"
+            )
         scope = EffectExecutionScope(
             org_id=run.org_id,
             user_id=run.user_id,
