@@ -2405,6 +2405,13 @@ class RuntimeEventPresentation(RuntimeContract):
     action_label: str | None = Field(default=None, max_length=60)
     result_preview: tuple[RuntimeEventPresentationPreviewRow, ...] = ()
     debug_label: str | None = Field(default="Tool details", max_length=40)
+    #: The typed failure code behind this card, so a client can key a remedy to
+    #: the actual cause instead of guessing from prose.
+    code: str | None = Field(default=None, max_length=80)
+    #: Whether repeating the operation could change the outcome. A client draws
+    #: a remedy ONLY when this is true — an action the system cannot honour is
+    #: worse than none. ``None`` on non-failure cards.
+    retryable: bool | None = None
 
     @field_validator(
         _Fields.TITLE,

@@ -2569,6 +2569,17 @@ export interface RuntimeEventPresentation {
   action_label?: string | null;
   result_preview?: RuntimeEventPresentationPreviewRow[];
   debug_label?: string | null;
+  /**
+   * The typed failure code behind this card, so a remedy can be keyed to the
+   * actual cause rather than guessed from prose.
+   */
+  code?: string | null;
+  /**
+   * Whether repeating the operation could change the outcome. Draw a remedy
+   * ONLY when this is `true` — an action the system cannot honour is worse
+   * than no action. Absent/null on non-failure cards.
+   */
+  retryable?: boolean | null;
 }
 
 export interface RuntimeEventReplayResponse {

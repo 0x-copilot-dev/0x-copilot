@@ -85,6 +85,46 @@ class _ErrorMessage:
         return getattr(cls, upper, cls.DEFAULT)
 
 
+class _ErrorRetryability:
+    """Whether repeating an operation could plausibly change its outcome.
+
+    A client draws a remedy only when the answer is yes. The default is NO: an
+    action the system cannot honour is worse than no action at all — that is
+    precisely what the old "Retry run" button was, wired to an SSE reconnect it
+    called a retry.
+
+    An explicit ``retryable`` on the payload always wins; several producers
+    (task policy, tool budget, skills middleware, the interpreter) already emit
+    one. This table covers the codes that do not.
+    """
+
+    _RETRYABLE = frozenset(
+        {
+            "TIMEOUT",
+            "TOOL_TIMEOUT",
+            "TOOL_RUN_TIMEOUT",
+            "TOOL_RUN_ABANDONED",
+            "EXTERNAL_SERVICE_ERROR",
+            "RUN_WORKER_LOST",
+        }
+    )
+    #: Listed for the record: repeating these is guaranteed to fail identically.
+    #: PERMISSION_DENIED needs a grant, WORKSPACE_UNAVAILABLE needs a folder,
+    #: and TOOL_CANCELLED was the user's own decision — re-running is a new
+    #: instruction, not a retry.
+    _NOT_RETRYABLE = frozenset(
+        {"PERMISSION_DENIED", "WORKSPACE_UNAVAILABLE", "TOOL_CANCELLED"}
+    )
+
+    @classmethod
+    def for_code(cls, code: str | None, explicit: object = None) -> bool:
+        if isinstance(explicit, bool):
+            return explicit
+        if not isinstance(code, str):
+            return False
+        return code.strip().upper().replace("-", "_") in cls._RETRYABLE
+
+
 class _Identifier:
     """Humanizer for snake/slug identifiers used as display fallbacks."""
 
@@ -223,28 +263,33 @@ class DeterministicTemplates:
     def _run_failed(
         cls, payload: Mapping[str, object], group_key: str | None
     ) -> JsonObject:
-        title, summary = _ErrorMessage.for_code(
-            cls._first_text(payload, ("error_code", "code"))
-        )
-        return cls._envelope(
-            title=title,
-            summary=summary,
-            status_label=_StatusLabel.FAILED,
-            kind=_Kind.ERROR,
-            group_key=group_key,
-        )
+        return cls._failure_envelope(payload, group_key)
 
     @classmethod
     def _error(cls, payload: Mapping[str, object], group_key: str | None) -> JsonObject:
-        title, summary = _ErrorMessage.for_code(
-            cls._first_text(payload, ("error_code", "code"))
-        )
+        return cls._failure_envelope(payload, group_key)
+
+    @classmethod
+    def _failure_envelope(
+        cls, payload: Mapping[str, object], group_key: str | None
+    ) -> JsonObject:
+        """Typed failure card: named cause plus whether a remedy can exist.
+
+        ``code`` and ``retryable`` travel to the client so it can offer an
+        action ONLY when repeating the operation could change the outcome.
+        Without them a client can do no better than a generic string and an
+        unconditional button.
+        """
+        code = cls._first_text(payload, ("error_code", "code"))
+        title, summary = _ErrorMessage.for_code(code)
         return cls._envelope(
             title=title,
             summary=summary,
             status_label=_StatusLabel.FAILED,
             kind=_Kind.ERROR,
             group_key=group_key,
+            code=code,
+            retryable=_ErrorRetryability.for_code(code, payload.get("retryable")),
         )
 
     @classmethod
@@ -282,6 +327,8 @@ class DeterministicTemplates:
         primary_entity: str | None = None,
         action_label: str | None = None,
         result_preview: list[JsonObject] | None = None,
+        code: str | None = None,
+        retryable: bool | None = None,
     ) -> JsonObject:
         envelope: JsonObject = {
             "title": title,
@@ -291,6 +338,10 @@ class DeterministicTemplates:
         }
         if summary is not None:
             envelope["summary"] = summary
+        if code is not None:
+            envelope["code"] = code
+        if retryable is not None:
+            envelope["retryable"] = retryable
         if group_key is not None:
             envelope["group_key"] = group_key
         if primary_entity is not None:

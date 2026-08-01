@@ -21,6 +21,7 @@ from agent_runtime.api.presentation_templates import (
     PayloadProjector,
     ToolTemplateRenderer,
     _ErrorMessage,
+    _ErrorRetryability,
 )
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
@@ -296,6 +297,16 @@ class PresentationGenerator:
         }
         if error_summary is not None:
             envelope["summary"] = error_summary[:240]
+        # A named cause plus whether repeating could change the outcome. The
+        # client draws a remedy only when `retryable` is true; without these it
+        # can do no better than a generic string and an unconditional button.
+        if is_failed or is_unavailable:
+            code = self._first_text(payload, ("error_code", "code"))
+            if code is not None:
+                envelope["code"] = code
+            envelope["retryable"] = _ErrorRetryability.for_code(
+                code, payload.get("retryable")
+            )
         if group_key is not None:
             envelope["group_key"] = group_key
         if humanized_tool:
