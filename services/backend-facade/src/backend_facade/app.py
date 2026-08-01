@@ -115,6 +115,19 @@ class FacadeRunRequest(BaseModel):
     branch_id: str | None = None
     branch: dict[str, object] | None = None
     idempotency_key: str | None = None
+    # Composer execution-mode pill (PRD-FS-10 §4.3): `{"message"|"run": "manual"
+    # |"bypass"}`. Forwarded verbatim; ai-backend's `FilesystemBypassSelection`
+    # validates it and `RunCoordinator` folds it against the master switch.
+    #
+    # The FOURTH field on this model to be lost to `extra="ignore"` — see
+    # `conversation_idempotency_key`, `reasoning_depth` and `web_search_enabled`
+    # above, each of which carries the same note. Undeclared here, the pill was
+    # silently stripped at the proxy: the desktop sent `filesystem_bypass`, the
+    # run sealed `source: "master"` ("nothing arrived"), and Bypass was
+    # inoperable on both hosts while every unit test on both sides passed,
+    # because neither side tests the hop between them. Apps may call ONLY the
+    # facade, so this model is the whole contract.
+    filesystem_bypass: dict[str, object] | None = None
     request_context: dict[str, object] = Field(default_factory=dict)
 
 

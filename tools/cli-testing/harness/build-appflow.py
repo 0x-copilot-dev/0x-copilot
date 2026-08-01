@@ -5,11 +5,17 @@ real wall-clock timing. Emits concat to stdout path arg.
 
 Usage: build-appflow.py <run_dir> <t_start> <t_end> <out_concat>
 """
+
 import json
 import os
 import sys
 
-run_dir, t_start, t_end, out = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
+run_dir, t_start, t_end, out = (
+    sys.argv[1],
+    float(sys.argv[2]),
+    float(sys.argv[3]),
+    sys.argv[4],
+)
 meta = json.load(open(os.path.join(run_dir, "markers.json")))
 frames = meta["meta"]  # [{n, t}, ...], t = wall-clock seconds
 sel = [f for f in frames if t_start <= f["t"] <= t_end]
