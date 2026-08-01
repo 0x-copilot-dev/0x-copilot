@@ -139,6 +139,23 @@ body {
   padding-left: calc(var(--desktop-traffic-light-clearance) + 30px) !important;
 }
 
+/* Settings is the one destination that suppresses the shell topbar (ChatShell
+   `suppressTopbar`), so its nav column — not a topbar — is the surface sitting
+   under the native controls and the windowed turbine. Nothing padded it, so the
+   "Settings" title was drawn hard against the traffic lights AND underneath the
+   translated turbine, which carries z-index 2 and therefore paints over the
+   text. Reserve the title-bar band vertically here rather than horizontally as
+   the topbar does: the nav is only 216px wide, so a 100px left inset would
+   strand the rows it heads. `--space-sm` on top of the band clears the turbine's
+   box, which ends at 42px (10px rail padding + the 32px mark) — 4px past the
+   38px band. `!important` because the shared surface sets `padding` inline. */
+.desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
+  [data-settings-nav] {
+  padding-top: calc(
+    var(--desktop-titlebar-height) + var(--space-sm)
+  ) !important;
+}
+
 /* First-run owns its own top bar rather than ChatShell's rail/header pair. Its
    brand clears the same native controls in a window and returns flush-left in
    fullscreen. */
