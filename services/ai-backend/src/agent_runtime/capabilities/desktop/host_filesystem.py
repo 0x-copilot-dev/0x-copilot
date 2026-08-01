@@ -191,10 +191,23 @@ class HostFilesystemRules:
         # 1. The agent's own namespaces. Without these, an ordinary
         #    `read_file("/memories/...")` would hit the catch-all interrupt and
         #    prompt the user about the agent's own bookkeeping.
+        #
+        #    BOTH forms, and the bare one is not decoration. `/workspace/**`
+        #    matches what is INSIDE the namespace and not the namespace itself,
+        #    so `ls("/workspace")` — the obvious first move to find out which
+        #    folders are attached — fell through to rule 4 and asked the user to
+        #    approve reading `/workspace`. Measured: all seven roots interrupted
+        #    while every path under them allowed. That one gap produced both of
+        #    the live symptoms — an attached folder that "still asks", and a
+        #    consent card naming a virtual mount the user has never heard of.
         rules.append(
             {
                 "operations": list(_ALL_OPERATIONS),
-                "paths": [f"{prefix}**" for prefix in VIRTUAL_NAMESPACES],
+                "paths": [
+                    path
+                    for prefix in VIRTUAL_NAMESPACES
+                    for path in (prefix.rstrip("/"), f"{prefix}**")
+                ],
                 "mode": _Mode.ALLOW,
             }
         )

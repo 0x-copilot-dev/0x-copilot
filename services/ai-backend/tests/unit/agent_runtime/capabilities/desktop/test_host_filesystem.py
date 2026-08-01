@@ -19,6 +19,7 @@ from deepagents.middleware.filesystem import (
 
 from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
 from agent_runtime.capabilities.desktop.host_filesystem import (
+    VIRTUAL_NAMESPACES,
     GrantedRoot,
     HostFilesystemRules,
 )
@@ -148,6 +149,42 @@ class TestTheAgentsOwnNamespaces(RuleSetMixin):
 
         assert self.verdict(path) == "allow"
         assert self.verdict(path, operation="write") == "allow"
+
+    @pytest.mark.parametrize("prefix", VIRTUAL_NAMESPACES)
+    def test_listing_the_namespace_itself_never_prompts_either(
+        self, prefix: str
+    ) -> None:
+        """`/workspace/**` matches the CONTENTS, not the directory.
+
+        Every one of these roots interrupted while every path beneath it
+        allowed, and the two live symptoms both came out of that gap: an
+        attached folder that "still asks" (the agent's first move is to list
+        `/workspace` and see what it has), and a consent card whose only
+        detail was `PATH /workspace` — a virtual mount the user has never
+        heard of and cannot judge.
+
+        Parametrized over the constant so a namespace added later cannot be
+        added in the broken form.
+        """
+
+        bare = prefix.rstrip("/")
+        assert self.verdict(bare) == "allow"
+        assert self.verdict(bare, operation="write") == "allow"
+
+    @pytest.mark.parametrize(
+        "path", ["/workspacex", "/workspace-other", "/memories2", "/skillsets"]
+    )
+    def test_a_lookalike_neighbour_still_asks(self, path: str) -> None:
+        """The bare form must be an exact segment, not a prefix.
+
+        Allowing `/workspace` by prefix would hand over `/workspaces` and
+        anything else that merely starts with the same letters — a real risk
+        for `/skills` and `/drafts`, which are ordinary English words a user
+        could plausibly have a folder named after.
+        """
+
+        assert self.verdict(path) == "interrupt"
+        assert self.verdict(path, operation="write") == "deny"
 
 
 class TestTmpIsNotAnAgentNamespace(RuleSetMixin):
