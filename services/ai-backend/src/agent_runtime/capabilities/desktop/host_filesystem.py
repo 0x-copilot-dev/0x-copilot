@@ -76,6 +76,7 @@ runs, and `test_agent_scratch` drives creation rather than assuming it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
@@ -280,8 +281,91 @@ class HostFilesystemRules:
         return tuple(rules)
 
 
+@dataclass(frozen=True)
+class HostBulkReadScope:
+    """Ground a bulk read may sweep without asking: `ls`, `glob`, `grep`.
+
+    WHY A SECOND ANSWER EXISTS. The rules above are matched per PATH, but
+    deepagents splits filesystem tools into two scopes, and only one of them
+    asks that question. `read_file` is ``exact`` — it interrupts iff the named
+    path matches an interrupt rule. `ls`/`glob`/`grep` are ``bulk``: the path is
+    a search ROOT, so `_make_bulk_when_predicate` instead asks whether the
+    subtree OVERLAPS any interrupt-mode rule, looking only at interrupt rules
+    and ignoring allow rules and rule order entirely.
+
+    Rule 4's anchor is ``/``. Everything overlaps ``/``. So every `ls` fired,
+    on every path, including inside a folder the user had just attached — which
+    is the whole of the "an attached folder still asks" report, and the reason a
+    consent card could name ``/workspace``, a mount nobody has heard of.
+
+    Fixing the rules could not have helped: no glob expresses "everything except
+    these roots", and the predicate would not have consulted an allow rule
+    anyway. deepagents does, however, let a host-supplied ``interrupt_on`` entry
+    take precedence over its generated one — so this type supplies the missing
+    half of the question.
+
+    CONTAINMENT, not overlap. A bulk call goes silent only when EVERY descendant
+    it could surface is already granted, so `ls("/Users")` still asks with a
+    grant on `/Users/ada/Projects` beneath it: that listing would show the
+    user's ungranted siblings.
+    """
+
+    #: Subtrees whose entire contents the user has already agreed to.
+    prefixes: tuple[str, ...]
+
+    @classmethod
+    def build(
+        cls,
+        roots: Sequence[GrantedRoot],
+        *,
+        scratch: AgentScratchRoot | None = None,
+    ) -> HostBulkReadScope:
+        """The confined subtrees for one run: namespaces, grants, scratch."""
+
+        prefixes = [prefix.rstrip("/") for prefix in VIRTUAL_NAMESPACES]
+        prefixes.extend(root.path.rstrip("/") for root in roots)
+        if scratch is not None:
+            prefixes.append(str(scratch.posix).rstrip("/"))
+        return cls(tuple(prefixes))
+
+    def confines(self, path: str) -> bool:
+        """Is every descendant of ``path`` inside ground already granted?
+
+        Fails CLOSED for anything it cannot reason about — a relative path, a
+        traversal, an empty scope. The caller only ever uses a ``True`` here to
+        SUPPRESS a prompt, so an unsure answer must be ``False``.
+        """
+
+        if not path.startswith("/") or not self.prefixes:
+            return False
+        candidate = PurePosixPath(path)
+        if ".." in candidate.parts:
+            return False
+        parents = set(candidate.parents)
+        return any(
+            candidate == PurePosixPath(prefix) or PurePosixPath(prefix) in parents
+            for prefix in self.prefixes
+        )
+
+    @staticmethod
+    def pattern_stays_inside(pattern: object) -> bool:
+        """Can ``glob``'s pattern NOT redirect the search out of the root?
+
+        `glob(pattern="/secrets/**", path="/granted")` sweeps `/secrets`, not
+        the granted folder — deepagents guards this and a replacement predicate
+        that forgot to would be a silent hole. Absolute patterns and traversals
+        are treated as an escape; anything that is not a string is unknown, and
+        unknown is an escape too.
+        """
+
+        if not isinstance(pattern, str):
+            return False
+        return not pattern.startswith("/") and ".." not in PurePosixPath(pattern).parts
+
+
 __all__ = (
     "VIRTUAL_NAMESPACES",
     "GrantedRoot",
+    "HostBulkReadScope",
     "HostFilesystemRules",
 )
