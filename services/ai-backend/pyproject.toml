@@ -38,6 +38,10 @@ dependencies = [
   "uvicorn==0.51.0",
   "gunicorn==26.0.0",
   "httpx==0.28.1",
+  # Retry/backoff for transient tool failures (agent_runtime.capabilities
+  # .retrying_tool). Already resolved transitively via langchain-core; declared
+  # here because it is now imported directly. Pin matches requirements.txt.
+  "tenacity==9.1.4",
   "psycopg[binary,pool]==3.3.4",
   "pyyaml==6.0.3",
   "opentelemetry-api==1.44.0",

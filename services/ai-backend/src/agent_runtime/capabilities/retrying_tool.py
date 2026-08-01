@@ -12,28 +12,40 @@ The wrapper is generic: any LangChain ``BaseTool`` can be wrapped, and the
 caller picks how many attempts and which exception types qualify as
 retryable. Cancellation, keyboard interrupts, and system exits are never
 retried regardless of configuration.
+
+The retry loop itself is driven by :mod:`tenacity` (``Retrying`` /
+``AsyncRetrying``). ``stop_after_attempt`` caps the attempt count,
+``wait_random_exponential`` supplies the exact "full jitter" backoff schedule
+(``random.uniform(0, min(initial * 2 ** (attempt - 1), max))``), ``reraise``
+lets the final underlying exception propagate unchanged so the runtime's
+normal ``tool_exception`` path still applies, and a ``before_sleep`` callback
+emits the structured ``tool_retry`` log. The retry *predicate* remains
+:meth:`RetryingTool._should_retry`, which keeps the never-retry sentinel
+winning over any caller-configured ``retry_exceptions``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import random
-import time
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+from tenacity import (
+    AsyncRetrying,
+    RetryCallState,
+    Retrying,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from pydantic import ConfigDict
 
 
 _LOGGER = logging.getLogger("agent_runtime.capabilities.retrying_tool")
-
-
-class _NeverRetry(BaseException):
-    """Sentinel used to express ``raise`` types that bypass the retry loop."""
 
 
 _NEVER_RETRY: tuple[type[BaseException], ...] = (
@@ -67,43 +79,40 @@ class RetryingTool(DelegatingTool):
         self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
     ) -> Any:
         """Sync retry loop; re-raises the last exception after ``max_attempts``."""
-        last_exc: BaseException | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            try:
-                return self.delegate(*args, config=config, **kwargs)
-            except _NEVER_RETRY:
-                raise
-            except BaseException as exc:  # noqa: BLE001 — width is intentional
-                if not self._should_retry(exc):
-                    raise
-                last_exc = exc
-                if attempt == self.max_attempts:
-                    break
-                self._log_retry(attempt=attempt, exc=exc)
-                time.sleep(self._backoff_seconds(attempt))
-        assert last_exc is not None  # narrow for type checker
-        raise last_exc
+        retrying = Retrying(
+            stop=stop_after_attempt(self.max_attempts),
+            wait=self._wait(),
+            retry=retry_if_exception(self._should_retry),
+            before_sleep=self._before_sleep,
+            reraise=True,
+        )
+        return retrying(self.delegate, *args, config=config, **kwargs)
 
     async def _arun(
         self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
     ) -> Any:
         """Async retry loop; re-raises the last exception after ``max_attempts``."""
-        last_exc: BaseException | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            try:
-                return await self.adelegate(*args, config=config, **kwargs)
-            except _NEVER_RETRY:
-                raise
-            except BaseException as exc:  # noqa: BLE001 — width is intentional
-                if not self._should_retry(exc):
-                    raise
-                last_exc = exc
-                if attempt == self.max_attempts:
-                    break
-                self._log_retry(attempt=attempt, exc=exc)
-                await asyncio.sleep(self._backoff_seconds(attempt))
-        assert last_exc is not None
-        raise last_exc
+        retrying = AsyncRetrying(
+            stop=stop_after_attempt(self.max_attempts),
+            wait=self._wait(),
+            retry=retry_if_exception(self._should_retry),
+            before_sleep=self._before_sleep,
+            reraise=True,
+        )
+        return await retrying(self.adelegate, *args, config=config, **kwargs)
+
+    def _wait(self) -> wait_random_exponential:
+        """Full-jitter exponential backoff capped at ``max_backoff_seconds``.
+
+        ``wait_random_exponential`` yields
+        ``random.uniform(0, min(initial * 2 ** (attempt - 1), max))`` — the
+        "Full Jitter" schedule that distributes concurrent retries across the
+        window instead of synchronising all callers at the same peak delay.
+        """
+        return wait_random_exponential(
+            multiplier=self.initial_backoff_seconds,
+            max=self.max_backoff_seconds,
+        )
 
     def _should_retry(self, exc: BaseException) -> bool:
         """Return ``True`` when ``exc`` qualifies for a retry attempt."""
@@ -111,24 +120,16 @@ class RetryingTool(DelegatingTool):
             return False
         return isinstance(exc, self.retry_exceptions)
 
-    def _backoff_seconds(self, attempt: int) -> float:
-        """Compute an exponential backoff with full jitter, capped at ``max_backoff_seconds``."""
-        # Full jitter distributes concurrent retries across the window instead
-        # of synchronising all callers at the same peak delay.
-        target = min(
-            self.initial_backoff_seconds * (2 ** (attempt - 1)),
-            self.max_backoff_seconds,
-        )
-        return random.uniform(0.0, target)
-
-    def _log_retry(self, *, attempt: int, exc: BaseException) -> None:
-        """Log a structured ``tool_retry`` event before sleeping."""
+    def _before_sleep(self, retry_state: RetryCallState) -> None:
+        """Log a structured ``tool_retry`` event before tenacity sleeps."""
+        outcome = retry_state.outcome
+        exc = outcome.exception() if outcome is not None else None
         _LOGGER.info(
             "tool_retry",
             extra={
                 "metadata": {
                     "tool_name": self.name,
-                    "attempt": attempt,
+                    "attempt": retry_state.attempt_number,
                     "max_attempts": self.max_attempts,
                     "error_class": exc.__class__.__name__,
                     "error_message": str(exc)[:200],
