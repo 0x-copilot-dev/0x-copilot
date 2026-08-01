@@ -118,34 +118,78 @@ correct one (it is the value the middleware actually enforces).
 
 ---
 
-## Stage 1 — Safe deletions (~1,174 LOC)
+## Stage 1 — Almost nothing is dead. Read them.
 
-Each task: re-verify at `HEAD` → delete module **and** its tests → suite → commit → merge.
+**Second correction, and it inverts this stage.** The age check said five modules were in
+flight. Reading all ten says the other five are too — every one is designed, documented,
+tested work **waiting on a dependency that has not shipped**.
 
-### T1.1 · Delete `proposal_extractor` (620 src + 523 tests)
+| Module                       | What it is actually waiting for                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `code_tool_adapter`          | its own docstring: the fetcher "will hit the backend's `/internal/v1/tools/{id}/code` internal endpoint **once P10-A2 ships that route**" |
+| `patch_plan`                 | "the closed, metadata-only plan that an **eventual C1 overlay transaction** may consume"                                                  |
+| `inbox_fallback`             | implements a PRD'd routing rule (`inbox-prd.md` §1.3) with a tenant-configurable window; the scheduler exists, the caller does not        |
+| `provider_hints`             | supplies F6.1's `TRUSTED_PROVIDER` tier, which "only `PRODUCT_CATALOG` ever had anything feeding it"                                      |
+| `context_origin_conformance` | an AST merge gate; lands the rule that "declaration without a gate is a comment"                                                          |
 
-**Pre-check:** `grep -rn "proposal_extractor" services/ai-backend/src` returns only its own
-file. Added 2026-05-18, one commit, never wired.
-**Suite delta:** −(tests in `test_proposal_extractor*`). Record the exact number.
+**The pattern is not waste. It is landing a component before its wiring, with nothing tracking
+the debt.** That is why ten modules were invisible for up to 2.5 months — not because anyone
+abandoned them, but because "built, not yet wired" is a state this repo has no ledger for.
 
-### T1.2 · Delete `inbox_fallback` (316 src + 0 tests)
+**So Stage 1 is no longer a deletion stage.** It is: build that ledger, and decide each
+pending wiring on its merits.
 
-**Pre-check:** as above. **Suite delta:** 0.
+### T1.1 · A pending-wiring ledger, not a delete list
 
-### T1.3 · Delete `code_tool_adapter` (238 src + 354 tests)
+Convert the orphan baseline from T0.2 into `docs/audit/ai-backend-smells/PENDING-WIRINGS.md`:
+per module, what it waits on, and who owns that. A module that cannot name what it waits for
+is the only real deletion candidate.
 
-**Pre-check:** as above. Note `capabilities/tools/code_sandbox.py` is a _different_ module and
-stays.
+**Behaviour change:** none. **Suite delta:** 0.
 
-### T1.4 · `encrypt_existing_columns` — decide, do not assume
+### T1.2 · Only genuine deletions, one per task
 
-216 src, 0 tests, added 2026-05-04. It is a **column-encryption backfill job**. A migration job
-that has already run is dead; one that has not is a pending obligation.
+On current evidence that is **`proposal_extractor`** (620 src + 523 tests, added 2026-05-18,
+one commit) and **`encrypt_existing_columns`** (216, a backfill job) — and both still need
+their owner asked first. `proposal_extractor` names no blocking dependency in its docstring;
+`encrypt_existing_columns` is dead only if the backfill has run everywhere.
 
-**This task is a question, not a deletion.** Answer: has the backfill run in every deployment?
-If yes, delete. If no, it is Stage 2 work — wire and schedule it.
+**Expected deletion from this whole stage: ~1,400 LOC, possibly zero.** The audit's ~8,600 was
+wrong, and the ~1,174 in the first draft of this plan was still too high.
 
----
+### T1.3 · Three of these would improve harness performance — promote them
+
+Answering the question directly: **yes, three of the "orphans" are harness levers**, and two
+of them are things the MCPMark PRD had scheduled as new work.
+
+**`tool_result_admission_gate` → bounds `m`, the quadratic cost term.**
+[DELETE-REPLACE.md](../../audit/ai-backend-smells/DELETE-REPLACE.md) §A1 called it a duplicate
+of deepagents' `_offload_tool_message_content`. **That was wrong.** Reading it, it solves a
+strictly harder problem: it hooks `RuntimeControlMiddleware`'s result sweep, so coverage is "a
+property of the graph's topology rather than of who remembered to wrap a tool" — including
+Deep Agents' own injected todo/filesystem/execute/task tools and a subagent's private copies,
+which a `BaseTool` decorator cannot reach. It is constructible with no arguments, so absence of
+a durable store no longer means an unbounded result ("an optional boundary is not a boundary").
+And `verify_model_visible` fails closed. **Wire this instead of, or alongside,
+`SummarizationMiddleware` — it is the better fit for our topology.**
+
+**`provider_hints` → fixes "reads gate as writes".**
+[FINDINGS.md](../../audit/ai-backend-smells/FINDINGS.md) §2b found the per-tool classifier
+`mode_for_tool` unwired, so the approval gate fixes its axis once from the umbrella tool's
+coarse side-effect class and asks users to approve read-only calls. `provider_hints` is the
+missing production source: MCP's own `readOnlyHint` / `destructiveHint` / `idempotentHint`
+annotations, already captured per run by `McpToolAnnotationsRegistry`. **`provider_hints` +
+`mode_for_tool` together are the fix**, and that is MCPMark's P0-3 gate.
+
+**`context_origin_conformance` → makes the cost baseline trustworthy.**
+[PRD.md](../mcpmark-optimization/PRD.md) Task 0.1 measures `S`, `T`, `m` from the occupancy
+recorder. If contributors add context without declaring an origin, those tokens land in
+`undeclared_tokens` and the baseline is wrong by an unknown amount. This gate is what makes the
+measurement complete — and it is the same shape as the G1 gate
+[PLAN.md](PLAN.md) §1 proposes **building**.
+
+**Each is its own Stage 2 task with its own verification.** None is free: `provider_hints`
+changes who gets asked for approval, and the admission gate changes what the model sees.
 
 ## Stage 2 — Wirings (behaviour changes, one at a time)
 

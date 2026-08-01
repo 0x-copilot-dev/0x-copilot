@@ -45,6 +45,16 @@ We import `deepagents.backends.*`, `middleware.filesystem`, `middleware.subagent
 have parallel implementations of, and two of which the MCPMark PRD had scheduled as **new
 work**.
 
+> **Correction — the `tool_result_admission_gate` half of this section is wrong.** Reading the
+> module (rather than matching its name against `_offload_tool_message_content`) shows it solves
+> a harder problem: it hooks `RuntimeControlMiddleware`'s result sweep, so coverage is a property
+> of the graph's topology and reaches Deep Agents' own injected tools and a subagent's private
+> copies — which a `BaseTool` decorator cannot. It is constructible with no arguments so a
+> missing durable store cannot silently disable bounding, and `verify_model_visible` fails
+> closed. **Wire it; do not delete it.** See
+> [TASKS.md](../../plan/ai-backend-consolidation/TASKS.md) §T1.3. The `SummarizationMiddleware`
+> half of this section stands.
+
 ### A1 — Context compaction: already shipped by the framework, scheduled as new work by us
 
 `deepagents/middleware/summarization.py` provides `SummarizationMiddleware` with:
