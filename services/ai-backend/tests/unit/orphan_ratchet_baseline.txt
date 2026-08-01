@@ -1,0 +1,44 @@
+# Orphan-module ratchet baseline for tools/ai-backend-smells/orphans.py.
+#
+# Every line is a module in services/ai-backend/src that NOTHING in src imports:
+# built, usually tested, and never reached at runtime. Ten such modules sat
+# invisible for up to 2.5 months because "landed, not yet wired" is a state this
+# repo had no ledger for (docs/plan/ai-backend-consolidation/HANDOFF.md §4-5).
+#
+# These are DEBT, not approval. The ratchet (tests/unit/test_orphan_ratchet.py)
+# fails when a module NOT listed here becomes an orphan — so a new unwired
+# module can no longer land unnoticed.
+#
+# To land a component ahead of its wiring, add its module here AND record what
+# it waits on in docs/audit/ai-backend-smells/PENDING-WIRINGS.md (T1.1). When you
+# wire an orphan up (or delete it), prune its line here in the same change — the
+# list is meant to shrink.
+#
+# Regenerate the current set with:
+#   python3 tools/ai-backend-smells/orphans.py services/ai-backend
+#
+# Format: one dotted module path per line, sorted.
+
+agent_runtime.api.inbox_fallback
+agent_runtime.capabilities.concurrency.provider_hints
+agent_runtime.capabilities.tools.code_tool_adapter
+agent_runtime.capabilities.tools.privacy
+agent_runtime.capabilities.workspace.patch_plan
+agent_runtime.context.tool_result_admission_gate
+agent_runtime.effects.reconciliation
+agent_runtime.harness_quality.promotion_cohorts
+agent_runtime.observability.context_origin_conformance
+agent_runtime.release.e2_final_conformance
+agent_runtime.release.promotion
+agent_runtime.surfaces_v2.retention
+runtime_adapters.in_memory.share_snapshot_store
+runtime_adapters.migrate
+runtime_adapters.postgres.todo_extraction_store
+runtime_worker.jobs.approval_expiry_sweeper
+runtime_worker.jobs.encrypt_existing_columns
+runtime_worker.jobs.proposal_extractor
+runtime_worker.jobs.routine_scheduler
+runtime_worker.jobs.todo_extractor
+runtime_worker.jobs.todo_recurrence_materializer
+runtime_worker.legacy_mcp_effect_executor
+runtime_worker.local_release_control_cli
