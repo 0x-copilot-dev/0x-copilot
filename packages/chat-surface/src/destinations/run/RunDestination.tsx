@@ -119,6 +119,7 @@ import {
   projectSurfaceTabs,
   projectToolCalls,
   projectRunTodos,
+  type RunTodosProjection,
   projectLedger,
   projectCanonicalRowsetReviewModel,
   surfaceIdForTabUri,
@@ -507,6 +508,38 @@ function useConversationFleetArchive(
  * event ledger supplies that history; cards observed live are retained while
  * the replay is in flight, and win for the same call id.
  */
+/**
+ * Hold the agent's checklist across the conversation's runs.
+ *
+ * The projection is run-scoped by construction — it reads the bound run's event
+ * stream — so every follow-up message emptied it until the new run wrote its
+ * own todos. From the user's side the plan simply disappeared the moment they
+ * tried to steer, which is the opposite of what a pinned panel is for.
+ *
+ * Retention is deliberately dumb: keep the newest snapshot seen in this
+ * conversation, and let the next `todo_list_updated` replace it. A finished
+ * list carried into the next run is already folded to a single summary line, so
+ * a stale one costs one row and stays truthful — it IS the last plan the agent
+ * had. Reset on `conversationId`, never across conversations.
+ */
+function useConversationTodos(
+  conversationId: ConversationId,
+  runTodos: RunTodosProjection | null,
+): RunTodosProjection | null {
+  const [held, setHeld] = useState<RunTodosProjection | null>(null);
+
+  useEffect(() => {
+    setHeld(null);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (runTodos === null) return;
+    setHeld(runTodos);
+  }, [runTodos]);
+
+  return runTodos ?? held;
+}
+
 function useConversationToolCallArchive(
   transport: ReturnType<typeof useTransport>,
   conversationId: ConversationId,
@@ -1838,6 +1871,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     () => projectRunTodos(session.events),
     [session.events],
   );
+  // …then held across the conversation's runs. `session.events` is the BOUND
+  // run's stream, so sending a follow-up rebinds the cockpit to a fresh run
+  // whose stream has no snapshot yet — and the checklist vanished mid-thread
+  // the moment the user tried to steer. Tool cards hit this first and grew
+  // `useConversationToolCallArchive`; a checklist needs far less, because it is
+  // one latest-snapshot rather than a set to merge: keep the last one until the
+  // new run supersedes it.
+  const todos = useConversationTodos(conversationId, runTodos);
 
   // WC-P6a (AD-11): the run-scoped citation registries, projected off the SAME
   // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
@@ -4011,7 +4052,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         toolCalls={conversationToolCalls.toolCalls}
         // The pinned checklist above the composer — the surface that replaced
         // both the raw `write_todos` card and the Focus "Plan".
-        todos={runTodos}
+        todos={todos}
         toolCallCitations={toolCallCitations}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}

@@ -17,6 +17,18 @@ import type { RunTodoStatus, RunTodosProjection } from "./eventProjector";
 
 export interface TcTodoListProps {
   readonly projection: RunTodosProjection;
+  /**
+   * The run is parked on a decision the USER owes — an approval was requested
+   * and not yet resolved. The in-progress row then reads *waiting*, not
+   * *working*, because nothing is executing while the graph is interrupted.
+   *
+   * This is not the inference `SUBAGENT_PAUSED` exists to forbid. That event
+   * was added so a paused row is never derived from the ABSENCE of a completion
+   * event; a pending `approval_requested` with no matching `approval_resolved`
+   * is a positive fact, already computed by `projectApprovals` over the same
+   * canonical array.
+   */
+  readonly blocked?: boolean;
 }
 
 /**
@@ -30,6 +42,7 @@ export interface TcTodoListProps {
  */
 export function TcTodoList({
   projection,
+  blocked = false,
 }: TcTodoListProps): ReactElement | null {
   const { todos, completedCount, isComplete, generation } = projection;
   // A finished list folds by default; the user's toggle OVERRIDES that default
@@ -54,6 +67,7 @@ export function TcTodoList({
       data-testid="tc-todo-list"
       data-collapsed={collapsed ? "true" : "false"}
       data-complete={isComplete ? "true" : "false"}
+      data-blocked={blocked ? "true" : "false"}
       data-generation={generation}
       style={rootStyle}
     >
@@ -108,10 +122,16 @@ export function TcTodoList({
               key={`${todo.content}-${index}`}
               data-testid="tc-todo-row"
               data-status={todo.status}
+              data-waiting={
+                blocked && todo.status === "in_progress" ? "true" : "false"
+              }
               style={rowStyle(todo.status)}
             >
-              <TodoGlyph status={todo.status} />
+              <TodoGlyph status={todo.status} blocked={blocked} />
               <span style={rowTextStyle}>{todo.content}</span>
+              {blocked && todo.status === "in_progress" ? (
+                <span style={waitingLabelStyle}>waiting for you</span>
+              ) : null}
             </li>
           ))}
         </ol>
@@ -128,8 +148,10 @@ interface Disclosure {
 
 function TodoGlyph({
   status,
+  blocked,
 }: {
   readonly status: RunTodoStatus;
+  readonly blocked: boolean;
 }): ReactElement {
   if (status === "completed") {
     return (
@@ -139,6 +161,21 @@ function TodoGlyph({
     );
   }
   if (status === "in_progress") {
+    // A spinner asserts motion. While the run is parked there is none, and the
+    // step is not "taking a while" — it is stopped on the user. A still glyph
+    // is the honest one, and it is also what makes the pending approval legible
+    // as the reason nothing is moving.
+    if (blocked) {
+      return (
+        <span style={glyphSlotStyle}>
+          <span
+            aria-hidden="true"
+            data-testid="tc-todo-waiting"
+            style={waitingGlyphStyle}
+          />
+        </span>
+      );
+    }
     return (
       <span style={glyphSlotStyle}>
         <span
@@ -325,6 +362,26 @@ const spinnerStyle: CSSProperties = {
   borderRadius: "50%",
   border: "1.5px solid var(--color-accent-soft, rgba(95, 178, 236, 0.22))",
   borderTopColor: "var(--color-accent)",
+};
+
+/** The parked counterpart of the spinner: a still, amber-rimmed ring. */
+const waitingGlyphStyle: CSSProperties = {
+  width: 12,
+  height: 12,
+  borderRadius: "50%",
+  border: "1.5px solid var(--color-warning, #e8b45e)",
+  borderTopColor: "transparent",
+};
+
+const waitingLabelStyle: CSSProperties = {
+  flex: "0 0 auto",
+  marginLeft: "auto",
+  paddingLeft: 8,
+  color: "var(--color-warning, #e8b45e)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  letterSpacing: "0.04em",
+  whiteSpace: "nowrap",
 };
 
 const ringStyle: CSSProperties = {

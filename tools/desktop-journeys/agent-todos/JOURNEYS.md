@@ -56,6 +56,26 @@ authenticated transport. Asserting only the DOM would leave "the panel rendered
 something" and "the server sent a checklist" indistinguishable; asserting only
 the event would repeat what the hermetic test already proves.
 
+## T6 — parked on a filesystem-access ask (`todos_with_gate.py`)
+
+**User story.** A step needs a folder I have not granted. I should be able to
+see what is being asked, why, and that nothing is happening until I answer.
+
+**Expected.**
+
+- The consent card is anchored **in the transcript**, right after the tool call
+  that provoked it — neither strip (`tc-chat-approvals`, `tc-chat-conf-cards`)
+  exists any more.
+- The checklist is the LAST element before the composer, so opening a gate never
+  shifts it.
+- A compact `N approvals waiting ↓` line replaces the strip's reachability role.
+- The in-progress row reads **waiting, not working**: no spinner, a still glyph,
+  and "waiting for you". A spinner asserts motion; a parked run has none.
+
+The checklist also gives the gate context the card lacks on its own — the card
+says `PATH /var/folders/…`, the checklist says it is step 1 of 3 and what the
+other two are.
+
 ## Blocked / not covered
 
 - **List rollover (generation 2).** Needs a run whose first list completes and

@@ -150,9 +150,24 @@ recomposes the workspace `[Chat · Sources · Agents · Approvals]` tabs and rec
 single `TcChat` as an injected `chatSlot`, so mode/tab switches never spawn a second
 chat mount.
 
-**The agent todo panel.** `TcTodoList` renders the agent's working checklist, pinned
-above the composer inside `TcChat` so it is single-mount and identical in Focus and
-Studio. It reads `projectRunTodos(session.events)` — the server's `todo_list_updated`
+**Approvals are inline.** Every approval card (confirmation, question, workspace
+grant, MCP auth, and the receipt a resolved one leaves behind) interleaves into the
+transcript through `mergeStream`, anchored on `TcChatApproval.createdAtMs`. The two
+pinned strips are **deleted**; `renderApprovalItem` is the single renderer, and `mode`
+picks only between the Studio 4-zone card and the Focus conf-card. Two consequences
+worth keeping: a resolved approval STAYS as its receipt (dropping it would reflow the
+thread and erase who decided what), and `MessageListBody`'s load/error notice must
+never early-return past the cards — inline, that hid a parked run's only way out.
+Reachability moved to a `tc-chat-approvals-waiting` line above the composer.
+
+**The agent todo panel.** `TcTodoList` renders the agent's working checklist, the ONLY
+pinned element above the composer inside `TcChat` — single-mount, identical in Focus
+and Studio, and stationary now that approvals no longer insert above it. It reads
+`projectRunTodos(session.events)` held across runs by `useConversationTodos` (the
+projection is run-scoped, so a follow-up message rebinds to a fresh run and the panel
+vanished mid-thread until the last snapshot was retained). `blocked` — a pending
+approval — makes the in-progress row read _waiting_ rather than spinning. The
+server's `todo_list_updated`
 snapshots, which the worker resolves from `write_todos` (LangChain's
 `TodoListMiddleware` replaces the whole list per call and carries no list identity, so
 the backend assigns `list_id`/`generation`: a write landing on an already-complete list
