@@ -103,6 +103,14 @@ because the quadratic term lives entirely in the 16% input share.
 | Reasoning effort | n/a (was negligible)         | **~0.84**                  |
 | History size `m` | 0.61                         | **0.10**                   |
 
+> **Superseded by [RESEARCH.md](RESEARCH.md) §4.** The demotion below reasons about
+> compaction as a _cost_ lever. Published results on the closest comparable setup — long-horizon
+> agents over **MCP tools** — show it is an **accuracy** lever: pruning to the last 5 tool
+> call/response pairs took completion 71.0% → 79.0% while cutting tokens 64%, and adding
+> summarisation reached 91.6%. P2-1's revised estimate is **accuracy +5 to +15pp**, and it is
+> promoted to a Phase 1 candidate. The paragraph below is kept because its arithmetic about the
+> _cost_ share is still correct — it was the framing that was wrong.
+
 **Consequence for §5: P2-1 (compaction) is demoted.** It attacks the input history term —
 61% of input, but input is only 16% of spend, so its modelled "−35–50% cost" becomes
 **−6–8%** on this basis. It is no longer worth its accuracy risk. Meanwhile **reasoning
@@ -384,6 +392,14 @@ are not. Baselines: accuracy against current ~1%, cost/latency against a _comple
 
 Accuracy figures are `pass@1` for a frontier model. `Δ` is absolute percentage points.
 
+> **Read [RESEARCH.md](RESEARCH.md) before scheduling anything past P0.** HARBOR ran four
+> rounds of exactly this kind of stacking on a production coding agent and scored **+2, −4,
+> −5** — two of three rounds net-negative — concluding that net-positive harness features are a
+> small class-specific subset and that stacking published techniques is often counterproductive.
+> P0 is gate removal and is safe to land as a set; everything below it is feature stacking and
+> inherits that warning. Two rows are already known to be wrong: **P2-1 is promoted** (§4 of
+> RESEARCH), and **P1-4 is new** (§5).
+
 | #        | Change                                              | Accuracy        | Cost             | Latency     | Confidence | Class   |
 | -------- | --------------------------------------------------- | --------------- | ---------------- | ----------- | ---------- | ------- |
 | **P0-1** | Set `recursion_limit` (run-configurable)            | **+15–25pp**    | **+40–70%**      | **+50–90%** | High       | Gate    |
@@ -392,7 +408,8 @@ Accuracy figures are `pass@1` for a frontier model. `Δ` is absolute percentage 
 | **P1-1** | Pass real MCP error text through redaction          | **+15–30pp**    | **−15–25%**      | **−15–25%** | Medium     | Quality |
 | **P1-2** | Degrade descriptor validation per-tool              | **+0–20pp**     | ~0%              | ~0%         | Medium     | Gate    |
 | **P1-3** | Parallel tool calls where independent               | ~0              | ~0%              | **−15–30%** | Medium     | Latency |
-| **P2-1** | Compact tool _results_, not reasoning               | **−5 to +5pp**  | **−35–50%**      | **−20–30%** | Low        | Cost    |
+| **P1-4** | Signal every truncation to the model                | **+2–10pp**     | ~0%              | ~0%         | Medium     | Quality |
+| **P2-1** | Compact tool _results_, not reasoning               | **+5 to +15pp** | **−40–60%**      | **−20–40%** | Medium     | Both    |
 | **P2-2** | Result field projection / truncation                | **−10 to +3pp** | **−20–30%**      | **−10–15%** | Low        | Cost    |
 | **P3-1** | Adaptive native-vs-umbrella tool exposure           | **+5–15pp**     | **−25% / +120%** | **−15%**    | Low        | Both    |
 
