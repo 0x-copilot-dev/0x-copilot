@@ -142,6 +142,73 @@ The largest correctness win and the one that fixes the boundary.
 **Deletes:** plausibly ~8,000 LOC across both services
 **Also delivers:** P1-1 by default, stdio, and one fewer network hop per tool call
 
+#### 2a. Module-by-module: can the adapter actually replace this?
+
+The honest answer is **about a third replaces cleanly, a third moves into an interceptor, and
+a third is an open question dominated by one subsystem.** Not a drop-in.
+
+**The adapter's surface** (verified against its published reference): `MultiServerMCPClient`;
+`StdioConnection` / `SSEConnection` / `StreamableHttpConnection` / `WebsocketConnection`;
+`McpHttpClientFactory` (custom `httpx` client — the hook for auth headers and TLS);
+`load_mcp_tools` / `convert_mcp_tool_to_langchain_tool`; `load_mcp_prompt`,
+`load_mcp_resources`, `get_mcp_resource`, `load_mcp_server_info`; `create_session`;
+`ToolCallInterceptor` + `MCPToolCallRequest`; `Callbacks` (logging, progress, elicitation);
+`MCPToolCallResult`, `MCPToolArtifact`, `ToolMessageContentBlock`.
+
+**`ToolCallInterceptor` is what makes this viable.** It is the documented hook for modifying
+requests and responses, so our permission checks, audit, approval gate and citation projection
+move there rather than being lost. Without it this would be a trade of custom code for lost
+semantics; with it, it is a straight substitution.
+
+**Replace outright — ~1,854 LOC:**
+
+| Ours                       | LOC | Adapter equivalent                                       |
+| -------------------------- | --- | -------------------------------------------------------- |
+| `backend_provider.py`      | 788 | `MultiServerMCPClient` — the proxy client stops existing |
+| `client.py`                | 213 | adapter's own connection/session types                   |
+| `annotations.py`           | 129 | MCP SDK descriptor types                                 |
+| `dispatcher.py`            | 114 | server-name tool prefixing                               |
+| `execution_services.py`    | 106 | `create_session` / connection config                     |
+| `outcomes.py`              | 73  | `ToolMessage(status="error")` by default                 |
+| `backend/mcp_transport.py` | 431 | the SDK's JSON-RPC framing                               |
+
+**Replace partially** — `cards.py` (706), `loader.py` (668), `constants.py` (452),
+`discovery_cache.py` (360). Descriptor contracts, discovery and pagination are the adapter's;
+what survives is our validation, our card shape for the picker, and whatever error vocabulary
+outlives passing the server's own text through.
+
+**Keep, relocated into `ToolCallInterceptor`** — `operation_adapter.py` (551),
+`gateway_context.py` (114), `permissions.py` (64). These are the named semantics that justify
+custom code under G1: scope gating, the approval gate, effect staging, citation projection.
+
+**Keep as product surface** — `registry.py` (161, picker cards), `files.py` (459, desktop
+config persistence), `control_plane_metrics.py` (138, our OTel vocabulary),
+`effect_material.py` / `target_ref.py` / `material_resolver.py` (189, worker plumbing).
+
+#### 2b. The open question: 2,253 LOC of descriptor-revision machinery
+
+`freshness.py` (813) · `revision_feed.py` (590) · `descriptor_revision_binding.py` (344) ·
+`revision_resolver.py` (316) · `revision_wire.py` (190) — plus store adapters in all three
+backends, `runtime_worker/mcp_revision_poller.py`, `mcp_revision_composition.py`,
+`capability_descriptor_revisions.py`, and event-schema surface.
+
+**It is live and heavily wired** — 15 importers for `revision_resolver` alone. This is not
+dead code.
+
+It is a **cache-coherence subsystem for MCP tool descriptors**, and it exists because
+descriptors are fetched through a proxy and cached, so they can go stale. The adapter is
+stateless by default — a fresh session per tool call, or an explicit persistent one — so
+"is my cached descriptor stale?" largely stops being a question you have to answer.
+
+**But do not assume it is waste.** There may be a genuine product reason for revision
+tracking: notifying a user when a connector's tools change, or pinning descriptors so a run is
+reproducible and auditable. **Answer that question before touching it** — it is the single
+largest block in the MCP layer, larger than the transport it supports, and the only one where
+the case for deletion is architectural inference rather than measurement.
+
+If revision tracking survives as a product requirement, it shrinks rather than disappears:
+tracking what a server advertises is much less code than tracking what our cache believes.
+
 ### Phase 3 — Adapter collapse
 
 One SQL implementation, Postgres and SQLite dialects, replacing three hand-written adapters of
