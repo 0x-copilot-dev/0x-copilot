@@ -344,6 +344,38 @@ server's total schema fits a byte budget, umbrella + lazy loading above it. That
 also the right _product_ behaviour — it is what "one connector installed" vs "twelve
 connectors installed" should do — which promotes this from `BENCH-ONLY` to a real feature.
 
+### 4.8 A fourth gate and a second budget layer, both in `model_invocation/` (GATE/COST)
+
+`agent_runtime.execution.model_invocation` is a live model routing, failover and
+circuit-breaker subsystem — composed into `runtime_worker/handlers/run.py`, `loop.py`,
+`model_invocation_circuit.py` and `runtime_api/app.py`. §4.1–4.7 were written without reading
+it, and it invalidates two things above.
+
+**A fourth gate.** `ProviderCircuitConfig`
+([circuit_health.py:64](../../../services/ai-backend/src/agent_runtime/execution/model_invocation/circuit_health.py:64))
+opens a provider circuit after `open_failure_threshold = 3` failures inside a
+120-second window, with a 30-second cooldown, tracked per worker process
+(`ProcessLocalProviderCircuitHealth`). A 17-turn MCPMark task runs for minutes against a live
+provider, so three transient failures inside any two-minute stretch stops the run. **`G` in
+§3.3 has three terms and needs at least four**, and this one is _not_ independent of the
+others — a long run is exactly the run most likely to accumulate three failures.
+
+**A second budget layer.** `ModelInvocationBudget`
+([contracts.py:324](../../../services/ai-backend/src/agent_runtime/execution/model_invocation/contracts.py:324))
+carries `max_cost_microusd`, `max_input_tokens`, `max_output_tokens` and `deadline_at`
+alongside `max_attempts` (**default 1**, ceiling 3) and `max_same_deployment_attempts`. So:
+
+- §3.1 models output cost as unbounded. It is not — there is a per-invocation ceiling that
+  can terminate a run on cost or on a deadline, independently of the tool budget and the
+  recursion limit. **At `xhigh`, where output is 84% of spend (§3.1a), a cost ceiling is the
+  bound most likely to bite first.**
+- `max_attempts = 1` means **no model-level retry by default**: one transient provider
+  failure ends the turn rather than failing over. §3.2's latency model assumed a clean
+  call per turn and never accounted for attempts at all.
+
+**Phase 0 must read these before sizing anything.** Whether they bind depends on the values
+the run path persists, which is a measurement, not a reading of the defaults.
+
 ## 5. Interventions and estimated effect
 
 Estimates are **modelled, not measured**, from §3. Signs are high-confidence; magnitudes

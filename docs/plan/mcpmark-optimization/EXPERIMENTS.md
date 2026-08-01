@@ -57,12 +57,18 @@ the full ablation matrix are in [COMPONENTS.md](COMPONENTS.md); this document as
 Task-level pass/fail yields **1 bit per task-run**, at roughly $0.20–0.50 of API spend. The
 mechanism each intervention acts on is observable at far higher frequency:
 
-| Intervention acts on | Observable                      | Events per full sweep |
-| -------------------- | ------------------------------- | --------------------- |
-| Turn ceiling         | super-steps per run             | 508                   |
-| Call budget          | calls per tool name per run     | ~8,800                |
-| Error recovery       | error → next-call outcome       | ~1,300                |
-| Compaction           | identifier retained at turn t+k | ~4,000                |
+| Intervention acts on        | Observable                      | Events per full sweep |
+| --------------------------- | ------------------------------- | --------------------- |
+| Turn ceiling                | super-steps per run             | 508                   |
+| Call budget                 | calls per tool name per run     | ~8,800                |
+| Error recovery              | error → next-call outcome       | ~1,300                |
+| Compaction                  | identifier retained at turn t+k | ~4,000                |
+| Provider circuit / attempts | attempt outcome + route         | ~8,600                |
+
+The last row needs no new instrument: `execution/model_invocation/journal.py` **already
+records every model attempt** with its outcome, route and exclusion reason. Phase 0 should
+read it rather than add a parallel counter — and it is the only place the §4.8 circuit gate
+becomes visible, since an opened circuit denies attempts rather than failing a tool call.
 
 Measuring `p_retry` from ~1,300 error events gives a ±0.025 CI. Inferring the same quantity
 from 508 pass/fail bits gives roughly ±0.10. **Same runs, 4× the precision, because we

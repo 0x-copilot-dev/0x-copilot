@@ -24,9 +24,17 @@ only to read one.
   appended per turn.
 - Write the measured values into [PRD.md](PRD.md) §3.4 and **re-derive §5's cost column**.
 
-**Exit:** `S`, `T`, `m` measured. If any is >2× off the assumption, §5 is rewritten before
-Phase 1 starts.
-**Effort:** S · **Risk:** none · **Metric effect:** none (measurement only)
+**Also read the invocation budget the run path actually persists** (PRD §4.8):
+`max_attempts`, `max_same_deployment_attempts`, `max_cost_microusd`, `max_input_tokens`,
+`max_output_tokens`, `deadline_at`. The contract defaults (`max_attempts=1`, ceiling 3) are
+not evidence of what a run carries, and a cost or deadline ceiling would bound the sweep
+before any gate in §4.1–4.3 does. Read `execution/model_invocation/journal.py` for the
+per-attempt record rather than adding a counter.
+
+**Exit:** `S`, `T`, `m` measured, and the invocation budget known to bind or not. If any is
+
+> 2× off the assumption, §5 is rewritten before Phase 1 starts.
+> **Effort:** S · **Risk:** none · **Metric effect:** none (measurement only)
 
 ### 0.2 Register the five benchmark MCP servers
 
