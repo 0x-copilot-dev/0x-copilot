@@ -83,10 +83,62 @@ only in the **web** host do not load on desktop. The new group must not repeat i
 
 ## 4. Design decisions
 
-**D-3.1 — Group consecutive activity entries.** A _tool run group_ is a maximal
-consecutive span of tool-call / fleet entries in the projected transcript,
-bounded by assistant text, user messages, or approvals. This is a pure fold over
-the existing projection — no new state, no new events.
+**D-3.1 — The group is a maximal consecutive run of non-message stream items.**
+
+> ⚠️ **This decision was revised twice. The second revision was wrong; this is the
+> corrected version.** Recording the whole path because the mistake is instructive.
+>
+> _First cut:_ "a maximal consecutive span of tool-call / fleet entries, bounded by
+> assistant text". _Second cut (wrong):_ on seeing that `eventProjector` emits
+> `stream_delta` for `model_delta` / `reasoning_summary_delta` and
+> `assistant_message` only for `final_response`, I concluded interim narration
+> should be absorbed INTO the group and only the final response should end it.
+>
+> That reasoned over the wrong data shape. `ChatEntry` is the **projector's**
+> internal union; the transcript `TcChat` actually renders is
+> `mergeStream(messages, fleets, toolCalls) → StreamItem[]`, and
+> `destinations/run/chatProjection.ts` **folds the whole run of deltas into ONE
+> assistant message**, with `reasoning_summary_delta` folded into a separate
+> `reasoning` part of that same message. There is no free-standing interim-text
+> item in the transcript to absorb.
+
+So the fold is over `StreamItem`:
+
+```
+a group = a maximal consecutive run of { kind: "tool" | "fleet" }
+          bounded by { kind: "message" } on either side
+```
+
+Consequences that follow, and are worth stating because they are easy to get wrong:
+
+- **Reasoning is not the group's problem.** It is a `parts[].type === "reasoning"`
+  entry on the assistant message, rendered inside that message by
+  `ReasoningGroup`. PRD-03 does not touch it.
+- **Multi-turn is handled for free.** `user → cards → answer → user → cards →
+answer` yields one group per turn, because each answer breaks the run.
+- **Approvals break a group** — an approval needs the user and must never be
+  buried in a collapsed summary.
+
+✅ **The live journey settled the open question.** `chatProjection` stamps the
+synthesized assistant message with the **first** delta's timestamp, and
+`mergeStream` slots cards by timestamp — so in principle a run that emits text
+before later tool calls could anchor the streaming answer _between_ activity
+items and split one turn's work into two groups.
+
+`tools/desktop-journeys/transcript-density/long_run_grouping.py` drove the real
+packaged app through a long task (web search + filesystem listing + one
+subagent) and recorded:
+
+```
+transcript order: ['msg:user', 'group', 'msg:assistant']
+FINDING  single group — the assistant message did NOT split the run
+FINDING  loose (ungrouped) activity cards: 0
+```
+
+So the answer anchors after the activity in practice, and the simple fold holds.
+The journey keeps logging the finding on every run rather than asserting a single
+group, so a future runtime change that starts interleaving text shows up as a
+recorded fact instead of a silent regression.
 
 **D-3.2 — Expanded while running, collapsed when settled.** This is the whole
 trick, and it is what Codex does. While any member is `running`, the group is
@@ -208,22 +260,24 @@ No new chrome for no benefit.
 
 ## 7. Functional requirements
 
-| ID      | Requirement                                                                                                                                |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| FR-3.1  | A pure `groupActivityEntries(entries)` fold produces maximal consecutive runs of tool/fleet entries. No new state, no new events.          |
-| FR-3.2  | Groups of `>= 2` members render a `ToolRunGroup`; a single member renders bare, exactly as today.                                          |
-| FR-3.3  | A group with any `running` member renders expanded.                                                                                        |
-| FR-3.4  | When all members settle **and** the group was never user-toggled, it collapses.                                                            |
-| FR-3.5  | A user toggle pins the group's state for the session; auto-collapse never overrides it.                                                    |
-| FR-3.6  | A group whose run terminated `failed` stays expanded regardless of FR-3.4.                                                                 |
-| FR-3.7  | Auto-collapse is suppressed while focus is inside the group.                                                                               |
-| FR-3.8  | The summary label follows the state table in §5, using the shared duration formatter from PRD-07.                                          |
-| FR-3.9  | At `compact`, collapsed member cards omit the summary line and access chip; tile, title, duration, status remain.                          |
-| FR-3.10 | A test asserts the computed font-size/color of assistant answer text is more prominent than the group summary — not a visual review.       |
-| FR-3.11 | All CSS for the group ships **inside `packages/chat-surface`**, not in a host stylesheet. Verified present in the packaged desktop bundle. |
-| FR-3.12 | Grouping is a view fold only — `useEventProjector` output is untouched and remains the single projection (FR-3.3 of the cockpit contract). |
-| FR-3.13 | At `compact`, an expanded group has a `max-height` and scrolls internally with the newest member in view.                                  |
-| FR-3.14 | `ReasoningGroup` behaviour is unchanged by this PRD. (Its stranded CSS is noted as a follow-up, not fixed here.)                           |
+| ID      | Requirement                                                                                                                                                                                                               |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FR-3.1  | A pure `groupActivityEntries(entries)` fold produces maximal consecutive runs of `tool_call` \| `subagent_*` \| `stream_delta`, terminated by `assistant_message` / user message / approval. No new state, no new events. |
+| FR-3.1a | Interim `stream_delta` entries render INSIDE the group as inline lines, in reading order — never as cards, and never as a group boundary.                                                                                 |
+| FR-3.1b | An approval always ends a group and renders outside it — it needs the user and must never be buried in a collapsed summary.                                                                                               |
+| FR-3.2  | Groups of `>= 2` members render a `ToolRunGroup`; a single member renders bare, exactly as today.                                                                                                                         |
+| FR-3.3  | A group with any `running` member renders expanded.                                                                                                                                                                       |
+| FR-3.4  | When all members settle **and** the group was never user-toggled, it collapses.                                                                                                                                           |
+| FR-3.5  | A user toggle pins the group's state for the session; auto-collapse never overrides it.                                                                                                                                   |
+| FR-3.6  | A group whose run terminated `failed` stays expanded regardless of FR-3.4.                                                                                                                                                |
+| FR-3.7  | Auto-collapse is suppressed while focus is inside the group.                                                                                                                                                              |
+| FR-3.8  | The summary label follows the state table in §5, using the shared duration formatter from PRD-07.                                                                                                                         |
+| FR-3.9  | At `compact`, collapsed member cards omit the summary line and access chip; tile, title, duration, status remain.                                                                                                         |
+| FR-3.10 | A test asserts the computed font-size/color of assistant answer text is more prominent than the group summary — not a visual review.                                                                                      |
+| FR-3.11 | All CSS for the group ships **inside `packages/chat-surface`**, not in a host stylesheet. Verified present in the packaged desktop bundle.                                                                                |
+| FR-3.12 | Grouping is a view fold only — `useEventProjector` output is untouched and remains the single projection (FR-3.3 of the cockpit contract).                                                                                |
+| FR-3.13 | At `compact`, an expanded group has a `max-height` and scrolls internally with the newest member in view.                                                                                                                 |
+| FR-3.14 | `ReasoningGroup` behaviour is unchanged by this PRD. (Its stranded CSS is noted as a follow-up, not fixed here.)                                                                                                          |
 
 ## 8. Non-functional requirements
 
