@@ -1621,6 +1621,37 @@ class RuntimeRunHandler:
             return None
         return None if conversation is None else conversation.title
 
+    @staticmethod
+    def _tombstone(reason: str) -> None:
+        """Record WHY the enforced workspace route fell closed.
+
+        The tombstone is correct — refusing beats silently reading the wrong
+        filesystem — but a refusal nobody can explain is a support ticket and a
+        wasted live run per hypothesis.
+        """
+
+        logging.getLogger(__name__).warning("workspace_effect.tombstone %s", reason)
+
+    def _missing_workspace_dependencies(
+        self, mcp_gateway_services: McpOperationGatewayServices | None
+    ) -> tuple[str, ...]:
+        """Which collaborators the enforced workspace route did not get.
+
+        Named individually rather than folded into one boolean: "the workspace
+        lane needs the MCP gateway" and "the desktop broker minted no host
+        session" are different problems with opposite fixes, and the previous
+        `or`-chain made them indistinguishable from outside.
+        """
+
+        candidates = (
+            ("mcp_gateway_services", mcp_gateway_services),
+            ("workspace_host_sessions", self._workspace_host_sessions),
+            ("workspace_overlay_store", self._workspace_overlay_store),
+            ("artifact_blob_store", self._artifact_blob_store),
+            ("artifact_reference_store", self._artifact_reference_store),
+        )
+        return tuple(name for name, value in candidates if value is None)
+
     async def _workspace_effect_backend_for_run(
         self,
         *,
@@ -1658,6 +1689,16 @@ class RuntimeRunHandler:
         # If an explicitly enabled E2 cohort or a targeted rollback does not
         # admit this persisted run, the model receives the tombstone route and
         # cannot stage an overlay or enqueue a workspace effect.
+        # Every `return WorkspaceTombstoneBackend()` below SAYS WHY. The branch
+        # used to be five silent conditions, and the model's only clue was
+        # "Local workspace access is unavailable" — which is what the user sees
+        # too, and which cost a full live-run cycle per guess to narrow down.
+        # A fail-closed path that records nothing is the same shape as the
+        # original defect this whole program started from: `ls ~/Downloads`
+        # answering `[]` with a green tick.
+        #
+        # Reasons only — no paths, no run content. Which DEPENDENCY is missing
+        # is deployment truth, not user data.
         if not self._e2_rollout_admission.permits_all(
             capabilities=(
                 RolloutCapability.OPERATION_GATEWAY,
@@ -1668,14 +1709,11 @@ class RuntimeRunHandler:
             ),
             facts_provider=self._rollout_facts_for_run(run),
         ):
+            self._tombstone("rollout_admission_denied")
             return WorkspaceTombstoneBackend()
-        if (
-            mcp_gateway_services is None
-            or self._workspace_host_sessions is None
-            or self._workspace_overlay_store is None
-            or self._artifact_blob_store is None
-            or self._artifact_reference_store is None
-        ):
+        missing = self._missing_workspace_dependencies(mcp_gateway_services)
+        if missing:
+            self._tombstone(f"missing_dependencies={'+'.join(missing)}")
             return WorkspaceTombstoneBackend()
         scope = EffectExecutionScope(
             org_id=run.org_id,
@@ -1693,6 +1731,11 @@ class RuntimeRunHandler:
             scope,
         )
         if session is None or session.base_read is None:
+            self._tombstone(
+                "no_host_session"
+                if session is None
+                else "host_session_has_no_base_read"
+            )
             return WorkspaceTombstoneBackend()
         merged = MergedWorkspaceBackend(
             run_id=run.run_id,
