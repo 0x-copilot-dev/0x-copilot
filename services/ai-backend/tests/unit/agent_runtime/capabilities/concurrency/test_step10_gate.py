@@ -91,34 +91,97 @@ class _WaveClock:
     """Elapsed latency measured in release waves, never in elapsed time.
 
     Each child's body stands for one unit of external latency: it arrives, waits
-    for the wave it belongs to to close, and returns. A wave closes once no
-    further child can join it.
+    for the wave it belongs to to close, and returns. A wave closes once every
+    child that shares it has *provably* arrived.
 
     Total latency is therefore ``len(waves)``:
 
-    - three children in one wave is ``max`` of the child latencies — the
-      parallel case, and the whole point of F6;
-    - three children in three waves is their ``sum`` — the serial case.
+    - the children of one parallel segment share a single wave — ``max`` of the
+      child latencies, the parallel case and the whole point of F6;
+    - children admitted one at a time each get their own wave — their ``sum``,
+      the serial case.
 
     This is what makes the claim a *latency* claim rather than a simultaneity
-    claim, without a single wall-clock read.
+    claim, without a single wall-clock read on the measured path.
+
+    **Why a barrier, not a quiescence count.** The wave a child lands in must be
+    a property of the *gate*, never of the event-loop scheduler. The earlier
+    harness had each child ``sleep(0)`` a fixed number of turns and let the first
+    to finish close the wave for everyone who had arrived so far. Whether N
+    genuinely-concurrent children merged into one wave then depended on how many
+    scheduler turns separated their arrivals — which jitters on a loaded runner,
+    so a sibling that the gate admitted concurrently but that reached the body a
+    few turns after the window closed was stranded into a second wave, failing
+    "only NONE and READ may ever overlap" non-deterministically on Linux CI.
+
+    Membership is now closed by an :class:`asyncio.Barrier` sized to
+    ``expected_width`` — the concurrency the gate is expected to deliver for this
+    cohort (a segment's planned width when parallel, one when serial). Every
+    child registers on arrival, holds, then meets at the barrier; the wave is
+    recorded only after the barrier releases, so ``active`` has provably reached
+    the full width — every member is inside the body — before any member leaves.
+    A straggler is *waited for* instead of stranded, whatever the scheduler does.
+
+    ``expected_width`` is a rendezvous target, not the answer:
+
+    - deliver *fewer* than expected (a parallelism regression) and the barrier
+      never fills; the settle backstop releases each stranded child into its own
+      wave, so the wave count is wrong and the assertion fails — cleanly, not by
+      hanging;
+    - deliver *more* than expected (a serial cohort that wrongly overlapped) and
+      the retained pre-barrier hold — identical in purpose to
+      ``_ConcurrencyProbe``'s window — keeps the extra child inside the occupied
+      interval, so it shares a wave and the wave it lands in is too wide.
+
+    Both directions still fail exactly the assertions they always did; the
+    barrier removes the flake without loosening a single one.
+
+    ``_SETTLE_SECONDS`` is a regression backstop and nothing else. A healthy run
+    never reaches it: the last expected member always arrives, and the turn-skew
+    this class exists to absorb is fast in wall-clock time, so the barrier trips
+    in well under a second whatever order the scheduler chose. The bound exists
+    so a regression that genuinely strands a member fails in a few seconds
+    instead of parking CI — the same reason ``TestAPlannedChild`` bounds its own
+    settle rather than waiting forever.
     """
 
-    def __init__(self) -> None:
+    #: Wall-clock ceiling on the rendezvous, reached only when a member the gate
+    #: was expected to admit never arrives (a regression). A healthy cohort trips
+    #: the barrier in microseconds however the scheduler interleaves it, so this
+    #: never fires on a passing run — it only turns a would-be hang into a fast,
+    #: clean, wrong-wave-count failure. Mirrors ``TestAPlannedChild``'s settle.
+    _SETTLE_SECONDS = 5.0
+
+    def __init__(self, *, expected_width: int) -> None:
         self.waves: list[tuple[int, ...]] = []
-        self._arrived: list[int] = []
+        self._barrier = asyncio.Barrier(expected_width)
+        self._active = 0
+        self._current: list[int] = []
 
     async def spend_one_unit_of_latency(self, value: int) -> str:
-        my_wave = len(self.waves)
-        self._arrived.append(value)
+        # Open a new wave when the body is empty; join the one in flight
+        # otherwise. This block never awaits, so the check and the mutation are
+        # atomic against every other coroutine on the loop.
+        if self._active == 0:
+            self._current = []
+        self._active += 1
+        self._current.append(value)
+        # Hold, so a concurrently-admitted sibling has room to arrive: identical
+        # in purpose to ``_ConcurrencyProbe``'s window, and what keeps a serial
+        # run whose gate wrongly overlapped from reading as one child per wave.
         for _ in range(_QUIESCENCE_YIELDS):
             await asyncio.sleep(0)
-        if len(self.waves) == my_wave:
-            # First of this wave to finish quiescing: everyone who could join
-            # has joined, so the wave closes here and later arrivals open a new
-            # one.
-            self.waves.append(tuple(self._arrived))
-            self._arrived.clear()
+        # Close the wave only once every member that shares it has provably
+        # arrived. On a healthy run the barrier trips the moment the last of the
+        # cohort's ``expected_width`` members reaches it, whatever order they
+        # were scheduled in; the timeout is the regression-only backstop.
+        try:
+            await asyncio.wait_for(self._barrier.wait(), self._SETTLE_SECONDS)
+        except (TimeoutError, asyncio.BrokenBarrierError):
+            pass
+        self._active -= 1
+        if self._active == 0:
+            self.waves.append(tuple(self._current))
         return str(value)
 
 
@@ -192,7 +255,7 @@ class TestIndependentReadsCostOneLatencyUnitNotThree:
     async def test_a_parallel_segment_costs_one_wave(self) -> None:
         """Three independent reads are released together: latency == max."""
 
-        clock = _WaveClock()
+        clock = _WaveClock(expected_width=_FANOUT)
         result, journal, _ = await _run_configured(clock.spend_one_unit_of_latency)
 
         assert result["messages"][-1].content == "done"
@@ -213,7 +276,7 @@ class TestIndependentReadsCostOneLatencyUnitNotThree:
     async def test_the_identical_serial_work_costs_three_waves(self) -> None:
         """The A/B half: same graph, same tool, no F6 — latency == sum."""
 
-        clock = _WaveClock()
+        clock = _WaveClock(expected_width=1)
         result = await _run_unconfigured(clock.spend_one_unit_of_latency)
 
         assert result["messages"][-1].content == "done"
@@ -238,9 +301,9 @@ class TestIndependentReadsCostOneLatencyUnitNotThree:
         measured property of this composition.
         """
 
-        parallel_clock = _WaveClock()
+        parallel_clock = _WaveClock(expected_width=_FANOUT)
         await _run_configured(parallel_clock.spend_one_unit_of_latency)
-        serial_clock = _WaveClock()
+        serial_clock = _WaveClock(expected_width=1)
         await _run_unconfigured(serial_clock.spend_one_unit_of_latency)
 
         assert len(serial_clock.waves) == _FANOUT
@@ -260,7 +323,12 @@ class TestOnlyDeclaredReadsCanEverOverlap:
         self,
         side_effect: SideEffectKind,
     ) -> None:
-        clock = _WaveClock()
+        overlapping = side_effect in (SideEffectKind.NONE, SideEffectKind.READ)
+        # The gate is expected to admit the whole segment at once for an
+        # overlapping effect class and one child at a time otherwise. A member
+        # added later that wrongly overlaps still fails below: its extra child
+        # lands inside the retained hold and widens a wave it should not share.
+        clock = _WaveClock(expected_width=_FANOUT if overlapping else 1)
         _, journal, _ = await _run_configured(
             clock.spend_one_unit_of_latency,
             declarations=_declarations(
@@ -269,7 +337,6 @@ class TestOnlyDeclaredReadsCanEverOverlap:
             ),
         )
 
-        overlapping = side_effect in (SideEffectKind.NONE, SideEffectKind.READ)
         expected_waves = 1 if overlapping else _FANOUT
         assert len(clock.waves) == expected_waves, (
             f"{side_effect} produced {len(clock.waves)} waves; "
@@ -288,7 +355,7 @@ class TestOnlyDeclaredReadsCanEverOverlap:
     async def test_a_serial_mode_declaration_never_overlaps_a_read(self) -> None:
         """Mode narrows independently of the effect class."""
 
-        clock = _WaveClock()
+        clock = _WaveClock(expected_width=1)
         await _run_configured(
             clock.spend_one_unit_of_latency,
             declarations=_declarations(
@@ -472,7 +539,7 @@ class TestAResourceSubjectIsSerialAtTheGraphSeam:
         }
 
     async def test_a_capability_with_a_resource_subject_never_overlaps(self) -> None:
-        clock = _WaveClock()
+        clock = _WaveClock(expected_width=1)
         _, journal, _ = await _run_configured(
             clock.spend_one_unit_of_latency,
             declarations=self._with_resource_template(),
@@ -496,7 +563,7 @@ class TestAResourceSubjectIsSerialAtTheGraphSeam:
         """
 
         _, journal, _ = await _run_configured(
-            _WaveClock().spend_one_unit_of_latency,
+            _WaveClock(expected_width=1).spend_one_unit_of_latency,
             declarations=self._with_resource_template(),
         )
         record = journal.plans[0].record
