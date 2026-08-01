@@ -7,6 +7,7 @@
 
 Usage: python3 spa.py <dist_dir> <port>
 """
+
 import http.server
 import os
 import socketserver

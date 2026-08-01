@@ -82,6 +82,25 @@ MENU_ITEMS_JS = (
 )
 
 
+# DO NOT try to observe the wire by patching `window.bridge` from the renderer.
+#
+# It cannot work, and it fails in the worst possible way: SILENTLY, while
+# reporting success. `apps/desktop/preload/bridge.ts` publishes the bridge with
+# `contextBridge.exposeInMainWorld`, and contextBridge objects are IMMUTABLE in
+# the main world — `window.bridge.ipc.invoke = fn` is a no-op that throws
+# nothing. An interceptor written this way returns `{installed: true}`, records
+# ZERO calls, and reads exactly like "the client never sent anything".
+#
+# Measured here: three runs were created, the probe reported installed, and the
+# capture was empty — which nearly became evidence for a client-side bug that
+# the probe was incapable of detecting either way.
+#
+# To see a run-create body, observe from the MAIN process (`mainEval`, where the
+# handler and the outbound HTTP call live), or skip the renderer entirely and
+# POST through `transport_json` — which is what `jK_bypass_wire.py` does to
+# separate "the client did not send it" from "the server dropped it".
+
+
 def _stub_picker(session: DriverSession, folder: Path) -> None:
     """Point the next `showOpenDialog` at ``folder`` (see jG for why)."""
 
