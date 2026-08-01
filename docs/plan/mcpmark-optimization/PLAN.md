@@ -32,9 +32,8 @@ before any gate in §4.1–4.3 does. Read `execution/model_invocation/journal.py
 per-attempt record rather than adding a counter.
 
 **Exit:** `S`, `T`, `m` measured, and the invocation budget known to bind or not. If any is
-
-> 2× off the assumption, §5 is rewritten before Phase 1 starts.
-> **Effort:** S · **Risk:** none · **Metric effect:** none (measurement only)
+off the assumption by more than 2×, §5 is rewritten before Phase 1 starts.
+**Effort:** S · **Risk:** none · **Metric effect:** none (measurement only)
 
 ### 0.2 Register the five benchmark MCP servers
 
