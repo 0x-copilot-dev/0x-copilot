@@ -16,13 +16,12 @@ Three tiers, and the journey walks them in the order a user meets them:
      the half that matters: bypass suspends the pause inside a folder the user
      attached with write permission, and changes nothing anywhere else.
 
-What this journey CANNOT do here, stated rather than approximated: the positive
-half of tier 3 — a write INSIDE a granted writable folder proceeding without a
-pause — needs a folder grant, and the only way to mint one is Electron's native
-`dialog.showOpenDialog`. Driving that dialog needs macOS Accessibility
-permission for the controlling process; without it `System Events` refuses
-(-25211) and no keystroke reaches the sheet. That is a system privacy setting,
-so the journey reports the gap instead of stubbing the picker.
+The positive half of tier 3 — a write INSIDE a granted writable folder
+proceeding without a pause — is NOT here. It needs a folder grant, and minting
+one needs Electron's native `dialog.showOpenDialog`, which cannot be driven
+without macOS Accessibility permission (`System Events` refuses with -25211).
+`jH_bypass_demo.py` does that half by stubbing the picker in the main process;
+this journey stays as the master-switch-outwards walk.
 """
 
 from __future__ import annotations
@@ -120,11 +119,11 @@ def main() -> int:
                 session.sign_in_local()
                 session.ftue_add_key(provider, key)
 
-                # The pill is mounted by `RunComposer` only — neither the
-                # first-run composer nor the cockpit's empty-state composer
-                # carries it, so a session that never sends a message never
-                # sees an execution-mode control at all. Recorded, then walked
-                # past: the tiers below are about the composer that HAS one.
+                # The FTUE composer carries the pill too now — it did not
+                # when this journey was written, and a session that never sent a
+                # message saw no execution-mode control at all. Still recorded
+                # and still walked past: the tiers below are about the run
+                # composer, and this probe is what would catch it regressing.
                 evidence["pill_on_first_run_composer"] = session.evaluate(PILL_STATE_JS)
                 session.shot("d-00-first-run-composer")
                 session.send_first_run_message("Say READY and nothing else.")
