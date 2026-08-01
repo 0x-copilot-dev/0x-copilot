@@ -841,6 +841,43 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entries.map((e) => e.id)).toEqual(["mc-1"]);
   });
 
+  it("excludes tools the server marked internal", () => {
+    // THE regression behind the raw "Calling write_todos" tile: the backend
+    // already stamps `visibility: "internal"` on both frames of every tool in
+    // its internal set, and `project()` honoured it — this pass did not, so the
+    // card rendered anyway, beside the surface built to replace it.
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        visibility: "internal",
+        payload: { call_id: "todo-1", tool_name: "write_todos" },
+      }),
+      makeEnvelope("tool_result", {
+        visibility: "internal",
+        payload: {
+          call_id: "todo-1",
+          tool_name: "write_todos",
+          status: "completed",
+        },
+      }),
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "mc-1", tool_name: "web_search" },
+      }),
+    ]);
+    expect(entries.map((e) => e.id)).toEqual(["mc-1"]);
+  });
+
+  it("excludes audit-visibility tools alongside internal ones", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        visibility: "audit",
+        payload: { call_id: "aud-1", tool_name: "record_something" },
+      }),
+    ]);
+    expect(entries).toEqual([]);
+  });
+
   it("is idempotent on replay (deduplicates by event_id)", () => {
     nextSeq = 0;
     const started = makeEnvelope("tool_call_started", {

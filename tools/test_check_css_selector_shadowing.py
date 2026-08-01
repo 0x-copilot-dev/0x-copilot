@@ -303,6 +303,22 @@ class TestScope:
         )
         assert _selectors(paths) == []
 
+    def test_the_desktop_staged_runtime_is_not_scanned(self, tmp_path: Path) -> None:
+        # `apps/desktop/resources/` is written by tools/desktop-runtime/stage.mjs
+        # and holds a COPY of the built web assets, so every package selector in
+        # the bundle looks like an app-side shadow of itself. Staging is a
+        # documented step — the desktop journeys require it — so before this was
+        # skipped, running them made the gate reject EVERY later commit with
+        # hundreds of findings about files that are not source.
+        paths = _paths(tmp_path)
+        _package(paths, ".fr-main {\n  gap: 12px;\n}\n")
+        _app(paths, ".fr-boot {\n  display: grid;\n}\n")
+        _write(
+            paths.apps_dir / "desktop" / "resources" / "web" / "assets" / "b.css",
+            ".fr-main {\n  gap: 0;\n}\n",
+        )
+        assert _selectors(paths) == []
+
 
 # ---------------------------------------------------------------------------
 # (d) The baseline ratchet

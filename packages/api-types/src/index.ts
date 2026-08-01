@@ -761,6 +761,7 @@ export type RuntimeApiEventType =
   | "sources_ingested"
   | "citation_made"
   | "draft_updated"
+  | "todo_list_updated"
   | "compression_note"
   | "subagent_fleet_started"
   | "subagent_fleet_finished"
@@ -853,6 +854,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "sources_ingested",
   "citation_made",
   "draft_updated",
+  "todo_list_updated",
   "compression_note",
   "subagent_fleet_started",
   "subagent_fleet_finished",
@@ -3929,6 +3931,11 @@ export interface RuntimeEventPayloadByType
   sources_ingested: SourcesIngestedPayload;
   citation_made: CitationMadePayload;
   draft_updated: DraftUpdatedPayload;
+  /** The agent's working checklist, resolved server-side from the
+   * `write_todos` frames LangChain's `TodoListMiddleware` produces. The tool
+   * replaces the whole list per call, so the snapshot IS the state — the client
+   * renders the newest one and never diffs. */
+  todo_list_updated: TodoListSnapshot;
   /** PR A1 — context-compression note. Server-emitted when the
    * memory-compression hook redacts older context; FE renders an
    * inline `<NoteCard>`. Payload mirrors `CompressionEventRecord`
@@ -4034,6 +4041,43 @@ export interface RuntimeEventPayloadByType
    * carries the reference (op / mount / virtual path / object_sha256 / size —
    * never a host path) so the change is auditable and undoable. */
   workspace_snapshot_captured: WorkspaceSnapshotCapturedPayload;
+}
+
+/**
+ * One row of the agent's working checklist. The three states are LangChain's
+ * `Todo.status` union verbatim (`langchain.agents.middleware.todo`) — this
+ * mirror exists so the client never re-types them, and so a middleware upgrade
+ * that adds a state fails the contract test rather than rendering as "pending".
+ */
+export type AgentTodoStatus = "pending" | "in_progress" | "completed";
+
+export interface AgentTodo {
+  /**
+   * The todo text as the agent wrote it. `write_todos` carries no per-item id,
+   * so content is also the identity used to detect which row just flipped to
+   * `completed` (that row animates its tick; older ones don't).
+   */
+  content: string;
+  status: AgentTodoStatus;
+}
+
+/**
+ * `todo_list_updated` payload — the resolved checklist after one `write_todos`
+ * call.
+ *
+ * `TodoListMiddleware` has no concept of a *second* list: the tool replaces the
+ * whole array, so "started a fresh plan" and "revised the current one" arrive
+ * identically. The server resolves that with a deterministic rule — a write
+ * that lands when every row of the previous list was already `completed` opens
+ * the next generation — and stamps the result here, so the client displays list
+ * identity rather than guessing at it.
+ */
+export interface TodoListSnapshot {
+  /** Stable across every revision of one list; changes on rollover. */
+  list_id: string;
+  /** 1-based. `> 1` means an earlier list in this run was finished first. */
+  generation: number;
+  todos: readonly AgentTodo[];
 }
 
 export interface CompressionNotePayload {

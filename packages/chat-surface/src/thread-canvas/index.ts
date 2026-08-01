@@ -47,6 +47,20 @@ export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
 export { projectToolCalls, type ToolCallEntry } from "./eventProjector";
 // === end inline tool-call cards ===
 
+// === Agent todos ===
+// The agent's working checklist, pinned above the composer. Another pure
+// selector over the SAME canonical run stream (FR-3.3), reading the server's
+// `todo_list_updated` snapshots. Replaces the deleted Focus `FocusPlan`, which
+// invented steps from tool-call frames instead of reading what the agent wrote.
+export {
+  projectRunTodos,
+  type RunTodoEntry,
+  type RunTodoStatus,
+  type RunTodosProjection,
+} from "./eventProjector";
+export { TcTodoList, type TcTodoListProps } from "./TcTodoList";
+// === end agent todos ===
+
 // === PRD-B1 (Generative Surfaces v2) client ledger fold ===
 // Pure PEER of `projectSurfaceTabs` over the SAME `session.events` array — folds
 // the v2 Work Ledger (`surface.created`/`view.derived`) into named tabs. Its

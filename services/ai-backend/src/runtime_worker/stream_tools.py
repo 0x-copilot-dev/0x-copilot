@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+from agent_runtime.capabilities.todo_list import TodoListProjector
 from agent_runtime.capabilities.workspace.policy_answers import WorkspacePolicyAnswers
 from agent_runtime.execution.contracts import (
     ConnectorAccessMode,
@@ -47,6 +48,12 @@ class ToolCallStreamState:
     args_text: str = ""
     last_delta: str = ""
     args: JsonObject = field(default_factory=dict)
+    # The same arguments before ``payload_mapping`` flattened them. ``args`` is
+    # display-shaped and lossy for any argument holding a list of objects (see
+    # ``StreamMessageParser.raw_args``); consumers that must read the structure
+    # — the todo-list projector — read this. Absent on the streamed-delta path,
+    # where ``args_text`` already holds the untouched JSON.
+    raw_args: object | None = None
     summary: str | None = None
     subagent_name: str | None = None
     short_summary: str | None = None
@@ -115,6 +122,10 @@ class StreamMessageProcessor:
         # on run discard). Subagent reasoning is intentionally dropped at
         # the extraction site, so this dict only ever sees main-agent runs.
         self._reasoning_buffers: dict[str, str] = {}
+        # Resolves ``write_todos`` writes into the checklist snapshots the todo
+        # panel renders. Held for the worker's lifetime (it keys its own state
+        # per run + subagent) and freed per run in ``discard_ledger``.
+        self._todo_lists = TodoListProjector()
 
     def ledger_for_run(self, run_id: str) -> ToolCallLedger:
         """Return (and lazily create) the per-run tool call ledger."""
@@ -130,6 +141,7 @@ class StreamMessageProcessor:
 
         self._ledgers.pop(run_id, None)
         self._reasoning_buffers.pop(run_id, None)
+        self._todo_lists.discard_run(run_id)
         # Per-call stream state was never dropped here. It survived every run
         # in a long-lived worker, and each entry now also holds the call's
         # ``ToolInvocationRecord`` (args included), so leaving it would grow the
@@ -279,6 +291,13 @@ class StreamMessageProcessor:
                 parent_task_id=parent_task_id,
                 subagent_id=subagent_id,
             )
+            await self._append_todo_list_event(
+                run=run,
+                payload=payload,
+                metadata=metadata,
+                parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
+            )
             settled_call_id = StreamTextHelper.extract(payload.get(Keys.Field.CALL_ID))
             if settled_call_id is not None:
                 self.ledger_for_run(run.run_id).observed_settled(settled_call_id)
@@ -326,6 +345,49 @@ class StreamMessageProcessor:
                 parent_task_id=parent_task_id,
                 subagent_id=subagent_id,
             )
+
+    async def _append_todo_list_event(
+        self,
+        *,
+        run: RunRecord,
+        payload: JsonObject,
+        metadata: JsonObject,
+        parent_task_id: str | None,
+        subagent_id: str | None,
+    ) -> None:
+        """Publish the agent's checklist when ``payload`` settles a ``write_todos`` call.
+
+        The tool's own frames stay INTERNAL (``internal_tool_names``) — this is
+        the public rendering of them, and the only one. Read from the settled
+        call's accumulated ARGUMENTS rather than the tool's output: the output is
+        a prose echo (``"Updated todo list to [...]"``) while the arguments carry
+        the structured list, and by this seam the streamed argument buffer is
+        complete where at TOOL_CALL_STARTED it is frequently still partial.
+        """
+
+        if payload.get(Keys.Field.TOOL_NAME) != Values.Tool.WRITE_TODOS:
+            return
+        state = self.tool_call_state_for_payload(run.run_id, payload)
+        if state is None:
+            return
+        snapshot = self._todo_lists.project(
+            run_id=run.run_id,
+            subagent_id=subagent_id,
+            arguments=self._structured_arguments(state),
+        )
+        # ``None`` means the write carried no usable list, or repeated the
+        # current one verbatim; either way there is no state change to publish.
+        if snapshot is None:
+            return
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.TOOL,
+            event_type=RuntimeApiEventType.TODO_LIST_UPDATED,
+            payload=snapshot.model_dump(mode="json"),
+            metadata=metadata,
+            parent_task_id=parent_task_id,
+            subagent_id=subagent_id,
+        )
 
     async def append_tool_call_chunk_event(
         self,
@@ -451,6 +513,29 @@ class StreamMessageProcessor:
         if state.args:
             return state.args
         return StreamMessageProcessor.parse_args_text(state.args_text)
+
+    @staticmethod
+    def _structured_arguments(state: ToolCallStreamState) -> Mapping[str, object]:
+        """Arguments for a call with nested structure intact, not display-flattened.
+
+        The sibling of :meth:`_state_arguments`. That one is right for the event
+        payload and the ledger row, where a readable string beats a nested
+        object; this one is for consumers that must read the shape the model
+        actually sent. The two paths a provider can take both survive here: a
+        complete argument mapping is held raw on the state, and a streamed one
+        is re-parsed from its untouched JSON buffer.
+        """
+
+        if isinstance(state.raw_args, Mapping):
+            return state.raw_args
+        if state.args_text.strip():
+            try:
+                parsed = json.loads(state.args_text)
+            except json.JSONDecodeError:
+                return {}
+            if isinstance(parsed, Mapping):
+                return parsed
+        return {}
 
     async def close_tool_invocation(
         self,
@@ -613,6 +698,7 @@ class StreamMessageProcessor:
                     state.last_delta = delta
             elif args:
                 state.args = StreamMessageParser.payload_mapping(args)
+                state.raw_args = StreamMessageParser.raw_args(tool_call)
                 state.last_delta = ""
         else:
             delta = StreamMessageParser.raw_text(args)

@@ -143,11 +143,39 @@ that wires three already-built pieces:
 **One event projection (FR-3.3).** The whole cockpit reads exactly one event source —
 `useRunSession.events` — projected once inside `ThreadCanvas`. The out-of-canvas
 consumers use PURE selectors over that same array, never a second SSE subscription or
-projector: `projectSubagents` (fleets + the Agents-tab "N live" count) and
+projector: `projectSubagents` (fleets + the Agents-tab "N live" count),
 `projectApprovals`/`toApprovalsQueue` (the in-chat `ApprovalCard`/conf-card + the
-Approvals-tab count). `RunWorkspaceRail` recomposes the workspace `[Chat · Sources ·
-Agents · Approvals]` tabs and receives the single `TcChat` as an injected `chatSlot`,
-so mode/tab switches never spawn a second chat mount.
+Approvals-tab count), and `projectRunTodos` (the pinned checklist). `RunWorkspaceRail`
+recomposes the workspace `[Chat · Sources · Agents · Approvals]` tabs and receives the
+single `TcChat` as an injected `chatSlot`, so mode/tab switches never spawn a second
+chat mount.
+
+**Approvals are inline.** Every approval card (confirmation, question, workspace
+grant, MCP auth, and the receipt a resolved one leaves behind) interleaves into the
+transcript through `mergeStream`, anchored on `TcChatApproval.createdAtMs`. The two
+pinned strips are **deleted**; `renderApprovalItem` is the single renderer, and `mode`
+picks only between the Studio 4-zone card and the Focus conf-card. Two consequences
+worth keeping: a resolved approval STAYS as its receipt (dropping it would reflow the
+thread and erase who decided what), and `MessageListBody`'s load/error notice must
+never early-return past the cards — inline, that hid a parked run's only way out.
+Reachability moved to a `tc-chat-approvals-waiting` line above the composer.
+
+**The agent todo panel.** `TcTodoList` renders the agent's working checklist, the ONLY
+pinned element above the composer inside `TcChat` — single-mount, identical in Focus
+and Studio, and stationary now that approvals no longer insert above it. It reads
+`projectRunTodos(session.events)` held across runs by `useConversationTodos` (the
+projection is run-scoped, so a follow-up message rebinds to a fresh run and the panel
+vanished mid-thread until the last snapshot was retained). `blocked` — a pending
+approval — makes the in-progress row read _waiting_ rather than spinning. The
+server's `todo_list_updated`
+snapshots, which the worker resolves from `write_todos` (LangChain's
+`TodoListMiddleware` replaces the whole list per call and carries no list identity, so
+the backend assigns `list_id`/`generation`: a write landing on an already-complete list
+opens the next one). The panel is **read-only** — the list is agent-owned, so there is
+no host callback surface. It replaced `FocusPlan`, which was **deleted**: that surface
+invented steps from tool-call frames, so it showed tool names where a plan belonged.
+Do not reintroduce a client-derived plan; if the cockpit needs to show intent, it comes
+from an event the agent actually produced.
 
 Seams the shell owns: scrub cursor (`scrubbedSeq`; `null` = live) + the "Viewing…"
 banner (approvals hidden while scrubbed); the empty/idle `RunEmptyState` goal composer
