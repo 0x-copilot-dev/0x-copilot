@@ -59,6 +59,11 @@ import type { ApprovalsQueueItem } from "../workspace";
 // transcript at the point each tool ran. The projection is the single source of
 // truth; TcChat never re-derives tool state from raw events.
 import type { RunTodosProjection, ToolCallEntry } from "./eventProjector";
+import { ToolRunGroup } from "../activity/ToolRunGroup";
+// PRD-03 FR-3.10 — reuse the formatter that already exists rather than adding a
+// third. PRD-07 renames/consolidates it; this call site moves with it.
+import { formatSubagentDuration } from "../subagents/labels";
+import { groupActivityStream, summariseGroup } from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
@@ -312,6 +317,10 @@ export interface TcChatProps {
    * in the column the user is already reading.
    */
   readonly terminalBeat?: ReactNode;
+  /** PRD-03 D-3.5 — the RUN's terminal failure keeps its group open. */
+  readonly runFailed?: boolean;
+  /** PRD-03 D-3.6 — narrow surface; shortens the group's summary label. */
+  readonly compact?: boolean;
   /**
    * Run-scoped citations supplied by the cockpit's canonical event projection.
    * Inline source cards select only citations whose backend-issued
@@ -487,6 +496,8 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantCancel,
     renderComposer,
     terminalBeat,
+    runFailed = false,
+    compact = false,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -643,6 +654,8 @@ export function TcChat(props: TcChatProps): ReactElement {
         mode={mode}
         markdownComponents={markdownComponents}
         terminalBeat={terminalBeat}
+        runFailed={runFailed}
+        compact={compact}
       />
     </div>
   );
@@ -1072,6 +1085,10 @@ interface MessageListBodyProps {
   readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
   readonly terminalBeat?: ReactNode;
+  /** PRD-03 D-3.5 — the RUN's terminal failure keeps its group open. */
+  readonly runFailed?: boolean;
+  /** PRD-03 D-3.6 — narrow surface; shortens the group's summary label. */
+  readonly compact?: boolean;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1088,6 +1105,8 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     mode,
     markdownComponents,
     terminalBeat,
+    runFailed = false,
+    compact = false,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1125,37 +1144,86 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   // fleet cards (PR-3.8), tool-call cards (Workstream D) and approvals — are
   // interleaved by timestamp so each lands where it happened in the flow.
   const items = mergeStream(messages, fleets, toolCalls, approvals);
+
+  const renderItem = (item: StreamItem): ReactNode => {
+    if (item.kind === "fleet") {
+      return renderFleetCard(item.fleet, subagentActivitiesByTask);
+    }
+    if (item.kind === "tool") {
+      return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
+    }
+    if (item.kind === "approval") {
+      return (
+        <li
+          key={`approval-item-${item.approval.approvalId}`}
+          style={approvalItemStyle}
+          data-testid={`tc-chat-approval-item-${item.approval.approvalId}`}
+          data-approval-pending={item.approval.resolved ? "false" : "true"}
+        >
+          {renderApprovalItem(item.approval, mode, approvalHandlers)}
+        </li>
+      );
+    }
+    return renderMessage(item.message, markdownComponents);
+  };
+
+  // PRD-03 — fold consecutive ACTIVITY into one collapsible group. Pure view
+  // layer: `items` order is untouched, only its framing changes.
+  //
+  // Only tool + fleet opt in. Messages and approvals pass through, and so does
+  // any kind added later — an approval buried inside a collapsed group would
+  // hide a parked run's only way out.
+  const grouped = groupActivityStream(items, {
+    isGroupable: (item) => item.kind === "tool" || item.kind === "fleet",
+    idOf: (item) =>
+      item.kind === "fleet"
+        ? `fleet-${item.fleet.fleetId}`
+        : item.kind === "tool"
+          ? item.toolCall.id
+          : "group",
+  });
+
   return (
     <>
       {notice}
       <ul style={ulStyle}>
-        {items.map((item) => {
-          if (item.kind === "fleet") {
-            return renderFleetCard(item.fleet, subagentActivitiesByTask);
+        {grouped.map((entry) => {
+          if (entry.kind !== "group") {
+            return renderItem(entry.item);
           }
-          if (item.kind === "tool") {
-            return renderToolCard(
-              item.toolCall,
-              mode,
-              toolCallCitations,
-              parked,
-            );
-          }
-          if (item.kind === "approval") {
-            return (
-              <li
-                key={`approval-item-${item.approval.approvalId}`}
-                style={approvalItemStyle}
-                data-testid={`tc-chat-approval-item-${item.approval.approvalId}`}
-                data-approval-pending={
-                  item.approval.resolved ? "false" : "true"
+          const summary = summariseGroup(
+            entry.members.map((m) =>
+              m.kind === "tool"
+                ? {
+                    status: m.toolCall.status,
+                    createdAtMs: m.toolCall.createdAtMs,
+                    durationMs: m.toolCall.durationMs,
+                  }
+                : {
+                    createdAtMs:
+                      m.kind === "fleet" ? m.fleet.createdAtMs : null,
+                  },
+            ),
+            runFailed,
+          );
+          return (
+            <li key={`group-${entry.id}`} style={fleetItemStyle}>
+              <ToolRunGroup
+                state={summary.state}
+                done={summary.done}
+                total={summary.total}
+                retried={summary.retried}
+                elapsed={
+                  summary.elapsedMs === null
+                    ? null
+                    : formatSubagentDuration(summary.elapsedMs)
                 }
+                compact={compact}
               >
-                {renderApprovalItem(item.approval, mode, approvalHandlers)}
-              </li>
-            );
-          }
-          return renderMessage(item.message, markdownComponents);
+                {entry.members.map(renderItem)}
+              </ToolRunGroup>
+            </li>
+          );
         })}
         {terminalBeat}
       </ul>
