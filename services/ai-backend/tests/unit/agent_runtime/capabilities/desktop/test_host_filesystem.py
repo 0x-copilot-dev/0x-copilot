@@ -23,6 +23,11 @@ from agent_runtime.capabilities.desktop.host_filesystem import (
     GrantedRoot,
     HostFilesystemRules,
 )
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+    FilesystemBypassMode,
+)
 
 GRANTED = "/Users/ada/Projects"
 UNGRANTED = "/Users/ada/Downloads"
@@ -32,16 +37,26 @@ UNGRANTED = "/Users/ada/Downloads"
 DROPPED_SCRATCH_DIR = ".copilot"
 
 
+#: The two postures rule 3's write half is built under. Manual is the DEFAULT
+#: everywhere — in the builder's own signature and in every helper below — so a
+#: test that does not mention bypass is asserting the asking posture, which is
+#: the one a user gets unless they reach for the composer pill.
+MANUAL = MANUAL_FILESYSTEM_BYPASS
+BYPASS = FilesystemBypassDecision(master_enabled=True, mode=FilesystemBypassMode.BYPASS)
+
+
 class RuleSetMixin:
     """Builds real `FilesystemPermission` objects from our plain dicts."""
 
     @staticmethod
     def rules(
-        *roots: GrantedRoot, scratch: AgentScratchRoot | None = None
+        *roots: GrantedRoot,
+        scratch: AgentScratchRoot | None = None,
+        bypass: FilesystemBypassDecision = MANUAL,
     ) -> list[FilesystemPermission]:
         return [
             FilesystemPermission(**rule)  # type: ignore[arg-type]
-            for rule in HostFilesystemRules.build(roots, scratch=scratch)
+            for rule in HostFilesystemRules.build(roots, scratch=scratch, bypass=bypass)
         ]
 
     def verdict(
@@ -51,9 +66,10 @@ class RuleSetMixin:
         operation: str = "read",
         roots: tuple = (),
         scratch: AgentScratchRoot | None = None,
+        bypass: FilesystemBypassDecision = MANUAL,
     ) -> str:
         return _check_fs_permission(
-            self.rules(*roots, scratch=scratch), operation, path
+            self.rules(*roots, scratch=scratch, bypass=bypass), operation, path
         )
 
 
@@ -100,16 +116,28 @@ class TestGrantedRoots(RuleSetMixin):
         produce and this app ships as an unpackaged CLI payload. "Writes are
         audited" therefore meant "writes never happen".
 
-        The consent question D7 protected is not dropped, it MOVED: the user
-        answers read-only vs read-and-write when attaching the folder, once,
-        knowing what they decide — rather than through per-write cards that are
-        indistinguishable from read cards and get clicked through unread.
+        The consent question D7 protected is not dropped, it SPLIT. Attaching
+        answers WHICH folders may be written; the composer's bypass pill answers
+        whether each write pauses. So a writable grant makes the folder eligible
+        in both postures, and the posture decides `interrupt` vs `allow` — the
+        one cell in this whole matrix that bypass moves.
         """
 
         roots = (GrantedRoot(path=GRANTED, writable=True),)
         assert self.verdict(f"{GRANTED}/notes.md", roots=roots) == "allow"
+        # Manual — the default. The write is eligible, and it asks.
         assert (
             self.verdict(f"{GRANTED}/notes.md", operation="write", roots=roots)
+            == "interrupt"
+        )
+        # Bypass — the same write, no pause.
+        assert (
+            self.verdict(
+                f"{GRANTED}/notes.md",
+                operation="write",
+                roots=roots,
+                bypass=BYPASS,
+            )
             == "allow"
         )
 
@@ -297,13 +325,13 @@ class TestGrantsInEitherPlatformsGrammar(RuleSetMixin):
         )
         # A Windows grant reaches the SAME verdict as a POSIX one — that is the
         # parity this class exists to hold. `from_host_path` defaults to
-        # writable, so the write inside it is allowed, and a sibling outside it
-        # is not.
+        # writable, so the write inside it is eligible (and asks, under the
+        # default Manual posture), while a sibling outside it is refused.
         assert (
             self.verdict(
                 "/C:/Users/ada/Projects/out.csv", operation="write", roots=(root,)
             )
-            == "allow"
+            == "interrupt"
         )
         assert (
             self.verdict(
@@ -372,23 +400,40 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
         The boundary is the grant, not the operation: everything outside stays
         `deny` and is never even a question, so a widened grant cannot leak into
         a neighbour.
+
+        Asserted in BOTH postures, because that is the property bypass must not
+        touch. Bypass may change whether the inside write pauses; if it ever
+        changes the outside one, this fails.
         """
 
         roots = (GrantedRoot(path=GRANTED, writable=True),)
-        assert (
-            self.verdict(f"{GRANTED}/out.csv", operation="write", roots=roots)
-            == "allow"
-        )
-        assert (
-            self.verdict(f"{UNGRANTED}/out.csv", operation="write", roots=roots)
-            == "deny"
-        )
+        for bypass, inside in ((MANUAL, "interrupt"), (BYPASS, "allow")):
+            assert (
+                self.verdict(
+                    f"{GRANTED}/out.csv",
+                    operation="write",
+                    roots=roots,
+                    bypass=bypass,
+                )
+                == inside
+            )
+            assert (
+                self.verdict(
+                    f"{UNGRANTED}/out.csv",
+                    operation="write",
+                    roots=roots,
+                    bypass=bypass,
+                )
+                == "deny"
+            )
         assert (
             self.verdict(f"{GRANTED}Secret/out.csv", operation="write", roots=roots)
             == "deny"
         )
         # The grant covers its whole subtree, and the scratch is a SEPARATE
         # allowance that needs no grant — so composing the two changes neither.
+        # The subtree write asks (Manual) exactly as the grant root does; what
+        # is being checked here is that depth does not change the answer.
         scratch = AgentScratchRoot(Path("/Users/ada/.0xcopilot/.tmp"))
         assert (
             self.verdict(
@@ -397,7 +442,7 @@ class TestAttachedFolderStopsAsking(RuleSetMixin):
                 roots=roots,
                 scratch=scratch,
             )
-            == "allow"
+            == "interrupt"
         )
         assert (
             self.verdict(

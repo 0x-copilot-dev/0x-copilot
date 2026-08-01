@@ -396,13 +396,34 @@ class DriverSession:
 
     # -- rpc --
     def rpc(self, cmd: str, **args) -> dict:
+        """Call the driver, raising with the driver's OWN message on failure.
+
+        The bare ``HTTPError`` this used to raise says only "HTTP Error 500:
+        Internal Server Error", which is indistinguishable between "your
+        selector matched nothing", "Playwright judged the element unactionable"
+        and "the driver crashed". Diagnosing a journey failure then costs a
+        whole re-run per hypothesis — measured, twice, on one `fillLast`.
+        The driver already puts the real reason in the response body; this only
+        stops throwing it away.
+        """
+
         body = json.dumps({"cmd": cmd, **args}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/rpc",
             data=body,
             headers={"content-type": "application/json"},
         )
-        return json.loads(urllib.request.urlopen(req, timeout=40).read())
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=40).read())
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace").strip()
+            except Exception:  # noqa: BLE001 — the original error still wins
+                pass
+            raise RuntimeError(
+                f"driver rpc {cmd} failed ({exc.code}): {detail or exc.reason}"
+            ) from exc
 
     def _probe(self) -> bool:
         try:
@@ -434,11 +455,45 @@ class DriverSession:
         return bool(self.evaluate(f"!!document.querySelector({json.dumps(selector)})"))
 
     def wait_for(self, selector: str, timeout_s: int = 60) -> bool:
+        """Wait until the selector EXISTS in the DOM. See `wait_visible`.
+
+        Built on `present`, i.e. `querySelector`, which finds nodes the user
+        cannot see. That is the right check for "has this rendered yet" and the
+        wrong one before typing or clicking — see `wait_visible`.
+        """
+
         for _ in range(timeout_s * 2):
             if self.present(selector):
                 return True
             time.sleep(0.5)
         return False
+
+    def wait_visible(self, selector: str, timeout_s: int = 30) -> bool:
+        """Wait until the selector is VISIBLE, the way Playwright judges it.
+
+        `wait_for` cannot distinguish "the composer is ready" from "the composer
+        is underneath the Settings surface": `querySelector` finds a hidden node
+        just as happily, and a DOM `.click()` on one still fires its handler, so
+        a journey can drive a screen the user is not looking at and record
+        convincing evidence that it worked.
+
+        Measured, in FS-H: Settings did not close, `present()` said the composer
+        was there, the pill DID switch to Bypass on a hidden element, and the
+        next `fill` spent 15s on "element is not visible" before failing. Use
+        this before any interaction whose success depends on the element
+        actually being on screen.
+        """
+
+        try:
+            self.rpc(
+                "waitFor",
+                selector=selector,
+                timeoutMs=timeout_s * 1000,
+                state="visible",
+            )
+            return True
+        except Exception:  # noqa: BLE001 — absence is an answer, not an error
+            return False
 
     def shot(self, label: str) -> None:
         self._shot += 1

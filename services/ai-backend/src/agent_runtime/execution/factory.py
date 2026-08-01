@@ -19,6 +19,10 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.filesystem_bypass import (
+    MANUAL_FILESYSTEM_BYPASS,
+    FilesystemBypassDecision,
+)
 from agent_runtime.execution.tool_surface import (
     ModelToolDeclaration,
     ModelToolOwner,
@@ -371,6 +375,7 @@ async def _assemble_harness(
         model_instructions = _instructions_with_granted_folders(
             instructions=prompt_assembly_plan.rendered_prompt,
             roots=granted_host_roots,
+            bypass=runtime_context.filesystem_bypass,
         )
         prompt_observer = runtime_dependencies.prompt_assembly_observer
         if prompt_observer is not None and not isinstance(
@@ -465,23 +470,28 @@ async def _assemble_harness(
                     workspace_backend,
                     granted_host_roots=granted_host_roots,
                     agent_scratch=agent_scratch,
+                    bypass=runtime_context.filesystem_bypass,
                 ),
-                # Host filesystem rules. D7 still holds and is now enforced by
-                # the rule set itself rather than by having none: every host
-                # WRITE is `deny`, so a generic filesystem interrupt cannot
-                # authorize a mutation — C3 stages workspace changes through its
-                # typed adapter and C2 remains the only commit authority.
+                # Host filesystem rules — the whole boundary for host paths.
                 #
-                # What the rules add is READS. An ungranted host path is
-                # `interrupt`, which parks the call on the same
+                # An UNGRANTED path is `interrupt` for reads and `deny` for
+                # writes. The interrupt parks the call on the same
                 # HumanInTheLoopMiddleware that already gates MCP tools; on
                 # approval the read proceeds against a real filesystem. Before
                 # this, such a path fell through to the StateBackend default and
                 # was answered with an empty listing and a green tick.
+                #
+                # A GRANTED writable root reads freely and writes according to
+                # this run's sealed bypass decision: Manual asks per write,
+                # Bypass proceeds. The decision comes from the persisted runtime
+                # context — never re-resolved here — so a Settings change
+                # mid-flight cannot retro-authorize a run that started under a
+                # different posture.
                 permissions=_host_filesystem_permissions(
                     workspace_backend,
                     granted_host_roots=granted_host_roots,
                     agent_scratch=agent_scratch,
+                    bypass=runtime_context.filesystem_bypass,
                 ),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
@@ -1731,6 +1741,7 @@ def _host_filesystem_permissions(
     *,
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
+    bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS,
 ) -> tuple[object, ...]:
     """Deep Agents ``FilesystemPermission`` rules for host paths — DESKTOP only.
 
@@ -1749,6 +1760,14 @@ def _host_filesystem_permissions(
     "nobody resolved one", which falls back to resolving it here. The fallback
     is the SAME function the caller would have used, so a caller that forgets to
     thread it cannot produce a second answer — only a second call.
+
+    ``bypass`` is the run's SEALED decision, read from the persisted runtime
+    context rather than re-resolved — the same discipline
+    ``WorkspaceGatewayServices`` already applies, and for the same reason: a
+    Settings change mid-flight must not retro-authorize a run the user started
+    under a different posture. It decides one thing, the mode of rule 3's write
+    half. Defaulting to Manual means every caller that does not thread it gets
+    the asking posture.
 
     Returns an empty tuple if deepagents' permission type cannot be imported,
     so a version skew degrades to today's behaviour instead of failing the run.
@@ -1774,6 +1793,7 @@ def _host_filesystem_permissions(
         for rule in HostFilesystemRules.build(
             roots=_granted_host_roots(workspace_backend, resolved=granted_host_roots),
             scratch=_agent_scratch_root(resolved=agent_scratch),
+            bypass=bypass,
         )
     )
 
@@ -1795,6 +1815,7 @@ def _with_host_bulk_read_scope(
     *,
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
+    bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS,
 ) -> dict[str, object]:
     """Let a bulk read that is FULLY inside granted ground proceed silently.
 
@@ -1838,13 +1859,25 @@ def _with_host_bulk_read_scope(
         _LOGGER.warning("host_filesystem.bulk_interrupt_seam_unavailable")
         return merged
 
+    # The SAME rules the graph will enforce, bypass mode included. Rebuilding
+    # them under a different posture here would generate `interrupt_on` entries
+    # for a rule set that is not the one in force — and since this function
+    # exists to OVERRIDE deepagents' generated predicates, that divergence would
+    # be invisible rather than loud.
     permissions = _host_filesystem_permissions(
         workspace_backend,
         granted_host_roots=granted_host_roots,
         agent_scratch=agent_scratch,
+        bypass=bypass,
     )
     if not permissions:
         return merged
+    # Only the three BULK read tools are overridden below. `write_file` /
+    # `edit_file` keep deepagents' own `exact` predicate, which fires iff
+    # `_check_fs_permission` answers "interrupt" for the named path — so under
+    # Bypass rule 3 answers "allow" and no entry is generated at all, and under
+    # Manual the entry fires on exactly the file being written. Nothing here
+    # needs to branch on the mode.
     generated = _build_interrupt_on_from_permissions(list(permissions))
     scope = HostBulkReadScope.build(
         _granted_host_roots(workspace_backend, resolved=granted_host_roots),
@@ -2283,6 +2316,7 @@ def _instructions_with_granted_folders(
     *,
     instructions: str,
     roots: tuple[object, ...] | None,
+    bypass: FilesystemBypassDecision = MANUAL_FILESYSTEM_BYPASS,
 ) -> str:
     """Name the folders the user attached, by their REAL paths.
 
@@ -2301,6 +2335,14 @@ def _instructions_with_granted_folders(
 
     Empty or absent roots append NOTHING, so a run with no grants keeps a
     byte-identical prompt and pays no token tax.
+
+    ``bypass`` changes only the sentence about approval, and it has to. This
+    block used to promise "no staging, no separate approval" unconditionally;
+    under Manual a write now pauses on a consent card, so that sentence became a
+    false statement about the model's own capability — the same class of error
+    that produced the refusal quoted above, just pointing the other way. A model
+    told a write is unconditional, whose write then parks, has been given a
+    reason to narrate a problem instead of simply making the call.
     """
 
     attached = tuple(roots or ())
@@ -2330,10 +2372,17 @@ def _instructions_with_granted_folders(
     if writable:
         block.append(
             "In a folder marked read and write you may create and modify files "
-            "directly — no staging, no separate approval. The user granted that "
-            "when they attached it. `write_file` CREATES a new file and refuses "
-            "a path that already exists; to change a file that is already there, "
-            "use `edit_file`."
+            "directly, with no staging step. `write_file` CREATES a new file and "
+            "refuses a path that already exists; to change a file that is "
+            "already there, use `edit_file`."
+        )
+        block.append(
+            "Writes there run immediately — the user turned off the confirmation "
+            "for this turn."
+            if bypass.skips_approval_pause
+            else "Each write is confirmed by the user as it happens. Just make "
+            "the call; the pause is normal and is not a refusal. Do not ask for "
+            "permission in prose, and do not treat waiting as a failure."
         )
     return "\n\n".join((instructions, "\n".join(block)))
 

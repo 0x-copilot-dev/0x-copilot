@@ -539,8 +539,10 @@ class TestWindowsAndPosixGetTheSameVerdicts(RuleVerdictMixin):
         """Both grammars reach the SAME verdict — the parity this class holds.
 
         `from_host_path` defaults to writable, so a write inside the grant is
-        allowed on both platforms; the assertion that matters is that neither
-        grammar is more permissive than the other.
+        eligible on both platforms and, under the default Manual posture, asks
+        on both. The assertion that matters is that neither grammar is more
+        permissive than the other — a Windows path must not skip a pause a
+        POSIX one takes.
         """
 
         roots_posix = (GrantedRoot.from_host_path("/Users/p/Downloads"),)
@@ -560,7 +562,7 @@ class TestWindowsAndPosixGetTheSameVerdicts(RuleVerdictMixin):
         )
 
         assert posix == windows
-        assert posix[0] == "allow"
+        assert posix[0] == "interrupt"
 
     def test_a_windows_grant_never_covers_the_posix_path_of_the_same_name(
         self,

@@ -41,6 +41,7 @@ from agent_runtime.execution.filesystem_bypass import (
     FilesystemBypassDecision,
     FilesystemBypassResolver,
     FilesystemBypassSource,
+    filesystem_bypass_offered,
 )
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
@@ -720,9 +721,17 @@ class RunCoordinator:
         either stale or hostile and both are worth seeing.
         """
 
-        master_enabled = bool(
+        # ABSENT is not FALSE, and this is where that distinction has to be made
+        # rather than assumed. The blob is a plain dict, so the pydantic default
+        # on ``WorkspaceBehaviorOverrides`` does not apply to it — and
+        # ``_resolve_workspace_behavior_overrides`` returns ``{}`` outright when
+        # a workspace has no defaults row at all, which is every fresh install.
+        # A bare ``.get(...) is True`` therefore sealed ``master_enabled=False``
+        # on exactly the installs the default was written for, while the GET
+        # endpoint (which builds the model) reported the control as offered. The
+        # user got a pill they could select and a server that ignored it.
+        master_enabled = filesystem_bypass_offered(
             (workspace_behavior_overrides or {}).get("filesystem_bypass_enabled")
-            is True
         )
         decision = FilesystemBypassResolver.resolve(
             master_enabled=master_enabled,

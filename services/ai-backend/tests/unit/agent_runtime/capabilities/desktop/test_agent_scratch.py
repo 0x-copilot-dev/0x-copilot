@@ -283,6 +283,11 @@ class TestScopedToTheScratchAndNothingAbove:
         A writable grant is writable on its own merits (see
         `test_host_filesystem`); what must never happen is the SCRATCH rule
         leaking write access to somewhere the user never attached.
+
+        The grant's own write reads `interrupt` here rather than `allow` only
+        because these rules are built under the default MANUAL posture, where
+        each write inside a grant asks. That is incidental to this test — the
+        assertion that carries weight is the third one.
         """
 
         granted = GrantedRoot(path="/Users/ada/Projects", writable=True)
@@ -290,7 +295,8 @@ class TestScopedToTheScratchAndNothingAbove:
 
         assert _check_fs_permission(rules, "read", f"{granted.path}/a.md") == "allow"
         assert (
-            _effective_write(self.SCRATCH, f"{granted.path}/a.md", granted) == "allow"
+            _effective_write(self.SCRATCH, f"{granted.path}/a.md", granted)
+            == "interrupt"
         )
         assert (
             _effective_write(self.SCRATCH, "/Users/ada/Downloads/a.md", granted)

@@ -35,6 +35,9 @@ from pydantic import (
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.execution.depth import ReasoningDepth
+from agent_runtime.execution.filesystem_bypass import (
+    DEFAULT_FILESYSTEM_BYPASS_OFFERED,
+)
 from agent_runtime.api.constants import Keys
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.conversations import (
@@ -255,13 +258,33 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
         max_length=_DEFAULT_LOCAL_MODEL_MAX_CHARS,
     )
     training_data_opt_out: bool = False
-    # PRD-FS-10 §4.3 tier 1 — the filesystem-bypass MASTER switch, and the
-    # only tier that is persisted. Default False, and the default is the
-    # product decision: until an operator turns this on, the composer must not
-    # OFFER a run/message bypass at all, and a request that carries one anyway
-    # resolves to manual (``FilesystemBypassResolver``). It rides the closed
-    # JSONB blob, so there is no column and no migration.
-    filesystem_bypass_enabled: bool = False
+    # PRD-FS-10 §4.3 tier 1 — the filesystem-bypass MASTER switch, and the only
+    # tier that is persisted. It decides whether the composer may OFFER a
+    # run/message bypass; a request carrying one while it is off resolves to
+    # manual (``FilesystemBypassResolver``). It rides the closed JSONB blob, so
+    # there is no column and no migration.
+    #
+    # Default TRUE, which is a change of product decision and not a relaxation.
+    # It was False while bypass moved nothing observable — the decision was read
+    # only by the ``/workspace/`` staged lane, which needs a C2 attestation an
+    # unpackaged build cannot produce. Now that the pill decides whether a host
+    # write PAUSES (``HostFilesystemRules`` rule 3), False would mean every
+    # write in an attached, explicitly-writable folder asks forever with no
+    # control on screen to say otherwise — the pill is behind a Settings toggle
+    # the user must find before the affordance that governs their own files
+    # appears at all.
+    #
+    # The safety property lives in the pill's own default, which is MANUAL: the
+    # switch makes the control VISIBLE, it does not turn bypass on. An operator
+    # who wants bypass unavailable still sets this False explicitly, and an
+    # explicit False is preserved — only absence now reads as "offer it".
+    #
+    # The default is IMPORTED, not spelled here, because the run-create seal
+    # reads this setting out of the persisted JSONB blob as a plain dict, where
+    # a pydantic default does not exist. Two copies of the literal is exactly
+    # how the API came to report the control as offered while every run sealed
+    # it off — see ``DEFAULT_FILESYSTEM_BYPASS_OFFERED``.
+    filesystem_bypass_enabled: bool = DEFAULT_FILESYSTEM_BYPASS_OFFERED
 
     @model_validator(mode="before")
     @classmethod

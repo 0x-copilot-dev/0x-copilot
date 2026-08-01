@@ -115,20 +115,95 @@ def _open_pill(session: DriverSession) -> bool:
     return bool(opened)
 
 
-def _select_mode(session: DriverSession, wanted: str) -> dict[str, Any]:
-    """Open the pill and pick Manual or Bypass; returns the pill state after."""
+def _toggle_checked(session: DriverSession, timeout_s: int = 15) -> bool | None:
+    """Whether the Settings bypass toggle reads ON, once it has settled.
 
-    _open_pill(session)
-    session.evaluate(
-        "(() => { const rows = Array.from(document.querySelectorAll('"
-        + PILL_ITEM
-        + "')); const row = rows.find((el) => /"
-        + wanted
-        + "/i.test(el.innerText || '')); if (row) row.click(); return !!row; })()"
+    Handles both shapes so a `Toggle` refactor cannot silently answer ``False``:
+    a real ``<input type=checkbox>`` exposes ``checked``; a div-based switch
+    carries ``aria-checked`` / ``data-state``. ``None`` means the control was
+    never found, which is a different failure from "found, and off".
+    """
+
+    probe = (
+        "(() => { const el = document.querySelector('"
+        + BYPASS_TOGGLE
+        + "'); if (!el) return null;"
+        " if (typeof el.checked === 'boolean') return el.checked;"
+        " const s = el.getAttribute('aria-checked') || el.getAttribute('data-state');"
+        " return s === 'true' || s === 'checked' || s === 'on'; })()"
     )
-    time.sleep(0.6)
-    session.press("body", "Escape")
-    time.sleep(0.3)
+    deadline = time.time() + timeout_s
+    seen: bool | None = None
+    while time.time() < deadline:
+        seen = session.evaluate(probe)
+        if seen is True:
+            return True
+        time.sleep(0.5)
+    return seen
+
+
+def _menu_row_count(session: DriverSession) -> int:
+    """How many execution-mode rows are mounted right now (0 ⇒ menu closed)."""
+
+    return int(
+        session.evaluate(
+            "(() => document.querySelectorAll('" + PILL_ITEM + "').length)()"
+        )
+        or 0
+    )
+
+
+def _ensure_menu_open(session: DriverSession, attempts: int = 4) -> bool:
+    """Leave the execution-mode menu OPEN, whatever state it starts in.
+
+    `_open_pill` TOGGLES. The old code called it unconditionally, so when a
+    previous `Escape` had failed to close the menu, "opening" it closed it — the
+    row query then matched nothing, no row was clicked, and the pill silently
+    stayed on Manual. The journey went on to run its Bypass phase under Manual
+    and reported `bypass_asked: True` as a product failure.
+
+    Asking whether the rows are mounted, rather than assuming the click worked,
+    is the whole fix.
+    """
+
+    for _ in range(attempts):
+        if _menu_row_count(session):
+            return True
+        _open_pill(session)
+    return bool(_menu_row_count(session))
+
+
+def _select_mode(
+    session: DriverSession, wanted: str, attempts: int = 3
+) -> dict[str, Any]:
+    """Pick Manual or Bypass and VERIFY it took; returns the pill state after.
+
+    Verified-with-retry because a silent no-op here does not fail the journey,
+    it changes what the journey is testing — and the resulting evidence
+    (`bypass_asked: True`) reads exactly like the product being broken.
+    """
+
+    for _ in range(attempts):
+        if not _ensure_menu_open(session):
+            continue
+        try:
+            # A real Playwright click on the row, so pointer events fire the way
+            # the component expects. `:has-text` is a substring match, and only
+            # one row carries each mode name.
+            session.rpc("clickLast", selector=f'{PILL_ITEM}:has-text("{wanted}")')
+        except Exception:  # noqa: BLE001 — fall back to the DOM handler
+            session.evaluate(
+                "(() => { const rows = Array.from(document.querySelectorAll('"
+                + PILL_ITEM
+                + "')); const row = rows.find((el) => /"
+                + wanted
+                + "/i.test(el.innerText || '')); if (row) row.click(); "
+                "return !!row; })()"
+            )
+        time.sleep(0.8)
+        state = session.evaluate(PILL_STATE_JS) or {}
+        if str(state.get("mode") or "").lower() == wanted.lower():
+            return state
     return session.evaluate(PILL_STATE_JS) or {}
 
 
@@ -162,13 +237,23 @@ def compose_state(session: DriverSession) -> dict[str, Any]:
 
 
 def _wait_ready_to_send(session: DriverSession, timeout_s: int = 360) -> dict[str, Any]:
-    """Block until the composer offers SEND again, approving any further pause.
+    """Block until the composer is IDLE again, approving any further pause.
 
     `settle_run` returns as soon as a run PARKS on an approval, which is correct
     for it — parked is an outcome, not a hang. But a parked-then-approved run is
     still in flight, and the composer shows STOP, not Send. Sending the next
     message against a Stop button is how the previous attempts died with
     `sends: 0, stop_present: true`.
+
+    IDLE, not "Send is enabled". Send is disabled precisely BECAUSE the textarea
+    is empty, so that condition can only become true AFTER typing — waiting for
+    it before typing spins the entire timeout on a perfectly healthy composer
+    and then fills a box the page has long since scrolled away from. Measured:
+    `sends: 1, send_disabled: [true]` for the full 360s, then a 500 out of
+    `fillLast`, on a run whose Manual half had already passed.
+
+    What this actually needs to know is that the PREVIOUS run has let go of the
+    composer: no Stop button, and the textarea accepts input.
 
     A run may pause more than once (one ask per operation), so this approves
     whatever it finds rather than assuming a single card.
@@ -177,8 +262,11 @@ def _wait_ready_to_send(session: DriverSession, timeout_s: int = 360) -> dict[st
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         state = compose_state(session)
-        sends = state.get("sends") or 0
-        if sends and not any(state.get("send_disabled") or []):
+        if (
+            (state.get("textareas") or 0) >= 1
+            and not state.get("stop_present")
+            and not any(state.get("textarea_disabled") or [])
+        ):
             return state
         if session.present(APPROVE):
             try:
@@ -195,9 +283,15 @@ def _ask(session: DriverSession, conversation_id: str, text: str, after: int) ->
     Typed through the REAL React path — a raw `value =` assignment does not
     reach a controlled component, so the send button would stay disabled and
     the message would never leave.
+
+    Waits on VISIBILITY: a composer that merely EXISTS can be sitting under the
+    Settings surface, and `fill` then burns its whole timeout on "element is not
+    visible" and reports a bare 500.
     """
 
-    assert session.wait_for(COMPOSER_INPUT, timeout_s=60), "no run composer"
+    assert session.wait_visible(COMPOSER_INPUT, timeout_s=60), (
+        "the run composer is not visible — something is covering it"
+    )
     session.rpc("fillLast", selector=COMPOSER_INPUT, value=text)
     time.sleep(0.5)
     session.rpc("clickLast", selector=SEND)
@@ -284,30 +378,56 @@ def main() -> int:
                 assert session.wait_for(PILL, timeout_s=90), (
                     "the execution-mode pill never rendered on the run composer"
                 )
-                evidence["pill_master_off"] = session.evaluate(PILL_STATE_JS)
+                evidence["pill_on_arrival"] = session.evaluate(PILL_STATE_JS)
 
-                # --- master switch ON, through the real Settings surface ----
+                # --- the master switch is ON out of the box, and it must be --
+                #
+                # This step used to CLICK the toggle, because the switch used to
+                # default off. It now defaults on, so clicking would turn bypass
+                # OFF and the rest of this journey would silently prove the
+                # opposite of what it claims. Read it instead.
+                #
+                # Worth visiting Settings rather than trusting the pill alone:
+                # the pill is fed by the same GET, so a pill that looks enabled
+                # proves the renderer agrees with itself, not that the shipped
+                # DEFAULT reached the real surface. Run 1 above already had to
+                # ask under Manual — which is what makes "on" safe here: the
+                # switch offers the control, it does not use it.
                 session.click(SETTINGS_TRIGGER)
                 assert session.wait_for("[data-testid=settings-surface]", 30)
                 session.click(MODEL_BEHAVIOR_NAV)
                 assert session.wait_for(BYPASS_TOGGLE, 30)
-                session.click(BYPASS_TOGGLE_HIT)
-                time.sleep(3.5)
-                session.shot("h-04-settings-bypass-on")
+                # POLLED, not read once. `Toggle` is controlled by the
+                # workspace-defaults GET, so a single read the instant the pane
+                # mounts catches it at its initial `false` — measured, on two
+                # runs whose server value was `true` both times. A stale probe
+                # reporting "the default did not ship" is worse than no probe.
+                evidence["master_toggle_checked"] = _toggle_checked(session)
+                session.shot("h-04-settings-bypass-default-on")
                 evidence["master_persisted"] = transport_json(
                     session, "GET", "/v1/agent/workspace/defaults"
                 ).get("behavior_overrides", {})
+                # LEAVE Settings, and prove it — on VISIBILITY, not presence.
+                #
+                # `present()` is a `querySelector`: it finds the pill and the
+                # composer while Settings is still covering them, so the old
+                # `if not present(PILL)` fallback could never fire. The run then
+                # drove a screen nobody was looking at — the pill really did
+                # switch to Bypass on a hidden element, evidence and all — and
+                # died 15s later inside `fill` with "element is not visible".
                 session.press("body", "Escape")
                 time.sleep(1.5)
-                if not session.present(PILL):
-                    session.evaluate(
-                        "(() => { const b = document.querySelector("
-                        "'[aria-label=\"Run\"][data-destination]'); "
-                        "if (b) b.click(); return !!b; })()"
-                    )
-                    time.sleep(2.5)
-                assert session.wait_for(PILL, timeout_s=30), (
-                    "the pill never came back after Settings"
+                for _ in range(3):
+                    if not session.present("[data-testid=settings-surface]"):
+                        break
+                    session.press("body", "Escape")
+                    time.sleep(1.0)
+                session.open_destination("Run")
+                assert session.wait_visible(PILL, timeout_s=30), (
+                    "the pill never became VISIBLE again after Settings"
+                )
+                assert session.wait_visible(COMPOSER_INPUT, timeout_s=30), (
+                    "the run composer never became VISIBLE again after Settings"
                 )
                 evidence["pill_master_on"] = session.evaluate(PILL_STATE_JS)
 
@@ -365,6 +485,21 @@ def main() -> int:
             out = dump(session.run_dir, "fs-h-evidence.json", evidence)
 
     failures: list[str] = []
+    if evidence.get("master_toggle_checked") is not True:
+        failures.append(
+            "MASTER: the bypass control is not offered out of the box, so a user "
+            "left in Manual has no way to reach Bypass"
+        )
+    # HARNESS checks first, and named as such. A pill that never switched makes
+    # the bypass phase run under Manual, which produces `bypass_asked: True` —
+    # evidence indistinguishable from "the product ignored Bypass" unless the
+    # journey says out loud which one it is. That misattribution cost a full
+    # run: the product was correct on every assertion and the test was not.
+    if str((evidence.get("bypass_pill") or {}).get("mode") or "") != "bypass":
+        failures.append(
+            "HARNESS: the pill never switched to Bypass, so the bypass phase "
+            "ran under Manual and proves nothing about bypass"
+        )
     if evidence.get("manual_asked") is not True:
         failures.append("MANUAL: the write into the attached folder did not ask")
     if evidence.get("manual_file_exists") is not True:

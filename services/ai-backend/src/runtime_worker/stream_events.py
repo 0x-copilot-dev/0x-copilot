@@ -183,9 +183,15 @@ class _FilesystemApproval:
     #: control; a shared one would have silently removed one.
     GRANT_SCOPE: Final = "grant_scope"
 
-    #: The access a durable folder grant asks for. Read-only, always: this lane
-    #: only ever widens READS (host writes stay on the staged C3 → ledger → C2
-    #: lane), so a card raised by a read must not mint write authority.
+    #: The access a durable folder grant asks for. Read-only, always — and now
+    #: for a stronger reason than when it was written.
+    #:
+    #: The original one ("host writes stay on the staged C3 → ledger → C2 lane")
+    #: is stale: host writes land directly inside a granted writable root. What
+    #: survives is the question the card actually asked. This card is raised by a
+    #: READ of an ungranted path and says so; turning that click into write
+    #: authority would answer a question nobody was shown. Write access is
+    #: chosen deliberately at attach time, on a card that names it.
     _GRANT_MODE: Final = "read_only"
 
     _MAX_PATH_CHARS: Final = 512
@@ -214,10 +220,17 @@ class _FilesystemApproval:
         folder = display.rstrip("/").rsplit("/", 1)[-1] or display
         approval_id = f"{interrupt_id}:{index}"
         read_only = operation == "read"
-        # A WRITE never offers a durable grant. Rule 5 denies host writes
-        # outright, so a write cannot legitimately park here at all; and if one
-        # ever did, minting read authority off it would be answering a question
-        # nobody asked. Host mutation stays on the staged C3 → ledger → C2 lane.
+        # A WRITE never offers a durable grant — but no longer because a write
+        # cannot park here. Under Manual, rule 3 raises an interrupt for every
+        # write inside a granted writable root, so this branch is now ordinary
+        # traffic rather than an impossible case.
+        #
+        # It stays `None` because the two "always" mean different things and
+        # must not share a control. `allow_always` here ATTACHES A FOLDER, which
+        # a write inside an already-attached folder does not need; what the user
+        # actually wants after the third card is "stop pausing for this run",
+        # and that is the composer's bypass pill. Overloading one option to mean
+        # both would make a grant appear from a card that never mentioned one.
         grant_scope = cls._grant_scope(action_name, path) if read_only else None
         payload: dict[str, object] = {
             "api_event_type": RuntimeApiEventType.APPROVAL_REQUESTED.value,
