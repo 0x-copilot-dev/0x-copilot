@@ -60,6 +60,10 @@ from agent_runtime.deployment import (
     resolve_or_exit,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.execution.deep_agent_builder import (
+    setup_runtime_checkpointer,
+    teardown_runtime_checkpointer,
+)
 from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
@@ -1510,6 +1514,12 @@ class RuntimeApiAppFactory:
         if ports is None:
             _log_decision(started=False, reason="no_ports")
             return
+        # Past every early-return gate: this process WILL run the executor, so
+        # open the durable graph checkpointer now. On a single_user_desktop
+        # Postgres deployment this opens the AsyncPostgresSaver pool + creates
+        # its tables; a no-op on the file store (AsyncSqliteSaver) and in-memory.
+        # Placed before the worker task is created so teardown always pairs.
+        await setup_runtime_checkpointer()
         if getattr(app.state, "mcp_discovery_cache", None) is None:
             cls.build_mcp_discovery_cache(app)
         event_bus = getattr(app.state, "runtime_event_bus", None)
@@ -1572,14 +1582,17 @@ class RuntimeApiAppFactory:
 
     @classmethod
     async def stop_in_process_worker(cls, app: FastAPI) -> None:
-        """Cancel and await the in-process worker task if one was started."""
+        """Cancel the in-process worker task and close its checkpointer pool."""
 
         task = getattr(app.state, "runtime_in_process_worker_task", None)
-        if task is None:
-            return
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        # Close the AsyncPostgresSaver pool that start_in_process_worker opened
+        # (single_user_desktop Postgres). Reads the singleton directly and
+        # no-ops on the SQLite / in-memory savers and when no worker started.
+        await teardown_runtime_checkpointer()
 
 
 app = RuntimeApiAppFactory.create_app()

@@ -25,6 +25,10 @@ dependencies = [
   # (durable graph/approval continuation across worker restart). Desktop path
   # only; postgres/in-memory keep InMemorySaver. Pulls in aiosqlite.
   "langgraph-checkpoint-sqlite==3.1.0",
+  # Postgres-backed LangGraph checkpointer for server deployments
+  # (RUNTIME_STORE_BACKEND=postgres); durable graph/approval continuation across
+  # worker restart. Lockstep sibling of the sqlite pin; reuses psycopg[pool].
+  "langgraph-checkpoint-postgres==3.1.0",
   "openai==2.46.0",
   "anthropic==0.117.0",
   "pydantic==2.13.4",
