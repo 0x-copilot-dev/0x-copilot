@@ -17,18 +17,24 @@ and a fixed 48px rail**. There is no narrow layout; there is one layout, cropped
 
 ## Read in this order
 
-| PRD                                       | Finding                                           | Severity | Wave |
-| ----------------------------------------- | ------------------------------------------------- | -------- | ---- |
-| [PRD-00](./PRD-00-overview.md)            | Overview + the shared responsive substrate        | —        | A    |
-| [PRD-01](./PRD-01-thread-switching.md)    | No thread list, and no way to get one             | P0       | B    |
-| [PRD-02](./PRD-02-run-header.md)          | Run header is decoration; the goal is `clip()`-ed | P0       | B    |
-| [PRD-03](./PRD-03-transcript-density.md)  | Transcript is all process, no answer              | P0       | B    |
-| [PRD-04](./PRD-04-recovered-failures.md)  | A recovered failure stays red forever             | P1       | C    |
-| [PRD-05](./PRD-05-content-grid.md)        | Two content grids in one column                   | P2 ⚠️    | D    |
-| [PRD-06](./PRD-06-chip-anchoring.md)      | Card-header chips anchor to nothing               | P2       | D    |
-| [PRD-07](./PRD-07-tool-metadata.md)       | Tool metadata is inconsistent                     | P2       | C    |
-| [PRD-08](./PRD-08-timeline-legibility.md) | The bottom timeline reads as unlabeled dots       | P1       | C    |
-| [PRD-09](./PRD-09-edge-affordances.md)    | No message actions; bare rail identity            | P2       | D    |
+| PRD                                       | Finding                                           | Severity | Wave | Status            |
+| ----------------------------------------- | ------------------------------------------------- | -------- | ---- | ----------------- |
+| [PRD-00](./PRD-00-overview.md)            | Overview + the shared responsive substrate        | —        | A    | ✅ shipped (#485) |
+| [PRD-01](./PRD-01-thread-switching.md)    | No thread list, and no way to get one             | P0       | B    | ✅ shipped (#485) |
+| [PRD-02](./PRD-02-run-header.md)          | Run header is decoration; the goal is `clip()`-ed | P0       | B    | ✅ shipped (#488) |
+| [PRD-03](./PRD-03-transcript-density.md)  | Transcript is all process, no answer              | P0       | B    | ✅ shipped (#491) |
+| [PRD-04](./PRD-04-recovered-failures.md)  | A recovered failure stays red forever             | P1       | C    | ▫️ next (wave C)  |
+| [PRD-05](./PRD-05-content-grid.md)        | Two content grids in one column                   | P2 ⚠️    | D    | ▫️ pending        |
+| [PRD-06](./PRD-06-chip-anchoring.md)      | Card-header chips anchor to nothing               | P2       | D    | ▫️ pending        |
+| [PRD-07](./PRD-07-tool-metadata.md)       | Tool metadata is inconsistent                     | P2       | C    | ▫️ pending        |
+| [PRD-08](./PRD-08-timeline-legibility.md) | The bottom timeline reads as unlabeled dots       | P1       | C    | ▫️ pending        |
+| [PRD-09](./PRD-09-edge-affordances.md)    | No message actions; bare rail identity            | P2       | D    | ▫️ pending        |
+
+**Out of scope, found on the way.** During PRD-03's live journey the agent batched
+its whole tool run and only narrated at the end — you get six steps then one
+summary, never "here's what the search found, now let me check the folder". That
+is the system prompt / tool loop in `services/ai-backend/agent_runtime`, not the
+surface, and no amount of transcript framing fixes it. It wants its own PRD.
 
 ⚠️ **PRD-05 is downgraded from P1.** On closer reading the right-aligned user
 bubble is deliberate, matches both references and the v3 design, and is not a

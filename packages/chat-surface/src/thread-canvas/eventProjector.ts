@@ -694,7 +694,15 @@ function projectChatEntry(
   const createdAt = event.created_at;
   switch (event.event_type) {
     case "final_response": {
-      const text = pickString(event.payload, "text") ?? event.summary ?? "";
+      // Same contract point as `chatProjection.payloadText`: the worker writes
+      // the answer to `payload.message` (RuntimeTextPayload declares `message`,
+      // never `text`) and mirrors it into `summary`. Reading only `text` meant
+      // this always fell through to the summary fallback.
+      const text =
+        pickString(event.payload, "text") ??
+        pickString(event.payload, "message") ??
+        event.summary ??
+        "";
       return {
         id: event.event_id,
         sequenceNo: event.sequence_no,
