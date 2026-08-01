@@ -1826,3 +1826,60 @@ describe("TcChat — inline approvals", () => {
     expect(screen.getByTestId("tc-todo-spinner")).toBeInTheDocument();
   });
 });
+
+// PRD-03 (D-3.1) — the fold is unit-tested in `groupActivity.test.ts`, but that
+// proves only the pure function. These assert the WIRING: that `TcChat` passes
+// an `isGroupable` which leaves an approval outside the collapsed group.
+//
+// The hazard is specific and this file already documents its cousin: an
+// approval buried in a collapsed group is a parked run with no visible way out.
+describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () => {
+  it("renders a pending approval OUTSIDE the tool-run group", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({ id: "call-1", createdAtMs: 1716000010000 }),
+            toolCall({ id: "call-2", createdAtMs: 1716000020000 }),
+          ]}
+          approvals={[approval({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    // Assert the group EXISTS first — otherwise a fold that grouped nothing at
+    // all would satisfy the containment check vacuously.
+    const groups = screen.getAllByTestId("tool-run-group");
+    expect(groups).toHaveLength(1);
+    for (const group of groups) {
+      expect(group.contains(card)).toBe(false);
+    }
+    // And the approve control is actually clickable, not just present.
+    expect(screen.getByTestId("tc-chat-approval-approve-appr-1")).toBeVisible();
+  });
+
+  it("splits a run of tool calls in two when an approval lands between them", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({ id: "call-1", createdAtMs: 1716000010000 }),
+            toolCall({ id: "call-2", createdAtMs: 1716000020000 }),
+            toolCall({ id: "call-3", createdAtMs: 1716000040000 }),
+            toolCall({ id: "call-4", createdAtMs: 1716000050000 }),
+          ]}
+          approvals={[approval({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    expect(screen.getAllByTestId("tool-run-group")).toHaveLength(2);
+  });
+});
