@@ -102,11 +102,13 @@ Two smaller consequences fall out of the same decision:
 the run goal. Both references put the thread/run identity here and nothing else
 competes for it.
 
-**D-2.2 — Keep the wordmark, demote it.** The product identity does have a job on
-desktop: it is the window's title when the app is in the background, and it
-anchors the traffic-light row. Decision: the wordmark survives **only at `wide`**,
-left-of-centre and muted; at `regular` and `compact` the goal takes the whole
-centre. This is the "chrome yields first" rule from PRD-00 applied concretely.
+**D-2.2 — REVISED: drop the wordmark entirely; `compact` shrinks the two
+clusters instead.** The first cut kept a muted wordmark at `wide`. OD-21 resolved
+against it (see below): the host sets the OS window title and the rail carries the
+`BrandMark`, so the bar was the third copy. What `compact` actually changes is the
+two flanking clusters — the mode control drops to single letters (keeping its
+`aria-label`) and the pulse chip hides its label but keeps its dot. The goal takes
+the whole remaining row at every width.
 
 **D-2.3 — Drop the mode word from the title.** `"0xCopilot — Focus"` duplicates
 the segmented control's selected tab, on the same 38px row. One source of truth
@@ -117,10 +119,28 @@ and sits immediately left of the mode control. It is the single highest-value
 thing the bar can show: whether the agent is working. It self-hides on terminal
 status, so a settled run costs nothing.
 
-**D-2.5 — Promote the scrub label.** The `status` seam renders next to the goal
-when scrubbing. A user in the past must be told, in chrome, that they are in the
-past — the mini-timeline's `↩ Now` pill is not sufficient signal on its own
-(PRD-08).
+**D-2.5 — WITHDRAWN. The scrub label stays where it is.**
+
+> ⚠️ **Corrected during implementation.** This decision said to promote the
+> `status` seam's scrub label into the header because "a user in the past must be
+> told, in chrome". Reading the code, they already are:
+> `RunViewingBanner` (`RunDestination.tsx:4690`) renders
+> `Viewing {time} · the run has moved on` as a `role="status"` with a
+> **`Return to live →` button**. That is strictly better than a header label —
+> it names the moment _and_ offers the exit.
+>
+> Adding a second scrub indicator would be exactly the duplication this program
+> exists to remove (see D-2.3, which deletes the mode's second copy on the same
+> row). PRD-08 D-8.6 still adds the tint on the timeline strip itself, which is a
+> different surface and does not duplicate the banner.
+
+**What the correction did surface:** the `status` seam's real payload today is
+not a scrub label at all — `RunDestination` passes the **v2 chip bar**
+(`PostureChip` + `PendingCounterChip`). Those were being handed into the header's
+visually-hidden div and clipped along with everything else, so two pieces of
+genuine chrome have been invisible on every `surfacesV2` run. Rendering `status`
+visibly (FR-2.4) un-hides them. That is a real casualty nobody had noticed, and
+it was found only because the clip was being removed for a different reason.
 
 **D-2.6 — The accessible summary stays, deduplicated.** Do not simply delete the
 hidden div: the kicker (`ACTIVE RUN` / `STANDBY`) is genuinely useful to a screen
@@ -251,8 +271,8 @@ fewer duplicate.
 
 ## 10. Open decisions
 
-| ID    | Question                                                           | Recommendation                                                                                                                                                                                                                                                            |
-| ----- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OD-21 | Does the desktop host still need the wordmark for window identity? | The OS window title is set by the host and is the right place for product identity. If that is already correct, D-2.2 could drop the wordmark entirely. **Check `apps/desktop/main` before implementing** — if the title is set there, delete the wordmark at all widths. |
-| OD-22 | Should the goal be editable inline (rename the run)?               | Out of scope. Both references make the title a menu target; note it as a follow-up, do not build it here.                                                                                                                                                                 |
-| OD-23 | Should the header show elapsed time?                               | No. `RunStatusPulse` already distinguishes queued/working/waiting, and per-tool durations live in the cards (PRD-07).                                                                                                                                                     |
+| ID    | Question                                                           | Recommendation                                                                                                                                                                                                                                                                                                                                                                                            |
+| ----- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OD-21 | Does the desktop host still need the wordmark for window identity? | **RESOLVED — dropped entirely.** `apps/desktop/main/window.ts:32` already sets `title: "0xCopilot"`, and the app rail's `BrandMark` carries visible brand presence, so the bar was the third copy. Honest caveat: the host uses `titleBarStyle: "hiddenInset"`, so that title serves the OS (⌘-tab, Mission Control) rather than being drawn in the frame — the rail mark is what the user actually sees. |
+| OD-22 | Should the goal be editable inline (rename the run)?               | Out of scope. Both references make the title a menu target; note it as a follow-up, do not build it here.                                                                                                                                                                                                                                                                                                 |
+| OD-23 | Should the header show elapsed time?                               | No. `RunStatusPulse` already distinguishes queued/working/waiting, and per-tool durations live in the cards (PRD-07).                                                                                                                                                                                                                                                                                     |
