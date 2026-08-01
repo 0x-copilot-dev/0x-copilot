@@ -131,11 +131,24 @@ body {
   transform: translateX(var(--desktop-traffic-light-clearance));
 }
 
-/* The ordinary destination topbar has a left-aligned page title. Clear the
-   windowed turbine there; RunHeader's product identity is centred and needs no
-   equivalent padding. */
+/* Both app headers with a left-aligned title clear the windowed turbine by the
+   same inset. RunHeader used to be exempt here, and the exemption was written
+   down as "its product identity is centred, so it needs no equivalent padding".
+   PRD-02 then made the GOAL the title — a left-aligned `<h2>` plus a `leading`
+   slot where the centred `0xCopilot — {mode}` overlay had been — which turned
+   RunHeader into precisely the case this rule exists for, while the exemption
+   stayed. The turbine (z-index 2) then painted over the leading control and the
+   first characters of the goal, and the leading slot sat under the traffic
+   lights themselves.
+
+   Keep the two selectors on ONE declaration: they are the same requirement (a
+   title starting at the main column's left edge), and splitting them is how the
+   pair drifted apart in the first place. `!important` because both headers set
+   `padding` inline. */
 .desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
-  [data-component="topbar"] {
+  [data-component="topbar"],
+.desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
+  [data-testid="run-header"] {
   padding-left: calc(var(--desktop-traffic-light-clearance) + 30px) !important;
 }
 
