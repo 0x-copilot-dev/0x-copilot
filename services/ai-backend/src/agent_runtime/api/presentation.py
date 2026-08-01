@@ -263,11 +263,11 @@ class PresentationGenerator:
             status_label = "Not available"
             kind = "result"
             error_summary = self._first_text(payload, ("safe_message", "error_message"))
-            default_title = (
-                f"{humanized_tool} isn’t available here"
-                if humanized_tool
-                else "Not available here"
-            )
+            # Deliberately not interpolating the tool name: humanising `ls`
+            # yields "Ls isn’t available here", and the summary underneath —
+            # the backend's own sentence — already says what is unavailable and
+            # what to do instead.
+            default_title = "Not available here"
         elif is_failed:
             status_label = "Failed"
             kind = "error"

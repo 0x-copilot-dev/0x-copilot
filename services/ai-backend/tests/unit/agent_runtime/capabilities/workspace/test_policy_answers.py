@@ -39,6 +39,34 @@ class TestWorkspacePolicyAnswers:
         assert not WorkspacePolicyAnswers.is_policy_answer(None)
         assert not WorkspacePolicyAnswers.is_policy_answer({"error": "x"})
 
+    def test_the_middleware_error_prefix_does_not_hide_a_policy_answer(self) -> None:
+        # The read-family tools render `content=f"Error: {result.error}"`. An
+        # exact-match classifier misses that and re-buries the policy answer in
+        # the failure taxonomy — which is exactly what a hand-written fixture
+        # failed to catch.
+        assert WorkspacePolicyAnswers.is_policy_answer(
+            f"Error: {WorkspacePolicyAnswers.UNAVAILABLE}"
+        )
+
+    def test_matches_the_real_middleware_rendering(self) -> None:
+        """Read the INSTALLED middleware, not an assumption about it.
+
+        Drives the real tombstone backend and formats its result the way
+        ``deepagents.middleware.filesystem`` does, so an upstream change to
+        either the message or the rendering fails here instead of silently
+        restoring the false alarm in production.
+        """
+        from agent_runtime.capabilities.workspace.deep_backend import (
+            WorkspaceTombstoneBackend,
+        )
+
+        result = WorkspaceTombstoneBackend().ls("/workspace/")
+
+        assert result.error is not None
+        # Both renderings the middleware actually uses.
+        assert WorkspacePolicyAnswers.is_policy_answer(result.error)
+        assert WorkspacePolicyAnswers.is_policy_answer(f"Error: {result.error}")
+
 
 class FilesystemToolMessageMixin:
     """Builds the message shape the Deep Agents filesystem middleware emits."""
@@ -64,6 +92,15 @@ class TestToolResultClassification(FilesystemToolMessageMixin):
 
         assert payload[Keys.Field.STATUS] == Values.Status.UNAVAILABLE
         assert payload[Keys.Field.STATUS] != Values.Status.FAILED
+
+    def test_the_read_family_rendering_is_classified_too(self) -> None:
+        # `ls` — the tool from the original report — renders with the prefix.
+        payload = StreamMessageProcessor.tool_result_payload(
+            self._tool_message(f"Error: {WorkspacePolicyAnswers.UNAVAILABLE}")
+        )
+
+        assert payload[Keys.Field.STATUS] == Values.Status.UNAVAILABLE
+        assert payload["error_code"] == WorkspacePolicyAnswerCode.UNAVAILABLE.value
 
     def test_policy_answer_carries_its_typed_code_and_message(self) -> None:
         payload = StreamMessageProcessor.tool_result_payload(

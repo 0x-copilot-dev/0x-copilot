@@ -49,18 +49,30 @@ class WorkspacePolicyAnswers:
         {UNAVAILABLE: WorkspacePolicyAnswerCode.UNAVAILABLE}
     )
 
+    #: The Deep Agents filesystem middleware renders a backend error two ways
+    #: depending on the tool: ``content=f"Error: {result.error}"`` for the read
+    #: family (ls / read_file / glob / grep) and bare ``content=res.error`` for
+    #: the write family. The declared message is the same either way, so the
+    #: prefix is stripped before matching rather than duplicated in the table.
+    #: Verified against the installed middleware by
+    #: ``test_matches_the_real_middleware_rendering``.
+    _TRANSPORT_PREFIX = "error:"
+
     @classmethod
     def code_for(cls, text: object) -> WorkspacePolicyAnswerCode | None:
         """Return the policy code for ``text``, or ``None`` when it is a fault.
 
-        Matching is exact on the declared message (after trimming surrounding
-        whitespace the tool transport may add). Anything else — including the
+        Matching is exact on the declared message, after removing whitespace and
+        the middleware's ``Error: `` prefix. Anything else — including the
         gateway's caught-exception messages, which ARE real failures — returns
         ``None`` and keeps its failure classification.
         """
         if not isinstance(text, str):
             return None
-        return cls._BY_TEXT.get(text.strip())
+        candidate = text.strip()
+        if candidate.lower().startswith(cls._TRANSPORT_PREFIX):
+            candidate = candidate[len(cls._TRANSPORT_PREFIX) :].strip()
+        return cls._BY_TEXT.get(candidate)
 
     @classmethod
     def is_policy_answer(cls, text: object) -> bool:
