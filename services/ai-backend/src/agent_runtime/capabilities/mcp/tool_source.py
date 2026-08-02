@@ -1,8 +1,8 @@
 """Per-tool MCP :class:`ToolSource` over ``langchain-mcp-adapters`` (P2-3).
 
-**Additive and UNWIRED** — nothing in the running app imports this module yet
-(P2-PLAN §3, P2-3). The registration flip that consumes it is P2-8, behind a
-flag defaulting OFF.
+**Consumed by the P2-8 registration flip**
+(``capabilities/mcp/per_tool_registration.py``), behind ``MCP_PER_TOOL_ENABLED``
+(default OFF). With the flag off nothing calls :meth:`McpToolSource.load`.
 
 This is the MCP half of the P0 ``ToolSource`` seam
 (``capabilities/policy/contracts.py``): it produces

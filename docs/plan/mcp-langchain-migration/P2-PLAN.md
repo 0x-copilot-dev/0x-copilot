@@ -253,6 +253,35 @@ retryable}` aligned to `RuntimeErrorCode`/`McpLoadErrorCode`); `middleware/citat
   call); flag **OFF** → legacy path byte-identical (regression).
 - **Parallel:** **sequential** — after P2-3, P2-4, P2-5, P2-6, P2-7a. Flag default OFF keeps `dev`/`main` green.
 
+**SHIPPED — three deliberate divergences from the sketch above, each recorded because it
+changes what P2-9 inherits:**
+
+1. **The composition lives in `capabilities/mcp/per_tool_registration.py`, not inline in
+   `factory.py`.** `_model_visible_tools` is sync and the source's `load()` opens one
+   discovery session per connector, so the load is awaited in `_assemble_harness` and the
+   result is threaded in as `mcp_per_tool`. The registration branch is still inside
+   `_model_visible_tools` — one composition site, as before.
+2. **`interrupt_on` is descriptor-driven but emitted only when the run has no in-tool
+   approval channel.** The POLICY stage parks _after_ the PDP decides; Deep Agents'
+   `interrupt_on` middleware parks _before_ the tool runs, for every call of a listed name.
+   Listing a GATE-eligible tool that POLICY will also park raises **two** approvals for one
+   write. Where they cannot both fire — `gate is None`, i.e. the non-OAuth connector that
+   `factory._tool_access_gate` documents as refused-not-parked today — the map turns that
+   refusal into a real approval.
+3. **Two latent defects surfaced and were fixed here** (the flip is the first time the real
+   POLICY stage was composed): P2-4's `args_schema` augmentation replaced a connector's
+   JSON-Schema `dict` with an empty model — erasing every argument of every real
+   `langchain-mcp-adapters` tool — and it failed the composer's identity assertion, so
+   **nothing** would have registered. `tool_call_id` now comes from the `arun` entry point,
+   the two schema-identity definitions are unified on `ToolSchemaIdentity` (with `extras`
+   enforced), and `McpErrorResultTool` renders the ERROR_MAP exception as a tool result.
+
+Test: `tests/unit/agent_runtime/execution/test_mcp_per_tool_flip.py` (48 hermetic cases —
+flag semantics, every decline road, reserved names, the composed READ/WRITE/decline/no-gate
+gate matrix, failure-as-result, descriptor-driven interrupts, the composed factory surface,
+and the resolver publish). The planned `tests/unit/runtime_worker/test_mcp_per_tool_gate_e2e.py`
+real-graph twin is **still owed** — see P2-9.
+
 #### P2-9 · deletions + desktop default-ON — `~net-negative LOC` · **cleanup, its own increment**
 
 - **Files:** flip `MCP_PER_TOOL_ENABLED` default **ON for the desktop profile** (after live-stack validation);

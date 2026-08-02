@@ -1,8 +1,9 @@
 """Native ``tool_name → server_slug`` resolver for per-tool MCP (migration P2-1).
 
-**Additive and unwired** — nothing in the running app imports this yet (P2-PLAN
-§3, P2-1). It is proven inert here and consumed later: the stream seams gain a
-fallback to it in P2-6, and the registration flip publishes it in P2-8.
+Consumed at both ends: the worker's stream seams fall back to it (P2-6), and the
+P2-8 registration flip publishes one per run — but only when
+``MCP_PER_TOOL_ENABLED`` is on, so with the flag off no run has a resolver and
+the seams resolve exactly as they did.
 
 Under the legacy single-gateway design every MCP call is one ``call_mcp_tool``
 dispatch, and the connector that hosts it is recovered by *unwrapping* the nested

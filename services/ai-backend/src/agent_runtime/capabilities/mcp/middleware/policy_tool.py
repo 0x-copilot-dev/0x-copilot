@@ -1,9 +1,8 @@
 """POLICY stage of the per-tool MCP pipeline (P2-4) — the security seam.
 
-**Additive and UNWIRED** — nothing in the running app imports this module yet
-(P2-PLAN §3, P2-4). The registration flip that composes it is P2-8, behind a flag
-defaulting OFF; until then the legacy ``call_mcp_tool`` gateway keeps owning the
-decision.
+**Composed by the P2-8 registration flip**, behind ``MCP_PER_TOOL_ENABLED``
+(default OFF). Until that flag is on for a deployment, the legacy
+``call_mcp_tool`` gateway still owns the decision and nothing here runs.
 
 This is ``CallMcpTool._authorize_mcp_dispatch`` **refactored, not rewritten**.
 The P1b original is *one gateway that decodes ``server`` / ``tool`` out of a
@@ -48,33 +47,39 @@ property rather than a nicety:
    two-tuple. A refusal that crashes the run is not a refusal, so
    :class:`McpRefusalEnvelope` shapes it to whatever format the wrapper declares.
 
-**What is propagated, and what deliberately is not.** The wrapper copies the
-inner tool's *model-visible surface* (``name`` / ``description`` /
-``args_schema`` / ``metadata`` / ``tags`` / ``extras``) and its *return contract*
-(``response_format`` / ``return_direct``), so a wrapped tool registers with the
-Deep Agent exactly like the tool it wraps. It does **not** copy
-``handle_tool_error`` / ``handle_validation_error``: normalising the
-``McpClientError`` taxonomy is the ERROR_MAP stage's job (P2-5), and a POLICY
-stage that also swallowed exceptions would quietly pre-empt it.
+**What is propagated, and what deliberately is not.** The wrapper is built from
+:meth:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity.fields_of`
+— the one definition of schema identity, shared with the other four stages since
+P2-8 — so a wrapped tool registers with the Deep Agent exactly like the tool it
+wraps. It does **not** copy ``handle_tool_error`` / ``handle_validation_error``:
+normalising the ``McpClientError`` taxonomy is the ERROR_MAP stage's job (P2-5),
+and a POLICY stage that also swallowed exceptions would quietly pre-empt it.
 
-The parallel P2-5 increment defines the same rule once as
-``middleware/compose.py``'s ``ToolSchemaIdentity``. This stage deliberately keeps
-its own copy for now rather than importing it: P2-4 and P2-5 are parallel
-increments (P2-PLAN §4), and a stage that imports a peer increment's helper fails
-to build if that peer is revised. The two are already field-compatible — the
-composer's ``assert_preserved`` check passes against this wrapper — so unifying
-them is a one-line change at P2-8, which is where the two stacks first meet.
+**Where the per-call id comes from, and why not from the schema.** P2-4 obtained
+LangChain's ``tool_call_id`` by adding an ``InjectedToolCallId`` field to the
+tool's ``args_schema``. That is unsound for a *connector* tool:
+``langchain-mcp-adapters`` sets ``args_schema`` to the server's raw
+``inputSchema`` — a JSON-Schema ``dict``, not a ``BaseModel`` — so the
+augmentation fell through to "build a fresh model containing only
+``tool_call_id``" and erased every argument the connector declares. It also made
+the wrapper fail the composer's identity assertion, which is how P2-8 found it.
+The id is now taken where LangChain already hands it over — the ``arun``
+entry point (``BaseTool.arun(..., tool_call_id=…)``, set by ``_prep_run_args``
+from the ``ToolCall``) — and carried to ``_arun`` on a per-call ``ContextVar``.
+No schema is touched, dict-schema tools work, and the id is available for every
+connector rather than only for the ones whose schema happened to be a model.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, InjectedToolCallId
-from pydantic import BaseModel, ConfigDict, SkipValidation, create_model
+from langchain_core.tools import BaseTool
+from pydantic import ConfigDict, SkipValidation
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from agent_runtime.capabilities.mcp.cards import (
@@ -84,6 +89,10 @@ from agent_runtime.capabilities.mcp.cards import (
 )
 from agent_runtime.capabilities.mcp.constants import Messages
 from agent_runtime.capabilities.mcp.descriptor_source import McpDispatchPolicy
+from agent_runtime.capabilities.mcp.middleware.compose import (
+    ToolResultShape,
+    ToolSchemaIdentity,
+)
 from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     CapabilityUrn,
@@ -143,23 +152,63 @@ class PdpReason:
 class McpRefusalEnvelope:
     """Render a typed refusal in the return shape the wrapper declares.
 
-    ``BaseTool.arun`` unpacks a two-tuple when ``response_format`` is
-    ``content_and_artifact`` and raises ``ValueError`` otherwise, so a refusal
-    from a wrapper carrying an MCP tool's format has to be a two-tuple as well.
-    The artifact half is ``None``: a refused call produced no raw tool output,
-    and inventing one would put a fabricated artifact on the ToolMessage.
+    The shaping rule itself lives once, in
+    :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolResultShape`
+    — the ERROR_MAP result renderer needs the identical rule, and two copies of
+    "does this format want a tuple?" is exactly one copy too many.
     """
-
-    CONTENT_AND_ARTIFACT = "content_and_artifact"
 
     @classmethod
     def render(cls, result: McpToolCallResult, *, response_format: str) -> Any:
         """Return the JSON-safe refusal payload, tupled when the format needs it."""
 
-        payload = result.model_dump(mode="json", exclude_none=True)
-        if response_format == cls.CONTENT_AND_ARTIFACT:
-            return (payload, None)
-        return payload
+        return ToolResultShape.render(
+            result.model_dump(mode="json", exclude_none=True),
+            response_format=response_format,
+        )
+
+
+#: The argument LangChain injects only into a tool whose schema declares
+#: ``Annotated[str, InjectedToolCallId]``. Read, never added and never removed —
+#: the same rule the OBSERVE and CITATIONS stages follow.
+_TOOL_CALL_ID_ARG = "tool_call_id"
+
+#: LangChain's per-call id, carried from :meth:`PolicyGatedMcpTool.arun` (where
+#: the framework supplies it) down to ``_arun`` (where the approval id is built).
+#: A ``ContextVar`` rather than instance state because one registered tool object
+#: serves every call in the run, including concurrent ones — an attribute would
+#: let two calls share an approval id, which is precisely the collision the
+#: approval id exists to avoid.
+_TOOL_CALL_ID: ContextVar[str | None] = ContextVar(
+    "mcp_policy_tool_call_id", default=None
+)
+
+
+class PolicyCallScope:
+    """The per-call ``ContextVar`` holding LangChain's ``tool_call_id``.
+
+    Mirrors the bind / unbind / current shape of ``McpCallBindingScope`` and
+    ``McpToolAnnotationsRegistry`` so there is one recognisable pattern for
+    call-scoped context in this package.
+    """
+
+    @classmethod
+    def bind(cls, tool_call_id: str | None) -> object:
+        """Set the id for this call; return the token that restores the previous."""
+
+        return _TOOL_CALL_ID.set(tool_call_id)
+
+    @classmethod
+    def unbind(cls, token: object) -> None:
+        """Restore the previous id. Safe to call with the bind result."""
+
+        _TOOL_CALL_ID.reset(token)  # type: ignore[arg-type]
+
+    @classmethod
+    def current(cls) -> str | None:
+        """Return the id of the call in flight, or ``None`` outside one."""
+
+        return _TOOL_CALL_ID.get(None)
 
 
 class PolicyGatedMcpTool(DelegatingTool):
@@ -204,31 +253,44 @@ class PolicyGatedMcpTool(DelegatingTool):
     ) -> "PolicyGatedMcpTool":
         """Return a wrapper carrying ``tool``'s model-visible surface verbatim.
 
-        ``args_schema`` is the source's schema plus one **injected** field,
-        ``tool_call_id`` (see :meth:`_augment_schema_with_tool_call_id`). That
-        addition is invisible to the model — LangChain strips
-        ``InjectedToolArg`` fields out of ``tool_call_schema``, which is what is
-        sent to the provider — and it is what makes the write-approval id
-        per-call unique. ``metadata`` / ``tags`` are copied rather than shared:
-        they are mutable, and a wrapper and its inner must not be able to edit
-        each other's annotations (the MCP tri-state hints the source ingested
-        ride in ``metadata``).
+        Every propagated field comes from the shared
+        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`
+        rule, so this stage cannot drift from the other four — including
+        ``args_schema``, which is now handed over untouched (see the module
+        docstring for what happened when it was not).
         """
 
         return cls(
-            name=tool.name,
-            description=tool.description,
-            args_schema=cls._augment_schema_with_tool_call_id(tool.args_schema),
-            metadata=dict(tool.metadata) if tool.metadata is not None else None,
-            tags=list(tool.tags) if tool.tags is not None else None,
-            extras=tool.extras,
-            return_direct=tool.return_direct,
-            response_format=tool.response_format,
+            **ToolSchemaIdentity.fields_of(tool),
             inner=tool,
             card=card,
             runtime_context=runtime_context,
             gate=gate,
         )
+
+    async def arun(
+        self,
+        tool_input: str | dict[str, Any],
+        *args: Any,
+        tool_call_id: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Bind LangChain's per-call id for the duration of this invocation.
+
+        ``BaseTool.arun`` receives ``tool_call_id`` from ``_prep_run_args`` (it
+        is the ``ToolCall``'s ``id``) but only forwards it into ``_arun`` for a
+        tool whose schema declares ``InjectedToolCallId``. Reading it here — and
+        changing nothing else about the call — is how the approval id stays
+        per-call unique without the wrapper touching the connector's schema.
+        """
+
+        token = PolicyCallScope.bind(tool_call_id)
+        try:
+            return await super().arun(
+                tool_input, *args, tool_call_id=tool_call_id, **kwargs
+            )
+        finally:
+            PolicyCallScope.unbind(token)
 
     def _run(
         self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
@@ -258,52 +320,44 @@ class PolicyGatedMcpTool(DelegatingTool):
         ``_to_args_and_kwargs`` yields named arguments and never positional ones
         (only a bare-string schema does, which no MCP tool has).
 
-        ``tool_call_id`` is LangChain's injected value, not one of the tool's
-        arguments: it is pulled out before the PDP sees the call and never
-        forwarded inward (the inner MCP tool does not declare it).
+        ``tool_call_id`` is LangChain plumbing, not one of the tool's arguments:
+        it is hidden from the PDP's view of the call, and — unlike P2-4, which
+        popped it — left in ``kwargs`` untouched, because the only way it can be
+        there now is that the *inner* tool's own schema asked for it, and
+        removing an argument the inner asked for breaks the inner.
         """
 
-        tool_call_id = self._extract_tool_call_id(kwargs)
-        kwargs.pop("tool_call_id", None)
-        refusal = await self._authorize(dict(kwargs), tool_call_id=tool_call_id)
+        tool_call_id = self._tool_call_id(kwargs)
+        refusal = await self._authorize(
+            self._policed_arguments(kwargs), tool_call_id=tool_call_id
+        )
         if refusal is not None:
             return refusal
         return await self.adelegate(*args, config=config, **kwargs)
 
     @staticmethod
-    def _extract_tool_call_id(kwargs: Mapping[str, Any]) -> str | None:
-        """Return LangChain's injected ``tool_call_id``, or ``None``.
+    def _policed_arguments(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the call's arguments as the PDP should see them."""
 
-        Injected only when the tool is driven through LangChain's dispatch; a
-        direct ``ainvoke(dict)`` (unit tests, replay) supplies nothing, and the
-        approval id then falls back to the tool name.
-        """
-
-        value = kwargs.get("tool_call_id")
-        return value if isinstance(value, str) and value else None
+        return {
+            name: value for name, value in kwargs.items() if name != _TOOL_CALL_ID_ARG
+        }
 
     @staticmethod
-    def _augment_schema_with_tool_call_id(inner_schema: object) -> type[BaseModel]:
-        """Add ``tool_call_id: Annotated[str, InjectedToolCallId]`` to a schema.
+    def _tool_call_id(kwargs: Mapping[str, Any]) -> str | None:
+        """Return this call's id: the injected kwarg, else the bound call scope.
 
-        The house pattern (see ``capabilities/citation_capturing_tool.py``).
-        Idempotent when the schema already declares the field, and tolerant of a
-        dict/``None`` ``args_schema``. An ``InjectedToolArg`` is excluded from
-        ``tool_call_schema``, so the tool the model sees is unchanged.
+        The kwarg exists only when the inner tool's schema declares
+        ``InjectedToolCallId``; the scope is set by :meth:`arun` for every call
+        LangChain drives. ``None`` means neither was available — a direct
+        ``_arun`` (unit tests, replay), where only one call is ever in flight
+        and the approval id may safely fall back to the tool name.
         """
 
-        if isinstance(inner_schema, type) and issubclass(inner_schema, BaseModel):
-            if "tool_call_id" in getattr(inner_schema, "model_fields", {}):
-                return inner_schema
-            return create_model(
-                f"{inner_schema.__name__}WithToolCallId",
-                __base__=inner_schema,
-                tool_call_id=(Annotated[str, InjectedToolCallId], ""),
-            )
-        return create_model(
-            "PolicyGatedMcpToolInput",
-            tool_call_id=(Annotated[str, InjectedToolCallId], ""),
-        )
+        value = kwargs.get(_TOOL_CALL_ID_ARG)
+        if isinstance(value, str) and value:
+            return value
+        return PolicyCallScope.current()
 
     async def _authorize(
         self, arguments: Mapping[str, Any], *, tool_call_id: str | None = None
@@ -485,6 +539,7 @@ class PolicyToolMiddleware:
 __all__ = [
     "McpRefusalEnvelope",
     "PdpReason",
+    "PolicyCallScope",
     "PolicyGatedMcpTool",
     "PolicyStageMessages",
     "PolicyToolMiddleware",

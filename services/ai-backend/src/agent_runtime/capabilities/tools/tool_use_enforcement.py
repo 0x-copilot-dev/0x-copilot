@@ -61,7 +61,9 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 # ``interrupt_on`` decisions for an ``ask`` / ``require`` gate. Byte-identical to
 # the set ``call_mcp_tool`` used before enforcement was policy-driven, so a
 # default-policy run offers the same approve / edit / reject card as before.
-_APPROVAL_DECISIONS: Final[tuple[str, ...]] = ("approve", "edit", "reject")
+# Public because the P2-8 per-tool registration builds the same map keyed per
+# tool instead of on the single umbrella name, and the two must not drift.
+APPROVAL_DECISIONS: Final[tuple[str, ...]] = ("approve", "edit", "reject")
 
 
 class _Keys:
@@ -202,7 +204,7 @@ class ToolUsePolicyEnforcer:
             )
             if decision.action is ToolGateAction.REQUIRE_APPROVAL:
                 interrupt_on[tool_name] = {
-                    "allowed_decisions": list(_APPROVAL_DECISIONS)
+                    "allowed_decisions": list(APPROVAL_DECISIONS)
                 }
             elif decision.action is ToolGateAction.REJECT and isinstance(
                 tool, BaseTool
@@ -217,6 +219,7 @@ class ToolUsePolicyEnforcer:
 
 
 __all__ = [
+    "APPROVAL_DECISIONS",
     "EnforcedToolSurface",
     "PolicyBlockedTool",
     "ToolUsePolicyEnforcer",

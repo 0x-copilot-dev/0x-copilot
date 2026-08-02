@@ -1,7 +1,8 @@
 """ERROR_MAP stage — normalize the MCP failure taxonomy (migration P2-5).
 
-**Additive and UNWIRED** — nothing in the running app wraps a tool with this yet
-(P2-PLAN §3, P2-5); P2-8 composes it behind a flag defaulting OFF.
+**Composed by the P2-8 registration flip**, behind ``MCP_PER_TOOL_ENABLED``
+(default OFF). Until that flag is on for a deployment, the legacy
+``call_mcp_tool`` gateway still owns the dispatch and nothing here runs.
 
 One connector failure has to answer three questions at once, and collapsing them
 is what once told a user "the server isn't responding right now — try again in a
@@ -28,8 +29,18 @@ EXEC_POLICY stage refuses to replay regardless of what ``retryable`` says.
 mean the retry stage never sees a failure and could never retry anything. The
 normalized :class:`McpToolCallError` therefore propagates outward carrying its
 :class:`McpToolErrorEnvelope`; EXEC_POLICY reads the envelope to decide whether
-to try again, and the registration site renders it for the model. ``str(exc)``
-is exactly the safe message, so an outer sanitizer has nothing to strip.
+to try again. ``str(exc)`` is exactly the safe message, so an outer sanitizer has
+nothing to strip.
+
+**Something has to catch it, though.** A typed exception that escapes the
+composed stack is a tool-node exception: the run fails instead of the model
+being told "that connector call failed, here is why, and here is whether
+retrying helps". :class:`McpErrorResultTool` closes that loop at the
+registration site — it wraps the *composed* stack (outside POLICY, so it sees
+every stage's failures including the one EXEC_POLICY re-raises after its last
+attempt) and turns the envelope into an ordinary tool result the model can route
+around. It catches :class:`McpToolCallError` only: an un-normalized exception is
+not a connector failure and must keep its existing path.
 """
 
 from __future__ import annotations
@@ -57,7 +68,10 @@ from agent_runtime.capabilities.mcp.client import (
     McpUnsupportedMethodError,
 )
 from agent_runtime.capabilities.mcp.constants import Limits, Messages
-from agent_runtime.capabilities.mcp.middleware.compose import ToolSchemaIdentity
+from agent_runtime.capabilities.mcp.middleware.compose import (
+    ToolResultShape,
+    ToolSchemaIdentity,
+)
 from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     CapabilityUrn,
@@ -397,6 +411,59 @@ class McpErrorMappingTool(DelegatingTool):
         return McpToolCallError(envelope)
 
 
+class McpErrorResultTool(DelegatingTool):
+    """Outermost wrapper: hand a normalized connector failure back as a result.
+
+    Not a :data:`MIDDLEWARE_ORDER` stage — deliberately. It sits *outside* the
+    composed five, because the failure it renders may be raised by any of them
+    (EXEC_POLICY re-raises after its last attempt, POLICY delegates through it),
+    and because it must never be able to swallow a failure before EXEC_POLICY
+    has decided whether to retry it.
+
+    Only :class:`McpToolCallError` is converted. Anything else — a schema
+    validation error, a defect in the tool, a cancelled run — keeps the path it
+    already had; dressing an unknown exception up as a connector result would
+    tell the model a lie about what happened.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    inner: BaseTool
+
+    @classmethod
+    def wrapping(cls, tool: BaseTool) -> "McpErrorResultTool":
+        """Return a schema-identical wrapper that renders MCP failures as results."""
+
+        return cls(**ToolSchemaIdentity.fields_of(tool), inner=tool)
+
+    def _run(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
+        """Sync path: delegate, rendering a normalized MCP failure as a result."""
+
+        try:
+            return self.delegate(*args, config=config, **kwargs)
+        except McpToolCallError as exc:
+            return self._as_result(exc)
+
+    async def _arun(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
+        """Async path: delegate, rendering a normalized MCP failure as a result."""
+
+        try:
+            return await self.adelegate(*args, config=config, **kwargs)
+        except McpToolCallError as exc:
+            return self._as_result(exc)
+
+    def _as_result(self, exc: McpToolCallError) -> Any:
+        """Render the safe envelope in the return shape this wrapper declares."""
+
+        return ToolResultShape.render(
+            exc.as_tool_result(), response_format=self.response_format
+        )
+
+
 @dataclass(frozen=True)
 class McpErrorMapMiddleware:
     """The ERROR_MAP stage of the P0 pipeline."""
@@ -421,6 +488,7 @@ __all__ = [
     "McpErrorCopy",
     "McpErrorMapMiddleware",
     "McpErrorMappingTool",
+    "McpErrorResultTool",
     "McpErrorRule",
     "McpErrorTaxonomy",
     "McpToolCallError",

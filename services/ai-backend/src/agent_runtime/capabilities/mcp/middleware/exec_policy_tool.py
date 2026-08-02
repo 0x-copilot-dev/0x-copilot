@@ -1,7 +1,8 @@
 """EXEC_POLICY stage — retry and replay policy, keyed on action (P2-5).
 
-**Additive and UNWIRED** — nothing in the running app wraps a tool with this yet
-(P2-PLAN §3, P2-5); P2-8 composes it behind a flag defaulting OFF.
+**Composed by the P2-8 registration flip**, behind ``MCP_PER_TOOL_ENABLED``
+(default OFF). Until that flag is on for a deployment, the legacy
+``call_mcp_tool`` gateway still owns the dispatch and nothing here runs.
 
 One rule, keyed on :class:`~agent_runtime.capabilities.policy.contracts.Action`,
 covers the whole never-replay edge:

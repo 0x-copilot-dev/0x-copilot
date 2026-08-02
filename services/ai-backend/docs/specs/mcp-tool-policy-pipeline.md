@@ -99,6 +99,23 @@ concrete middleware; the uniform seam is `(tool, descriptor) -> tool`.
 `MIDDLEWARE_ORDER` is outermost-first: Policy sees the call before anyone,
 Citations sits closest to the inner tool.
 
+**Schema identity has one definition**, `middleware/compose.py`'s
+`ToolSchemaIdentity` (P2-8): `name`, `description`, `args_schema` and `extras`
+are propagated **and** enforced; `response_format`, `return_direct`, `metadata`
+and `tags` are propagated. `args_schema` is passed by identity and never
+rebuilt — `langchain-mcp-adapters` sets it to the server's raw `inputSchema`
+(a JSON-Schema `dict`, not a model), so a stage that synthesised a replacement
+would erase every argument the connector declares. A stage that needs
+LangChain's per-call `tool_call_id` reads it at the `arun` entry point rather
+than adding an injected field to the schema.
+
+**The stack raises typed failures; the registration site renders them.**
+Error-map raises `McpToolCallError` outward so Exec-policy can decide about a
+retry (`MIDDLEWARE_ORDER` puts Error-map _inside_ it). `McpErrorResultTool`
+wraps the composed stack — outside Policy, not a sixth stage — and turns the
+safe envelope into an ordinary tool result, so a connector failure is something
+the model routes around rather than a tool-node exception that fails the run.
+
 ### URN identity
 
 `CapabilityUrn` normalises segments through the **same** slug helpers the

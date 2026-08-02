@@ -82,6 +82,15 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         "agent_runtime.capabilities.mcp:AuthMcpTool",
         "agent_runtime.capabilities.mcp:LoadMcpServerTool",
         "agent_runtime.capabilities.mcp:mcp_dispatcher",
+        # The P2-8 per-tool flip. Not additional rent: this site and
+        # ``mcp_dispatcher`` above are the two arms of one branch, and exactly
+        # one of them composes on any given run. What it changes is the *shape*
+        # of the same budget — one umbrella schema whose arguments are a server
+        # name and a payload becomes N real tool schemas — so the cost moves
+        # from constant to proportional to the connectors a user has installed.
+        # That is the tradeoff being accepted here, and it is why the flag
+        # defaults off until it has been measured on a live stack.
+        "agent_runtime.capabilities.mcp:per_tool_mcp_tools",
         "agent_runtime.capabilities.sandbox:sandbox_execute_tool",
         "agent_runtime.capabilities.skills:30_skill_cards",
         "agent_runtime.capabilities.skills:LoadSkillTool",
@@ -116,7 +125,11 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
     gate's duplicate check makes that a violation, and this asserts the
     resulting count directly: one entry per composition site in
     ``_model_visible_tools``, which today is the registry seed plus thirteen
-    appends plus the capability-bridge extend.
+    appends plus the capability-bridge extend plus the P2-8 per-tool MCP
+    extend. The last two are the arms of one branch — a run composes either the
+    ``call_mcp_tool`` umbrella or the per-tool surface, never both — so the
+    count is of declaring SITES, as it has always been, not of tools any single
+    run pays for.
     """
 
     tool_owners = (
@@ -136,7 +149,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
         if label.rsplit(":", 1)[0] in tool_owners
         and not label.rsplit(":", 1)[1][:1].isdigit()
     ]
-    assert len(composed) == 15
+    assert len(composed) == 16
 
 
 class PlantedSourceTreeMixin:

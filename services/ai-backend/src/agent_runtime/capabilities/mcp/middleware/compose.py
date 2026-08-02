@@ -1,17 +1,24 @@
 """Assemble the fixed P0 middleware stack around one tool (migration P2-5).
 
-**Additive and UNWIRED** — nothing in the running app calls this yet (P2-PLAN
-§3, P2-5). The registration flip that composes every ``(tool, descriptor)`` pair
-is P2-8, behind a flag defaulting OFF.
+Composed for real by the P2-8 registration flip
+(:mod:`agent_runtime.capabilities.mcp.per_tool_registration`), behind a flag
+defaulting OFF.
 
-Two responsibilities, deliberately split:
+Three responsibilities, deliberately split:
 
-* :class:`ToolSchemaIdentity` — the single definition of what "a wrapper is
+* :class:`ToolSchemaIdentity` — the **single** definition of what "a wrapper is
   schema-identical to the tool it wraps" means. Every stage in this package
   builds its wrapper from :meth:`ToolSchemaIdentity.fields_of`, so the
-  propagation rule is written once instead of four times, and
+  propagation rule is written once instead of five times, and
   :meth:`ToolSchemaIdentity.assert_preserved` is the composer's check that a
-  stage actually honoured the P0 ``ToolMiddleware`` contract.
+  stage actually honoured the P0 ``ToolMiddleware`` contract. P2-4 shipped a
+  second, parallel propagation list inside ``policy_tool``; P2-8 unified them
+  here, which is also what put ``extras`` into the enforced set (the POLICY
+  stage propagated it, this rule did not, so the two disagreed about whether a
+  dropped ``extras`` was a violation).
+* :class:`ToolResultShape` — the matching rule for the *return* side: how a
+  wrapper renders a payload it produced itself (a refusal, a normalized error)
+  in whatever shape its own ``response_format`` promised.
 * :class:`ToolMiddlewareComposer` — wraps a pair in the **fixed**
   :data:`~agent_runtime.capabilities.policy.contracts.MIDDLEWARE_ORDER`.
 
@@ -29,7 +36,7 @@ or duplicated is refused with a typed
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Final
 
 from langchain_core.tools import BaseTool
 
@@ -59,7 +66,11 @@ class ToolSchemaIdentity:
     * :attr:`MODEL_SURFACE` is what the model sees and what the P0
       ``ToolMiddleware`` contract calls schema-identical — a wrapped tool
       registers with the Deep Agent exactly like its inner. This is the set
-      :meth:`assert_preserved` enforces.
+      :meth:`assert_preserved` enforces. ``extras`` belongs to it: it is
+      provider-facing tool configuration (``@tool(extras={"cache_control": …})``
+      in ``langchain_core.tools.base``), so a stage that silently dropped it
+      would change how the tool is sent to the model while every name /
+      description / schema check still passed.
     * :attr:`DISPATCH_SURFACE` is what LangChain reads on the *outermost* tool
       when it turns a return value into a ``ToolMessage``. It is propagated but
       not enforced, because a stage owned by another increment may legitimately
@@ -70,10 +81,17 @@ class ToolSchemaIdentity:
       defaulted back to ``"content"`` would hand the model the repr of the whole
       tuple — a silent, per-connector content corruption that no schema check
       would catch.
+
+    ``args_schema`` is propagated **by identity, never rebuilt**. That is not a
+    style preference: ``langchain-mcp-adapters`` passes the server's raw
+    ``inputSchema`` (a JSON-Schema ``dict``, not a ``BaseModel``) as
+    ``args_schema``, so any stage that tried to "extend" it with a synthesised
+    pydantic model would replace every argument the connector declares with an
+    empty object — a tool the model can see but can no longer call correctly.
     """
 
-    #: The model-visible surface — enforced.
-    MODEL_SURFACE: tuple[str, ...] = ("name", "description", "args_schema")
+    #: The model-visible surface — propagated AND enforced.
+    MODEL_SURFACE: tuple[str, ...] = ("name", "description", "args_schema", "extras")
     #: The dispatch-shaping surface — propagated.
     DISPATCH_SURFACE: tuple[str, ...] = (
         "response_format",
@@ -86,14 +104,18 @@ class ToolSchemaIdentity:
     def fields_of(cls, tool: BaseTool) -> dict[str, Any]:
         """Return the constructor kwargs that make a wrapper identical to ``tool``.
 
-        ``metadata`` and ``tags`` are copied rather than shared: a wrapper and
-        its inner must not be able to mutate each other's annotations, and the
-        MCP annotations the source ingested ride in ``metadata``.
+        ``metadata`` / ``tags`` / ``extras`` are copied rather than shared: a
+        wrapper and its inner must not be able to mutate each other's
+        annotations, and the MCP annotations the source ingested ride in
+        ``metadata``. ``args_schema`` is deliberately shared — see the class
+        docstring; a copy would also break the "the composed tool presents the
+        raw tool's own schema object" property the stack is asserted on.
         """
 
         fields: dict[str, Any] = {
             name: getattr(tool, name) for name in cls.MODEL_SURFACE
         }
+        fields["extras"] = dict(tool.extras) if tool.extras is not None else None
         fields["response_format"] = tool.response_format
         fields["return_direct"] = tool.return_direct
         fields["metadata"] = dict(tool.metadata) if tool.metadata is not None else None
@@ -116,6 +138,33 @@ class ToolSchemaIdentity:
                     f"middleware stage {stage.value!r} changed {field!r} of tool "
                     f"{inner.name!r}; a wrapped tool must stay schema-identical"
                 )
+
+
+class ToolResultShape:
+    """Render a wrapper-authored payload in the return shape it declared.
+
+    The mirror image of :class:`ToolSchemaIdentity`: identity governs what goes
+    *in*, this governs what comes *out*. ``BaseTool.arun`` unpacks a two-tuple
+    when ``response_format`` is ``content_and_artifact`` and raises
+    ``ValueError`` otherwise, and every MCP tool ``langchain-mcp-adapters``
+    builds declares exactly that format. So a stage that returns a value of its
+    own — a POLICY refusal, an ERROR_MAP result — has to match the format its
+    wrapper propagated, or the refusal crashes the run it was refusing to run.
+
+    The artifact half is ``None`` by construction: a call that never dispatched
+    produced no raw tool output, and inventing one would put a fabricated
+    artifact on the ``ToolMessage``.
+    """
+
+    CONTENT_AND_ARTIFACT: Final[str] = "content_and_artifact"
+
+    @classmethod
+    def render(cls, payload: Any, *, response_format: str) -> Any:
+        """Return ``payload``, tupled with a ``None`` artifact when required."""
+
+        if response_format == cls.CONTENT_AND_ARTIFACT:
+            return (payload, None)
+        return payload
 
 
 class ToolMiddlewareComposer:
@@ -165,5 +214,6 @@ class ToolMiddlewareComposer:
 __all__ = [
     "MiddlewareCompositionError",
     "ToolMiddlewareComposer",
+    "ToolResultShape",
     "ToolSchemaIdentity",
 ]

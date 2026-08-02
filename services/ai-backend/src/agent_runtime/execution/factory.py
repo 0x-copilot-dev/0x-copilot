@@ -54,6 +54,11 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+from agent_runtime.capabilities.mcp.per_tool_registration import (
+    McpPerToolCollaborators,
+    McpPerToolRegistrar,
+    McpPerToolRegistration,
+)
 from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
@@ -299,9 +304,20 @@ async def _assemble_harness(
         memory_routes=_file_memory_routes(memory_backend),
     )
 
+    # P2-8 — the per-tool MCP flip. Awaited here (not inside
+    # ``_model_visible_tools``, which is sync and stays sync) because the source
+    # opens one discovery session per authorized connector. Returns ``None``
+    # whenever the flip declines — flag off, no credential plane, nothing loaded
+    # — and the legacy ``call_mcp_tool`` branch below then runs untouched.
+    canonical_tools = tuple(_canonical_graph_tool(tool) for tool in tools)
+    mcp_per_tool = await _mcp_per_tool_registration(
+        runtime_context=runtime_context,
+        runtime_dependencies=runtime_dependencies,
+        tools=canonical_tools,
+    )
     try:
         model_tools = _model_visible_tools(
-            tools=tuple(_canonical_graph_tool(tool) for tool in tools),
+            tools=canonical_tools,
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -315,6 +331,7 @@ async def _assemble_harness(
             capability_catalog=runtime_dependencies.capability_catalog,
             capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
+            mcp_per_tool=mcp_per_tool,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
         # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
@@ -466,7 +483,9 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=_with_host_bulk_read_scope(
-                    enforced_tools.interrupt_on,
+                    _with_mcp_per_tool_interrupts(
+                        enforced_tools.interrupt_on, mcp_per_tool
+                    ),
                     workspace_backend,
                     granted_host_roots=granted_host_roots,
                     agent_scratch=agent_scratch,
@@ -540,6 +559,106 @@ async def _assemble_harness(
     )
 
 
+async def _mcp_per_tool_registration(
+    *,
+    runtime_context: AgentRuntimeContext,
+    runtime_dependencies: RuntimeDependencies,
+    tools: Sequence[object],
+) -> McpPerToolRegistration | None:
+    """Build the P2-8 per-tool MCP surface, or ``None`` to keep the gateway.
+
+    Three jobs, all of which have to happen before ``_model_visible_tools``
+    composes: resolve the reserved native names so a connector cannot shadow a
+    builtin, run the (async) load, and publish the resulting
+    ``tool_name -> server_slug`` snapshot to the worker's stream seam so a
+    per-tool call still carries its connector identity.
+
+    The publish is deliberately here and not inside the registrar: the registrar
+    is domain code that must not know a worker exists, and the sink is an
+    injected port on ``RuntimeDependencies`` (``None`` off the worker path).
+    """
+
+    registration = await McpPerToolRegistrar.build(
+        runtime_context=runtime_context,
+        mcp_registry=runtime_dependencies.mcp_registry,
+        collaborators=_mcp_per_tool_collaborators(runtime_dependencies),
+        gate=_tool_access_gate(  # type: ignore[arg-type]
+            auth_session_creator=_auth_session_creator(
+                runtime_dependencies.mcp_registry
+            ),
+            runtime_context=runtime_context,
+        ),
+        reserved_names=_reserved_tool_names(
+            tools,
+            mcp_registry=runtime_dependencies.mcp_registry,
+            skill_registry=runtime_dependencies.skill_registry,
+        ),
+    )
+    if registration is None:
+        return None
+    sink = runtime_dependencies.mcp_connector_resolver_sink
+    publish = getattr(sink, "publish_connector_resolver", None)
+    if callable(publish):
+        publish(runtime_context.run_id, registration.resolver)
+    return registration
+
+
+def _mcp_per_tool_collaborators(
+    runtime_dependencies: RuntimeDependencies,
+) -> McpPerToolCollaborators | None:
+    """Narrow the injected credential plane to its concrete type, or ``None``.
+
+    An unset (or wrongly-typed) field is not an error: it is the production
+    default while the desktop keychain writer is missing, and it means "keep the
+    legacy gateway" — never "register a connector surface with no credentials".
+    """
+
+    collaborators = runtime_dependencies.mcp_per_tool_collaborators
+    if isinstance(collaborators, McpPerToolCollaborators):
+        return collaborators
+    return None
+
+
+def _with_mcp_per_tool_interrupts(
+    interrupt_on: Mapping[str, object],
+    registration: McpPerToolRegistration | None,
+) -> dict[str, object]:
+    """Merge the descriptor-driven per-tool approval entries into ``interrupt_on``.
+
+    A no-op — and a plain copy of the input — when the flip declined or emitted
+    nothing, which is the default and keeps the legacy map byte-identical. The
+    existing entries win on a name collision: they came from the run's tool-use
+    policy, which is the stricter, admin-owned source.
+    """
+
+    if registration is None or not registration.interrupt_on:
+        return dict(interrupt_on)
+    return {**registration.interrupt_on, **interrupt_on}
+
+
+def _reserved_tool_names(
+    tools: Sequence[object],
+    *,
+    mcp_registry: object,
+    skill_registry: object | None,
+) -> frozenset[str]:
+    """Names already claimed on this run's model tool surface.
+
+    One definition, two readers: ``_model_visible_tools`` uses it for the MCP
+    loader's collision check, and the per-tool registration passes it to the
+    source as ``reserved_names`` so a connector tool cannot take a native name.
+    """
+
+    return _local_tool_names(
+        tools,
+        include_mcp_tools=callable(getattr(mcp_registry, "resolve_server", None)),
+        include_auth_mcp=_auth_session_creator(mcp_registry) is not None,
+        include_skill_loader=skill_registry is not None
+        and callable(getattr(skill_registry, "load_skill_by_name", None)),
+        include_mcp_discovery=True,
+    )
+
+
 def _model_visible_tools(
     *,
     tools: Sequence[object],
@@ -556,6 +675,7 @@ def _model_visible_tools(
     capability_catalog: object | None = None,
     capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
+    mcp_per_tool: McpPerToolRegistration | None = None,
 ) -> tuple[object, ...]:
     # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
     # the owner of that tool's schema text. The declarations are what the
@@ -579,13 +699,10 @@ def _model_visible_tools(
         )
     )
     auth_session_creator = _auth_session_creator(mcp_registry)
-    local_tool_names = _local_tool_names(
+    local_tool_names = _reserved_tool_names(
         model_tools,
-        include_mcp_tools=callable(getattr(mcp_registry, "resolve_server", None)),
-        include_auth_mcp=auth_session_creator is not None,
-        include_skill_loader=skill_registry is not None
-        and callable(getattr(skill_registry, "load_skill_by_name", None)),
-        include_mcp_discovery=True,
+        mcp_registry=mcp_registry,
+        skill_registry=skill_registry,
     )
     # The loader consumes the explicit cache port, allowing the revision-aware
     # decorator to compose here without a concrete-cache ``isinstance`` gate.
@@ -619,21 +736,39 @@ def _model_visible_tools(
                 owner=ModelToolOwner.MCP,
             )
         )
-        mcp_dispatcher = CallMcpTool(
-            registry=mcp_registry,  # type: ignore[arg-type]
-            loader=loader,
-            runtime_context=runtime_context,
-            gate=_tool_access_gate(
-                auth_session_creator=auth_session_creator,
-                runtime_context=runtime_context,
-            ),
-        )
-        model_tools.append(
-            ModelToolDeclaration.declared(
-                _structured_tool(mcp_dispatcher, McpToolCallRequest),
-                owner=ModelToolOwner.MCP,
+        if mcp_per_tool is not None:
+            # P2-8 flip — one model tool per REAL MCP tool, each already wrapped
+            # in the fixed POLICY → EXEC_POLICY → OBSERVE → ERROR_MAP →
+            # CITATIONS pipeline. The umbrella ``call_mcp_tool`` is not
+            # registered: the PDP decision it used to take is now taken by the
+            # POLICY stage of each of these tools, bound to a fixed
+            # ``(card, server, tool)`` instead of decoding one out of a
+            # model-supplied payload. ``mcp_dispatcher`` stays ``None``, so the
+            # F3 capability bridge (which borrows it as its dispatch route)
+            # registers nothing rather than reopening the retired gateway.
+            per_tool_mcp_tools = mcp_per_tool.tools
+            model_tools.extend(
+                ModelToolDeclaration.declared_all(
+                    per_tool_mcp_tools,
+                    owner=ModelToolOwner.MCP,
+                )
             )
-        )
+        else:
+            mcp_dispatcher = CallMcpTool(
+                registry=mcp_registry,  # type: ignore[arg-type]
+                loader=loader,
+                runtime_context=runtime_context,
+                gate=_tool_access_gate(
+                    auth_session_creator=auth_session_creator,
+                    runtime_context=runtime_context,
+                ),
+            )
+            model_tools.append(
+                ModelToolDeclaration.declared(
+                    _structured_tool(mcp_dispatcher, McpToolCallRequest),
+                    owner=ModelToolOwner.MCP,
+                )
+            )
     if auth_session_creator is not None:
         model_tools.append(
             ModelToolDeclaration.declared(

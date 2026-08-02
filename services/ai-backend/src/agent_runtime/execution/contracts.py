@@ -863,6 +863,24 @@ class RuntimeDependencies(RuntimeContract):
     # concrete types and narrows to no bridge tools when either is unresolved.
     capability_activation: object | None = None
     capability_catalog: object | None = None
+    # Optional P2-8 per-tool MCP credential plane: an
+    # ``McpPerToolCollaborators`` (connection directory + credential provider).
+    # Supplied per deployment by the composition root; ``None`` — the production
+    # default while the desktop keychain writer is missing — makes the factory
+    # keep the legacy ``call_mcp_tool`` gateway even with
+    # ``MCP_PER_TOOL_ENABLED`` on, so a half-wired credential plane can never
+    # cost a run its connectors. Kept as ``object`` (like
+    # ``prompt_assembly_observer``) to preserve this module's dependency
+    # direction; the registrar validates the concrete type.
+    mcp_per_tool_collaborators: object | None = None
+    # Optional sink for the run's ``tool_name -> server_slug`` snapshot. The
+    # worker passes its ``StreamMessageProcessor`` (which exposes
+    # ``publish_connector_resolver`` since P2-6); the factory calls it once per
+    # run when per-tool registration succeeds, so a per-tool call still resolves
+    # ``connector_slug`` / ``provenance`` / ``access_mode`` in the stream.
+    # ``None`` everywhere the legacy gateway is active — the seam then resolves
+    # exactly as it did, through ``McpDispatcherUnwrap``.
+    mcp_connector_resolver_sink: object | None = None
     # Optional F3 invocation seam: the run-scoped inputs only a composition root
     # can know (the keyed reference minter, the live revalidation, the telemetry
     # observers, and the protected-schema publisher). See

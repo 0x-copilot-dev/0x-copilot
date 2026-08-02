@@ -52,6 +52,7 @@ from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
 from agent_runtime.capabilities.mcp.middleware.policy_tool import (
+    PolicyCallScope,
     PolicyStageMessages,
     PolicyToolMiddleware,
 )
@@ -310,18 +311,22 @@ class PolicyToolFixtureMixin:
     ) -> Any:
         """Drive the wrapper's async entry point, returning its RAW result.
 
-        Deliberately not ``ainvoke(dict)``: the wrapper declares an injected
-        ``tool_call_id`` (which is what makes the write-approval id per-call
-        unique), and LangChain requires any tool declaring one to be invoked
-        with a full ``ToolCall`` — which yields a ``ToolMessage`` rather than the
-        raw payload these tests assert on. :meth:`call_as_tool_call` covers that
-        real dispatch path, including the schema and refusal-shape checks.
+        Deliberately not ``ainvoke(dict)``: that returns a ``ToolMessage``
+        rather than the raw payload these tests assert on. The call scope is
+        bound by hand around ``_arun`` because that is exactly what the
+        wrapper's own ``arun`` does with the id LangChain hands it — the
+        wrapper never adds ``tool_call_id`` to the connector's schema, so it can
+        never arrive as a tool argument. :meth:`call_as_tool_call` covers the
+        real dispatch path end to end.
         """
 
-        result = await wrapped.tool._arun(  # noqa: SLF001 - the wrapper's own entry point
-            **(dict(arguments) or {"team": "ENG"}),
-            tool_call_id=tool_call_id,
-        )
+        token = PolicyCallScope.bind(tool_call_id)
+        try:
+            result = await wrapped.tool._arun(  # noqa: SLF001 - the wrapper's own entry point
+                **(dict(arguments) or {"team": "ENG"}),
+            )
+        finally:
+            PolicyCallScope.unbind(token)
         # A ``content_and_artifact`` tool returns ``(content, artifact)``;
         # LangChain splits that only when building a ToolMessage. Return the
         # content half so these assertions read the payload, exactly as before.
@@ -360,16 +365,17 @@ class TestSchemaIdentity(PolicyToolFixtureMixin):
         inner = wrapped.inner
         assert wrapped.tool.name == inner.name
         assert wrapped.tool.description == inner.description
-        # The MODEL-visible schema is what must not drift. ``args_schema`` is
-        # deliberately augmented with an injected ``tool_call_id`` (that is what
-        # makes the write-approval id per-call unique), and LangChain strips
-        # injected args out of ``tool_call_schema`` — the schema actually sent to
-        # the provider — so the tool the model sees is unchanged.
+        # The schema is propagated by IDENTITY, never rebuilt (P2-8). A stage
+        # that synthesised a replacement would erase every argument of a real
+        # connector tool, whose ``args_schema`` is the server's raw JSON-Schema
+        # dict rather than a model — and it would fail the composer's identity
+        # assertion, which is how that was found.
+        assert wrapped.tool.args_schema is inner.args_schema
         assert set(wrapped.tool.tool_call_schema.model_fields) == set(
             inner.tool_call_schema.model_fields
         )
         assert "tool_call_id" not in wrapped.tool.tool_call_schema.model_fields
-        assert "tool_call_id" in wrapped.tool.args_schema.model_fields
+        assert wrapped.tool.extras == inner.extras
         assert wrapped.tool.metadata == inner.metadata
         assert wrapped.tool.tags == inner.tags
         assert wrapped.tool.return_direct == inner.return_direct

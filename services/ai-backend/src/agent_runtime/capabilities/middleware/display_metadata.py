@@ -462,16 +462,37 @@ class _DisplayFields(BaseModel):
     tool_call_id: Annotated[str, InjectedToolCallId] = UNINJECTED_TOOL_CALL_ID
 
 
-def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:
+def wrap_args_schema(args_schema: object | None) -> object:
     """Return a Pydantic model that extends ``args_schema`` with optional ``_display_title`` and ``_display_summary`` fields.
 
     Returns ``_DisplayFields`` directly when ``args_schema`` is ``None``.
     Idempotent: a schema bearing the ``__display_wrapped__`` marker is returned unchanged,
     making it safe to call on tools lists that pass through the wrap more than once.
+
+    A **raw JSON-Schema mapping** is returned unchanged. LangChain allows a tool's
+    ``args_schema`` to be a plain dict, and ``langchain-mcp-adapters`` always uses
+    one — it assigns the server's ``inputSchema``, which the MCP spec types as a
+    required ``dict[str, Any]``. Such a schema cannot be extended by
+    ``create_model`` (there is no ``__name__`` and no base class to inherit), and
+    it cannot express ``InjectedToolCallId`` at all, since injection is a Pydantic
+    ``Annotated`` marker rather than anything JSON Schema can state. Attempting it
+    raised ``AttributeError: 'dict' object has no attribute '__name__'`` **inside
+    harness construction**, which surfaces as a generic non-retryable
+    ``AgentRuntimeError`` — so with per-tool MCP registration enabled, every run
+    in the deployment failed before the model was ever invoked, whether or not it
+    touched a connector.
+
+    The cost of returning it unchanged is bounded and correct: those tools simply
+    do not gain the optional ``_display_title`` / ``_display_summary`` arguments.
+    The alternative — synthesizing a model from the JSON Schema — would rewrite
+    the connector's own argument contract, and a lossy rewrite there is a far
+    worse failure than a missing display hint.
     """
 
     if args_schema is None:
         return _DisplayFields  # already exactly what we need
+    if isinstance(args_schema, Mapping):
+        return args_schema
     if getattr(args_schema, "__display_wrapped__", False):
         return args_schema
     wrapped = create_model(
@@ -740,8 +761,20 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
         config: RunnableConfig,
         **kwargs: Any,
     ) -> Any:
-        """Delegate to ``tool.ainvoke`` with a full LangChain tool-call envelope."""
+        """Delegate to ``tool.ainvoke`` with a full LangChain tool-call envelope.
+
+        When nothing was injected the plain arguments are forwarded instead. That
+        happens for a tool whose ``args_schema`` is a raw JSON-Schema mapping —
+        ``langchain-mcp-adapters`` always builds one — because injection is a
+        Pydantic ``Annotated`` marker that such a schema cannot declare, so
+        LangChain has no field to inject into and passes the sentinel. Building
+        the envelope anyway would hand ``require_tool_call_id`` an unusable id and
+        raise, failing the call at the wrapper rather than running the tool.
+        """
+
         real, _ = strip_display(kwargs)
+        if tool_call_id == UNINJECTED_TOOL_CALL_ID:
+            return await tool.ainvoke(real, config=config)
         envelope = _DispatchEnvelope.build(
             args=real,
             name=inner_name,
