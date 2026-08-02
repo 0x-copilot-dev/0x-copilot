@@ -444,7 +444,7 @@ def create_server(...): ...
 | `POST/GET/PATCH/DELETE /v1/mcp/servers`                                     | `mcp:write` / `mcp:read`                 |
 | `POST /v1/mcp/servers/{id}/auth/*`                                          | `connectors:auth`                        |
 | `GET /v1/mcp/oauth/callback`                                                | public (OAuth state is the trust anchor) |
-| `GET /internal/v1/mcp/cards`, `client-session`, `rpc`                       | `runtime:use`                            |
+| `GET /internal/v1/mcp/cards`, `client-session`, `rpc`, `access-token`       | `runtime:use`                            |
 | `POST /internal/v1/mcp/.../test-token`                                      | `mcp:write`                              |
 | `POST/GET/PUT/DELETE /v1/skills/*`                                          | `skills:write` / `skills:read`           |
 | `GET /internal/v1/skills/*`                                                 | `runtime:use`                            |

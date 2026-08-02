@@ -905,6 +905,15 @@ class RuntimeRunHandler:
                 outcome=ToolOutcome.CANCELLED,
                 error_code=ToolErrorCode.TOOL_CANCELLED,
             )
+            # Subagents need the same settling, and did not get it. A child's
+            # terminal frame comes from the ``task`` tool's result message, so a
+            # run stopped mid-delegation emitted none and the cockpit kept a
+            # spinning card and an "N live" count forever. These are causal
+            # facts about this run, so they are appended here — inside the
+            # prefix the cancel handler is about to seal — not after it.
+            await (
+                self.stream_event_mapper.update_processor
+            ).close_open_subagents_as_cancelled(run=run)
             raise
         except Exception as exc:
             await self._reconcile_inflight_tool_calls(
@@ -1880,6 +1889,16 @@ class RuntimeRunHandler:
         # reading the workspace object.
         if granted_host_roots is not None:
             update["granted_host_roots"] = granted_host_roots
+        # The durable, conversation-scoped MCP catalog the model browses at
+        # `/mcp/`. Desktop only — `None` composes the in-process store exactly
+        # as before. It MUST also be set on the approval-resume path
+        # (`ApprovalHandler._dependencies_for_resume`), or a catalog browsed
+        # before a write approval is gone when the run resumes: bug R1's shape.
+        mcp_catalog_store = AgentScratchWorkerWiring(
+            workspace_backend=workspace_backend
+        ).mcp_catalog_store(conversation_id=command.conversation_id)
+        if mcp_catalog_store is not None:
+            update["mcp_catalog_store"] = mcp_catalog_store
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.

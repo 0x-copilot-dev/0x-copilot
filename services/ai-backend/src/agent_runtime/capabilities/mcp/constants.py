@@ -381,6 +381,7 @@ class Messages:
             "The MCP server returned a tool name that collides with a local tool."
         )
         LOCAL_TOOL_NAMES_INVALID = "MCP local tool names are invalid."
+        PROTOCOL_ERROR = "The MCP server reported an error for this tool call."
         PROTOCOL_ERROR_FALLBACK = (
             "The MCP server returned an error without a readable message."
         )

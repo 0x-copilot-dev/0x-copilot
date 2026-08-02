@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.mcp.connector_resolver import ToolConnectorResolver
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
 from agent_runtime.capabilities.todo_list import TodoListProjector
 from agent_runtime.capabilities.workspace.policy_answers import WorkspacePolicyAnswers
@@ -126,6 +127,13 @@ class StreamMessageProcessor:
         # panel renders. Held for the worker's lifetime (it keys its own state
         # per run + subagent) and freed per run in ``discard_ledger``.
         self._todo_lists = TodoListProjector()
+        # Per-run ``tool_name → server_slug`` snapshots for per-tool MCP
+        # registration (P2-6). Keyed by run because one worker serves runs from
+        # different users, whose installed connectors differ — a worker-wide map
+        # could attribute one run's tool to another run's connector. Empty until
+        # the per-tool flip publishes one (P2-8), which is what keeps this seam
+        # inert under the legacy ``call_mcp_tool`` gateway.
+        self._connector_resolvers: dict[str, ToolConnectorResolver] = {}
 
     def ledger_for_run(self, run_id: str) -> ToolCallLedger:
         """Return (and lazily create) the per-run tool call ledger."""
@@ -136,12 +144,28 @@ class StreamMessageProcessor:
             self._ledgers[run_id] = ledger
         return ledger
 
+    def publish_connector_resolver(
+        self,
+        run_id: str,
+        resolver: ToolConnectorResolver,
+    ) -> None:
+        """Bind ``run_id``'s registration-time ``tool_name → server_slug`` map.
+
+        Called once per run by the per-tool registration path (P2-8), after the
+        tool source has published its map. Nothing calls it under the legacy
+        gateway, so no run has a resolver and the connector-identity seams keep
+        resolving exactly as they did — through ``McpDispatcherUnwrap``.
+        """
+
+        self._connector_resolvers[run_id] = resolver
+
     def discard_ledger(self, run_id: str) -> None:
         """Free per-run ledger state once the run has reached a terminal state."""
 
         self._ledgers.pop(run_id, None)
         self._reasoning_buffers.pop(run_id, None)
         self._todo_lists.discard_run(run_id)
+        self._connector_resolvers.pop(run_id, None)
         # Per-call stream state was never dropped here. It survived every run
         # in a long-lived worker, and each entry now also holds the call's
         # ``ToolInvocationRecord`` (args included), so leaving it would grow the
@@ -440,9 +464,14 @@ class StreamMessageProcessor:
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             state.started_at = datetime.now(timezone.utc)
             if state.call_id is not None and state.tool_name is not None:
-                # The dispatcher's MCP server name for a `call_mcp_tool`
-                # invocation, else None (a native tool — a step, not an app).
-                connector_slug = McpDispatcherUnwrap.effective_server_name(payload)
+                # The MCP server hosting this call — the dispatcher's nested
+                # server name under the legacy gateway, the run's registration
+                # map under per-tool — else None (a native tool: a step, not
+                # an app).
+                connector_slug = self.connector_slug_for_payload(
+                    run_id=run.run_id,
+                    payload=payload,
+                )
                 self.ledger_for_run(run.run_id).started(
                     call_id=state.call_id,
                     tool_name=state.tool_name,
@@ -931,6 +960,43 @@ class StreamMessageProcessor:
         elapsed = datetime.now(timezone.utc) - state.started_at
         return max(0, round(elapsed.total_seconds() * 1000))
 
+    def connector_slug_for_payload(
+        self,
+        *,
+        run_id: str,
+        payload: Mapping[str, object],
+    ) -> str | None:
+        """Return the MCP connector hosting the call in ``payload``, else ``None``.
+
+        Two registration shapes reach this seam and both must resolve, because
+        P2 flips them one deployment at a time:
+
+        * **Legacy gateway** — every MCP call is one ``call_mcp_tool`` dispatch
+          whose connector is nested at ``args.server_name``. ``McpDispatcherUnwrap``
+          is tried first and answers here, so this method is inert versus the
+          previous behaviour for every payload the old code resolved.
+        * **Per-tool** — the tool name IS the real MCP tool, there is nothing to
+          unwrap, and the unwrap returns ``None``. The connector then comes from
+          the run's registration snapshot (:meth:`publish_connector_resolver`),
+          a lookup of a name the source itself registered.
+
+        ``None`` means "no connector": a native tool (a step, not an app), an
+        unregistered name, or a dispatcher call whose args have not streamed in
+        yet. It is never inferred from the tool name's shape — a native
+        ``notion_search`` must not acquire MCP identity.
+        """
+
+        server_name = McpDispatcherUnwrap.effective_server_name(payload)
+        if server_name is not None:
+            return server_name
+        resolver = self._connector_resolvers.get(run_id)
+        if resolver is None:
+            return None
+        tool_name = StreamTextHelper.extract(payload.get(Keys.Field.TOOL_NAME))
+        if tool_name is None:
+            return None
+        return resolver.server_for(tool_name)
+
     def add_tool_presentation_fields(
         self,
         *,
@@ -940,17 +1006,23 @@ class StreamMessageProcessor:
     ) -> None:
         """Attach source-backed optional details to a public tool event.
 
-        MCP provenance is disclosed only when the dispatcher event contains a
-        concrete ``args.server_name``. The frozen access-mode context is keyed
-        by server ID, whereas the stream carries a server name; an exact key
-        match is the only safe resolution available at this seam. A missing or
-        non-matching key remains absent rather than being guessed. ``read_act``
-        is reported strictly as that configured authority mode, not as a claim
-        about the side effect of this particular call.
+        MCP provenance is disclosed only when the event resolves to a concrete
+        connector — the dispatcher's ``args.server_name`` under the legacy
+        gateway, the run's published registration map under per-tool. Neither is
+        a guess from the tool name's shape. The frozen access-mode context is
+        keyed by server ID, whereas the stream carries a server name; an exact
+        key match is the only safe resolution available at this seam. A missing
+        or non-matching key remains absent rather than being guessed.
+        ``read_act`` is reported strictly as that configured authority mode, not
+        as a claim about the side effect of this particular call.
         """
 
         provenance_payload: Mapping[str, object] = payload
-        if McpDispatcherUnwrap.effective_server_name(provenance_payload) is None:
+        server_name = self.connector_slug_for_payload(
+            run_id=run.run_id,
+            payload=provenance_payload,
+        )
+        if server_name is None:
             state = self.tool_call_state_for_payload(run.run_id, payload)
             if state is not None:
                 provenance_payload = {
@@ -958,7 +1030,10 @@ class StreamMessageProcessor:
                     Keys.Field.ARGS: state.args
                     or self.parse_args_text(state.args_text),
                 }
-        server_name = McpDispatcherUnwrap.effective_server_name(provenance_payload)
+                server_name = self.connector_slug_for_payload(
+                    run_id=run.run_id,
+                    payload=provenance_payload,
+                )
         if server_name is not None:
             payload[Keys.Field.PROVENANCE] = {
                 "source": Values.Provenance.MCP,

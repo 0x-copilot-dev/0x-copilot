@@ -95,7 +95,7 @@ class McpCapabilityDescriptorSource:
 
         return CapabilityDescriptor(
             urn=CapabilityUrn.for_mcp(server, tool),
-            action=cls._action(server=server, tool=tool),
+            action=cls.action_for(server=server, tool=tool),
             trust=cls._trust(server=server, tool=tool, card=card),
             scopes=tuple(sorted(card.required_scopes)),
             source="mcp",
@@ -116,8 +116,14 @@ class McpCapabilityDescriptorSource:
         return Posture.MANUAL
 
     @classmethod
-    def _action(cls, *, server: str, tool: str) -> Action:
-        """Catalog → annotations → fail-closed WRITE (spec §4, Move-1 order)."""
+    def action_for(cls, *, server: str, tool: str) -> Action:
+        """Catalog → annotations → fail-closed WRITE (spec §4, Move-1 order).
+
+        Public because the MCP filesystem catalog labels every tool with the
+        action class the PDP will police. Reading it from anywhere else — the
+        descriptor's own ``readOnlyHint``, say — would let the browsable index
+        advertise READ for a call the gateway gates as a write.
+        """
 
         catalog_kind = ACTION_CATALOG.lookup(server, tool)
         if catalog_kind is not None:

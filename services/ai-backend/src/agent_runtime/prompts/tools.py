@@ -145,8 +145,12 @@ CALL_MCP_TOOL_DESCRIPTION = (
 )
 
 LOAD_MCP_SERVER_TOOL_DESCRIPTION = (
-    "Load an authorized MCP server by stable name and return validated "
-    "tool and resource descriptors."
+    "Load an authorized MCP server by stable name. Publishes its catalog under "
+    "/mcp/<server>/ and returns a pointer plus a short summary — not the full "
+    "descriptors. Read /mcp/<server>/SERVER.md for how to call it, list "
+    "/mcp/<server>/tools/ to see every tool, and read one "
+    "/mcp/<server>/tools/<tool>.json for that tool's full input schema. Use "
+    "grep over /mcp/<server>/ to find a tool by keyword."
 )
 
 LOAD_TOOL_SPEC_DESCRIPTION = (

@@ -150,12 +150,38 @@ Called by the facade to validate and refresh session state.
 
 ## MCP (internal — for ai-backend)
 
-| Method | Path                                       | Auth          | Notes                                           |
-| ------ | ------------------------------------------ | ------------- | ----------------------------------------------- |
-| `GET`  | `/internal/v1/mcp/servers`                 | Service token | `InternalMcpServerListResponse` filtered by org |
-| `GET`  | `/internal/v1/mcp/sessions/{server_id}`    | Service token | `InternalMcpClientSession` with credential_ref  |
-| `POST` | `/internal/v1/mcp/servers/{id}/auth/start` | Service token | Begin OAuth for ai-backend approval flow        |
-| `POST` | `/internal/v1/mcp/servers/{id}/rpc`        | Service token | JSON-RPC proxy to MCP server                    |
+| Method | Path                                         | Auth          | Notes                                               |
+| ------ | -------------------------------------------- | ------------- | --------------------------------------------------- |
+| `GET`  | `/internal/v1/mcp/servers`                   | Service token | `InternalMcpServerListResponse` filtered by org     |
+| `GET`  | `/internal/v1/mcp/sessions/{server_id}`      | Service token | `InternalMcpClientSession` with credential_ref      |
+| `POST` | `/internal/v1/mcp/servers/{id}/auth/start`   | Service token | Begin OAuth for ai-backend approval flow            |
+| `POST` | `/internal/v1/mcp/servers/{id}/rpc`          | Service token | JSON-RPC proxy to MCP server                        |
+| `POST` | `/internal/v1/mcp/servers/{id}/access-token` | Service token | Scoped short-TTL bearer for direct-connect runtimes |
+
+`access-token` takes `?org_id=&user_id=` and answers `InternalMcpAccessToken`
+(`url`, `transport`, `access_token`, `expires_at`, `scopes`, `access_mode`). It runs the
+same admission sequence as `/rpc` — tenant scope, the PRD-06 D3 access-mode gate,
+liveness, and refresh-on-expiry — and never returns the refresh token. `expires_at` is
+capped by `McpRegistryService.ACCESS_TOKEN_MAX_TTL`. A server with no credential
+(`auth_mode=none`) or no endpoint (stdio) answers `409` with `server_has_no_credential` /
+`server_has_no_endpoint`.
+
+The gate is stricter here than at `/rpc`, and both refusals land before anything is
+decrypted:
+
+| Access mode | `/rpc`                                              | `/access-token`                  |
+| ----------- | --------------------------------------------------- | -------------------------------- |
+| `off`       | `403 connector_access_off`                          | `403 connector_access_off`       |
+| `read`      | reads pass; a non-read-only `tools/call` is refused | `403 connector_access_read_only` |
+| `read_act`  | everything passes                                   | mints, `access_mode: "read_act"` |
+| no row      | everything passes                                   | mints, `access_mode: null`       |
+
+A minted bearer names no tool and is answerable to nothing on this side, so a `read`
+connector cannot be direct-connected at all — its reads stay available through `/rpc`,
+which can police each one. `access_mode` states what the gate evaluated so the authority
+travels with the credential; `null` means no connector row joins the server, so nothing
+was configured and nothing gated. See
+[`../features/mcp-registry.md`](../features/mcp-registry.md) for the topology split.
 
 ---
 

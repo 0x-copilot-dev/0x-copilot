@@ -795,18 +795,32 @@ class StreamOrchestrator:
                 payload=payload,
                 metadata=namespace.metadata(_Fields.VALUES),
             )
-            # Generative Surfaces v2 (PRD-C2): a ToolAccessGate park rides the
-            # mcp_auth interrupt. When the interrupt payload carries the additive
-            # ``gate`` block (present ONLY when ``SURFACES_V2`` is on — the gate
-            # never adds it flag-off), emit ``gate.opened`` beside the
-            # MCP_AUTH_REQUIRED event via the same producer, source=SYSTEM.
-            # Best-effort: a ledger emit never breaks parking or approval
-            # correctness. Flag off ⇒ no block ⇒ this is a no-op (byte-identical).
+            # Generative Surfaces v2 (PRD-C2): a ToolAccessGate park rides an
+            # interrupt. When the interrupt payload carries the additive ``gate``
+            # block (present ONLY when ``SURFACES_V2`` is on — the gate never
+            # adds it flag-off), emit ``gate.opened`` beside the interrupt event
+            # via the same producer, source=SYSTEM. Best-effort: a ledger emit
+            # never breaks parking or approval correctness. Flag off ⇒ no block ⇒
+            # this is a no-op (byte-identical).
             await self._maybe_emit_gate_opened(
                 run=run, event_type=event_type, payload=payload
             )
             did_append = True
         return did_append
+
+    #: The two interrupt events a ToolAccessGate park can ride: the OAuth-connect
+    #: gate on ``mcp_auth_required``, the P1b write-approval gate on
+    #: ``approval_requested``. Both must be admitted here or the write gate keeps
+    #: parking, resuming and executing with no ledger trail at all — the audit
+    #: gap this map exists to close. Neither type IMPLIES a gate: the payload's
+    #: ``gate`` block still decides (an ordinary approval, or the model's own
+    #: ``ask_a_question``, carries none and emits nothing).
+    _GATE_BEARING_EVENT_TYPES = frozenset(
+        {
+            RuntimeApiEventType.MCP_AUTH_REQUIRED,
+            RuntimeApiEventType.APPROVAL_REQUESTED,
+        }
+    )
 
     async def _maybe_emit_gate_opened(
         self,
@@ -815,9 +829,23 @@ class StreamOrchestrator:
         event_type: RuntimeApiEventType,
         payload: Mapping[str, object],
     ) -> None:
-        """Emit ``gate.opened`` for an mcp_auth interrupt carrying a v2 gate block."""
+        """Emit ``gate.opened`` for a gate interrupt carrying a v2 gate block.
 
-        if event_type is not RuntimeApiEventType.MCP_AUTH_REQUIRED:
+        The append rides the same ``RuntimeEventProducer`` as the interrupt event
+        it accompanies, on the same in-run pass, so it lands inside the run's
+        causal ledger prefix — a gate cannot open after the run that opened it
+        has sealed. It carries no amendment for that reason: were it ever emitted
+        post-seal, ``LedgerSealViolation`` is the correct outcome, and the
+        best-effort guard below turns it into a warning rather than a broken park.
+        """
+
+        if event_type not in self._GATE_BEARING_EVENT_TYPES:
+            return
+        # The payload names its own kind; ``append_native_interrupt_events``
+        # derives ``event_type`` from that same field. Requiring them to agree
+        # costs nothing and refuses to classify a payload delivered under an
+        # event type it does not claim.
+        if StreamMessageParser.api_event_type(payload) is not event_type:
             return
         try:
             from agent_runtime.surfaces_v2.gate import GateLedger

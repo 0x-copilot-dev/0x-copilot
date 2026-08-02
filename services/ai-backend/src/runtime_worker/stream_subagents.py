@@ -76,6 +76,64 @@ class StreamUpdateProcessor:
         self._fleet_remaining: dict[tuple[str, str], set[str]] = {}
         self._fleet_started_at: dict[tuple[str, str], datetime] = {}
 
+    class _Messages:
+        """User-visible text this processor emits on a run's cancellation."""
+
+        SUBAGENT_CANCELLED = "Stopped when the run was cancelled."
+
+    async def close_open_subagents_as_cancelled(
+        self,
+        *,
+        run: RunRecord,
+        metadata: JsonObject | None = None,
+    ) -> None:
+        """Emit a terminal frame for every subagent this run left open.
+
+        The sibling of ``_reconcile_inflight_tool_calls``, and needed for the
+        same reason. A ``SUBAGENT_COMPLETED`` is derived from the ``task`` tool's
+        *result* message, so a run that stops before its child returns — the
+        cancellation case — emits none, and the cockpit keeps a spinning card
+        and an "N live" count that nothing will ever clear. This closes those
+        children from the bookkeeping the processor already keeps: a task is open
+        exactly when it recorded a start and no completion popped it.
+
+        Deduplication is the existing one in ``append_task_lifecycle_event``, so
+        a child that completed normally is untouched, and calling this twice
+        emits nothing the second time.
+        """
+
+        frame_metadata: JsonObject = dict(metadata or {})
+        open_task_ids = tuple(
+            task_id
+            for (run_id, task_id) in tuple(self._subagent_started_at)
+            if run_id == run.run_id
+        )
+        for task_id in open_task_ids:
+            payload: JsonObject = {
+                self._Fields.TASK_ID: task_id,
+                self._Fields.SUBAGENT_NAME: self._subagent_name_by_call_id.get(
+                    (run.run_id, task_id), "subagent"
+                ),
+                self._Fields.STATUS: Values.Status.CANCELLED,
+                self._Fields.SUMMARY: self._Messages.SUBAGENT_CANCELLED,
+            }
+            fleet_id = self._fleet_id_by_task_id.get((run.run_id, task_id))
+            if fleet_id is not None:
+                payload[self._Fields.PARENT_FLEET_ID] = fleet_id
+            await self.append_task_lifecycle_event(
+                run=run,
+                event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
+                payload=payload,
+                metadata=dict(frame_metadata),
+            )
+            if fleet_id is not None:
+                await self._maybe_emit_fleet_finished(
+                    run=run,
+                    fleet_id=fleet_id,
+                    task_id=task_id,
+                    metadata=dict(frame_metadata),
+                )
+
     def bind_metrics(self, run_id: str, metrics: AssistantRunMetrics) -> None:
         """Register the per-run metrics object so SUBAGENT_COMPLETED can rollup."""
 

@@ -129,6 +129,7 @@ from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
     compose_capability_discovery,
 )
+from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -1045,6 +1046,15 @@ class RuntimeApprovalHandler:
         # ("nobody resolved"), so an empty tuple must still be carried.
         if granted_host_roots is not None:
             update["granted_host_roots"] = granted_host_roots
+        # The same conversation-scoped MCP catalog the interrupted turn was
+        # browsing. Without this the resumed harness silently falls back to a
+        # fresh in-process store and `/mcp/` empties after every write approval
+        # — literally bug R1 again, one directory over.
+        mcp_catalog_store = AgentScratchWorkerWiring(
+            workspace_backend=workspace_backend
+        ).mcp_catalog_store(conversation_id=run.conversation_id)
+        if mcp_catalog_store is not None:
+            update["mcp_catalog_store"] = mcp_catalog_store
         subagent_backend = self._file_store_wiring.subagent_artifacts_backend(
             org_id=run.org_id,
             conversation_id=run.conversation_id,

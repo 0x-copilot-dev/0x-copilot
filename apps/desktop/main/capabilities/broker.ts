@@ -69,6 +69,12 @@ import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 // `mount` id is an HMAC of the root under a per-boot random salt, so it is
 // stable within a boot (two grants on one tree share a mount) yet reveals
 // nothing about the path and is not a brute-force oracle across boots.
+//
+// P2-7a added `POST /mcp/secret`: the ONE route that hands a secret to the
+// child, so the MCP direct-connect credential plane reuses this authenticated
+// loopback instead of opening a second trust boundary. It reads through the
+// same main-owned `SecretStorage` ACTIVE-WORKSPACE gate the renderer is held
+// to, so a compromised run cannot pull another workspace's connector token.
 
 export const CAPABILITY_BROKER_PROTOCOL = "1";
 export const CAPABILITY_BROKER_AUDIENCE = LOCAL_BROKER_AUDIENCE.capability;
@@ -88,6 +94,7 @@ const ROUTES = {
   fsRead: "/v1/fs/read",
   fsGlob: "/v1/fs/glob",
   fsGrep: "/v1/fs/grep",
+  mcpSecret: "/mcp/secret",
   workspacePrepare: "/internal/workspace/v2/prepare",
   workspaceHostSessions: "/internal/workspace/v2/host-sessions",
   workspaceCommit: "/internal/workspace/v2/prepared",
@@ -105,6 +112,7 @@ const ADVERTISED_METHODS = [
   "readFile",
   "glob",
   "grep",
+  "readMcpSecret",
   "prepareWorkspaceEffect",
   "uploadWorkspaceContent",
   "commitWorkspaceEffect",
@@ -120,6 +128,23 @@ const WORKSPACE_V2_METHODS = new Set<string>([
   "abortWorkspaceEffect",
 ]);
 
+const MCP_SECRET_METHOD = "readMcpSecret";
+
+// `SecretStorage`'s partition for MCP connector material. Pinned as a constant
+// so this broker can only ever read that one partition — never the `backend`
+// partition holding the app's own session, and never the `saas` one.
+const MCP_SECRET_KIND = "mcp";
+
+// Wire/record caps. They exist so a corrupted or hostile record cannot be
+// echoed as an unbounded body; the exact numbers mirror the ai-backend model
+// (`McpSecretResult`) that parses this response.
+const MAX_MCP_URL_CHARS = 2_048;
+const MAX_MCP_TRANSPORT_CHARS = 64;
+const MAX_MCP_TOKEN_CHARS = 8_192;
+const MAX_MCP_EXPIRY_CHARS = 64;
+const MAX_MCP_HEADERS = 32;
+const MAX_MCP_HEADER_CHARS = 1_024;
+
 // The legacy read routes require only an active read grant. No v1 mutation is
 // present in this map, so changing a grant mode cannot restore a write path.
 const FS_ROUTE_REQUIRED_MODE: Record<string, GrantMode> = {
@@ -130,6 +155,51 @@ const FS_ROUTE_REQUIRED_MODE: Record<string, GrantMode> = {
   [ROUTES.fsGrep]: "read_only",
 };
 
+/**
+ * One MCP connector's stored connection material, as written into
+ * `SecretStorage` under `(activeWorkspace, "mcp", serverId)` when the
+ * connector connects.
+ *
+ * The record is spelled in the SAME vocabulary as the wire on purpose: the
+ * store, this route, and the ai-backend model that parses it are one contract,
+ * so there is no translation layer to drift. Only the fields below are
+ * projected to the child — a stored refresh token, client secret, or any other
+ * field a future writer adds is NOT echoed, because the projection is
+ * field-by-field and never a spread.
+ */
+export interface McpConnectionSecret {
+  /** Remote endpoint. `stdio` connectors store their launch spec elsewhere. */
+  readonly url: string;
+  /** Transport as the connector was registered (`http` / `sse` / `stdio`). */
+  readonly transport: string;
+  /** The bearer. NEVER logged, never echoed into an error body. */
+  readonly token: string;
+  /** Epoch (ms or s) or ISO-8601. Absent/`null` means "not stated". */
+  readonly expires_at?: string | number | null;
+  /** NON-SECRET request headers only; the bearer rides `token`. */
+  readonly headers?: Readonly<Record<string, string>>;
+}
+
+/**
+ * The main-owned secret store this broker reads MCP material from.
+ *
+ * Declared as a narrow read-only port rather than importing the class, so the
+ * broker keeps its dependency-light shape AND cannot reach `set` / `delete` /
+ * `deleteWorkspaceSecrets`. `SecretStorage` (auth/secret-storage.ts)
+ * structurally satisfies it; pinning `serverKind` to the `"mcp"` literal means
+ * this broker cannot even ask for another partition, and a rename of that
+ * partition breaks the composition root at compile time rather than silently.
+ */
+export interface McpSecretStore {
+  /** The workspace the signed-in session is bound to, or null when signed out. */
+  getActiveWorkspace(): string | null;
+  get(
+    workspaceId: string,
+    serverKind: "mcp",
+    serverId: string,
+  ): Promise<unknown | null>;
+}
+
 export interface CapabilityBrokerConfig {
   readonly grants: GrantProvider;
   /**
@@ -137,6 +207,12 @@ export interface CapabilityBrokerConfig {
    * (`unsupported`) — the broker never touches the disk without it.
    */
   readonly hostFs?: HostFs;
+  /**
+   * MCP connector credential source for `POST /mcp/secret`. When omitted the
+   * route fails closed (`unsupported`) and the method is not advertised — the
+   * broker never invents connection material it was not given.
+   */
+  readonly mcpSecrets?: McpSecretStore;
   /** Injectable CSPRNG for tests. Defaults to node:crypto randomBytes. */
   readonly randomBytes?: (size: number) => Buffer;
   /**
@@ -184,6 +260,7 @@ const HOST_SESSION_REF = /^whs_[A-Za-z0-9_-]{32,160}$/u;
 export class CapabilityBroker {
   readonly #grants: GrantProvider;
   readonly #hostFs: HostFs | null;
+  readonly #mcpSecrets: McpSecretStore | null;
   readonly #randomBytes: (size: number) => Buffer;
   readonly #runContexts: RunContextStore;
   readonly #workspaceAuthority: LocalWorkspaceAuthority | null;
@@ -212,6 +289,7 @@ export class CapabilityBroker {
   constructor(config: CapabilityBrokerConfig) {
     this.#grants = config.grants;
     this.#hostFs = config.hostFs ?? null;
+    this.#mcpSecrets = config.mcpSecrets ?? null;
     this.#randomBytes = config.randomBytes ?? nodeRandomBytes;
     this.#runContexts =
       config.runContexts ??
@@ -477,6 +555,9 @@ export class CapabilityBroker {
         respondJson(res, 200, { released });
         return;
       }
+      case ROUTES.mcpSecret:
+        await this.#handleMcpSecret(body, res);
+        return;
       case ROUTES.workspaceHostSessions:
         await this.#handleWorkspaceHostSession(body, res);
         return;
@@ -535,6 +616,60 @@ export class CapabilityBroker {
       }
       const result = await runFsOp(hostFs, route, grant.root, params);
       respondJson(res, 200, result);
+    } catch (err) {
+      const { status, code } = fsErrorResponse(err);
+      respondJson(res, status, { error: code });
+    }
+  }
+
+  /**
+   * Resolve ONE MCP connector's connection material for the ACTIVE workspace.
+   *
+   * MCP tokens are minted when a connector connects, long after boot, so they
+   * cannot ride the supervisor's boot secrets — they must be read live. This
+   * is the only broker route that returns a secret, so it is deliberately the
+   * narrowest one:
+   *
+   *  - The caller is already authenticated by `#handle` (per-boot bearer +
+   *    exact child identity). An unauthenticated call never reaches here.
+   *  - The read is scoped to `SecretStorage`'s ACTIVE workspace, which lives in
+   *    main and is never caller-controlled. A caller MAY assert which workspace
+   *    it believes is active (`workspace_id`); that can only ever NARROW — a
+   *    mismatch is refused BEFORE the store is touched, and it can never widen
+   *    the read to another workspace. So a compromised run reaches exactly one
+   *    workspace's connectors: the one it is running in.
+   *  - Nothing here logs, and no failure path echoes the record. The token
+   *    appears in exactly one place: the `token` field of a 200 body.
+   *  - There is no partial success. A missing, unreadable, or malformed record
+   *    is `not_found` — never a 200 carrying an empty or absent token.
+   */
+  async #handleMcpSecret(body: unknown, res: ServerResponse): Promise<void> {
+    const store = this.#mcpSecrets;
+    if (store === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    try {
+      const params = requireRecord(body);
+      const serverId = requireOpaqueId(params, "server_id");
+      const asserted = optionalString(params, "workspace_id");
+      const active = store.getActiveWorkspace();
+      // Signed out: there is no active workspace to read under. Fail closed
+      // rather than fall back to "whatever is on disk".
+      if (active === null) {
+        throw new FsError("permission_denied", "no active workspace");
+      }
+      if (asserted !== undefined && asserted !== active) {
+        // The caller asked for a workspace that is not the active one. Refuse
+        // without touching the store, so this cannot become an existence
+        // oracle for another workspace's connectors.
+        throw new FsError("permission_denied", "workspace gate rejected read");
+      }
+      // The store re-applies its own gate on this call; if the active
+      // workspace changed between the two lines it returns null and we fail
+      // closed below, exactly as if the record were absent.
+      const record = await store.get(active, MCP_SECRET_KIND, serverId);
+      respondJson(res, 200, mcpSecretWire(record));
     } catch (err) {
       const { status, code } = fsErrorResponse(err);
       respondJson(res, status, { error: code });
@@ -839,10 +974,14 @@ export class CapabilityBroker {
 
   #advertisedMethods(): readonly string[] {
     const authority = this.#workspaceAuthority;
-    if (authority === null) return ADVERTISED_METHODS;
     return ADVERTISED_METHODS.filter((method) => {
-      if (WORKSPACE_V2_METHODS.has(method))
+      // Advertised only when a secret store is wired. Without one the route
+      // answers `unsupported`, and a child that trusted the handshake would
+      // otherwise plan a direct MCP connection it can never open.
+      if (method === MCP_SECRET_METHOD) return this.#mcpSecrets !== null;
+      if (authority !== null && WORKSPACE_V2_METHODS.has(method)) {
         return authority.writableAvailable();
+      }
       return true;
     });
   }
@@ -1147,6 +1286,108 @@ function workspaceCommitWire(
     result_digest: result.resultDigest,
     safe_message: result.safeMessage,
   };
+}
+
+/**
+ * Validate one stored MCP record and project it onto the wire FIELD BY FIELD.
+ *
+ * Never a spread: a future writer that also stores a refresh token, a client
+ * secret, or the workspace it belongs to must not have that reach the child
+ * just because it landed in the same record.
+ *
+ * Anything unusable — absent, not an object, or a missing / mistyped /
+ * oversized field — fails closed to `not_found`. That means an unknown
+ * connector and a corrupt record are indistinguishable from outside, which is
+ * both the honest answer (there is no usable credential; reconnect it) and one
+ * that leaks nothing about which connectors exist in the workspace. No branch
+ * renders the record or any of its values into the error.
+ *
+ * What is deliberately NOT decided here: whether a URL/transport pair is
+ * openable. The broker reports what the device actually holds; ai-backend's
+ * connection builder owns that judgement, and deciding it twice would mean two
+ * answers to one question.
+ */
+function mcpSecretWire(record: unknown): Record<string, unknown> {
+  if (typeof record !== "object" || record === null || Array.isArray(record)) {
+    throw new FsError("not_found", "no usable mcp connection material");
+  }
+  const stored = record as Record<string, unknown>;
+  const wire: Record<string, unknown> = {
+    url: mcpSecretString(stored, "url", MAX_MCP_URL_CHARS),
+    transport: mcpSecretString(stored, "transport", MAX_MCP_TRANSPORT_CHARS),
+    token: mcpSecretString(stored, "token", MAX_MCP_TOKEN_CHARS),
+    expires_at: mcpSecretExpiry(stored.expires_at),
+  };
+  const headers = mcpSecretHeaders(stored.headers);
+  if (headers !== undefined) wire.headers = headers;
+  return wire;
+}
+
+/** A required, non-empty, length-capped record field. Never echoes the value. */
+function mcpSecretString(
+  stored: Record<string, unknown>,
+  key: string,
+  maxChars: number,
+): string {
+  const value = stored[key];
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maxChars
+  ) {
+    throw new FsError("not_found", `unusable mcp record field: ${key}`);
+  }
+  return value;
+}
+
+/**
+ * `expires_at` stays loose on purpose — an OAuth store legitimately holds epoch
+ * seconds, epoch milliseconds, or ISO-8601, and ai-backend's credential
+ * provider owns the single rule that normalizes them. Absent is normalized to
+ * `null` ("not stated") rather than dropped, so the consumer's unknown-lifetime
+ * branch is reached explicitly. A boolean or a NaN is a defect, not a time.
+ */
+function mcpSecretExpiry(value: unknown): string | number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_MCP_EXPIRY_CHARS
+  ) {
+    return value;
+  }
+  throw new FsError("not_found", "unusable mcp record field: expires_at");
+}
+
+/**
+ * Optional NON-SECRET request headers. Built on a null-prototype object because
+ * the record arrives from `JSON.parse`, where `__proto__` is an ordinary own
+ * key — copying it onto an `{}` literal would invoke the prototype setter.
+ */
+function mcpSecretHeaders(value: unknown): Record<string, string> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new FsError("not_found", "unusable mcp record field: headers");
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return undefined;
+  if (entries.length > MAX_MCP_HEADERS) {
+    throw new FsError("not_found", "unusable mcp record field: headers");
+  }
+  const headers = Object.create(null) as Record<string, string>;
+  for (const [key, header] of entries) {
+    if (
+      key.length === 0 ||
+      key.length > MAX_MCP_HEADER_CHARS ||
+      typeof header !== "string" ||
+      header.length > MAX_MCP_HEADER_CHARS
+    ) {
+      throw new FsError("not_found", "unusable mcp record field: headers");
+    }
+    headers[key] = header;
+  }
+  return headers;
 }
 
 // `path` must be PRESENT and a string, but an empty string is valid — it

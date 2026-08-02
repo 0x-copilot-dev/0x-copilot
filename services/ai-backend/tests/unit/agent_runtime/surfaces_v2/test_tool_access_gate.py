@@ -410,3 +410,146 @@ def test_gate_resume_is_frozen_contract() -> None:
     resume = GateResume(approved=True)
     with pytest.raises(Exception):
         resume.approved = False  # type: ignore[misc]
+
+
+# --------------------------------------------------------------------------- #
+# GateLedger — the WRITE-approval gate (park_for_approval)
+# --------------------------------------------------------------------------- #
+
+
+async def _park_write(
+    *,
+    arguments: dict | None = None,
+    tool_name: str = "create_issue",
+    op_class: str = "write",
+) -> dict:
+    """Park a write approval and return the interrupt payload it raised."""
+
+    interrupt = _CapturingInterrupt({"decision": "approved"})
+    gate = _gate(interrupt=interrupt)
+    await gate.park_for_approval(
+        card=_card(auth_state=McpAuthState.AUTHENTICATED),
+        tool_name=tool_name,
+        arguments={} if arguments is None else arguments,
+        op_class=op_class,
+        approval_id="mcp_write:run_abcdef:call_1",
+    )
+    assert len(interrupt.payloads) == 1
+    return interrupt.payloads[0]
+
+
+async def test_write_gate_opened_payload_is_the_full_safe_field_set() -> None:
+    """A parked write yields a ``gate.opened`` answering the audit question.
+
+    Exact-equality on the payload is the point: which connector, which
+    operation, and — via ``auth_state: insufficient`` — that this was a policy
+    gate rather than a broken credential. Nothing else may ride along.
+    """
+
+    payload = await _park_write(arguments={"title": "Fix login"})
+
+    assert GateLedger.is_write_gate(payload) is True
+    assert GateLedger.opened_payload(interrupt_payload=payload) == {
+        "v": 1,
+        "gate_id": "mcp_write:run_abcdef:call_1",
+        "connector": "linear",
+        "purpose": "approve write create_issue on linear",
+        "scopes": ["docs:read", "docs:write"],
+        "auth_state": GateAuthState.INSUFFICIENT.value,
+    }
+
+
+async def test_write_gate_ledger_purpose_never_carries_tool_arguments() -> None:
+    """The card may show the argument; the durable ledger row may not.
+
+    ``GatePurposeBuilder`` puts a sanitised primary argument on the interrupt
+    payload so a human can see what they are approving. Copying that into the
+    ledger — as the connect gate's builder does — would put caller-controlled
+    content, and with it any PII inside it, into a compliance record.
+    """
+
+    secret = "ada.lovelace@example.com wants **root** at https://evil.example/x"
+    payload = await _park_write(arguments={"title": secret})
+
+    # Present on the interactive card...
+    assert "ada.lovelace@example.com" in payload["gate"]["purpose"]
+    # ...and absent from every value of the ledger row.
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+    assert opened is not None
+    assert "ada.lovelace" not in repr(opened)
+    assert opened["purpose"] == "approve write create_issue on linear"
+
+
+async def test_write_gate_opened_payload_records_the_op_class() -> None:
+    """``op_class`` is the PDP's verdict and rides the purpose line verbatim."""
+
+    payload = await _park_write(tool_name="delete_issue", op_class="destructive")
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+
+    assert opened is not None
+    assert opened["purpose"] == "approve destructive delete_issue on linear"
+
+
+def test_write_gate_ledger_purpose_sanitises_an_untrusted_tool_name() -> None:
+    """``op`` comes off an MCP descriptor, so it is untrusted like an argument.
+
+    The identifier whitelist has to keep ``_`` (it is structure in a tool name,
+    not markdown emphasis) while still dropping newlines, link syntax and URLs.
+    """
+
+    payload = {
+        "api_event_type": "approval_requested",
+        "approval_id": "mcp_write:run_abcdef:call_1",
+        "server_name": "linear",
+        "gate": {
+            "v": 1,
+            "purpose": "to run x on Linear",
+            "scopes": [],
+            "op": "create_issue\n\n[see](https://evil.example/x)" + "z" * 200,
+            "op_class": "write",
+        },
+    }
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+
+    assert opened is not None
+    purpose = opened["purpose"]
+    assert purpose.startswith("approve write create_issue")
+    assert "\n" not in purpose
+    assert "http" not in purpose
+    assert "[" not in purpose
+    assert "(" not in purpose
+    # Bounded by the per-token cap even with an adversarially long name.
+    assert len(purpose) <= 120
+
+
+def test_connect_gate_is_not_classified_as_a_write_gate() -> None:
+    payload = {
+        "api_event_type": "mcp_auth_required",
+        "approval_id": "mcp_auth:run_abcdef:seed:linear",
+        "server_name": "linear",
+        "gate": {"v": 1, "purpose": "p", "scopes": [], "auth_state": "expired"},
+    }
+
+    assert GateLedger.is_write_gate(payload) is False
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+    assert opened is not None
+    assert opened["auth_state"] == "expired"
+    assert opened["purpose"] == "p"
+
+
+def test_plain_ask_a_question_is_not_a_gate() -> None:
+    """The model's own question tool shares the write gate's interrupt shape.
+
+    Only the additive ``gate`` block separates them, so an ordinary question
+    must classify as neither a gate nor a write gate.
+    """
+
+    payload = {
+        "api_event_type": "approval_requested",
+        "approval_kind": "ask_a_question",
+        "approval_id": "interrupt:run_abcdef:0",
+        "question": "Which project?",
+    }
+
+    assert GateLedger.is_write_gate(payload) is False
+    assert GateLedger.opened_payload(interrupt_payload=payload) is None

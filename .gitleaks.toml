@@ -20,6 +20,14 @@
 # constant trips `generic-api-key` purely on its `*_KEY = "<string>"` shape. We
 # allowlist the flag NAMESPACE (a value pattern), never a file or directory, so
 # a real secret in the same files is still caught.
+#
+# `gAAAAABmZm9vYmFy…` is `McpCatalogMixin.CatalogValues.SECRET_CANARY` — a FAKE
+# Fernet ciphertext (its plaintext decodes to "foobarsupersecrettoken"). It is
+# the negative control for the MCP filesystem catalog: the tests plant it in a
+# connector descriptor and assert it never reaches a model-visible file under
+# `/mcp/`. It has to LOOK exactly like a leaked vault token for that assertion
+# to mean anything, which is precisely why the entropy rule fires on it.
+# Allowlisted as a literal value, so a real Fernet token elsewhere still trips.
 
 [extend]
 useDefault = true
@@ -34,4 +42,5 @@ regexes = [
   # the constant (`key === SURFACES_V2_FLAG_KEY`), which gitleaks' generic-api-key
   # rule matches by entropy. Not a secret — allowlist the identifier.
   '''SURFACES_V2_FLAG_KEY''',
+  '''gAAAAABmZm9vYmFyc3VwZXJzZWNyZXR0b2tlbg''',
 ]

@@ -399,13 +399,14 @@ class ApprovalCoordinator:
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
             payload=resolved_payload,
         )
-        # PRD-C2 — a resolved mcp_auth gate emits ``gate.resolved`` beside the
-        # APPROVAL_RESOLVED event (v2 flag on): ``connected`` iff approved, else
+        # PRD-C2 — a resolved gate emits ``gate.resolved`` beside the
+        # APPROVAL_RESOLVED event: ``connected`` iff approved, else
         # ``cancelled``; the persisted write policy rides the connect payload so
         # the client fold flips the posture chip. Best-effort — the decision is
         # already durable; a ledger emit never rewrites it.
         await self._maybe_emit_gate_resolved(
             run=run,
+            approval=approval,
             approval_kind=approval_kind,
             gate_id=record.approval_id,
             connected=record.status is ApprovalStatus.APPROVED,
@@ -519,24 +520,48 @@ class ApprovalCoordinator:
         self,
         *,
         run: RunRecord,
+        approval: ApprovalRequestRecord,
         approval_kind: object,
         gate_id: str,
         connected: bool,
         write_policy: str | None,
     ) -> None:
-        """Emit ``gate.resolved`` for a resolved mcp_auth gate (v2 flag on).
+        """Emit ``gate.resolved`` for a resolved ToolAccessGate park.
 
-        Best-effort: the decision is already durable, so a ledger-emit failure is
-        logged and swallowed — parking / approval correctness never depend on it.
+        Two gate kinds resolve here and each is recognised on its own terms:
+
+        * the **OAuth-connect** gate — an ``mcp_auth`` approval, behind the v2
+          flag, exactly as PRD-C2 shipped it;
+        * the **write-approval** gate — an ``ask_a_question`` approval whose
+          metadata (a verbatim copy of the interrupt payload) carries the v2
+          ``gate`` block. Until this branch existed, an approved write executed
+          with no ``gate.resolved`` and no ``gate.opened`` before it, so the run
+          ledger could not say who let the write through or what happened next.
+
+        The write branch reads no flag of its own, deliberately: the ``gate``
+        block exists only because a gate actually parked, which is the same
+        condition that let ``gate.opened`` be emitted. Keying both halves of the
+        pair on one condition is what guarantees they stay paired — a flag
+        flipped between park and decision cannot strand an open gate that never
+        resolves (``PendingWorkProjector`` would report it pending forever).
+
+        Emission is in-run: the decision arrives while the run is parked on the
+        interrupt, so the append lands inside the causal ledger prefix and needs
+        no amendment. Best-effort otherwise: the decision is already durable, so
+        a ledger-emit failure — including a ``LedgerSealViolation`` from a run
+        that terminated while parked — is logged and swallowed rather than
+        failing a decision that has already been made.
         """
 
-        if approval_kind != Values.ApprovalKind.MCP_AUTH:
-            return
-        if not SurfacesV2Flag.enabled():
-            return
         try:
             from agent_runtime.surfaces_v2.gate import GateLedger
 
+            resolves_a_gate = GateLedger.is_write_gate(approval.metadata) or (
+                approval_kind == Values.ApprovalKind.MCP_AUTH
+                and SurfacesV2Flag.enabled()
+            )
+            if not resolves_a_gate:
+                return
             payload = GateLedger.resolved_payload(
                 gate_id=gate_id,
                 connected=connected,

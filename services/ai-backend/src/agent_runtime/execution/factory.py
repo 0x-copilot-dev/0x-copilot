@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import logging
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
@@ -46,13 +46,25 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
+from agent_runtime.capabilities.mcp.cards import McpServerCard, McpToolCallRequest
+from agent_runtime.capabilities.mcp.catalog import (
+    McpCatalogBuilder,
+    McpCatalogPublisher,
+    McpCatalogReader,
+    McpCatalogStore,
+)
+from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
+)
+from agent_runtime.capabilities.mcp.per_tool_registration import (
+    McpPerToolCollaborators,
+    McpPerToolRegistrar,
+    McpPerToolRegistration,
 )
 from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
@@ -298,10 +310,40 @@ async def _assemble_harness(
         agent_scratch=agent_scratch,
         memory_routes=_file_memory_routes(memory_backend),
     )
+    # The MCP filesystem catalog. One store, written by ``load_mcp_server`` and
+    # read by the ``/mcp/`` route — the two are composed together for this run,
+    # so the write surface needs no graph state and no persistence, exactly
+    # like ``/subagents/`` and ``/large_tool_results/``.
+    # ``mcp_catalog`` is rebound to what was actually MOUNTED: a run whose route
+    # declined must not hand the store to the load tool (see the note there).
+    deep_backend, mcp_catalog = _with_mcp_catalog_route(
+        deep_backend,
+        catalog=_mcp_catalog_store(
+            runtime_dependencies.mcp_registry,
+            runtime_dependencies.mcp_catalog_store,
+        ),
+        memory_backend=memory_backend,
+    )
+    # And populate it NOW, from the cards already resolved above — so `ls /mcp`
+    # lists the connected servers on the model's first turn, before it has
+    # called anything. Seeding after the mount, not before, because the mount is
+    # the single source of truth for whether a catalog exists this run.
+    _seed_mcp_catalog(mcp_catalog, mcp_servers)
 
+    # P2-8 — the per-tool MCP flip. Awaited here (not inside
+    # ``_model_visible_tools``, which is sync and stays sync) because the source
+    # opens one discovery session per authorized connector. Returns ``None``
+    # whenever the flip declines — flag off, no credential plane, nothing loaded
+    # — and the legacy ``call_mcp_tool`` branch below then runs untouched.
+    canonical_tools = tuple(_canonical_graph_tool(tool) for tool in tools)
+    mcp_per_tool = await _mcp_per_tool_registration(
+        runtime_context=runtime_context,
+        runtime_dependencies=runtime_dependencies,
+        tools=canonical_tools,
+    )
     try:
         model_tools = _model_visible_tools(
-            tools=tuple(_canonical_graph_tool(tool) for tool in tools),
+            tools=canonical_tools,
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -315,6 +357,8 @@ async def _assemble_harness(
             capability_catalog=runtime_dependencies.capability_catalog,
             capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
+            mcp_per_tool=mcp_per_tool,
+            mcp_catalog=mcp_catalog,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
         # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
@@ -466,7 +510,9 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=_with_host_bulk_read_scope(
-                    enforced_tools.interrupt_on,
+                    _with_mcp_per_tool_interrupts(
+                        enforced_tools.interrupt_on, mcp_per_tool
+                    ),
                     workspace_backend,
                     granted_host_roots=granted_host_roots,
                     agent_scratch=agent_scratch,
@@ -540,6 +586,267 @@ async def _assemble_harness(
     )
 
 
+async def _mcp_per_tool_registration(
+    *,
+    runtime_context: AgentRuntimeContext,
+    runtime_dependencies: RuntimeDependencies,
+    tools: Sequence[object],
+) -> McpPerToolRegistration | None:
+    """Build the P2-8 per-tool MCP surface, or ``None`` to keep the gateway.
+
+    Three jobs, all of which have to happen before ``_model_visible_tools``
+    composes: resolve the reserved native names so a connector cannot shadow a
+    builtin, run the (async) load, and publish the resulting
+    ``tool_name -> server_slug`` snapshot to the worker's stream seam so a
+    per-tool call still carries its connector identity.
+
+    The publish is deliberately here and not inside the registrar: the registrar
+    is domain code that must not know a worker exists, and the sink is an
+    injected port on ``RuntimeDependencies`` (``None`` off the worker path).
+    """
+
+    registration = await McpPerToolRegistrar.build(
+        runtime_context=runtime_context,
+        mcp_registry=runtime_dependencies.mcp_registry,
+        collaborators=_mcp_per_tool_collaborators(runtime_dependencies),
+        gate=_tool_access_gate(  # type: ignore[arg-type]
+            auth_session_creator=_auth_session_creator(
+                runtime_dependencies.mcp_registry
+            ),
+            runtime_context=runtime_context,
+        ),
+        reserved_names=_reserved_tool_names(
+            tools,
+            mcp_registry=runtime_dependencies.mcp_registry,
+            skill_registry=runtime_dependencies.skill_registry,
+        ),
+    )
+    if registration is None:
+        return None
+    sink = runtime_dependencies.mcp_connector_resolver_sink
+    publish = getattr(sink, "publish_connector_resolver", None)
+    if callable(publish):
+        publish(runtime_context.run_id, registration.resolver)
+    return registration
+
+
+def _mcp_per_tool_collaborators(
+    runtime_dependencies: RuntimeDependencies,
+) -> McpPerToolCollaborators | None:
+    """Narrow the injected credential plane to its concrete type, or ``None``.
+
+    An unset (or wrongly-typed) field is not an error: it is the production
+    default while the desktop keychain writer is missing, and it means "keep the
+    legacy gateway" — never "register a connector surface with no credentials".
+    """
+
+    collaborators = runtime_dependencies.mcp_per_tool_collaborators
+    if isinstance(collaborators, McpPerToolCollaborators):
+        return collaborators
+    return None
+
+
+def _with_mcp_per_tool_interrupts(
+    interrupt_on: Mapping[str, object],
+    registration: McpPerToolRegistration | None,
+) -> dict[str, object]:
+    """Merge the descriptor-driven per-tool approval entries into ``interrupt_on``.
+
+    A no-op — and a plain copy of the input — when the flip declined or emitted
+    nothing, which is the default and keeps the legacy map byte-identical. The
+    existing entries win on a name collision: they came from the run's tool-use
+    policy, which is the stricter, admin-owned source.
+    """
+
+    if registration is None or not registration.interrupt_on:
+        return dict(interrupt_on)
+    return {**registration.interrupt_on, **interrupt_on}
+
+
+def _reserved_tool_names(
+    tools: Sequence[object],
+    *,
+    mcp_registry: object,
+    skill_registry: object | None,
+) -> frozenset[str]:
+    """Names already claimed on this run's model tool surface.
+
+    One definition, two readers: ``_model_visible_tools`` uses it for the MCP
+    loader's collision check, and the per-tool registration passes it to the
+    source as ``reserved_names`` so a connector tool cannot take a native name.
+    """
+
+    return _local_tool_names(
+        tools,
+        include_mcp_tools=callable(getattr(mcp_registry, "resolve_server", None)),
+        include_auth_mcp=_auth_session_creator(mcp_registry) is not None,
+        include_skill_loader=skill_registry is not None
+        and callable(getattr(skill_registry, "load_skill_by_name", None)),
+        include_mcp_discovery=True,
+    )
+
+
+def _mcp_catalog_store(
+    mcp_registry: object, injected: object | None = None
+) -> McpCatalogPublisher | None:
+    """One catalog store per run, or ``None`` when this run has no MCP seam.
+
+    Gated on the same signal the loader tool is gated on, so a run that cannot
+    load a server never mounts an empty ``/mcp/`` directory for the model to
+    wonder about — and composes byte-for-byte as it did before the catalog
+    existed.
+
+    ``injected`` is the worker's durable, conversation-scoped store (real files
+    under the agent scratch). When it is absent — web, postgres, in-memory, and
+    every unit test — the in-process store is composed instead. Exactly one of
+    the two is live per run; there is never a file tree with an in-memory copy
+    in front of it.
+    """
+
+    if not callable(getattr(mcp_registry, "resolve_server", None)):
+        _LOGGER.info(_McpCatalogLog.DECLINED, _McpCatalogDecline.NO_MCP_SEAM)
+        return None
+    if injected is not None:
+        if _implements_catalog_seam(injected):
+            return cast(McpCatalogPublisher, injected)
+        # A store that cannot serve the seam would fail the run at the first
+        # ``ls``. Falling back costs the durability, not the catalog.
+        _LOGGER.warning(_McpCatalogLog.INJECTED_UNUSABLE)
+    _LOGGER.info(_McpCatalogLog.MEMORY_STORE)
+    return McpCatalogStore()
+
+
+def _implements_catalog_seam(store: object) -> bool:
+    """Whether ``store`` offers both halves of the catalog seam."""
+
+    return all(
+        callable(getattr(store, method, None))
+        for method in ("publish", "seed", "snapshot", "directories")
+    )
+
+
+def _seed_mcp_catalog(
+    catalog: McpCatalogPublisher | None, mcp_servers: Sequence[object]
+) -> None:
+    """Populate ``/mcp/`` from the authorized cards, before the model runs.
+
+    THE bug this exists for: the ``load_mcp_server`` description advertises
+    ``/mcp/<server>/`` in the tool schema, so a model reads it and probes ``ls
+    /mcp`` *first*. Nothing had published yet, the listing came back empty and
+    successful, and the model concluded the connector had no browsable
+    filesystem and stopped. Seeding costs no network call and no tool discovery
+    — every byte comes from the compact card the registry already resolved for
+    this run — so it is affordable on every run for every connected server.
+
+    ``load_mcp_server`` then REPLACES that server's directory with the full
+    tool tree. A server already loaded (previous turn, or before an approval
+    interrupt, on the durable store) is left exactly as it is.
+    """
+
+    if catalog is None:
+        return
+    cards = tuple(card for card in mcp_servers if isinstance(card, McpServerCard))
+    if len(cards) != len(mcp_servers):
+        # A registry that lists something other than a card is a contract
+        # violation, not a reason to lose the catalog for the cards that are
+        # valid — but it must be visible.
+        _LOGGER.warning(
+            _McpCatalogLog.SEED_SKIPPED_CARDS, len(mcp_servers) - len(cards)
+        )
+    catalog.seed(McpCatalogBuilder.seed_all(cards))
+
+
+class _McpCatalogLog:
+    """Structured events for the catalog's composition, in one place.
+
+    A live "``ls /mcp`` came back empty" report has to be diagnosable from the
+    log alone: these five lines say which store was chosen, where its files are,
+    whether the route mounted, how many servers were seeded — and, on every
+    decline, exactly which branch declined.
+    """
+
+    MOUNTED = "mcp_catalog.mounted path=%s composite=%s"
+    DECLINED = "mcp_catalog.not_mounted reason=%s"
+    MEMORY_STORE = "mcp_catalog.store=memory durable=false"
+    SEED_SKIPPED_CARDS = "mcp_catalog.seed_skipped_non_cards count=%d"
+    INJECTED_UNUSABLE = "mcp_catalog.injected_store_unusable falling_back=memory"
+
+
+class _McpCatalogDecline:
+    """Why a run mounted no ``/mcp/`` route. Exactly one is logged per decline."""
+
+    #: The registry exposes no ``resolve_server``, so this run cannot load a
+    #: server at all and an empty ``/mcp/`` would be a puzzle, not a capability.
+    NO_MCP_SEAM = "no_mcp_seam"
+    #: The memory backend is itself a ``DeepAgentsBackend`` the builder passes
+    #: straight through; wrapping it would drop the ``memory_paths`` attribute
+    #: deepagents reads off it. A working memory surface is not worth trading
+    #: for a browsable one. Test / direct-caller path only — on the worker path
+    #: a composite always exists.
+    PASSTHROUGH_MEMORY_BACKEND = "passthrough_memory_backend"
+
+
+def _with_mcp_catalog_route(
+    deep_backend: object | None,
+    *,
+    catalog: McpCatalogPublisher | None,
+    memory_backend: object,
+) -> tuple[object | None, McpCatalogPublisher | None]:
+    """Mount the read-only MCP catalog at ``/mcp/`` on the composed backend.
+
+    Returns ``(backend, mounted_catalog)``. The second element is the catalog
+    ONLY when the route was actually mounted, and it is what the load tool must
+    be given — handing the store to the tool while the route declined would have
+    ``load_mcp_server`` publish into a store nothing can read and return a
+    pointer to a ``/mcp/…/SERVER.md`` that does not exist, losing the descriptors
+    outright. That is strictly worse than the blob it replaced, so the mount is
+    the single source of truth for whether a catalog exists this run.
+
+    Additive by construction. When a ``CompositeBackend`` already exists the
+    route joins it (same default, same other routes). When none exists we build
+    one whose default is deepagents' own ``StateBackend`` — the object the
+    builder would have constructed anyway for ``backend=None``.
+
+    The ONE case left untouched is a run whose memory backend is itself a
+    ``DeepAgentsBackend``: the builder passes that object straight through when
+    no composite exists, and wrapping it would drop the ``memory_paths``
+    attribute deepagents reads off it. That run keeps its exact composition and
+    simply has no catalog mount, rather than trading a working memory surface
+    for a browsable one.
+    """
+
+    if catalog is None:
+        return deep_backend, None
+    from deepagents.backends.composite import CompositeBackend  # noqa: PLC0415
+
+    backend = McpCatalogBackend(cast(McpCatalogReader, catalog))
+    if isinstance(deep_backend, CompositeBackend):
+        _LOGGER.info(_McpCatalogLog.MOUNTED, McpCatalogBackend.PATH_PREFIX, True)
+        return (
+            CompositeBackend(
+                default=deep_backend.default,
+                routes={**deep_backend.routes, McpCatalogBackend.PATH_PREFIX: backend},
+                artifacts_root=deep_backend.artifacts_root,
+            ),
+            catalog,
+        )
+    if deep_backend is not None or isinstance(memory_backend, DeepAgentsBackend):
+        _LOGGER.warning(
+            _McpCatalogLog.DECLINED, _McpCatalogDecline.PASSTHROUGH_MEMORY_BACKEND
+        )
+        return deep_backend, None
+    from deepagents.backends.state import StateBackend  # noqa: PLC0415
+
+    _LOGGER.info(_McpCatalogLog.MOUNTED, McpCatalogBackend.PATH_PREFIX, False)
+    return (
+        CompositeBackend(
+            default=StateBackend(),
+            routes={McpCatalogBackend.PATH_PREFIX: backend},
+        ),
+        catalog,
+    )
+
+
 def _model_visible_tools(
     *,
     tools: Sequence[object],
@@ -556,6 +863,8 @@ def _model_visible_tools(
     capability_catalog: object | None = None,
     capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
+    mcp_per_tool: McpPerToolRegistration | None = None,
+    mcp_catalog: McpCatalogPublisher | None = None,
 ) -> tuple[object, ...]:
     # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
     # the owner of that tool's schema text. The declarations are what the
@@ -579,13 +888,10 @@ def _model_visible_tools(
         )
     )
     auth_session_creator = _auth_session_creator(mcp_registry)
-    local_tool_names = _local_tool_names(
+    local_tool_names = _reserved_tool_names(
         model_tools,
-        include_mcp_tools=callable(getattr(mcp_registry, "resolve_server", None)),
-        include_auth_mcp=auth_session_creator is not None,
-        include_skill_loader=skill_registry is not None
-        and callable(getattr(skill_registry, "load_skill_by_name", None)),
-        include_mcp_discovery=True,
+        mcp_registry=mcp_registry,
+        skill_registry=skill_registry,
     )
     # The loader consumes the explicit cache port, allowing the revision-aware
     # decorator to compose here without a concrete-cache ``isinstance`` gate.
@@ -613,27 +919,49 @@ def _model_visible_tools(
                         loader=loader,
                         runtime_context=runtime_context,
                         local_tool_names=local_tool_names,
+                        # With a catalog wired the load returns a POINTER to
+                        # ``/mcp/<server>/`` instead of every descriptor; the
+                        # 70 KB single-line blob is never produced.
+                        catalog=mcp_catalog,
                     ),
                     LoadMcpServerInput,
                 ),
                 owner=ModelToolOwner.MCP,
             )
         )
-        mcp_dispatcher = CallMcpTool(
-            registry=mcp_registry,  # type: ignore[arg-type]
-            loader=loader,
-            runtime_context=runtime_context,
-            gate=_tool_access_gate(
-                auth_session_creator=auth_session_creator,
-                runtime_context=runtime_context,
-            ),
-        )
-        model_tools.append(
-            ModelToolDeclaration.declared(
-                _structured_tool(mcp_dispatcher, McpToolCallRequest),
-                owner=ModelToolOwner.MCP,
+        if mcp_per_tool is not None:
+            # P2-8 flip — one model tool per REAL MCP tool, each already wrapped
+            # in the fixed POLICY → EXEC_POLICY → OBSERVE → ERROR_MAP →
+            # CITATIONS pipeline. The umbrella ``call_mcp_tool`` is not
+            # registered: the PDP decision it used to take is now taken by the
+            # POLICY stage of each of these tools, bound to a fixed
+            # ``(card, server, tool)`` instead of decoding one out of a
+            # model-supplied payload. ``mcp_dispatcher`` stays ``None``, so the
+            # F3 capability bridge (which borrows it as its dispatch route)
+            # registers nothing rather than reopening the retired gateway.
+            per_tool_mcp_tools = mcp_per_tool.tools
+            model_tools.extend(
+                ModelToolDeclaration.declared_all(
+                    per_tool_mcp_tools,
+                    owner=ModelToolOwner.MCP,
+                )
             )
-        )
+        else:
+            mcp_dispatcher = CallMcpTool(
+                registry=mcp_registry,  # type: ignore[arg-type]
+                loader=loader,
+                runtime_context=runtime_context,
+                gate=_tool_access_gate(
+                    auth_session_creator=auth_session_creator,
+                    runtime_context=runtime_context,
+                ),
+            )
+            model_tools.append(
+                ModelToolDeclaration.declared(
+                    _structured_tool(mcp_dispatcher, McpToolCallRequest),
+                    owner=ModelToolOwner.MCP,
+                )
+            )
     if auth_session_creator is not None:
         model_tools.append(
             ModelToolDeclaration.declared(

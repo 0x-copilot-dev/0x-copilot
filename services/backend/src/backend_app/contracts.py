@@ -47,6 +47,7 @@ _RESERVED_HEADER_NAMES = frozenset(
 class _Fields:
     """Flat constant pool for every field name referenced in validators or key lookups."""
 
+    ACCESS_MODE = "access_mode"
     ALLOWED_TOOLS = "allowed_tools"
     ARGS = "args"
     AUTH_STATE = "auth_state"
@@ -1304,6 +1305,59 @@ class InternalMcpLeaseFailure(BackendContract):
 
 class InternalMcpRpcResponse(BackendContract):
     payload: dict[str, Any]
+
+
+class InternalMcpAccessToken(BackendContract):
+    """A narrow, short-lived bearer for ONE MCP server, plus how to reach it.
+
+    Answered by ``POST /internal/v1/mcp/servers/{server_id}/access-token`` so a
+    runtime that opens the connector itself (direct-connect) never has to hold
+    the durable credential. What the caller receives is deliberately the whole
+    story: an endpoint, a transport, one access token, when that token stops
+    being usable, the scopes it carries, and the authority it was issued under.
+
+    Two properties are structural rather than conventional, because a
+    convention is what leaks:
+
+    * **The refresh token has nowhere to ride.** There is no field for it and
+      ``BackendContract`` forbids extras, so no future edit can add one by
+      accident — extending the credential's life stays a backend-only power.
+    * **The plaintext does not render.** ``repr=False`` keeps the token out of
+      every ``repr`` — the shape that reaches a traceback or a log line — while
+      ``model_dump`` still carries it, because the wire response is the one
+      place it is supposed to appear.
+
+    ``expires_at`` is the honest earlier of the stored credential's own expiry
+    and this service's issue ceiling, so the caller re-mints on a bounded
+    schedule and the access-mode gate is re-evaluated each time.
+    """
+
+    url: str = Field(min_length=1)
+    transport: McpTransport
+    access_token: str = Field(min_length=1, repr=False)
+    expires_at: datetime
+    scopes: tuple[str, ...] = ()
+    # The joined connector row's durable access mode, as the mint evaluated it
+    # (``McpRegistryService._require_mintable_access_mode``). Stated on the
+    # response so the authority a credential was released under travels WITH
+    # the credential and the holder cannot claim it did not know: ``read`` and
+    # ``off`` are refused, so a token only ever arrives carrying ``read_act``
+    # or ``None``.
+    #
+    # ``None`` means no connector row joins this server — nothing was
+    # configured, so nothing gated. Unlike ``McpServerResponse`` /
+    # ``InternalMcpServerCard``, which default that case to ``"read"``, it is
+    # NOT defaulted here: those fields describe what to render, where a
+    # default is harmless, while this one describes what was actually
+    # evaluated, where a default would be a claim. A holder that wants to fail
+    # closed refuses to act on ``None``; that decision is its own to make, and
+    # this field is what lets it make it.
+    #
+    # Typed ``str`` rather than ``ConnectorAccessMode`` for the same reason the
+    # two contracts above are: the enum lives in ``connectors.store``, which
+    # imports this module, so naming it here would close an import cycle. The
+    # service converts (``None if mode is None else mode.value``).
+    access_mode: str | None = None
 
 
 class TokenEnvelope(BackendContract):

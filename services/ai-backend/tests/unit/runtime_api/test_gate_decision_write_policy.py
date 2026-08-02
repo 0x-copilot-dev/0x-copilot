@@ -4,6 +4,12 @@ Pins the fail-closed axis: ``write_policy`` is allowed only on an mcp_auth
 approve; it is persisted (PRD-C1 connectors storage) BEFORE the decision is
 recorded so a persist failure 502s with the decision untouched; and a resolved
 gate emits ``gate.resolved`` with the outcome + persisted policy.
+
+Also pins the P1b **write-approval** gate's half of that pair. It resolves
+through the same endpoint but is a different approval kind
+(``ask_a_question``), so it was invisible to the mcp_auth-keyed emitter: an
+approved write executed with no ``gate.resolved``, leaving "who let this write
+through, and did it run" unanswerable from the ledger.
 """
 
 from __future__ import annotations
@@ -289,3 +295,197 @@ class TestCoordinatorGatePolicy:
             )
         assert exc.value.http_status == 422
         assert client.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# the write-approval gate (ToolAccessGate.park_for_approval)
+# --------------------------------------------------------------------------- #
+
+
+class WriteGateApprovalMixin:
+    """Seeds the approval a parked WRITE leaves behind.
+
+    ``metadata`` is a verbatim copy of the interrupt payload — that is what the
+    worker persists — so the additive ``gate`` block is what marks this approval
+    as a gate rather than an ordinary question from the model.
+    """
+
+    WRITE_APPROVAL = "mcp_write:run_gate:call_1"
+
+    @classmethod
+    async def seed_write_gate_approval(
+        cls, store: InMemoryRuntimeApiStore, *, with_gate: bool = True
+    ) -> None:
+        metadata: dict = {
+            "api_event_type": "approval_requested",
+            "event_type": "approval_requested",
+            "approval_kind": "ask_a_question",
+            "native_interrupt_id": cls.WRITE_APPROVAL,
+            "server_name": "linear",
+            "display_name": "Linear",
+            "question": "Allow Linear to run create_issue?",
+        }
+        if with_gate:
+            metadata["gate"] = {
+                "v": 1,
+                "purpose": "to run create_issue on Linear: Fix login",
+                "scopes": ["docs:write"],
+                "op": "create_issue",
+                "op_class": "write",
+            }
+        await store.seed_approval_request(
+            ApprovalRequestRecord(
+                approval_id=cls.WRITE_APPROVAL,
+                run_id=_RUN,
+                conversation_id=_CONV,
+                org_id=_ORG,
+                user_id=_USER,
+                metadata=metadata,
+            )
+        )
+
+    @staticmethod
+    async def decide(
+        coordinator: ApprovalCoordinator,
+        *,
+        approval_id: str,
+        decision: ApprovalDecision,
+    ) -> None:
+        await coordinator.record_approval_decision(
+            org_id=_ORG,
+            approval_id=approval_id,
+            request=ApprovalDecisionRequest(
+                decision=decision,
+                decided_by_user_id=_USER,
+                answer="ok" if decision is ApprovalDecision.APPROVED else None,
+            ),
+        )
+
+
+class TestWriteApprovalGateResolved(WriteGateApprovalMixin):
+    async def test_approved_write_emits_gate_resolved_with_the_safe_field_set(
+        self, monkeypatch
+    ) -> None:
+        """The audit gap, closed on the decision side.
+
+        Exact-equality on the payload: the gate id (which joins the
+        ``gate.opened`` row, the approval record, and the ``approval.accept``
+        audit row carrying org + user) plus the outcome, and nothing else. No
+        question text, no answer, no argument, no identity — attribution rides
+        the run envelope and the audit row, never a ledger payload.
+        """
+
+        monkeypatch.setenv("SURFACES_V2", "true")
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await self.seed_write_gate_approval(store)
+        coordinator = _coordinator(store, policy_client=_RecordingPolicyClient())
+
+        await self.decide(
+            coordinator,
+            approval_id=self.WRITE_APPROVAL,
+            decision=ApprovalDecision.APPROVED,
+        )
+
+        resolved = _gate_resolved_events(store)
+        assert len(resolved) == 1
+        assert resolved[0].payload == {  # type: ignore[union-attr]
+            "v": 1,
+            "gate_id": self.WRITE_APPROVAL,
+            "outcome": "connected",
+        }
+
+    async def test_declined_write_emits_a_cancelled_gate(self, monkeypatch) -> None:
+        monkeypatch.setenv("SURFACES_V2", "true")
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await self.seed_write_gate_approval(store)
+        coordinator = _coordinator(store, policy_client=_RecordingPolicyClient())
+
+        await self.decide(
+            coordinator,
+            approval_id=self.WRITE_APPROVAL,
+            decision=ApprovalDecision.REJECTED,
+        )
+
+        resolved = _gate_resolved_events(store)
+        assert len(resolved) == 1
+        assert resolved[0].payload["outcome"] == "cancelled"  # type: ignore[union-attr]
+
+    async def test_a_plain_ask_a_question_resolves_without_a_gate_event(
+        self, monkeypatch
+    ) -> None:
+        """The model's own question tool shares this approval kind exactly.
+
+        Only the ``gate`` block separates them, so an ordinary question must
+        leave the gate ledger untouched.
+        """
+
+        monkeypatch.setenv("SURFACES_V2", "true")
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await self.seed_write_gate_approval(store, with_gate=False)
+        coordinator = _coordinator(store, policy_client=_RecordingPolicyClient())
+
+        await self.decide(
+            coordinator,
+            approval_id=self.WRITE_APPROVAL,
+            decision=ApprovalDecision.APPROVED,
+        )
+
+        assert _gate_resolved_events(store) == []
+
+    async def test_gate_stays_paired_when_the_flag_flips_mid_run(
+        self, monkeypatch
+    ) -> None:
+        """A gate that opened must resolve, whatever the flag says later.
+
+        ``gate.opened`` was emitted because the interrupt carried a gate block;
+        the block is still there at decision time. Re-reading the flag here
+        instead would strand the gate open forever in the pending-work fold,
+        which reports a gate pending iff it has no matching resolve.
+        """
+
+        monkeypatch.setenv("SURFACES_V2", "false")
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await self.seed_write_gate_approval(store)
+        coordinator = _coordinator(store, policy_client=_RecordingPolicyClient())
+
+        await self.decide(
+            coordinator,
+            approval_id=self.WRITE_APPROVAL,
+            decision=ApprovalDecision.APPROVED,
+        )
+
+        assert len(_gate_resolved_events(store)) == 1
+
+    async def test_gate_resolved_lands_inside_the_causal_prefix(
+        self, monkeypatch
+    ) -> None:
+        """The run is parked on the interrupt, so the append is mid-run.
+
+        ``api/ledger_seal.py`` seals the prefix on the terminal event; a gate
+        resolved after it would be an event no live client can receive. Assert
+        the ordering directly: the resolve follows its ``approval_resolved`` and
+        no terminal event has been written.
+        """
+
+        monkeypatch.setenv("SURFACES_V2", "true")
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await self.seed_write_gate_approval(store)
+        coordinator = _coordinator(store, policy_client=_RecordingPolicyClient())
+
+        await self.decide(
+            coordinator,
+            approval_id=self.WRITE_APPROVAL,
+            decision=ApprovalDecision.APPROVED,
+        )
+
+        names = [event.event_type for event in store.events_by_run[_RUN]]
+        assert names == ["approval_resolved", "gate.resolved"]
+        assert not (
+            {"run_completed", "run_failed", "run_cancelled", "run_rejected"}
+            & set(names)
+        )

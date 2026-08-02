@@ -58,11 +58,20 @@ _NEVER_RETRY: tuple[type[BaseException], ...] = (
 class RetryingTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that retries transient inner failures.
 
-    The inner tool's ``name`` / ``description`` / ``args_schema`` are
-    propagated unchanged so the model sees an identical surface — only the
-    invocation path differs. After ``max_attempts`` attempts, the last
-    exception is re-raised so the runtime's normal ``tool_exception`` path
-    still applies for genuinely-broken tools.
+    The inner tool's surface is propagated unchanged so the model sees an
+    identical tool — only the invocation path differs. After ``max_attempts``
+    attempts, the last exception is re-raised so the runtime's normal
+    ``tool_exception`` path still applies for genuinely-broken tools.
+
+    "Surface" means the whole of it, not just the model-visible half. Build
+    every wrapper through :meth:`wrapping` rather than hand-listing fields at
+    the call site: the built-in ``web_search`` was constructed by hand with
+    ``name`` / ``description`` / ``args_schema`` only, so it silently dropped
+    the inner's ``response_format="content_and_artifact"``. LangChain reads
+    ``response_format`` off the tool it dispatches, so the inner kept returning
+    ``(content, artifact)`` while the wrapper promised a bare ``content`` — the
+    pair was stringified into ``ToolMessage.content`` and ``artifact`` was
+    ``None`` on every call.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -74,6 +83,50 @@ class RetryingTool(DelegatingTool):
     # Retried by default. Callers can narrow (e.g. ``(httpx.ConnectError,)``)
     # to avoid masking permanent failures. ``_NEVER_RETRY`` always wins.
     retry_exceptions: tuple[type[BaseException], ...] = (Exception,)
+
+    @classmethod
+    def wrapping(
+        cls,
+        inner: BaseTool,
+        *,
+        max_attempts: int | None = None,
+        initial_backoff_seconds: float | None = None,
+        max_backoff_seconds: float | None = None,
+        retry_exceptions: tuple[type[BaseException], ...] | None = None,
+    ) -> RetryingTool:
+        """Return a retry wrapper presenting ``inner``'s full tool surface.
+
+        The propagated field set is
+        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`'s
+        — the single definition of what a wrapper must reproduce from the tool
+        it wraps, covering both the model surface and the dispatch surface
+        (``response_format`` / ``return_direct`` / ``metadata`` / ``tags``).
+        Reusing it is the point: a second, parallel propagation list is exactly
+        how ``response_format`` went missing here in the first place.
+
+        A ``None`` retry knob keeps this class's own field default, so the
+        defaults live in one place instead of being restated in this signature.
+        """
+
+        # Imported inside the method on purpose: ``exec_policy_tool`` (reached
+        # from the ``capabilities.mcp`` package __init__) imports THIS module,
+        # so a module-level import of ``compose`` would close an import cycle
+        # and break every path that touches ``RetryingTool`` first.
+        from agent_runtime.capabilities.mcp.middleware.compose import (  # noqa: PLC0415
+            ToolSchemaIdentity,
+        )
+
+        overrides: dict[str, Any] = {
+            "max_attempts": max_attempts,
+            "initial_backoff_seconds": initial_backoff_seconds,
+            "max_backoff_seconds": max_backoff_seconds,
+            "retry_exceptions": retry_exceptions,
+        }
+        return cls(
+            **ToolSchemaIdentity.fields_of(inner),
+            inner=inner,
+            **{name: value for name, value in overrides.items() if value is not None},
+        )
 
     def _run(
         self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any

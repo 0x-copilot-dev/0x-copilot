@@ -59,11 +59,48 @@ a single time, and every later run finds it still connected. ``FS_F_FRESH=1``
 opts back into a virgin install for the narrower question "what does a
 brand-new install actually have?".
 
-Run it:
+**The connect MUST happen OUT OF BAND — clicking Connect under the harness
+cannot work.** ``tools/cli-testing/harness/driver.mjs`` (lines 149-162)
+replaces ``shell.openExternal`` in the Electron main process and merely
+RECORDS the URL: "suppress the OS-browser open; the test drives Chrome
+itself". Every journey runs through that driver, so the consent screen never
+opens, the loopback in ``apps/desktop/main/connectors/oauth-coordinator.ts``
+never receives a ``?code``, and the flow dies as a redirect-stage
+``ConnectorOAuthError`` — ``connect cancelled`` when anything cancels it, or
+``loopback redirect timed out`` when left to expire. This cost real debugging
+time once; it is a property of the harness, not a Linear or MCP defect.
+
+So: launch the app YOURSELF (a normal launch has a real ``openExternal``)
+against the SAME stage and the SAME profile this journey reuses, connect,
+quit — then run the journey.
+
+Step 1, once, by hand — note the subdir is ``journey-<DriverSession
+name>-reuse``, and this journey is ``DriverSession(name="fs-f-linear-mcp")``::
+
+    COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \\
+    COPILOT_DESKTOP_USER_DATA_SUBDIR=journey-fs-f-linear-mcp-reuse \\
+        npm run dev --workspace @0x-copilot/desktop
+    # "Tools" in the left rail -> Linear -> Connect -> finish OAuth in the
+    # browser -> the row must read Connected -> QUIT the app.
+
+Step 2, the journey itself::
 
     COPILOT_HOME="$PWD/apps/desktop/resources" \\
     COPILOT_JOURNEY_DOTENV=/path/to/services/ai-backend/.env \\
     python3 tools/desktop-journeys/filesystem-access/jF_linear_mcp.py
+
+``COPILOT_RUNTIME_DIR`` in step 1 must be the same directory as
+``COPILOT_HOME`` in step 2 — the connection lives in the supervised Postgres
+under that staged runtime, so a different stage is a different database. Do
+NOT add ``COPILOT_DEV=1`` / ``COPILOT_AUTH_MODE=dev-mint`` to step 1: a staged
+``COPILOT_RUNTIME_DIR`` alone already resolves production posture
+(``apps/desktop/main/posture.ts``), matching the driver's ``POSTURE=prod``,
+whereas dev-mint would sign in a DIFFERENT persona whose connectors this
+journey cannot see.
+
+**And re-stage after backend changes.** ``<COPILOT_HOME>/runtime/**`` is a
+SNAPSHOT of ``services/*``; a stale stage answers every question below about
+code that is no longer in the checkout. See ``tools/desktop-journeys/README.md``.
 
 Privacy: no key, token, header value, or ``.env`` content is ever written to
 evidence or a screenshot. Configured header values are recorded as

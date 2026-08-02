@@ -10,6 +10,11 @@ scopes, auth-state, op/op-class) — so the StreamOrchestrator's existing mcp_au
 handling and the legacy in-chat Connect card keep working unchanged, while the v2
 canvas gate card + ``gate.opened`` ledger event read the richer block.
 
+The gate has a second, non-OAuth mode: :meth:`ToolAccessGate.park_for_approval`
+parks a *write* the policy decision point returned GATE for. Both modes emit the
+same ``gate.opened`` / ``gate.resolved`` ledger pair — see :class:`GateLedger`
+for why that pair, and not a distinct write-approval event, is the right home.
+
 Fail-closed by construction (SDR §10 invariant 5, FR-C0):
 
 * an absent classifier ⇒ ``op_class = "write"`` (never silently "read");
@@ -121,6 +126,24 @@ class _Messages:
     def approve(*, display_name: str, op: str) -> str:
         return f"Allow {display_name} to run {op}?"
 
+    @staticmethod
+    def ledger_purpose(*, op_class: str, op: str, connector: str) -> str:
+        """The ``gate.opened`` purpose line for a WRITE-approval gate.
+
+        Built from the op class, the tool name, and the connector slug ONLY —
+        never from the call's arguments. The interactive card's purpose
+        (:class:`GatePurposeBuilder`) deliberately includes a sanitised primary
+        argument because a human approving an effect needs to see what it acts
+        on; the ledger row is a durable compliance record and must not carry
+        tool arguments, model text, or anything derived from them.
+
+        Callers pass identifier-sanitised tokens
+        (:meth:`GatePurposeBuilder.sanitize_identifier`), which also bounds the
+        line: three capped tokens plus fixed copy.
+        """
+
+        return f"approve {op_class} {op} on {connector}"
+
 
 class GateResume(RuntimeContract):
     """The gate's interpretation of a resume value.
@@ -146,9 +169,11 @@ class GatePurposeBuilder:
     """
 
     _MAX_LEN = 80
+    _MAX_IDENTIFIER_LEN = 64
     _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
     _MARKDOWN_RE = re.compile(r"[`*_#\[\]()<>|~]")
     _WHITESPACE_RE = re.compile(r"\s+")
+    _IDENTIFIER_RE = re.compile(r"[^A-Za-z0-9_.:-]")
 
     @classmethod
     def build(
@@ -192,6 +217,25 @@ class GatePurposeBuilder:
         without_markdown = cls._MARKDOWN_RE.sub("", without_urls)
         collapsed = cls._WHITESPACE_RE.sub(" ", without_markdown).strip()
         return collapsed[: cls._MAX_LEN]
+
+    @classmethod
+    def sanitize_identifier(cls, value: str) -> str:
+        """Reduce an untrusted *name* to an identifier: URLs out, whitelist in.
+
+        Public because :class:`GateLedger` builds the write gate's ledger purpose
+        line from a tool name and a connector slug, both of which arrive on an
+        MCP descriptor and are untrusted for the same reason arguments are.
+
+        A whitelist rather than :meth:`_sanitize`'s blacklist, because the two
+        inputs are different in kind. In free-form argument text ``_`` is
+        markdown emphasis and is stripped; in a tool name it is structure, and
+        stripping it turns ``create_issue`` into ``createissue`` — losing the
+        exact token the ledger row exists to record. Length is capped so an
+        adversarial descriptor cannot grow the purpose line without bound.
+        """
+
+        without_urls = cls._URL_RE.sub("", value)
+        return cls._IDENTIFIER_RE.sub("", without_urls)[: cls._MAX_IDENTIFIER_LEN]
 
 
 @dataclass(frozen=True)
@@ -469,14 +513,76 @@ class ToolAccessGate:
 class GateLedger:
     """Builds the ``gate.opened`` / ``gate.resolved`` ledger payloads (SDR §5).
 
-    The two emission sites live in different processes — ``gate.opened`` beside
-    the mcp_auth interrupt in the worker's ``StreamOrchestrator``, ``gate.resolved``
-    in the API's ``ApprovalCoordinator`` — so the payload shapes are centralised
-    here rather than duplicated. Both are strict SDR-verbatim dicts; the
-    transport projector re-filters them again on append.
+    The emission sites live in different processes — ``gate.opened`` beside the
+    interrupt in the worker's ``StreamOrchestrator``, ``gate.resolved`` in the
+    API's ``ApprovalCoordinator`` — so the payload shapes are centralised here
+    rather than duplicated. Both are strict SDR-verbatim dicts; the transport
+    projector re-filters them again on append.
+
+    Two gate KINDS ride these two event types
+    -----------------------------------------
+    * the **OAuth-connect** gate (:meth:`ToolAccessGate.park`), which rides an
+      ``mcp_auth_required`` interrupt; and
+    * the **write-approval** gate (:meth:`ToolAccessGate.park_for_approval`),
+      which rides an ``approval_requested`` / ``ask_a_question`` interrupt.
+
+    Only the first emitted a ledger pair when P1b shipped, so a write that
+    parked, was approved by a human, and then executed left NO gate trail at
+    all: "who approved this write, when, and what happened" was unanswerable
+    from the events. This class closes that.
+
+    Why reuse ``gate.opened`` / ``gate.resolved`` rather than mint a distinct
+    write-approval event
+    --------------------------------------------------------------------------
+    1. **They are the run's one gate vocabulary, and every consumer keys on it.**
+       ``PendingWorkProjector`` calls a gate pending iff a ``gate.opened`` has no
+       later ``gate.resolved``; ``receipt_export_v2._fold_gates`` builds the
+       receipt's gate rows from the pair; ``receipt_v2`` warns on a resolve
+       without an open; the client canvas folds the pair into the gate card. A
+       new event type would have left the write gate invisible to all four —
+       i.e. it would have re-created the very hole being closed, one indirection
+       further out.
+    2. **The vocabulary is a pinned cross-language SSOT.** ``LedgerEventType``,
+       ``LEDGER_EVENT_TYPES`` and the JSON contract in ``service-contracts`` are
+       asserted equal, in order, at exactly 34 entries, with per-event
+       required/property parity against the Pydantic models and golden replay
+       fixtures (``test_ledger_contract_parity``). A 35th event type is a
+       contract change spanning that shared package, the TS transport tuple, the
+       wire enum, the projector allow-list and the goldens — not a runtime fix.
+    3. **The fields fit once read at gate altitude**, which is the level the SDR
+       defines them at. Two spellings are OAuth-flavoured and are given their
+       precise reading here rather than left to the reader:
+
+       * ``auth_state`` — the connect gate emits ``missing`` / ``expired``. The
+         write gate emits the third, until-now-unused member, ``insufficient``:
+         *the standing authorization is not sufficient for THIS operation*. That
+         is exactly true of an authenticated (or ``auth_mode=NONE``) connector
+         whose policy requires a human grant per write, and it is the only
+         member that does not assert a broken credential. It doubles as the
+         machine-readable discriminator between the two gate kinds, so no new
+         field is needed to tell them apart.
+       * ``outcome`` — ``connected`` means the gate was passed (the grant was
+         given), ``cancelled`` that it was withheld.
+
+    Answering the audit question
+    ----------------------------
+    *which connector* → ``connector``; *which operation* → ``purpose``, built
+    from the op class + tool name + connector slug and NOTHING else; *what the
+    decision was* → ``outcome``; *who made it* → the ``gate_id``, which is the
+    ``approval_id``, which is the ``resource_id`` of the ``approval.accept`` /
+    ``approval.reject`` audit row the same coordinator writes, carrying the
+    org + user. Identity is deliberately not in the payload: ledger payloads
+    carry no org/user fields by rule — attribution rides the run envelope — and
+    ``test_no_org_or_user_fields_on_any_payload`` enforces it across all 34
+    payload models.
     """
 
     GATE_KEY = _PayloadKey.GATE
+
+    #: Wire ``api_event_type`` of the interrupt the write gate rides (the connect
+    #: gate rides ``_Values.EVENT_TYPE``). A bare string, so this domain module
+    #: never imports the transport enum to classify.
+    WRITE_INTERRUPT = _Values.APPROVAL_REQUESTED
 
     @classmethod
     def gate_block(cls, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -485,19 +591,37 @@ class GateLedger:
         Its presence is the flag signal — the block is added by :meth:`park` only
         when ``SurfacesV2Flag`` is on, so a flag-off mcp_auth interrupt has no
         block and no ``gate.opened`` is emitted (byte-identical stream).
+
+        It is also what separates a gate from a look-alike: the model's own
+        ``ask_a_question`` tool raises an interrupt with the same
+        ``approval_requested`` / ``ask_a_question`` shape the write gate reuses,
+        and carries no block — so it can never be mistaken for a gate here.
         """
 
         block = payload.get(cls.GATE_KEY)
         return block if isinstance(block, Mapping) else None
 
     @classmethod
+    def is_write_gate(cls, payload: Mapping[str, Any]) -> bool:
+        """True iff this payload is a WRITE-approval gate (not an OAuth connect).
+
+        Accepts either the raw interrupt payload (worker side) or the approval
+        record's ``metadata``, which the worker persists as a verbatim copy of
+        that payload — so both emission sites classify off one predicate.
+        """
+
+        if cls.gate_block(payload) is None:
+            return False
+        return payload.get(_PayloadKey.API_EVENT_TYPE) == cls.WRITE_INTERRUPT
+
+    @classmethod
     def opened_payload(
         cls, *, interrupt_payload: Mapping[str, Any]
     ) -> dict[str, Any] | None:
-        """Build a ``gate.opened`` payload from an mcp_auth interrupt payload.
+        """Build a ``gate.opened`` payload from a gate interrupt payload.
 
-        Returns ``None`` when the interrupt carries no v2 gate block (flag off) —
-        the caller then emits nothing.
+        Returns ``None`` when the interrupt carries no v2 gate block (flag off,
+        or an interrupt that is not a gate at all) — the caller emits nothing.
         """
 
         block = cls.gate_block(interrupt_payload)
@@ -506,16 +630,61 @@ class GateLedger:
         gate_id = interrupt_payload.get(_PayloadKey.APPROVAL_ID)
         connector = interrupt_payload.get(_PayloadKey.SERVER_NAME)
         scopes = block.get(_GateKey.SCOPES)
+        safe_connector = connector if isinstance(connector, str) else ""
         return {
             _GateKey.V: _Values.PAYLOAD_V,
             "gate_id": gate_id if isinstance(gate_id, str) else "",
-            "connector": connector if isinstance(connector, str) else "",
-            _GateKey.PURPOSE: str(block.get(_GateKey.PURPOSE, "")),
-            _GateKey.SCOPES: list(scopes) if isinstance(scopes, (list, tuple)) else [],
-            _GateKey.AUTH_STATE: str(
-                block.get(_GateKey.AUTH_STATE, GateAuthState.MISSING.value)
+            "connector": safe_connector,
+            _GateKey.PURPOSE: cls._purpose(
+                interrupt_payload, block, connector=safe_connector
             ),
+            _GateKey.SCOPES: list(scopes) if isinstance(scopes, (list, tuple)) else [],
+            _GateKey.AUTH_STATE: cls._auth_state(interrupt_payload, block),
         }
+
+    @classmethod
+    def _purpose(
+        cls,
+        interrupt_payload: Mapping[str, Any],
+        block: Mapping[str, Any],
+        *,
+        connector: str,
+    ) -> str:
+        """The gate's ledger purpose line.
+
+        Connect gate: the card's purpose verbatim (unchanged). Write gate: a
+        rebuilt, argument-free line — the card's purpose may embed a sanitised
+        primary argument for the human approving it, which must never become a
+        durable ledger row. ``op`` and the connector slug come off an MCP
+        descriptor and are therefore untrusted; every token goes through
+        :meth:`GatePurposeBuilder.sanitize_identifier`.
+        """
+
+        if not cls.is_write_gate(interrupt_payload):
+            return str(block.get(_GateKey.PURPOSE, ""))
+        return _Messages.ledger_purpose(
+            op_class=GatePurposeBuilder.sanitize_identifier(
+                str(block.get(_GateKey.OP_CLASS, _Values.OP_CLASS_WRITE))
+            ),
+            op=GatePurposeBuilder.sanitize_identifier(str(block.get(_GateKey.OP, ""))),
+            connector=GatePurposeBuilder.sanitize_identifier(connector),
+        )
+
+    @classmethod
+    def _auth_state(
+        cls, interrupt_payload: Mapping[str, Any], block: Mapping[str, Any]
+    ) -> str:
+        """``missing`` / ``expired`` for a connect gate, ``insufficient`` for a write.
+
+        A write gate's block carries no ``auth_state`` — there is no credential
+        problem to report — so defaulting it to ``missing`` (as the connect
+        branch does when a block omits it) would put a falsehood in a compliance
+        record. See the class docstring for the reading of ``insufficient``.
+        """
+
+        if cls.is_write_gate(interrupt_payload):
+            return GateAuthState.INSUFFICIENT.value
+        return str(block.get(_GateKey.AUTH_STATE, GateAuthState.MISSING.value))
 
     @classmethod
     def resolved_payload(
@@ -525,7 +694,13 @@ class GateLedger:
         connected: bool,
         write_policy: str | None,
     ) -> dict[str, Any]:
-        """Build a ``gate.resolved`` payload (outcome + optional write policy)."""
+        """Build a ``gate.resolved`` payload (outcome + optional write policy).
+
+        Shared by both gate kinds: ``connected`` is "the gate was passed" — a
+        connector authenticated, or a write granted — and ``cancelled`` is the
+        withheld case. ``write_policy`` rides only the connect gate; the decision
+        endpoint rejects it (422) on any other approval kind.
+        """
 
         payload: dict[str, Any] = {
             _GateKey.V: _Values.PAYLOAD_V,
