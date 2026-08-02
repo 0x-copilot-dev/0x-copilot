@@ -31,7 +31,6 @@ import { RunDestination } from "./RunDestination";
 const CONVERSATION_ID = "conv_workspace_1" as ConversationId;
 const RUN_ID = "run_workspace_1";
 const STAGE_ID = "stage_workspace_1";
-const MCP_STAGE_ID = "stage_mcp_1";
 const ARTIFACT_ID = "artifact_workspace_1";
 const PROPOSAL_DIGEST = "a".repeat(64);
 const TARGET_DIGEST = "b".repeat(64);
@@ -66,15 +65,6 @@ class WorkspaceTransport implements Transport {
     decision: "approve",
     status: "approved",
   };
-  mcpEffectDecisionResponse: unknown = {
-    stage_id: MCP_STAGE_ID,
-    revision: 1,
-    decision_ledger_id: "ledger_mcp_1",
-    proposal_digest: PROPOSAL_DIGEST,
-    target_digest: TARGET_DIGEST,
-    decision: "approve",
-    status: "approved",
-  };
 
   async request<TRes>(request: TypedRequest): Promise<TRes> {
     this.requests.push(request);
@@ -85,9 +75,6 @@ class WorkspaceTransport implements Transport {
     }
     if (request.path.includes(`/effect-stages/${STAGE_ID}/decisions`)) {
       return this.effectDecisionResponse as TRes;
-    }
-    if (request.path.includes(`/effect-stages/${MCP_STAGE_ID}/decision`)) {
-      return this.mcpEffectDecisionResponse as TRes;
     }
     return {
       latest_run_id: RUN_ID,
@@ -221,20 +208,6 @@ function workspaceStageEvents(includeArtifact = false): RuntimeEventEnvelope[] {
   return events;
 }
 
-function mcpStageEvent(): RuntimeEventEnvelope {
-  return runtimeEvent(1, "effect.staged", {
-    v: 1,
-    stage_id: MCP_STAGE_ID,
-    operation_id: "operation_mcp_1",
-    executor: "mcp",
-    target_digest: TARGET_DIGEST,
-    proposal_digest: PROPOSAL_DIGEST,
-    policy: "ask",
-    display_target: "send_email on gmail",
-    author_actor: "user",
-  });
-}
-
 function renderRun(options: {
   readonly transport: WorkspaceTransport;
   readonly workspaceStageHost?: WorkspaceStageHost;
@@ -274,40 +247,6 @@ async function mountWorkspaceStage(
 }
 
 describe("RunDestination workspace EffectStage integration", () => {
-  it("makes an ASK MCP effect actionable only through the generic decision route", async () => {
-    const transport = new WorkspaceTransport();
-    renderRun({ transport });
-    await screen.findByTestId("thread-canvas");
-    await waitFor(() => expect(transport.sessionSubscription).toBeDefined());
-    act(() => {
-      transport.sessionSubscription?.onMessage?.(
-        JSON.stringify(mcpStageEvent()),
-      );
-    });
-    await screen.findByTestId("effect-stage-card");
-
-    fireEvent.click(screen.getByTestId("effect-stage-approve"));
-    await waitFor(() =>
-      expect(
-        transport.requests.find((request) =>
-          request.path.includes(`/effect-stages/${MCP_STAGE_ID}/decision`),
-        ),
-      ).toEqual({
-        method: "POST",
-        path: `/v1/agent/effect-stages/${MCP_STAGE_ID}/decision?run_id=${RUN_ID}`,
-        body: {
-          revision: 1,
-          decision: "approve",
-          proposal_digest: PROPOSAL_DIGEST,
-          target_digest: TARGET_DIGEST,
-        },
-      }),
-    );
-    expect(screen.getByTestId("effect-stage-message")).toHaveTextContent(
-      "Decision recorded. Waiting for the run ledger.",
-    );
-  });
-
   it("mounts the canonical workspace stage in Studio and sends desktop only the narrow snapshot", async () => {
     const transport = new WorkspaceTransport();
     const decisions: unknown[] = [];

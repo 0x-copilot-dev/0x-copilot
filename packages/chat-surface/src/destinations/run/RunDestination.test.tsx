@@ -1168,6 +1168,73 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
   });
 });
 
+// === P1b — an MCP write parks inline, never the retired EffectStageCard ===
+//
+// Regression guard for the MCP-staging UI removal. The old path staged an MCP
+// write as an `effect.staged` "PROPOSED CHANGE" `EffectStageCard` on the canvas
+// and left the run to seal before the decision could apply ("Waiting for the
+// run ledger"). P1b retires that: a write GATE parks the run on a LangGraph
+// interrupt emitted as `approval_requested` + `approval_kind: "ask_a_question"`
+// (see ai-backend `surfaces_v2/gate.py::_approval_interrupt_payload`), which the
+// existing ApprovalCoordinator projection renders as an INLINE card in the chat
+// rail and resumes the SAME run on decision (proven end-to-end by ai-backend
+// `test_mcp_write_gate_e2e`). This pins the FRONTEND half so deleting the MCP
+// effect-stage renderer cannot silently drop a write's only approval affordance.
+
+/** The exact `approval_requested` payload P1b's write GATE raises (a Linear write). */
+function mcpWriteGateRequested(approvalId: string): Record<string, unknown> {
+  const question = "Allow Linear to run create_issue?";
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      api_event_type: "approval_requested",
+      event_type: "approval_requested",
+      approval_id: approvalId,
+      action_id: approvalId,
+      approval_kind: "ask_a_question",
+      server_name: "linear",
+      display_name: "Linear",
+      message: question,
+      question,
+      status: "pending",
+      gate: {
+        v: 1,
+        purpose: "to run create_issue on Linear",
+        scopes: ["issues:write"],
+        op: "create_issue",
+        op_class: "write",
+      },
+    },
+  });
+}
+
+describe("RunDestination — MCP write approval is inline, not staged (P1b)", () => {
+  it("renders the write interrupt as an inline card and never the retired EffectStageCard", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Create the launch issue in Linear");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+
+    act(() => {
+      transport.emit(mcpWriteGateRequested("mcp-write-1"));
+    });
+
+    // The write parks on an inline approval card in the chat rail (the
+    // `ask_a_question` interrupt seam P1b reuses), naming the op under review.
+    const card = await screen.findByTestId("tc-chat-question-mcp-write-1");
+    expect(card).toHaveTextContent("create_issue");
+
+    // The retired canvas "PROPOSED CHANGE" EffectStageCard must NEVER appear for
+    // an MCP write — that renderer is gone; the interrupt is the only surface.
+    expect(screen.queryByTestId("effect-stage-card")).toBeNull();
+  });
+});
+
 // === PR-3.11 — empty/idle goal composer + run rebinding ===
 //
 // Integration: with no run the shell mounts the empty-state goal composer
