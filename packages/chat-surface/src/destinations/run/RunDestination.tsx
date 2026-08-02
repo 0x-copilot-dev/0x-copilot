@@ -183,10 +183,6 @@ import {
   type ConversationCanvasSubject,
 } from "./useConversationCanvas";
 import {
-  projectMcpEffectStages,
-  type McpEffectStageReview,
-} from "./effectStageLifecycle";
-import {
   projectWorkspaceStageLifecycle,
   type WorkspaceStageReview,
   type WorkspaceStageReviewProjection,
@@ -282,10 +278,6 @@ const EMPTY_STAGE_SEQUENCES: ReadonlyMap<string, number> = new Map();
 const EMPTY_ROWSET_EFFECT_REVIEWS: ReadonlyMap<string, RowSetEffectReview> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
-const EMPTY_MCP_EFFECT_STAGE_REVIEWS: ReadonlyMap<
-  string,
-  McpEffectStageReview
-> = new Map();
 const EMPTY_SUBAGENT_ARCHIVE: ReadonlyMap<string, SubagentEntry> = new Map();
 const EMPTY_FLEET_ARCHIVE: readonly FleetProjection[] = [];
 const EMPTY_TOOL_CALL_ARCHIVE: readonly ToolCallEntry[] = [];
@@ -768,25 +760,6 @@ function isMatchingWebWorkspaceDecision(
     receipt.decision_ledger_id.length > 0 &&
     typeof receipt.change_set_digest === "string" &&
     receipt.change_set_digest.length > 0
-  );
-}
-
-function isMatchingMcpEffectDecision(
-  value: unknown,
-  review: McpEffectStageReview,
-  decision: "approve" | "reject",
-): boolean {
-  const result = plainRecord(value);
-  if (result === null) return false;
-  return (
-    result.stage_id === review.stageId &&
-    result.revision === review.revision &&
-    result.decision === decision &&
-    result.proposal_digest === review.proposalDigest &&
-    result.target_digest === review.targetDigest &&
-    result.status === (decision === "approve" ? "approved" : "rejected") &&
-    typeof result.decision_ledger_id === "string" &&
-    result.decision_ledger_id.length > 0
   );
 }
 
@@ -1384,8 +1357,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setEditingDiffId(null);
     // Surfaces v2: a new conversation starts from a clean gate/toast state.
     setGatePolicies(EMPTY_GATE_POLICIES);
-    setEffectStageBusyId(null);
-    setEffectStageMessages(new Map());
     setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
     setRowsetActionNotices(new Map());
     setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
@@ -1557,15 +1528,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [workspaceStageMessages, setWorkspaceStageMessages] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
-  // Generic MCP stages are server-authorised through the same A4/A5 pipeline
-  // as workspace stages. Keep only transient UI progress here; the ledger is
-  // still the sole authority for decision/execution state.
-  const [effectStageBusyId, setEffectStageBusyId] = useState<string | null>(
-    null,
-  );
-  const [effectStageMessages, setEffectStageMessages] = useState<
-    ReadonlyMap<string, string>
-  >(() => new Map());
   // PRD-12: preserve the exact row-set presentation snapshot across the
   // request→ledger gap. The button stays disabled until replay advances past
   // the sequence the reviewer acted on; no optimistic row outcome is invented.
@@ -1609,8 +1571,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   useEffect(() => {
     setWorkspaceStageBusyId(null);
     setWorkspaceStageMessages(new Map());
-    setEffectStageBusyId(null);
-    setEffectStageMessages(new Map());
     setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
     setRowsetActionNotices(new Map());
     setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
@@ -1864,8 +1824,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setEditingDiffId(null);
       // Surfaces v2: a run switch resets the gate/toast state too.
       setGatePolicies(EMPTY_GATE_POLICIES);
-      setEffectStageBusyId(null);
-      setEffectStageMessages(new Map());
       setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
       setRowsetActionNotices(new Map());
       setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
@@ -2361,22 +2319,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       !surfacesV2
         ? EMPTY_WORKSPACE_STAGE_REVIEWS
         : projectWorkspaceStageLifecycle(
-            scrubbedSeq === null
-              ? session.events
-              : session.events.filter(
-                  (event) => event.sequence_no <= scrubbedSeq,
-                ),
-          ),
-    [surfacesV2, scrubbedSeq, session.events],
-  );
-  // The generic MCP projection is deliberately a peer of the workspace
-  // projection. It sees the same scrubbed event prefix but never treats a
-  // workspace stage as a generic effect decision.
-  const mcpEffectStageReviews = useMemo(
-    () =>
-      !surfacesV2
-        ? EMPTY_MCP_EFFECT_STAGE_REVIEWS
-        : projectMcpEffectStages(
             scrubbedSeq === null
               ? session.events
               : session.events.filter(
@@ -3348,78 +3290,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     ],
   );
 
-  const setEffectStageMessage = useCallback(
-    (stageId: string, message: string | null): void => {
-      setEffectStageMessages((previous) => {
-        const next = new Map(previous);
-        if (message === null) next.delete(stageId);
-        else next.set(stageId, message);
-        return next;
-      });
-    },
-    [],
-  );
-
-  // Standard external effects deliberately use the production A4 decision
-  // route. There is no client-side executor or draft-only approval exception:
-  // the server verifies this exact snapshot, then the existing A5 queue owns
-  // execution. SSE/replay remains the only source of terminal stage state.
-  const handleMcpEffectDecision = useCallback(
-    (review: McpEffectStageReview, decision: "approve" | "reject"): void => {
-      if (session.runId === null || session.runId === "") return;
-      const current = mcpEffectStageReviews.get(review.stageId);
-      if (
-        current === undefined ||
-        current.revision !== review.revision ||
-        current.proposalDigest !== review.proposalDigest ||
-        current.targetDigest !== review.targetDigest ||
-        !current.canDecide
-      ) {
-        setEffectStageMessage(
-          review.stageId,
-          "This change was updated before the decision could be recorded. Review the current revision.",
-        );
-        return;
-      }
-      setEffectStageBusyId(review.stageId);
-      setEffectStageMessage(review.stageId, null);
-      void transport
-        .request<unknown>({
-          method: "POST",
-          path: `/v1/agent/effect-stages/${encodeURIComponent(
-            review.stageId,
-          )}/decision?run_id=${encodeURIComponent(session.runId)}`,
-          body: {
-            revision: review.revision,
-            decision,
-            proposal_digest: review.proposalDigest,
-            target_digest: review.targetDigest,
-          },
-        })
-        .then((result) => {
-          if (!isMatchingMcpEffectDecision(result, review, decision)) {
-            throw new Error("effect decision response did not match the stage");
-          }
-          setEffectStageMessage(
-            review.stageId,
-            "Decision recorded. Waiting for the run ledger.",
-          );
-        })
-        .catch(() => {
-          setEffectStageMessage(
-            review.stageId,
-            "The decision was not recorded. The proposed change remains held.",
-          );
-        })
-        .finally(() => {
-          setEffectStageBusyId((currentId) =>
-            currentId === review.stageId ? null : currentId,
-          );
-        });
-    },
-    [mcpEffectStageReviews, session.runId, setEffectStageMessage, transport],
-  );
-
   // A staged artifact is the only edit affordance available at this product
   // boundary. Opening it creates an ordinary artifact-edit flow; it never
   // mutates a workspace stage or invents a legacy stage-revision request.
@@ -3824,7 +3694,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               <EffectStageCard
                 stageId={effectStageId}
                 title={subject.title}
-                busy
                 message={
                   rowsetReviewErrors.get(effectStageId) ??
                   "Loading the exact row review…"
@@ -3882,20 +3751,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             />
           );
         }
-        const mcpReview = mcpEffectStageReviews.get(effectStageId);
+        // No rowset review and no hosted workspace stage: render the
+        // display-only generic stage card. MCP writes no longer stage on this
+        // canvas — P1b parks them on an inline approval interrupt
+        // (approval_requested / ask_a_question) shown in the chat rail — so
+        // there is no MCP decision path left to wire here.
         return (
           <EffectStageCard
             stageId={effectStageId}
-            title={mcpReview?.title ?? subject?.title ?? "Proposed change"}
-            review={mcpReview}
-            busy={effectStageBusyId === effectStageId}
-            message={effectStageMessages.get(effectStageId) ?? null}
-            onDecision={
-              mcpReview === undefined
-                ? undefined
-                : (review, decision) =>
-                    handleMcpEffectDecision(review, decision)
-            }
+            title={subject?.title ?? "Proposed change"}
           />
         );
       }
@@ -3941,10 +3805,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       workspaceStageHost,
       workspaceStageBusyId,
       workspaceStageMessages,
-      mcpEffectStageReviews,
-      effectStageBusyId,
-      effectStageMessages,
-      handleMcpEffectDecision,
       handleWorkspaceDecision,
       handleWorkspaceArtifactEdit,
       handleWorkspaceArtifactDownload,
