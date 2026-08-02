@@ -12,6 +12,10 @@ alwaysApply: false
 - Use dependency inversion for registries, stores, MCP clients, and subagent runners.
 - Do not expose unauthorized tools, MCP servers, memories, or skills to the model.
 - Do not put product persistence, tenant auth ownership, or app-specific presentation logic in the AI backend.
+- `ai-backend` **is** a lean Deep Agents / LangGraph runtime plus the adapters that map LangGraph output into our event format (`runtime_worker/stream_*`, `capabilities/middleware/`, `operations/presentation_boundary`). See `docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md` (~80% runtime / ~20% misplaced / ~4% dead).
+- Do not add here: billing / pricing / usage rollups, tenant or workspace admin CRUD, product persistence (sharing, inbox, todos, notifications, model catalog), one-shot migrations, eval / benchmark / promotion tooling, a second audit stream or another logging-contract copy. Each has a home in `backend`.
+- PDP/PEP: policy data belongs to `backend`; policy **enforcement** stays in the runtime because the model picks tools mid-graph-loop. Use snapshot-at-run-start + enforce in-process + POST the facts (as `ToolUsePolicySnapshot.from_response` does) — never a per-tool-call HTTP hop.
+- Landing a module before its wiring is tracked, not forbidden: record it in `docs/audit/ai-backend-smells/PENDING-WIRINGS.md` and enroll it in `tests/unit/orphan_ratchet_baseline.txt`, naming what it waits on.
 - Update docs when implementation changes a contract, invariant, or edge case.
 - Do not hard-code repeated keys, method names, or user-facing messages inline; use nested `Keys` classes and dedicated message/exception classes.
 - Keep production helper behavior inside classes rather than module-level helper functions.

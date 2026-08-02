@@ -14,6 +14,15 @@ Architecture, features, guides, and reference docs are the source of truth.
 - This service must not import `services/ai-backend/src` or `services/backend-facade/src`. Cross-service work is HTTP only.
 - Use this service's own `.venv`. Never add a sibling service to `PYTHONPATH`.
 
+### Concerns migrating here from `ai-backend`
+
+A boundary audit ([docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md](../../docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md)) found ~36k LOC in `ai-backend` whose target home is this service — billing/pricing/usage rollups, tenant + workspace admin CRUD, product persistence (sharing, inbox, todos, notifications, model catalog), one-shot migrations, eval/promotion tooling, and a duplicate audit stream + logging contract. Expect these to arrive incrementally.
+
+Two rules when accepting one:
+
+- **Serve policy as a run-start snapshot, not a per-call endpoint.** `ai-backend` enforces policy inside the graph loop; a per-tool-call hop to this service would put a network round-trip on the hottest path. Follow `/internal/v1/policies/tool-use`: one fetch per run, enforced in-process there, facts POSTed back afterwards.
+- **Own the authoring/storage/admin half only.** The enforcement point stays in the runtime by design — see the PDP/PEP rule in the root [CLAUDE.md](../../CLAUDE.md).
+
 ## Public contracts
 
 Update [packages/api-types](../../packages/api-types) when public app-facing payloads or routes change. `/internal/v1/*` is not mirrored to api-types.

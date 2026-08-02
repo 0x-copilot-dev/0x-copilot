@@ -17,5 +17,7 @@ alwaysApply: false
 - `backend` currently owns MCP registration, OAuth/token state, user skills, and audit events; broader tenant/product ownership is target direction.
 - Do not put AI orchestration logic in `backend-facade`.
 - Do not put tenant auth ownership, billing/admin state, or product persistence in `services/ai-backend`.
+- Stated positively: `ai-backend` **is** a lean Deep Agents / LangGraph runtime plus the adapters mapping LangGraph output to our event format. Also keep out: usage rollups, workspace admin CRUD, sharing/inbox/todos/notifications, model catalog, one-shot migrations, eval/promotion tooling, duplicate audit or logging contracts. See `docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md`.
+- PDP/PEP: policy data is `backend`'s; policy **enforcement** stays in `ai-backend` (the model picks tools mid-graph-loop). Snapshot at run start, enforce in-process, POST facts afterwards — never a per-tool-call HTTP hop.
 - Treat `apps/mac`, `apps/windows`, and `packages/shared-config` as planned until they exist on disk.
 - Add or update a service-boundary doc before creating a new service or shared package.
