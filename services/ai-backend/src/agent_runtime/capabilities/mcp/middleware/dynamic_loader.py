@@ -22,6 +22,26 @@ from agent_runtime.capabilities.mcp.loader import McpLoader
 _LOGGER = logging.getLogger(__name__)
 
 
+class _Log:
+    """The load path's trace, so a live "``/mcp`` is empty" report is diagnosable.
+
+    ``mcp_catalog.*`` in ``execution.factory`` says which store was composed and
+    whether the route mounted, and ``McpCatalogStore``'s own
+    ``mcp_catalog.published`` says a directory was written. Missing between them
+    was what the model DID: absent ``mcp_load.requested`` the model never asked
+    (a prompt problem); present, but with no ``mcp_catalog.published`` after it,
+    the load failed or fell back (a wiring problem). Telling those two apart cost
+    a filesystem walk across 26 conversation directories once.
+    """
+
+    REQUESTED = "mcp_load.requested server=%s catalog=%s"
+    #: The silent branch: a load SUCCEEDED but no catalog was composed, so the
+    #: model got the raw descriptor blob and ``/mcp/<server>/tools/`` was never
+    #: written. Indistinguishable from "never called" without this line.
+    NO_CATALOG = "mcp_load.no_catalog server=%s falling_back=descriptor_payload"
+    FAILED = "mcp_load.failed server=%s code=%s"
+
+
 class LoadMcpServerInput(RuntimeContract):
     """Input contract for the model-facing MCP load helper."""
 
@@ -67,6 +87,7 @@ class LoadMcpServerTool:
         if isinstance(parsed_input, McpLoadResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
 
+        _LOGGER.info(_Log.REQUESTED, parsed_input.server_name, self.catalog is not None)
         result = await self.loader.load_server_by_name(
             server_name=parsed_input.server_name,
             runtime_context=self.runtime_context,
@@ -104,6 +125,17 @@ class McpLoadResultPresenter:
 
         loaded_server = result.loaded_server
         if catalog is None or loaded_server is None:
+            if loaded_server is None:
+                # The contract guarantees exactly one of the two is set, so an
+                # absent ``loaded_server`` means ``error`` is present.
+                error = result.error
+                _LOGGER.warning(
+                    _Log.FAILED,
+                    error.server_name if error else None,
+                    error.code.value if error else None,
+                )
+            else:
+                _LOGGER.warning(_Log.NO_CATALOG, loaded_server.server_card.name)
             return result.model_dump(mode="json", exclude_none=True)
         try:
             server_catalog = McpCatalogBuilder.build(loaded_server)

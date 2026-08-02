@@ -184,10 +184,81 @@ class TestCatalogListing(CatalogBackendMixin):
 
         assert self.entry_paths(result) == ["/mcp/tools/odd_tool.json"]
 
-    def test_unknown_directory_lists_empty_rather_than_erroring(self) -> None:
+    def test_unknown_directory_answers_with_a_directive_not_empty_success(
+        self,
+    ) -> None:
+        # The inverse of this assertion is the live failure: an empty listing
+        # that SUCCEEDS reads to the model as "there is nothing here", and it
+        # stops. A directive is the only shape that recovers the turn.
         store = self.published_store()
 
         result = self.backend(store).ls("/nope")
+
+        assert result.error == Messages.UNKNOWN_SERVER
+        assert result.entries is None
+
+    def test_a_seeded_server_says_load_me_not_no_such_server(self) -> None:
+        # Live failure: the model walks /mcp -> /mcp/linear -> /mcp/linear/tools
+        # before loading, and the last step answered "No MCP server by that
+        # name" — false, and it sends the model back to `ls /mcp` in a loop.
+        # A seeded server exists; only its loaded tier is missing.
+        store = McpCatalogStore()
+        store.seed(
+            McpCatalogBuilder.seed_all(
+                [self.make_catalog_card(name=self.CatalogValues.SERVER)]
+            )
+        )
+
+        result = self.backend(store).ls(
+            McpCatalogPaths.tools_dir(self.CatalogValues.SERVER)
+        )
+
+        assert result.error == Messages.SERVER_NOT_LOADED
+        assert result.entries is None
+
+    def test_the_public_spelling_of_a_seeded_server_says_the_same_thing(self) -> None:
+        # A MISS resolves to the UNSTRIPPED path, so the server segment sits
+        # behind `mcp`. Reading it naively takes "mcp" as the server name and
+        # silently falls through to UNKNOWN_SERVER — the original bug.
+        store = McpCatalogStore()
+        store.seed(
+            McpCatalogBuilder.seed_all(
+                [self.make_catalog_card(name=self.CatalogValues.SERVER)]
+            )
+        )
+
+        result = self.backend(store).ls(f"/mcp/{self.CatalogValues.SERVER}/tools")
+
+        assert result.error == Messages.SERVER_NOT_LOADED
+
+    def test_an_unknown_server_is_still_reported_as_unknown(self) -> None:
+        # The guard above must not soften a genuine typo into "load it first".
+        store = McpCatalogStore()
+        store.seed(
+            McpCatalogBuilder.seed_all(
+                [self.make_catalog_card(name=self.CatalogValues.SERVER)]
+            )
+        )
+
+        result = self.backend(store).ls("/nosuchserver/tools")
+
+        assert result.error == Messages.UNKNOWN_SERVER
+
+    def test_an_empty_catalog_root_tells_the_model_nothing_is_connected(self) -> None:
+        result = self.backend(McpCatalogStore()).ls("/")
+
+        assert result.error == Messages.NO_SERVERS
+        assert result.entries is None
+
+    def test_a_declared_but_empty_directory_still_lists_empty(self) -> None:
+        # A server that published no resources has a real, empty ``resources/``
+        # directory — that IS success with zero entries, and must not be
+        # confused with a path that does not exist.
+        store = self.published_store(tools=(self.make_catalog_tool("only_tool"),))
+
+        result = self.backend(store).ls(
+            McpCatalogPaths.resources_dir(self.CatalogValues.SERVER)
+        )
 
         assert result.error is None
         assert result.entries == []

@@ -41,6 +41,10 @@ Not everything re-roots at the run — the namespaces do not share a lifetime::
         meta.json                       the human name + orientation (D5)
         drafts/                         conversation-scoped: a draft outlives
                                         the run that started it
+        mcp/<server>/                   conversation-scoped: the browsable
+                                        connector catalog the model reads at
+                                        /mcp/, seeded at run start and enriched
+                                        by load_mcp_server
         <run_id>/
             tool-results/               this run's offloaded tool output
             subagents/                  this run's subagent transcripts
@@ -143,6 +147,16 @@ SCRATCH_DIR_NAME: Final = ".tmp"
 #: Conversation-scoped subdirectory. A draft outlives the run that started it,
 #: so it is NOT under ``<run_id>/``.
 DRAFTS_DIR_NAME: Final = "drafts"
+
+#: Conversation-scoped subdirectory holding the browsable MCP catalog
+#: (``mcp/<server>/SERVER.md`` + ``tools/`` + ``resources/``). Conversation
+#: scope for the same reason ``drafts/`` has it, and the reason is a bug that
+#: has already been paid for: the catalog used to live in the per-harness
+#: process, and a harness is rebuilt for every run AND again on approval
+#: resume — so a connector browsed in turn 1 was gone in turn 2, and one
+#: browsed before a write approval was gone when the run resumed. Run scope
+#: would reproduce exactly that.
+MCP_DIR_NAME: Final = "mcp"
 
 #: Run-scoped subdirectories.
 TOOL_RESULTS_DIR_NAME: Final = "tool-results"
@@ -296,6 +310,12 @@ class ConversationScratch:
 
         return self.path / DRAFTS_DIR_NAME
 
+    @property
+    def mcp(self) -> Path:
+        """``mcp/`` — the browsable connector catalog for this chat."""
+
+        return self.path / MCP_DIR_NAME
+
     def run(self, run_id: str) -> RunScratch:
         """The run-scoped subtree for ``run_id`` (validated, never a title)."""
 
@@ -318,6 +338,7 @@ class ConversationScratch:
 
         _ensure_dir(self.path)
         _ensure_dir(self.drafts)
+        _ensure_dir(self.mcp)
         self._write_meta(title=title, extra=extra)
         return self
 
@@ -465,6 +486,7 @@ __all__ = (
     "COPILOT_HOME_ENV",
     "DEFAULT_COPILOT_HOME_DIRNAME",
     "DRAFTS_DIR_NAME",
+    "MCP_DIR_NAME",
     "META_FILE_NAME",
     "SCRATCH_DIR_NAME",
     "SUBAGENTS_DIR_NAME",

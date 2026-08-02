@@ -1,10 +1,22 @@
 """Read-only Deep Agents backend serving the MCP catalog at ``/mcp/``.
 
 Mounted as a ``CompositeBackend`` route exactly like ``/subagents/`` and
-``/large_tool_results/``: the artifacts are authored by ai-backend when a
-connector loads, and the model reaches them with the filesystem tools it
-already has. Nothing here is provider-specific — ``ls`` / ``read_file`` /
-``glob`` / ``grep`` are primitives every model exposes.
+``/large_tool_results/``: the artifacts are authored by ai-backend — seeded at
+run start from the authorized cards, enriched when a connector loads — and the
+model reaches them with the filesystem tools it already has. Nothing here is
+provider-specific — ``ls`` / ``read_file`` / ``glob`` / ``grep`` are primitives
+every model exposes.
+
+The store behind it is injected (:class:`McpCatalogReader`), so the SAME code
+serves the desktop's real files under ``$COPILOT_HOME/.tmp/<conv>/mcp/`` and the
+in-memory store every other image composes. This is the only backend in the repo
+implementing real ``grep`` + ``glob`` over its own content, which is the whole
+point: ``grep "issue" /mcp/linear/`` is how a tool is found.
+
+**An empty listing is an error, not a success.** ``ls /mcp`` used to answer
+``[]`` when nothing had been published, and a live model correctly read that as
+"this connector has no browsable filesystem" and gave up. Every empty listing
+now carries a directive instead.
 
 **Read-only to the model, deliberately.** The catalog is a projection of what a
 connector published; letting the model edit it would let one turn rewrite the
@@ -257,6 +269,73 @@ class McpCatalogBackend(BackendProtocol):
         directories = self._directories()
         base = self._resolve_dir(files, directories, path)
         prefix = base if base.endswith(Values.SEPARATOR) else f"{base}/"
+        entries = self._entries(files, directories, prefix)
+        if entries:
+            return LsResult(entries=entries)
+        # An empty listing is answered with a DIRECTIVE, never with success.
+        # Success-with-zero-entries is what taught a live model that a connected
+        # connector had no browsable filesystem: it read `ls /mcp` → `[]`,
+        # concluded there was nothing to find, and stopped. An error string is
+        # the one shape deepagents surfaces verbatim to the model.
+        if base == Values.ROOT:
+            return LsResult(error=Messages.NO_SERVERS)
+        if not self._directory_exists(files, directories, prefix):
+            # A path under a server that IS connected but not yet loaded (its
+            # seed tier publishes SERVER.md and nothing else) must not be told
+            # "no MCP server by that name" — the model just saw that name in
+            # `ls /mcp/`, so the denial is false and bounces it back to the same
+            # listing. Name the actual state and the one call that fixes it.
+            if self._server_is_seeded(files, base):
+                return LsResult(error=Messages.SERVER_NOT_LOADED)
+            return LsResult(error=Messages.UNKNOWN_SERVER)
+        return LsResult(entries=[])
+
+    @classmethod
+    def _server_is_seeded(cls, files: Mapping[str, str], base: str) -> bool:
+        """Whether ``base`` sits under a server the catalog has seeded.
+
+        Seeded means ``/<server>/SERVER.md`` exists — the always-present tier —
+        even though the loaded tier (``tools/``) does not yet.
+
+        ``base`` arrives in either spelling: the mount-stripped form the file map
+        is keyed on, or the full ``/mcp/...`` form, which is what a MISS returns
+        because there was no directory to resolve against. Reading the server
+        segment without accounting for that would take ``mcp`` as the server name
+        and never match, which is precisely the bug this guard exists to fix.
+        """
+
+        segments = [part for part in base.split(Values.SEPARATOR) if part]
+        if segments and segments[0] == Keys.Dir.ROOT.strip(Values.SEPARATOR):
+            segments = segments[1:]
+        if not segments:
+            return False
+        server_root = f"{Values.SEPARATOR}{segments[0]}{Values.SEPARATOR}"
+        return any(name.startswith(server_root) for name in files)
+
+    @classmethod
+    def _directory_exists(
+        cls,
+        files: Mapping[str, str],
+        directories: tuple[str, ...],
+        prefix: str,
+    ) -> bool:
+        """Whether ``prefix`` names a directory the catalog actually declares.
+
+        An empty ``tools/`` on a server that published none is a real, empty
+        directory; ``/mcp/nosuchserver/`` is not.
+        """
+
+        if any(key.startswith(prefix) for key in files):
+            return True
+        return any(directory.startswith(prefix) for directory in directories)
+
+    @classmethod
+    def _entries(
+        cls,
+        files: Mapping[str, str],
+        directories: tuple[str, ...],
+        prefix: str,
+    ) -> list[FileInfo]:
         entries: list[FileInfo] = []
         subdirs: set[str] = set()
         for key, content in files.items():
@@ -283,7 +362,7 @@ class McpCatalogBackend(BackendProtocol):
             FileInfo(path=subdir, is_dir=True, size=0) for subdir in sorted(subdirs)
         )
         entries.sort(key=lambda entry: entry.get("path", ""))
-        return LsResult(entries=entries)
+        return entries
 
     def _read(self, file_path: str, offset: int, limit: int) -> ReadResult:
         files = self._files()

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
 
 import pytest
@@ -458,6 +459,33 @@ class TestLoadReturnsAPointer(McpCatalogMixin):
         assert (
             result["loaded_server"]["server_card"]["name"]
             == self.TestValues.Names.DRIVE_MCP
+        )
+
+    def test_a_catalogless_load_says_so_instead_of_falling_back_silently(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # This branch is a SUCCESSFUL load that writes no files. On disk it is
+        # indistinguishable from "the model never called load_mcp_server", and
+        # telling those two apart is the whole diagnostic question when a live
+        # user reports an empty `/mcp/<server>/tools/`. It must not be silent.
+        with caplog.at_level(logging.WARNING):
+            self.load_through_tool(catalog=None, context=self.build_catalog_context())
+
+        assert any("mcp_load.no_catalog" in record.message for record in caplog.records)
+
+    def test_a_load_records_that_it_was_requested_and_whether_a_catalog_existed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The other half of the same question: absent this line, the model never
+        # asked, which is a prompt problem rather than a wiring one.
+        with caplog.at_level(logging.INFO):
+            self.load_through_tool(
+                catalog=McpCatalogStore(), context=self.build_catalog_context()
+            )
+
+        assert any(
+            "mcp_load.requested" in record.message and "catalog=True" in record.message
+            for record in caplog.records
         )
 
     def test_catalog_is_identical_across_model_providers(self) -> None:

@@ -22,6 +22,15 @@ Deletion (D6) deliberately does NOT live here. It is
 :func:`~agent_runtime.capabilities.desktop.agent_scratch.delete_conversation_scratch`,
 so the file store adapter can cascade into it without a store depending on the
 worker.
+
+The MCP catalog rides the same gate
+-----------------------------------
+``mcp/`` is a conversation-scoped directory in this same tree, so
+:meth:`AgentScratchWorkerWiring.mcp_catalog_store` lives here rather than in a
+wiring class of its own: one gate, one id validation, one failure posture. That
+is deliberate — the R1 bug (:mod:`runtime_worker.file_store_wiring`) was two run
+paths drifting into one wiring and the other not, and the approval-resume path
+must reach the SAME catalog the interrupted turn was browsing.
 """
 
 from __future__ import annotations
@@ -33,6 +42,27 @@ if TYPE_CHECKING:
     from agent_runtime.capabilities.desktop.agent_scratch import ConversationScratch
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _Log:
+    """Structured event names emitted by this wiring."""
+
+    UNUSABLE_ID = "agent_scratch.unusable_conversation_id"
+    PROVISION_FAILED = "agent_scratch.provision_failed"
+    CATALOG_DECLINED = "mcp_catalog.store_declined reason=%s"
+
+
+class _DeclineReason:
+    """Why a run got no file-backed MCP catalog. One of these is always logged."""
+
+    #: No workspace backend — the hosted/web/postgres images, where writing
+    #: ``~/.0xcopilot/.tmp/<conv>/`` would land per-tenant scratch on the
+    #: server's own home directory.
+    NOT_DESKTOP = "not_desktop"
+    #: The conversation id is not usable as a directory name.
+    UNUSABLE_ID = "unusable_conversation_id"
+    #: The scratch directory could not be created or resolved.
+    SCRATCH_UNAVAILABLE = "scratch_unavailable"
 
 
 class AgentScratchWorkerWiring:
@@ -81,13 +111,50 @@ class AgentScratchWorkerWiring:
             # The id is not usable as a directory name. Deliberately not logged
             # with the value: it may be user content, which is the whole reason
             # a title never names a path.
-            _LOGGER.warning("agent_scratch.unusable_conversation_id")
+            _LOGGER.warning(_Log.UNUSABLE_ID)
             return None
         except (OSError, RuntimeError):
             # ``RuntimeError`` is here for ``Path.home()`` on a process with no
             # resolvable home, which does NOT raise ``OSError``. A run must not
             # fail because the agent could not get a working directory.
-            _LOGGER.warning("agent_scratch.provision_failed")
+            _LOGGER.warning(_Log.PROVISION_FAILED)
+            return None
+
+    def mcp_catalog_store(self, *, conversation_id: str) -> object | None:
+        """Return the file-backed MCP catalog store for this chat, or ``None``.
+
+        ``None`` means the run composes the in-process
+        :class:`~agent_runtime.capabilities.mcp.catalog.McpCatalogStore` instead
+        — byte-for-byte the previous behavior on web / postgres / in-memory, and
+        on a desktop whose scratch is unusable. Every decline logs WHY, because
+        "the model said ``/mcp`` was empty" is otherwise indistinguishable from
+        "the catalog was never mounted" in a live report.
+
+        The store creates its own directory, so this is safe on the
+        approval-resume path, which never calls :meth:`provision`.
+        """
+
+        if not self._enabled:
+            _LOGGER.info(_Log.CATALOG_DECLINED, _DeclineReason.NOT_DESKTOP)
+            return None
+        from agent_runtime.capabilities.desktop.agent_scratch import (  # noqa: PLC0415
+            ScratchIdError,
+            agent_scratch_root,
+        )
+        from runtime_adapters.file.mcp_catalog_store import (  # noqa: PLC0415
+            FileMcpCatalogStore,
+        )
+
+        try:
+            root = agent_scratch_root().conversation(conversation_id).mcp
+            return FileMcpCatalogStore(root)
+        except ScratchIdError:
+            _LOGGER.warning(_Log.CATALOG_DECLINED, _DeclineReason.UNUSABLE_ID)
+            return None
+        except (OSError, RuntimeError):
+            _LOGGER.warning(
+                _Log.CATALOG_DECLINED, _DeclineReason.SCRATCH_UNAVAILABLE, exc_info=True
+            )
             return None
 
 

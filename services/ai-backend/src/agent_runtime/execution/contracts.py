@@ -786,6 +786,16 @@ class RuntimeDependencies(RuntimeContract):
     # prefix to it. `None` everywhere else, so those paths stay on the default
     # `StateBackend` exactly as before.
     large_tool_results_backend: object | None = None
+    # Optional durable store for the browsable MCP catalog served at `/mcp/`.
+    # Implements the publisher + reader halves of the catalog seam
+    # (`McpCatalogPublisher` / `McpCatalogReader`); on the desktop the worker
+    # supplies the file-backed one rooted at
+    # `$COPILOT_HOME/.tmp/<conversation_id>/mcp/`, which is what makes a catalog
+    # survive the next turn AND the second harness an approval resume builds.
+    # `None` everywhere else, and the factory then composes the in-process
+    # `McpCatalogStore` exactly as before — one catalog per run either way,
+    # never a file tree shadowed by an in-memory copy.
+    mcp_catalog_store: object | None = None
     # Optional read-only Deep Agents backend exposing user-granted host folders
     # under `/workspace/<mount>/<path>`. Constructed by the run handler per run
     # from the desktop capability broker (env config + the run's ACTIVE grant

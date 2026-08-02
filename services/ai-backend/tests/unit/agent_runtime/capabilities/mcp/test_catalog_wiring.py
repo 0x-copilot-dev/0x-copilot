@@ -1,9 +1,17 @@
-"""The catalog's composition seam: one store, written by the loader, read at ``/mcp/``.
+"""The catalog's composition seam: one store, seeded at run start, read at ``/mcp/``.
 
 A mechanism nobody mounts is a dead feature, so these assert the wiring itself —
 that the route lands on the composed Deep Agents backend, that it joins an
 existing composite instead of replacing it, and that every run which composed
 without a catalog before still composes exactly the same way.
+
+The eager-seed cases are the ones that guard the live failure. The
+``load_mcp_server`` description advertises ``/mcp/<server>/`` in the tool schema,
+so a model reads it and probes ``ls /mcp`` BEFORE calling anything. Nothing had
+published yet, the listing came back empty AND successful, and the model
+concluded the connector had no browsable filesystem and stopped. So: ``ls /mcp``
+must list the connected servers on a freshly composed runtime, with no load
+call anywhere in the test.
 """
 
 from __future__ import annotations
@@ -12,13 +20,19 @@ from collections.abc import Sequence
 
 from deepagents.backends.composite import CompositeBackend
 
-from agent_runtime.capabilities.mcp.catalog import McpCatalogBuilder, McpCatalogStore
+from agent_runtime.capabilities.mcp.catalog import (
+    McpCatalogBuilder,
+    McpCatalogStore,
+    McpCatalogTier,
+    Messages,
+)
 from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.execution.factory import (
     _mcp_catalog_store,
+    _seed_mcp_catalog,
     _with_mcp_catalog_route,
     acreate_agent_runtime,
 )
@@ -119,6 +133,36 @@ class TestCatalogStoreGate(CatalogWiringMixin):
         # No loader tool, so no catalog: the model never sees an empty /mcp/.
         assert _mcp_catalog_store(object()) is None
 
+    def test_an_injected_store_replaces_the_in_process_one(self) -> None:
+        # Exactly one catalog per run. The desktop's durable store is not a
+        # cache in front of an in-memory copy; it IS the store.
+        injected = McpCatalogStore()
+
+        assert _mcp_catalog_store(FakeMcpRegistry(), injected) is injected
+
+    def test_an_unusable_injected_store_falls_back_rather_than_failing(
+        self, caplog
+    ) -> None:
+        # A store that cannot serve the seam would raise at the model's first
+        # ``ls``. Losing durability is the right trade; losing the run is not.
+        with caplog.at_level("WARNING"):
+            store = _mcp_catalog_store(FakeMcpRegistry(), object())
+
+        assert isinstance(store, McpCatalogStore)
+        assert "mcp_catalog.injected_store_unusable" in caplog.text
+
+    def test_no_mcp_seam_logs_the_reason(self, caplog) -> None:
+        with caplog.at_level("INFO"):
+            _mcp_catalog_store(object())
+
+        assert "mcp_catalog.not_mounted reason=no_mcp_seam" in caplog.text
+
+    def test_the_in_process_fallback_says_it_is_not_durable(self, caplog) -> None:
+        with caplog.at_level("INFO"):
+            _mcp_catalog_store(FakeMcpRegistry())
+
+        assert "mcp_catalog.store=memory durable=false" in caplog.text
+
 
 class TestCatalogRouteComposition(CatalogWiringMixin):
     def test_route_joins_an_existing_composite_without_disturbing_it(self) -> None:
@@ -178,6 +222,89 @@ class TestCatalogRouteComposition(CatalogWiringMixin):
         # to a file that does not exist, losing the descriptors outright.
         assert mounted is None
 
+    def test_the_mount_says_where_it_landed(self, caplog) -> None:
+        with caplog.at_level("INFO"):
+            _with_mcp_catalog_route(
+                self.existing_composite(),
+                catalog=McpCatalogStore(),
+                memory_backend=None,
+            )
+
+        assert "mcp_catalog.mounted path=/mcp/ composite=True" in caplog.text
+
+    def test_the_decline_says_why(self, caplog) -> None:
+        with caplog.at_level("WARNING"):
+            _with_mcp_catalog_route(
+                None,
+                catalog=McpCatalogStore(),
+                memory_backend=FakeDeepAgentsMemoryBackend(),
+            )
+
+        # "The model said /mcp was empty" and "no route was ever mounted" are
+        # indistinguishable from a transcript. They must not be from a log.
+        assert (
+            "mcp_catalog.not_mounted reason=passthrough_memory_backend" in caplog.text
+        )
+
+
+class TestEagerSeeding(CatalogWiringMixin):
+    def test_seeding_lists_every_authorized_card(self) -> None:
+        store = McpCatalogStore()
+
+        _seed_mcp_catalog(
+            store,
+            (
+                self.make_catalog_card(name=self.CatalogValues.SERVER),
+                self.make_catalog_card(name="slack_mcp"),
+            ),
+        )
+
+        assert store.server_names() == ("linear", "slack_mcp")
+
+    def test_a_seeded_server_is_browsable_without_any_load(self) -> None:
+        store = McpCatalogStore()
+
+        _seed_mcp_catalog(
+            store, (self.make_catalog_card(name=self.CatalogValues.SERVER),)
+        )
+
+        listing = McpCatalogBackend(store).ls("/")
+        assert self.entry_paths(listing) == ["/linear/"]
+        assert listing.error is None
+
+    def test_seeding_never_overwrites_a_loaded_server(self) -> None:
+        store = McpCatalogStore()
+        store.publish(McpCatalogBuilder.build(self.make_loaded()))
+
+        _seed_mcp_catalog(
+            store, (self.make_catalog_card(name=self.CatalogValues.SERVER),)
+        )
+
+        # Turn 2 of the same chat must not un-load turn 1's tool list.
+        listing = McpCatalogBackend(store).ls("/linear/tools")
+        assert len(listing.entries or []) == self.CatalogValues.LARGE_TOOL_COUNT
+
+    def test_a_seed_catalog_declares_no_tools_directory(self) -> None:
+        catalog = McpCatalogBuilder.seed(
+            self.make_catalog_card(name=self.CatalogValues.SERVER)
+        )
+
+        assert catalog.tier is McpCatalogTier.SEED
+        assert catalog.directories == ()
+        assert Messages.Seed.TOOLS_UNKNOWN in catalog.server_markdown.content
+
+    def test_seeding_a_run_with_no_catalog_is_a_no_op(self) -> None:
+        _seed_mcp_catalog(None, (self.make_catalog_card(),))
+
+    def test_a_non_card_listing_is_reported_not_swallowed(self, caplog) -> None:
+        store = McpCatalogStore()
+
+        with caplog.at_level("WARNING"):
+            _seed_mcp_catalog(store, (self.make_catalog_card(name="linear"), object()))
+
+        assert store.server_names() == ("linear",)
+        assert "mcp_catalog.seed_skipped_non_cards count=1" in caplog.text
+
 
 class TestCatalogRouteServesPublishedFiles(CatalogWiringMixin):
     def test_a_published_catalog_is_readable_through_the_composed_backend(
@@ -200,6 +327,42 @@ class TestCatalogRouteServesPublishedFiles(CatalogWiringMixin):
 
 
 class TestCatalogReachesTheBuiltAgent(CatalogWiringMixin):
+    async def test_ls_mcp_lists_connected_servers_before_any_load(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        # THE regression test. No ``load_mcp_server`` call anywhere below: this
+        # is the state the model finds on its first turn of a fresh chat, and
+        # an empty listing here is the whole live failure.
+        builder = CapturingBuilder()
+
+        await acreate_agent_runtime(
+            context=runtime_context_admin,
+            dependencies=self.live_dependencies(),
+            agent_builder=builder,
+        )
+
+        backend = getattr(builder.calls[0], "memory_backend")
+        listing = backend.ls("/mcp")
+        assert listing.error is None
+        assert self.entry_paths(listing) == [f"/mcp/{self.TestValues.Names.DRIVE_MCP}/"]
+
+    async def test_the_seeded_server_markdown_says_how_to_get_the_tools(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        builder = CapturingBuilder()
+        await acreate_agent_runtime(
+            context=runtime_context_admin,
+            dependencies=self.live_dependencies(),
+            agent_builder=builder,
+        )
+        backend = getattr(builder.calls[0], "memory_backend")
+
+        result = backend.read(f"/mcp/{self.TestValues.Names.DRIVE_MCP}/SERVER.md")
+
+        assert result.error is None
+        content = (result.file_data or {}).get("content", "")
+        assert "load_mcp_server" in content
+
     async def test_built_runtime_mounts_the_catalog_route(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:

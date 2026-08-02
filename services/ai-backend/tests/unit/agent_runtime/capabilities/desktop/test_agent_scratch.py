@@ -448,8 +448,13 @@ class TestTheLayout:
         for name in ("memories", "policies", "skills", "memory"):
             assert not hasattr(conversation, name)
         conversation.provision()
+        # ``mcp`` belongs here for the opposite reason: the connector catalog is
+        # rebuilt from the registry on every run, so it IS disposable — but it
+        # must outlive the RUN, because the harness is rebuilt per run and again
+        # on approval resume.
         assert sorted(child.name for child in conversation.path.iterdir()) == [
             "drafts",
+            "mcp",
             "meta.json",
         ]
 
