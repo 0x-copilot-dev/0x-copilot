@@ -134,6 +134,30 @@ class _LinearMcpProvider:
         raise AssertionError("the write-approval gate never opens an auth session")
 
 
+@dataclass
+class _LocalMcpProvider:
+    """Non-OAuth fake provider (stdio / local): it has NO ``create_auth_session``.
+
+    Models the Manage-MCP-config direction — a local/stdio MCP server the
+    factory's OAuth probe (``_auth_session_creator``) finds no session factory
+    for, so the run's ``ToolAccessGate`` is built with ``auth_session_creator=None``.
+    The ABSENCE of ``create_auth_session`` is the whole point: it is what made
+    ``_tool_access_gate`` return ``gate=None`` before the fix, so every write was
+    refused ("approval not available") instead of parked.
+    """
+
+    card: McpServerCard
+    client: _RecordingFakeClient
+    created_clients: list[str] = field(default_factory=list)
+
+    async def list_server_cards(self) -> Sequence[McpServerCard]:
+        return (self.card,)
+
+    def create_client(self, card: McpServerCard) -> _RecordingFakeClient:
+        self.created_clients.append(card.name)
+        return self.client
+
+
 class LinearMcpRunMixin:
     """Drive a real queued run whose one turn calls a fake ``linear`` MCP tool."""
 
@@ -364,6 +388,99 @@ class TestWriteParksThenApproveExecutes(LinearMcpRunMixin):
         assert store.runs[run_id].status is AgentRunStatus.COMPLETED
         # The write executed in the SAME run, exactly once (no double-dispatch
         # across the interrupt replay), and only after approval.
+        assert provider.created_clients == [_SERVER]
+        assert provider.client.calls == [
+            ("create_issue", {"title": "Ship it", "team": "ENG"})
+        ]
+
+
+class NonOAuthLocalMcpRunMixin(LinearMcpRunMixin):
+    """Drive the SAME real-graph run as ``LinearMcpRunMixin`` on a NON-OAuth server.
+
+    Only two things change versus the OAuth fixture: the provider offers no
+    ``create_auth_session`` (:class:`_LocalMcpProvider`), and the card is
+    ``auth_mode=NONE`` over stdio. The catalog still keys ``create_issue`` under
+    "linear" → WRITE, so the descriptor + PDP decision are byte-identical and the
+    write GATEs exactly as before — isolating the one variable under test: no
+    OAuth provider, hence (pre-fix) ``gate=None`` and no interrupt at all.
+    """
+
+    @staticmethod
+    def _card() -> McpServerCard:
+        return McpServerCard(
+            name=_SERVER,
+            server_id="srv_linear_local",
+            short_description="Local (stdio) Linear-like MCP connector.",
+            transport=McpTransport.STDIO,
+            auth_mode=McpAuthMode.NONE,
+            auth_state=McpAuthState.AUTH_UNSUPPORTED,
+            required_scopes=frozenset(),
+            health=McpServerHealth.HEALTHY,
+            load_cost=10,
+            enabled=True,
+        )
+
+    @classmethod
+    def _provider(cls) -> _LocalMcpProvider:
+        return _LocalMcpProvider(
+            card=cls._card(),
+            client=_RecordingFakeClient(
+                tool_outputs={
+                    "create_issue": {"issue": {"id": "L-99", "title": "Created"}}
+                }
+            ),
+        )
+
+
+class TestNonOAuthWriteParksThenApproveExecutes(NonOAuthLocalMcpRunMixin):
+    async def test_non_oauth_write_parks_then_approve_executes_in_same_run(
+        self, monkeypatch
+    ) -> None:
+        provider = self._provider()
+        # Precondition: no OAuth session factory ⇒ the factory's probe finds no
+        # ``auth_session_creator`` — the exact condition that used to yield
+        # ``gate=None`` and a hard "approval not available" refusal.
+        assert not hasattr(provider, "create_auth_session")
+        self._patch_registry(monkeypatch, provider)
+        self._script_one_mcp_call(
+            monkeypatch,
+            tool_name="create_issue",
+            arguments={"title": "Ship it", "team": "ENG"},
+        )
+        store = InMemoryRuntimeApiStore()
+        settings = self._settings()
+        blobs, references = self._artifact_stores()
+        runs, conversations, approvals = self._coordinators(store, settings)
+        run_id = await self._enqueue_run(runs, conversations)
+
+        # --- Act 1: drive to the park. -----------------------------------
+        await self._drain(store, settings, blobs=blobs, references=references)
+
+        names = self._event_types(store, run_id)
+        assert store.runs[run_id].status is AgentRunStatus.WAITING_FOR_APPROVAL, names
+        pending = self._pending_approvals(store, run_id)
+        assert len(pending) == 1, [a.approval_id for a in pending]
+        # PARKED, not refused: no external change and no seal before approval.
+        assert provider.created_clients == []
+        assert provider.client.calls == []
+        assert "run_completed" not in names, names
+
+        # --- Act 2: approve, then re-drain. ------------------------------
+        await approvals.record_approval_decision(
+            org_id=_ORG_ID,
+            approval_id=pending[0].approval_id,
+            request=ApprovalDecisionRequest(
+                decision="approved", decided_by_user_id=_USER_ID, answer="yes"
+            ),
+        )
+        await self._drain(store, settings, blobs=blobs, references=references)
+
+        names = self._event_types(store, run_id)
+        assert "run_failed" not in names, names
+        assert "run_completed" in names
+        assert store.runs[run_id].status is AgentRunStatus.COMPLETED
+        # The write executed in the SAME run exactly once, only after approval —
+        # on a connector with NO OAuth provider wired.
         assert provider.created_clients == [_SERVER]
         assert provider.client.calls == [
             ("create_issue", {"title": "Ship it", "team": "ENG"})

@@ -1505,32 +1505,32 @@ def _tool_access_gate(
     auth_session_creator: object | None,
     runtime_context: AgentRuntimeContext,
 ) -> object | None:
-    """Build the PRD-C2 ToolAccessGate, or ``None`` when no OAuth provider exists.
+    """Build the PRD-C2 ToolAccessGate for a run that has MCP servers.
 
-    Reuses the SAME OAuth-capable provider ``AuthMcpTool`` gets (the
-    ``create_auth_session`` duck-probe). Wired with C1's ``ActionClassifier``
-    (over the module-level catalog) so the gate card's read-only pledge /
-    write-policy choice is honest — an absent classifier fails closed to
-    ``write`` inside the gate. Returned as ``object | None`` so the
-    ``CallMcpTool`` construction site stays type-agnostic.
+    Wired with C1's ``ActionClassifier`` (over the module-level catalog) so the
+    gate card's read-only pledge / write-policy choice is honest — an absent
+    classifier fails closed to ``write`` inside the gate. Returned as
+    ``object | None`` so the ``CallMcpTool`` construction site stays
+    type-agnostic; the sole caller invokes it where the registry exposes the MCP
+    seam, so today it always returns a gate.
+
+    ``auth_session_creator`` MAY be ``None``. It is only the OAuth-connect gate's
+    session factory (the ``create_auth_session`` duck-probe, the SAME object
+    ``AuthMcpTool`` gets); the write-approval gate (``park_for_approval``) opens
+    no auth session. Building the gate regardless of OAuth is what lets a
+    non-OAuth MCP server (stdio / local, ``auth_mode == NONE``) still PARK its
+    writes on the approval interrupt instead of being refused ("approval not
+    available"). The OAuth-connect ``park`` fails closed when the creator is
+    ``None``, and is unreachable for a ``NONE``-auth card anyway (its
+    ``gate_state`` is ``None``).
 
     Gating (P1b): the write-approval path (``_authorize_mcp_dispatch`` →
     ``ToolAccessGate.park_for_approval``) performs no in-gate ``SurfacesV2Flag``
     check. It is reached only when the operation gateway is bound, which the
     composer declines when ``surfaces_v2`` is off — so the flag still makes the
     whole path inert, just indirectly (not via a flag read inside the gate).
-
-    KNOWN LIMITATION (follow-up, tracked): the gate is built only when a provider
-    offers OAuth. ``park_for_approval`` needs no auth session, so a non-OAuth MCP
-    server (stdio / local) currently gets ``gate=None`` and its writes are
-    refused ("approval not available") instead of parked. Harmless on today's
-    OAuth mainline; supporting non-OAuth servers means building the gate even
-    when ``auth_session_creator is None`` (make that field Optional + guard the
-    auth-``park`` path) so the write-approval interrupt can still open.
     """
 
-    if auth_session_creator is None:
-        return None
     from agent_runtime.capabilities.actions.classifier import (  # noqa: PLC0415
         ACTION_CLASSIFIER,
     )

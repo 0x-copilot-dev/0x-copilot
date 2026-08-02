@@ -205,9 +205,18 @@ class ToolAccessGate:
     is still unusable, LangGraph's index-matched interrupt returns the stored
     resume value immediately, so ``park`` returns the typed failure without
     re-parking (no gate loop; a cancelled gate can never dispatch).
+
+    ``auth_session_creator`` is Optional. Only the OAuth-connect gate (:meth:`park`)
+    opens a session; the write-approval gate (:meth:`park_for_approval`) opens
+    none — it asks "may this effect run", not "connect this server". A non-OAuth
+    MCP server (stdio / local, ``auth_mode == NONE``) has no OAuth provider, so
+    the factory builds the gate with ``auth_session_creator=None`` and the write
+    gate still parks. :meth:`park` then fails closed (never dispatches) if it is
+    ever reached without a creator — though a ``NONE``-auth card yields
+    ``gate_state == None``, so :meth:`park` is not on its path to begin with.
     """
 
-    auth_session_creator: McpAuthSessionCreator
+    auth_session_creator: McpAuthSessionCreator | None
     runtime_context: AgentRuntimeContext
     interrupt_handler: Callable[[dict[str, Any]], object] = field(
         default=langgraph_interrupt
@@ -254,6 +263,14 @@ class ToolAccessGate:
         caller whether to dispatch (approved) or fail closed (not approved).
         """
 
+        if self.auth_session_creator is None:
+            # No OAuth provider is wired for this run, so the connect flow cannot
+            # start: fail closed (the caller returns a typed auth failure and
+            # never dispatches). No interrupt is raised — there is nothing to
+            # connect. Not reached for a ``auth_mode == NONE`` card, whose
+            # ``gate_state`` is ``None``; this guards only a defensive re-entry
+            # (e.g. a connector that raises ``McpAuthError`` mid-dispatch).
+            return GateResume(approved=False)
         session = await self.auth_session_creator.create_auth_session(
             server_id=card.server_id or card.name,
             runtime_context=self.runtime_context,
