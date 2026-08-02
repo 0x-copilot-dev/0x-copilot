@@ -33,6 +33,8 @@ from agent_runtime.capabilities.desktop.host_filesystem import (
 )
 from agent_runtime.capabilities.desktop.host_floor import (
     HostFilesystemFloor,
+    builtin_asset_roots,
+    builtin_skills_root,
     HostFloorMessages,
 )
 
@@ -451,3 +453,90 @@ class TestFloorVerdicts:
         assert results[0].error == "permission_denied"
         assert results[0].content is None
         assert results[1] is served[0]
+
+
+class TestShippedSkillsAreReadable:
+    """The runtime's own Skills, which were 100% dead in the packaged app.
+
+    Built-in Skills ship at ``<install>/services/ai-backend/skills/<name>/SKILL.md``
+    and a packaged install roots ``<install>`` under ``$COPILOT_HOME`` — which is
+    ``~/.0xcopilot``. One dotted segment blinds deepagents' matcher, so the rule
+    set had no opinion and the floor refused. deepagents' loader logs
+    ``permission_denied; skipping`` and carries on, so nothing surfaced: 2 of 2
+    shipped skills silently absent from every run, while a checkout that happened
+    to sit outside a dotted directory worked and hid it.
+    """
+
+    INSTALL = "/Users/ada/.0xcopilot/runtime/darwin-arm64/services/ai-backend"
+    SKILLS = f"{INSTALL}/skills"
+    SKILL = f"{INSTALL}/skills/web-search-discipline/SKILL.md"
+
+    @classmethod
+    def floor(cls, *, wired: bool) -> HostFilesystemFloor:
+        return HostFilesystemFloor(object(), assets=(cls.SKILLS,) if wired else ())
+
+    def test_the_packaged_path_is_matcher_blind_which_is_why_this_is_needed(
+        self,
+    ) -> None:
+        assert HostFilesystemFloor.is_matcher_blind(self.SKILL) is True
+
+    def test_an_unwired_floor_refuses_the_shipped_skill(self) -> None:
+        assert self.floor(wired=False).permits_read(self.SKILL) is False
+
+    def test_a_wired_floor_admits_it(self) -> None:
+        assert self.floor(wired=True).permits_read(self.SKILL) is True
+
+    def test_shipped_assets_are_never_writable(self) -> None:
+        # Read-only by construction: an asset root is content we ship, so a
+        # write there is a bug in us, not a capability to grant.
+        assert self.floor(wired=True).permits_write(self.SKILL) is False
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            f"{INSTALL}/../../../.ssh/id_rsa",
+            "/Users/ada/.ssh/id_rsa",
+            f"{INSTALL}/.env",
+            f"{INSTALL}/skills-other/.secret",
+        ],
+    )
+    def test_the_allow_does_not_leak_upward_or_sideways(self, path: str) -> None:
+        # A prefix comparison would admit `skills-other`; traversal would admit
+        # the whole disk. Neither may pass.
+        assert self.floor(wired=True).permits_read(path) is False
+
+    def test_the_loader_op_is_the_one_that_was_failing(self) -> None:
+        # Skills load through `download_files`, and its refusal string is
+        # verbatim what the live packaged app logged.
+        served = [SimpleNamespace(path=self.SKILL)]
+        floor = HostFilesystemFloor(
+            SimpleNamespace(download_files=lambda paths: list(served)),
+            assets=(self.SKILLS,),
+        )
+
+        assert floor.download_files([self.SKILL])[0] is served[0]
+
+        refusing = HostFilesystemFloor(
+            SimpleNamespace(download_files=lambda paths: list(served))
+        )
+
+        assert refusing.download_files([self.SKILL])[0].error == "permission_denied"
+
+
+class TestTheAssetRootIsTheOneTheLoaderUses:
+    """Two derivations of one path is what let the floor and loader disagree."""
+
+    def test_the_worker_constant_is_the_floors_own_answer(self) -> None:
+        from runtime_worker.dependencies import BUILTIN_SKILLS_ROOT
+
+        assert BUILTIN_SKILLS_ROOT.resolve() == builtin_skills_root().resolve()
+
+    def test_the_asset_root_is_advertised_only_when_it_exists(self) -> None:
+        # An allow-rule for an absent directory is a hole waiting for someone
+        # to create it.
+        roots = builtin_asset_roots()
+
+        if builtin_skills_root().is_dir():
+            assert roots == (builtin_skills_root().as_posix(),)
+        else:
+            assert roots == ()

@@ -1,10 +1,14 @@
 """Web / self-host credential plane for direct-connect MCP (migration P2-7b).
 
 **Additive and unwired** — nothing in the running app constructs this yet
-(P2-PLAN §3); P2-8 injects it behind the per-tool flag for every deployment that
-is *not* ``ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop``, where
-:class:`~agent_runtime.capabilities.mcp.credentials.desktop.DesktopKeychainCredentialProvider`
-answers instead.
+(P2-PLAN §3); P2-8 injects it behind the per-tool flag.
+
+It is now the ONLY credential provider. P2-7a's desktop keychain broker was
+deleted rather than kept as a desktop-profile branch: it reached the Electron
+broker for a secret that had to exist there first, and nothing ever wrote that
+record, so it was blocked from the day it landed. Minting from the vault owner
+works on every deployment INCLUDING the desktop, which makes the second path
+redundant rather than complementary.
 
 The problem it solves is the mirror image of the desktop one. Under
 direct-connect ai-backend opens the MCP server itself, so it needs the endpoint

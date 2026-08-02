@@ -2591,6 +2591,7 @@ def _host_default_backend(
     from agent_runtime.capabilities.desktop import guarded_default  # noqa: PLC0415
     from agent_runtime.capabilities.desktop.host_floor import (  # noqa: PLC0415
         HostFilesystemFloor,
+        builtin_asset_roots,
     )
     from agent_runtime.capabilities.desktop.host_tool_paths import (  # noqa: PLC0415
         NativeHostPathBackend,
@@ -2626,6 +2627,14 @@ def _host_default_backend(
         NativeHostPathBackend(FilesystemBackend(virtual_mode=False)),
         roots=roots,  # type: ignore[arg-type]
         scratch=scratch,  # type: ignore[arg-type]
+        # The Skills the runtime ships. READ-only, and needed here for the same
+        # reason the scratch is: a packaged install roots them under
+        # `$COPILOT_HOME` (`~/.0xcopilot`), and one dotted segment blinds the
+        # glob matcher, so the floor is the only layer that decides there. Left
+        # out, every shipped skill loads as `permission_denied; skipping` — 2 of
+        # 2 dead in the packaged app, silently, while a checkout outside a
+        # dotted directory worked fine and hid it.
+        assets=builtin_asset_roots(),
     )
 
 

@@ -226,9 +226,28 @@ WRITE_TEXT_TOKENS: Final = (
 CONNECTION_FAILED_CODE: Final = "connection_failed"
 CONNECTION_FAILED_COPY: Final = "The MCP server could not be reached."
 
-#: A Linear issue identifier — TEAM-123. The cheapest proof that a real
-#: workspace answered, because nothing in the prompt or the app supplies one.
+#: A Linear issue identifier — TEAM-123.
+#:
+#: It was described here as proof "a real workspace answered, because nothing in
+#: the prompt or the app supplies one". That was FALSE once the MCP catalog
+#: became browsable files: the connector's own tool descriptors carry example
+#: keys, so a run that read `/mcp/linear/tools/*.json` and returned NO issues at
+#: all still yielded `issue_keys: ["ISO-8601", "LIN-123"]` — a doc placeholder
+#: and a date standard — and the journey passed on a completely empty errand.
+#: The pattern is unchanged; WHERE it is applied is the fix (see
+#: `WORKSPACE_DATA_TOOLS`), and this denylist is defence in depth for
+#: standards-shaped tokens that are never team prefixes.
 ISSUE_KEY: Final = re.compile(r"\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b")
+
+#: Tools whose output IS workspace data. A filesystem read of the catalog is
+#: not: it returns the connector's schema, examples and all.
+WORKSPACE_DATA_TOOLS: Final = frozenset({"call_mcp_tool"})
+
+#: Never a Linear team prefix — these are standards and encodings that happen to
+#: fit `AAA-123`.
+NOT_TEAM_PREFIXES: Final = frozenset(
+    {"ISO", "RFC", "UTF", "SHA", "AES", "RSA", "UTC", "HTTP", "IEEE", "ANSI", "ASCII"}
+)
 
 #: Anything token-shaped is scrubbed before a log line reaches the run dir.
 _REDACTIONS: Final = (
@@ -512,8 +531,16 @@ def data_returned(stream: list[dict[str, Any]], answer: str) -> dict[str, Any]:
             failed += 1
         else:
             succeeded += 1
+        if str(payload.get("tool_name") or "") not in WORKSPACE_DATA_TOOLS:
+            # A catalog read is not workspace data. Harvesting keys from it is
+            # what let a zero-issue run report two issue keys and pass.
+            continue
         blob = json.dumps(payload.get("output"), default=str)
-        keys.update(ISSUE_KEY.findall(blob))
+        keys.update(
+            key
+            for key in ISSUE_KEY.findall(blob)
+            if key.split("-", 1)[0] not in NOT_TEAM_PREFIXES
+        )
         for node in _walk(payload.get("output")):
             identifier = node.get("id") or node.get("identifier")
             label = node.get("title") or node.get("name")
@@ -525,7 +552,10 @@ def data_returned(stream: list[dict[str, Any]], answer: str) -> dict[str, Any]:
         "issue_keys": sorted(keys)[:25],
         "items": items[:15],
         "item_count": len(items),
-        "answer_has_issue_key": bool(ISSUE_KEY.search(answer)),
+        "answer_has_issue_key": any(
+            key.split("-", 1)[0] not in NOT_TEAM_PREFIXES
+            for key in ISSUE_KEY.findall(answer)
+        ),
         "has_real_data": bool(keys or items),
     }
 

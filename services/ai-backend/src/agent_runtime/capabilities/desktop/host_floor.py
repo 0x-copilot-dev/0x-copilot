@@ -75,7 +75,7 @@ did before the floor existed.
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Final
 
 from deepagents.backends.protocol import (
@@ -131,11 +131,17 @@ class HostFilesystemFloor:
         *,
         roots: tuple[GrantedRoot, ...] = (),
         scratch: AgentScratchRoot | None = None,
+        assets: tuple[str, ...] = (),
     ) -> None:
-        """Guard ``backend`` for the host paths ``roots`` does not cover."""
+        """Guard ``backend`` for the host paths ``roots`` does not cover.
+
+        ``assets`` are READ-ONLY locations shipped inside the runtime's own
+        installation — see :func:`builtin_asset_roots`.
+        """
         self._backend = backend
         self._roots = roots
         self._scratch_path = None if scratch is None else scratch.posix
+        self._assets = assets
 
     @property
     def backend(self) -> object:
@@ -151,6 +157,11 @@ class HostFilesystemFloor:
     def scratch_path(self) -> str | None:
         """The agent's scratch root as a POSIX path, or ``None`` if it has none."""
         return self._scratch_path
+
+    @property
+    def assets(self) -> tuple[str, ...]:
+        """Read-only roots shipped inside the runtime's own installation."""
+        return self._assets
 
     def __getattr__(self, name: str) -> Any:
         """Delegate every op this floor does not guard (see the module header)."""
@@ -176,15 +187,29 @@ class HostFilesystemFloor:
         """Whether a READ of ``path`` may proceed past the floor.
 
         Everything the rule set can see is delegated to it; a matcher-blind
-        host path is admitted only from inside a folder the user attached, or
-        from inside the agent's own scratch — which is itself matcher-blind
+        host path is admitted only from inside a folder the user attached, from
+        inside the agent's own scratch — which is itself matcher-blind
         (``$COPILOT_HOME/.tmp``), so without naming it here the agent could not
-        read back the working files it had just written.
+        read back the working files it had just written — or from inside the
+        runtime's own shipped assets.
+
+        That last one was a live bug, and a total one. The built-in Skills ship
+        at ``<install>/services/ai-backend/skills/<name>/SKILL.md``, and a
+        packaged install puts ``<install>`` under ``$COPILOT_HOME`` — which is
+        ``~/.0xcopilot`` by convention. One dotted segment anywhere in a path is
+        enough to blind the matcher, so EVERY shipped skill failed this
+        predicate and deepagents' loader logged ``permission_denied; skipping``
+        and moved on. 2 of 2 skills were dead in the packaged app, silently,
+        while the same paths resolved fine in a checkout that happened not to
+        sit under a dotted directory. Read-only: shipped assets are never a
+        write target, so ``permits_write`` deliberately does not consult them.
         """
 
         if not self._is_host(path) or not self.is_matcher_blind(path):
             return True
         if self._within_scratch(path):
+            return True
+        if any(self._within(path, asset) for asset in self._assets):
             return True
         return any(self._within(path, root.path) for root in self._roots)
 
@@ -349,4 +374,38 @@ class HostFilesystemFloor:
         )
 
 
-__all__ = ("HostFilesystemFloor", "HostFloorMessages")
+def builtin_skills_root() -> Path:
+    """Where the Skills that ship WITH the runtime live.
+
+    ``<service_root>/skills`` — resolved from this module's own location so a
+    wheel-installed deployment, a staged packaged runtime, and a local checkout
+    all answer correctly with no configuration.
+
+    It lives here, next to the floor that must admit it, and
+    ``runtime_worker.dependencies.BUILTIN_SKILLS_ROOT`` re-exports it rather
+    than re-deriving it. Two independent derivations of one path is precisely
+    how the loader ends up reading a directory the floor refuses.
+    """
+
+    return Path(__file__).resolve().parents[4] / "skills"
+
+
+def builtin_asset_roots() -> tuple[str, ...]:
+    """POSIX roots the runtime ships and the agent may READ but never write.
+
+    Handed to :class:`HostFilesystemFloor` as ``assets``. Only directories that
+    genuinely exist are returned, so a deployment that ships no skills grants
+    nothing — an allow-rule for an absent path is a hole waiting for someone to
+    create it.
+    """
+
+    skills = builtin_skills_root()
+    return (skills.as_posix(),) if skills.is_dir() else ()
+
+
+__all__ = (
+    "HostFilesystemFloor",
+    "HostFloorMessages",
+    "builtin_asset_roots",
+    "builtin_skills_root",
+)

@@ -26,7 +26,7 @@ execution plan did not survive contact with the source — see §Corrections.
 
 | State             | Meaning                                                                                      | Count |
 | ----------------- | -------------------------------------------------------------------------------------------- | ----: |
-| **Blocked**       | Names a specific **unshipped** dependency (route, hook, consumer, column). Cannot wire yet.  |    17 |
+| **Blocked**       | Names a specific **unshipped** dependency (route, hook, consumer, column). Cannot wire yet.  |    16 |
 | **Wireable**      | No unshipped blocker — every dep is present; the decision is **wire-or-drop**, not a wait.   |     5 |
 | **Delete**        | No blocker **and** superseded by a wired twin / stale shim / redundant scaffolding.          |     3 |
 | **Not an orphan** | Live `python -m` entrypoint (`__main__` guard) the scanner mis-flags. Exclude from the scan. |     2 |
@@ -38,7 +38,7 @@ the Delete/Wireable set is "confirm first," not "remove now."
 
 ---
 
-## Blocked — waiting on named, unshipped work (17)
+## Blocked — waiting on named, unshipped work (16)
 
 These are pending-wiring in the strict sense: the module names what it needs and
 that thing is not in the tree. Track the owner; do not delete.
@@ -61,7 +61,6 @@ that thing is not in the tree. Track the owner; do not delete.
 | `agent_runtime.capabilities.mcp.connection`              |  117 | 08-02 | the direct-connect MCP migration — "**additive and unwired** — nothing in the running app imports this module yet (P2-PLAN §3, P2-1)" | credential-plane contracts (endpoint/transport/short-lived token) for ai-backend opening MCP servers itself instead of proxying through `services/backend`   |
 | `agent_runtime.capabilities.mcp.connector_resolver`      |   75 | 08-02 | **P2-6** ("the stream seams gain a fallback to it") and **P2-8** ("the registration flip publishes it")                               | the native `tool_name → server_slug` map replacing `McpDispatcherUnwrap.effective_server_name` once each MCP tool is its own `BaseTool`                      |
 | `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                                    | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
-| `agent_runtime.capabilities.mcp.credentials.desktop`     |  ~90 | 08-02 | nothing — **superseded** by `credentials.backend` above, which mints from the vault owner instead of brokering through the desktop    | delete with task **#15**; kept one release so a desktop still on the broker route is not stranded mid-upgrade                                                |
 
 Two clusters dominate: the **todos/memory extraction pipeline** (`proposal_extractor`,
 `todo_extractor`, `postgres.todo_extraction_store`, and cross-service `routine_scheduler`)

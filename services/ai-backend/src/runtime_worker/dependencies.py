@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
+from agent_runtime.capabilities.desktop.host_floor import builtin_skills_root
 from agent_runtime.capabilities.citation_capturing_tool import (
     CitationCapturingRegistry,
 )
@@ -52,12 +52,17 @@ if TYPE_CHECKING:  # pragma: no cover - typing only.
 _LOGGER = logging.getLogger(__name__)
 
 
-# Built-in skills shipped with the runtime. The directory is resolved relative
-# to this file so wheel-installed deployments and local dev both work without
-# extra configuration. Each subdirectory under `skills/` must contain a
-# `SKILL.md` with YAML frontmatter (`name`, `description`, ...) per Anthropic's
-# Agent Skills spec.
-BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parent.parent.parent / "skills"
+# Built-in skills shipped with the runtime. Each subdirectory under `skills/`
+# must contain a `SKILL.md` with YAML frontmatter (`name`, `description`, ...)
+# per Anthropic's Agent Skills spec.
+#
+# Re-exported from `host_floor` rather than re-derived here. The floor is the
+# layer that decides whether this directory is READABLE at all, and when the
+# two derivations were independent the loader read a path the floor refused:
+# a packaged install roots it under `$COPILOT_HOME` (`~/.0xcopilot`), whose
+# dotted segment blinds deepagents' glob matcher, and every shipped skill
+# failed with `permission_denied; skipping`. One definition, one verdict.
+BUILTIN_SKILLS_ROOT = builtin_skills_root()
 
 
 async def compose_capability_discovery(
