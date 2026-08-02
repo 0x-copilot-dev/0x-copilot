@@ -1,7 +1,7 @@
 import type { SafeStorageLike } from "../auth/secret-storage";
 import type { LocalServiceChannelCredential } from "../services/local-service-identity";
 
-import { CapabilityBroker } from "./broker";
+import { CapabilityBroker, type McpSecretStore } from "./broker";
 import { FolderPicker, type ShowOpenDialogResult } from "./folder-picker";
 import { GrantStore, type GrantStoreAudit } from "./grant-store";
 import { HostFs } from "./host-fs";
@@ -40,6 +40,13 @@ export interface CreateCapabilityServiceConfig {
   readonly workspace?: WorkspaceAuthorityBootstrap;
   /** Named children permitted to call the main-owned local broker. */
   readonly localBrokerClients?: readonly LocalServiceChannelCredential[];
+  /**
+   * Main-owned MCP connector credential source for the broker's `/mcp/secret`
+   * route (`SecretStorage`, whose ACTIVE-WORKSPACE gate this relies on).
+   * Omitting it leaves the route failing closed and unadvertised — direct
+   * MCP connect is then simply unavailable, which is the safe default.
+   */
+  readonly mcpSecrets?: McpSecretStore;
 }
 
 export interface WorkspaceAuthorityBootstrap {
@@ -117,6 +124,7 @@ export function createCapabilityService(
     hostFs: new HostFs(),
     workspaceAuthority: authority,
     clientCredentials: config.localBrokerClients,
+    mcpSecrets: config.mcpSecrets,
   });
   return new CapabilityService({
     store,
@@ -137,6 +145,8 @@ export {
   CapabilityBroker,
   CAPABILITY_BROKER_AUDIENCE,
   CAPABILITY_BROKER_PROTOCOL,
+  type McpConnectionSecret,
+  type McpSecretStore,
 } from "./broker";
 export { GrantStore } from "./grant-store";
 export {

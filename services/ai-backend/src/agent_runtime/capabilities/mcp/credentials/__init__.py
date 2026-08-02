@@ -8,6 +8,15 @@ transport-agnostic :class:`RefreshingBearerAuth`; the deployment-specific
 providers that feed it (desktop loopback broker, gated backend mint) land here
 in P2-7.
 
+P2-7a's ``desktop`` module is deliberately **not** re-exported below. It reaches
+the Electron capability broker, so importing it pulls the desktop capability
+package in; keeping it off this package's ``__init__`` means a web / postgres /
+in-memory image that touches ``RefreshingBearerAuth`` does not load desktop-only
+code. Import it by module —
+``from agent_runtime.capabilities.mcp.credentials.desktop import
+DesktopKeychainCredentialProvider`` — which is what the desktop-profile branch of
+the P2-8 factory does.
+
 Additive and unwired: nothing in the running app imports this yet.
 """
 

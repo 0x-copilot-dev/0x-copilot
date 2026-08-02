@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 
@@ -107,6 +107,11 @@ class Routes:
     GREP: Final = "/v1/fs/grep"
     #: Grant-management read — the CURRENT active grant snapshot (path-free).
     GRANTS_SNAPSHOT: Final = "/v1/grants/snapshot"
+    #: MCP direct-connect credential read (migration P2-7a). Resolves one
+    #: connector's endpoint + short-lived bearer out of ``SecretStorage`` under
+    #: the main process's ACTIVE-WORKSPACE gate. Kept here so ai-backend has one
+    #: HTTP path to the broker rather than a second, MCP-only client.
+    MCP_SECRET: Final = "/mcp/secret"
     #: C2 staged workspace mutation protocol. These are private loopback
     #: routes, never facade/public API routes.
     WORKSPACE_PREPARE: Final = "/internal/workspace/v2/prepare"
@@ -129,6 +134,10 @@ class Field_:  # noqa: N801 — a small constants namespace, not a runtime type
     """Request/response JSON field names shared with the broker wire contract."""
 
     GRANT_ID: Final = "grant_id"
+    #: The MCP connector identity ``/mcp/secret`` is keyed on — the same
+    #: ``server_id`` ``SecretStorage.get(activeWorkspace, "mcp", server_id)``
+    #: uses, so one connector has one id across the whole credential plane.
+    SERVER_ID: Final = "server_id"
     PATH: Final = "path"
     OFFSET: Final = "offset"
     MAX_BYTES: Final = "max_bytes"
@@ -428,6 +437,54 @@ class BrokerGrantSnapshot(_BrokerModel):
     grants: tuple[BrokerGrant, ...] = ()
 
 
+class McpSecretResult(_BrokerModel):
+    """``/mcp/secret`` — one MCP connector's endpoint plus a short-lived bearer.
+
+    The desktop half of the direct-connect credential plane (migration P2-7a).
+    Electron main resolves it from ``SecretStorage`` under the **active-workspace
+    gate**, so a run can only ever read the credential of the workspace it is
+    running in; this model is the untrusted-JSON boundary on the ai-backend side.
+
+    ``token`` is a :class:`~pydantic.SecretStr` with ``repr`` additionally
+    suppressed at the field level, so neither ``repr()`` nor ``str()`` nor
+    ``model_dump_json()`` (structured logs) can render the plaintext. It is
+    unwrapped in exactly one place downstream — the moment the ``Authorization``
+    header is written by ``RefreshingBearerAuth``.
+
+    ``expires_at`` is deliberately permissive at the wire (``str | int | float |
+    None``): Electron speaks epoch milliseconds elsewhere on this broker while an
+    OAuth store commonly speaks epoch seconds or ISO-8601, and guessing wrong in
+    either direction is a live failure (a token cached past its death, or a
+    re-mint on every single request). The one place that normalization happens is
+    the MCP credential provider, which owns the rule and the clock.
+
+    ``headers`` carries only NON-SECRET request headers. The bearer never rides
+    here — the provider strips any authorization-shaped header before the config
+    reaches the connection.
+    """
+
+    url: str = Field(min_length=1, max_length=2_048)
+    transport: str = Field(min_length=1, max_length=64)
+    token: SecretStr = Field(repr=False, min_length=1)
+    expires_at: str | int | float | None = Field(default=None, alias="expiresAt")
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def _reject_boolean_expiry(cls, value: object) -> object:
+        """Refuse a ``bool`` before the union's lax ``int`` member accepts it.
+
+        ``bool`` is an ``int`` subclass, so a JSON ``true`` would otherwise be
+        coerced to ``1`` and read as 1970-01-01T00:00:01Z — an expiry in the past
+        means the auth re-mints on *every* request, a keychain-read storm
+        sustained by one malformed field. Rejected at the boundary instead.
+        """
+
+        if isinstance(value, bool):
+            raise ValueError("expires_at must be a timestamp, not a boolean")
+        return value
+
+
 class WorkspaceUploadSlot(_BrokerModel):
     """One private staged-content slot returned by workspace prepare."""
 
@@ -615,6 +672,23 @@ class DesktopBrokerClient:
         """
         body = await self._post(Routes.GRANTS_SNAPSHOT, {})
         return BrokerGrantSnapshot.model_validate(body)
+
+    async def mcp_secret(self, server_id: str) -> McpSecretResult:
+        """Read one MCP connector's endpoint + short-lived bearer (P2-7a).
+
+        MCP tokens are added at connect time, so they cannot ride the supervisor's
+        boot secrets and must be read live. The read happens in Electron main
+        under the active-workspace gate — a compromised run cannot reach another
+        workspace's connector — and returns over this same authenticated loopback
+        channel, so direct-connect adds no new trust boundary.
+
+        Raises a typed :class:`BrokerError` on any transport, protocol, or
+        broker-signalled failure, exactly like every other route here. The
+        response's token is a ``SecretStr``: nothing on this path logs it, and
+        :meth:`_raise_for_error` only ever records route + status + machine code.
+        """
+        body = await self._post(Routes.MCP_SECRET, {Field_.SERVER_ID: server_id})
+        return McpSecretResult.model_validate(body)
 
     # --- v2 workspace authority (C2) --------------------------------------
 
