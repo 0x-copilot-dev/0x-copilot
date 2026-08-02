@@ -9,6 +9,18 @@ Module split:
 - `runtime_worker/` — separate process that claims queued runs, drives LangGraph, and emits typed `RuntimeEventEnvelope` records. API can run an in-process worker via `RUNTIME_START_IN_PROCESS_WORKER=true` for local dev.
 - `runtime_adapters/` — `in_memory` for tests/dev, `postgres` for shared-store production-style runs. Selected by `RUNTIME_STORE_BACKEND`.
 
+## What belongs in this service
+
+**A lean Deep Agents / LangGraph runtime, plus the adapters that map LangGraph output into our event format** (`runtime_worker/stream_*`, `capabilities/middleware/`, `operations/presentation_boundary`).
+
+A source-level audit ([docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md](../../docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md)) measured ~80% of this service as genuinely that runtime, ~20% misplaced, ~4% dead. Before adding a module here, check it is not one of the concerns that already has a home in `backend`:
+
+**Do not add here:** billing / pricing / usage rollups · tenant or workspace admin CRUD · product persistence (sharing, inbox, todos, notifications, model catalog) · one-shot data migrations · eval / benchmark / promotion tooling · a second audit stream or another copy of the logging contract.
+
+**Policy decision vs enforcement (PDP/PEP).** Policy data belongs to `backend`; enforcement stays here, because the model picks tools mid-graph-loop and no caller outside the loop can see those calls. The required pattern is the one `ToolUsePolicySnapshot.from_response` already uses: **snapshot at run start, enforce in-process, POST the facts afterwards** — never a per-tool-call HTTP hop. "We enforce here" is correct; "we author, store or administer the policy here" is the violation.
+
+**Landing a module before its wiring** is tracked, not forbidden — record it in [PENDING-WIRINGS.md](../../docs/audit/ai-backend-smells/PENDING-WIRINGS.md) and enroll it in `tests/unit/orphan_ratchet_baseline.txt`, naming what it waits on. A module that cannot name what it waits for is the real deletion candidate.
+
 ## Before changing behavior
 
 Read [docs/README.md](docs/README.md), the relevant architecture doc, and the **matching spec under `docs/specs/`** before implementing. Read PRDs only for future work that hasn't shipped.
