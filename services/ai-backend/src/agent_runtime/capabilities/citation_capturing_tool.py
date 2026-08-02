@@ -15,6 +15,10 @@ from agent_runtime.capabilities.citation_projection import CitationProjector
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
+from agent_runtime.capabilities.mcp.middleware.compose import (
+    ToolResultShape,
+    ToolSchemaIdentity,
+)
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 
 
@@ -66,6 +70,45 @@ class CitationHint:
             dict_key=cls.DICT_HINT_KEY,
         )
 
+    @classmethod
+    def append_within_response_format(
+        cls,
+        result: object,
+        *,
+        ordinal: int,
+        tool_name: str,
+        response_format: str,
+    ) -> object:
+        """Append the hint without breaking the shape ``response_format`` promised.
+
+        ``BaseTool.arun`` unpacks **exactly two** values from a
+        ``content_and_artifact`` return and raises ``ValueError`` on anything
+        else, so the annotation has to land on the content half and leave the
+        pair a pair.
+
+        :meth:`append_to` cannot do that on its own: :class:`ToolResultNote`
+        walks a tuple looking for a string to extend and, finding none, inserts
+        the note as a new first element. That is right for a free-form tuple and
+        fatal for a declared ``(content, artifact)`` pair whose content is not a
+        string — the built-in ``web_search`` returns ``(list[dict], list[dict])``,
+        which would reach dispatch as a three-tuple and fail the call the
+        artifact was being preserved for.
+
+        A tool that declares the format but did not return a pair is already
+        breaking its own contract; the plain shape walk is kept for it so this
+        method never changes behaviour it is not there to fix.
+        """
+
+        if response_format != ToolResultShape.CONTENT_AND_ARTIFACT:
+            return cls.append_to(result, ordinal=ordinal, tool_name=tool_name)
+        if not isinstance(result, tuple) or len(result) != 2:
+            return cls.append_to(result, ordinal=ordinal, tool_name=tool_name)
+        content, artifact = result
+        return (
+            cls.append_to(content, ordinal=ordinal, tool_name=tool_name),
+            artifact,
+        )
+
 
 # The class was module-private until the occupancy ledger needed to recognise
 # the note it appends. The old private name is kept as an alias so existing
@@ -76,8 +119,11 @@ _CitationHint = CitationHint
 class CitationCapturingTool(DelegatingTool):
     """BaseTool wrapper that projects results to the citation ledger and appends ordinal hints.
 
-    Propagates the inner tool's name, description, and args_schema unchanged.
-    The sync ``_run`` path delegates without projection; the runtime always
+    Propagates the inner tool's whole surface — model-visible *and*
+    dispatch-shaping — except ``args_schema``, which is deliberately augmented
+    with an injected ``tool_call_id`` (see
+    :meth:`CitationCapturingRegistry._augment_schema_with_tool_call_id`). The
+    sync ``_run`` path delegates without projection; the runtime always
     dispatches via ``_arun`` where both the ledger projection and the hint
     append happen best-effort.
     """
@@ -135,8 +181,11 @@ class CitationCapturingTool(DelegatingTool):
                 ordinal = await allocator.allocate_for_tool_call(
                     tool_call_id=tool_call_id, tool_name=self.name
                 )
-                result = CitationHint.append_to(
-                    result, ordinal=ordinal, tool_name=self.name
+                result = CitationHint.append_within_response_format(
+                    result,
+                    ordinal=ordinal,
+                    tool_name=self.name,
+                    response_format=self.response_format,
                 )
                 _LOGGER.info(
                     "[citations] tool.hint_appended tool=%s ordinal=%d "
@@ -186,7 +235,18 @@ class CitationCapturingRegistry:
 
     @classmethod
     def _wrap(cls, tool: object) -> object:
-        """Wrap a single tool; return it unchanged if not a BaseTool or already wrapped."""
+        """Wrap a single tool; return it unchanged if not a BaseTool or already wrapped.
+
+        The propagated field set is
+        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`'s
+        — one definition for every wrapper in the runtime rather than a
+        hand-listed subset per wrap site. ``args_schema`` is the single
+        deliberate override (below); everything else, including the dispatch
+        surface, must arrive unchanged. Listing only name / description /
+        args_schema here is what dropped ``response_format`` from the built-in
+        ``web_search`` chain and stringified its ``(content, artifact)`` pair
+        into the model-visible content on every call.
+        """
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, CitationCapturingTool):
@@ -195,12 +255,9 @@ class CitationCapturingRegistry:
         # _arun kwargs. Tools that don't declare InjectedToolCallId natively
         # (e.g. DuckDuckGo) would otherwise emit citations with an empty
         # source_tool_call_id, forcing fragile ordinal-position lookups.
-        return CitationCapturingTool(
-            name=tool.name,
-            description=tool.description,
-            args_schema=cls._augment_schema_with_tool_call_id(tool.args_schema),
-            inner=tool,
-        )
+        fields = ToolSchemaIdentity.fields_of(tool)
+        fields["args_schema"] = cls._augment_schema_with_tool_call_id(tool.args_schema)
+        return CitationCapturingTool(**fields, inner=tool)
 
     @staticmethod
     def _augment_schema_with_tool_call_id(

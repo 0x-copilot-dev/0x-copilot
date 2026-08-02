@@ -38,6 +38,10 @@ from agent_runtime.control_plane.context import (
     TaskPolicyRuntimeBinding,
 )
 from agent_runtime.control_plane.feature_modes import FeatureMode
+from agent_runtime.capabilities.mcp.middleware.compose import (
+    ToolResultShape,
+    ToolSchemaIdentity,
+)
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import StreamEventSource
@@ -931,9 +935,10 @@ def estimate_tool_input_tokens(arguments: dict[str, Any]) -> int:
 class ToolBudgetGuardedTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that gates calls through the active guard.
 
-    Inner tool's ``name`` / ``description`` / ``args_schema`` are
-    propagated so the model sees an identical surface. Only the
-    invocation path differs.
+    The inner tool's whole surface is propagated — see
+    :meth:`ToolBudgetGuardedRegistry._wrap` — so the model sees an identical
+    tool and LangChain unpacks the return value the same way it would have
+    without the wrapper. Only the invocation path differs.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -1062,12 +1067,47 @@ class ToolBudgetGuardedTool(DelegatingTool):
         guard: ToolBudgetGuard,
         call_id: str,
     ) -> object:
-        """Annotate, then bound, the exact value returned to LangChain."""
+        """Annotate, then bound, the model-visible part of the value LangChain gets.
 
+        Under a declared ``content_and_artifact`` return only the first half is
+        model-visible; the artifact rides on ``ToolMessage.artifact`` and is
+        never sent to the model, so it is neither annotated nor budget-bounded.
+        Splitting is not optional now that the wrapper propagates
+        ``response_format``: :class:`ToolResultNote` walks a tuple looking for a
+        string to extend and, finding none — ``web_search`` returns
+        ``(list[dict], list[dict])`` — inserts the note as a new first element,
+        and ``BaseTool.arun`` raises ``ValueError`` on any return that is not
+        exactly two values. Twin of
+        :meth:`~agent_runtime.capabilities.citation_capturing_tool.CitationHint.append_within_response_format`,
+        which solves the same split for the citation hint.
+        """
+
+        if self._declares_a_pair(result):
+            content, artifact = result  # type: ignore[misc]
+            return (
+                guard.admit_model_visible_result(
+                    content, tool_name=self.name, call_id=call_id
+                ),
+                artifact,
+            )
         return guard.admit_model_visible_result(
             result,
             tool_name=self.name,
             call_id=call_id,
+        )
+
+    def _declares_a_pair(self, result: object) -> bool:
+        """Return whether ``result`` is the ``(content, artifact)`` pair this tool promised.
+
+        A tool that declares the format but returns something else is already
+        breaking its own contract; it keeps the undivided path so this wrapper
+        never invents behavior for it.
+        """
+
+        return (
+            self.response_format == ToolResultShape.CONTENT_AND_ARTIFACT
+            and isinstance(result, tuple)
+            and len(result) == 2
         )
 
     @staticmethod
@@ -1105,17 +1145,23 @@ class ToolBudgetGuardedRegistry:
 
     @staticmethod
     def _wrap(tool: object) -> object:
-        """Wrap ``tool`` in a ``ToolBudgetGuardedTool``; return non-BaseTool entries unchanged."""
+        """Wrap ``tool`` in a ``ToolBudgetGuardedTool``; return non-BaseTool entries unchanged.
+
+        The propagated field set is
+        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`'s
+        — one definition for every wrapper in the runtime instead of a
+        hand-listed subset per wrap site. The subset that used to live here
+        (``name`` / ``description`` / ``args_schema``) dropped the dispatch
+        surface, and ``response_format`` with it: LangChain reads that field off
+        the tool it dispatches, so a guarded ``content_and_artifact`` tool would
+        have its ``(content, artifact)`` pair stringified into the model-visible
+        content with ``ToolMessage.artifact`` left ``None``.
+        """
         if not isinstance(tool, BaseTool):
             return tool
         if ToolBudgetGuardedRegistry._contains_guard(tool):
             return tool
-        return ToolBudgetGuardedTool(
-            name=tool.name,
-            description=tool.description,
-            args_schema=tool.args_schema,
-            inner=tool,
-        )
+        return ToolBudgetGuardedTool(**ToolSchemaIdentity.fields_of(tool), inner=tool)
 
     @staticmethod
     def _contains_guard(tool: BaseTool) -> bool:

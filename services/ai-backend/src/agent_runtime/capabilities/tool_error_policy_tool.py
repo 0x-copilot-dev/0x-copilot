@@ -14,10 +14,28 @@ is the single chokepoint where tool exceptions get classified:
 Cancellation, ``KeyboardInterrupt``, and ``SystemExit`` are re-raised
 without classification — they are never routed through the policy.
 
-This mirrors the structure of
-:class:`agent_runtime.capabilities.tool_budget_guard.ToolBudgetGuardedTool`:
-inner ``name``/``description``/``args_schema`` are propagated unchanged
-so the model sees an identical surface.
+This is the **outermost** wrapper of the built-in tool chain
+(``ToolErrorPolicyRegistry`` over ``CitationCapturingRegistry`` over
+``WebSearchToolRegistry``, see
+:mod:`runtime_worker.dependencies`), which makes it the tool LangChain
+actually dispatches — and LangChain reads ``response_format`` off the tool it
+dispatches, not off anything nested inside it. Both halves of that fact are
+load-bearing here:
+
+* The wrapper must present the inner's **whole** surface, so it is built from
+  :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`
+  rather than a hand-listed ``name`` / ``description`` / ``args_schema``. That
+  hand-listed subset is what silently dropped ``response_format`` from
+  ``web_search``: every inner layer declared ``content_and_artifact`` and
+  returned ``(results, raw_results)`` while this layer declared plain
+  ``content``, so LangChain stringified the whole pair into the model-visible
+  ``ToolMessage.content`` and left ``artifact`` ``None`` on every call.
+* The surfaced-error path returns a value this wrapper **authored itself**, so
+  it has to be rendered in the shape the wrapper now promises — via
+  :meth:`~agent_runtime.capabilities.mcp.middleware.compose.ToolResultShape.render`.
+  A bare string handed back under ``content_and_artifact`` makes
+  ``BaseTool.arun`` raise on the unpack, i.e. the error handler would crash on
+  the very call it was there to rescue.
 """
 
 from __future__ import annotations
@@ -30,15 +48,19 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
+from agent_runtime.capabilities.mcp.middleware.compose import (
+    ToolResultShape,
+    ToolSchemaIdentity,
+)
 from pydantic import ConfigDict
 
 from agent_runtime.execution.tool_error_policy import (
     DefaultToolErrorPolicy,
+    ToolErrorClassification,
     ToolErrorOutcome,
     ToolErrorPolicy,
 )
 from agent_runtime.execution.tool_errors import RunFatalToolError
-from agent_runtime.execution.tool_error_policy import ToolErrorClassification
 
 _LOGGER = logging.getLogger("agent_runtime.capabilities.tool_error_policy_tool")
 
@@ -83,7 +105,7 @@ class ToolErrorPolicyTool(DelegatingTool):
                     audit_summary=classification.audit_trace,
                 ) from exc
             self._log_surfaced(classification, sync=True)
-            return classification.to_llm_message_content()
+            return self._surfaced_result(classification)
 
     async def _arun(
         self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
@@ -103,11 +125,28 @@ class ToolErrorPolicyTool(DelegatingTool):
                     audit_summary=classification.audit_trace,
                 ) from exc
             self._log_surfaced(classification, sync=False)
-            return classification.to_llm_message_content()
+            return self._surfaced_result(classification)
+
+    def _surfaced_result(self, classification: ToolErrorClassification) -> Any:
+        """Render the sanitized error in the return shape this wrapper declares.
+
+        The classification renders as a bare string. Under
+        ``response_format="content_and_artifact"`` — which every MCP tool and
+        the built-in ``web_search`` declare, and which this wrapper now
+        propagates — LangChain unpacks exactly two values from a tool return and
+        raises ``ValueError`` on anything else. ``ToolResultShape`` is the one
+        definition of that mapping; the artifact half is ``None`` because a call
+        that failed produced no raw tool output to carry.
+        """
+
+        return ToolResultShape.render(
+            classification.to_llm_message_content(),
+            response_format=self.response_format,
+        )
 
     def _log_surfaced(
         self,
-        classification: "ToolErrorClassification",  # type: ignore[name-defined]
+        classification: ToolErrorClassification,
         *,
         sync: bool,
     ) -> None:
@@ -151,15 +190,23 @@ class ToolErrorPolicyRegistry:
         return tuple(self._wrap(tool) for tool in rendered)
 
     def _wrap(self, tool: object) -> object:
-        """Wrap a single ``BaseTool`` in :class:`ToolErrorPolicyTool`; pass non-tools through unchanged."""
+        """Wrap a single ``BaseTool`` in :class:`ToolErrorPolicyTool`; pass non-tools through unchanged.
+
+        The propagated field set is
+        :class:`~agent_runtime.capabilities.mcp.middleware.compose.ToolSchemaIdentity`'s
+        — the one definition of what a wrapper reproduces from the tool it
+        wraps, covering the dispatch surface (``response_format`` /
+        ``return_direct`` / ``metadata`` / ``tags``) as well as the
+        model-visible one. This site is where a hand-listed subset does the most
+        damage: the tools it returns are the outermost layer, so whatever it
+        fails to propagate is what LangChain sees.
+        """
         if not isinstance(tool, BaseTool):
             return tool
         if isinstance(tool, ToolErrorPolicyTool):
             return tool
         return ToolErrorPolicyTool(
-            name=tool.name,
-            description=tool.description,
-            args_schema=tool.args_schema,
+            **ToolSchemaIdentity.fields_of(tool),
             inner=tool,
             policy=self._policy,
         )

@@ -17,8 +17,10 @@ from __future__ import annotations
 
 
 import pytest
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 
+from agent_runtime.capabilities.mcp.middleware.compose import ToolSchemaIdentity
 from agent_runtime.capabilities.tool_budget_guard import (
     ToolBudgetGuard,
     ToolBudgetGuardedRegistry,
@@ -106,6 +108,31 @@ class _ResultTool(BaseTool):
     async def _arun(self, *args: object, **kwargs: object) -> str:
         self.call_count += 1
         return self.result
+
+
+class _ContentAndArtifactTool(BaseTool):
+    """Inner shaped like the built-in ``web_search`` and every MCP tool.
+
+    Neither half of the declared pair is a string, which is what makes the
+    note-append path interesting: :class:`ToolResultNote` finds nothing to
+    extend and would insert the note as a third tuple element.
+    """
+
+    name: str = "echo"
+    description: str = "Returns a declared (content, artifact) pair."
+    response_format: str = "content_and_artifact"
+    return_direct: bool = True
+    tags: list[str] | None = ["builtin"]
+    metadata: dict[str, object] | None = {"origin": "builtin"}
+    extras: dict[str, object] | None = {"cache_control": {"type": "ephemeral"}}
+    content: list[dict[str, str]] = []
+    artifact: list[dict[str, str]] = []
+
+    def _run(self, *_args: object, **_kwargs: object) -> tuple[object, object]:
+        return self.content, self.artifact
+
+    async def _arun(self, *_args: object, **_kwargs: object) -> tuple[object, object]:
+        return self.content, self.artifact
 
 
 class _ModelTurnStoppingController:
@@ -891,6 +918,93 @@ class TestToolBudgetGuardedRegistry:
         rendered = registry.list_available_tools(context=None)
         # The wrapper recognises its own kind and short-circuits.
         assert rendered[0] is already_wrapped
+
+
+class ContentAndArtifactBudgetMixin:
+    """Builders for the dispatch-surface + note-shape regression."""
+
+    CONTENT: list[dict[str, str]] = [{"title": "T", "link": "https://example.test/a"}]
+    ARTIFACT: list[dict[str, str]] = [{"raw": "payload", "secret": "artifact-only"}]
+    TOOL_CALL_ID = "call_budget_1"
+
+    def _inner(self) -> _ContentAndArtifactTool:
+        return _ContentAndArtifactTool(content=self.CONTENT, artifact=self.ARTIFACT)
+
+    def _guarded(self, inner: BaseTool) -> ToolBudgetGuardedTool:
+        return guard_model_tools([inner])[0]  # type: ignore[return-value]
+
+    def _bind_notifying_guard(self) -> object:
+        # A cap of 3 leaves little headroom, so ``usage_note`` renders a
+        # remaining-calls notice — the annotation this test is about.
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=3)]
+            ),
+            ledger=ToolCallLedger(run_id="run-pair"),
+        )
+        return ToolBudgetGuard.bind_for_run(guard)
+
+    def _tool_call(self) -> dict[str, object]:
+        return {
+            "name": "echo",
+            "args": {},
+            "id": self.TOOL_CALL_ID,
+            "type": "tool_call",
+        }
+
+
+class TestGuardedContentAndArtifactDispatch(ContentAndArtifactBudgetMixin):
+    def test_wrap_propagates_every_identity_field(self) -> None:
+        inner = self._inner()
+
+        wrapped = self._guarded(inner)
+
+        for field in (
+            *ToolSchemaIdentity.MODEL_SURFACE,
+            *ToolSchemaIdentity.DISPATCH_SURFACE,
+        ):
+            assert getattr(wrapped, field) == getattr(inner, field), field
+
+    def test_wrap_carries_the_inner_response_format(self) -> None:
+        assert self._guarded(self._inner()).response_format == "content_and_artifact"
+
+    async def test_budget_note_keeps_the_declared_pair_a_pair(self) -> None:
+        wrapped = self._guarded(self._inner())
+        token = self._bind_notifying_guard()
+        try:
+            result = await wrapped._arun()
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        # The note landed on the model-visible half only.
+        assert result[0][: len(self.CONTENT)] == self.CONTENT
+        assert any(isinstance(entry, str) for entry in result[0])
+        assert result[1] == self.ARTIFACT
+
+    async def test_artifact_reaches_the_tool_message_through_the_guard(self) -> None:
+        wrapped = self._guarded(self._inner())
+        token = self._bind_notifying_guard()
+        try:
+            message = await wrapped.ainvoke(self._tool_call())
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert isinstance(message, ToolMessage)
+        assert message.artifact == self.ARTIFACT
+        assert "artifact-only" not in message.content
+
+    async def test_plain_content_tool_keeps_the_undivided_annotation_path(self) -> None:
+        wrapped = self._guarded(_RecordingTool())
+        token = self._bind_notifying_guard()
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert isinstance(result, str)
+        assert result.startswith("echo-ok")
 
 
 def test_full_model_surface_wrapper_is_idempotent_for_injected_tools() -> None:

@@ -126,6 +126,15 @@ class WebSearchToolRegistry:
         The underlying library raises opaque ``DDGSException`` wrappers on transient
         failures; the ``RetryingTool`` wrapper absorbs those and only re-raises after
         sustained failure so a single hiccup does not terminate the subagent run.
+
+        The wrapper is built through :meth:`RetryingTool.wrapping` so the inner's
+        whole surface travels with it. This site used to hand-list
+        ``name`` / ``description`` / ``args_schema``, which dropped
+        ``response_format``: the inner declares ``content_and_artifact`` and
+        returns ``(results, raw_results)``, the wrapper declared plain
+        ``content``, and LangChain — which reads the field off the tool it
+        dispatches — stringified the whole pair into ``ToolMessage.content`` and
+        left ``artifact`` ``None`` on every web search.
         """
         from langchain_core.tools import StructuredTool
 
@@ -138,11 +147,8 @@ class WebSearchToolRegistry:
             args_schema=cls.WebSearchInput,
             response_format="content_and_artifact",
         )
-        return RetryingTool(
-            name=inner.name,
-            description=inner.description,
-            args_schema=inner.args_schema,
-            inner=inner,
+        return RetryingTool.wrapping(
+            inner,
             max_attempts=3,
             initial_backoff_seconds=1.0,
             max_backoff_seconds=8.0,
