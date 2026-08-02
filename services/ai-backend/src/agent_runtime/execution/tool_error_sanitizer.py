@@ -134,6 +134,17 @@ class ErrorSanitizer:
         strings, file paths, canonical UUIDs, and labeled internal ids are still
         removed by the shared pattern set; a resource id the server itself
         returned survives so the model can act on it.
+
+        Coverage is shape-conditional, and that is deliberate: an internal id
+        emitted as **bare undashed hex** (``uuid4().hex``) is byte-for-byte
+        indistinguishable from a dashless-UUID resource id a connector returns —
+        same alphabet, same length — so it survives too. No sink-side regex can
+        separate the two without re-blinding the model to server resource ids,
+        which is the whole point of this method. Code that must keep a specific
+        internal id out of model-visible text therefore defends at the producer:
+        emit it dashed (:data:`_UUID_PATTERN`) or behind an internal-id label
+        (:data:`_INTERNAL_HEX_ID_PATTERN`), both covered above — never as bare
+        hex. See ``TestBareHexInternalIdLeakIsAnAcceptedTradeoff``.
         """
         return cls._truncate(cls._strip(text), max_length=max_length)
 
