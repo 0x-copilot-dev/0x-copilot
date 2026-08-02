@@ -445,15 +445,25 @@ class GatewayCapabilityExecutor:
         reads a receipt, never a connector body.
         """
 
-        if outcome.get("error") is not None:
-            raise CapabilityExecutionRefused(
-                CapabilityDiscoveryErrorCode.EXECUTION_FAILED
-            )
         body = outcome.get("output")
         if not isinstance(body, Mapping):
+            # No body at all: nothing auditable to hand back. This is also the
+            # only remaining shape a typed error can take here — a dispatcher
+            # failure that produced no operation identity.
             raise CapabilityExecutionRefused(
                 CapabilityDiscoveryErrorCode.EXECUTION_FAILED
             )
+        # A typed `error` beside a real body is a FAILED operation, not an
+        # unusable one, and its receipt is the more useful answer: `refused`
+        # plus a resolvable `invocation_ref` the run can audit, rather than an
+        # exception carrying neither. Nothing from the error travels — the
+        # summary below comes from this module's fixed map, so a connector
+        # payload still cannot reach the model through this path.
+        #
+        # This branch used to raise, which was invisible while a failed
+        # dispatch returned a success envelope with `error` absent. Making that
+        # failure typed turned every connector failure on the bridge into an
+        # exception, and the receipt it should have produced disappeared.
         status = self._status(body.get("status"))
         invocation_ref = self._invocation_ref(body, status=status)
         if invocation_ref is None:
