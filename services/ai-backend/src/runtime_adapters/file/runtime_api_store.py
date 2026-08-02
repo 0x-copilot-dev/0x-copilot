@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
@@ -81,7 +82,6 @@ from agent_runtime.persistence.records import (
     LegalHoldConflict,
     LegalHoldMutationResult,
     LegalHoldRecord,
-    RuntimeContextGraphScope,
     RuntimeContextOccupancyRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
@@ -98,6 +98,7 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters._materialized_store import MaterializedViewStoreBase
 from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
 from runtime_adapters._event_idempotency import EventRedeliveryResolver
 from runtime_adapters.artifact_lifecycle import (
@@ -255,8 +256,16 @@ class _PurgeOutcome:
         self.audit_event_id: str | None = None
 
 
-class FileRuntimeApiStore:
-    """On-disk implementation of persistence, event store, and queue ports."""
+class FileRuntimeApiStore(MaterializedViewStoreBase):
+    """On-disk implementation of persistence, event store, and queue ports.
+
+    The context-occupancy port and its shared domain policy live on
+    :class:`~runtime_adapters._materialized_store.MaterializedViewStoreBase`;
+    this store *is* that in-memory view plus a JSONL persistence sidecar. It
+    overrides the base's two backend-difference hooks — :meth:`_state_guard`
+    (its shared state lock) and :meth:`_persist_context_occupancy` (the JSONL
+    ledger append) — and inherits the append/read policy unchanged.
+    """
 
     # The file adapter persists append-only audit material across process restarts.
     receipt_export_v2_available = True
@@ -3212,116 +3221,49 @@ class FileRuntimeApiStore:
                 record.model_dump(mode="json")
             )
 
-    async def append_usage_attribution_edge(
-        self,
-        *,
-        org_id: str,
-        edge: UsageAttributionEdge,
-    ) -> bool:
-        """Append a retry-safe immutable relation without rewriting usage."""
+    def _persist_usage_attribution_edge(
+        self, *, org_id: str, edge: UsageAttributionEdge
+    ) -> None:
+        """Append one newly-persisted attribution edge to the durable JSONL ledger.
 
-        async with self._state_lock:
-            if not any(
-                record.id == edge.usage_record_id and record.org_id == org_id
-                for record in self.model_call_usage
-            ):
-                raise LookupError(
-                    "usage attribution requires an in-tenant usage record"
-                )
-
-            natural_key = (org_id, *edge.idempotency_key)
-            if natural_key in self._usage_attribution_edge_ids_by_key:
-                return False
-
-            existing = self.usage_attribution_edges.get(edge.edge_id)
-            if existing is not None:
-                if existing == (org_id, edge):
-                    return False
-                raise ValueError("usage attribution edge_id already exists")
-
-            self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
-            self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
-            self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).append_put(
-                {
-                    "org_id": org_id,
-                    "edge": edge.model_dump(mode="json"),
-                }
-            )
-            return True
-
-    async def list_usage_attribution_edges_for_usage_records(
-        self,
-        *,
-        org_id: str,
-        usage_record_ids: Sequence[str],
-    ) -> Sequence[UsageAttributionEdge]:
-        """Read immutable edges for a known organization-scoped call set."""
-
-        requested_ids = set(usage_record_ids)
-        if not requested_ids:
-            return ()
-        async with self._state_lock:
-            return tuple(
-                sorted(
-                    (
-                        edge
-                        for stored_org_id, edge in self.usage_attribution_edges.values()
-                        if stored_org_id == org_id
-                        and edge.usage_record_id in requested_ids
-                    ),
-                    key=lambda edge: (edge.created_at, edge.edge_id),
-                )
-            )
-
-    async def append_context_occupancy(
-        self,
-        record: RuntimeContextOccupancyRecord,
-    ) -> bool:
-        """Append one occupancy snapshot to the durable ledger, once per attempt.
-
-        The natural-key check happens before the line is written, so a
-        redelivered append costs nothing on disk and reload has nothing to fold
-        away. Nothing is ever rewritten: an occupancy measurement describes a
-        request already sent, and the desktop substrate keeps that immutable for
-        the same reason the Postgres role holds no UPDATE privilege.
+        The ledger stores the ``(org_id, edge)`` envelope the reopen path folds by
+        natural key. Runs inside :meth:`_state_guard`, only for a genuinely new
+        edge (the base invokes it after both in-memory indices are updated).
         """
 
-        async with self._state_lock:
-            if record.idempotency_key in self.context_occupancy:
-                return False
-            self.context_occupancy[record.idempotency_key] = record
-            self._ledger(_Tables.CONTEXT_OCCUPANCY).append_put(
-                record.model_dump(mode="json")
-            )
-            return True
+        self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).append_put(
+            {
+                "org_id": org_id,
+                "edge": edge.model_dump(mode="json"),
+            }
+        )
 
-    async def list_context_occupancy(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        graph_scope: RuntimeContextGraphScope | None = None,
-    ) -> Sequence[RuntimeContextOccupancyRecord]:
-        """Return one run's snapshots oldest-first within the tenant scope.
+    def _state_guard(self) -> AbstractAsyncContextManager[object]:
+        """Serialize back-office-state reads/writes under the shared state lock.
 
-        Ties break on the natural key rather than ``id`` so this backend and
-        Postgres return the same order for two attempts measured inside the
-        same clock tick.
+        The base defaults to no lock (the in-memory store). The desktop store is
+        single-writer in-process but still serializes here so an append's JSONL
+        durability flush cannot interleave with a concurrent append or read of
+        the same ledger — the guarantee ``append_context_occupancy`` and
+        ``list_context_occupancy`` relied on when they held this lock directly.
         """
 
-        async with self._state_lock:
-            return tuple(
-                sorted(
-                    (
-                        record
-                        for record in self.context_occupancy.values()
-                        if record.org_id == org_id
-                        and record.run_id == run_id
-                        and (graph_scope is None or record.graph_scope is graph_scope)
-                    ),
-                    key=lambda record: (record.created_at, *record.idempotency_key),
-                )
-            )
+        return self._state_lock
+
+    def _persist_context_occupancy(self, record: RuntimeContextOccupancyRecord) -> None:
+        """Append one newly-persisted snapshot to the durable JSONL ledger.
+
+        Nothing is ever rewritten: an occupancy measurement describes a request
+        already sent, and the desktop substrate keeps that immutable for the same
+        reason the Postgres role holds no UPDATE privilege. Runs inside
+        :meth:`_state_guard`, and the base invokes it only for a genuinely new
+        row — so a redelivered append writes no line and reload has nothing to
+        fold away.
+        """
+
+        self._ledger(_Tables.CONTEXT_OCCUPANCY).append_put(
+            record.model_dump(mode="json")
+        )
 
     async def update_run_usage_cost(
         self, *, run_id: str, cost_micro_usd: int, pricing_id: str, pricing_version: str

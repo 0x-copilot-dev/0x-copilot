@@ -39,7 +39,6 @@ from agent_runtime.persistence.records import (
     LegalHoldConflict,
     LegalHoldMutationResult,
     LegalHoldRecord,
-    RuntimeContextGraphScope,
     RuntimeContextOccupancyRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
@@ -60,6 +59,7 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
+from runtime_adapters._materialized_store import MaterializedViewStoreBase
 from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
 from runtime_adapters._event_idempotency import EventRedeliveryResolver
 from runtime_adapters.artifact_lifecycle import (
@@ -100,8 +100,15 @@ from runtime_api.schemas import (
 )
 
 
-class InMemoryRuntimeApiStore:
-    """In-memory implementation of persistence, event store, and queue ports."""
+class InMemoryRuntimeApiStore(MaterializedViewStoreBase):
+    """In-memory implementation of persistence, event store, and queue ports.
+
+    The context-occupancy port (``append_context_occupancy`` /
+    ``list_context_occupancy``) and its shared domain policy live on
+    :class:`~runtime_adapters._materialized_store.MaterializedViewStoreBase`.
+    This store keeps no lock and nothing on disk, so it inherits the base's
+    no-op ``_state_guard`` / ``_persist_context_occupancy`` unchanged.
+    """
 
     # D7 receipts are durable audit artifacts. This test/dev adapter can model
     # signatures but cannot truthfully claim a durable, exportable audit record.
@@ -1906,104 +1913,6 @@ class InMemoryRuntimeApiStore:
     ) -> None:
         """Append a per-call usage record."""
         self.model_call_usage.append(record)
-
-    async def append_usage_attribution_edge(
-        self,
-        *,
-        org_id: str,
-        edge: UsageAttributionEdge,
-    ) -> bool:
-        """Append one immutable usage-to-operation edge.
-
-        The natural identity makes retry delivery idempotent while a distinct
-        usage-record ID (for example, a model retry) remains a distinct edge.
-        """
-
-        if not any(
-            record.id == edge.usage_record_id and record.org_id == org_id
-            for record in self.model_call_usage
-        ):
-            raise LookupError("usage attribution requires an in-tenant usage record")
-
-        natural_key = (org_id, *edge.idempotency_key)
-        if natural_key in self._usage_attribution_edge_ids_by_key:
-            return False
-
-        existing = self.usage_attribution_edges.get(edge.edge_id)
-        if existing is not None:
-            if existing == (org_id, edge):
-                return False
-            raise ValueError("usage attribution edge_id already exists")
-
-        self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
-        self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
-        return True
-
-    async def list_usage_attribution_edges_for_usage_records(
-        self,
-        *,
-        org_id: str,
-        usage_record_ids: Sequence[str],
-    ) -> Sequence[UsageAttributionEdge]:
-        """Return only edges belonging to the trusted organization scope."""
-
-        requested_ids = set(usage_record_ids)
-        if not requested_ids:
-            return ()
-        return tuple(
-            sorted(
-                (
-                    edge
-                    for stored_org_id, edge in self.usage_attribution_edges.values()
-                    if stored_org_id == org_id and edge.usage_record_id in requested_ids
-                ),
-                key=lambda edge: (edge.created_at, edge.edge_id),
-            )
-        )
-
-    async def append_context_occupancy(
-        self,
-        record: RuntimeContextOccupancyRecord,
-    ) -> bool:
-        """Append one snapshot keyed by its measured attempt.
-
-        The dict key is :attr:`RuntimeContextOccupancyRecord.idempotency_key`
-        rather than ``record.id``, mirroring the UNIQUE constraint the Postgres
-        adapter relies on: the same attempt re-delivered under a fresh transport
-        id must not become a second row in either backend.
-        """
-
-        if record.idempotency_key in self.context_occupancy:
-            return False
-        self.context_occupancy[record.idempotency_key] = record
-        return True
-
-    async def list_context_occupancy(
-        self,
-        *,
-        org_id: str,
-        run_id: str,
-        graph_scope: RuntimeContextGraphScope | None = None,
-    ) -> Sequence[RuntimeContextOccupancyRecord]:
-        """Return one run's snapshots oldest-first within the tenant scope.
-
-        Ties break on the natural key, never on ``id``: ``id`` is a random
-        UUID and would make the per-turn series non-deterministic for two
-        attempts measured inside the same clock tick.
-        """
-
-        return tuple(
-            sorted(
-                (
-                    record
-                    for record in self.context_occupancy.values()
-                    if record.org_id == org_id
-                    and record.run_id == run_id
-                    and (graph_scope is None or record.graph_scope is graph_scope)
-                ),
-                key=lambda record: (record.created_at, *record.idempotency_key),
-            )
-        )
 
     async def update_run_usage_cost(
         self,
