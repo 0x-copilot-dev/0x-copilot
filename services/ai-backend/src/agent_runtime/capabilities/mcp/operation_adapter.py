@@ -159,6 +159,7 @@ class McpOperationAdapter(OperationAdapter):
         gate: ToolAccessGate | None,
         execution: McpOperationExecutionServices,
         tool_call_id: str | None,
+        authorized_to_execute: bool = False,
     ) -> None:
         # Python permits local and dynamic imports, so a test-only import
         # convention is insufficient.  Verify this provider module's source
@@ -173,8 +174,29 @@ class McpOperationAdapter(OperationAdapter):
         self._gate = gate
         self._execution = execution
         self._tool_call_id = tool_call_id
+        # P1b: an MCP operation only reaches the gateway *after* the PDP has
+        # ALLOWed it (or an approval GATE was resolved) at the ``call_mcp_tool``
+        # dispatch boundary, so the gateway must EXECUTE it (read or write)
+        # rather than route a write to the retired staging path. This flag is
+        # the per-adapter execute-now directive the gateway honours; the browser
+        # adapter never sets it, so its ``REQUIRE`` effects still stage. See
+        # ``docs/specs/mcp-tool-policy-pipeline.md`` §5 (the approval GATE
+        # replaces the effect-staging path).
+        self._authorized_to_execute = authorized_to_execute
         self._stored_result: McpOperationStoredResult | None = None
         self._protocol_error: str | None = None
+
+    @property
+    def authorized_to_execute(self) -> bool:
+        """Whether the gateway should execute this operation instead of staging.
+
+        Read by :meth:`OperationGateway._invoke_once` via ``getattr`` so the
+        generic fork stays capability-agnostic: MCP arrives post-PDP-authorized
+        and executes; adapters that do not expose this attribute (browser) keep
+        the ``effect_class`` staging rule.
+        """
+
+        return self._authorized_to_execute
 
     @property
     def stored_result(self) -> McpOperationStoredResult | None:

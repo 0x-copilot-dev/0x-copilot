@@ -23,12 +23,14 @@ from agent_runtime.api.user_policies_resolver import (
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
+from agent_runtime.capabilities.mcp.gateway_context import McpOperationGatewayContext
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from runtime_worker.mcp_operation_storage import McpOperationGatewayComposer
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
@@ -208,6 +210,13 @@ class RuntimeApprovalHandler:
         mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
+        # P1b: the durable stores + queue the model-facing MCP operation gateway
+        # needs. On resume they let an approved write re-enter the same gateway
+        # and EXECUTE in this run; absent (the pre-P1b default), the resumed tool
+        # holds instead of dispatching, exactly as before this wiring.
+        queue: object | None = None,
+        artifact_blob_store: object | None = None,
+        artifact_reference_store: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
         run_control_decision_store: object | None = None,
@@ -260,6 +269,9 @@ class RuntimeApprovalHandler:
             kill_switches=self.settings.execution.rollout_kill_switches,
         )
         self.artifact_service = artifact_service
+        self._queue = queue
+        self._artifact_blob_store = artifact_blob_store
+        self._artifact_reference_store = artifact_reference_store
         self._run_control_builder = run_control_builder
         self._prompt_observation_store = prompt_observation_store
         # BYOK re-hydration on resume: the persisted run record's context was
@@ -491,6 +503,7 @@ class RuntimeApprovalHandler:
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
         workspace_backend = await self._workspace_backend_for_resume(running)
         operation_context_token: object | None = None
+        mcp_operation_gateway_token: object | None = None
         shadow_comparison_token: object | None = None
         model_invocation_effect_tracker: ModelInvocationEffectTracker | None = None
         # A resumed graph is a fresh tool-execution context. Bind the desktop
@@ -614,6 +627,20 @@ class RuntimeApprovalHandler:
                     if model_invocation_effect_tracker is not None:
                         model_invocation_effect_tracker.mark_event(event_type)
 
+                # P1b: re-compose the model-facing MCP operation gateway so an
+                # approved write re-enters an identical gateway on resume and
+                # EXECUTES in this run. Without it the resumed ``call_mcp_tool``
+                # finds no canonical operation context and holds — re-opening the
+                # orphan the interrupt closed. ``None`` (no durable stores wired,
+                # the pre-P1b default) preserves the prior hold-on-resume shape.
+                mcp_gateway_services = McpOperationGatewayComposer.compose(
+                    surfaces_v2=self.settings.execution.surfaces_v2,
+                    queue=self._queue,
+                    blobs=self._artifact_blob_store,
+                    references=self._artifact_reference_store,
+                    event_producer=self.event_producer,
+                    run=running,
+                )
                 operation_context_token = OperationContext.bind_for_run(
                     identity=VerifiedOperationIdentity(
                         org_id=running.org_id,
@@ -633,8 +660,12 @@ class RuntimeApprovalHandler:
                         else None
                     ),
                     mode=self.settings.execution.operation_gateway_mode,
-                    canonical_arguments_durable=False,
+                    canonical_arguments_durable=mcp_gateway_services is not None,
                 )
+                if mcp_gateway_services is not None:
+                    mcp_operation_gateway_token = (
+                        McpOperationGatewayContext.bind_for_run(mcp_gateway_services)
+                    )
             harness_or_coro = self.agent_factory(
                 context=resume_context,
                 dependencies=dependencies,
@@ -710,6 +741,8 @@ class RuntimeApprovalHandler:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
                 ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
+            if mcp_operation_gateway_token is not None:
+                McpOperationGatewayContext.unbind(mcp_operation_gateway_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
                 OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             CitationResolver.unbind(resolver_token)

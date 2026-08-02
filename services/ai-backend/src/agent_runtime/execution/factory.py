@@ -1508,13 +1508,25 @@ def _tool_access_gate(
     """Build the PRD-C2 ToolAccessGate, or ``None`` when no OAuth provider exists.
 
     Reuses the SAME OAuth-capable provider ``AuthMcpTool`` gets (the
-    ``create_auth_session`` duck-probe) so a gate can only park a run when the
-    runtime can actually start the connect flow. Wired with C1's
-    ``ActionClassifier`` (over the module-level catalog) so the gate card's
-    read-only pledge / write-policy choice is honest — an absent classifier fails
-    closed to ``write`` inside the gate. Returned as ``object | None`` so the
-    ``CallMcpTool`` construction site stays type-agnostic; the whole gate path is
-    additionally guarded by ``SurfacesV2Flag`` at call time (flag off ⇒ inert).
+    ``create_auth_session`` duck-probe). Wired with C1's ``ActionClassifier``
+    (over the module-level catalog) so the gate card's read-only pledge /
+    write-policy choice is honest — an absent classifier fails closed to
+    ``write`` inside the gate. Returned as ``object | None`` so the
+    ``CallMcpTool`` construction site stays type-agnostic.
+
+    Gating (P1b): the write-approval path (``_authorize_mcp_dispatch`` →
+    ``ToolAccessGate.park_for_approval``) performs no in-gate ``SurfacesV2Flag``
+    check. It is reached only when the operation gateway is bound, which the
+    composer declines when ``surfaces_v2`` is off — so the flag still makes the
+    whole path inert, just indirectly (not via a flag read inside the gate).
+
+    KNOWN LIMITATION (follow-up, tracked): the gate is built only when a provider
+    offers OAuth. ``park_for_approval`` needs no auth session, so a non-OAuth MCP
+    server (stdio / local) currently gets ``gate=None`` and its writes are
+    refused ("approval not available") instead of parked. Harmless on today's
+    OAuth mainline; supporting non-OAuth servers means building the gate even
+    when ``auth_session_creator is None`` (make that field Optional + guard the
+    auth-``park`` path) so the write-approval interrupt can still open.
     """
 
     if auth_session_creator is None:

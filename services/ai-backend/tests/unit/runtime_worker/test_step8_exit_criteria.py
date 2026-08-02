@@ -54,6 +54,10 @@ from agent_runtime.capabilities.discovery import (
 from agent_runtime.capabilities.discovery.activation import CapabilityExpansionLimits
 from agent_runtime.capabilities.discovery.contracts import CapabilityExpansionBounds
 from agent_runtime.capabilities.mcp import DynamicMcpRegistry
+from agent_runtime.capabilities.mcp.annotations import (
+    McpToolAnnotations,
+    McpToolAnnotationsRegistry,
+)
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
 from agent_runtime.capabilities.mcp.gateway_context import McpOperationGatewayContext
@@ -609,6 +613,18 @@ class TestRevocationBetweenDescribeAndInvokeFailsSafely(Step8Harness):
     ) -> Mapping[str, Any]:
         run_token = self.bound_run(context)
         operation_token, service_token = self.bind_gateway(context)
+        # ``list_issues`` is a read that is absent from the curated catalog; in
+        # production the MCP loader registers its ``readOnlyHint`` at discovery.
+        # Register it here so the P1b PDP derives READ (and ALLOWs the invoke)
+        # rather than the fail-closed WRITE it must assume for an un-annotated,
+        # un-catalogued op.
+        annotations_token = McpToolAnnotationsRegistry.bind_for_run({})
+        for server_id in range(10):
+            McpToolAnnotationsRegistry.register(
+                f"issues{server_id}",
+                _READ_TOOL,
+                McpToolAnnotations(read_only_hint=True),
+            )
         try:
             return await self.call(
                 tools[CapabilityBridgeToolName.INVOKE_CAPABILITY.value],
@@ -616,6 +632,7 @@ class TestRevocationBetweenDescribeAndInvokeFailsSafely(Step8Harness):
                 arguments={"team": "ENG"},
             )
         finally:
+            McpToolAnnotationsRegistry.unbind(annotations_token)
             McpOperationGatewayContext.unbind(service_token)
             OperationContext.unbind(operation_token)
             RunControlContext.unbind(run_token)

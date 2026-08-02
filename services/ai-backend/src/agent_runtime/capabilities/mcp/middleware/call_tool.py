@@ -12,10 +12,12 @@ from pydantic import ValidationError
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
     McpLoadErrorCode,
+    McpServerCard,
     McpToolCallRequest,
     McpToolCallResult,
 )
 from agent_runtime.capabilities.mcp.constants import Messages, Values
+from agent_runtime.capabilities.mcp.descriptor_source import McpDispatchPolicy
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
@@ -24,6 +26,7 @@ from agent_runtime.capabilities.mcp.gateway_context import (
 from agent_runtime.capabilities.mcp.operation_adapter import McpOperationAdapter
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.policy.contracts import PolicyDecision
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationRequestFactory,
@@ -38,6 +41,19 @@ from agent_runtime.surfaces_v2.ledger_models import (
 
 _LOGGER = logging.getLogger(__name__)
 _DESKTOP_BROWSER_SERVER = "desktop_browser"
+
+# The PDP DENY reason (a stable machine code from
+# ``PdpPolicyService._Reason``) that maps to "connector unavailable" copy;
+# every other DENY reason collapses to "permission denied". The PDP never
+# leaks which gate failed, so this table stays deliberately coarse.
+_CONNECTOR_UNAVAILABLE_REASON = "connector_unavailable"
+# Safe copy for a write the user declined at the approval gate, and for a write
+# that needs approval when no approval channel is wired for this run.
+_WRITE_DECLINED = "The action was declined; no external change was made."
+_APPROVAL_UNAVAILABLE = (
+    "This action needs your approval, which is not available for this run; "
+    "no external change was made."
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +164,24 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
+        is_browser = (
+            parsed_input.server_name.strip().lower().replace("-", "_")
+            == _DESKTOP_BROWSER_SERVER
+        )
+        # P1b: the PDP owns the MCP approval decision. It is consulted BEFORE any
+        # operation id is minted, so a write that GATEs parks on the interrupt
+        # before the gateway's idempotency scope is entered — the approved write
+        # then mints its id and executes exactly once on resume. ALLOW falls
+        # through to execute-now; DENY / declined return a typed refusal. The
+        # browser server keeps its own effect-staging lane (below) and is not
+        # routed through this connector-write gate.
+        if not is_browser:
+            gate_result = await self._authorize_mcp_dispatch(
+                parsed_input, resolution.card
+            )
+            if gate_result is not None:
+                return gate_result
+
         request = OperationRequestFactory.create(
             capability=parsed_input.server_name,
             op=parsed_input.tool_name,
@@ -185,10 +219,6 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
-        is_browser = (
-            parsed_input.server_name.strip().lower().replace("-", "_")
-            == _DESKTOP_BROWSER_SERVER
-        )
         mcp_adapter: McpOperationAdapter | None = None
         if is_browser:
             # Local imports avoid making the MCP package import the browser
@@ -249,6 +279,9 @@ class CallMcpTool:
                 gate=self.gate,
                 execution=services.execution,
                 tool_call_id=parsed_input.tool_call_id,
+                # Post-PDP-authorized: the gateway executes (read or write)
+                # instead of routing a write to the retired staging path.
+                authorized_to_execute=True,
             )
             adapter = mcp_adapter
         disposition = await services.gateway.invoke(request, adapter)
@@ -323,6 +356,97 @@ class CallMcpTool:
             tool_name=parsed_input.tool_name,
             output=output,
         ).model_dump(mode="json", exclude_none=True)
+
+    async def _authorize_mcp_dispatch(
+        self,
+        parsed_input: McpToolCallRequest,
+        card: McpServerCard,
+    ) -> dict[str, Any] | None:
+        """Consult the PDP; return a refusal dict, or ``None`` to dispatch.
+
+        ALLOW → ``None`` (fall through to execute-now). DENY → a typed refusal.
+        GATE → park on the write-approval interrupt (reusing the run's
+        ``ToolAccessGate``); on approve → ``None`` (execute in the SAME run), on
+        reject → a typed refusal. When a run has no approval channel wired
+        (``gate is None``), a GATE cannot be satisfied and fails closed to a
+        typed refusal — never a silent dispatch, never a stage.
+        """
+
+        decision = McpDispatchPolicy.evaluate(
+            card=card,
+            server=parsed_input.server_name,
+            tool=parsed_input.tool_name,
+            arguments=parsed_input.arguments,
+            context=self.runtime_context,
+        )
+        if decision.decision is PolicyDecision.ALLOW:
+            return None
+        if decision.decision is PolicyDecision.DENY:
+            return self._policy_denied_result(parsed_input, decision.reason)
+        # GATE — the write-approval interrupt (park + resume in the same run).
+        if self.gate is None:
+            return self._refusal(
+                parsed_input,
+                McpLoadErrorCode.PERMISSION_DENIED,
+                _APPROVAL_UNAVAILABLE,
+            )
+        resume = await self.gate.park_for_approval(
+            card=card,
+            tool_name=parsed_input.tool_name,
+            arguments=parsed_input.arguments,
+            op_class=decision.descriptor.action.value,
+            approval_id=self._write_approval_id(parsed_input),
+        )
+        if not resume.approved:
+            return self._refusal(
+                parsed_input,
+                McpLoadErrorCode.PERMISSION_DENIED,
+                _WRITE_DECLINED,
+            )
+        return None
+
+    def _policy_denied_result(
+        self, parsed_input: McpToolCallRequest, reason: str
+    ) -> dict[str, Any]:
+        """Map a PDP DENY reason code onto a typed, non-leaking refusal."""
+
+        if reason == _CONNECTOR_UNAVAILABLE_REASON:
+            return self._refusal(
+                parsed_input,
+                McpLoadErrorCode.SERVER_UNHEALTHY,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+            )
+        return self._refusal(
+            parsed_input,
+            McpLoadErrorCode.PERMISSION_DENIED,
+            Messages.Loader.UNAUTHORIZED_SERVER,
+        )
+
+    def _refusal(
+        self,
+        parsed_input: McpToolCallRequest,
+        code: McpLoadErrorCode,
+        safe_message: str,
+        *,
+        retryable: bool = False,
+    ) -> dict[str, Any]:
+        """Build a typed ``call_mcp_tool`` failure result."""
+
+        return McpToolCallResult.fail(
+            code,
+            safe_message,
+            retryable=retryable,
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            correlation_id=self.runtime_context.trace_id,
+        ).model_dump(mode="json", exclude_none=True)
+
+    def _write_approval_id(self, parsed_input: McpToolCallRequest) -> str:
+        """Deterministic id for the write-approval gate of this tool call."""
+
+        suffix = parsed_input.tool_call_id or parsed_input.tool_name
+        return f"mcp_write:{self.runtime_context.run_id}:{suffix}"
 
     async def __call__(
         self,

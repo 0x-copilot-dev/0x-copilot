@@ -497,8 +497,15 @@ class TestInnerOperationEntersTheGateway(ExecutorHarness):
         assert result_store.calls[0][0] == operation_id
         assert [name for name, _args in client.calls] == [_READ_TOOL]
 
-    async def test_an_effectful_capability_stages_rather_than_completing(self) -> None:
-        """Approval/effect staging is the gateway's, not the bridge's."""
+    async def test_an_effectful_capability_is_gated_not_completed(self) -> None:
+        """P1b: an effectful capability is GATEd by the PDP, not staged.
+
+        The retired MCP write-staging path is gone; the bridge delegates the
+        approval decision to the PDP at the ``call_mcp_tool`` boundary. This
+        harness wires no ``ToolAccessGate``, so the GATE fails closed to a
+        refusal — the effect never reaches the connector, never stages, and the
+        bridge surfaces a refusal rather than a completed/staged receipt.
+        """
 
         context = self.context()
         catalog = self.catalog(context)
@@ -526,18 +533,14 @@ class TestInnerOperationEntersTheGateway(ExecutorHarness):
             McpOperationGatewayContext.unbind(svc_token)
             OperationContext.unbind(op_token)
 
-        assert result["invocation"]["receipt"]["status"] == (
-            CapabilityInvocationStatus.STAGED.value
-        )
-        # A staged effect never reaches the connector — the gateway held it.
+        # Refused, not completed/staged: the bridge surfaces the error outcome.
+        assert "invocation" not in result
+        assert result["error"]["code"] == "execution_failed"
+        # The effect never reached the connector and never staged: the PDP GATE
+        # fires BEFORE the gateway is entered, so no operation rows are emitted.
         assert client.calls == []
-        # The effect landed in the real stage ledger under its own operation id.
-        assert stage_ledger.events_by_stage
-        assert events.types()[:2] == [
-            LedgerEventType.OPERATION_REQUESTED.value,
-            LedgerEventType.OPERATION_CLASSIFIED.value,
-        ]
-        assert len(set(events.operation_ids())) == 1
+        assert stage_ledger.events_by_stage == {}
+        assert events.types() == []
 
     async def test_the_inner_operation_carries_the_run_derived_audit_identity(
         self,
