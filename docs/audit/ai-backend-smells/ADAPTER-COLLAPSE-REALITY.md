@@ -94,6 +94,13 @@ bug.
    dedicated cross-backend test + migration, so it is the lowest-blast-radius domain to
    prove the base-extraction pattern, parity-verified against the existing three tests.
 
+**Status:** recommendation (2) is now under way. The base
+(`MaterializedViewStoreBase`) exists and the first two slices —
+`ContextOccupancyStorePort` and `UsageAttributionEdgeStorePort` — are extracted
+and parity-verified. See [ADAPTER-BASE-EXTRACTION.md](ADAPTER-BASE-EXTRACTION.md)
+for the implementation record and the tiered ledger of the remaining method
+groups.
+
 ## 5. Why this was not implemented autonomously
 
 The `file`↔`in_memory` base extraction is the right win, but it is a **~5–8k-LOC
