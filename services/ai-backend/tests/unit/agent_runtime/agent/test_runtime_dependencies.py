@@ -306,6 +306,126 @@ class TestWebSearchDispatchSurface(WebSearchDispatchMixin):
         assert "RuntimeError" in message.content
 
 
+class FakeEnrichment:
+    """Stand-in for the local extraction pipeline, scripted per test."""
+
+    def __init__(
+        self,
+        *,
+        result: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[list[dict[str, Any]]] = []
+
+    def enrich(
+        self, raw_results: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        self.calls.append(list(raw_results))
+        if self.error is not None:
+            raise self.error
+        assert self.result is not None
+        return self.result
+
+
+class TestWebSearchExtractionWiring(WebSearchDispatchMixin):
+    """The seam between DuckDuckGo discovery and local page extraction."""
+
+    WINDOWED = {
+        "snippet": "A window of the real page, containing the actual answer.",
+        "title": "Result title",
+        "link": "https://example.test/result",
+    }
+    ENRICHED_ARTIFACT = {
+        **WebSearchDispatchMixin.RAW_RESULT,
+        "extracted_text": "The whole extracted article.",
+        "extraction_status": "extracted",
+        "passage_origin": "window",
+    }
+
+    def test_no_workspace_root_leaves_the_tool_on_engine_snippets(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Desktop-only, expressed as the absence of a workspace directory rather
+        # than a second feature flag that could drift from it.
+        self._install_fake_ddgs(monkeypatch)
+        monkeypatch.delenv("RUNTIME_STORE_BACKEND", raising=False)
+        monkeypatch.delenv("RUNTIME_FILE_STORE_ROOT", raising=False)
+        registry = WebSearchToolRegistry()
+
+        result = registry.list_available_tools(None)[0].invoke({"query": self.QUERY})  # type: ignore[union-attr]
+
+        assert result == [self.MODEL_RESULT]
+        assert registry._resolve_enrichment() is None
+
+    def test_enriched_content_and_artifact_reach_the_tool_message(
+        self,
+        runtime_context_admin,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._install_fake_ddgs(monkeypatch)
+        enrichment = FakeEnrichment(result=([self.WINDOWED], [self.ENRICHED_ARTIFACT]))
+        tool = WebSearchToolRegistry(enrichment=enrichment).list_available_tools(
+            runtime_context_admin
+        )[0]
+
+        message = tool.invoke(self._tool_call())  # type: ignore[union-attr]
+
+        assert isinstance(message, ToolMessage)
+        assert enrichment.calls == [[self.RAW_RESULT]]
+        assert message.artifact == [self.ENRICHED_ARTIFACT]
+        assert "the actual answer" in message.content
+        # The full article is the artifact's job; it must not cost prompt tokens.
+        assert "The whole extracted article." not in message.content
+
+    def test_enrichment_failure_returns_exactly_the_pre_extraction_output(
+        self,
+        runtime_context_admin,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # AC1: a failure of the new path is a fallback, never an error. This is
+        # the one assertion that has to hold whatever else breaks.
+        self._install_fake_ddgs(monkeypatch)
+        enrichment = FakeEnrichment(error=RuntimeError("extraction exploded"))
+        tool = WebSearchToolRegistry(enrichment=enrichment).list_available_tools(
+            runtime_context_admin
+        )[0]
+
+        message = tool.invoke(self._tool_call())  # type: ignore[union-attr]
+
+        assert isinstance(message, ToolMessage)
+        assert message.artifact == [self.RAW_RESULT]
+        assert self.ARTIFACT_ONLY_FIELD not in message.content
+        assert self.MODEL_RESULT["snippet"] in message.content
+
+    def test_discovery_parameters_are_unchanged_by_extraction(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._install_fake_ddgs(monkeypatch)
+        enrichment = FakeEnrichment(result=([self.WINDOWED], [self.ENRICHED_ARTIFACT]))
+
+        WebSearchToolRegistry(enrichment=enrichment).list_available_tools(None)[
+            0
+        ].invoke({"query": self.QUERY})  # type: ignore[union-attr]
+
+        assert calls == [self.EXPECTED_DDGS_CALL]
+
+    def test_the_registry_is_still_free_to_construct(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The production capability guard constructs this registry on a bare
+        # ``None`` context; resolving a workspace directory there would put
+        # filesystem work on a path that only asks "is web search configured".
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "file")
+        monkeypatch.setenv("RUNTIME_FILE_STORE_ROOT", "/tmp/copilot-store-unused")
+
+        registry = WebSearchToolRegistry()
+
+        assert registry._enrichment is None
+        assert registry._enrichment_resolved is False
+
+
 def test_web_search_registry_omits_tool_when_disabled(runtime_context_admin) -> None:
     disabled = runtime_context_admin.model_copy(update={"web_search_enabled": False})
 
