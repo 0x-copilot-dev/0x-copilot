@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "services/ai-backend/**"
+      - "services/ai-backend/requirements.in"
+      - "services/ai-backend/requirements-dev.in"
       - "packages/service-contracts/**"
       - "packages/api-types/**"
       - "packages/audit-chain/**"
@@ -14,6 +16,8 @@ on:
       - dev
     paths:
       - "services/ai-backend/**"
+      - "services/ai-backend/requirements.in"
+      - "services/ai-backend/requirements-dev.in"
       - "packages/service-contracts/**"
       - "packages/api-types/**"
       - "packages/audit-chain/**"
@@ -46,10 +50,39 @@ jobs:
           python -m pip install --upgrade pip pip-audit cyclonedx-bom
           python -m pip install ./packages/service-contracts
           python -m pip install ./packages/audit-chain
-          # requirements-dev.txt pulls in requirements.txt via `-r` and adds the
-          # pinned test tooling. The pip-audit and SBOM steps below stay on the
-          # runtime file on purpose — they must describe only what ships.
-          python -m pip install -r services/ai-backend/requirements-dev.txt
+          # requirements-dev.txt is the compiled SUPERSET: requirements-dev.in
+          # starts with `-r requirements.in`, so the lock inlines the whole
+          # runtime closure plus the pinned test tooling, every entry hashed.
+          # The pip-audit and SBOM steps below stay on the RUNTIME lock on
+          # purpose — they must describe only what ships.
+          python -m pip install -r services/ai-backend/requirements-dev.txt --require-hashes
+
+      - name: Verify the locks are compiled from their .in files
+        run: |
+          # pip is pinned below 26.2 alongside pip-tools. pip 26.2 removed
+          # `pip._internal.utils.compat.stdlib_pkgs`, which pip-tools imports
+          # via piptools/sync.py while validating its config file — so
+          # `pip-compile` dies on import, not on resolution. Verified
+          # locally: 25.2-26.1 export it, 26.2 does not, and pip-tools 7.6.0
+          # imports it too, so bumping pip-tools does not help. The earlier
+          # step upgrades pip unpinned, which is how this reached main.
+          python -m pip install 'pip<26.2' pip-tools==7.5.3
+          cd services/ai-backend
+          # NOTE: never add `--upgrade` here. pip-compile treats the EXISTING
+          # lock as a constraint set, so this re-resolve is stable — it does not
+          # drift when an unpinned transitive dep publishes a new release, which
+          # is what keeps this gate from going red on unrelated PRs. Verified:
+          # an unconstrained resolve of this same requirements.in wants
+          # mcp 2.0.0 (vs the pinned 1.29.0), rpds-py 2026.6.3 and httpx2.
+          # Upgrades are a deliberate, reviewed `pip-compile --upgrade` commit.
+          pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
+          pip-compile --generate-hashes --resolver=backtracking requirements-dev.in -o requirements-dev.txt
+          cd ../..
+          # A hand-edited lock is the failure this catches. `mcp==1.29.0`
+          # silently pulled jsonschema, httpx-sse, referencing, rpds-py and
+          # jsonschema-specifications into the old flat pin list without
+          # listing them, so pip-audit and the SBOM never saw them.
+          git diff --exit-code services/ai-backend/requirements.txt services/ai-backend/requirements-dev.txt
 
       - name: Verify installed dependency graph (pip check)
         run: cd services/ai-backend && python -m pip check

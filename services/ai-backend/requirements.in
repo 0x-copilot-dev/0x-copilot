@@ -1,0 +1,81 @@
+# Top-level RUNTIME deps for services/ai-backend. Regenerate the lock:
+#   cd services/ai-backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
+#
+# Only DECLARED dependencies belong here. `requirements.txt` is generated from
+# this file and carries the full transitive closure with hashes, installed with
+# `--require-hashes` — the same gate services/backend and services/backend-facade
+# already have. It exists because the hand-maintained flat pin list it replaced
+# could not see what it did not list: `mcp==1.29.0` silently pulled jsonschema,
+# httpx-sse, referencing, rpds-py and jsonschema-specifications, none of which
+# were pinned, so `pip-audit` and the published SBOM never saw them either.
+#
+# Test tooling lives in `requirements-dev.in`. Keep it that way: `pip-audit` and
+# the CycloneDX SBOM step in `.github/workflows/ci-ai-backend.yml` read
+# `requirements.txt` ALONE so they describe only what actually ships.
+#
+# Keep the pins here in sync with `pyproject.toml`'s `[project] dependencies` —
+# that metadata is what `pip install ./services/ai-backend` resolves, and a
+# version that disagrees with the lock is a divergence nobody sees until deploy.
+
+# -- service surface ----------------------------------------------------------
+fastapi==0.139.2
+# `from starlette import status` is used directly across runtime_api/ and
+# runtime_adapters/. FastAPI happens to require it; the import is still ours.
+starlette==1.3.1
+uvicorn==0.51.0
+gunicorn==26.0.0
+httpx==0.28.1
+python-multipart==0.0.32
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+PyYAML==6.0.3
+
+# -- agent runtime ------------------------------------------------------------
+deepagents==0.6.12
+langchain==1.3.14
+langchain-openai==1.3.5
+langchain-anthropic==1.4.8
+langchain-google-genai==4.2.7
+langgraph==1.2.9
+# SQLite-backed LangGraph checkpointer for the single_user_desktop file store
+# (durable graph/approval continuation across worker restart). Desktop path
+# only; postgres/in-memory keep InMemorySaver.
+langgraph-checkpoint-sqlite==3.1.0
+# `import aiosqlite` in execution/deep_agent_builder.py is a DIRECT import even
+# though langgraph-checkpoint-sqlite also requires it.
+aiosqlite==0.22.1
+# MultiServerMCPClient + descriptor conversion (capabilities/mcp/tool_source.py).
+langchain-mcp-adapters==0.3.1
+openai==2.46.0
+anthropic==0.117.0
+# Upstream authority for provider model metadata, pricing, and preflight token
+# counting. Never replaced by a locally-maintained per-model catalog.
+litellm==1.93.0
+ddgs==9.14.4
+
+# -- storage ------------------------------------------------------------------
+psycopg[binary,pool]==3.3.4
+yoyo-migrations==9.0.0
+
+# -- crypto / filesystem ------------------------------------------------------
+# Ed25519 verification for run-control releases and workspace attestation.
+cryptography==49.0.0
+# `from wcmatch import glob` in capabilities/desktop/agent_scratch.py.
+wcmatch==11.0
+
+# -- telemetry ----------------------------------------------------------------
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-grpc==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-httpx==0.65b0
+opentelemetry-instrumentation-psycopg==0.65b0
+
+# Deliberately ABSENT — boto3. `persistence/_aws_kms_client.py` imports it
+# lazily so a deployment that does not use AWS KMS never carries the SDK; one
+# that does installs it alongside this set.
+#
+# Deliberately ABSENT — langsmith[sandbox]. `capabilities/sandbox/providers/
+# langsmith.py` imports it lazily behind a typed error. Plain `langsmith`
+# arrives transitively via langchain; the sandbox EXTRA is opt-in.

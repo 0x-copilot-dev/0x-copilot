@@ -47,6 +47,8 @@ from agent_runtime.execution.deep_agent_builder import (
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.cards import McpToolCallRequest
+from agent_runtime.capabilities.mcp.catalog import McpCatalogStore
+from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
@@ -303,6 +305,17 @@ async def _assemble_harness(
         agent_scratch=agent_scratch,
         memory_routes=_file_memory_routes(memory_backend),
     )
+    # The MCP filesystem catalog. One store, written by ``load_mcp_server`` and
+    # read by the ``/mcp/`` route — the two are composed together for this run,
+    # so the write surface needs no graph state and no persistence, exactly
+    # like ``/subagents/`` and ``/large_tool_results/``.
+    # ``mcp_catalog`` is rebound to what was actually MOUNTED: a run whose route
+    # declined must not hand the store to the load tool (see the note there).
+    deep_backend, mcp_catalog = _with_mcp_catalog_route(
+        deep_backend,
+        catalog=_mcp_catalog_store(runtime_dependencies.mcp_registry),
+        memory_backend=memory_backend,
+    )
 
     # P2-8 — the per-tool MCP flip. Awaited here (not inside
     # ``_model_visible_tools``, which is sync and stays sync) because the source
@@ -332,6 +345,7 @@ async def _assemble_harness(
             capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
             mcp_per_tool=mcp_per_tool,
+            mcp_catalog=mcp_catalog,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
         # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
@@ -659,6 +673,76 @@ def _reserved_tool_names(
     )
 
 
+def _mcp_catalog_store(mcp_registry: object) -> McpCatalogStore | None:
+    """One catalog store per run, or ``None`` when this run has no MCP seam.
+
+    Gated on the same signal the loader tool is gated on, so a run that cannot
+    load a server never mounts an empty ``/mcp/`` directory for the model to
+    wonder about — and composes byte-for-byte as it did before the catalog
+    existed.
+    """
+
+    if not callable(getattr(mcp_registry, "resolve_server", None)):
+        return None
+    return McpCatalogStore()
+
+
+def _with_mcp_catalog_route(
+    deep_backend: object | None,
+    *,
+    catalog: McpCatalogStore | None,
+    memory_backend: object,
+) -> tuple[object | None, McpCatalogStore | None]:
+    """Mount the read-only MCP catalog at ``/mcp/`` on the composed backend.
+
+    Returns ``(backend, mounted_catalog)``. The second element is the catalog
+    ONLY when the route was actually mounted, and it is what the load tool must
+    be given — handing the store to the tool while the route declined would have
+    ``load_mcp_server`` publish into a store nothing can read and return a
+    pointer to a ``/mcp/…/SERVER.md`` that does not exist, losing the descriptors
+    outright. That is strictly worse than the blob it replaced, so the mount is
+    the single source of truth for whether a catalog exists this run.
+
+    Additive by construction. When a ``CompositeBackend`` already exists the
+    route joins it (same default, same other routes). When none exists we build
+    one whose default is deepagents' own ``StateBackend`` — the object the
+    builder would have constructed anyway for ``backend=None``.
+
+    The ONE case left untouched is a run whose memory backend is itself a
+    ``DeepAgentsBackend``: the builder passes that object straight through when
+    no composite exists, and wrapping it would drop the ``memory_paths``
+    attribute deepagents reads off it. That run keeps its exact composition and
+    simply has no catalog mount, rather than trading a working memory surface
+    for a browsable one.
+    """
+
+    if catalog is None:
+        return deep_backend, None
+    from deepagents.backends.composite import CompositeBackend  # noqa: PLC0415
+
+    backend = McpCatalogBackend(catalog)
+    if isinstance(deep_backend, CompositeBackend):
+        return (
+            CompositeBackend(
+                default=deep_backend.default,
+                routes={**deep_backend.routes, McpCatalogBackend.PATH_PREFIX: backend},
+                artifacts_root=deep_backend.artifacts_root,
+            ),
+            catalog,
+        )
+    if deep_backend is not None or isinstance(memory_backend, DeepAgentsBackend):
+        return deep_backend, None
+    from deepagents.backends.state import StateBackend  # noqa: PLC0415
+
+    return (
+        CompositeBackend(
+            default=StateBackend(),
+            routes={McpCatalogBackend.PATH_PREFIX: backend},
+        ),
+        catalog,
+    )
+
+
 def _model_visible_tools(
     *,
     tools: Sequence[object],
@@ -676,6 +760,7 @@ def _model_visible_tools(
     capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
     mcp_per_tool: McpPerToolRegistration | None = None,
+    mcp_catalog: McpCatalogStore | None = None,
 ) -> tuple[object, ...]:
     # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
     # the owner of that tool's schema text. The declarations are what the
@@ -730,6 +815,10 @@ def _model_visible_tools(
                         loader=loader,
                         runtime_context=runtime_context,
                         local_tool_names=local_tool_names,
+                        # With a catalog wired the load returns a POINTER to
+                        # ``/mcp/<server>/`` instead of every descriptor; the
+                        # 70 KB single-line blob is never produced.
+                        catalog=mcp_catalog,
                     ),
                     LoadMcpServerInput,
                 ),
