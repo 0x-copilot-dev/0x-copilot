@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "mcp_loading": {
+    "max_tool_descriptors": 100,
+    "max_resource_descriptors": 100,
+    "timeout_seconds": 30.0,
+    "catalog_page_size": 40,
+    "defer_loading_policy": "off"
+  },
+  "mcp_catalog": {
+    "server_markdown_max_bytes": 4096,
+    "header_reserve_bytes": 900,
+    "index_summary_max_bytes": 96,
+    "index_summary_min_bytes": 24
+  },
+  "reads": {
+    "default_line_limit": 2000,
+    "offloaded_result_line_limit": 20000
+  },
+  "retry": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 0.5,
+    "max_backoff_seconds": 4.0
+  },
+  "execution": {
+    "max_retries": 2,
+    "max_parallel_runs": 4,
+    "max_parallel_tasks": 4,
+    "max_parallel_subagents": 4,
+    "tool_call_budget": 10,
+    "default_timeout_seconds": 180.0,
+    "delta_coalesce_window_ms": 0,
+    "delta_coalesce_max_chunks": 64,
+    "worker_poll_interval_seconds": 1.0,
+    "worker_lock_seconds": 60
+  },
+  "subagents": {
+    "timeout_seconds": 120,
+    "concurrency_limit": 2
+  },
+  "context": {
+    "max_input_tokens": 128000,
+    "recent_context_ratio": 0.25,
+    "summary_threshold_ratio": 0.85,
+    "preview_line_limit": 10,
+    "preview_char_limit": 2000,
+    "offload_preview_chars": 200,
+    "model_result_preview_bytes": 8192
+  },
+  "model_mapper": {
+    "max_output_tokens": 1024,
+    "temperature": 0.0
+  },
+  "observability": {
+    "max_stream_field_length": 2000
+  },
+  "citations": {
+    "per_result_max": 25
+  }
+}

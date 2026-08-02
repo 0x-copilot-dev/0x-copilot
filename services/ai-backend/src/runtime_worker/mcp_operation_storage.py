@@ -67,10 +67,15 @@ from runtime_worker.workspace_effect_storage import (
     workspace_executor,
 )
 from agent_runtime.surfaces_v2.mcp_connector import McpStageCommitConnector
+from agent_runtime.hyperparameters.contracts import ContextHyperparameters
 
+# Admission ceilings on what may be persisted or handed back, not budgets:
+# exceeding either is refused, so they stay code constants.
 MAX_CANONICAL_ARGUMENT_BYTES = 1_048_576
 MAX_MODEL_RESULT_BYTES = 65_536
-MAX_MODEL_RESULT_PREVIEW_BYTES = 8_192
+# How much of an over-large result the model is shown instead — a preview size,
+# owned by the ``context`` section of ``hyperparameters.json``.
+MAX_MODEL_RESULT_PREVIEW_BYTES = ContextHyperparameters().model_result_preview_bytes
 
 
 async def _one_chunk(body: bytes) -> AsyncIterator[bytes]:

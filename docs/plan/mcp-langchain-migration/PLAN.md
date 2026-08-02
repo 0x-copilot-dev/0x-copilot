@@ -157,6 +157,36 @@ construction. Token refresh lives in the provider (~a small `httpx.Auth`), not a
 
 ## 4. Delete / keep / re-hook
 
+> **⚠️ THIS TABLE IS STALE AND ITS `DELETE` COLUMN IS WRONG.** A source-level
+> audit of every row — [P3-DELETE-SET.md](P3-DELETE-SET.md), file:line evidence
+> per verdict — found the deletable set is **empty**. Executing this table would
+> remove live, reachable code. It is kept as the historical intent; take the
+> audit as the record.
+>
+> The three corrections that matter most:
+>
+> 1. **`surfaces_v2/gate.py` is the REPLACEMENT, not the thing replaced.**
+>    `ToolAccessGate.park_for_approval` (`gate.py:342`) is called from
+>    `call_tool.py:418` and `policy_tool.py:399`, and `factory.py:1830-1871`
+>    builds it for every MCP run — including non-OAuth (`auth_mode == NONE`)
+>    cards. P2-PLAN.md §2 already listed it PRESERVE; this table was never
+>    updated to agree.
+> 2. **MCP stages are still produced, and default-ON where it counts.**
+>    `draft_service.py:167-168` → `artifact_draft_send.py:189-217`, gated on
+>    `artifact_drafts_v2` — which the desktop sets **true**
+>    (`service-env.ts:202-203`) while the service default is `false`
+>    (`settings.py:243`). Reading only the service default is what made this
+>    table conclude staging was dead.
+> 3. **There is a second live stage producer this table never mentions.**
+>    `stage_rowset_write` is a model-visible builtin gated on `SURFACES_V2`
+>    alone (`handlers/run.py:2145`, registered `factory.py:1091-1097`).
+>
+> Also: the live production MCP path is `call_tool.py`, not the P2 per-tool
+> pipeline — `MCP_PER_TOOL_ENABLED` defaults **off**
+> (`per_tool_registration.py:115`), and `factory.py:932-950` is a
+> mutually-exclusive if/else. Any row whose fate assumes the per-tool path is
+> live is answering about a branch that does not run.
+
 | Legacy                                                                                                                                                 | Fate                                                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `mcp/{client,backend_provider,loader,registry}.py` transport/JSON-RPC/pagination                                                                       | **DELETE** → library                                                                                                         |

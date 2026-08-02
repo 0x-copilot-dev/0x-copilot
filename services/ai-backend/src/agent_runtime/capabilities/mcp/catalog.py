@@ -81,9 +81,11 @@ import logging
 import re
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from pydantic import Field, field_validator
+
+from agent_runtime.hyperparameters.contracts import McpCatalogHyperparameters
 
 from agent_runtime.capabilities.mcp.cards import (
     LoadedMcpServer,
@@ -193,27 +195,37 @@ class Values:
 
 
 class Limits:
-    """Size bounds for the always-loaded tier."""
+    """Size bounds for the always-loaded tier.
+
+    The four byte budgets are the ``mcp_catalog`` section of
+    ``hyperparameters.json``: tuning how much of a connector's index fits in the
+    always-loaded tier changes only how the agent reads, never a contract a peer
+    relies on. ``MIN_NEWLINES_PER_FILE`` is deliberately NOT among them.
+    """
 
     #: ``SERVER.md`` is loaded on every disclosure, so it is budgeted. The
     #: summary column flexes to fit; tool NAMES never do — a hidden tool is the
     #: exact failure this module exists to remove, so a server with enough
     #: tools to blow the budget on names alone produces a larger file rather
     #: than a shorter list.
-    SERVER_MARKDOWN_MAX_BYTES = 4_096
+    _SECTION: Final = McpCatalogHyperparameters()
+
+    SERVER_MARKDOWN_MAX_BYTES = _SECTION.server_markdown_max_bytes
     #: Reserved for the ``SERVER.md`` preamble (title, status block, the
     #: three-step how-to). The preamble is fixed text plus a bounded
     #: description, so this is a ceiling rather than an estimate.
-    HEADER_RESERVE_BYTES = 900
+    HEADER_RESERVE_BYTES = _SECTION.header_reserve_bytes
     #: Widest one-line summary rendered in the index, before the budget shrinks
     #: it further.
-    INDEX_SUMMARY_MAX_BYTES = 96
+    INDEX_SUMMARY_MAX_BYTES = _SECTION.index_summary_max_bytes
     #: Below this the summary column is dropped entirely rather than rendered
     #: as a useless stub.
-    INDEX_SUMMARY_MIN_BYTES = 24
+    INDEX_SUMMARY_MIN_BYTES = _SECTION.index_summary_min_bytes
     #: Every emitted file must be line-oriented; deepagents' ``read_file``
     #: offset/limit are SOURCE LINES, so a single-line file is unreadable in
-    #: exactly the way the 70 KB blob was.
+    #: exactly the way the 70 KB blob was. An invariant, not a budget: tuning it
+    #: to 0 reintroduces the 70 KB single-line bug the catalog exists to remove,
+    #: so it stays a code constant and never enters the document.
     MIN_NEWLINES_PER_FILE = 2
 
 

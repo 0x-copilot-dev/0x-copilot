@@ -131,6 +131,13 @@ class ContextSummarizationManager:
 class ContextPayloadManager:
     """Route connector and tool output to inline, offload, or summarize based on token budget."""
 
+    # ``hyperparameters.json`` states both under ``context``, but this module is
+    # inside the import closure the document's contracts pull in, so binding
+    # them here closes a cycle (see ``context/memory/constants.py``). This is
+    # the pair that produced the empty-success failure on a 70,465-byte,
+    # zero-newline descriptor blob: ten "lines" of a file with no newlines is
+    # the whole blob, clipped to the first 2000 characters, and re-reading at an
+    # offset returns the same 2000 characters.
     PREVIEW_LINE_LIMIT = 10
     PREVIEW_CHAR_LIMIT = 2_000
 

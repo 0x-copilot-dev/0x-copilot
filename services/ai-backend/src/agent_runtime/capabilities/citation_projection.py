@@ -25,13 +25,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Final
 
 from agent_runtime.capabilities.citations import CitationLedger, SourceRef
 from agent_runtime.capabilities.tool_result_shapes import ToolResultPayloads
+from agent_runtime.hyperparameters.contracts import CitationHyperparameters
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+#: The ``citations`` section of ``hyperparameters.json``. Module level because
+#: :class:`CitationProjector.Limits` reads it from its own class body, and a
+#: nested class body cannot see the enclosing class's namespace.
+_CITATIONS: Final = CitationHyperparameters()
 
 
 class CitationProjector:
@@ -40,7 +47,7 @@ class CitationProjector:
     class Limits:
         """Per-result source caps to bound registry size on high-volume connectors."""
 
-        PER_RESULT_MAX = 25
+        PER_RESULT_MAX = _CITATIONS.per_result_max
 
     class Keys:
         """Result-shape field names — stable for back-compat."""

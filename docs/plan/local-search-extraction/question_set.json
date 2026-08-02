@@ -1,0 +1,773 @@
+{
+  "schema_version": "1",
+  "acceptance_criterion": "AC3",
+  "prd": "docs/plan/local-search-extraction/PRD.md",
+  "measured_at": "2026-08-03",
+  "measurement_method": {
+    "library": "ddgs==9.14.4",
+    "mirrors": "services/ai-backend/src/runtime_worker/dependencies.py :: WebSearchToolRegistry._search",
+    "params": {
+      "region": "wt-wt",
+      "safesearch": "moderate",
+      "timelimit": "y",
+      "max_results": 4,
+      "backend": "auto"
+    },
+    "gate": [
+      "the exact answer string appears in the fetched page text",
+      "the exact answer string appears in NONE of the four returned snippets",
+      "the source page is itself one of the four results, so fetch+extract can reach it"
+    ],
+    "normalization": "case-folded, whitespace-collapsed, with typographic quotes/dashes and non-breaking spaces mapped to ASCII, so line wrapping is not a false mismatch"
+  },
+  "questions": [
+    {
+      "id": "redis-maxmemory-samples",
+      "question": "Under Redis's approximated-LRU eviction, how many keys does it sample per eviction by default?",
+      "query": "redis approximated LRU eviction sampling maxmemory",
+      "source_url": "https://redis.io/docs/latest/develop/reference/eviction/",
+      "answer": "maxmemory-samples 5",
+      "answer_location": {
+        "section": "Approximated LRU algorithm — the config line shown after the prose about tuning sample count",
+        "depth_pct": 57.9,
+        "char_offset": 10075,
+        "page_chars": 17395
+      },
+      "why_snippet_misses": "The rank-1 snippet is drawn from the LRM section further down and names maxmemory-samples without ever printing its value; the number 5 only appears in the config-line code block in the LRU section.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Overview of Redis key eviction policies (LRU, LFU, etc.)",
+            "url": "https://redis.io/docs/latest/develop/reference/eviction/",
+            "snippet": "Like LRU, LRM uses an approximation algorithm that samples a small number of keys at random and evicts the ones with the longest time since last modification. The same maxmemory-samples configuration directive that affects LRU performance also applies to LRM."
+          },
+          {
+            "rank": 2,
+            "title": "Using Redis as an LRU cache — Redis Documentation latest...",
+            "url": "https://redis-documentation.readthedocs.io/en/latest/topics/lru-cache.html",
+            "snippet": "How the eviction process works. Approximated LRU algorithm. Redis Documentation.maxmemory 100mb. Setting maxmemory to zero results into no memory limits. This is the default behavior for 64 bit systems, while 32 bit systems use an implicit memory limit of 3GB."
+          },
+          {
+            "rank": 3,
+            "title": "How Redis LRU and LFU Eviction Algorithms Work Internally",
+            "url": "https://oneuptime.com/blog/post/2026-03-31-redis-how-redis-lru-and-lfu-eviction-algorithms-work-internally/view",
+            "snippet": "Understand how Redis implements approximate LRU and approximate LFU eviction algorithms using clock bits and frequency counters to free memory when maxmemory is reached."
+          },
+          {
+            "rank": 4,
+            "title": "Choosing the Right Redis Eviction Policy for... - DEV Community",
+            "url": "https://dev.to/beefedai/choosing-the-right-redis-eviction-policy-for-production-3ka1",
+            "snippet": "# redis.conf or CONFIG SET equivalents maxmemory 8gb maxmemory-policy allkeys-lru maxmemory-samples 10 maxmemory-eviction-tenacity 20 activedefrag yes. Pick the right policy for your workload: sessions, configs, caches."
+          }
+        ]
+      }
+    },
+    {
+      "id": "semver-prerelease-precedence",
+      "question": "What worked example does the SemVer spec give for pre-release precedence ordering?",
+      "query": "semantic versioning pre-release precedence rules",
+      "source_url": "https://semver.org/",
+      "answer": "1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0",
+      "answer_location": {
+        "section": "Spec item 11 (Precedence) — the 'Example:' line that closes the pre-release sub-rules",
+        "depth_pct": 43.1,
+        "char_offset": 7285,
+        "page_chars": 16907
+      },
+      "why_snippet_misses": "The snippet carries the rule statement ('pre-release versions have a lower precedence...') and stops before the worked ordering that actually resolves alpha.beta vs beta.2 vs beta.11.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Semantic Versioning 2.0.0 | Semantic Versioning",
+            "url": "https://semver.org/",
+            "snippet": "Pre-release versions have a lower precedence than the associated normal version. A pre-release version indicates that the version is unstable and might not satisfy the intended compatibility requirements as denoted by its associated normal version."
+          },
+          {
+            "rank": 2,
+            "title": "Semantic Versioning",
+            "url": "https://semantic-versioning.org/",
+            "snippet": "A larger set of pre-release fields has a higher precedence than a smaller set, if all of the preceding identifiers are equal. Select the subcategory below that best describes the artifact."
+          },
+          {
+            "rank": 3,
+            "title": "Semantic Versioning 2.0.0-rc.2 | Semantic VersioningVersion Precedence | semver/semver | DeepWikigithub - Semantic Versioning - pre release - Stack OverflowSemantic Versioning: How Versions Bump, Compare and ...Semantic Versioning Guide for Major, Minor, Patch, and Pre ...",
+            "url": "https://semver.org/spec/v2.0.0-rc.2.html",
+            "snippet": "The key words “MUST”, “MUST NOT”, “REQUIRED”, “SHALL”, “SHALL NOT”, “SHOULD”,“SHOULD NOT”, “RECOMMENDED”, “MAY”, and “OPTIONAL” in this document are to beinterpreted as described in RFC 2119. 1. Software using Semantic Versioning MUST declare a public API. This APIcould be declared in the code itself or exist strictly in documentation.However it is... See full list on semver.org This is not a new or revolutionary idea. In fact, you probably do somethingclose to this already. The problem is that “close” isn’t good enough. Withoutcompliance to some sort of formal specification, version numbers areessentially useless for dependency management. By giving a name and cleardefinition to the above ideas, it becomes easy to communi... See full list on semver.org How should I deal with revisions in the 0.y.z initial development phase? The simplest thing to do is start your initial development release at 0.1.0and then increment the minor version for each subsequent release. How do I know when to release 1.0.0? If your software is being used in production, it should probably already be1.0.0. If you have a stable API on which users have come to depend, you shouldbe 1.0.0. If you’re worrying a lot about backwards compatibility, you shouldprobably already be 1.0.0. Doesn’t this discourage rapid development and fast iteration? Major version zero is all about rapid development. If you’re changing the APIevery day you should either still be in version 0.y.z or on a separatedevelopment branch working on the next major version. See full list on semver.org The Semantic Versioning specification is authored by TomPreston-Werner, inventor of Gravatars andcofounder of GitHub. If you’d like to leave feedback, please open an issue onGitHub. See full list on semver.org Sep 19, 2025 · This document describes how semantic versions are compared and ordered according to the Semantic Versioning specification. It covers the complete precedence rules for normal versions, pre-release versions, and the handling of build metadata in version comparisons. Jun 30, 2024 · Effectively, you're doing it backwards. Your best bet is to either start with pre-releases in the first place and then up the version to a release version or to start with a given version and bump the appropriate value in the triad (major, minor, patch) according to the semver rules. 6 days ago · What major/minor/patch actually communicate, how prerelease versions sort, why ^ and ~ matter in package.json, and how to bump correctly. SemVer guide covering MAJOR.MINOR.PATCH rules, pre-release tags, compatibility expectations, and common versioning mistakes."
+          },
+          {
+            "rank": 4,
+            "title": "Version Precedence | semver/semver | DeepWiki",
+            "url": "https://deepwiki.com/semver/semver/2.3-version-precedence",
+            "snippet": "Sep 19, 2025 · This document describes how semantic versions are compared and ordered according to the Semantic Versioning specification. It covers the complete precedence rules for normal versions, pre-release versions, and the handling of build metadata in version comparisons."
+          }
+        ]
+      }
+    },
+    {
+      "id": "mdn-429-retry-after-example",
+      "question": "In MDN's worked 429 example, what Retry-After value does the server send?",
+      "query": "HTTP 429 Too Many Requests Retry-After header",
+      "source_url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429",
+      "answer": "Retry-After: 3600",
+      "answer_location": {
+        "section": "Examples — inside the fenced HTTP response block of the rate-limited example",
+        "depth_pct": 29.3,
+        "char_offset": 3271,
+        "page_chars": 11166
+      },
+      "why_snippet_misses": "The snippet says a Retry-After header 'may be included' — it names the header and omits the value. The value lives in a code block, and code blocks are what snippet extraction drops first.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "429 Too Many Requests - HTTP | MDN - MDN Web Docs",
+            "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429",
+            "snippet": "Jun 22, 2026 · A Retry-After header may be included to this response to indicate how long a client should wait before making the request again. Implementations of rate limiting vary; restrictions may be server-wide or per resource."
+          },
+          {
+            "rank": 2,
+            "title": "HTTP Error 429 (Too Many Requests) – How to Fix",
+            "url": "https://blog.postman.com/http-error-429/",
+            "snippet": "Nov 19, 2025 · HTTP 429 Too Many Requests means you’ve exceeded the API’s rate limit. Solutions include implementing exponential backoff, respecting Retry-After headers, using request queuing, caching responses, and distributing load over time."
+          },
+          {
+            "rank": 3,
+            "title": "How to Fix HTTP 429 Error Too Many Requests - GeeksforGeeks",
+            "url": "https://www.geeksforgeeks.org/websites-apps/429-error-causes-and-solutions/",
+            "snippet": "Jul 23, 2025 · Here are some simple solutions for fixing the HTTP 429 Error \"Too Many Requests.\" By following these methods, you can resolve the issue and restore normal browsing or usage."
+          },
+          {
+            "rank": 4,
+            "title": "HTTP 429 Too Many Requests — Meaning, Causes & How to Fix",
+            "url": "https://jsondevtools.org/http-status/429.html",
+            "snippet": "HTTP 429 Too Many Requests explained — rate limiting, the Retry-After header, exponential backoff, and how to fix it."
+          }
+        ]
+      }
+    },
+    {
+      "id": "sqlite-max-column",
+      "question": "In SQLite, what is the largest value SQLITE_MAX_COLUMN can be raised to at compile time?",
+      "query": "sqlite maximum number of columns limit",
+      "source_url": "https://www.sqlite.org/limits.html",
+      "answer": "as large as 32767",
+      "answer_location": {
+        "section": "Maximum Number Of Columns — second paragraph, after the bulleted list of what the bound covers",
+        "depth_pct": 28.2,
+        "char_offset": 4215,
+        "page_chars": 14931
+      },
+      "why_snippet_misses": "The snippet is the page's opening definition of 'Limits' and literally teases 'the maximum number of columns in a table' without giving either the default or the ceiling.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Implementation Limits For SQLite",
+            "url": "https://sqlite.org/limits.html",
+            "snippet": "Limits In SQLite \"Limits\" in the context of this article means sizes or quantities that can not be exceeded. We are concerned with things like the maximum number of bytes in a BLOB or the maximum number of columns in a table. SQLite was originally designed with a policy of avoiding arbitrary limits. Of course, every program that runs on a machine with finite memory and disk space has limits of ..."
+          },
+          {
+            "rank": 2,
+            "title": "Scaling Your App: Overcoming SQLite's Parameter, Column, and Database ...",
+            "url": "https://runebook.dev/en/docs/sqlite/limits",
+            "snippet": "Have you ever tried to create a table with a huge number of columns, only to be met with a \"too many columns\" error? Why it happens SQLite sets a limit on the number of columns a single table can have. The default is 2000. This is usually a sign of a design that might not be fully normalized. Alternative & Friendly Solution Re-think your schema!"
+          },
+          {
+            "rank": 3,
+            "title": "Compile-time Options - SQLite",
+            "url": "https://sqlite.org/compile.html",
+            "snippet": "The SQLITE_QUERY_PLANNER_LIMIT option sets an initial baseline value for the maximum number of index-and-constraint combinations that the query planner will consider."
+          },
+          {
+            "rank": 4,
+            "title": "python - Solving AttributeError with sqlite3.Connection.getlimit ...",
+            "url": "https://runebook.dev/en/docs/python/library/sqlite3/sqlite3.Connection.getlimit",
+            "snippet": "Maximum length of an SQL statement, string, or BLOB. sqlite3.SQLITE_LIMIT_SQL_LENGTH Maximum length of an SQL statement. sqlite3.SQLITE_LIMIT_COLUMN Maximum number of columns in a table or index. You would use it like this ... Here are a few common issues developers encounter when working with this method This is arguably the most frequent ..."
+          }
+        ]
+      }
+    },
+    {
+      "id": "curl-max-redirs-default",
+      "question": "By default, how many redirects will curl follow when --location is used?",
+      "query": "curl man page command line options reference",
+      "source_url": "https://curl.se/docs/manpage.html",
+      "answer": "By default the limit is set to 50 redirects",
+      "answer_location": {
+        "section": "OPTIONS — the '--max-redirs <num>' entry in the alphabetical option list",
+        "depth_pct": 43.3,
+        "char_offset": 113518,
+        "page_chars": 261891
+      },
+      "why_snippet_misses": "The man page is one 260k-character document holding every option; the snippet landed on an unrelated option (error 22 / --fail). Which slice of an alphabetical reference a snippet shows is essentially arbitrary.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "curl - How To Use",
+            "url": "https://curl.se/docs/manpage.html",
+            "snippet": "curl man page.This command line option prevents curl from outputting that data and instead returns error 22 early. By default, curl does not consider HTTP response codes to indicate failure. To get both the error code and also save the content, use --fail-with-body instead."
+          },
+          {
+            "rank": 2,
+            "title": "curl(1) - Linux manual page",
+            "url": "https://man7.org/linux/man-pages/man1/curl.1.html",
+            "snippet": "This lists all curl command line options within. the given category. If no argument is provided, curl displays only the most.man page for details about this option. curl sets this option by default and you need to explicitly."
+          },
+          {
+            "rank": 3,
+            "title": "ss64.com/bash/curl.html",
+            "url": "https://ss64.com/bash/curl.html",
+            "snippet": "curl Man Page - Linux - SS64.com - SS64 Command line reference."
+          },
+          {
+            "rank": 4,
+            "title": "curl/docs/cmdline-opts/MANPAGE.md at master · curl/curl · GitHub",
+            "url": "https://github.com/curl/curl/blob/master/docs/cmdline-opts/MANPAGE.md",
+            "snippet": "Only refer to options with their long form option version, like --verbose. The output generator replaces such option with the correct markup that shows both short and long version.Generates a full curl --help output for all known command line options. Generating the man page."
+          }
+        ]
+      }
+    },
+    {
+      "id": "go-time-reference-unix",
+      "question": "Go's reference time for layout strings, expressed as a Unix timestamp, is what number?",
+      "query": "pkg.go.dev time package documentation",
+      "source_url": "https://pkg.go.dev/time",
+      "answer": "As a Unix time, this is 1136239445",
+      "answer_location": {
+        "section": "Constants — the prose under the layout constants explaining the reference time",
+        "depth_pct": 17.8,
+        "char_offset": 13377,
+        "page_chars": 75266
+      },
+      "why_snippet_misses": "The snippet came from the Time-equality discussion elsewhere on the page. The Unix value is one clause inside a paragraph that is itself an aside under a code block.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "time package - time - Go Packages",
+            "url": "https://pkg.go.dev/time",
+            "snippet": "Jul 7, 2026 · See the documentation for the Time type for a discussion of equality testing for Time values. For debugging, the result of t.String does include the monotonic clock reading if present."
+          },
+          {
+            "rank": 2,
+            "title": "Package time - The Go Programming Language",
+            "url": "https://go.dev/pkg/time/?m=old",
+            "snippet": "Jan 2, 2022 · Package time provides functionality for measuring and displaying time. The calendrical calculations always assume a Gregorian calendar, with no leap seconds. Operating systems provide both a “wall clock,” which is subject to changes for clock synchronization, and a “monotonic clock,” which is not."
+          },
+          {
+            "rank": 3,
+            "title": "time package - helm.sh/helm/v3/pkg/time - Go Packages",
+            "url": "https://pkg.go.dev/helm.sh/helm/v3/pkg/time",
+            "snippet": "Jul 9, 2026 · Package time contains a wrapper for time.Time in the standard library and associated methods."
+          },
+          {
+            "rank": 4,
+            "title": "time package - go.starlark.net/lib/time - Go Packages",
+            "url": "https://pkg.go.dev/go.starlark.net/lib/time",
+            "snippet": "Jul 8, 2026 · NowFunc is a function that reports the current time. Intentionally exported so that it can be overridden, for example by applications that require their Starlark scripts to be fully deterministic."
+          }
+        ]
+      }
+    },
+    {
+      "id": "rfc8259-duplicate-names",
+      "question": "RFC 8259 says implementations disagree on duplicate object names. What does it say many of them do?",
+      "query": "RFC 8259 The JavaScript Object Notation JSON Data Interchange Format",
+      "source_url": "https://datatracker.ietf.org/doc/rfc8259/",
+      "answer": "Many implementations report the last name/value pair only",
+      "answer_location": {
+        "section": "Section 4 (Objects) — the paragraph following the ABNF for object",
+        "depth_pct": 45.1,
+        "char_offset": 11472,
+        "page_chars": 25425
+      },
+      "why_snippet_misses": "The snippet is the RFC abstract, which is what every RFC index page surfaces. The interoperability consequence of duplicate names is four paragraphs into the body.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "RFC 8259 - The JavaScript Object Notation (JSON) Data Interchange Format",
+            "url": "https://datatracker.ietf.org/doc/rfc8259/",
+            "snippet": "JavaScript Object Notation (JSON) is a lightweight, text-based, language-independent data interchange format. It was derived from the ECMAScript Programming Language Standard. JSON defines a small set of formatting rules for the portable representation of structured data. This document removes inconsistencies with other specifications of JSON, repairs specification errors, and offers ..."
+          },
+          {
+            "rank": 2,
+            "title": "RFC 8259 - The JavaScript Object Notation (JSON) Data Interchange ...",
+            "url": "https://rfcinfo.com/rfc-8259/",
+            "snippet": "RFC 8259 defines the authoritative syntax standard for JavaScript Object Notation (JSON) data interchange format. It is the most widely used lightweight data format for REST APIs, configuration files, and data storage."
+          },
+          {
+            "rank": 3,
+            "title": "The JavaScript Object Notation (JSON) Data Interchange Format",
+            "url": "https://datatracker.ietf.org/doc/rfc7159/",
+            "snippet": "JavaScript Object Notation (JSON) is a lightweight, text-based, language-independent data interchange format. It was derived from the ECMAScript Programming Language Standard. JSON defines a small set of formatting rules for the portable representation of structured data. This document removes inconsistencies with other specifications of JSON, repairs specification errors, and offers ..."
+          },
+          {
+            "rank": 4,
+            "title": "2. JSON Grammar | RFCinfo",
+            "url": "https://rfcinfo.com/rfc-8259/2-json-grammar/",
+            "snippet": "RFC Documents RFC 8259 - The JavaScript Object Notation (JSON) Data Interchange Format 2. JSON Grammar"
+          }
+        ]
+      }
+    },
+    {
+      "id": "git-worktree-prune-expire",
+      "question": "What grace period does git gc use when it calls git worktree prune?",
+      "query": "git-scm.com git-gc documentation",
+      "source_url": "https://git-scm.com/docs/git-gc",
+      "answer": "git worktree prune --expire 3.months.ago",
+      "answer_location": {
+        "section": "CONFIGURATION — the gc.worktreePruneExpire entry",
+        "depth_pct": 69.9,
+        "char_offset": 11535,
+        "page_chars": 16510
+      },
+      "why_snippet_misses": "The snippet is the one-line NAME description ('Cleanup unnecessary files and optimize the local repository'). The entire CONFIGURATION section, where every default lives, is invisible to a snippet-only reader.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Git - git-gc Documentation",
+            "url": "https://git-scm.com/docs/git-gc",
+            "snippet": "git-gc - Cleanup unnecessary files and optimize the local repository."
+          },
+          {
+            "rank": 2,
+            "title": "Git - Documentation",
+            "url": "https://git-scm.dev/doc",
+            "snippet": "Documentation Reference Reference Manual The official and comprehensive man pages that are included in the Git package itself. Quick reference guides: GitHub Cheat Sheet | Visual Git Cheat Sheet Book Pro Git The entire Pro Git book written by Scott Chacon and Ben Straub is available to read online for free. Dead tree versions are available on ..."
+          },
+          {
+            "rank": 3,
+            "title": "Git - git-gc Documentation",
+            "url": "https://git-scm.com/docs/git-gc/2.9.5",
+            "snippet": "Usually git gc runs very quickly while providing good disk space utilization and performance. This option will cause git gc to more aggressively optimize the repository at the expense of taking much more time."
+          },
+          {
+            "rank": 4,
+            "title": "Git gc: Complete Guide to Documentation - Atlassian",
+            "url": "https://www.atlassian.com/git/tutorials/git-gc",
+            "snippet": "Git gc is a repository maintenance command. \"Gc\" stands for garbage collection. Use our complete guide to learn all about cleaning up messes with git gc."
+          }
+        ]
+      }
+    },
+    {
+      "id": "git-gc-log-expiry",
+      "question": "How old must gc.log be before git gc --auto stops short-circuiting and runs again?",
+      "query": "git-scm.com git-gc documentation",
+      "source_url": "https://git-scm.com/docs/git-gc",
+      "answer": "unless that file is more than gc.logExpiry old. Default is \"1.day\"",
+      "answer_location": {
+        "section": "CONFIGURATION — the gc.logExpiry entry",
+        "depth_pct": 61.6,
+        "char_offset": 10170,
+        "page_chars": 16510
+      },
+      "why_snippet_misses": "Same one-line NAME snippet as the sibling question. Two different facts on the same page are both unreachable, which is the clearest demonstration that the snippet is not a summary of the page.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Git - git-gc Documentation",
+            "url": "https://git-scm.com/docs/git-gc",
+            "snippet": "git-gc - Cleanup unnecessary files and optimize the local repository."
+          },
+          {
+            "rank": 2,
+            "title": "Git - Documentation",
+            "url": "https://git-scm.dev/doc",
+            "snippet": "Documentation Reference Reference Manual The official and comprehensive man pages that are included in the Git package itself. Quick reference guides: GitHub Cheat Sheet | Visual Git Cheat Sheet Book Pro Git The entire Pro Git book written by Scott Chacon and Ben Straub is available to read online for free. Dead tree versions are available on ..."
+          },
+          {
+            "rank": 3,
+            "title": "Git - git-gc Documentation",
+            "url": "https://git-scm.com/docs/git-gc/2.9.5",
+            "snippet": "Usually git gc runs very quickly while providing good disk space utilization and performance. This option will cause git gc to more aggressively optimize the repository at the expense of taking much more time."
+          },
+          {
+            "rank": 4,
+            "title": "Git gc: Complete Guide to Documentation - Atlassian",
+            "url": "https://www.atlassian.com/git/tutorials/git-gc",
+            "snippet": "Git gc is a repository maintenance command. \"Gc\" stands for garbage collection. Use our complete guide to learn all about cleaning up messes with git gc."
+          }
+        ]
+      }
+    },
+    {
+      "id": "jq-ltrimstr-example",
+      "question": "In the jq manual's ltrimstr example, what output does jq '[.[]|ltrimstr(\"foo\")]' produce?",
+      "query": "jq manual documentation jqlang",
+      "source_url": "https://jqlang.org/manual/",
+      "answer": "[\"fo\",\"\",\"barfoo\",\"bar\",\"afoo\"]",
+      "answer_location": {
+        "section": "Builtin operators and functions — the worked example table under ltrimstr(str)",
+        "depth_pct": 44.3,
+        "char_offset": 49029,
+        "page_chars": 110734
+      },
+      "why_snippet_misses": "The snippet is the time-functions paragraph. The answer is an example's output row: the empty-string result for input 'foo' is the whole point and exists nowhere except that table cell.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "jq 1.8 Manual",
+            "url": "https://jqlang.org/manual/",
+            "snippet": "Low-level jq interfaces to the C-library time functions are also provided: strptime, strftime, strflocaltime, mktime, gmtime, and localtime. Refer to your host operating system's documentation for the format strings used by strptime and strftime."
+          },
+          {
+            "rank": 2,
+            "title": "GitHub - jqlang/jq: Command-line JSON processor · GitHub",
+            "url": "https://github.com/jqlang/jq",
+            "snippet": "Try jq Online: play.jqlang.org.jq is released under the MIT License. jq's documentation is licensed under the Creative Commons CC BY 3.0. jq uses parts of the open source C library \"decNumber\", which is distributed under ICU License."
+          },
+          {
+            "rank": 3,
+            "title": "jqlang - Tikray",
+            "url": "https://tikray.readthedocs.io/engine/jqlang/index.html",
+            "snippet": "To learn fundamentals about jqlang, the expression language provided by jq, please refer to the jq tutorial and the jq manual documentation, and do a few orientation flights on the jq playground."
+          },
+          {
+            "rank": 4,
+            "title": "Redirecting to jqlang.github.io",
+            "url": "https://stedolan.github.io/jq/manual/",
+            "snippet": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "jq-skip-function",
+      "question": "What does jq's skip(n; expr) function do?",
+      "query": "jq manual documentation jqlang",
+      "source_url": "https://jqlang.org/manual/",
+      "answer": "The skip function skips the first n outputs from expr",
+      "answer_location": {
+        "section": "Builtin operators and functions — the skip(n; expr) entry, immediately after limit(n; expr)",
+        "depth_pct": 78.9,
+        "char_offset": 87323,
+        "page_chars": 110734
+      },
+      "why_snippet_misses": "The manual is a single 110k-character page of function entries; the snippet showed the time functions. Nearly four fifths of the document is past where the snippet stops.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "jq 1.8 Manual",
+            "url": "https://jqlang.org/manual/",
+            "snippet": "Low-level jq interfaces to the C-library time functions are also provided: strptime, strftime, strflocaltime, mktime, gmtime, and localtime. Refer to your host operating system's documentation for the format strings used by strptime and strftime."
+          },
+          {
+            "rank": 2,
+            "title": "GitHub - jqlang/jq: Command-line JSON processor · GitHub",
+            "url": "https://github.com/jqlang/jq",
+            "snippet": "Try jq Online: play.jqlang.org.jq is released under the MIT License. jq's documentation is licensed under the Creative Commons CC BY 3.0. jq uses parts of the open source C library \"decNumber\", which is distributed under ICU License."
+          },
+          {
+            "rank": 3,
+            "title": "jqlang - Tikray",
+            "url": "https://tikray.readthedocs.io/engine/jqlang/index.html",
+            "snippet": "To learn fundamentals about jqlang, the expression language provided by jq, please refer to the jq tutorial and the jq manual documentation, and do a few orientation flights on the jq playground."
+          },
+          {
+            "rank": 4,
+            "title": "Redirecting to jqlang.github.io",
+            "url": "https://stedolan.github.io/jq/manual/",
+            "snippet": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "nginx-client-max-body-size",
+      "question": "What is nginx's default client_max_body_size?",
+      "query": "nginx.org ngx_http_core_module directives reference",
+      "source_url": "https://nginx.org/en/docs/http/ngx_http_core_module.html",
+      "answer": "client_max_body_size 1m",
+      "answer_location": {
+        "section": "The client_max_body_size directive block — the 'Default:' row of its Syntax/Default/Context table",
+        "depth_pct": 13.9,
+        "char_offset": 8789,
+        "page_chars": 63162
+      },
+      "why_snippet_misses": "The snippet came from absolute_redirect, an unrelated directive on the same page. Directive defaults live in small per-directive tables, and a snippet can only ever show one of the hundreds on this page.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Module ngx_http_core_module",
+            "url": "https://nginx.org/en/docs/http/ngx_http_core_module.html",
+            "snippet": "Module ngx_http_core_module.http, server, location. This directive appeared in version 1.11.8. If disabled, redirects issued by nginx will be relative. See also server_name_in_redirect and port_in_redirect directives."
+          },
+          {
+            "rank": 2,
+            "title": "NGINX modules reference",
+            "url": "http://cla2.auburn.edu/nginx-modules-reference.pdf",
+            "snippet": "HTTP server modules. Module ngx_http_core_module. Directives. absolute_redirect.The ngx http autoindex module, ngx http random index module, and ngx http dav module modules currently ignore this directive. Nginx, Inc."
+          },
+          {
+            "rank": 3,
+            "title": "github.com/rafaelgou/the-phpjs-local-docs-collection/blob/master/nginx...",
+            "url": "https://github.com/rafaelgou/the-phpjs-local-docs-collection/blob/master/nginx/1.6.0/en/docs/http/ngx_http_core_module.html",
+            "snippet": "large_client_header_buffers directive, are allocated.Provides the configuration file context in which the HTTP server directives."
+          },
+          {
+            "rank": 4,
+            "title": "src/http/ngx_http_core_module.c - nginx-1.7.10",
+            "url": "https://agentzh.org/misc/code/nginx/http/ngx_http_core_module.c.html",
+            "snippet": "src/http/ngx_http_core_module.c - nginx-1.7.10. Global variables defined."
+          }
+        ]
+      }
+    },
+    {
+      "id": "rfc3339-unknown-offset",
+      "question": "In RFC 3339, which offset represents a timestamp whose UTC time is known but whose local offset is unknown?",
+      "query": "RFC 3339 Date and Time on the Internet Timestamps",
+      "source_url": "https://datatracker.ietf.org/doc/html/rfc3339",
+      "answer": "this can be represented with an offset of \"-00:00\"",
+      "answer_location": {
+        "section": "Section 4.3 (Unknown Local Offset Convention)",
+        "depth_pct": 31.2,
+        "char_offset": 9853,
+        "page_chars": 31617
+      },
+      "why_snippet_misses": "The snippet is assembled from the abstract and the introduction. The -00:00 convention is a named subsection a third of the way in, and it is exactly the kind of narrow rule a general ranker has no reason to surface.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "RFC 3339 - Date and Time on the Internet: Timestamps",
+            "url": "https://datatracker.ietf.org/doc/html/rfc3339",
+            "snippet": "Date and time formats cause a lot of confusion and interoperability problems on the Internet.of UTC. Such timestamps are expressed relative to universal time, using the best available practice at the stated time. o Date and time expressions indicate an instant in time."
+          },
+          {
+            "rank": 2,
+            "title": "Date and Time on the Internet: Timestamps",
+            "url": "https://www.greenbytes.de/tech/webdav/rfc3339.pdf",
+            "snippet": "This document defines a date and time format for use in Internet protocols that is a profile of the ISO 8601 standard for representation of dates and times using the Gregorian calendar. RFC 3339."
+          },
+          {
+            "rank": 3,
+            "title": "RFC 3339: Date and Time on the Internet: Timestamps - Pike...",
+            "url": "https://pike.lysator.liu.se/docs/ietf/rfc/33/rfc3339.xml",
+            "snippet": "Timestamps can express times that occurred before the introduction of UTC. Such timestamps are expressed relative to universal time, using the best available practice at the stated time. Date and time expressions indicate an instant in time."
+          },
+          {
+            "rank": 4,
+            "title": "RFC3339: Date and Time on the Internet: Timestamps | Guide books",
+            "url": "https://dl.acm.org/doi/book/10.17487/RFC3339",
+            "snippet": "This document defines a date and time format for use in Internet protocols that is a profile of the ISO 8601 standard for representation of dates and times using the Gregorian calendar."
+          }
+        ]
+      }
+    },
+    {
+      "id": "pg-max-wal-size-default",
+      "question": "What is PostgreSQL's default max_wal_size, and what unit is assumed when none is given?",
+      "query": "postgresql documentation write ahead log configuration",
+      "source_url": "https://www.postgresql.org/docs/current/runtime-config-wal.html",
+      "answer": "If this value is specified without units, it is taken as megabytes. The default is 1 GB.",
+      "answer_location": {
+        "section": "Write Ahead Log → Settings — the max_wal_size parameter entry",
+        "depth_pct": 51.9,
+        "char_offset": 19825,
+        "page_chars": 38177
+      },
+      "why_snippet_misses": "The snippet describes wal_level=minimal, a different parameter earlier in the same list. Postgres config pages are long flat parameter lists; the snippet shows whichever entry matched, not the one asked about.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "PostgreSQL: Documentation: 18: 19.5. Write Ahead Log",
+            "url": "https://www.postgresql.org/docs/current/runtime-config-wal.html",
+            "snippet": "The minimal level generates the least WAL volume. It logs no row information for permanent relations in transactions that create or rewrite them. This can make operations much faster (see Section 14.4.7). Operations that initiate this optimization include"
+          },
+          {
+            "rank": 2,
+            "title": "PostgreSQL Fundamentals: Write-Ahead Logging Deep Dive (Part 5)",
+            "url": "https://prateekcodes.com/postgres-fundamentals-wal-deep-dive-part-5/",
+            "snippet": "Deep dive into PostgreSQL's Write-Ahead Logging: how it works, what's inside WAL records, and how it enables both durability and crash recovery.PostgreSQL Documentation: WAL Configuration."
+          },
+          {
+            "rank": 3,
+            "title": "PostgreSQL WAL Settings Query Guide | Postgres Scripts",
+            "url": "https://www.postgresscripts.com/post/postgresql-wal-settings-query-guide/",
+            "snippet": "This PostgreSQL query retrieves all Write-Ahead Log (WAL) configuration settings from the pg_settings system view. WAL settings control durability, crash recovery, checkpointing, archiving, and replication log generation. Purpose and Overview."
+          },
+          {
+            "rank": 4,
+            "title": "IO - WALWrite | Redrock Postgres Documentation",
+            "url": "https://doc.rockdata.net/waits/walwrite/",
+            "snippet": "Write-Ahead Logging (WAL) is a standard method for ensuring data integrity. The WALWrite wait occurs while PostgreSQL flushes WAL records to disk or during a WAL segment switch. How to reduce this wait. Increase the number of wal_buffers available to the database."
+          }
+        ]
+      }
+    },
+    {
+      "id": "sqlite-charint-affinity",
+      "question": "Which declared type name do the SQLite docs use to show that the order of the column-affinity rules matters?",
+      "query": "sqlite.org datatype3 type affinity documentation",
+      "source_url": "https://www.sqlite.org/datatype3.html",
+      "answer": "A column whose declared type is \"CHARINT\"",
+      "answer_location": {
+        "section": "Section 3.1 (Determination Of Column Affinity) — the note after the five ordered rules",
+        "depth_pct": 32.4,
+        "char_offset": 9225,
+        "page_chars": 28444
+      },
+      "why_snippet_misses": "The snippet is the section 3 preamble and stops immediately before the rules. The CHARINT remark exists only to show that rule order matters, so it is precisely the clarification a truncated snippet destroys.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "Datatypes In SQLite",
+            "url": "https://www.sqlite.org/datatype3.html",
+            "snippet": "3. Type Affinity. SQL database engines that use rigid typing will usually try to automatically convert values to the appropriate datatype. Consider this: CREATE TABLE t1(a INT, b VARCHAR(10)); INSERT INTO t1(a,b) VALUES('123',456)"
+          },
+          {
+            "rank": 2,
+            "title": "SQLite — SQLAlchemy 1.4 Documentation",
+            "url": "https://docs.sqlalchemy.org/en/14/dialects/sqlite.html",
+            "snippet": "See also. Type Affinity - in the SQLite documentation. SQLite Auto Incrementing Behavior¶.SQLite’s typing model is based on naming conventions. Among other things, this means that any type name which contains the substring \"INT\" will be determined to be of “integer affinity”."
+          },
+          {
+            "rank": 3,
+            "title": "java - SQLite data types - Stack Overflow",
+            "url": "https://stackoverflow.com/questions/3388098/sqlite-data-types",
+            "snippet": "The type affinity of a column is the recommended type for data stored in that column.LONG isn't recognized by SQLite, but section 2.1 in the datatype documentation says that unrecognized types default to numeric."
+          },
+          {
+            "rank": 4,
+            "title": "Re: [SQLObject] BoolCol and the backend datatypes",
+            "url": "https://www.mail-archive.com/sqlobject-discuss@lists.sourceforge.net/msg03204.html",
+            "snippet": "The type affinity of a column is determined by the declared type of the column, according to the following rules: 1. If the datatype contains the string \"INT\" then it is assigned INTEGER affinity.\""
+          }
+        ]
+      }
+    },
+    {
+      "id": "rfc9110-418-unused",
+      "question": "Why does RFC 9110 mark HTTP status code 418 as Unused?",
+      "query": "RFC 9110 HTTP Semantics specification",
+      "source_url": "https://www.ietf.org/rfc/rfc9110.html",
+      "answer": "was an April 1 RFC that lampooned the various ways HTTP was abused",
+      "answer_location": {
+        "section": "Section 15.5.19 (418 Unused)",
+        "depth_pct": 75.6,
+        "char_offset": 337351,
+        "page_chars": 446120
+      },
+      "why_snippet_misses": "The snippet is the abstract. The answer sits three quarters of the way into a 446k-character specification — no snippet from any ranker reaches it.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "RFC 9110: HTTP Semantics",
+            "url": "https://www.ietf.org/rfc/rfc9110.html",
+            "snippet": "In this definition are core protocol elements, extensibility mechanisms, and the \"http\" and \"https\" Uniform Resource Identifier (URI) schemes. This document updates RFC 3864 and obsoletes RFCs 2818, 7231, 7232, 7233, 7235, 7538, 7615, 7694, and portions of 7230."
+          },
+          {
+            "rank": 2,
+            "title": "RFC 9110: HTTP Semantics | RFC Editor",
+            "url": "https://www.rfc-editor.org/info/rfc9110/",
+            "snippet": "Published specification: RFC 9110 (see Section 14.6)¶. Applications that use this media type: HTTP components supporting multiple ranges in a single request¶."
+          },
+          {
+            "rank": 3,
+            "title": "RFC 9110: HTTP Semantics Deep Dive — StatusCodeFYI",
+            "url": "https://statuscodefyi.com/guides/rfc-9110-http-semantics/",
+            "snippet": "Deep dive into RFC 9110 HTTP Semantics: methods, idempotency, status code classes, content negotiation, conditional requests, and range requests.Why RFC 9110 Matters. HTTP's Layered Architecture. Methods and Their Semantics. Status Code Semantics."
+          },
+          {
+            "rank": 4,
+            "title": "RFC 9110: The Ambiguous GET Request Body - Beyond... | zerosday",
+            "url": "https://zerosday.com/post/others/rfc-9110-the-ambiguous-get-request-body-beyond-the-no-defined-semantics-trap",
+            "snippet": "RFC 9110, the latest HTTP semantics specification, explicitly states that the GET request method's payload has \"no generally defined semantics.\" This means while technically possible to send data in a GET request, it's an anti-pattern that breaks expectations..."
+          }
+        ]
+      }
+    },
+    {
+      "id": "pg-transaction-timeout-interaction",
+      "question": "In PostgreSQL, what happens when transaction_timeout is shorter than or equal to statement_timeout?",
+      "query": "postgresql client connection defaults documentation",
+      "source_url": "https://www.postgresql.org/docs/current/runtime-config-client.html",
+      "answer": "then the longer timeout is ignored",
+      "answer_location": {
+        "section": "Client Connection Defaults → Statement Behavior — the transaction_timeout entry",
+        "depth_pct": 36.0,
+        "char_offset": 12639,
+        "page_chars": 35060
+      },
+      "why_snippet_misses": "The snippet shows client_min_messages, the first parameter in the same section. It also quotes an older section number (19.11.1) than the live page, so the snippet is both incomplete and slightly stale.",
+      "measurement": {
+        "target_rank": 1,
+        "answer_in_any_snippet": false,
+        "results": [
+          {
+            "rank": 1,
+            "title": "PostgreSQL: Documentation: 18: 19.11. Client Connection Defaults",
+            "url": "https://www.postgresql.org/docs/current/runtime-config-client.html",
+            "snippet": "19.11.1. Statement Behavior #. client_min_messages (enum) #. Controls which message levels are sent to the client. Valid values are DEBUG5, DEBUG4, DEBUG3, DEBUG2, DEBUG1, LOG, NOTICE, WARNING, and ERROR. Each level includes all the levels that follow it."
+          },
+          {
+            "rank": 2,
+            "title": "Client Connection Defaults / Locale and Formatting",
+            "url": "https://pghealth.io/docs/postgresql_parameters/client-connection-defaults-locale-and-formatting",
+            "snippet": "Master PostgreSQL client connection locale and formatting settings. Learn how to configure encoding, time zones, numeric formatting, and text search for optimal international compatibility and data consistency."
+          },
+          {
+            "rank": 3,
+            "title": "Connection String Parameters | Npgsql Documentation",
+            "url": "https://www.npgsql.org/doc/connection-string-parameters.html",
+            "snippet": "To connect to a database, the application provides a connection string which specifies parameters such as the host, the username, the password, etc. Connection strings have the form keyword1=value; keyword2=value; and are case-insensitive."
+          },
+          {
+            "rank": 4,
+            "title": "Troubleshooting PostgreSQL Client Connection Defaults: A Friendly...",
+            "url": "https://runebook.dev/en/docs/postgresql/runtime-config-client",
+            "snippet": "This section in your postgresql.conf file (or set at runtime) governs various session-level settings. They are the initial values for things like transaction behavior, language, and formatting for a client connection, unless the client explicitly overrides them. Setting Category."
+          }
+        ]
+      }
+    }
+  ]
+}

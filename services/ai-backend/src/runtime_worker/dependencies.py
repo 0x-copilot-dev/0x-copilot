@@ -15,6 +15,7 @@ from agent_runtime.capabilities.citation_capturing_tool import (
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.freshness import RevisionAwareMcpDiscoveryCache
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.search import SearchCandidate, SearchEnrichment
 from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import (
     BackendSkillProvider,
@@ -89,7 +90,16 @@ async def compose_capability_discovery(
 
 
 class WebSearchToolRegistry:
-    """Default local tools available to Deep Agents runtime runs."""
+    """Default local tools available to Deep Agents runtime runs.
+
+    On the desktop the tool does more than discovery: the pages DuckDuckGo
+    points at are fetched and extracted locally, and ``content`` carries a
+    window of each page anchored on the text the engine matched rather than the
+    engine's own one-to-three-sentence snippet
+    (:mod:`agent_runtime.capabilities.search`). Everywhere else — and whenever
+    any part of that path fails — the tool returns exactly the snippets it
+    always has.
+    """
 
     class WebSearchInput(BaseModel):
         """Stable model-visible argument contract for the built-in search tool."""
@@ -109,6 +119,22 @@ class WebSearchToolRegistry:
             "Search the public web for recent information, documentation, news, "
             "and external references. Returns result snippets with source links."
         )
+        ENRICHMENT_FAILED = (
+            "search.enrichment_failed; returning engine snippets unchanged"
+        )
+
+    def __init__(self, *, enrichment: SearchEnrichment | None = None) -> None:
+        """Bind the local extraction pipeline, or resolve it on first search.
+
+        A caller that passes ``enrichment`` explicitly (every test) decides the
+        pipeline outright. The default defers resolution to the first search so
+        that constructing the registry — which the production capability-mode
+        guard does on a bare ``None`` context — stays free of filesystem and
+        environment work.
+        """
+
+        self._enrichment = enrichment
+        self._enrichment_resolved = enrichment is not None
 
     def list_available_tools(self, context: object) -> Sequence[object]:
         """Return the built-in tool list, honoring the per-run web-search toggle.
@@ -124,8 +150,7 @@ class WebSearchToolRegistry:
             return ()
         return (self._web_search_tool(),)
 
-    @classmethod
-    def _web_search_tool(cls) -> object:
+    def _web_search_tool(self) -> object:
         """Build a retry-wrapped DuckDuckGo search tool.
 
         The underlying library raises opaque ``DDGSException`` wrappers on transient
@@ -146,10 +171,10 @@ class WebSearchToolRegistry:
         from agent_runtime.capabilities.retrying_tool import RetryingTool
 
         inner = StructuredTool.from_function(
-            func=cls._search,
-            name=cls.Values.WEB_SEARCH_TOOL_NAME,
-            description=cls.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
-            args_schema=cls.WebSearchInput,
+            func=self._search,
+            name=self.Values.WEB_SEARCH_TOOL_NAME,
+            description=self.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
+            args_schema=self.WebSearchInput,
             response_format="content_and_artifact",
         )
         return RetryingTool.wrapping(
@@ -159,14 +184,34 @@ class WebSearchToolRegistry:
             max_backoff_seconds=8.0,
         )
 
+    def _search(self, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Query ``ddgs``, then enrich the results with local page extraction.
+
+        The discovery half is unchanged — same engine, same parameters, same
+        result shape. The enrichment half is allowed to fail in every way it
+        can: the ``except`` below is the single place AC1 ("never worse than
+        today") is enforced, and it returns the exact pair this method returned
+        before extraction existed.
+        """
+
+        raw_results = self._discover(query)
+        enrichment = self._resolve_enrichment()
+        if enrichment is None:
+            return self._engine_results(raw_results), raw_results
+        try:
+            return enrichment.enrich(raw_results)
+        except Exception:  # noqa: BLE001 - enrichment is an upgrade, never a failure mode
+            _LOGGER.warning(self.Messages.ENRICHMENT_FAILED, exc_info=True)
+            return self._engine_results(raw_results), raw_results
+
     @classmethod
-    def _search(cls, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Query ``ddgs`` directly and preserve the former LangChain result shape."""
+    def _discover(cls, query: str) -> list[dict[str, Any]]:
+        """Query ``ddgs`` directly and return its raw text results."""
 
         from ddgs import DDGS
 
         with DDGS() as search:
-            raw_results = list(
+            return list(
                 search.text(
                     query,
                     region=cls.Values.REGION,
@@ -177,15 +222,29 @@ class WebSearchToolRegistry:
                 )
                 or ()
             )
-        results = [
-            {
-                "snippet": result.get("body", ""),
-                "title": result.get("title", ""),
-                "link": result.get("href", ""),
-            }
-            for result in raw_results
-        ]
-        return results, raw_results
+
+    @staticmethod
+    def _engine_results(
+        raw_results: Sequence[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Render the model-visible rows from engine snippets alone."""
+
+        return [SearchCandidate.from_raw(result).as_result() for result in raw_results]
+
+    def _resolve_enrichment(self) -> SearchEnrichment | None:
+        """Return this process's extraction pipeline, resolving it once.
+
+        ``None`` — no desktop workspace directory — is the ordinary answer on
+        every hosted image, and it is what keeps this a desktop-only feature
+        without a second dual-mode code path to keep in step.
+        """
+
+        import os  # noqa: PLC0415
+
+        if not self._enrichment_resolved:
+            self._enrichment_resolved = True
+            self._enrichment = SearchEnrichment.for_environment(os.environ)
+        return self._enrichment
 
 
 class EmptyMcpRegistry:

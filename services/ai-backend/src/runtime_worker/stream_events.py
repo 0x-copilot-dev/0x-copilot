@@ -483,6 +483,20 @@ class StreamOrchestrator:
                 interrupt_envelope=interrupt_envelope,
                 parent_task_id=parent_task_id,
             )
+            # THE path that matters. `append_native_interrupt_events` carries the
+            # same call, but it runs only on the NON-streaming branch of
+            # `handlers/run.py` — and every model that supports streaming takes
+            # this one instead, which is every model the desktop ships. So the
+            # write gate parked, resumed and executed with `gate.resolved` on the
+            # ledger and no `gate.opened` before it: an audit trail that records
+            # the decision but not the gate that forced it.
+            #
+            # Found by CN-09 driving a real Linear write on the packaged app, not
+            # by a test — the unit suite exercises the non-streaming path, where
+            # it always worked.
+            await self._maybe_emit_gate_opened(
+                run=run, event_type=event_type, payload=payload
+            )
         if native_payloads:
             return
 
@@ -822,6 +836,18 @@ class StreamOrchestrator:
         }
     )
 
+    class _GateLog:
+        """Why a gate.opened was or was not emitted. All three were silent."""
+
+        NOT_GATE_BEARING = (
+            "[surfaces_v2] gate.opened skipped: event_type=%s not gate-bearing"
+        )
+        TYPE_MISMATCH = (
+            "[surfaces_v2] gate.opened skipped: delivered as %s but payload claims %s"
+        )
+        NO_BLOCK = "[surfaces_v2] gate.opened skipped: no gate block approval_kind=%s approval_id=%s"
+        OPENED = "[surfaces_v2] gate.opened gate_id=%s"
+
     async def _maybe_emit_gate_opened(
         self,
         *,
@@ -839,20 +865,39 @@ class StreamOrchestrator:
         best-effort guard below turns it into a warning rather than a broken park.
         """
 
+        # Every decline below used to be SILENT, and that cost a live
+        # investigation: a real write parked, `gate.resolved` landed, and
+        # `gate.opened` did not — with nothing in the log to say which of the
+        # three conditions declined it, or whether this was even reached. An
+        # absent audit event and an unreached emitter look identical from the
+        # outside, so they are separated here.
         if event_type not in self._GATE_BEARING_EVENT_TYPES:
+            _logger.debug(self._GateLog.NOT_GATE_BEARING, event_type)
             return
         # The payload names its own kind; ``append_native_interrupt_events``
         # derives ``event_type`` from that same field. Requiring them to agree
         # costs nothing and refuses to classify a payload delivered under an
         # event type it does not claim.
-        if StreamMessageParser.api_event_type(payload) is not event_type:
+        claimed = StreamMessageParser.api_event_type(payload)
+        if claimed is not event_type:
+            _logger.warning(self._GateLog.TYPE_MISMATCH, event_type, claimed)
             return
         try:
             from agent_runtime.surfaces_v2.gate import GateLedger
 
             gate_payload = GateLedger.opened_payload(interrupt_payload=payload)
             if gate_payload is None:
+                # The ordinary case for a non-gate approval (the model's own
+                # ask_a_question carries no block) — but ALSO what a write gate
+                # whose block went missing looks like, so it is logged with the
+                # approval kind that distinguishes them.
+                _logger.info(
+                    self._GateLog.NO_BLOCK,
+                    payload.get(Keys.Field.APPROVAL_KIND),
+                    payload.get(Keys.Field.APPROVAL_ID),
+                )
                 return
+            _logger.info(self._GateLog.OPENED, gate_payload.get("gate_id"))
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,

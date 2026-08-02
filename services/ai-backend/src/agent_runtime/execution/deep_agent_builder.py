@@ -56,6 +56,14 @@ _WEB_HARNESS_PROFILE_KEYS = (
 # ``5`` against an enforced ``10``; T0.3 closed the gap. A literal, not an
 # import, to keep this execution module off the persistence layer — the gate
 # keeps the two in step.
+#
+# ``hyperparameters.json`` states this as ``execution.tool_call_budget`` and the
+# mapper pair below as ``model_mapper``, but this module cannot read either:
+# ``execution/__init__.py`` reaches it while ``execution/contracts.py`` is still
+# mid-import, and the document's contracts import ``delegation.subagents``,
+# whose eager package ``__init__`` imports ``execution.contracts`` right back.
+# Binding here fails EVERY import of ``agent_runtime``. Blocked until the
+# document sources its subagent ceilings without that package import.
 _DEFAULT_TOOL_CALL_BUDGET = 10
 
 
@@ -706,7 +714,14 @@ class SurfaceModelConfigFactory:
         "ollama": "ollama",
     }
     _MAX_INPUT_TOKENS = 200_000
+    #: ``hyperparameters.json``'s ``model_mapper`` section owns this pair, but
+    #: this module cannot import the document — see ``_DEFAULT_TOOL_CALL_BUDGET``
+    #: above for the cycle. Hoisted out of the ``ModelConfig`` literal anyway so
+    #: the binding is a one-line change once that is unblocked.
+    #: ``_MAX_INPUT_TOKENS`` / ``_TIMEOUT_SECONDS`` are deliberately not in the
+    #: document: it states only the pair the plan lists.
     _MAX_OUTPUT_TOKENS = 1_024
+    _TEMPERATURE = 0.0
     _TIMEOUT_SECONDS = 60.0
 
     @classmethod
@@ -718,7 +733,7 @@ class SurfaceModelConfigFactory:
             max_input_tokens=cls._MAX_INPUT_TOKENS,
             max_output_tokens=cls._MAX_OUTPUT_TOKENS,
             timeout_seconds=cls._TIMEOUT_SECONDS,
-            temperature=0.0,
+            temperature=cls._TEMPERATURE,
             supports_streaming=False,
         )
 

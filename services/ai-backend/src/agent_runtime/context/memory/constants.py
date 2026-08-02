@@ -73,7 +73,17 @@ class Values:
 
 
 class Defaults:
-    """Default budget and routing values."""
+    """Default budget and routing values.
+
+    ``hyperparameters.json`` states the three budget numbers under ``context``,
+    but this module cannot read them. It is inside the import closure the
+    document's own contracts pull in (they import ``delegation.subagents``'s
+    ``Limits`` for their ``le=`` ceilings, and that package's eager ``__init__``
+    reaches ``capabilities.tools`` -> ``prompts`` -> ``context.memory``), so an
+    import here closes a cycle. The document's copies are inert until the
+    document sources those ceilings from a module with no package ``__init__``
+    behind it.
+    """
 
     ASSISTANT_ID = "default"
     MAX_INPUT_TOKENS = 128_000
