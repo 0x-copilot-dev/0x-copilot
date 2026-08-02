@@ -231,6 +231,74 @@ async def test_resume_approved_or_approve_with_edits_maps_approved(
 
 
 # --------------------------------------------------------------------------- #
+# auth_session_creator is Optional — non-OAuth (stdio / local) servers
+# --------------------------------------------------------------------------- #
+
+
+def _no_oauth_gate(*, interrupt: object, classifier: object = None) -> ToolAccessGate:
+    """A gate whose OAuth session factory is absent (a non-OAuth run)."""
+
+    return ToolAccessGate(
+        auth_session_creator=None,
+        runtime_context=_context(),
+        interrupt_handler=interrupt,
+        classifier=classifier,
+    )
+
+
+async def test_park_for_approval_opens_without_auth_session_creator() -> None:
+    """The write gate parks with ``auth_session_creator=None`` — it opens no session.
+
+    A non-OAuth server (``auth_mode == NONE``) has no OAuth provider, so the run's
+    gate carries no session factory. The write-approval interrupt must still open.
+    """
+
+    interrupt = _CapturingInterrupt({"decision": "approved"})
+    gate = _no_oauth_gate(interrupt=interrupt, classifier=_WriteClassifier())
+    resume = await gate.park_for_approval(
+        card=_card(
+            auth_mode=McpAuthMode.NONE, auth_state=McpAuthState.AUTH_UNSUPPORTED
+        ),
+        tool_name="create_issue",
+        arguments={"title": "Ship it"},
+        op_class="write",
+        approval_id="mcp_write:run_abcdef:call_1",
+    )
+    assert resume.approved is True
+    # Exactly one interrupt, carrying the write-approval (ask_a_question) shape —
+    # never the mcp_auth connect shape (no session was ever created).
+    assert len(interrupt.payloads) == 1
+    payload = interrupt.payloads[0]
+    assert payload["approval_kind"] == "ask_a_question"
+    assert payload["event_type"] == "approval_requested"
+    assert payload["approval_id"] == "mcp_write:run_abcdef:call_1"
+    assert payload["gate"]["op"] == "create_issue"
+    assert payload["gate"]["op_class"] == "write"
+
+
+async def test_park_fails_closed_without_auth_session_creator() -> None:
+    """The OAuth-connect gate fails closed (no dispatch, no interrupt) without a creator.
+
+    Defensive: a ``NONE``-auth card never reaches :meth:`park` (its
+    ``gate_state`` is ``None``), but a connector that raises ``McpAuthError``
+    mid-dispatch can — and there is no session to connect, so it must not attempt
+    one and must not approve.
+    """
+
+    interrupt = _CapturingInterrupt({"decision": "approved"})
+    gate = _no_oauth_gate(interrupt=interrupt)
+    resume = await gate.park(
+        card=_card(),
+        tool_name="create_issue",
+        arguments={"title": "x"},
+        state=GateAuthState.MISSING,
+    )
+    assert resume.approved is False
+    # Nothing to connect ⇒ the interrupt was never raised.
+    assert interrupt.payloads == []
+
+
+# --------------------------------------------------------------------------- #
 # purpose builder — untrusted args
 # --------------------------------------------------------------------------- #
 
