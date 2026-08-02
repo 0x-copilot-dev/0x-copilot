@@ -16,7 +16,7 @@ from agent_runtime.capabilities.mcp.cards import (
     McpToolCallRequest,
     McpToolCallResult,
 )
-from agent_runtime.capabilities.mcp.constants import Messages, Values
+from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.descriptor_source import McpDispatchPolicy
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.gateway_context import (
@@ -331,6 +331,16 @@ class CallMcpTool:
             output["status"] = "blocked"
         else:
             output["status"] = "failed"
+            # The gateway attaches a machine-readable `failure_code` precisely
+            # so a caller need not parse its deliberately-generic sentence — and
+            # this is the site that was dropping it. Live, the model received
+            # `{"status": "failed", "operation_id": "op_…", "summary":
+            # "Operation failed; no external change was made."}` and nothing
+            # else: no code, no retry hint, and an id-shaped token it then tried
+            # to `read_file` as if it were a path, burning two more tool calls.
+            if disposition.failure_code:
+                output[Keys.Field.FAILURE_CODE] = disposition.failure_code
+            output[Keys.Field.RETRYABLE] = disposition.retryable
             connector_error = (
                 mcp_adapter.protocol_error if mcp_adapter is not None else None
             )
@@ -351,6 +361,21 @@ class CallMcpTool:
                     correlation_id=self.runtime_context.trace_id,
                     output=output,
                 ).model_dump(mode="json", exclude_none=True)
+            # The server never answered with `isError`, so the failure happened
+            # in our own execution path. It is STILL a typed failure: returning
+            # `ok()` with `status: "failed"` buried in `output` made a hard
+            # failure read to the model as an empty success — the exact shape
+            # this program has been bitten by repeatedly — and left the error
+            # channel empty for anything downstream that inspects it.
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.MCP_PROTOCOL_ERROR,
+                Messages.Loader.OPERATION_FAILED,
+                retryable=disposition.retryable,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+                output=output,
+            ).model_dump(mode="json", exclude_none=True)
         return McpToolCallResult.ok(
             server_name=parsed_input.server_name,
             tool_name=parsed_input.tool_name,

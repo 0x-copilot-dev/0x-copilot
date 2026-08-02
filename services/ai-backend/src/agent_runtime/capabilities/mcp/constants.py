@@ -37,6 +37,7 @@ class Keys:
         CORRELATION_ID = "correlation_id"
         DESCRIPTION = "description"
         ENABLED = "enabled"
+        FAILURE_CODE = "failure_code"
         HEALTH = "health"
         INPUT_SCHEMA = "input_schema"
         LATENCY_MS = "latency_ms"
@@ -377,6 +378,18 @@ class Messages:
             "The MCP server returned invalid connection metadata."
         )
         LOAD_FAILED = "The MCP server could not be loaded right now."
+        #: The call failed somewhere in OUR execution path rather than at the
+        #: server — the server never replied with an error, so there is no
+        #: connector message to quote. Distinct from ``PROTOCOL_ERROR``, which
+        #: means the server DID answer and said no: telling the model the
+        #: server rejected a call it never received sends it off rewriting
+        #: perfectly valid arguments.
+        OPERATION_FAILED = (
+            "The connector call did not complete. Nothing was changed. This is "
+            "a failure on our side rather than a rejection by the server, so "
+            "the arguments are probably fine — report it rather than rewriting "
+            "the call, and read `failure_code` for what to do next."
+        )
         LOCAL_TOOL_COLLISION = (
             "The MCP server returned a tool name that collides with a local tool."
         )

@@ -12,6 +12,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import json
+import logging
+
 import pytest
 
 from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
@@ -803,3 +806,88 @@ class TestConnectorProtocolErrorReachesTheModelSafely(_ProtocolErrorFixture):
         message = self._safe_message(result)
         assert message
         assert result["error"]["code"] == "mcp_protocol_error"
+
+
+class TestAFailureInOurOwnPathIsStillTyped(_Fixture):
+    """A live `list_issues` failure that reached the model as an empty success.
+
+    The server never answered `isError` — the call blew up on OUR side — so
+    `protocol_error` was `None` and the branch fell through to
+    `McpToolCallResult.ok(...)` with `status: "failed"` buried in `output`. The
+    model therefore got a success envelope containing:
+
+        {"status": "failed", "operation_id": "op_698d3bc8-…",
+         "summary": "Operation failed; no external change was made."}
+
+    No code, no retry hint, and an id-shaped token it then tried to `read_file`
+    as if it were a path — two more wasted tool calls. Meanwhile the gateway
+    logged nothing at all, so a grep for that operation id across the whole
+    ai-backend log returned zero lines.
+    """
+
+    class _ExplodingClient:
+        """A client whose call raises rather than replying with `isError`."""
+
+        BOOM = "connector transport died mid-call"
+
+        def __init__(self, inner: object) -> None:
+            self._inner = inner
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._inner, name)
+
+        async def call_tool(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError(self._ExplodingClient.BOOM)
+
+    def invoke_exploding_read(self) -> dict[str, object]:
+        tool, provider = self.make_call_tool()
+        provider.clients[_SERVER] = self._ExplodingClient(provider.clients[_SERVER])
+        _c, _e, _l, _r, operation_token, service_token = self.bind_enforced()
+        try:
+            return _invoke(tool, "list_issues", {"team": "ENG"})
+        finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
+
+    def test_the_result_is_a_typed_failure_not_an_ok_envelope(self) -> None:
+        result = self.invoke_exploding_read()
+
+        # The whole point: `error` is populated, so anything inspecting the
+        # error channel sees a failure instead of a success carrying one.
+        assert result.get("error") is not None, result
+        assert result["output"]["status"] == "failed"
+
+    def test_the_model_is_told_this_is_not_its_arguments_fault(self) -> None:
+        message = self.invoke_exploding_read()["error"]["safe_message"]
+
+        # Reporting a server rejection for a call the server never received
+        # sends the model off rewriting perfectly valid arguments.
+        assert "failure on our side" in message
+
+    def test_the_machine_readable_code_survives_to_the_model(self) -> None:
+        output = self.invoke_exploding_read()["output"]
+
+        # The adapter already narrows a transport blow-up to a typed connector
+        # failure — this asserts the code SURVIVES the presentation layer, which
+        # is where it was being dropped, not what the code happens to be.
+        assert output["failure_code"] == "operation_adapter_failed"
+        assert "retryable" in output
+
+    def test_the_internal_exception_text_never_reaches_the_model(self) -> None:
+        result = self.invoke_exploding_read()
+
+        assert self._ExplodingClient.BOOM not in json.dumps(result)
+
+    def test_the_failure_is_logged_because_nothing_else_records_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(
+            logging.WARNING, logger="agent_runtime.capabilities.operations.gateway"
+        ):
+            self.invoke_exploding_read()
+
+        failed = [r for r in caplog.records if "operation_gateway.failed" in r.message]
+        assert failed, (
+            "a connector failure must leave exactly one operator-visible line"
+        )
+        assert failed[0].exc_info is not None, "the traceback is the diagnostic value"

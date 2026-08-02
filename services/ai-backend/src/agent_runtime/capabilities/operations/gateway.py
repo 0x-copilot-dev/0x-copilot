@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 
 from agent_runtime.artifacts.contracts import (
@@ -71,6 +72,26 @@ from agent_runtime.surfaces_v2.ledger_models import (
 )
 
 __operation_boundary__ = "presentation"
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class _Log:
+    """The one line an operator needs when a connector call fails.
+
+    Before this, the `except Exception` below turned any adapter exception into
+    a `failure_code` and a generic sentence and logged NOTHING. A live Linear
+    `list_issues` failure was therefore invisible from both ends: the model was
+    told "Operation failed; no external change was made." with no code, and a
+    grep of the whole ai-backend log for the operation id returned zero lines.
+    A failure nobody can see is a failure nobody can fix.
+    """
+
+    FAILED = (
+        "operation_gateway.failed operation_id=%s capability=%s op=%s "
+        "failure_code=%s retryable=%s"
+    )
 
 
 class FailClosedGateResolver:
@@ -321,6 +342,19 @@ class OperationGateway:
             raise
         except Exception as exc:  # safe failure becomes a disposition
             failure_code, retryable = self._safe_failure(exc)
+            # WARNING, with the traceback: this is the only record that the
+            # connector call failed at all. The disposition below is safe-by-
+            # design and says nothing specific on purpose, so if this line is
+            # absent the failure is undiagnosable.
+            _LOGGER.warning(
+                _Log.FAILED,
+                request.operation_id,
+                metric_capability,
+                metric_op,
+                failure_code,
+                retryable,
+                exc_info=True,
+            )
             await self._emit_failed(
                 request=request,
                 failure_code=failure_code,
