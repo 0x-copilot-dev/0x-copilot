@@ -32,6 +32,7 @@ from backend_app.contracts import (
     CreateSkillRequest,
     DeployAuditEventResponse,
     DeployAuditRequest,
+    InternalMcpAccessToken,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpRpcRequest,
@@ -316,6 +317,7 @@ from backend_app.service import (
     ConnectorAccessDenied,
     DeployAuditService,
     InternalMcpLeaseFailureError,
+    McpAccessTokenUnavailable,
     McpRegistryService,
     SkillRegistryService,
     ToolCatalogService,
@@ -1523,6 +1525,63 @@ def create_app(
             )
         except ConnectorAccessDenied as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+    @app.post(
+        "/internal/v1/mcp/servers/{server_id}/access-token",
+        response_model=InternalMcpAccessToken,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_mcp_access_token(
+        request: Request,
+        server_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> InternalMcpAccessToken:
+        """Mint a scoped, short-TTL bearer for a runtime that connects directly.
+
+        Same admission sequence as the RPC proxy below (tenant scope →
+        access-mode gate → liveness → refresh-on-expiry), and the same identity
+        rule: with ``ENTERPRISE_SERVICE_TOKEN`` configured the org/user in the
+        query string is ignored in favour of the verified service headers, so a
+        caller cannot mint against a tenant it has not been vouched for.
+
+        The access-mode gate is stricter here than at ``/rpc``, and for a
+        structural reason rather than an arbitrary one: the proxy sees the call
+        it is authorizing and can refuse the writes a ``read`` connector
+        forbids, while a bearer names nothing and answers to nothing once
+        issued. So ``off`` and ``read`` are both ``403``
+        (``connector_access_off`` / ``connector_access_read_only``) and only
+        ``read_act`` — or a server no connector row joins — mints.
+
+        The refresh token, the vault ciphertext and the OAuth client secret
+        stay on this side of the boundary — the response contract has no field
+        that could carry them.
+        """
+
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            return _AppServices.mcp(app).mint_internal_access_token(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                server_id=server_id,
+            )
+        except ConnectorAccessDenied as exc:
+            # Same 403 + stable reason code the RPC proxy answers with, so one
+            # deny vocabulary covers both topologies.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except McpAccessTokenUnavailable as exc:
+            # 409, not 404 or 403: the server exists and the caller is entitled
+            # to it — its shape simply admits no bearer. A 4xx either way, but
+            # only this one tells the caller not to bother retrying *this* route.
+            raise HTTPException(status.HTTP_409_CONFLICT, exc.reason) from exc
         except InternalMcpLeaseFailureError as exc:
             raise HTTPException(
                 exc.status_code, exc.failure.model_dump(mode="json")

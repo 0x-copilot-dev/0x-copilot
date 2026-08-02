@@ -40,6 +40,7 @@ from backend_app.contracts import (
     DeployAuditRequest,
     CreateSkillRequest,
     InstallMcpServerRequest,
+    InternalMcpAccessToken,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
     InternalMcpLeaseFailure,
@@ -73,6 +74,7 @@ from backend_app.contracts import (
     McpServerResponse,
     McpStdioConfig,
     McpStdioRequest,
+    McpTransport,
     OAuthTokenRequest,
     SkillAuditEventRecord,
     SkillListResponse,
@@ -273,19 +275,56 @@ ConnectorAccessResolver = Callable[[McpServerRecord], ConnectorAccessMode | None
 
 
 class ConnectorAccessDenied(Exception):
-    """Raised by the ``proxy_internal_rpc`` access-mode gate (PRD-06 D3c).
+    """Raised by the access-mode gate (PRD-06 D3c) in either credential topology.
 
     ``reason`` is the stable wire code the route layer maps to a ``403``:
 
     * ``connector_access_off``       — the connector is ``off``; no reads, no
       acts. Raised BEFORE the vault token is decrypted.
-    * ``connector_access_read_only`` — the connector is ``read`` and the
-      target tool is not read-only (its ``annotations.readOnlyHint`` is
-      absent or false — fail-closed).
+    * ``connector_access_read_only`` — the connector is ``read`` and the call
+      being authorized cannot be shown to be a read. In ``proxy_internal_rpc``
+      that is a ``tools/call`` whose target tool is not read-only (its
+      ``annotations.readOnlyHint`` is absent or false — fail-closed). In
+      ``mint_internal_access_token`` it is *any* mint: a bearer names no tool
+      and, once handed over, is answerable to nothing on this side, so it can
+      never be shown to be read-only.
+
+    One code for both because it is one refusal — "this connector is
+    read-only and what you asked for is not a read" — and a caller that
+    handles it in the proxy topology should not have to learn a second word
+    for it in the direct-connect one.
     """
 
     OFF = "connector_access_off"
     READ_ONLY = "connector_access_read_only"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class McpAccessTokenUnavailable(Exception):
+    """Raised when a server cannot be answered with a scoped access token.
+
+    Distinct from :class:`ConnectorAccessDenied` (which is a *refusal* — the
+    user turned the connector off) and from
+    :class:`InternalMcpLeaseFailureError` (which is a runtime fault). This one
+    says the server is fine and the caller is entitled, but its shape admits no
+    bearer at all, so it is a conflict rather than a denial or an outage.
+
+    ``reason`` is the stable wire code the route layer maps to a ``409``:
+
+    * ``server_has_no_credential`` — the server authenticates with nothing
+      (``auth_mode == none``), so there is no token to scope down. A caller
+      that wants such a server connects to it unauthenticated; it must not
+      read that as "credentials were withheld".
+    * ``server_has_no_endpoint``   — the server is a local subprocess (stdio,
+      or simply no URL). Its "address" is a command on the backend host, which
+      is meaningless to another service, so no endpoint can be handed out.
+    """
+
+    NO_CREDENTIAL = "server_has_no_credential"
+    NO_ENDPOINT = "server_has_no_endpoint"
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -317,6 +356,18 @@ class InternalMcpLeaseFailureError(ValueError):
 
 class McpRegistryService:
     """Owns MCP registration, auth state, and backend-only credentials."""
+
+    #: Ceiling on the lifetime this service will *state* for a scoped access
+    #: token (``mint_internal_access_token``). The stored credential itself may
+    #: live for an hour or forever; what the caller is told is the earlier of
+    #: that and this. It is the re-authorization interval, and it is the only
+    #: thing that bounds a handed-out bearer: once the plaintext has left this
+    #: process, turning the connector ``off`` cannot claw it back, so the
+    #: window in which an ``off`` (or revoked, or re-scoped) connector is still
+    #: usable is exactly this value. Short enough that a revocation is a
+    #: minutes-scale fact, long enough that a run does not spend its time
+    #: minting.
+    ACCESS_TOKEN_MAX_TTL = timedelta(minutes=5)
 
     def __init__(
         self,
@@ -1554,6 +1605,159 @@ class McpRegistryService:
         self._forget_lease(lease_token)
         return InternalMcpSessionReleaseResponse(outcome=outcome.value)
 
+    def mint_internal_access_token(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+    ) -> InternalMcpAccessToken:
+        """Issue a narrow, short-TTL bearer for one server (direct-connect).
+
+        The counterpart to :meth:`proxy_internal_rpc` for a runtime that opens
+        the MCP server itself instead of tunnelling JSON-RPC through here. It
+        runs the **same** admission sequence, in the same order and for the
+        same reasons — the ordering is the security property, not an accident:
+
+        1. :meth:`_require_server_for_user` — tenant isolation. A server that
+           does not belong to this org *and* this user is not found, so a
+           mis-scoped caller cannot even learn that it exists.
+        2. :meth:`_require_mintable_access_mode` — the PRD-06 D3(c) gate. An
+           ``off`` connector is refused, and so is a ``read`` one, **before**
+           anything is decrypted.
+        3. :meth:`_require_live_server` — disabled / unhealthy / unauthenticated
+           servers have nothing usable to hand out.
+        4. :meth:`_require_valid_token` — the same refresh-on-expiry path the
+           proxy uses, so a token about to lapse is renewed once, centrally,
+           rather than by every caller.
+
+        What deliberately does NOT cross the line: the refresh token, the
+        vault ciphertext, the OAuth client secret, and any configured header
+        value. The caller gets one access token whose stated life is capped at
+        :attr:`ACCESS_TOKEN_MAX_TTL`, so it must come back — and every return
+        trip re-runs this whole sequence.
+
+        What the caller is told, beyond the credential itself, is the access
+        mode the gate evaluated. The mint refuses to issue above that mode, so
+        the field is not the enforcement — it is the record that travels with
+        the credential, and it is what a holder that wants to be stricter than
+        the backend needs in order to be.
+        """
+
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        access_mode = self._require_mintable_access_mode(record)
+        self._require_live_server(record)
+        if record.auth_mode == McpAuthMode.NONE:
+            raise McpAccessTokenUnavailable(McpAccessTokenUnavailable.NO_CREDENTIAL)
+        # Resolved before the token is touched: a stdio server cannot be
+        # direct-connected by another service no matter how valid its
+        # credential is, so decrypting one first would be a pointless
+        # plaintext.
+        if record.url is None or record.transport == McpTransport.STDIO:
+            raise McpAccessTokenUnavailable(McpAccessTokenUnavailable.NO_ENDPOINT)
+        token = self._require_valid_token(record)
+        stated_mode = None if access_mode is None else access_mode.value
+        minted = InternalMcpAccessToken(
+            url=record.url,
+            transport=record.transport,
+            access_token=self.token_vault.decrypt(token.encrypted_access_token),
+            expires_at=self._scoped_token_expiry(token),
+            scopes=record.required_scopes,
+            access_mode=stated_mode,
+        )
+        # A credential left the vault. That is the audit-worthy event here —
+        # there is no primary write to pair it with (a mint is a read), which
+        # is why it stands alone rather than inside a transaction. The mode
+        # rides along because "a credential was released" is only half the
+        # question an auditor asks; the other half is what it was allowed to
+        # do, and that answer must not require re-deriving a connector row's
+        # state as it was minutes ago.
+        self._audit(
+            record,
+            "mcp_access_token_minted",
+            metadata={_Fields.ACCESS_MODE: stated_mode},
+        )
+        return minted
+
+    def _require_mintable_access_mode(
+        self, record: McpServerRecord
+    ) -> ConnectorAccessMode | None:
+        """The access mode a direct-connect bearer may be issued under.
+
+        :meth:`proxy_internal_rpc`'s rule, applied to what a mint can actually
+        see. There, a ``read`` connector still works: every method except a
+        ``tools/call`` is allowed outright, and that one call is classified
+        against the server's advertised annotations and refused **fail-closed**
+        whenever it cannot be shown to be read-only (:meth:`_tool_is_read_only`
+        returns ``False`` for an unknown tool, an absent ``annotations`` block,
+        and — the case that decides this method — a tool it was not told the
+        name of).
+
+        A mint names no method and no tool. What it hands over is the
+        provider's own bearer, and once that plaintext has left this process
+        every call made with it is invisible here: there is no later chokepoint
+        to classify, no way to narrow the credential to reads, and no way to
+        take it back before :attr:`ACCESS_TOKEN_MAX_TTL` runs out. So the
+        fail-closed branch is the only one that fits. Under ``read`` the
+        classification cannot be made, and issuing anyway would grant exactly
+        the writes and deletes the proxy would have refused — which is not a
+        gap in a gate, it is a route around one. It is refused with the same
+        ``connector_access_read_only`` code the proxy answers a refused write
+        with.
+
+        The consequence is deliberate and worth saying plainly: a ``read``
+        connector — the default for a newly projected row — cannot be
+        direct-connected at all. Reads are still fully available to it through
+        the proxy, which can police each one. Widening this is a product
+        decision (a provider that supports downscoped token exchange, or a
+        runtime decision point whose verdicts this service can verify), not a
+        default.
+
+        ``off`` is refused as it is everywhere. ``None`` — no connector row
+        joins this server — is not a user-set mode and does not gate, exactly
+        as in :meth:`proxy_internal_rpc`; it is returned rather than folded
+        into ``read`` so the caller is told that nothing was configured
+        instead of being left to assume which way to read a silence.
+
+        Both refusals land BEFORE the vault is asked for anything, so a
+        connector the user restricted never causes a plaintext credential to
+        exist in this process at all.
+
+        Compared with ``==`` rather than ``is``, as the other two gates are.
+        The resolver is *declared* to return the enum and today's wiring does,
+        but ``ConnectorAccessMode`` is a ``StrEnum``: under ``==`` a resolver
+        that ever hands back the raw column string still denies, while under
+        ``is`` it would silently mint. An identity check is the wrong kind of
+        strict on the deny side of a gate.
+        """
+
+        access_mode = self._resolve_access_mode(record)
+        if access_mode == ConnectorAccessMode.OFF:
+            raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
+        if access_mode == ConnectorAccessMode.READ:
+            raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
+        return access_mode
+
+    def _scoped_token_expiry(self, token: TokenEnvelope) -> datetime:
+        """The earlier of the credential's own expiry and this issue ceiling.
+
+        Never later than the stored token actually lives (which would promise
+        the caller a validity this service cannot deliver) and never later than
+        :attr:`ACCESS_TOKEN_MAX_TTL` (which is what keeps the handed-out bearer
+        narrow). A stored credential that never expires still gets a ceiling —
+        "forever" is not a lifetime to hand across a service boundary.
+        """
+
+        ceiling = datetime.now(timezone.utc) + self.ACCESS_TOKEN_MAX_TTL
+        if token.expires_at is None:
+            return ceiling
+        stored = token.expires_at
+        if stored.tzinfo is None:
+            stored = stored.replace(tzinfo=timezone.utc)
+        return min(stored, ceiling)
+
     @staticmethod
     def _rpc_tool_name(payload: dict[str, object]) -> str | None:
         """Extract the target tool name from a ``tools/call`` JSON-RPC payload."""
@@ -2254,7 +2458,17 @@ class McpRegistryService:
         action: str,
         *,
         conn: Any | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
+        """Append one MCP audit row.
+
+        Every row carries the server's auth state and health, because every
+        MCP event is worth reading against them. ``metadata`` adds whatever
+        else *this* action makes the row about. The two defaults are applied
+        after it and therefore win: a caller can say something they do not
+        cover, never quietly overwrite one that they do.
+        """
+
         self.store.append_audit(
             AuditEventRecord(
                 org_id=record.org_id,
@@ -2262,6 +2476,7 @@ class McpRegistryService:
                 server_id=record.server_id,
                 action=action,
                 metadata={
+                    **(metadata or {}),
                     _Fields.AUTH_STATE: record.auth_state.value,
                     _Fields.HEALTH: record.health.value,
                 },

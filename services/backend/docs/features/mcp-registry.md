@@ -126,16 +126,64 @@ Served at `GET /v1/mcp/catalog` (auth required, org-agnostic).
 
 ## Internal API (consumed by ai-backend)
 
-| Route                                           | What it returns                                                                                            |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `GET /internal/v1/mcp/servers`                  | `InternalMcpServerListResponse` — cards filtered by org, with `auth_state`, `load_cost`, `required_scopes` |
-| `POST /internal/v1/mcp/servers/{id}/auth/start` | Initiates OAuth; returns `McpAuthStartResponse` (ai-backend triggers this during an approval interrupt)    |
-| `GET /internal/v1/mcp/sessions/{id}`            | Returns `InternalMcpClientSession` with `credential_ref`                                                   |
-| `POST /internal/v1/mcp/servers/{id}/rpc`        | JSON-RPC proxy: attaches bearer from vault → forwards to server URL                                        |
+| Route                                             | What it returns                                                                                            |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `GET /internal/v1/mcp/servers`                    | `InternalMcpServerListResponse` — cards filtered by org, with `auth_state`, `load_cost`, `required_scopes` |
+| `POST /internal/v1/mcp/servers/{id}/auth/start`   | Initiates OAuth; returns `McpAuthStartResponse` (ai-backend triggers this during an approval interrupt)    |
+| `GET /internal/v1/mcp/sessions/{id}`              | Returns `InternalMcpClientSession` with `credential_ref`                                                   |
+| `POST /internal/v1/mcp/servers/{id}/rpc`          | JSON-RPC proxy: attaches bearer from vault → forwards to server URL                                        |
+| `POST /internal/v1/mcp/servers/{id}/access-token` | `InternalMcpAccessToken` — a scoped, short-TTL bearer for a runtime that connects directly                 |
 
-The RPC proxy injects the decrypted OAuth token into the upstream request. It does NOT
-return the plaintext token to ai-backend; the proxy call is the only path where tokens
-are momentarily decrypted.
+There are two credential topologies, and they differ in where the plaintext ends up.
+
+**Proxied (`/rpc`).** The proxy injects the decrypted OAuth token into the upstream
+request and returns only the JSON-RPC result. No plaintext credential crosses back to
+ai-backend.
+
+**Direct-connect (`/access-token`).** The runtime opens the MCP server itself, so it
+needs a bearer. `McpRegistryService.mint_internal_access_token` runs the _same_ admission
+sequence as the proxy — tenant scope → PRD-06 D3 access-mode gate (`_require_mintable_access_mode`,
+which refuses before anything is decrypted) → liveness → `_require_valid_token`'s
+refresh-on-expiry — and then answers with `{url, transport, access_token, expires_at,
+scopes, access_mode}`. What stays behind: the refresh token (the response contract has no
+field it could ride, and the contract forbids extras), the vault ciphertext, the OAuth
+client secret, and configured header values. `expires_at` is the earlier of the stored
+credential's own expiry and `McpRegistryService.ACCESS_TOKEN_MAX_TTL`, so the caller
+re-mints on a bounded schedule and the gate is re-evaluated every time.
+
+**The gate is stricter for a mint than for the proxy**, and the asymmetry is the whole
+point. The proxy sees the call it is authorizing: under `ConnectorAccessMode.READ` it lets
+reads through and classifies a `tools/call` against the server's advertised annotations,
+refusing fail-closed anything it cannot show to be read-only. A mint names no method and
+no tool; what it hands over is the provider's own bearer, and from the moment that
+plaintext leaves the process there is no chokepoint left to classify anything, no way to
+narrow the credential to reads, and no way to withdraw it before `ACCESS_TOKEN_MAX_TTL`
+expires. The same fail-closed rule therefore lands on the mint as a whole:
+
+| Access mode | Proxy (`/rpc`)                                      | Mint (`/access-token`)           |
+| ----------- | --------------------------------------------------- | -------------------------------- |
+| `off`       | `403 connector_access_off`                          | `403 connector_access_off`       |
+| `read`      | reads pass; a non-read-only `tools/call` is refused | `403 connector_access_read_only` |
+| `read_act`  | everything passes                                   | mints, `access_mode: "read_act"` |
+| no row      | everything passes                                   | mints, `access_mode: null`       |
+
+Consequences worth stating rather than discovering:
+
+- A `read` connector — the default for a newly projected row — **cannot be
+  direct-connected at all.** Its reads remain fully available through the proxy, which can
+  police each one. Widening this is a product decision (a provider supporting downscoped
+  token exchange, or a runtime decision point whose verdicts the backend can verify), not
+  a default, and it must not be re-introduced as an unenforced note in a docstring.
+- `access_mode` on the response is the mode the gate evaluated, not a second enforcement
+  point — the mint already refused everything above it. It exists so the authority a
+  credential was released under travels with the credential, is written to the
+  `mcp_access_token_minted` audit row, and gives a holder that wants to be stricter than
+  the backend what it needs to be. `null` means no connector row joins the server: nothing
+  was configured, so nothing gated.
+- A server with `auth_mode=none` (nothing to scope down) or a stdio server (no endpoint
+  another service could use) is answered `409` with a stable reason code
+  (`server_has_no_credential` / `server_has_no_endpoint`), not `403` — the caller is
+  entitled to the server; its shape simply admits no bearer.
 
 ---
 
