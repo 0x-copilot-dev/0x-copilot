@@ -15,10 +15,11 @@ live stack. When the flag is off, :meth:`McpPerToolRegistrar.build` returns
 ``None`` before touching anything, and the factory's legacy branch runs
 untouched.
 
-**ON does not mean "assume the credential plane works".** The desktop
-:class:`~agent_runtime.capabilities.mcp.credentials.desktop.DesktopKeychainCredentialProvider`
-is currently blocked — nothing writes an ``mcp`` keychain record yet (P2-7a) —
-so the collaborators are *injected*, and their absence is an ordinary,
+**ON does not mean "assume the credential plane works".** The provider may
+simply not be composed for this run —
+:class:`~agent_runtime.capabilities.mcp.credentials.backend.BackendCredentialProvider`
+needs a reachable backend and a mintable access mode — so the collaborators are
+*injected*, and their absence is an ordinary,
 first-class outcome: ``build`` returns ``None`` and the run falls back to the
 legacy gateway. The same is true when the load produces no tools at all. The
 alternative — registering an empty or half-built connector surface because the
