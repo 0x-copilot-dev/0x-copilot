@@ -685,6 +685,12 @@ def gate_rows(stream: list[dict[str, Any]], event_type: str) -> list[dict[str, A
     ]
 
 
+#: The only tools whose result can mean an external change actually happened.
+#: A filesystem read of the MCP catalog is not one, however many connector op
+#: names its content contains.
+DISPATCH_TOOLS: Final = frozenset({"call_mcp_tool"})
+
+
 def write_evidence(stream: list[dict[str, Any]], ops: set[str]) -> dict[str, Any]:
     """Did the declined write stay declined?
 
@@ -709,6 +715,17 @@ def write_evidence(stream: list[dict[str, Any]], ops: set[str]) -> dict[str, Any
             if code == PERMISSION_DENIED_CODE or message == WRITE_DECLINED_COPY:
                 refusals.append({"event": name, "code": code, "safe_message": message})
         if name not in RESULT_EVENTS:
+            continue
+        if str(payload.get("tool_name") or "") not in DISPATCH_TOOLS:
+            # Only a connector dispatch can execute a write. Scanning EVERY
+            # tool result made this fire on `grep` and `read_file` over
+            # `/mcp/<server>/tools/*.json` — the connector's own descriptors,
+            # which contain `create_issue`, `save_issue` and friends as ordinary
+            # text. Live, that reported a "possible silent write" for a run in
+            # which the write was correctly declined and nothing was sent.
+            # Same false positive the FS-F issue-key detector had, from the same
+            # cause: the catalog is browsable now, so connector op names appear
+            # in file content.
             continue
         status = str(payload.get("status") or "")
         blob = json.dumps(payload, default=str)
