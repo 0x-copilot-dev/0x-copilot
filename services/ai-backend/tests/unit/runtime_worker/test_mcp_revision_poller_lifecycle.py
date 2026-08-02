@@ -146,64 +146,86 @@ class _Poller:
         self.stops += 1
 
 
-async def test_runtime_worker_starts_and_stops_poller_before_returning() -> None:
-    poller = _Poller()
-    worker = object.__new__(RuntimeWorker)
-    worker._mcp_revision_poller = poller
-    worker._provider_circuit_snapshot = None
+class IdleWorkerMixin:
+    """A ``RuntimeWorker`` skeleton whose loop never finds anything to claim.
 
-    async def idle() -> bool:
-        return False
+    ``run_forever`` reads the queue seams directly rather than going through
+    ``run_once``, because it dispatches each claim as its own task so a cancel
+    command can be claimed while a run is still executing. These tests are about
+    the poller's start/stop bookends, not about claiming, so the skeleton answers
+    "nothing to do" for every seam one idle pass touches.
+    """
 
-    worker.run_once = idle  # type: ignore[method-assign]
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(
-            worker.run_forever(poll_interval_seconds=60), timeout=0.01
+    @staticmethod
+    def idle_worker(**attributes: object) -> RuntimeWorker:
+        worker = object.__new__(RuntimeWorker)
+        worker._sandbox_recovery_reaper = None
+        worker._evaluation_projection_runner = None
+        worker._max_inflight_claims = 1
+        for name, value in attributes.items():
+            setattr(worker, name, value)
+
+        async def _nothing_claimable() -> None:
+            return None
+
+        worker._claim_next = _nothing_claimable  # type: ignore[method-assign]
+        return worker
+
+
+class TestRuntimeWorkerPollerLifecycle(IdleWorkerMixin):
+    async def test_runtime_worker_starts_and_stops_poller_before_returning(
+        self,
+    ) -> None:
+        poller = _Poller()
+        worker = self.idle_worker(
+            _mcp_revision_poller=poller, _provider_circuit_snapshot=None
         )
 
-    assert (poller.starts, poller.stops) == (1, 1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                worker.run_forever(poll_interval_seconds=60), timeout=0.01
+            )
 
+        assert (poller.starts, poller.stops) == (1, 1)
 
-async def test_runtime_worker_stops_poller_before_flushing_other_lifecycle() -> None:
-    order: list[str] = []
+    async def test_runtime_worker_stops_poller_before_flushing_other_lifecycle(
+        self,
+    ) -> None:
+        order: list[str] = []
 
-    class OrderedPoller(_Poller):
-        async def stop(self) -> None:
-            await super().stop()
-            order.append("poller")
+        class OrderedPoller(_Poller):
+            async def stop(self) -> None:
+                await super().stop()
+                order.append("poller")
 
-    class Snapshot:
-        def flush(self, _health: object) -> None:
-            order.append("snapshot")
+        class Snapshot:
+            def flush(self, _health: object) -> None:
+                order.append("snapshot")
 
-    worker = object.__new__(RuntimeWorker)
-    worker._mcp_revision_poller = OrderedPoller()
-    worker._provider_circuit_snapshot = Snapshot()
-    worker._provider_circuit_health = object()
-
-    async def idle() -> bool:
-        return False
-
-    worker.run_once = idle  # type: ignore[method-assign]
-    with pytest.raises(TimeoutError):
-        await asyncio.wait_for(
-            worker.run_forever(poll_interval_seconds=60), timeout=0.01
+        worker = self.idle_worker(
+            _mcp_revision_poller=OrderedPoller(),
+            _provider_circuit_snapshot=Snapshot(),
+            _provider_circuit_health=object(),
         )
 
-    assert order == ["poller", "snapshot"]
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                worker.run_forever(poll_interval_seconds=60), timeout=0.01
+            )
 
+        assert order == ["poller", "snapshot"]
 
-async def test_runtime_worker_drains_poller_when_startup_fails() -> None:
-    class FailingPoller(_Poller):
-        async def start(self) -> None:
-            self.starts += 1
-            raise RuntimeError("feed startup failed")
+    async def test_runtime_worker_drains_poller_when_startup_fails(self) -> None:
+        class FailingPoller(_Poller):
+            async def start(self) -> None:
+                self.starts += 1
+                raise RuntimeError("feed startup failed")
 
-    poller = FailingPoller()
-    worker = object.__new__(RuntimeWorker)
-    worker._mcp_revision_poller = poller
-    worker._provider_circuit_snapshot = None
+        poller = FailingPoller()
+        worker = self.idle_worker(
+            _mcp_revision_poller=poller, _provider_circuit_snapshot=None
+        )
 
-    with pytest.raises(RuntimeError, match="feed startup failed"):
-        await worker.run_forever(poll_interval_seconds=60)
-    assert (poller.starts, poller.stops) == (1, 1)
+        with pytest.raises(RuntimeError, match="feed startup failed"):
+            await worker.run_forever(poll_interval_seconds=60)
+        assert (poller.starts, poller.stops) == (1, 1)

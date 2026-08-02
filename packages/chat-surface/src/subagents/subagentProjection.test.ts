@@ -12,6 +12,7 @@ import type {
   RuntimeEventEnvelope,
 } from "@0x-copilot/api-types";
 
+import { isRunningStatus } from "../workspace/workspaceHelpers";
 import { projectSubagents } from "./subagentProjection";
 
 let nextSeq = 0;
@@ -111,6 +112,66 @@ describe("projectSubagents", () => {
     expect(fleet.total).toBe(2);
     expect(out.subagents.get("t1")?.status).toBe("completed");
     expect(out.subagents.get("t2")?.status).toBe("running");
+  });
+
+  // The client half of "Stop must stop". The worker closes every subagent a
+  // cancelled run left open (`close_open_subagents_as_cancelled`), and the ONLY
+  // thing that makes that terminal frame clear the cockpit is this reduction:
+  // `cancelled` has to land as a terminal status, not fall back to `running`.
+  // Assert through `isRunningStatus` — the predicate `RunWorkspaceRail` counts
+  // with — rather than restating the status word, so a divergence between the
+  // projection and the badge cannot pass.
+  it("closes a cancelled child so the Agents 'N live' count clears", () => {
+    nextSeq = 0;
+    const out = projectSubagents([
+      evt("subagent_fleet_started", {
+        source: "main_agent",
+        payload: { fleet_id: "f", agent_ids: ["a"] },
+      }),
+      child("subagent_started", "t1", { payload: { parent_fleet_id: "f" } }),
+      child("subagent_completed", "t1", {
+        status: "cancelled",
+        payload: {
+          parent_fleet_id: "f",
+          status: "cancelled",
+          summary: "Stopped when the run was cancelled.",
+        },
+      }),
+      evt("subagent_fleet_finished", {
+        source: "main_agent",
+        payload: { fleet_id: "f" },
+      }),
+    ]);
+
+    expect(out.subagents.get("t1")?.status).toBe("cancelled");
+    const live = [...out.subagents.values()].filter((entry) =>
+      isRunningStatus(entry.status),
+    );
+    expect(live).toHaveLength(0);
+    expect(out.fleets[0].running).toBe(0);
+    expect(out.fleets[0].done).toBe(1);
+    // A cancelled child is not a success — the fleet chrome must not claim one.
+    expect(out.fleets[0].failed).toBe(1);
+  });
+
+  it("closes a child on a status-less subagent_completed, labelling it completed", () => {
+    // The degraded case, and the reduction only holds one way. The projection
+    // reads the ENVELOPE's `status` and never `payload.status`, so a frame that
+    // reaches the client without the projected field falls back to `completed`:
+    // the count still clears — that is the property that matters, and the whole
+    // reason a missing status cannot strand a spinning card — but the label is
+    // then wrong for a cancelled child. Pinned rather than glossed, so anyone
+    // who assumes the payload is a second source of truth is corrected here.
+    nextSeq = 0;
+    const out = projectSubagents([
+      child("subagent_started", "t1"),
+      child("subagent_completed", "t1", { payload: { status: "cancelled" } }),
+    ]);
+
+    const entry = out.subagents.get("t1");
+    expect(entry).toBeDefined();
+    expect(isRunningStatus(entry!.status)).toBe(false);
+    expect(entry!.status).toBe("completed");
   });
 
   it("records fleet elapsed + finished on subagent_fleet_finished", () => {

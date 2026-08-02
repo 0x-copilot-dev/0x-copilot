@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 import logging
 import os
-from typing import Protocol
+from typing import Final, Protocol
 from uuid import uuid4
 
 from opentelemetry import trace as otel_trace
@@ -85,6 +85,7 @@ from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
+from runtime_worker.run_cancellation import LiveRunRegistry
 from runtime_worker.e2_rollout_admission import (
     E2RolloutEffectCommitHandler,
     E2RolloutStageCommitHandler,
@@ -166,6 +167,23 @@ class BackgroundJobRunnerPort(Protocol):
 
 class RuntimeWorker:
     """Claim and process queued runtime commands with bounded concurrency."""
+
+    #: How many claims may be in flight *beyond* the execution width. It is a
+    #: queue-depth bound, not a concurrency bound — ``_semaphore`` is the
+    #: concurrency bound, and control commands bypass it. The headroom exists so
+    #: a cancel command can still be *claimed* while every execution slot is
+    #: busy, which is the one moment cancellation matters most.
+    CONTROL_CLAIM_HEADROOM: Final[int] = 8
+
+    #: Command families that execute a run's graph, and are therefore what a
+    #: cancel command must be able to reach. Registered in the live-run registry
+    #: for exactly as long as their handler is inside the claim.
+    _RUN_EXECUTION_COMMAND_TYPES: Final[frozenset[str]] = frozenset(
+        {
+            PersistenceValues.EventType.RUN_REQUESTED,
+            PersistenceValues.EventType.APPROVAL_RESOLVED,
+        }
+    )
 
     def __init__(
         self,
@@ -345,6 +363,11 @@ class RuntimeWorker:
             else None
         )
         self.live_batch_admissions = live_batch_admissions
+        # The same join, one level up: which runs are *executing* in this
+        # process. Unlike F6 it is unconditional, because the thing it stops is
+        # not an optional subsystem — it is the run, and with it every subagent
+        # the run is awaiting in-process. See ``runtime_worker.run_cancellation``.
+        self.live_runs = LiveRunRegistry()
         model_invocation_composer = ModelInvocationWorkerComposer(
             settings=self.settings,
             persistence=self.persistence,
@@ -481,6 +504,7 @@ class RuntimeWorker:
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             live_batch_admissions=live_batch_admissions,
+            live_runs=self.live_runs,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -613,6 +637,9 @@ class RuntimeWorker:
                 ),
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
+        self._max_inflight_claims = (
+            self.settings.execution.max_parallel_runs + self.CONTROL_CLAIM_HEADROOM
+        )
         self.logger = logging.getLogger("runtime_worker")
         self._sandbox_recovery_reaper = self._build_sandbox_recovery_reaper()
         self._evaluation_projection_runner = evaluation_projection_runner
@@ -868,24 +895,93 @@ class RuntimeWorker:
             await self._handle_claim(claim)
 
     async def run_forever(self, *, poll_interval_seconds: float = 1.0) -> None:
-        """Continuously process queue claims."""
+        """Continuously process queue claims, dispatching each concurrently.
 
+        The loop returns to the queue instead of awaiting the handler, and that
+        is not a throughput choice. A run executes for as long as its model and
+        tools take; a loop that awaits it cannot claim anything else meanwhile,
+        so the ``run_cancel_requested`` command the Stop button enqueues would
+        not be *claimed* until the run it cancels had already finished. Every
+        handler-level proof of cancellation is vacuous above a loop like that,
+        and in the single-worker desktop topology it made Stop a no-op.
+
+        Concurrency is bounded twice over: ``_semaphore`` bounds executing work
+        at ``max_parallel_runs``, and ``_max_inflight_claims`` bounds how much of
+        a deep queue is pulled into memory. Control commands bypass the first —
+        see :meth:`_bypasses_execution_limit`.
+        """
+
+        inflight: set[asyncio.Task[None]] = set()
         try:
             if self._mcp_revision_poller is not None:
                 await self._mcp_revision_poller.start()
             while True:
-                did_work = await self.run_once()
-                if not did_work:
+                await self._reap_sandbox_cleanup()
+                projected = await self._run_evaluation_projection_once()
+                claim = (
+                    await self._claim_next()
+                    if len(inflight) < self._max_inflight_claims
+                    else None
+                )
+                if claim is not None:
+                    task = asyncio.create_task(self._dispatch_claim(claim))
+                    inflight.add(task)
+                    task.add_done_callback(inflight.discard)
+                    continue
+                if not projected:
                     await asyncio.sleep(poll_interval_seconds)
         finally:
+            await self._abandon_inflight(inflight)
             if self._mcp_revision_poller is not None:
                 await self._mcp_revision_poller.stop()
             if self._provider_circuit_snapshot is not None:
                 self._provider_circuit_snapshot.flush(self._provider_circuit_health)
 
+    async def _dispatch_claim(self, claim: RuntimeWorkerClaim) -> None:
+        """Handle one claim, applying the execution limit only where it belongs."""
+
+        if self._bypasses_execution_limit(claim):
+            await self._handle_claim(claim)
+            return
+        await self._handle_claim_with_limit(claim)
+
+    @classmethod
+    def _bypasses_execution_limit(cls, claim: RuntimeWorkerClaim) -> bool:
+        """Return whether this claim may skip the execution semaphore.
+
+        Only cancellation does. The semaphore bounds *work*, and a cancel
+        command is the thing that removes work — making it queue behind the very
+        runs it exists to stop reintroduces, under saturation, exactly the wedge
+        the concurrent loop above was written to remove.
+        """
+
+        return claim.command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED
+
+    async def _abandon_inflight(self, inflight: set[asyncio.Task[None]]) -> None:
+        """Cancel and reap outstanding claim tasks when the loop exits.
+
+        These are worker-shutdown cancellations, not run cancellations: the
+        handles were never marked ``cancel_requested``, so each claim stays
+        unsettled and the queue replays it — the behaviour a killed worker had
+        before this loop dispatched concurrently.
+        """
+
+        for task in tuple(inflight):
+            task.cancel()
+        if inflight:
+            await asyncio.gather(*tuple(inflight), return_exceptions=True)
+
     async def _handle_claim(self, claim: RuntimeWorkerClaim) -> None:
         """Dispatch the claim and mark it complete, retry, or dead-letter on error."""
         prepared: _PreparedWorkerDispatch | None = None
+        # Published for exactly as long as this task is inside the handler, so a
+        # cancel claim landing in the same process can reach the coroutine that
+        # is executing the run — and therefore the subagent it is awaiting.
+        live_run = (
+            self.live_runs.register(run_id=claim.run_id, task=asyncio.current_task())
+            if claim.command_type in self._RUN_EXECUTION_COMMAND_TYPES
+            else None
+        )
         try:
             prepared = self._prepare_dispatch(claim)
             await self._invoke_prepared_dispatch(prepared)
@@ -902,6 +998,20 @@ class RuntimeWorker:
                 retry_permitted=self._retry_permitted(prepared),
             )
             return
+        except asyncio.CancelledError:
+            # Cancellation is a BaseException, so the handler below never saw
+            # it and the claim was left unsettled — harmless when a dying worker
+            # wants the queue to replay the run, and a resurrection bug when the
+            # user cancelled it: the lock expires, the command replays, and a run
+            # the user stopped starts over. Settle it only for the cancellation
+            # this process authorised.
+            if live_run is not None and live_run.cancel_requested:
+                await self.queue.mark_complete(
+                    result=RuntimeWorkerResult(
+                        command_id=claim.command_id, succeeded=True
+                    )
+                )
+            raise
         except Exception:
             self.logger.exception(
                 "runtime worker command crashed command_id=%s command_type=%s run_id=%s",
@@ -920,6 +1030,8 @@ class RuntimeWorker:
                 retry_permitted=self._retry_permitted(prepared),
             )
             return
+        finally:
+            self.live_runs.release(live_run)
         await self.queue.mark_complete(
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
         )

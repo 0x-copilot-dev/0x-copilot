@@ -20,12 +20,14 @@ from agent_runtime.observability.usage_recorder import (
 )
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from runtime_api.schemas import (
+    ACTIVE_RUN_STATUSES,
     AgentRunStatus,
     RuntimeCancelCommand,
 )
 from runtime_worker.batch_concurrency_composition import LiveBatchAdmissionRegistry
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
+from runtime_worker.run_cancellation import LiveRunRegistry
 from runtime_worker.run_control import RunControlPlaneBuilder
 from runtime_worker.run_metrics import AssistantRunMetrics
 
@@ -44,6 +46,7 @@ class RuntimeCancelHandler:
         usage_recorder: UsageRecorder | None = None,
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
+        live_runs: LiveRunRegistry | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -60,6 +63,10 @@ class RuntimeCancelHandler:
         # ``None`` — the default, and what an unconfigured deployment gets —
         # means this handler behaves exactly as it did before W4.
         self._live_batch_admissions = live_batch_admissions
+        # The run itself executing in *this* process. Stopping it is the only
+        # thing that stops an in-process subagent, because the ``task`` tool
+        # awaits the child graph inside the parent's own tool call.
+        self._live_runs = live_runs
         self._budget_charger = BudgetCharger(self.persistence)
         self.usage_recorder: UsageRecorder = usage_recorder or NullUsageRecorder()
         self._model_invocation_terminal = (
@@ -86,11 +93,15 @@ class RuntimeCancelHandler:
             else None
         )
         if run.status is not AgentRunStatus.CANCELLED:
-            if run.status not in {
-                AgentRunStatus.QUEUED,
-                AgentRunStatus.RUNNING,
-                AgentRunStatus.WAITING_FOR_APPROVAL,
-            }:
+            # ``ACTIVE_RUN_STATUSES`` rather than a re-typed tuple, and that is
+            # the whole fix for the bug this guard used to be: the re-typed copy
+            # omitted ``CANCELLING``, which is the only status a cancel command
+            # ever arrives on — ``RunCoordinator.cancel_run`` flips the run to
+            # ``cancelling`` *before* enqueueing the command. So this handler
+            # returned early on every Stop a user ever pressed, and the run sat
+            # in ``cancelling`` until it finished on its own. The shared
+            # constant exists precisely to stop this literal drifting.
+            if run.status not in ACTIVE_RUN_STATUSES:
                 return
             # W4 — F6.6's cancellation, on the path a run is actually cancelled
             # by. Its position before the status flip and the terminal event is
@@ -110,6 +121,15 @@ class RuntimeCancelHandler:
             # Inside the status guard, so a repeated cancel command does not
             # re-cancel a run that is already terminal.
             await self._cancel_live_batches(run.run_id)
+            # Then the run itself, and — because subagents are in-process —
+            # every subagent it is awaiting. The drain is awaited *before* the
+            # status flip and the terminal event on purpose: the run's own
+            # cancellation path settles its in-flight tool calls and closes its
+            # open subagent cards, and those are causal facts that must land
+            # inside the sealed prefix. Emitted after the terminal event they
+            # would be durable and invisible, because a client's stream closes
+            # on the seal. See ``agent_runtime.api.ledger_seal``.
+            await self._cancel_live_run(run.run_id)
             run = await with_optimistic_retry(
                 lambda: self.persistence.update_run_status(
                     run_id=command.run_id,
@@ -184,3 +204,17 @@ class RuntimeCancelHandler:
         # ``acancel`` is total, so no exception from a run that is already over
         # can stop it from becoming terminal.
         await admission.acancel()
+
+    async def _cancel_live_run(self, run_id: str) -> None:
+        """Stop this run's graph execution in this process, if it is here.
+
+        The same honest degradation as ``_cancel_live_batches``: a miss is the
+        ordinary multi-worker case, not a fault, and it leaves this handler
+        doing exactly what it did before — record the cancellation and let the
+        run finish wherever it is actually running. What a miss must never do is
+        pretend, so nothing here reports a stopped run it did not stop.
+        """
+
+        if self._live_runs is None:
+            return
+        await self._live_runs.cancel(run_id)
