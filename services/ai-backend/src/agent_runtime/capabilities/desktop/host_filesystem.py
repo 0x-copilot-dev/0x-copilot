@@ -120,6 +120,19 @@ if TYPE_CHECKING:
 #: unqualified host-write allow in a rule set whose whole point is that host
 #: writes go through the staged, ledgered lane. Keep this list to prefixes the
 #: composite genuinely owns.
+#: ``/mcp/`` earns its place the same way: it is a real ``CompositeBackend``
+#: route (``McpCatalogBackend.PATH_PREFIX``) serving the connector catalog the
+#: agent itself published this run. Omitting it was a live bug, not a
+#: theoretical one — the catalog landed 52 tool files on disk and then rule 4
+#: charged the model a consent card to read ITS OWN index: one for
+#: ``/mcp/linear/SERVER.md``, one per ``grep`` over ``/mcp/linear/tools``. The
+#: errand parked at the first card and returned no data, which reads to a user
+#: as "the connector is broken". Approval fatigue of exactly the kind the
+#: catalog exists to remove.
+#:
+#: The write half of this allow is inert rather than trusted: ``McpCatalogBackend``
+#: refuses write, edit and delete itself, so the catalog is read-only to the
+#: model whatever this rule says.
 VIRTUAL_NAMESPACES: Final[tuple[str, ...]] = (
     "/memories/",
     "/policies/",
@@ -128,6 +141,7 @@ VIRTUAL_NAMESPACES: Final[tuple[str, ...]] = (
     "/subagents/",
     "/large_tool_results/",
     "/workspace/",
+    "/mcp/",
 )
 
 #: Deep Agents filesystem operations we write rules for. Kept explicit rather

@@ -186,6 +186,8 @@ class TestTheAgentsOwnNamespaces(RuleSetMixin):
             "/subagents/researcher/out.json",
             "/large_tool_results/abc",
             "/workspace/proj/file.txt",
+            "/mcp/linear/SERVER.md",
+            "/mcp/linear/tools/list_issues.json",
         ],
     )
     def test_agent_bookkeeping_never_prompts_the_user(self, path: str) -> None:
@@ -193,6 +195,22 @@ class TestTheAgentsOwnNamespaces(RuleSetMixin):
 
         assert self.verdict(path) == "allow"
         assert self.verdict(path, operation="write") == "allow"
+
+    def test_the_mcp_catalog_route_is_covered_by_its_own_prefix(self) -> None:
+        """The literal above must stay the route the catalog actually mounts.
+
+        These are two independent spellings of one path — the permission list
+        here, and ``McpCatalogBackend.PATH_PREFIX`` in the composite. When they
+        drifted, the live cost was not an error but a consent card per catalog
+        read: the model published 52 tool files and was then asked to approve
+        reading its own index, once for ``SERVER.md`` and once per ``grep``.
+        The errand parked on the first card and returned nothing.
+        """
+
+        from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
+
+        route = McpCatalogBackend.PATH_PREFIX.rstrip("/")
+        assert f"{route}/" in VIRTUAL_NAMESPACES
 
     @pytest.mark.parametrize("prefix", VIRTUAL_NAMESPACES)
     def test_listing_the_namespace_itself_never_prompts_either(
