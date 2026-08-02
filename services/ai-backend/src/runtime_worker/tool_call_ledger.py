@@ -55,8 +55,10 @@ class ToolCallEntry:
     # silently halved every configured cap.
     budget_scoped: bool = False
     # Connector that owned this tool — the dispatcher's MCP server name for a
-    # ``call_mcp_tool`` invocation, ``None`` for a native tool. Set at
-    # :meth:`ToolCallLedger.started` from ``McpDispatcherUnwrap`` (PRD-08 D1b).
+    # ``call_mcp_tool`` invocation, the run's registration map for a per-tool
+    # MCP call, ``None`` for a native tool. Set at
+    # :meth:`ToolCallLedger.started` from
+    # ``StreamMessageProcessor.connector_slug_for_payload`` (PRD-08 D1b, P2-6).
     connector_slug: str | None = None
     # ``True`` once this entry has been popped as the "originating tool"
     # for an LLM call's attribution. Prevents double-attribution when
