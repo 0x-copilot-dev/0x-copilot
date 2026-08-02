@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Final
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -42,6 +42,7 @@ from tenacity import (
 )
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
+from agent_runtime.hyperparameters.contracts import RetryHyperparameters
 from pydantic import ConfigDict
 
 
@@ -53,6 +54,17 @@ _NEVER_RETRY: tuple[type[BaseException], ...] = (
     KeyboardInterrupt,
     SystemExit,
 )
+
+
+#: The ``retry`` section of ``hyperparameters.json``, whose declared defaults
+#: are the three knobs on :class:`RetryingTool`. Before this binding the same
+#: ``3`` was written twice — on the class and again at the
+#: ``RetryingTool.wrapping(..., max_attempts=3)`` call in
+#: ``runtime_worker/dependencies.py`` — with nothing making the two agree.
+#: Module level rather than a class attribute because ``RetryingTool`` is a
+#: Pydantic model, where an underscore-prefixed class attribute is claimed as a
+#: private attribute instead of staying an ordinary constant.
+_RETRY_POLICY: Final = RetryHyperparameters()
 
 
 class RetryingTool(DelegatingTool):
@@ -77,9 +89,9 @@ class RetryingTool(DelegatingTool):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     inner: BaseTool
-    max_attempts: int = 3
-    initial_backoff_seconds: float = 0.5
-    max_backoff_seconds: float = 4.0
+    max_attempts: int = _RETRY_POLICY.max_attempts
+    initial_backoff_seconds: float = _RETRY_POLICY.initial_backoff_seconds
+    max_backoff_seconds: float = _RETRY_POLICY.max_backoff_seconds
     # Retried by default. Callers can narrow (e.g. ``(httpx.ConnectError,)``)
     # to avoid masking permanent failures. ``_NEVER_RETRY`` always wins.
     retry_exceptions: tuple[type[BaseException], ...] = (Exception,)

@@ -85,7 +85,17 @@ class Values:
 
 
 class Defaults:
-    """Default task and lifecycle limits."""
+    """Default task and lifecycle limits.
+
+    ``hyperparameters.json`` states these two under ``subagents`` but NOTHING in
+    this package can read them: the document's fields take their ``le=``
+    ceilings from :class:`Limits` below, and importing the document from
+    anywhere inside ``delegation.subagents`` closes a cycle through this
+    package's eager ``__init__`` (``__init__`` -> ``contracts`` -> the document
+    -> ``constants`` -> ``__init__``). Until the document takes those ceilings
+    from a module outside this package, the two values below are the live ones
+    and the document's copies are inert.
+    """
 
     OUTPUT_FORMAT = Values.OutputFormat.TEXT
     SUBAGENT_TIMEOUT_SECONDS = 120

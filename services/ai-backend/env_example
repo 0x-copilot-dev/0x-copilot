@@ -6,7 +6,6 @@ RUNTIME_ENVIRONMENT=development
 RUNTIME_DEFAULT_PROVIDER=openai
 RUNTIME_DEFAULT_MODEL=gpt-5.4-mini
 RUNTIME_DEFAULT_TEMPERATURE=0
-RUNTIME_DEFAULT_TIMEOUT_SECONDS=180
 RUNTIME_DEFAULT_MAX_INPUT_TOKENS=128000
 RUNTIME_DEFAULT_SUPPORTS_STREAMING=true
 RUNTIME_DEFAULT_REASONING_ENABLED=true
@@ -18,16 +17,10 @@ RUNTIME_DEFAULT_REASONING_INCLUDE_ENCRYPTED_CONTENT=
 RUNTIME_DEFAULT_THINKING_MODE=
 RUNTIME_PRESENTATION_MODEL=gpt-4.1-nano
 RUNTIME_PRESENTATION_TIMEOUT_SECONDS=1.5
-RUNTIME_MAX_RETRIES=2
-RUNTIME_MAX_PARALLEL_RUNS=4
-RUNTIME_MAX_PARALLEL_SUBAGENTS=4
 # Per-tool call cap for one run. Drives both the prompt the model is
 # given and the hard-enforced runtime_tool_budgets seed row.
-RUNTIME_TOOL_CALL_BUDGET=10
 RUNTIME_STORE_BACKEND=in_memory
 DATABASE_URL=
-RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
-RUNTIME_WORKER_LOCK_SECONDS=60
 RUNTIME_START_IN_PROCESS_WORKER=true
 RUNTIME_ALLOW_EMPTY_CAPABILITIES=false
 # --- E2 independent rollout lanes ------------------------------------------
@@ -53,8 +46,6 @@ BROWSER_ADAPTER_MODE=off
 RUNTIME_EVENT_WRITE_CONSOLIDATED=true
 # P4 Stage 2 — worker-side MODEL_DELTA coalesce window (ms). 0 = disabled
 # (default; ships dark). Recommended 50 once measured on staging.
-RUNTIME_DELTA_COALESCE_WINDOW_MS=0
-RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
 # P2 — SSE event-bus backend. Default is ``auto`` (resolves to ``postgres``
 # when DATABASE_URL is configured, else ``in_memory``). Dev pins
 # ``in_memory`` here because dev typically runs API + worker in one

@@ -118,7 +118,7 @@ hard-coded pair moves.
 PRD AC2: `max_retries 2`, `max_parallel_runs 4`, `max_parallel_tasks 4`, `max_parallel_subagents 4`,
 `tool_call_budget` (`:207`), `worker_poll_interval_seconds 1`, `worker_lock_seconds 60`,
 `delta_coalesce_window_ms 0` (`:216`), `delta_coalesce_max_chunks 64` (`:219`). Also
-`RuntimeSettings.default_timeout_seconds 60` (`:360`) and
+`RuntimeSettings.default_timeout_seconds` (`:360`; the field default reads 60 but `env_example` ships `RUNTIME_DEFAULT_TIMEOUT_SECONDS=180`, so **180** is the effective value the document must carry) and
 `RuntimeSkillSettings.cache_ttl_seconds 60` (`:318`).
 
 ---
@@ -166,7 +166,7 @@ The document is grouped by the subsystem that owns each number, not flattened:
     "max_parallel_tasks": 4,
     "max_parallel_subagents": 4,
     "tool_call_budget": 40,
-    "default_timeout_seconds": 60.0,
+    "default_timeout_seconds": 180.0,
     "delta_coalesce_window_ms": 0,
     "delta_coalesce_max_chunks": 64,
     "worker_poll_interval_seconds": 1.0,

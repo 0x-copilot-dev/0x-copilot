@@ -30,6 +30,14 @@ class Keys:
 class Defaults:
     """Default limits and placeholders for stream projection."""
 
+    # NOT bound to ``hyperparameters.json``'s ``observability`` section, though
+    # the value is stated there. This module sits inside the import closure of
+    # ``execution/contracts.py``, and the document's contracts import
+    # ``delegation.subagents.constants`` for their ``le=`` ceilings — whose
+    # package ``__init__`` imports ``delegation.subagents.contracts``, which
+    # imports ``execution.contracts``. Importing the document here closes that
+    # cycle and every module in the service fails to load. The value also has no
+    # reader anywhere in ``src`` today.
     MAX_STREAM_FIELD_LENGTH = 2_000
     REDACTED = "[redacted]"
     TRUNCATED = "[truncated]"

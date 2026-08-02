@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from typing import Final
 
+from agent_runtime.hyperparameters.contracts import McpLoadingHyperparameters
 from agent_runtime.prompts.tools import (
     AUTH_MCP_TOOL_DESCRIPTION as _AUTH_MCP_TOOL_DESCRIPTION,
     CALL_MCP_TOOL_DESCRIPTION as _CALL_MCP_TOOL_DESCRIPTION,
@@ -273,11 +275,26 @@ class Limits:
 
 
 class Defaults:
-    """Default runtime limits for MCP loading."""
+    """Default runtime limits for MCP loading, owned by ``hyperparameters.json``.
 
-    MAX_RESOURCE_DESCRIPTORS = 100
-    MAX_TOOL_DESCRIPTORS = 100
-    TIMEOUT_SECONDS = 30
+    These are the ``mcp_loading`` section's declared defaults, bound here to the
+    ``McpLoader`` dataclass field defaults a frozen dataclass cannot receive by
+    injection. They are not a second copy: ``tests/unit/agent_runtime/
+    hyperparameters/test_document.py`` asserts the model defaults equal the
+    checked-in document field-for-field, so editing the JSON without editing the
+    model fails there rather than leaving the two silently disagreeing.
+
+    A composition root that has loaded the document (env overrides included)
+    passes the values explicitly to ``McpLoader``; these apply to every other
+    construction. ``McpLoader``'s own construction site is not yet wired — see
+    ``execution/factory.py``.
+    """
+
+    _SECTION: Final = McpLoadingHyperparameters()
+
+    MAX_RESOURCE_DESCRIPTORS = _SECTION.max_resource_descriptors
+    MAX_TOOL_DESCRIPTORS = _SECTION.max_tool_descriptors
+    TIMEOUT_SECONDS = _SECTION.timeout_seconds
 
 
 class Patterns:

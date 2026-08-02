@@ -39,6 +39,7 @@ from typing import Protocol, runtime_checkable
 
 from agent_runtime.api.constants import Values
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.hyperparameters.contracts import ContextHyperparameters
 
 # Accepts the full ``/large_tool_results/<sha>`` locator as well as the forms a
 # composite backend leaves after stripping its own prefix (``/<sha>``, ``<sha>``).
@@ -93,7 +94,8 @@ class ContentAddressedOffloadWriter(ABC):
     """
 
     #: Characters of inline peek persisted beside the blob. Never authoritative.
-    PREVIEW_CHARS = 200
+    #: Owned by the ``context`` section of ``hyperparameters.json``.
+    PREVIEW_CHARS = ContextHyperparameters().offload_preview_chars
     #: Media type recorded for offloaded tool results on every store.
     TEXT_MEDIA_TYPE = "text/plain; charset=utf-8"
 

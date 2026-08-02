@@ -7,11 +7,17 @@ from enum import StrEnum
 import logging
 import os
 from pathlib import Path
+from typing import Final
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.hyperparameters.contracts import (
+    ExecutionHyperparameters,
+    Hyperparameters,
+)
+from agent_runtime.hyperparameters.loader import HyperparameterLoader
 from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningConfig,
@@ -22,10 +28,6 @@ from agent_runtime.execution.contracts import (
     RuntimeContract,
 )
 
-# Imported from the leaf module rather than the ``records`` package so
-# settings does not pull the whole persistence surface (and its imports)
-# in at configuration-load time.
-from agent_runtime.persistence.records.tool_budgets import DefaultToolBudget
 from agent_runtime.rollout import (
     E2RolloutResolution,
     LegacyRolloutInputs,
@@ -173,6 +175,81 @@ class _EnvFields:
     _SDK_KEYS = (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY)
 
 
+#: The ``execution`` section's declared defaults, used as the ``Field`` defaults
+#: below. A composition root loads the real document through
+#: :meth:`RuntimeSettings.load`; this is the fallback for a settings object built
+#: without one, and the two agree by the document's own test. Module level
+#: because these models are Pydantic, where an underscore-prefixed class
+#: attribute is claimed as a private attribute rather than staying a constant.
+_EXECUTION: Final = ExecutionHyperparameters()
+
+
+class _DeprecatedTunableEnv:
+    """Legacy ``RUNTIME_*`` variables for values that moved to the document.
+
+    These variables still apply — this is the one-release shim the migration
+    plan requires. The risk it exists for is specific: a
+    ``RUNTIME_MAX_PARALLEL_SUBAGENTS=1`` set in a desktop supervisor, a compose
+    file, or an operator's shell that quietly stopped applying does not fail. It
+    makes the agent four times more parallel than the operator believes, in
+    production, with a green test suite. So the variable keeps winning and says
+    so loudly, once per boot, naming the ``COPILOT_HP__`` form that replaces it.
+
+    The pointer is the JSON pointer into ``hyperparameters.json``; the
+    replacement variable name is derived from it rather than restated, so a
+    renamed field cannot leave the message advertising a variable that no longer
+    resolves.
+    """
+
+    _LOGGER: Final = logging.getLogger("agent_runtime.settings")
+
+    MESSAGE: Final[str] = (
+        "deprecated_hyperparameter_env var=%s pointer=%s replacement=%s — this "
+        "variable still applies but will stop being read; move the value into "
+        "hyperparameters.json or set the replacement variable."
+    )
+
+    #: Legacy variable -> the JSON pointer that now owns the value.
+    POINTERS: Final[Mapping[str, str]] = {
+        _EnvFields.DEFAULT_TIMEOUT_SECONDS: "/execution/default_timeout_seconds",
+        _EnvFields.MAX_RETRIES: "/execution/max_retries",
+        _EnvFields.MAX_PARALLEL_RUNS: "/execution/max_parallel_runs",
+        _EnvFields.MAX_PARALLEL_TASKS: "/execution/max_parallel_tasks",
+        _EnvFields.MAX_PARALLEL_SUBAGENTS: "/execution/max_parallel_subagents",
+        _EnvFields.TOOL_CALL_BUDGET: "/execution/tool_call_budget",
+        _EnvFields.WORKER_POLL_INTERVAL_SECONDS: (
+            "/execution/worker_poll_interval_seconds"
+        ),
+        _EnvFields.WORKER_LOCK_SECONDS: "/execution/worker_lock_seconds",
+        _EnvFields.DELTA_COALESCE_WINDOW_MS: "/execution/delta_coalesce_window_ms",
+        _EnvFields.DELTA_COALESCE_MAX_CHUNKS: "/execution/delta_coalesce_max_chunks",
+    }
+
+    @classmethod
+    def replacement(cls, pointer: str) -> str:
+        """Return the ``COPILOT_HP__`` variable that supersedes ``pointer``."""
+
+        separator = HyperparameterLoader.Env.PATH_SEPARATOR
+        segments = [segment for segment in pointer.split("/") if segment]
+        return HyperparameterLoader.Env.PREFIX + separator.join(
+            segment.upper() for segment in segments
+        )
+
+    @classmethod
+    def warn_all(cls, values: Mapping[str, str]) -> None:
+        """Log every legacy tunable variable present in ``values``.
+
+        Emitted before the settings object exists, so a boot that fails on one
+        of these values still has the line naming it.
+        """
+
+        for name, pointer in cls.POINTERS.items():
+            raw = values.get(name)
+            if raw is None or not raw.strip():
+                continue
+            cls._LOGGER.warning(cls.MESSAGE, name, pointer, cls.replacement(pointer))
+
+
 class RuntimeEnvironment(StrEnum):
     """Known runtime environments."""
 
@@ -194,29 +271,47 @@ class ProviderSettings(RuntimeContract):
 
 
 class RuntimeExecutionSettings(RuntimeContract):
-    """Runtime execution limits loaded from environment."""
+    """Runtime execution: deployment switches, plus tunables kept for the shim.
 
-    max_retries: int = Field(default=2, ge=0, le=10)
-    max_parallel_runs: int = Field(default=4, ge=1, le=100)
-    max_parallel_tasks: int = Field(default=4, ge=1, le=100)
-    max_parallel_subagents: int = Field(default=4, ge=1, le=100)
+    The numbers below are no longer authored here — ``hyperparameters.json``'s
+    ``execution`` section owns them, and their defaults are read from it. They
+    remain *fields* because the deprecation shim still lets a legacy
+    ``RUNTIME_*`` variable set them, and because every existing consumer reads
+    them through this object. The switches (``start_in_process_worker``,
+    ``event_bus_backend``, the rollout block, ...) are genuine deployment
+    concerns and stay authored here.
+    """
+
+    max_retries: int = Field(default=_EXECUTION.max_retries, ge=0, le=10)
+    max_parallel_runs: int = Field(default=_EXECUTION.max_parallel_runs, ge=1, le=100)
+    max_parallel_tasks: int = Field(default=_EXECUTION.max_parallel_tasks, ge=1, le=100)
+    max_parallel_subagents: int = Field(
+        default=_EXECUTION.max_parallel_subagents, ge=1, le=100
+    )
     # Per-tool call cap. Feeds BOTH the prompt suffix the model is given
     # and the ``runtime_tool_budgets`` seed row the middleware enforces —
     # they must agree, or the model is told a cap that is not the one it
-    # actually hits. Keep in step with ``DefaultToolBudget``.
-    tool_call_budget: int = Field(
-        default=DefaultToolBudget.MAX_CALLS_PER_RUN, ge=1, le=100
+    # actually hits. The document's copy is pinned to ``DefaultToolBudget`` by
+    # the hyperparameter document test, and all four sites by the SSOT gate.
+    tool_call_budget: int = Field(default=_EXECUTION.tool_call_budget, ge=1, le=100)
+    worker_poll_interval_seconds: float = Field(
+        default=_EXECUTION.worker_poll_interval_seconds, gt=0, le=60
     )
-    worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
-    worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
+    worker_lock_seconds: int = Field(
+        default=_EXECUTION.worker_lock_seconds, gt=0, le=3600
+    )
     start_in_process_worker: bool = True
     allow_empty_capabilities: bool = False
     # Coalesce window in ms for worker-side ``MODEL_DELTA`` batching.
     # ``0`` disables coalescing (default). Increase on staging after measuring.
-    delta_coalesce_window_ms: int = Field(default=0, ge=0, le=1000)
+    delta_coalesce_window_ms: int = Field(
+        default=_EXECUTION.delta_coalesce_window_ms, ge=0, le=1000
+    )
     # Hard cap on chunks per coalesce batch — forces a flush even if the
     # window has not expired, preventing unbounded buffer growth.
-    delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1024)
+    delta_coalesce_max_chunks: int = Field(
+        default=_EXECUTION.delta_coalesce_max_chunks, ge=1, le=1024
+    )
     # SSE event bus backend. ``auto`` (the default) resolves to ``postgres``
     # when ``DATABASE_URL`` is configured and ``in_memory`` otherwise — see
     # ``RuntimeSettings.resolved_event_bus_backend``. Explicit values
@@ -357,10 +452,19 @@ class RuntimeSettings(BaseSettings):
 
     environment: RuntimeEnvironment = RuntimeEnvironment.DEVELOPMENT
     default_model: ModelConfig
-    default_timeout_seconds: float = Field(default=60, gt=0, le=600)
+    default_timeout_seconds: float = Field(
+        default=_EXECUTION.default_timeout_seconds, gt=0, le=600
+    )
     execution: RuntimeExecutionSettings = Field(
         default_factory=RuntimeExecutionSettings
     )
+    # The loaded tuning document, carried on the settings object rather than
+    # threaded separately: settings is already the load-once, inject-everywhere
+    # seam, so this is what makes a hyperparameters.json edit reach a consumer
+    # without a second parallel injection path. ``load()`` replaces this with
+    # the on-disk document (COPILOT_HP__ overrides applied); the default is the
+    # model's own defaults, which that document equals.
+    hyperparameters: Hyperparameters = Field(default_factory=Hyperparameters)
     store: RuntimeStoreSettings = Field(default_factory=RuntimeStoreSettings)
     mcp: RuntimeMcpSettings = Field(default_factory=RuntimeMcpSettings)
     skills: RuntimeSkillSettings = Field(default_factory=RuntimeSkillSettings)
@@ -394,8 +498,17 @@ class RuntimeSettings(BaseSettings):
         env_file: str | Path | None = None,
         template_file: str | Path | None = None,
         environ: Mapping[str, str] | None = None,
+        hyperparameters: Hyperparameters | None = None,
     ) -> "RuntimeSettings":
-        """Load settings from env_example, .env, and process environment."""
+        """Load settings from env_example, .env, the environment, and the document.
+
+        This is the composition root for tunables as well as deployment
+        settings: the document is read from disk exactly once here, with
+        ``COPILOT_HP__`` overrides resolved against the same merged mapping the
+        rest of settings uses, so an override set in ``.env`` behaves like one
+        set in the process environment. A caller that has already loaded the
+        document passes it in rather than re-reading the file.
+        """
 
         service_root = Path(__file__).resolve().parents[2]
         values: dict[str, str] = {}
@@ -406,14 +519,26 @@ class RuntimeSettings(BaseSettings):
                 else service_root / "env_example"
             )
         )
-        values.update(
+        # Deliberately warned over the operator-supplied layers only, not over
+        # ``env_example``: the template is this repo's to update, and a
+        # deprecation that fires on every boot of an untouched checkout is the
+        # kind of warning people learn to scroll past.
+        operator_values: dict[str, str] = {}
+        operator_values.update(
             cls._load_env_file(
                 Path(env_file) if env_file is not None else service_root / ".env"
             )
         )
-        values.update(dict(environ if environ is not None else os.environ))
+        operator_values.update(dict(environ if environ is not None else os.environ))
+        _DeprecatedTunableEnv.warn_all(operator_values)
+        values.update(operator_values)
 
-        return cls._from_env_values(values)
+        document = (
+            HyperparameterLoader.with_overrides(HyperparameterLoader.default(), values)
+            if hyperparameters is None
+            else hyperparameters
+        )
+        return cls._from_env_values(values, hyperparameters=document)
 
     def provider_settings(self, provider: str) -> ProviderSettings:
         """Return credential settings for a normalized provider slug."""
@@ -518,15 +643,35 @@ class RuntimeSettings(BaseSettings):
         return raw.strip() if raw and raw.strip() else None
 
     @classmethod
-    def _from_env_values(cls, v: Mapping[str, str]) -> "RuntimeSettings":
-        """Assemble nested settings from a flat environment mapping."""
+    def _from_env_values(
+        cls,
+        v: Mapping[str, str],
+        *,
+        hyperparameters: Hyperparameters | None = None,
+    ) -> "RuntimeSettings":
+        """Assemble nested settings from a flat environment mapping.
+
+        Every tunable's fallback is the document's value; the legacy
+        ``RUNTIME_*`` variable still overrides it, which is the shim
+        :class:`_DeprecatedTunableEnv` documents. ``load`` emits the deprecation
+        lines, because only it can tell an operator-set variable from the
+        checked-in ``env_example`` template.
+        """
 
         E = _EnvFields
         _s = cls._env_str
         _o = cls._env_opt
         _truthy = E._BOOL_TRUTHY
+        document = Hyperparameters() if hyperparameters is None else hyperparameters
+        execution_tunables = document.execution
 
-        timeout = float(_s(v, E.DEFAULT_TIMEOUT_SECONDS, "60"))
+        timeout = float(
+            _s(
+                v,
+                E.DEFAULT_TIMEOUT_SECONDS,
+                str(execution_tunables.default_timeout_seconds),
+            )
+        )
         surfaces_v2 = _s(v, E.SURFACES_V2, "true").lower() in _truthy
         artifact_effects_v2 = _s(v, E.ARTIFACT_EFFECTS_V2, "false").lower() in _truthy
         artifact_drafts_v2 = _s(v, E.ARTIFACT_DRAFTS_V2, "false").lower() in _truthy
@@ -607,26 +752,69 @@ class RuntimeSettings(BaseSettings):
                 reasoning=cls._build_reasoning_config(v),
             ),
             default_timeout_seconds=timeout,
+            hyperparameters=document,
             execution=RuntimeExecutionSettings(
-                max_retries=int(_s(v, E.MAX_RETRIES, "2")),
-                max_parallel_runs=int(_s(v, E.MAX_PARALLEL_RUNS, "4")),
-                max_parallel_tasks=int(_s(v, E.MAX_PARALLEL_TASKS, "4")),
-                max_parallel_subagents=int(_s(v, E.MAX_PARALLEL_SUBAGENTS, "4")),
+                max_retries=int(
+                    _s(v, E.MAX_RETRIES, str(execution_tunables.max_retries))
+                ),
+                max_parallel_runs=int(
+                    _s(
+                        v,
+                        E.MAX_PARALLEL_RUNS,
+                        str(execution_tunables.max_parallel_runs),
+                    )
+                ),
+                max_parallel_tasks=int(
+                    _s(
+                        v,
+                        E.MAX_PARALLEL_TASKS,
+                        str(execution_tunables.max_parallel_tasks),
+                    )
+                ),
+                max_parallel_subagents=int(
+                    _s(
+                        v,
+                        E.MAX_PARALLEL_SUBAGENTS,
+                        str(execution_tunables.max_parallel_subagents),
+                    )
+                ),
                 tool_call_budget=int(
-                    _s(v, E.TOOL_CALL_BUDGET, str(DefaultToolBudget.MAX_CALLS_PER_RUN))
+                    _s(v, E.TOOL_CALL_BUDGET, str(execution_tunables.tool_call_budget))
                 ),
                 worker_poll_interval_seconds=float(
-                    _s(v, E.WORKER_POLL_INTERVAL_SECONDS, "1")
+                    _s(
+                        v,
+                        E.WORKER_POLL_INTERVAL_SECONDS,
+                        str(execution_tunables.worker_poll_interval_seconds),
+                    )
                 ),
-                worker_lock_seconds=int(_s(v, E.WORKER_LOCK_SECONDS, "60")),
+                worker_lock_seconds=int(
+                    _s(
+                        v,
+                        E.WORKER_LOCK_SECONDS,
+                        str(execution_tunables.worker_lock_seconds),
+                    )
+                ),
                 start_in_process_worker=_s(v, E.START_IN_PROCESS_WORKER, "true").lower()
                 in _truthy,
                 allow_empty_capabilities=_s(
                     v, E.ALLOW_EMPTY_CAPABILITIES, "false"
                 ).lower()
                 in _truthy,
-                delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
-                delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
+                delta_coalesce_window_ms=int(
+                    _s(
+                        v,
+                        E.DELTA_COALESCE_WINDOW_MS,
+                        str(execution_tunables.delta_coalesce_window_ms),
+                    )
+                ),
+                delta_coalesce_max_chunks=int(
+                    _s(
+                        v,
+                        E.DELTA_COALESCE_MAX_CHUNKS,
+                        str(execution_tunables.delta_coalesce_max_chunks),
+                    )
+                ),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "auto").lower(),
                 enable_local_models=_s(v, E.ENABLE_LOCAL_MODELS, "false").lower()
                 in _truthy,
