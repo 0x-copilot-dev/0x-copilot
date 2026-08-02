@@ -21,7 +21,6 @@ from agent_runtime.api.conversation_fork import ConversationForkService
 from agent_runtime.api.notifications import LoggingNotificationDispatcher
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
-from runtime_adapters.in_memory.share_snapshot_store import InMemoryShareSnapshotStore
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ConversationRecord,
@@ -42,6 +41,40 @@ pytestmark = pytest.mark.anyio
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+class _FakeShareSnapshotStore:
+    """Inline ``ShareSnapshotPort`` double: token-keyed lookup with revocation + expiry."""
+
+    def __init__(self) -> None:
+        self._by_token: dict[str, ShareSnapshot] = {}
+        self._revoked: set[str] = set()
+        self._expires_at: dict[str, datetime] = {}
+
+    def register(
+        self,
+        *,
+        token: str,
+        snapshot: ShareSnapshot,
+        expires_at: datetime | None = None,
+    ) -> None:
+        self._by_token[token] = snapshot
+        if expires_at is not None:
+            self._expires_at[token] = expires_at
+
+    def revoke(self, token: str) -> None:
+        self._revoked.add(token)
+
+    async def resolve_by_token(self, share_token: str) -> ShareSnapshot | None:
+        if share_token in self._revoked:
+            return None
+        snapshot = self._by_token.get(share_token)
+        if snapshot is None:
+            return None
+        expires_at = self._expires_at.get(share_token)
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            return None
+        return snapshot
 
 
 class _ForkFixtureMixin:
@@ -67,8 +100,8 @@ class _ForkFixtureMixin:
         async_store = sync_store
         return async_store, sync_store
 
-    def make_share_store(self) -> InMemoryShareSnapshotStore:
-        return InMemoryShareSnapshotStore()
+    def make_share_store(self) -> _FakeShareSnapshotStore:
+        return _FakeShareSnapshotStore()
 
     def make_audit(self, store) -> WorkerAuditEmitter:
         # The in-memory store implements ``write_audit_log``; the
@@ -79,7 +112,7 @@ class _ForkFixtureMixin:
         self,
         *,
         async_store: InMemoryRuntimeApiStore,
-        share_store: InMemoryShareSnapshotStore,
+        share_store: _FakeShareSnapshotStore,
         audit: WorkerAuditEmitter,
         notifications=None,
         max_messages: int | None = None,
@@ -138,7 +171,7 @@ class _ForkFixtureMixin:
 
     def register_share(
         self,
-        share_store: InMemoryShareSnapshotStore,
+        share_store: _FakeShareSnapshotStore,
         *,
         token: str | None = None,
         view_access: str = "workspace",

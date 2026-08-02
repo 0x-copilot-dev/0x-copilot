@@ -723,3 +723,83 @@ def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() ->
     assert material.arguments == arguments
     assert material.proposal_content_ref == request.canonical_args_ref
     assert material.proposal_digest == request.args_digest
+
+
+class _ProtocolErrorFixture(_Fixture):
+    """Drive a read whose server answers ``isError`` and read what the model gets."""
+
+    #: One payload that carries all four security cases at once: an actionable
+    #: Postgres column error, a connection string that must not leak, a server
+    #: resource id that must survive, and an internal org UUID that must not.
+    PAGE_ID = "2fd1e2a3b4c5d6e7f8091a2b3c4d5e6f"
+    ORG_UUID = "550e8400-e29b-41d4-a716-446655440000"
+    ERROR_TEXT = (
+        'relation query failed: column "assignee_id" does not exist\n'
+        "dsn=postgresql://svc:s3cr3t_pw@db.internal.example:5432/prod\n"
+        f"while resolving page {PAGE_ID} for org {ORG_UUID}"
+    )
+
+    def error_envelope(self, *, text: str | None = None) -> dict[str, object]:
+        return {
+            "content": [{"type": "text", "text": text or self.ERROR_TEXT}],
+            "isError": True,
+        }
+
+    def invoke_protocol_error(self, *, text: str | None = None) -> dict[str, object]:
+        tool, _provider = self.make_call_tool(output=self.error_envelope(text=text))
+        _c, _e, _l, _r, operation_token, service_token = self.bind_enforced()
+        try:
+            return _invoke(tool, "list_issues", {"team": "ENG"})
+        finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
+
+
+class TestConnectorProtocolErrorReachesTheModelSafely(_ProtocolErrorFixture):
+    """The merge gate: the connector's real error reaches the model, scrubbed.
+
+    T2.1 — before this, a server ``isError`` reply was collapsed into a generic
+    "the connector reported an error", discarding the one sentence that let the
+    model self-correct. Now the connector's own text is surfaced on a typed
+    failure result, sanitized: actionable detail and server resource ids survive,
+    secrets and internal ids do not.
+    """
+
+    def _safe_message(self, result: dict[str, object]) -> str:
+        assert result["error"] is not None, result
+        return result["error"]["safe_message"]
+
+    def test_result_is_a_typed_non_retryable_protocol_error(self) -> None:
+        result = self.invoke_protocol_error()
+        assert result["error"]["code"] == "mcp_protocol_error"
+        assert result["error"]["retryable"] is False
+        # Evidence of the failure is still visible on the output envelope.
+        assert result["output"]["status"] == "failed"
+
+    def test_a_postgres_column_error_reaches_the_model(self) -> None:
+        # (a) The actionable fact the whole change exists to deliver.
+        assert 'column "assignee_id" does not exist' in self._safe_message(
+            self.invoke_protocol_error()
+        )
+
+    def test_a_connection_string_in_the_same_payload_does_not(self) -> None:
+        # (b) The secret sharing the payload with (a) is stripped.
+        message = self._safe_message(self.invoke_protocol_error())
+        assert "postgresql://" not in message
+        assert "s3cr3t_pw" not in message
+
+    def test_a_server_resource_id_survives(self) -> None:
+        # (c) The Notion-style page id the connector's error is about.
+        assert self.PAGE_ID in self._safe_message(self.invoke_protocol_error())
+
+    def test_an_internal_org_uuid_does_not_survive(self) -> None:
+        # (d) A canonical UUID — how our internal org id would appear — is gone.
+        assert self.ORG_UUID not in self._safe_message(self.invoke_protocol_error())
+
+    def test_a_textless_error_envelope_falls_back_to_a_safe_message(self) -> None:
+        # No readable text block: the field must still be a non-empty safe
+        # message, never blank and never the raw envelope.
+        result = self.invoke_protocol_error(text="")
+        message = self._safe_message(result)
+        assert message
+        assert result["error"]["code"] == "mcp_protocol_error"

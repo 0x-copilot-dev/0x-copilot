@@ -27,6 +27,10 @@ from typing import Any
 
 
 _MAX_SANITIZED_LENGTH = 2048
+# Appended when a message is clipped to the length budget, so the LLM can tell
+# a severed message from one that genuinely ended. Shared byte-for-byte with
+# ``ToolInvocationOutcome`` so the truncation signal is uniform service-wide.
+_TRUNCATION_MARKER = "…[truncated]"
 
 # Patterns that should never reach the LLM. Order matters — broader
 # patterns last so narrower ones (e.g. ``Bearer <token>``) catch first.
@@ -36,8 +40,35 @@ _PATH_PATTERN = re.compile(
 _REPO_PATH_PATTERN = re.compile(
     r"(?:enterprise[-_]search|services/(?:ai-backend|backend|backend-facade))[^\s\"']*",
 )
-_HEX_ID_PATTERN = re.compile(r"\b[0-9a-fA-F]{16,}\b")
-# Permissive UUID-with-dashes form too.
+# A long hex run is redacted only when an adjacent label names it as one of OUR
+# internal identifiers (``run_id=<hex>``, ``org id: <hex>``, or the bare label
+# word as in ``run <hex>``). A hex run with no such label is far more likely a
+# resource id the connector itself returned — a Notion page id, a git sha, an
+# external record key — and redacting those blinds the model to the very object
+# its error is about. The old blunt ``\b[0-9a-fA-F]{16,}\b`` caught both alike,
+# so a connector's "page <32-hex> not found" reached the model as
+# "page [redacted] not found", stripping the one fact that let it self-correct.
+# Canonical dashed UUIDs are still redacted unconditionally below, so an internal
+# id in that form stays covered even under a label word we do not list here.
+_INTERNAL_ID_LABELS = (
+    "run",
+    "org",
+    "organization",
+    "conversation",
+    "conv",
+    "tenant",
+    "trace",
+    "correlation",
+    "principal",
+)
+_INTERNAL_HEX_ID_PATTERN = re.compile(
+    r"\b(?P<label>(?:" + "|".join(_INTERNAL_ID_LABELS) + r")(?:[ _-]?id)?)"
+    r"(?P<sep>\s*[:=]\s*|\s+)"
+    r"(?P<value>[0-9a-fA-F]{16,})\b",
+    re.IGNORECASE,
+)
+# Permissive UUID-with-dashes form. Kept unconditional: our internal run / org /
+# conversation ids in canonical form are redacted here regardless of any label.
 _UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -90,6 +121,34 @@ class ErrorSanitizer:
         return cls._truncate(first_line)
 
     @classmethod
+    def sanitize_text(
+        cls, text: str, *, max_length: int = _MAX_SANITIZED_LENGTH
+    ) -> str:
+        """Scrub an untrusted free-text string in full and cap it to *max_length*.
+
+        Unlike :meth:`sanitize`, which takes an exception and keeps only its
+        first line, this preserves every surviving line — it is used for
+        connector-provided error text, whose actionable detail (a Postgres
+        ``column ... does not exist``, a validation hint) often spans several
+        lines the model needs in full to self-correct. Secrets, connection
+        strings, file paths, canonical UUIDs, and labeled internal ids are still
+        removed by the shared pattern set; a resource id the server itself
+        returned survives so the model can act on it.
+
+        Coverage is shape-conditional, and that is deliberate: an internal id
+        emitted as **bare undashed hex** (``uuid4().hex``) is byte-for-byte
+        indistinguishable from a dashless-UUID resource id a connector returns —
+        same alphabet, same length — so it survives too. No sink-side regex can
+        separate the two without re-blinding the model to server resource ids,
+        which is the whole point of this method. Code that must keep a specific
+        internal id out of model-visible text therefore defends at the producer:
+        emit it dashed (:data:`_UUID_PATTERN`) or behind an internal-id label
+        (:data:`_INTERNAL_HEX_ID_PATTERN`), both covered above — never as bare
+        hex. See ``TestBareHexInternalIdLeakIsAnAcceptedTradeoff``.
+        """
+        return cls._truncate(cls._strip(text), max_length=max_length)
+
+    @classmethod
     def _strip(cls, text: str) -> str:
         """Apply all redaction patterns to *text* and return the scrubbed result."""
         scrubbed = _TRACEBACK_HEADER_PATTERN.sub("", text)
@@ -101,18 +160,23 @@ class ErrorSanitizer:
         scrubbed = _PATH_PATTERN.sub(cls._REDACTED, scrubbed)
         scrubbed = _REPO_PATH_PATTERN.sub(cls._REDACTED, scrubbed)
         scrubbed = _UUID_PATTERN.sub(cls._REDACTED, scrubbed)
-        scrubbed = _HEX_ID_PATTERN.sub(cls._REDACTED, scrubbed)
+        scrubbed = _INTERNAL_HEX_ID_PATTERN.sub(cls._redact_labeled_id, scrubbed)
         return scrubbed
 
     @classmethod
-    def _truncate(cls, text: str) -> str:
-        """Clip *text* to the sanitized byte budget, appending a truncation marker if needed."""
-        if len(text) <= _MAX_SANITIZED_LENGTH:
+    def _redact_labeled_id(cls, match: re.Match[str]) -> str:
+        """Redact a labeled internal id's value while keeping the label as context."""
+        return f"{match.group('label')}{match.group('sep')}{cls._REDACTED}"
+
+    @classmethod
+    def _truncate(cls, text: str, *, max_length: int = _MAX_SANITIZED_LENGTH) -> str:
+        """Clip *text* to *max_length*, appending a truncation marker if needed."""
+        if len(text) <= max_length:
             return text
         # Trim with an explicit marker so the LLM knows truncation
         # happened — it can ask for a tighter call instead of guessing.
-        cutoff = _MAX_SANITIZED_LENGTH - len("…[truncated]")
-        return text[:cutoff] + "…[truncated]"
+        cutoff = max_length - len(_TRUNCATION_MARKER)
+        return text[:cutoff] + _TRUNCATION_MARKER
 
 
 class ErrorHintExtractor:

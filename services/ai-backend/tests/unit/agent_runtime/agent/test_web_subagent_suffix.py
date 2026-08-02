@@ -10,10 +10,13 @@ from agent_runtime.execution.deep_agent_builder import (
 
 class TestFormatWebSubagentSuffix:
     def test_default_includes_default_cap(self) -> None:
-        # Backwards-compat: the default still says "5 invocations" so the
-        # legacy module constant is byte-identical.
+        # The default cap is the enforced seed cap
+        # ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10), so the suffix the model
+        # is handed matches what ``ToolBudgetMiddleware`` admits. It said "5"
+        # while the middleware enforced 10 until T0.3 reconciled them (see
+        # tests/unit/architecture/test_named_default_ssot.py).
         suffix = format_web_subagent_suffix()
-        assert "5 invocations" in suffix
+        assert "10 invocations" in suffix
         assert suffix == WEB_SUBAGENT_CHECKPOINT_SUFFIX
 
     def test_custom_cap_is_interpolated(self) -> None:

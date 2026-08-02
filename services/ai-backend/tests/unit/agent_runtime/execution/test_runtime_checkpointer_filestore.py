@@ -103,3 +103,71 @@ class TestFileStoreCheckpointer(_CheckpointerEnvMixin):
         assert (root / "index" / "checkpoints.sqlite3").is_file()
         assert (root / "index" / "checkpoints.sqlite3").name != "catalog.sqlite3"
         await saver.conn.close()
+
+
+class TestServerPostgresCheckpointer(_CheckpointerEnvMixin):
+    """Server-profile selection of the durable AsyncPostgresSaver.
+
+    These are SELECTION tests only: the pool is built with ``open=False`` so no
+    live Postgres is touched. Durability/resume ("kill a worker mid-run, it
+    resumes") needs a real database and belongs in an integration suite, not
+    PR-CI — so these never call ``setup()``/``aput``.
+    """
+
+    _DATABASE_URL = "postgresql://u:p@127.0.0.1:5432/does_not_connect"
+
+    async def test_returns_postgres_saver_on_server_profile(self, monkeypatch) -> None:
+        # RUNTIME_STORE_BACKEND=postgres + DATABASE_URL selects the durable
+        # AsyncPostgresSaver over a connection pool that is constructed but NOT
+        # opened — setup_runtime_checkpointer() owns opening it at the worker
+        # startup seam, so import/selection never blocks on a live database.
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "postgres")
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        monkeypatch.delenv("RUNTIME_FILE_STORE_ROOT", raising=False)
+
+        saver = builder_module.runtime_checkpointer()
+        assert type(saver).__name__ == "AsyncPostgresSaver"
+
+        from psycopg_pool import AsyncConnectionPool
+
+        assert isinstance(saver.conn, AsyncConnectionPool)
+        # ``closed`` is True for a pool built with open=False and never opened.
+        assert saver.conn.closed is True
+
+    def test_postgres_backend_without_database_url_falls_back(
+        self, monkeypatch
+    ) -> None:
+        # backend=postgres but no DATABASE_URL: the postgres builder returns None
+        # and the or-chain falls through to the in-memory saver rather than
+        # constructing a pool with no conninfo.
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "postgres")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("RUNTIME_FILE_STORE_ROOT", raising=False)
+        saver = builder_module.runtime_checkpointer()
+        assert type(saver).__name__ == "InMemorySaver"
+
+    async def test_desktop_file_store_wins_over_database_url(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # The or-chain order is load-bearing: the desktop file store is tried
+        # first, so a single_user_desktop whose env also carries DATABASE_URL
+        # still gets the SQLite saver, never the postgres one.
+        root = tmp_path / "store"
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "file")
+        monkeypatch.setenv("RUNTIME_FILE_STORE_ROOT", str(root))
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        saver = builder_module.runtime_checkpointer()
+        assert type(saver).__name__ == "AsyncSqliteSaver"
+        await saver.conn.close()
+
+    async def test_setup_runtime_checkpointer_noop_when_not_postgres(
+        self, monkeypatch
+    ) -> None:
+        # setup_runtime_checkpointer() is duck-typed on the class name: on a
+        # non-postgres saver it returns without opening anything (the in-memory
+        # saver has no pool), so calling it on the dev/test profile is safe.
+        monkeypatch.delenv("RUNTIME_STORE_BACKEND", raising=False)
+        monkeypatch.delenv("RUNTIME_FILE_STORE_ROOT", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        await builder_module.setup_runtime_checkpointer()
+        assert type(builder_module._runtime_checkpointer).__name__ == "InMemorySaver"

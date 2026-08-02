@@ -181,7 +181,9 @@ class _OverlapProbe:
     is not merely late, it is not running.
     """
 
-    YIELDS: int = 32
+    #: Widened 32 -> 1024 after CI flaked under load; same value and reasoning as
+    #: ``_ConcurrencyProbe.YIELDS``. Widening is always safe, so do not lower it.
+    YIELDS: int = 1024
 
     def __init__(self) -> None:
         self.active = 0

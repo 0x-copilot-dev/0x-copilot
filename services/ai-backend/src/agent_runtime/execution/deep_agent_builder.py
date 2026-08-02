@@ -48,7 +48,15 @@ _WEB_HARNESS_PROFILE_KEYS = (
 # wording requires the checkpoint to ride in the same AIMessage as the next
 # tool call so the loop continues, and reserves a tool-call-free message for
 # the explicit final answer.
-_DEFAULT_TOOL_CALL_BUDGET = 5  # Aligns with the historical literal "5" used here.
+# The per-tool cap the model is TOLD in the suffix below. It must equal the
+# enforced seed cap ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10): telling the
+# model a smaller number than ``ToolBudgetMiddleware`` admits is the
+# prompt-vs-enforced drift the SSOT gate
+# (tests/unit/architecture/test_named_default_ssot.py) exists to catch. It was
+# ``5`` against an enforced ``10``; T0.3 closed the gap. A literal, not an
+# import, to keep this execution module off the persistence layer — the gate
+# keeps the two in step.
+_DEFAULT_TOOL_CALL_BUDGET = 10
 
 
 def format_web_subagent_suffix(
@@ -378,22 +386,36 @@ def _local_subagent_graph_count(subagents: Sequence[object]) -> int:
 def runtime_checkpointer(checkpointer: object | None = None) -> object:
     """Return *checkpointer* if supplied, else the shared lazy singleton.
 
-    On the ``single_user_desktop`` file-store path (``RUNTIME_STORE_BACKEND=file``
-    with ``RUNTIME_FILE_STORE_ROOT`` set) the singleton is a file-backed
-    ``AsyncSqliteSaver`` so graph/approval continuation survives a worker
-    restart. Every other deployment (postgres, in-memory, web) keeps the
-    process-local ``InMemorySaver`` exactly as before — the SQLite path is
-    reached only when both env signals hold, so non-desktop behavior is
-    untouched.
+    The singleton is chosen once, by deployment, in a fixed precedence:
+
+    1. ``single_user_desktop`` file store (``RUNTIME_STORE_BACKEND=file`` with
+       ``RUNTIME_FILE_STORE_ROOT`` set) -> a file-backed ``AsyncSqliteSaver`` so
+       graph/approval continuation survives a worker restart.
+    2. Server Postgres (``RUNTIME_STORE_BACKEND=postgres`` with ``DATABASE_URL``
+       set) -> an ``AsyncPostgresSaver`` over a lazily-opened connection pool, so
+       graph state and paused approvals survive a worker restart instead of
+       dying with the process-local ``InMemorySaver``.
+    3. Everything else (in-memory dev/test, web) -> the process-local
+       ``InMemorySaver`` exactly as before.
+
+    Each builder returns ``None`` when its env signals are absent, so the
+    ``or``-chain falls through to the next candidate; the order is load-bearing.
+
+    The Postgres saver does NOT self-open its pool or create its tables. A
+    server startup seam must ``await setup_runtime_checkpointer()`` once (worker
+    ``amain`` / in-process worker start) and ``await
+    teardown_runtime_checkpointer()`` on shutdown; the desktop SQLite and
+    in-memory savers need neither.
     """
 
     if checkpointer is not None:
         return checkpointer
     global _runtime_checkpointer
     if _runtime_checkpointer is None:
-        file_saver = _file_store_checkpointer()
         _runtime_checkpointer = (
-            file_saver if file_saver is not None else _in_memory_checkpointer()
+            _file_store_checkpointer()  # desktop AsyncSqliteSaver — unchanged
+            or _postgres_checkpointer()  # server AsyncPostgresSaver — durable
+            or _in_memory_checkpointer()  # last-resort process-local default
         )
     return _runtime_checkpointer
 
@@ -447,6 +469,97 @@ def _file_store_checkpointer() -> object | None:
     db_path = db_dir / "checkpoints.sqlite3"
     connection = aiosqlite.connect(str(db_path), check_same_thread=False)
     return AsyncSqliteSaver(connection)
+
+
+def _postgres_checkpointer() -> object | None:
+    """Build a durable ``AsyncPostgresSaver`` for a server deployment, or ``None``.
+
+    Returns ``None`` (so the caller falls through to the ``InMemorySaver``)
+    unless the server Postgres path is active: ``RUNTIME_STORE_BACKEND=postgres``
+    **and** ``DATABASE_URL`` set. This is what stops a multi-process server from
+    losing in-flight graph state (and paused approvals) to a process-local
+    ``InMemorySaver`` on every worker restart.
+
+    The pool is constructed with ``open=False`` so selecting/importing the saver
+    never blocks on a live database — ``setup_runtime_checkpointer()`` opens it
+    and creates the checkpoint tables once at startup. ``autocommit=True`` +
+    ``row_factory=dict_row`` + ``prepare_threshold=0`` are the connection
+    settings ``AsyncPostgresSaver`` documents for pooled usage.
+
+    Imports are lazy and AFTER the env gate (mirroring the SQLite builder) so a
+    desktop/in-memory process never needs the postgres checkpointer package.
+    ``ImportError`` is deliberately NOT swallowed: a server that asked for the
+    Postgres backend but is missing the driver must fail loudly, not silently
+    degrade to a non-durable saver.
+    """
+
+    import os
+
+    backend = os.environ.get("RUNTIME_STORE_BACKEND", "").strip().lower()
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if backend != "postgres" or not database_url:
+        return None
+
+    from psycopg.rows import dict_row
+    from psycopg_pool import AsyncConnectionPool
+
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    pool = AsyncConnectionPool(
+        conninfo=database_url,
+        open=False,
+        kwargs={
+            "autocommit": True,
+            "row_factory": dict_row,
+            "prepare_threshold": 0,
+        },
+    )
+    return AsyncPostgresSaver(pool)
+
+
+async def setup_runtime_checkpointer() -> None:
+    """Open the Postgres checkpointer pool and create its tables, once at startup.
+
+    A no-op on every non-Postgres saver: the desktop ``AsyncSqliteSaver`` opens
+    its aiosqlite connection lazily on first use, and the in-memory saver needs
+    nothing. Duck-typed on the class name so importing this module on a desktop
+    build never drags in the postgres checkpointer package.
+
+    Idempotent enough for a startup seam: opening an already-open pool and
+    re-running ``AsyncPostgresSaver.setup()`` (``CREATE TABLE IF NOT EXISTS``
+    DDL) are both safe. Must be awaited inside the event loop the worker will run
+    on — ``AsyncPostgresSaver`` binds to the running loop at construction.
+    """
+
+    saver = runtime_checkpointer()
+    if type(saver).__name__ != "AsyncPostgresSaver":
+        return
+    from psycopg_pool import AsyncConnectionPool
+
+    conn = getattr(saver, "conn", None)
+    if isinstance(conn, AsyncConnectionPool):
+        await conn.open()
+        await conn.wait()
+    await saver.setup()
+
+
+async def teardown_runtime_checkpointer() -> None:
+    """Close the Postgres checkpointer pool on shutdown; a no-op otherwise.
+
+    Mirror of :func:`setup_runtime_checkpointer`. Reads the module singleton
+    directly rather than calling :func:`runtime_checkpointer` so shutdown never
+    *constructs* a saver, and does nothing when none was built or when the saver
+    is the desktop SQLite / in-memory variant.
+    """
+
+    saver = _runtime_checkpointer
+    if saver is None or type(saver).__name__ != "AsyncPostgresSaver":
+        return
+    from psycopg_pool import AsyncConnectionPool
+
+    conn = getattr(saver, "conn", None)
+    if isinstance(conn, AsyncConnectionPool):
+        await conn.close()
 
 
 def build_chat_model(

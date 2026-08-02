@@ -65,6 +65,20 @@ orchestration.
 
 It should not own tenant auth, billing/admin state, product persistence, or app-specific presentation logic.
 
+Stated positively — because a passive prohibition is what let ~20% of the service drift
+in: **`ai-backend` is a lean Deep Agents / LangGraph runtime plus the adapters that map
+LangGraph output into our event format** (`runtime_worker/stream_*`,
+`capabilities/middleware/`, `operations/presentation_boundary`). A source-level audit
+([docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md](../audit/ai-backend-smells/BOUNDARY-AUDIT.md))
+measured ~80% runtime / ~20% misplaced (~36k LOC) / ~4% dead, and lists the concrete
+targets.
+
+**Policy decision vs enforcement (PDP/PEP).** Policy data is `backend`'s; the
+enforcement point stays in `ai-backend`, because the model selects tools mid-graph-loop
+and no caller outside the loop observes those calls. The required shape — already used
+by `ToolUsePolicySnapshot.from_response` — is snapshot-at-run-start, enforce in-process,
+POST the facts afterwards. A per-tool-call HTTP hop is never acceptable.
+
 ### `packages/api-types`
 
 Implemented. Owns stable TypeScript schemas and public contracts between apps

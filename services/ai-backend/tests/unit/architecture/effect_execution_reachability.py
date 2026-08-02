@@ -103,7 +103,6 @@ WORKER_PREFIX = "runtime_worker"
 WORKER_EXECUTOR_MODULES = frozenset(
     {
         "runtime_worker.builtin_effect_executor",
-        "runtime_worker.legacy_mcp_effect_executor",
         "runtime_worker.mcp_effect_executor",
         "runtime_worker.workspace_effect_storage",
     }

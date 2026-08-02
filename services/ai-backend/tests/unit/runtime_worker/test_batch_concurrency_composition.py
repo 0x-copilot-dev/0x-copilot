@@ -22,12 +22,30 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any
 
+from agent_runtime.capabilities.concurrency import (
+    ConcurrencyMode,
+    ConcurrencyPolicyField,
+    PolicySource,
+    SideEffectKind,
+)
+from agent_runtime.capabilities.mcp.annotations import (
+    McpToolAnnotations,
+    McpToolAnnotationsRegistry,
+)
 from runtime_worker.batch_concurrency_composition import (
     BatchConcurrencyComposer,
     BatchConcurrencyEnvironment,
     EnvironmentConcurrencyKillSwitchSource,
     build_batch_concurrency_composer,
+)
+
+from tests.unit.agent_runtime.capabilities.middleware.test_runtime_tool_control_batch import (  # noqa: E501
+    _ORG,
+    _TRACE,
+    _InMemoryBatchJournal,
+    _binding,
 )
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[3] / "src"
@@ -326,4 +344,146 @@ class TestBothCompositionRootsAreWired:
         assert source.count("build_batch_concurrency_composer(") == 1
         assert (
             source.count("batch_concurrency_composer=batch_concurrency_composer") == 2
+        )
+
+
+#: The MCP umbrella the model calls, and the connector call an operator files a
+#: policy for. ``call_mcp_tool`` names its server and tool inside its arguments,
+#: so the catalog is keyed ``server:tool`` — the same key
+#: ``graph_capability_key`` derives — while the graph tool is the umbrella.
+_MCP_TOOL = "call_mcp_tool"
+_SERVER = "linear"
+_INNER_TOOL = "create_issue"
+_MCP_ARGUMENTS: dict[str, str] = {"server_name": _SERVER, "tool_name": _INNER_TOOL}
+
+
+class _ProviderHintComposer(BatchConcurrencyComposer):
+    """The real composer, with only the durable journal's storage substituted.
+
+    Every seam it assembles is production — the presence gate, the operator
+    catalog parse, and the one this class exists to pin: the ``policies=`` source
+    the run installs. Only ``_journal`` is swapped, for the same reason
+    ``_RecordingComposer`` swaps it: the durable adapter has its own tests and
+    ``compose`` never writes through it here.
+    """
+
+    def __init__(self, *, catalog: str) -> None:
+        super().__init__(
+            events=_Events(),  # type: ignore[arg-type]
+            snapshots=_Snapshots(),  # type: ignore[arg-type]
+            environ={
+                BatchConcurrencyEnvironment.MAX_PARALLELISM: "4",
+                BatchConcurrencyEnvironment.CATALOG: catalog,
+            },
+        )
+
+    def _journal(self) -> Any:
+        return _InMemoryBatchJournal()
+
+
+class TestTheComposerWiresTheProviderNarrowingTier:
+    """The composer installs the provider-narrowing tier, not the bare catalog.
+
+    ``test_provider_hints`` proves the decorator narrows and rejects over-claims
+    in isolation; these prove the object ``_compose`` actually hands the run *is*
+    that decorator, reading this run's live MCP annotations. Together they close
+    the gap F6.1 left: the ``TRUSTED_PROVIDER`` tier had no production source, so
+    a connector's self-declared danger reached no real run.
+
+    The annotations are registered before ``compose`` and read at
+    ``resolution_for``. In production the per-run registry binds *after* compose,
+    so the tier reads the ``ContextVar`` lazily at plan time — an eager snapshot
+    taken during compose would be empty.
+    """
+
+    @staticmethod
+    def _compose(catalog: str) -> Any:
+        """Compose one run's admission exactly as both worker handlers do."""
+
+        return _ProviderHintComposer(catalog=catalog).compose(
+            org_id=_ORG,
+            trace_id=_TRACE,
+            control=_binding(),
+            runtime_context=None,
+        )
+
+    @staticmethod
+    def _resolution(admission: Any) -> Any:
+        policies = admission._policies  # noqa: SLF001 - the wiring is under test.
+        return policies.resolution_for(tool_name=_MCP_TOOL, arguments=_MCP_ARGUMENTS)
+
+    def test_a_destructive_hint_narrows_the_operators_parallel_read(self) -> None:
+        """A connector self-declaring danger flips a catalog read to serial.
+
+        The operator declared ``linear:create_issue`` the widest thing honest of
+        a read — parallel-safe, naturally idempotent. The server's own
+        ``destructiveHint`` narrows it on every field it touches, and the
+        effective trust source drops to the provider that caused it. On the bare
+        ``DeclaredConcurrencyPolicySource`` this stays parallel-safe under
+        ``PRODUCT_CATALOG`` and every assertion below fails — which is the point.
+        """
+
+        registry: dict[tuple[str, str], McpToolAnnotations] = {}
+        token = McpToolAnnotationsRegistry.bind_for_run(registry)
+        try:
+            McpToolAnnotationsRegistry.register(
+                _SERVER,
+                _INNER_TOOL,
+                McpToolAnnotations.from_wire({"destructiveHint": True}),
+            )
+            admission = self._compose(
+                '{"linear:create_issue": {"mode": "parallel_safe",'
+                ' "side_effect": "read", "idempotency": "natural"}}'
+            )
+            assert admission is not None, "the composition root refused to compose"
+            resolution = self._resolution(admission)
+        finally:
+            McpToolAnnotationsRegistry.unbind(token)
+
+        assert resolution is not None
+        assert resolution.policy.mode is ConcurrencyMode.SERIAL
+        assert resolution.policy.side_effect is SideEffectKind.IRREVERSIBLE_WRITE
+        assert resolution.policy.policy_source is PolicySource.TRUSTED_PROVIDER
+        assert PolicySource.TRUSTED_PROVIDER in resolution.contributing_sources
+
+    def test_an_over_claiming_hint_is_rejected_never_applied(self) -> None:
+        """A server declaring itself safer than the catalog cannot widen it.
+
+        The operator declared an irreversible, serial, non-idempotent write. The
+        server claims ``readOnlyHint`` and ``idempotentHint`` — both widenings.
+        Not one field moves, the source stays ``PRODUCT_CATALOG``, and each
+        over-claim is a typed widening rejection attributed to the provider tier.
+        On the bare catalog source there is no tier to reject anything, so
+        ``widening_rejections`` is empty and the set assertion fails.
+        """
+
+        registry: dict[tuple[str, str], McpToolAnnotations] = {}
+        token = McpToolAnnotationsRegistry.bind_for_run(registry)
+        try:
+            McpToolAnnotationsRegistry.register(
+                _SERVER,
+                _INNER_TOOL,
+                McpToolAnnotations.from_wire(
+                    {"readOnlyHint": True, "idempotentHint": True}
+                ),
+            )
+            admission = self._compose(
+                '{"linear:create_issue": {"mode": "serial",'
+                ' "side_effect": "irreversible_write", "idempotency": "none"}}'
+            )
+            assert admission is not None, "the composition root refused to compose"
+            resolution = self._resolution(admission)
+        finally:
+            McpToolAnnotationsRegistry.unbind(token)
+
+        assert resolution is not None
+        assert resolution.policy.mode is ConcurrencyMode.SERIAL
+        assert resolution.policy.side_effect is SideEffectKind.IRREVERSIBLE_WRITE
+        assert resolution.policy.policy_source is PolicySource.PRODUCT_CATALOG
+        assert {
+            rejection.policy_field for rejection in resolution.widening_rejections
+        } == {ConcurrencyPolicyField.SIDE_EFFECT, ConcurrencyPolicyField.IDEMPOTENCY}
+        assert all(
+            rejection.source is PolicySource.TRUSTED_PROVIDER
+            for rejection in resolution.widening_rejections
         )

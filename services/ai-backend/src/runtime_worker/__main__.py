@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import timedelta
 
+from agent_runtime.api.membership import (
+    HttpWorkspaceMembershipResolver,
+    InMemoryWorkspaceMembershipResolver,
+    MembershipResolverUnavailable,
+    WorkspaceMembershipResolver,
+)
 from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
 from agent_runtime.capabilities.desktop.workspace_attestation import (
     DesktopWorkspaceAttestationRegistry,
+)
+from agent_runtime.execution.deep_agent_builder import (
+    setup_runtime_checkpointer,
+    teardown_runtime_checkpointer,
 )
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
@@ -32,6 +43,11 @@ from runtime_worker.run_control_release_composition import (
 from agent_runtime.observability.db_statement_metrics import (
     DbStatementMetricsCollector,
     DbStatementMetricsCollectorEnv,
+)
+from runtime_worker.jobs.approval_expiry_sweeper import (
+    ApprovalExpirySweeper,
+    ApprovalExpirySweeperEnv,
+    build_default_sweeper,
 )
 from runtime_worker.jobs.retention_backfill import (
     RetentionBackfillJob,
@@ -99,6 +115,11 @@ class RuntimeWorkerEntrypoint:
             )
         await async_ports.lifecycle.open()
         await async_ports.lifecycle.migrate()
+        # Durable graph checkpointer: on RUNTIME_STORE_BACKEND=postgres this
+        # opens the AsyncPostgresSaver pool and creates its checkpoint tables so
+        # graph state / paused approvals survive a worker restart. A no-op on
+        # every other backend (this standalone worker never runs the file store).
+        await setup_runtime_checkpointer()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         artifact_cleanup_execution_loop: ArtifactCleanupExecutionLoop | None = None
@@ -107,6 +128,7 @@ class RuntimeWorkerEntrypoint:
             None
         )
         statement_collector: DbStatementMetricsCollector | None = None
+        approval_expiry_sweeper: ApprovalExpirySweeper | None = None
         try:
             # One worker-owned MCP revision assembly per process. It contains
             # the single base cache/resolver/feed/catalog/cursor graph; API-only
@@ -474,10 +496,49 @@ class RuntimeWorkerEntrypoint:
                     "retention_backfill_complete",
                     metadata={"rows_stamped": sum(backfill_counts.values())},
                 )
+            # Approval-expiry sweeper — opt-in, default OFF. Its two passes
+            # auto-reject expired approvals and cascade rejections onto approvals
+            # whose recipient is no longer an active member; both are destructive
+            # when the expiry window or the membership lane is misconfigured, so
+            # this stays dark until an operator sets
+            # RUNTIME_APPROVAL_EXPIRY_SWEEP_ENABLED after observing how many
+            # approvals a pass would expire (T2.3). ``build_default_sweeper`` is
+            # the canonical gate — it returns None while the flag is unset — and
+            # the outer check only avoids constructing the membership resolver
+            # (and its httpx client) on the default-off path so a disabled deploy
+            # does no new work at boot. Each pass is idempotent: the store's
+            # queries return only PENDING rows, so once a synthetic rejection
+            # resolves an approval it is never swept again.
+            if ApprovalExpirySweeperEnv.env_bool(
+                ApprovalExpirySweeperEnv.ENABLED, default=False
+            ):
+                approval_expiry_sweeper = build_default_sweeper(
+                    persistence=async_ports.persistence,
+                    queue=async_ports.queue,
+                    membership_resolver=(
+                        RuntimeWorkerEntrypoint._build_membership_resolver()
+                    ),
+                )
+                if approval_expiry_sweeper is not None:
+                    await approval_expiry_sweeper.start()
+                    logger.info(
+                        "approval_expiry_sweeper_started",
+                        metadata={
+                            "interval_seconds": approval_expiry_sweeper._interval,
+                            "batch_size": approval_expiry_sweeper._batch_size,
+                            "membership_batch_size": (
+                                approval_expiry_sweeper._membership_batch_size
+                            ),
+                        },
+                    )
             await worker.run_forever(
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
+            # Stop the sweeper first so no synthetic rejection is enqueued mid
+            # shutdown (None whenever the feature is off).
+            if approval_expiry_sweeper is not None:
+                await approval_expiry_sweeper.stop()
             if artifact_cleanup_execution_loop is not None:
                 await artifact_cleanup_execution_loop.stop()
             if audit_export_verification_loop is not None:
@@ -490,10 +551,69 @@ class RuntimeWorkerEntrypoint:
                 await retention_loop.stop()
             if rollup_loop is not None:
                 await rollup_loop.stop()
+            # Close the AsyncPostgresSaver pool opened above (no-op otherwise).
+            await teardown_runtime_checkpointer()
             await async_ports.lifecycle.close()
             # Idempotent — closes the pooled backend client used by the
             # BYOK policy resolver (and any capability HTTP callers).
             await BackendHttpPool.aclose()
+
+    @staticmethod
+    def _build_membership_resolver() -> WorkspaceMembershipResolver:
+        """Pick the membership resolver the approval-expiry sweeper cascades on.
+
+        A deliberate replica of
+        ``RuntimeApiAppFactory.default_membership_resolver``: production wires
+        :class:`HttpWorkspaceMembershipResolver` over the trusted service-token
+        lane when ``BACKEND_BASE_URL`` and ``ENTERPRISE_SERVICE_TOKEN`` are both
+        set, and otherwise returns a conservative-deny
+        :class:`InMemoryWorkspaceMembershipResolver` (every check returns
+        ``False``). The worker builds its own instance rather than importing the
+        API app factory, which would drag the whole FastAPI graph into the
+        worker process. NOTE: because the fallback denies every membership, an
+        operator who enables the sweeper without configuring the backend lane
+        would have the cascade pass reject every pending approval — configure
+        the lane before opting in.
+        """
+
+        backend_base_url = os.environ.get("BACKEND_BASE_URL", "").strip()
+        service_token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
+        if not backend_base_url or not service_token:
+            return InMemoryWorkspaceMembershipResolver()
+        return HttpWorkspaceMembershipResolver(
+            fetch=RuntimeWorkerEntrypoint._httpx_membership_fetcher(),
+            backend_base_url=backend_base_url,
+            service_token=service_token,
+        )
+
+    @staticmethod
+    def _httpx_membership_fetcher():
+        """Return a small httpx-backed ``HttpFetcher`` for the membership resolver.
+
+        Mirrors ``RuntimeApiAppFactory._httpx_membership_fetcher``; the httpx
+        import is kept local to the wiring path so processes that never build
+        the resolver do not pay for it.
+        """
+
+        import httpx
+
+        async def fetch(
+            url: str, headers: dict[str, str]
+        ) -> tuple[int, dict[str, object]]:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.get(url, headers=headers)
+            except (httpx.HTTPError, OSError) as exc:
+                raise MembershipResolverUnavailable(
+                    "Identity backend unreachable while resolving membership."
+                ) from exc
+            try:
+                body = response.json() if response.content else {}
+            except ValueError:
+                body = {}
+            return response.status_code, body
+
+        return fetch
 
     @staticmethod
     def main() -> None:

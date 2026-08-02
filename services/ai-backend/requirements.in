@@ -45,6 +45,11 @@ langgraph-checkpoint-sqlite==3.1.0
 # `import aiosqlite` in execution/deep_agent_builder.py is a DIRECT import even
 # though langgraph-checkpoint-sqlite also requires it.
 aiosqlite==0.22.1
+# Postgres-backed LangGraph checkpointer (T3.2): the server topology's durable
+# graph continuation, the sibling of the sqlite saver above. Added on `dev`
+# after this file was first compiled, so it arrived as a merge conflict rather
+# than as a resolver change — pinning it here is what keeps the lock honest.
+langgraph-checkpoint-postgres==3.1.0
 # MultiServerMCPClient + descriptor conversion (capabilities/mcp/tool_source.py).
 langchain-mcp-adapters==0.3.1
 openai==2.46.0

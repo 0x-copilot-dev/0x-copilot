@@ -170,6 +170,34 @@ Hard rule: no deployable component imports another's `src/`. This is non-negotia
 - `packages/shared-config` is planned — do not import from it until it exists.
 - Add or update a service-boundary doc before creating a new service or shared package.
 
+### What `ai-backend` is (state it positively, or it accretes)
+
+**A lean Deep Agents / LangGraph runtime, plus the adapters that map LangGraph output
+into our event format.** That adapter layer is `runtime_worker/stream_*`,
+`capabilities/middleware/`, and `operations/presentation_boundary` — it belongs here by
+design, not by accident.
+
+A source-level audit ([docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md](docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md))
+found ~80% of the service genuinely is that runtime, ~20% is misplaced, ~4% is dead.
+The rule below is what keeps the 20% from growing.
+
+**Do not add to `ai-backend`:** billing / pricing / usage rollups · tenant or workspace
+admin CRUD · product persistence (sharing, inbox, todos, notifications, model catalog) ·
+one-shot data migrations · eval / benchmark / promotion tooling · a second audit stream
+or another copy of the logging contract. Each of those already has a home in `backend`.
+
+### Policy decision vs policy enforcement (PDP/PEP) — the rule that is easy to get wrong
+
+**Policy data belongs to `backend`; policy _enforcement_ stays in the runtime.** The
+model chooses tools mid-graph-loop — the facade sees one "start a run" call and never
+sees the resulting tool calls, so the enforcement point cannot live outside the loop.
+
+The required pattern, already implemented by `ToolUsePolicySnapshot.from_response`:
+**snapshot the policy once at run start, enforce in-process, POST the facts afterwards.**
+Never put a per-call HTTP hop on the tool path — it is a network round-trip on the
+hottest path in the system. "We enforce here" is correct; "we author, store or
+administer the policy here" is the violation.
+
 ## Branching & Releases
 
 **Open PRs against `dev`, never `main`.** `main` moves only via `promote-to-main.yml`

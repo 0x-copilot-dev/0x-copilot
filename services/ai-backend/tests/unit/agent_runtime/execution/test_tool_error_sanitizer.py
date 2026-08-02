@@ -83,6 +83,149 @@ class TestErrorSanitizerStripsInternals:
         assert "line 10" not in msg
 
 
+class TestSanitizeTextForConnectorErrors:
+    """`sanitize_text` scrubs connector-provided error text for the model.
+
+    The narrowing this pins: an internal id (labeled, or canonical UUID) is
+    still removed, but a resource id the *server* returned survives — a
+    connector's error is usually *about* that resource, and redacting it blinds
+    the model to the object it must fix its call around.
+    """
+
+    def test_a_postgres_column_error_reaches_the_model(self) -> None:
+        # The actionable half: the model can only fix "column does not exist"
+        # by reading which column, so the text must survive verbatim.
+        msg = ErrorSanitizer.sanitize_text('ERROR: column "assignee_id" does not exist')
+        assert 'column "assignee_id" does not exist' in msg
+
+    def test_a_connection_string_in_the_same_payload_is_redacted(self) -> None:
+        # The dangerous half, in the same string as the actionable half: the
+        # column error survives while the DSN and its password do not.
+        msg = ErrorSanitizer.sanitize_text(
+            'ERROR: column "assignee_id" does not exist\n'
+            "dsn=postgresql://svc:s3cr3t_pw@db.internal.example:5432/prod"
+        )
+        assert 'column "assignee_id" does not exist' in msg
+        assert "postgresql://" not in msg
+        assert "s3cr3t_pw" not in msg
+
+    def test_a_server_resource_id_survives(self) -> None:
+        # A Notion-style page id (undashed 32-hex) is the server's own resource
+        # id; the connector's "not found" is about it, so it must reach the model.
+        page_id = "2fd1e2a3b4c5d6e7f8091a2b3c4d5e6f"
+        msg = ErrorSanitizer.sanitize_text(f"Could not find page {page_id}")
+        assert page_id in msg
+
+    def test_an_org_uuid_is_still_redacted(self) -> None:
+        # A canonical dashed UUID is how our internal org/run/conversation ids
+        # appear; it stays redacted even though bare resource ids now survive.
+        org_uuid = "550e8400-e29b-41d4-a716-446655440000"
+        msg = ErrorSanitizer.sanitize_text(f"not permitted for org {org_uuid}")
+        assert org_uuid not in msg
+        assert ErrorSanitizer._REDACTED in msg
+
+    def test_a_labeled_internal_hex_id_is_still_redacted(self) -> None:
+        # The narrowing keeps redacting a long hex run when a label marks it as
+        # one of ours, so an internal id echoed back in connector text stays out.
+        run_id = "8475dbace42f4e34a2d2fb1555a542e0"
+        msg = ErrorSanitizer.sanitize_text(f"failed for run_id={run_id}")
+        assert run_id not in msg
+        assert "run_id" in msg  # the label is kept as context
+        assert ErrorSanitizer._REDACTED in msg
+
+    def test_all_four_survive_or_redact_in_one_payload(self) -> None:
+        page_id = "2fd1e2a3b4c5d6e7f8091a2b3c4d5e6f"
+        org_uuid = "550e8400-e29b-41d4-a716-446655440000"
+        msg = ErrorSanitizer.sanitize_text(
+            'relation query failed: column "assignee_id" does not exist\n'
+            "dsn=postgresql://svc:s3cr3t_pw@db.internal.example:5432/prod\n"
+            f"while resolving page {page_id} for org {org_uuid}"
+        )
+        assert 'column "assignee_id" does not exist' in msg  # (a) actionable
+        assert "postgresql://" not in msg and "s3cr3t_pw" not in msg  # (b) secret
+        assert page_id in msg  # (c) resource id
+        assert org_uuid not in msg  # (d) internal id
+
+    def test_multiline_detail_is_preserved_not_reduced_to_one_line(self) -> None:
+        # Unlike `sanitize`, connector text keeps every surviving line — a
+        # Postgres error's DETAIL/HINT are as actionable as its first line.
+        msg = ErrorSanitizer.sanitize_text(
+            'ERROR: column "x" does not exist\n'
+            'HINT: Perhaps you meant to reference the column "team_id".'
+        )
+        assert "HINT:" in msg
+        assert 'reference the column "team_id"' in msg
+
+    def test_the_field_cap_bounds_a_runaway_connector_message(self) -> None:
+        msg = ErrorSanitizer.sanitize_text("z" * 5000, max_length=2048)
+        assert len(msg) <= 2048
+        assert msg.endswith("…[truncated]")
+
+
+class TestBareHexInternalIdLeakIsAnAcceptedTradeoff:
+    """Pin, by name, the residual leak the T2.1 narrowing knowingly accepted.
+
+    Some internal ids are emitted as ``uuid4().hex`` — 32 undashed hex chars
+    (e.g. ``ToolBudgetRecord.id``). Unlabeled, that byte string is *identical*
+    to a dashless-UUID resource id a connector returns (a Notion page id, an
+    external record key): same alphabet, same length, no delimiter to tell them
+    apart. ``sanitize_text`` therefore lets it survive, exactly as it lets a
+    real resource id survive — the two cases are the same bytes.
+
+    ``test_a_server_resource_id_survives`` already exercises this shape as the
+    *desired* behaviour; this class exists to record the *security decision*
+    hiding inside it, so a later "just redact bare 32-hex" change is a conscious
+    reversal of a documented tradeoff (and re-breaks the resource-id survival it
+    would collide with) rather than a silent tightening. The two producer-side
+    mitigations that DO work are asserted alongside, as executable guidance.
+
+    Why accepted rather than plugged at this sink:
+
+    * Not reachable via the sole caller. ``sanitize_text``'s only production
+      call site is the MCP connector-protocol-error path, whose input is the
+      connector's own response text (or a static fallback). We inject none of
+      our ids into the connector request (only ``tool_name`` + ``arguments``)
+      or its response, and ``ToolBudgetRecord`` / ``ToolResultAdmission`` never
+      enter the MCP dispatch package at all.
+    * Low severity even if reached. A ``uuid4().hex`` is a random, non-secret
+      opaque token — not a credential, path, or PII — surfaced to a model
+      already inside the same run's trust boundary. The genuinely sensitive
+      shapes (secrets, keys, Bearer, connection strings, paths, dashed UUIDs)
+      stay redacted unconditionally.
+    * Unpluggable at the sink without regression. No regex separates our hex
+      from the connector's; redacting it re-blinds the model to resource ids,
+      the precise failure T2.1 removed.
+    """
+
+    # Simultaneously a valid ``uuid4().hex`` (an internal-id shape) AND a valid
+    # dashless page id (a resource-id shape). No test can tell the two intents
+    # apart — that ambiguity is the finding.
+    _BARE_HEX = "3f2504e04f8941d39a0c0305e82c3301"
+
+    def test_a_bare_uuid4_hex_internal_id_is_not_redacted(self) -> None:
+        # Deliberate: unlabeled + undashed => indistinguishable from a resource
+        # id, so it survives. This is the accepted leak, pinned so it stays a
+        # choice.
+        msg = ErrorSanitizer.sanitize_text(f"could not find record {self._BARE_HEX}")
+        assert self._BARE_HEX in msg
+
+    def test_producer_mitigation_dashed_form_is_redacted(self) -> None:
+        # Mitigation #1: emit the same id in canonical dashed form and it is
+        # covered unconditionally, no label required.
+        dashed = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+        msg = ErrorSanitizer.sanitize_text(f"could not find record {dashed}")
+        assert dashed not in msg
+        assert ErrorSanitizer._REDACTED in msg
+
+    def test_producer_mitigation_internal_label_is_redacted(self) -> None:
+        # Mitigation #2: put it behind an internal-id label and even the bare
+        # hex form is redacted, with the label kept as context.
+        msg = ErrorSanitizer.sanitize_text(f"failed for trace_id={self._BARE_HEX}")
+        assert self._BARE_HEX not in msg
+        assert "trace_id" in msg
+        assert ErrorSanitizer._REDACTED in msg
+
+
 class TestErrorHintExtractor:
     def test_pydantic_validation_error_yields_field_hints(self) -> None:
         with pytest.raises(ValidationError) as caught:
