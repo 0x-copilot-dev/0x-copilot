@@ -289,7 +289,11 @@ class TestAlwaysLoadedTier(McpCatalogMixin):
         content = catalog.server_markdown.content
 
         assert McpCatalogPaths.tools_dir(self.CatalogValues.SERVER) in content
-        assert "call_mcp_tool" in content
+        # Names the way to run a tool WITHOUT naming a tool that no longer
+        # exists. Pinning the absence too: a stale pointer here is invisible
+        # in every unit test and only shows up as an empty answer in a live run.
+        assert "call the tool by its own name" in content
+        assert "call_mcp_tool" not in content
 
 
 class TestToolFiles(McpCatalogMixin):
@@ -306,13 +310,14 @@ class TestToolFiles(McpCatalogMixin):
         assert payload["input_schema"] == dict(descriptor.input_schema)
         assert payload["output_shape"] == dict(descriptor.output_shape)
         assert payload["action"] == McpToolActionClass.READ.value
+        # The tool IS the descriptor's name; `server_name` remains for
+        # provenance, not as an argument to fill in.
         assert payload["invoke_with"] == {
-            "tool": "call_mcp_tool",
+            "tool": descriptor.name,
             "server_name": self.CatalogValues.SERVER,
-            "tool_name": descriptor.name,
         }
 
-    def test_tool_file_points_at_the_gateway_not_a_direct_call(self) -> None:
+    def test_tool_file_points_at_the_tool_itself(self) -> None:
         catalog = McpCatalogBuilder.build(
             self.make_loaded(tools=(self.make_catalog_tool("create_issue"),))
         )
@@ -320,9 +325,15 @@ class TestToolFiles(McpCatalogMixin):
 
         payload = json.loads(catalog.as_mapping()[path])
 
-        # Discovery grants nothing: the only advertised way to run a tool is
-        # the gateway that carries the PDP decision and the approval interrupt.
-        assert payload["invoke_with"]["tool"] == "call_mcp_tool"
+        # Discovery still grants nothing — the POLICY stage carries the PDP
+        # decision and the approval interrupt either way. What changed is the
+        # ADDRESS: per-tool registration puts each connector tool on the model
+        # surface under its own name, so pointing at the retired umbrella sends
+        # the model to a tool that does not exist. A live run proved the cost:
+        # the model read all 52 descriptors, called `call_mcp_tool`, and
+        # returned a successful-looking nothing.
+        assert payload["invoke_with"]["tool"] == "create_issue"
+        assert payload["invoke_with"]["server_name"] == self.CatalogValues.SERVER
         assert payload["action"] == McpToolActionClass.WRITE.value
 
 
@@ -438,7 +449,8 @@ class TestLoadReturnsAPointer(McpCatalogMixin):
         next_steps = str(result["next_steps"])
         assert result["server_md"] in next_steps
         assert "grep" in next_steps
-        assert "call_mcp_tool" in next_steps
+        assert "call the tool by its own name" in next_steps
+        assert "call_mcp_tool" not in next_steps
 
     def test_load_publishes_the_browsable_tree(self) -> None:
         store = McpCatalogStore()
