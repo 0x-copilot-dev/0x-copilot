@@ -139,45 +139,6 @@ MCP_SERVER_CARDS_INSTRUCTIONS = (
     "from the loaded descriptor."
 )
 
-# F3 ``deferred`` replaces the per-server enumeration above with this block. It
-# has to carry over everything the enumeration was load-bearing for while
-# costing a constant number of tokens, so it says only what does not vary by
-# connector: that authorized capabilities exist, how to find one, and how to
-# reach the three direct MCP tools that discovery does NOT replace.
-#
-# Two of those carry-overs are easy to lose:
-#
-# * inventory questions. The card block answered "which servers do I have?"
-#   from the prompt and told the model *not* to call load_mcp_server for it.
-#   With no cards the honest answer is search_capabilities, so the instruction
-#   inverts rather than disappearing.
-# * auth state. Each card printed ``auth_state``, and the catalog has no
-#   equivalent field — a CapabilityIndexEntry for an MCP server carries no auth
-#   at all. So the model can no longer know in advance that a server needs
-#   authentication, and this block has to name the reactive route instead: an
-#   auth failure from load/call means call auth_mcp, not that the server is
-#   unusable.
-#
-# The opening sentence is deliberately count-neutral. A catalog with no entries
-# still mints a generation, so a bridge registers and this block renders even
-# when the user has authorized nothing — claiming servers *are* available would
-# be a false statement the model would then try to act on.
-CAPABILITY_DISCOVERY_INSTRUCTIONS = (
-    "Any MCP servers available to this request are discoverable rather than "
-    "listed here. Do not assume external services are unavailable; search for "
-    "them first. Call search_capabilities with a short description of what you "
-    "need to get back matching capabilities with their stable names, and "
-    "describe_capability on one of its opaque references for compact metadata. "
-    "If the user asks which MCP servers are available, answer from "
-    "search_capabilities rather than assuming none exist. To use a capability, "
-    "call load_mcp_server with its "
-    "stable name to load only that server's validated tool descriptors, then "
-    "call call_mcp_tool with a tool_name and arguments from the loaded "
-    "descriptor. If loading or calling reports an authentication failure, call "
-    "auth_mcp with the same stable name and then retry; an unauthenticated "
-    "server is not an unavailable one."
-)
-
 SKILL_CARDS_INSTRUCTIONS = (
     "Available user-created Skills are compact cards backed by a virtual registry. "
     "When a Skill is relevant, call load_skill with the stable skill_name to read "

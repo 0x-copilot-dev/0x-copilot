@@ -256,14 +256,32 @@ cannot break policy / observability / errors.
       the backend RPC-proxy path for the agent.
 - **Ships:** MCP served by the library; pipeline unchanged; Resources available next.
 
-### P3 — Collapse the staging subsystem
+### P3 — Collapse the staging subsystem — **CLOSED, NOTHING DELETED**
 
-- [ ] Delete A4/A5 effect-staging, rowset machinery, `mcp_effect_executor`,
-      `/effect-stages/*` routes, descriptor-revision.
-- [ ] Keep a **thin audit record** (who approved + what executed) if compliance needs a
-      receipt — not the whole machine.
-- [ ] Remove residual effect-stage UI.
-- **Ships:** the heavy, buggy path is gone.
+Executing this phase as written would have removed live, reachable code. A
+source-level pass over every module it names — [P3-DELETE-SET.md](P3-DELETE-SET.md),
+file:line evidence per verdict — found the deletable set is **empty**.
+
+The premise was that the interrupt GATE replaced staging and left the machinery
+orphaned. Half of that is true: the GATE did replace fire-and-return staging for
+MCP writes. The other half is not — staging still has **two live producers**, one
+of which is default-ON where it counts:
+
+- `artifact_draft_send` reaches `EffectStager.stage`, gated on `artifact_drafts_v2`,
+  which the desktop sets **true** while the service default is `false`. Reading
+  only the service default is what made this phase look safe.
+- `stage_rowset_write` is a model-visible builtin gated on `SURFACES_V2` alone,
+  and this plan never mentioned it.
+
+And `surfaces_v2/gate.py`, listed here for deletion, **is the replacement** —
+`ToolAccessGate.park_for_approval` is called from both live MCP paths.
+
+- [x] Audit every named module against source — done, verdict per module.
+- [x] Correct §4's table, which is what a reader hits first — banner added.
+- [ ] **Superseded:** re-open only if a future change retires both stage
+      producers. Until then there is no deletion to make, and the thin audit
+      record this phase wanted already exists as `gate.opened` / `gate.resolved`.
+- **Ships:** the record that the heavy path is still load-bearing, and why.
 
 ### P4 — Resources / Prompts + render≠approve polish
 

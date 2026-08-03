@@ -414,3 +414,50 @@ class TestLoadActuallyReadsTheDocument:
 
         with pytest.raises(HyperparameterError):
             RuntimeSettings.load(environ={})
+
+
+class TestTheSearchSectionReachesTheTool:
+    """The second section that is a SOURCE rather than a mirror.
+
+    Before this, only `settings.execution.*` read the document; every other
+    section bound the model's own field defaults at import, so editing
+    `hyperparameters.json` changed nothing and `COPILOT_HP__` overrides were
+    inert. `search` is wired through the composition root — the only layer that
+    has read the document — and these tests fail if that wiring is removed.
+
+    It is the section that most needed to be tunable: with no ranking stage the
+    window size IS the cost control (local-search PRD §5), and extraction was
+    measured at 3.6x the snippet-only baseline.
+    """
+
+    def test_a_document_value_reaches_the_search_pipeline(self) -> None:
+        from agent_runtime.hyperparameters.contracts import SearchHyperparameters
+        from runtime_worker.dependencies import WebSearchToolRegistry
+
+        section = SearchHyperparameters(content_token_budget=333, window_chars=444)
+        registry = WebSearchToolRegistry(content_budget=section)
+
+        override = registry._budget_override()
+
+        assert override["content_budget"].content_token_budget == 333
+        assert override["content_budget"].window_chars == 444
+
+    def test_no_section_keeps_the_pipeline_defaults(self) -> None:
+        """Every test and every non-worker caller passes nothing; nothing changes."""
+
+        from runtime_worker.dependencies import WebSearchToolRegistry
+
+        assert WebSearchToolRegistry()._budget_override() == {}
+
+    def test_a_window_wider_than_the_whole_budget_is_refused(self) -> None:
+        """One source would consume the allowance and starve the other three."""
+
+        from agent_runtime.hyperparameters.contracts import SearchHyperparameters
+
+        with pytest.raises(ValidationError):
+            SearchHyperparameters(content_token_budget=100, window_chars=20_000)
+
+    def test_the_checked_in_document_carries_the_section(self) -> None:
+        document = HyperparameterLoader.default()
+
+        assert document.search.content_token_budget == 1_200

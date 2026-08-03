@@ -210,7 +210,6 @@ class RuntimeWorker:
         ) = None,
         citation_store: "CitationStorePort | None" = None,
         mcp_discovery_cache: object | None = None,
-        mcp_revision_resolver: object | None = None,
         user_policies_resolver: object | None = None,
         artifact_service: object | None = None,
         artifact_blob_store: object | None = None,
@@ -280,10 +279,6 @@ class RuntimeWorker:
         # default run / approval handler dependencies factories so every
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
-        # The same assembly's revision authority. It is what lets one run's F3
-        # catalog generation key on the F8 descriptor revisions, so a reference
-        # minted before a server moved fails closed at use time.
-        self.mcp_revision_resolver = mcp_revision_resolver
         # The assembly is constructed at the worker root, but its one feed
         # task is not started until ``run_forever`` owns a fully-built worker.
         self._mcp_revision_poller = mcp_revision_poller
@@ -449,7 +444,6 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
-            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             # PRD-D3 — lets the per-run bulk-staging tool enqueue an allow-always
             # auto-apply through the same durable queue the API uses.
@@ -514,7 +508,6 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
-            mcp_revision_resolver=mcp_revision_resolver,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
             # P1b: an approved MCP write executes on resume through the same

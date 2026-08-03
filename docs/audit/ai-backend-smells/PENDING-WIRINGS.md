@@ -48,7 +48,7 @@ that thing is not in the tree. Track the owner; do not delete.
 | `agent_runtime.context.tool_result_admission_gate`       |  413 | 07-29 | `RuntimeControlMiddleware`'s result sweep to call the gate (docstring says "already routes" — source disagrees)                       | `runtime_tool_control.py` still bounds via the older `ToolResultAdmissionAdapter`; also a **T1.3 lever**                                                     |
 | `agent_runtime.observability.context_origin_conformance` | 1271 | 07-30 | invocation as a merge/CI gate ("cannot merge", "hard-fails CI")                                                                       | no caller; sibling `llm_seam` gate _is_ aggregated into `release/e2_final_conformance.py:216`, this one never was                                            |
 | `agent_runtime.capabilities.workspace.patch_plan`        |  804 | 07-27 | "an **eventual C1 overlay transaction** may consume" the validated plan                                                               | no `OverlayTransaction`/applier consumer (rest of the `workspace` package _is_ wired)                                                                        |
-| `agent_runtime.harness_quality.promotion_cohorts`        |  552 | 07-29 | "the declared promotion cohort matrix **Step 15** evaluates"                                                                          | Step-15 evaluator absent; deliberately unexported from `__init__`                                                                                            |
+| `agent_runtime.harness_quality.operational_corpus`       | 1521 | 07-29 | the **Step 15** promotion evaluator, same as its deleted importer                                                                     | inherited this row when `promotion_cohorts` — its only `src` importer — was deleted with F3 discovery; still exercised by three harness-quality test modules |
 | `agent_runtime.surfaces_v2.retention`                    |  696 | 07-25 | "a **future coordinator** supplies a trusted snapshot … owns the I/O"                                                                 | consumer is `PRD-FS-04` `workspace-trash.ts`; big name-collision with the wired `agent_runtime.retention` package                                            |
 | `agent_runtime.release.promotion`                        |  183 | 07-27 | the Step-15 driver that constructs `PairedPromotionEvaluator` (prose is silent; sibling `promotion_cohorts` names Step 15)            | persistence sink `put_paired_report` _is_ wired; no production caller                                                                                        |
 | `agent_runtime.api.inbox_fallback`                       |  316 | 05-18 | run-handler caller + `tenants.inbox_fallback_inactivity_ms` column                                                                    | `handlers/run.py` never calls `schedule_approval_fallback`; `InboxProducerPort` _is_ shipped                                                                 |
@@ -65,9 +65,12 @@ that thing is not in the tree. Track the owner; do not delete.
 Two clusters dominate: the **todos/memory extraction pipeline** (`proposal_extractor`,
 `todo_extractor`, `postgres.todo_extraction_store`, and cross-service `routine_scheduler`)
 all wait on the same missing **P3-A1 / P5-A1** orchestrator + backend endpoints; and a
-**release/harness conformance** cluster (`promotion_cohorts`, `release.promotion`,
+**release/harness conformance** cluster (`operational_corpus`, `release.promotion`,
 `context_origin_conformance`, and the Wireable `e2_final_conformance`) all wait on a
-Step-15 / CI driver.
+Step-15 / CI driver. `promotion_cohorts` was the fourth member until the F3
+capability-discovery deletion removed it — it imported `CapabilityActivationMode`,
+so it could not outlive the package — and `operational_corpus` was orphaned in the
+same stroke, having had no other `src` importer.
 
 ---
 

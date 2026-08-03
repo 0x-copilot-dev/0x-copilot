@@ -1547,14 +1547,6 @@ class RuntimeApiAppFactory:
                 "poller",
                 None,
             ),
-            # Without the resolver the F3 catalog generation folds zero
-            # descriptor revisions, so a capability ref can never be reported
-            # stale mid-run — BUG-12, on the in-process dev worker path.
-            mcp_revision_resolver=getattr(
-                getattr(app.state, "mcp_revision_control_plane", None),
-                "resolver",
-                None,
-            ),
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None
             ),

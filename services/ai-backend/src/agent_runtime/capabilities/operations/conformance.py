@@ -190,24 +190,6 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
             "execution.factory._model_visible_tools",
         ),
         ("builtin", "suggest_mcp_connector", "execution.factory._model_visible_tools"),
-        # F3 capability-discovery bridge tools. They are registered by the same
-        # factory function as their neighbours, through
-        # ``CapabilityBridgeRegistrar``, and only in the ``deferred`` posture.
-        # They are inventoried unconditionally because this list records fixed
-        # registration *seams*, not whichever seams a given run's feature flags
-        # happened to open — exactly like ``run_in_sandbox``, which is also
-        # absent from a run that supplies no sandbox tool.
-        (
-            "builtin",
-            "search_capabilities",
-            "execution.factory._model_visible_tools",
-        ),
-        (
-            "builtin",
-            "describe_capability",
-            "execution.factory._model_visible_tools",
-        ),
-        ("builtin", "invoke_capability", "execution.factory._model_visible_tools"),
         ("builtin", "run_code_mode", "execution.factory._model_visible_tools"),
         ("builtin", "run_in_sandbox", "execution.factory._model_visible_tools"),
         ("builtin", "stage_rowset_write", "execution.factory._model_visible_tools"),

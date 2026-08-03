@@ -88,6 +88,12 @@ class CheckedInDocumentMixin:
         "model_mapper": {"max_output_tokens": 1024, "temperature": 0.0},
         "observability": {"max_stream_field_length": 2000},
         "citations": {"per_result_max": 25},
+        "search": {
+            "content_token_budget": 1_200,
+            "window_chars": 1_200,
+            "lead_chars": 900,
+            "min_window_chars": 200,
+        },
     }
 
     @staticmethod
@@ -106,7 +112,15 @@ class SecretKeyScanMixin:
     #: credential. Kept as full paths, not as a relaxed rule, so a genuinely
     #: secret-shaped key can never be admitted by a pattern loophole.
     ALLOWED_PATHS = frozenset(
-        {"/context/max_input_tokens", "/model_mapper/max_output_tokens"}
+        {
+            "/context/max_input_tokens",
+            "/model_mapper/max_output_tokens",
+            # A count of context tokens `web_search` may spend, not a bearer of
+            # anything. Listed as a full path for the reason above: the leaf
+            # genuinely contains the word, and admitting it by loosening the
+            # rule would admit a real credential named the same way.
+            "/search/content_token_budget",
+        }
     )
 
     @classmethod
