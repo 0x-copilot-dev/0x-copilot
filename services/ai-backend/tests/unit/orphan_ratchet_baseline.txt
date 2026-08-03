@@ -23,7 +23,7 @@ agent_runtime.capabilities.tools.code_tool_adapter
 agent_runtime.capabilities.tools.privacy
 agent_runtime.capabilities.workspace.patch_plan
 agent_runtime.context.tool_result_admission_gate
-agent_runtime.harness_quality.promotion_cohorts
+agent_runtime.harness_quality.operational_corpus
 agent_runtime.observability.context_origin_conformance
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion

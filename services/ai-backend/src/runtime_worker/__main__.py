@@ -174,7 +174,6 @@ class RuntimeWorkerEntrypoint:
                 ),
                 citation_store=async_ports.citation_store,
                 mcp_discovery_cache=mcp_control_plane.discovery_cache,
-                mcp_revision_resolver=mcp_control_plane.resolver,
                 mcp_revision_poller=mcp_control_plane.poller,
                 user_policies_resolver=user_policies_resolver,
                 artifact_service=ArtifactServiceComposition.build(async_ports),

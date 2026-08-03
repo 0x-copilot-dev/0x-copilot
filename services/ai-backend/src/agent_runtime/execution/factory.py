@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
-    CapabilityBridgeComposition,
     RuntimeDependencies,
     RuntimeErrorCode,
 )
@@ -117,7 +116,6 @@ from agent_runtime.control_plane.context import (
 )
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
-    CAPABILITY_DISCOVERY_INSTRUCTIONS,
     CONNECTOR_ROUTING_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -356,9 +354,6 @@ async def _assemble_harness(
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             revise_artifact_tool=runtime_dependencies.revise_artifact_tool,
-            capability_activation=runtime_dependencies.capability_activation,
-            capability_catalog=runtime_dependencies.capability_catalog,
-            capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
             mcp_per_tool=mcp_per_tool,
             mcp_catalog=mcp_catalog,
@@ -396,14 +391,6 @@ async def _assemble_harness(
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
             tool_schema_revision=_model_tool_schema_revision(model_tools),
-            # Read off the *final* composed surface, after display decoration
-            # and tool-policy enforcement, so the prompt can only ever describe
-            # tools the model was actually given.
-            capability_bridge_tools=_capability_bridge_tool_names(
-                model_tools,
-                activation=runtime_dependencies.capability_activation,
-                catalog=runtime_dependencies.capability_catalog,
-            ),
             workspace_active=bool(
                 workspace_backend is not None
                 and getattr(workspace_backend, "advertise_workspace", True)
@@ -918,9 +905,6 @@ def _model_visible_tools(
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
     revise_artifact_tool: object | None = None,
-    capability_activation: object | None = None,
-    capability_catalog: object | None = None,
-    capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
     mcp_per_tool: McpPerToolRegistration | None = None,
     mcp_catalog: McpCatalogPublisher | None = None,
@@ -1080,29 +1064,6 @@ def _model_visible_tools(
             owner=ModelToolOwner.DISCOVERY,
         )
     )
-    # F3 — bounded capability-discovery bridge tools. Which tools (if any) a run
-    # may expose is decided solely by ``CapabilityBridgeRegistrar``; the factory
-    # only wraps what it returns, so there is no second activation vocabulary
-    # and no second tool-composition path. Appended here, before the gated
-    # Wave-1 block, so bridge tools receive the SAME display, tool-policy,
-    # approval, and budget middleware as every other model-visible tool — they
-    # are not privileged. Empty in ``direct``/``server``/``shadow`` and for a
-    # catalog that cannot mint a revalidatable ref, which is the current
-    # production posture: the composed surface is then byte-identical to the
-    # pre-F3 disclosure path.
-    model_tools.extend(
-        ModelToolDeclaration.declared_all(
-            _capability_bridge_tools(
-                activation=capability_activation,
-                catalog=capability_catalog,
-                bridge=capability_bridge,
-                loader=loader,
-                local_tool_names=local_tool_names,
-                runtime_context=runtime_context,
-            ),
-            owner=ModelToolOwner.DISCOVERY,
-        )
-    )
     # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
     # (constructed per run by the worker) or ``None`` when its flag+desktop gate
     # is off. Appended last so they receive the SAME tool-policy / approval /
@@ -1163,217 +1124,6 @@ def _model_visible_tools(
     return tuple(model_tools)
 
 
-def _capability_bridge_tools(
-    *,
-    activation: object | None,
-    catalog: object | None,
-    bridge: object | None = None,
-    loader: McpLoader | None = None,
-    local_tool_names: frozenset[str] = frozenset(),
-    runtime_context: AgentRuntimeContext,
-) -> tuple[object, ...]:
-    """Return the F3 bridge tools this run may expose, or nothing at all.
-
-    Registration is a *narrowing* decision that this factory delegates whole:
-    :meth:`CapabilityBridgeRegistrar.registrations_for` owns the posture gate,
-    the unbindable-catalog gate, and the invoke-seam gate, and it yields plain
-    domain adapters plus their bounded schemas.  The factory only wraps them
-    with the same ``_structured_tool`` helper every other model tool uses, so
-    tool composition keeps exactly one owner and the discovery package keeps
-    importing no model-framework type.
-
-    What this function adds beyond delegation is the *join* the registrar cannot
-    perform for itself.  A bridge that can act needs one run-scoped disclosure
-    ledger written by search and read by the executor, and it needs the loader
-    and the MCP dispatcher — which exist only here, one per run, and are handed
-    over rather than rebuilt.  :meth:`CapabilityBridgeSeam.compose` owns the
-    ledger, and the executor is constructed from ``seam.disclosure`` itself, so
-    "the registrar and the executor share one ledger" is a property of how this
-    code is written rather than a rule someone has to remember.
-
-    Every unresolved input narrows and leaves the run further back on the
-    pre-F3 path, never further forward:
-
-    * an absent activation or catalog — the production default while F3 is
-      dark — registers nothing and does not even import the discovery package,
-      so the dark path's composed surface and import graph are unchanged;
-    * a value that is not the expected typed contract registers nothing rather
-      than guessing at a posture;
-    * an absent bridge composition, minter, or loader registers the catalog-only
-      search and describe pair, exactly as before this seam existed; and
-    * a registrar failure degrades to the same empty surface, because a dark
-      feature must never widen a tool surface *or* fail an otherwise healthy
-      run.  The failure is logged, never surfaced to the model.
-    """
-
-    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
-        return ()
-    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
-        CapabilityActivationDecision,
-        CapabilityBridgeRegistrar,
-        CapabilityCatalog,
-    )
-
-    if not isinstance(activation, CapabilityActivationDecision) or not isinstance(
-        catalog, CapabilityCatalog
-    ):
-        _LOGGER.warning(
-            "Capability discovery inputs are not the expected contracts; "
-            "keeping the pre-F3 disclosure path."
-        )
-        return ()
-    composition = _capability_bridge_composition(bridge)
-    try:
-        seam = _capability_bridge_seam(
-            catalog=catalog,
-            loader=loader,
-            composition=composition,
-        )
-        registrations = CapabilityBridgeRegistrar.registrations_for(
-            activation=activation,
-            catalog=catalog,
-            runtime_context=runtime_context,
-            seam=seam,
-            executor=_capability_executor(seam=seam, loader=loader),
-            revalidation=None if composition is None else composition.revalidation,
-            schema_artifacts=(
-                None if composition is None else composition.schema_artifacts
-            ),
-            observer=None if composition is None else composition.observer,
-            local_tool_names=local_tool_names,
-        )
-    except Exception:
-        _LOGGER.warning(
-            "Capability bridge registration failed; "
-            "keeping the pre-F3 disclosure path.",
-            exc_info=True,
-        )
-        return ()
-    return tuple(
-        _structured_tool(registration.adapter, registration.args_schema)
-        for registration in registrations
-    )
-
-
-def _capability_bridge_composition(
-    bridge: object | None,
-) -> CapabilityBridgeComposition | None:
-    """Narrow the injected bridge inputs, or discard them entirely.
-
-    A wrongly typed value is treated exactly like an absent one.  Reading
-    attributes off whatever arrived would let a partially-shaped object mount
-    half a seam, and half a seam is the state where search discloses references
-    that nothing can dispatch.
-    """
-
-    if bridge is None:
-        return None
-    if isinstance(bridge, CapabilityBridgeComposition):
-        return bridge
-    _LOGGER.warning(
-        "Capability bridge composition is not the expected contract; "
-        "keeping the catalog-only bridge."
-    )
-    return None
-
-
-def _capability_bridge_seam(
-    *,
-    catalog: object,
-    loader: McpLoader | None,
-    composition: CapabilityBridgeComposition | None,
-) -> object | None:
-    """Compose this run's second tier and the ledger it discloses into.
-
-    Both inputs are required and neither is invented here.  The minter is the
-    composition root's — keyed identically to the builder that projected
-    ``catalog``, which is what makes an expanded reference indistinguishable
-    from a catalog member — and the loader is the run's own, so tier two opens
-    servers through the same bounded descriptor read ``load_mcp_server`` uses.
-    Missing either one composes no seam, and the registrar then mounts the
-    catalog-only search it mounted before.
-    """
-
-    if composition is None or composition.minter is None or loader is None:
-        return None
-    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
-        CapabilityBridgeSeam,
-    )
-
-    return CapabilityBridgeSeam.compose(
-        catalog=catalog,  # type: ignore[arg-type]
-        loader=loader,
-        minter=composition.minter,
-        limits=composition.expansion_limits,
-        observer=composition.expansion_observer,
-    )
-
-
-def _capability_executor(
-    *,
-    seam: object | None,
-    loader: McpLoader | None,
-) -> object | None:
-    """The non-model dispatch route for a disclosed capability: there is none.
-
-    F3's bridge dispatched through the umbrella ``CallMcpTool``, which is gone --
-    per-tool registration replaced it, and a per-tool surface has no single
-    dispatcher to borrow. ``None`` is the same signal the unconfigured
-    deployment already produced (``F3_CAPABILITY_ACTIVATION`` is set nowhere in
-    this repo), so no run's behaviour changes; what changes is that the route is
-    absent by construction rather than by configuration.
-    """
-
-    del seam, loader
-    return None
-
-
-def _capability_discovery_is_supplied(
-    *,
-    activation: object | None,
-    catalog: object | None,
-) -> bool:
-    """Return whether F3 supplied both inputs a bridge registration needs.
-
-    This is the one precondition every F3 seam in this module shares, so it is
-    written once.  It is deliberately only a *precondition*: satisfying it means
-    a bridge registration is possible, never that one happened.
-    """
-
-    return activation is not None and catalog is not None
-
-
-def _capability_bridge_tool_names(
-    model_tools: Sequence[object],
-    *,
-    activation: object | None,
-    catalog: object | None,
-) -> frozenset[str]:
-    """Return the bridge tools actually present in the model-visible surface.
-
-    Deferred suppression reads this and nothing else.  Deriving it from the
-    *composed surface* rather than from the activation posture that produced it
-    is what makes the safety property structural: a run whose bridge did not
-    register — for any of W1's reasons, or any future one — has no bridge tool
-    in its surface, so there is nothing here that could authorize suppressing
-    the disclosure path it fell back to.  The unsuppressed pre-F3 prompt and the
-    empty bridge set are reached by the same branch.
-
-    The narrowing precondition is checked first purely so a dark run never
-    imports the discovery package to look for names that cannot be there; it can
-    only ever report *fewer* bridge tools, never more.
-    """
-
-    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
-        return frozenset()
-    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
-        CapabilityBridgeToolName,
-    )
-
-    composed = {str(getattr(tool, "name", "")) for tool in model_tools}
-    return frozenset(composed & CapabilityBridgeToolName.reserved_names())
-
-
 def _canonical_graph_tool(tool: object) -> object:
     """Remove the legacy budget adapter at the canonical graph boundary."""
 
@@ -1389,7 +1139,6 @@ def _prompt_assembly_plan(
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
     tool_schema_revision: str,
-    capability_bridge_tools: frozenset[str] = frozenset(),
     workspace_active: bool,
     workspace_writable: bool,
     workspace_effect_staging: bool,
@@ -1404,26 +1153,15 @@ def _prompt_assembly_plan(
     adapter gives each block a typed revision, scope, and cache eligibility
     before rendering them in their historical order.  The plan itself is safe
     to project only through :meth:`PromptAssemblyPlan.diagnostic`.
-
-    ``capability_bridge_tools`` names the F3 bridge tools the model was actually
-    given.  When it is empty — every posture but a successfully registered
-    ``deferred`` — this builds the pre-F3 plan byte for byte.
     """
 
     application_block = _standalone_prompt_block(
         _instructions_with_application_context(instructions="")
     )
-    discovery_block = _standalone_prompt_block(
-        _instructions_with_capability_discovery(
-            instructions="",
-            capability_bridge_tools=capability_bridge_tools,
-        )
-    )
     mcp_block = _standalone_prompt_block(
         _instructions_with_mcp_cards(
             instructions="",
             mcp_servers=mcp_servers,
-            capability_bridge_tools=capability_bridge_tools,
         )
     )
     skill_block = _standalone_prompt_block(
@@ -1496,30 +1234,6 @@ def _prompt_assembly_plan(
                 if base_cacheable
                 else PromptCacheEligibility.NEVER
             ),
-        ),
-        # The static protocol block that replaces the card enumeration under a
-        # registered bridge. Unlike the cards it stands in for, it contains no
-        # subject data and does not vary by connector, so it is classified as
-        # installation-scoped immutable policy and — exactly like the
-        # application boundary above, and for the same contiguity reason — joins
-        # the cacheable stable prefix only when the base instructions do.
-        capability_discovery_protocol=(
-            PromptSourceMaterial(
-                source_owner="agent_runtime.capabilities.discovery",
-                source_revision="capability-discovery-protocol-v1",
-                source_scope=PromptFragmentScope.INSTALLATION,
-                scope=PromptFragmentScope.INSTALLATION,
-                sensitivity=PromptSensitivity.INTERNAL,
-                trust=PromptTrustLabel.IMMUTABLE_POLICY,
-                content=discovery_block,
-                cache_eligibility=(
-                    PromptCacheEligibility.STABLE_PREFIX
-                    if base_cacheable
-                    else PromptCacheEligibility.NEVER
-                ),
-            )
-            if discovery_block.strip()
-            else None
         ),
         mcp_cards=_prompt_source_material(
             owner="agent_runtime.capabilities.mcp",
@@ -1899,23 +1613,9 @@ def _instructions_with_mcp_cards(
     *,
     instructions: str,
     mcp_servers: Sequence[object],
-    capability_bridge_tools: frozenset[str] = frozenset(),
 ) -> str:
-    """Append the MCP server card block (or the no-servers block) to the base instructions.
+    """Append the MCP server card block (or the no-servers block) to the base instructions."""
 
-    The block is suppressed only when a bridge tool is genuinely present in the
-    composed model surface.  Suppression is the one thing in F3 that reduces
-    prompt size: this is an unbounded enumeration, one line per authorized
-    server, rendered on every turn and growing linearly with connector count,
-    and search-and-describe is a strictly constant-size replacement for it.
-
-    The default is deliberately the *unsuppressed* block, so a caller that has
-    not proven a bridge registered keeps the pre-F3 disclosure it is entitled
-    to rather than silently losing its only route to MCP.
-    """
-
-    if capability_bridge_tools:
-        return instructions
     if not mcp_servers:
         return "\n\n".join(
             (
@@ -1952,39 +1652,6 @@ def _instructions_with_application_context(*, instructions: str) -> str:
     """Append the invariant that quoted application context is untrusted data."""
 
     return "\n\n".join((instructions, _APPLICATION_CONTEXT_INSTRUCTIONS))
-
-
-def _instructions_with_capability_discovery(
-    *,
-    instructions: str,
-    capability_bridge_tools: frozenset[str],
-) -> str:
-    """Append the discovery protocol block when a bridge tool actually registered.
-
-    Gated on the same set that suppresses the card block, so the two are exactly
-    mutually exclusive: the model is never left without *some* account of how to
-    reach MCP, and never given both.
-
-    The block deliberately re-enumerates nothing.  It is one fixed paragraph
-    whose length does not depend on how many servers are authorized — which is
-    the whole point, since re-listing the servers under a different heading
-    would rebuild the block this lane exists to remove.
-    """
-
-    if not capability_bridge_tools:
-        return instructions
-    return "\n\n".join(
-        (
-            instructions,
-            CAPABILITY_DISCOVERY_INSTRUCTIONS,
-            # The routing rules are needed *more* here than under the cards.
-            # Suppression removes the enumeration that told the model which
-            # servers are authenticated, so without an explicit "check what is
-            # connected first" step its cheapest-looking move is to suggest a
-            # connector for something already connected.
-            CONNECTOR_ROUTING_INSTRUCTIONS,
-        )
-    )
 
 
 async def _skill_cards(

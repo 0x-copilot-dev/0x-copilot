@@ -165,12 +165,8 @@ from runtime_worker.batch_concurrency_composition import (
     LiveBatchAdmissionRegistry,
     activate_batch_admission,
 )
-from runtime_worker.capability_discovery_composition import (
-    build_capability_discovery_composer,
-)
 from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
-    compose_capability_discovery,
 )
 from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
@@ -265,7 +261,6 @@ class RuntimeRunHandler:
         ) = None,
         usage_recorder: UsageRecorder | None = None,
         mcp_discovery_cache: object | None = None,
-        mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
         queue: object | None = None,
@@ -365,13 +360,6 @@ class RuntimeRunHandler:
             DefaultRuntimeDependenciesFactory(
                 self.settings,
                 mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
-                capability_discovery=build_capability_discovery_composer(
-                    decision_store=run_control_decision_store,
-                    schema_artifact_writer=(
-                        self._file_store_worker_wiring.schema_artifact_writer()
-                    ),
-                    descriptor_revision_resolver=mcp_revision_resolver,
-                ),
             )
         )
         self.agent_factory = agent_factory
@@ -725,17 +713,6 @@ class RuntimeRunHandler:
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
             )
-            # F3 needs the run's authorized MCP card snapshot, which only exists
-            # once the registry above does and can only be obtained by awaiting
-            # it. Composing here — after the run-control binding is installed
-            # and against the run's own registry — is what makes the deferred
-            # posture reachable at all. A deployment with no F3 activation
-            # configured returns immediately and lists nothing.
-            dependencies = await compose_capability_discovery(
-                self.dependencies_factory,
-                dependencies,
-                command.runtime_context,
-            )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
             )
@@ -863,6 +840,16 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
                 )
             )
+            # Subagents need settling on THIS path too. A child's terminal frame
+            # comes from the `task` tool's result message, so a run that ends
+            # mid-delegation emits none and the cockpit keeps a spinning card
+            # forever. Appended BEFORE `_emit_receipt_then_terminate` because
+            # that is what seals the prefix: settle after it and the append is
+            # refused by the seal guard, so the run dies with a
+            # `LedgerSealViolation` that hides the real terminal reason.
+            await (
+                self.stream_event_mapper.update_processor
+            ).close_open_subagents_as_cancelled(run=run)
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
@@ -934,6 +921,16 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
                 default_message="We couldn't complete this run. Please try again.",
             )
+            # Subagents need settling on THIS path too. A child's terminal frame
+            # comes from the `task` tool's result message, so a run that ends
+            # mid-delegation emits none and the cockpit keeps a spinning card
+            # forever. Appended BEFORE `_emit_receipt_then_terminate` because
+            # that is what seals the prefix: settle after it and the append is
+            # refused by the seal guard, so the run dies with a
+            # `LedgerSealViolation` that hides the real terminal reason.
+            await (
+                self.stream_event_mapper.update_processor
+            ).close_open_subagents_as_cancelled(run=run)
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.FAILED,
