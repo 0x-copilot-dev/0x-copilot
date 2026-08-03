@@ -213,3 +213,126 @@ class TestTheLeaseIsReleased(ProxyStubMixin):
         await transport.aclose()
 
         assert transport.lease is None
+
+
+class TestTheGateRefusalIsTypedNotGeneric(ProxyStubMixin):
+    """A 403 is ``backend``'s access-mode gate, and must classify as such.
+
+    ``McpErrorTaxonomy`` classifies by exception type. A refusal that arrives as
+    a bare transport error is reported to the user as "the MCP server could not
+    be reached" — wrong, and un-actionable: the fix is the connector's access
+    mode, not a retry.
+    """
+
+    async def test_a_refused_call_raises_a_permission_error(self) -> None:
+        client, _ = self.stub(rpc_status=403)
+        transport = self.transport(client)
+
+        with pytest.raises(PermissionError):
+            await transport.handle_async_request(
+                self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})
+            )
+
+    async def test_a_refused_session_raises_a_permission_error(self) -> None:
+        """Access turned off entirely refuses at session-open, not at the call."""
+
+        client, _ = self.stub(session_status=403)
+        transport = self.transport(client)
+
+        with pytest.raises(PermissionError):
+            await transport.handle_async_request(
+                self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})
+            )
+
+    async def test_the_refusal_names_no_internal_detail(self) -> None:
+        client, _ = self.stub(rpc_status=403)
+        transport = self.transport(client)
+
+        with pytest.raises(PermissionError) as caught:
+            await transport.handle_async_request(
+                self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})
+            )
+
+        message = str(caught.value)
+        assert self.BACKEND not in message
+        assert "403" not in message
+
+    async def test_another_failure_is_still_a_plain_transport_error(self) -> None:
+        """Only 403 is the gate. A 500 must not be reported as a permission problem."""
+
+        client, _ = self.stub(rpc_status=500)
+        transport = self.transport(client)
+
+        with pytest.raises(McpProxyTransportError) as caught:
+            await transport.handle_async_request(
+                self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})
+            )
+
+        assert not isinstance(caught.value, PermissionError)
+
+
+class TestSessionLifecycleVerbs(ProxyStubMixin):
+    """Streamable-http's non-POST verbs are session lifecycle, not JSON-RPC."""
+
+    async def test_a_teardown_delete_does_not_open_a_session(self) -> None:
+        client, seen = self.stub()
+        transport = self.transport(client)
+
+        response = await transport.handle_async_request(
+            httpx.Request("DELETE", "https://mcp.invalid/mcp")
+        )
+
+        assert response.status_code == 202
+        assert seen == []
+
+    async def test_a_stream_get_does_not_open_a_session(self) -> None:
+        client, seen = self.stub()
+        transport = self.transport(client)
+
+        response = await transport.handle_async_request(
+            httpx.Request("GET", "https://mcp.invalid/mcp")
+        )
+
+        assert response.status_code == 202
+        assert seen == []
+
+
+class TestTheLeaseIsActuallyReleased(ProxyStubMixin):
+    """``InternalMcpSessionReleaseRequest`` requires the identity, not just the lease.
+
+    ``post`` does not raise for a 422, so an under-specified release looks like
+    it succeeded while the backend holds the session until it expires.
+    """
+
+    async def test_the_release_carries_everything_the_contract_requires(self) -> None:
+        client, seen = self.stub(rpc_result={"jsonrpc": "2.0", "id": 1, "result": {}})
+        transport = self.transport(client)
+        await transport.handle_async_request(
+            self.request({"jsonrpc": "2.0", "id": 1, "method": "tools/call"})
+        )
+
+        await transport.aclose()
+
+        release = [r for r in seen if r.url.path.endswith("/release")]
+        assert len(release) == 1
+        body = json.loads(release[0].content)
+        assert set(body) == {"org_id", "user_id", "lease"}
+        assert body["lease"] == self.LEASE
+
+    async def test_nothing_is_released_when_no_session_was_opened(self) -> None:
+        client, seen = self.stub()
+        transport = self.transport(client)
+
+        await transport.aclose()
+
+        assert seen == []
+
+    async def test_the_backend_facing_client_is_closed_too(self) -> None:
+        """It is ours, not the SDK's — the outer close does not reach it."""
+
+        client, _ = self.stub()
+        transport = self.transport(client)
+
+        await transport.aclose()
+
+        assert client.is_closed

@@ -110,9 +110,12 @@ class McpPerToolFlag:
     #: Values that read as "on". Matches ``settings._BOOL_TRUTHY`` exactly.
     _ENABLED_VALUES: ClassVar[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
 
-    #: The default applied when the var is absent — **off**, until the per-tool
-    #: path is validated against a live stack (P2-9 flips it for desktop).
-    _DEFAULT_WHEN_UNSET: ClassVar[str] = "false"
+    #: The default applied when the var is absent — **on** since the proxy
+    #: credential plane landed. What kept it off was direct-connect's missing
+    #: vendor bearer; routing the library through ``backend``'s existing proxy
+    #: removed that dependency rather than satisfying it, so there is no longer
+    #: a half-wired state for the default to protect against.
+    _DEFAULT_WHEN_UNSET: ClassVar[str] = "true"
 
     @classmethod
     def enabled(cls, environ: Mapping[str, str] | None = None) -> bool:

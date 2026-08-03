@@ -424,8 +424,21 @@ class PerToolFixtureMixin:
 
 
 class TestFlagDefault:
-    def test_the_flag_is_off_when_unset(self) -> None:
-        assert McpPerToolFlag.enabled({}) is False
+    def test_the_flag_is_on_when_unset(self) -> None:
+        """The proxy credential plane removed the reason it defaulted off.
+
+        Direct-connect needed a vendor bearer this process could not obtain, so
+        "on" would have registered a connector surface that could not answer.
+        Routing the library through ``backend``'s proxy means there is no
+        credential left to be missing.
+        """
+
+        assert McpPerToolFlag.enabled({}) is True
+
+    def test_it_can_still_be_turned_off(self) -> None:
+        """The rollback lever is the whole point of keeping the flag."""
+
+        assert McpPerToolFlag.enabled({McpPerToolFlag.ENV_VAR: "false"}) is False
 
     @pytest.mark.parametrize("raw", ["1", "true", "TRUE", " yes ", "on"])
     def test_explicit_truthy_values_enable_it(self, raw: str) -> None:
@@ -822,10 +835,33 @@ class TestFactoryWiring(PerToolFixtureMixin):
             mcp_connector_resolver_sink=sink,
         )
 
+    async def test_an_unset_environment_registers_the_per_tool_surface(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unset is the shape production runs in — nothing sets this var."""
+
+        monkeypatch.delenv(McpPerToolFlag.ENV_VAR, raising=False)
+        assert (
+            await _mcp_per_tool_registration(
+                runtime_context=self.context(),
+                runtime_dependencies=self.dependencies(
+                    collaborators=self.collaborators([self.read_tool()]), sink=None
+                ),
+                tools=(),
+            )
+            is not None
+        )
+
     async def test_the_flag_is_read_from_the_process_environment(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv(McpPerToolFlag.ENV_VAR, raising=False)
+        """Turning it off must still reach the factory, not just the reader.
+
+        A rollback lever that the flag class honours but the factory ignores is
+        worse than no lever: it reports a mitigation that never applied.
+        """
+
+        monkeypatch.setenv(McpPerToolFlag.ENV_VAR, "false")
         assert (
             await _mcp_per_tool_registration(
                 runtime_context=self.context(),

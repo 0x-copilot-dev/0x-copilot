@@ -53,11 +53,13 @@ class ProxyTransportValues:
     JSON_MEDIA_TYPE: Final = "application/json"
     CONTENT_TYPE: Final = "content-type"
     SESSION_PATH: Final = "/client-session"
+    POST: Final = "POST"
     #: MCP notifications carry no ``id`` and expect no reply. JSON-RPC says a
     #: notification gets no response at all; HTTP still needs a status, and
     #: 202 is what the MCP spec's streamable-http binding uses for exactly this.
     ACCEPTED: Final = 202
     OK: Final = 200
+    FORBIDDEN: Final = 403
 
 
 class McpProxyTransportError(Exception):
@@ -66,6 +68,18 @@ class McpProxyTransportError(Exception):
     Distinct from a JSON-RPC error *result*, which is a successful hop carrying
     a failure the model should read. This is the hop itself failing, and the
     library surfaces it as a connection error rather than a tool result.
+    """
+
+
+class McpProxyAccessDeniedError(McpProxyTransportError, PermissionError):
+    """``backend``'s access-mode gate refused this call (PRD-06 D3(c)).
+
+    Subclasses ``PermissionError`` deliberately: ``McpErrorTaxonomy`` classifies
+    by exception type, and ``PermissionError`` is the kind that maps to
+    ``PERMISSION_DENIED`` / ``retryable=False``. Left as a bare transport error
+    a write refused on a ``read``-mode connector would read as "the MCP server
+    could not be reached" — which is both wrong and un-actionable, since the fix
+    is to change the connector's access mode, not to retry.
     """
 
 
@@ -113,6 +127,15 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Translate one MCP JSON-RPC POST into a proxied backend call."""
 
+        if request.method.upper() != ProxyTransportValues.POST:
+            # Streamable-http's non-POST verbs are session lifecycle, not
+            # JSON-RPC: GET opens the server's event stream, DELETE terminates
+            # the session. The proxy owns the session on our behalf and
+            # ``aclose`` already releases it, so answering here is both correct
+            # and keeps a teardown DELETE from acquiring a lease to discard.
+            return httpx.Response(
+                ProxyTransportValues.ACCEPTED, request=request, content=b""
+            )
         payload = self._json_rpc_body(request)
         lease = await self._ensure_lease()
         result = await self._post_rpc(payload, lease=lease)
@@ -133,17 +156,30 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
         )
 
     async def aclose(self) -> None:
-        """Release the lease so the backend's session pool does not leak one."""
+        """Release the lease so the backend's session pool does not leak one.
+
+        Called by ``httpx.AsyncClient.aclose``, which the MCP SDK runs via
+        ``async with client:`` around every session it opens — so this is the
+        real teardown path, not a hook nobody pulls.
+        """
 
         lease = self._lease
         self._lease = None
-        if lease is None:
-            return
         try:
+            if lease is None:
+                return
             await self._client.post(
                 f"{self._backend_url}"
                 f"{Values.Route.INTERNAL_MCP_CLIENT_SESSION_RELEASE.format(server_id=self._server_id)}",
-                json={Keys.Field.LEASE: lease},
+                # ``InternalMcpSessionReleaseRequest`` requires the identity as
+                # well as the lease. Sending the lease alone is a 422 that
+                # ``post`` does not raise for — the release would look like it
+                # happened and the backend would hold the session until expiry.
+                json={
+                    Keys.Field.ORG_ID: self._org_id,
+                    Keys.Field.USER_ID: self._user_id,
+                    Keys.Field.LEASE: lease,
+                },
                 headers=self._service_headers,
                 timeout=self._timeout,
             )
@@ -152,6 +188,11 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
             # its own, and raising here would turn a completed run into a failed
             # one at teardown.
             return
+        finally:
+            # The backend-facing client is ours, not the SDK's — closing the
+            # outer client does not reach it, so it would leak a connection
+            # pool per MCP session.
+            await self._client.aclose()
 
     # --- internals ----------------------------------------------------------
 
@@ -187,6 +228,12 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
             raise McpProxyTransportError(
                 "The MCP proxy session could not be opened"
             ) from error
+        if response.status_code == ProxyTransportValues.FORBIDDEN:
+            # The gate can refuse at session-open too, when a connector's access
+            # is off entirely rather than merely read-only.
+            raise McpProxyAccessDeniedError(
+                "This connector's access mode does not permit that call"
+            )
         if response.status_code >= 400:
             raise McpProxyTransportError(
                 f"The MCP proxy refused a session ({response.status_code})"
@@ -235,6 +282,10 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
             )
         except httpx.HTTPError as error:
             raise McpProxyTransportError("The MCP proxy call failed") from error
+        if response.status_code == ProxyTransportValues.FORBIDDEN:
+            raise McpProxyAccessDeniedError(
+                "This connector's access mode does not permit that call"
+            )
         if response.status_code >= 400:
             raise McpProxyTransportError(
                 f"The MCP proxy rejected the call ({response.status_code})"
@@ -277,6 +328,7 @@ class BackendProxyTransport(httpx.AsyncBaseTransport):
 
 __all__ = (
     "BackendProxyTransport",
+    "McpProxyAccessDeniedError",
     "McpProxyTransportError",
     "ProxyTransportValues",
 )

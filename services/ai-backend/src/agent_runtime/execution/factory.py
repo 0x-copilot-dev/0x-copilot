@@ -61,15 +61,19 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
     McpPerToolRegistrar,
     McpPerToolRegistration,
 )
+from agent_runtime.capabilities.mcp.proxy_plane import ProxyCredentialPlane
 from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
+from langchain.agents.middleware import TodoListMiddleware
+
 from agent_runtime.capabilities.middleware import (
     ModelInvocationMiddleware,
     RuntimeControlMiddleware,
@@ -544,6 +548,17 @@ async def _assemble_harness(
                 middleware=(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
+                    # `write_todos` used to arrive for free: deepagents included
+                    # `TodoListMiddleware` in its own stack. 0.7.1 stopped doing
+                    # that — the class lives in `langchain.agents.middleware` and
+                    # only the AUTO-INCLUSION went away. Nothing would have
+                    # failed loudly: the tool would simply be absent, the model
+                    # would stop emitting checklist frames, and the cockpit's
+                    # todo panel would go quiet, because
+                    # `stream_tools.TodoListProjector` is fed entirely by
+                    # `write_todos` tool frames. Declared here so the feature is
+                    # ours to keep rather than a side effect of a dependency.
+                    TodoListMiddleware(),
                     *_host_path_tool_middleware(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -553,6 +568,10 @@ async def _assemble_harness(
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
+                    # Subagents get the checklist too — it was in their stack
+                    # before 0.7.1 for the same reason it was in the
+                    # supervisor's.
+                    TodoListMiddleware,
                     *_host_path_tool_middleware_factories(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -608,7 +627,9 @@ async def _mcp_per_tool_registration(
     registration = await McpPerToolRegistrar.build(
         runtime_context=runtime_context,
         mcp_registry=runtime_dependencies.mcp_registry,
-        collaborators=_mcp_per_tool_collaborators(runtime_dependencies),
+        collaborators=_mcp_per_tool_collaborators(
+            runtime_dependencies, runtime_context=runtime_context
+        ),
         gate=_tool_access_gate(  # type: ignore[arg-type]
             auth_session_creator=_auth_session_creator(
                 runtime_dependencies.mcp_registry
@@ -632,18 +653,58 @@ async def _mcp_per_tool_registration(
 
 def _mcp_per_tool_collaborators(
     runtime_dependencies: RuntimeDependencies,
+    *,
+    runtime_context: AgentRuntimeContext,
 ) -> McpPerToolCollaborators | None:
-    """Narrow the injected credential plane to its concrete type, or ``None``.
+    """Return this run's credential plane: injected if any, else the proxy one.
 
-    An unset (or wrongly-typed) field is not an error: it is the production
-    default while the desktop keychain writer is missing, and it means "keep the
-    legacy gateway" — never "register a connector surface with no credentials".
+    The injected field stays honoured because tests supply fakes through it. In
+    production nothing injects, and the fallback is what actually runs: the
+    proxy plane, built from the registry the run already talks to.
+
+    The old default here was ``None`` — "keep the legacy gateway" — because
+    direct-connect needed a vendor bearer this process had no way to obtain. The
+    proxy removes that premise rather than satisfying it: there is no vendor
+    credential to hold, so there is nothing left to be missing, and the plane
+    can be built for every run.
     """
 
     collaborators = runtime_dependencies.mcp_per_tool_collaborators
     if isinstance(collaborators, McpPerToolCollaborators):
         return collaborators
-    return None
+    return _proxy_collaborators(
+        runtime_dependencies.mcp_registry, runtime_context=runtime_context
+    )
+
+
+def _proxy_collaborators(
+    mcp_registry: object,
+    *,
+    runtime_context: AgentRuntimeContext,
+) -> McpPerToolCollaborators | None:
+    """Build the proxy credential plane from a backend-backed MCP registry.
+
+    Declines when the registry is not backend-backed — an in-memory or fake
+    registry has no proxy to route through, and inventing a URL for it would
+    register a connector surface that cannot answer.
+    """
+
+    backend_url = getattr(mcp_registry, "backend_url", None)
+    if not isinstance(backend_url, str) or not backend_url.strip():
+        return None
+    timeout = getattr(mcp_registry, "timeout_seconds", None)
+    directory, credentials, client_factory = ProxyCredentialPlane.build(
+        backend_url=backend_url,
+        org_id=runtime_context.org_id,
+        user_id=runtime_context.user_id,
+        service_headers=BackendMcpServiceAuth.headers(runtime_context),
+        timeout_seconds=float(timeout) if isinstance(timeout, (int, float)) else 10.0,
+    )
+    return McpPerToolCollaborators(
+        directory=directory,
+        credentials=credentials,
+        client_factory=client_factory,
+    )
 
 
 def _with_mcp_per_tool_interrupts(
