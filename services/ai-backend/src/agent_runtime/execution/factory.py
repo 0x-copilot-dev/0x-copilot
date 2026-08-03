@@ -979,9 +979,10 @@ def _model_visible_tools(
             # fixed ``(card, server, tool)`` instead of decoded out of a
             # model-supplied payload; and its Work Ledger emission is the
             # PRESENT stage.
+            per_tool_mcp_tools = mcp_per_tool.tools
             model_tools.extend(
                 ModelToolDeclaration.declared_all(
-                    mcp_per_tool.tools,
+                    per_tool_mcp_tools,
                     owner=ModelToolOwner.MCP,
                 )
             )

@@ -41,7 +41,6 @@ _SELECTION_REF = f"task-policy-selection://run_1/research/sha256/{'c' * 64}"
 _PINNED_MODEL_VISIBLE_TOOL_ORDER = (
     "web_search",
     "load_mcp_server",
-    "call_mcp_tool",
     "auth_mcp",
     "load_skill",
     "load_prior_tool_result",

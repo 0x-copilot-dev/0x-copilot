@@ -57,42 +57,51 @@ class PinnedDeepAgentsInventoryMixin:
     PINNED_INVENTORY: Final[dict[str, int]] = {
         "deepagents.backends.sandbox:_EDIT_COMMAND_TEMPLATE": 541,
         "deepagents.backends.sandbox:_EDIT_TMPFILE_TEMPLATE": 536,
-        "deepagents.backends.sandbox:_GLOB_COMMAND_TEMPLATE": 205,
-        "deepagents.backends.sandbox:_READ_COMMAND_TEMPLATE": 893,
-        "deepagents.backends.sandbox:_WRITE_CHECK_TEMPLATE": 63,
-        "deepagents.graph:BASE_AGENT_PROMPT": 569,
-        "deepagents.middleware:DEEPAGENTS_DEFAULT_SUMMARY_PROMPT": 841,
-        "deepagents.middleware:GRADER_SYSTEM_PROMPT": 277,
-        "deepagents.middleware.async_subagents:ASYNC_TASK_SYSTEM_PROMPT": 626,
+        "deepagents.backends.sandbox:_EXECUTE_CAPTURE_CMD_TEMPLATE": 399,
+        "deepagents.backends.sandbox:_GLOB_COMMAND_TEMPLATE": 317,
+        "deepagents.backends.sandbox:_GREP_PATH_GLOB_TEMPLATE": 741,
+        "deepagents.backends.sandbox:_READ_COMMAND_TEMPLATE": 1693,
+        "deepagents.graph:_LEGACY_BASE_AGENT_PROMPT": 569,
         "deepagents.middleware.async_subagents:ASYNC_TASK_TOOL_DESCRIPTION": 169,
-        "deepagents.middleware.filesystem:EDIT_FILE_TOOL_DESCRIPTION": 109,
-        "deepagents.middleware.filesystem:EXECUTE_TOOL_DESCRIPTION": 693,
-        "deepagents.middleware.filesystem:EXECUTION_SYSTEM_PROMPT": 70,
-        "deepagents.middleware.filesystem:FILESYSTEM_SYSTEM_PROMPT": 292,
-        "deepagents.middleware.filesystem:GLOB_TOOL_DESCRIPTION": 93,
-        "deepagents.middleware.filesystem:GREP_TOOL_DESCRIPTION": 130,
+        "deepagents.middleware.filesystem:DELETE_TOOL_DESCRIPTION": 91,
+        "deepagents.middleware.filesystem:EDIT_FILE_TOOL_DESCRIPTION": 90,
+        "deepagents.middleware.filesystem:EXECUTE_TOOL_DESCRIPTION": 222,
+        "deepagents.middleware.filesystem:GREP_GLOB_DESCRIPTION": 106,
+        "deepagents.middleware.filesystem:GREP_OUTPUT_MODE_DESCRIPTION": 83,
+        "deepagents.middleware.filesystem:GREP_TOOL_DESCRIPTION": 160,
+        "deepagents.middleware.filesystem:GREP_TRUNCATION_NOTE": 57,
         "deepagents.middleware.filesystem:LIST_FILES_TOOL_DESCRIPTION": 52,
-        "deepagents.middleware.filesystem:READ_FILE_TOOL_DESCRIPTION": 468,
+        "deepagents.middleware.filesystem:READ_FILE_TOOL_DESCRIPTION": 305,
         "deepagents.middleware.filesystem:READ_FILE_TRUNCATION_MSG": 82,
+        "deepagents.middleware.filesystem:READ_FILE_VIDEO_TOOL_DESCRIPTION": 350,
         "deepagents.middleware.filesystem:TOO_LARGE_HUMAN_MSG": 64,
         "deepagents.middleware.filesystem:TOO_LARGE_TOOL_MSG": 154,
-        "deepagents.middleware.filesystem:_FILESYSTEM_SYSTEM_PROMPT_TEMPLATE": 296,
+        "deepagents.middleware.filesystem:WRITE_FILE_TOOL_DESCRIPTION": 81,
+        "deepagents.middleware.filesystem:_EXECUTE_TOOL_DESCRIPTION_TEMPLATE": 175,
+        "deepagents.middleware.filesystem:_EXECUTE_TOOL_DESCRIPTION_WITHOUT_SEARCH": 161,
+        "deepagents.middleware.filesystem:_EXECUTE_TOOL_DESCRIPTION_WITH_GLOB_ONLY": 201,
+        "deepagents.middleware.filesystem:_EXECUTE_TOOL_DESCRIPTION_WITH_GREP_ONLY": 201,
+        "deepagents.middleware.filesystem:_GREP_TOOL_DESCRIPTION_TEMPLATE": 144,
+        "deepagents.middleware.filesystem:_GREP_TOOL_DESCRIPTION_WITHOUT_EXECUTE": 140,
+        "deepagents.middleware.filesystem:_READ_FILE_TOOL_DESCRIPTION_TEMPLATE": 271,
         "deepagents.middleware.memory:MEMORY_SYSTEM_PROMPT": 1281,
         "deepagents.middleware.skills:SKILLS_SYSTEM_PROMPT": 465,
         "deepagents.middleware.subagents:DEFAULT_GENERAL_PURPOSE_DESCRIPTION": 87,
         "deepagents.middleware.subagents:DEFAULT_SUBAGENT_PROMPT": 72,
-        "deepagents.middleware.subagents:TASK_SYSTEM_PROMPT": 539,
-        "deepagents.middleware.subagents:TASK_TOOL_DESCRIPTION": 1644,
+        "deepagents.middleware.subagents:TASK_TOOL_DESCRIPTION": 235,
         "deepagents.middleware.summarization:DEFAULT_SUMMARY_PROMPT": 681,
-        "deepagents.middleware.summarization:SUMMARIZATION_SYSTEM_PROMPT": 104,
         "deepagents.middleware.summarization:_MEDIA_REFERENCE_SUMMARY_PROMPT": 159,
+        "deepagents.middleware:DEEPAGENTS_DEFAULT_SUMMARY_PROMPT": 841,
+        "deepagents.middleware:GRADER_SYSTEM_PROMPT": 277,
         "deepagents.profiles.harness._anthropic_haiku_4_5:_SYSTEM_PROMPT_SUFFIX": 364,
         "deepagents.profiles.harness._anthropic_opus_4_7:_SYSTEM_PROMPT_SUFFIX": 537,
         "deepagents.profiles.harness._anthropic_sonnet_4_6:_SYSTEM_PROMPT_SUFFIX": 364,
+        "deepagents.profiles.harness._nvidia_nemotron_3_ultra:_READ_FILE_DESCRIPTION_OVERRIDE": 230,
+        "deepagents.profiles.harness._nvidia_nemotron_3_ultra:_SYSTEM_PROMPT_SUFFIX": 741,
         "deepagents.profiles.harness._openai_codex:_SYSTEM_PROMPT_SUFFIX": 292,
     }
 
-    PINNED_TOTAL_ESTIMATED_TOKENS: Final[int] = 13812
+    PINNED_TOTAL_ESTIMATED_TOKENS: Final[int] = 14781
 
     # Paths that do not exist, standing in for "the dependency reorganised".
     # Pointing the adapter at them is a real constructor seam rather than a
@@ -117,12 +126,14 @@ class PinnedDeepAgentsInventoryMixin:
 
     # Carries non-ASCII punctuation, so its UTF-8 length exceeds its character
     # length. Pins that ``byte_count`` means bytes rather than ``len(str)``.
-    NON_ASCII_CONSTANT: Final[str] = (
-        "deepagents.middleware.filesystem:FILESYSTEM_SYSTEM_PROMPT"
-    )
-    LARGEST_CONSTANT: Final[str] = (
-        "deepagents.middleware.subagents:TASK_TOOL_DESCRIPTION"
-    )
+    NON_ASCII_CONSTANT: Final[str] = "deepagents.middleware.memory:MEMORY_SYSTEM_PROMPT"
+    # 0.7.1 moved the bulk of the resident prose. `TASK_TOOL_DESCRIPTION` was
+    # the largest constant at 1644 bytes and is now 235: the subagent guidance
+    # was cut, and the sandbox backend's shell templates became the biggest
+    # single block. Worth stating because the two are charged differently — the
+    # task description is resident on every run that can delegate, whereas a
+    # sandbox template is only rendered when that backend is composed.
+    LARGEST_CONSTANT: Final[str] = "deepagents.backends.sandbox:_READ_COMMAND_TEMPLATE"
     # Present in the package and therefore in the inventory, but removed from
     # the web profile's tool surface.
     EXCLUDED_TOOL_CONSTANT: Final[str] = (
@@ -280,7 +291,7 @@ class TestPinnedDeepAgentsInventory(PinnedDeepAgentsInventoryMixin):
             self.PINNED_TOTAL_ESTIMATED_TOKENS
         )
 
-    def test_largest_constant_is_the_task_tool_description(self) -> None:
+    def test_largest_constant_is_the_sandbox_read_template(self) -> None:
         inventory = self.adapter().inventory()
         largest = max(inventory, key=lambda name: inventory[name])
 
