@@ -54,18 +54,6 @@ can also connect to local models through Ollama.
 For diagnostics, updates, data locations, and uninstall instructions, see the
 [`@0x-copilot/cli` guide](tools/cli/README.md).
 
-## Self-host
-
-Run the web stack on your own host with Docker Compose:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/0x-copilot-dev/0x-copilot/main/deploy/self-host/install.sh | bash
-```
-
-Open <http://127.0.0.1:8080> when the installer finishes. See the
-[self-hosting guide](deploy/self-host/README.md) for domains, TLS, authentication,
-model providers, local models, upgrades, and operations.
-
 ## Contributing
 
 Pull requests target **`dev`**, never `main`.
@@ -109,7 +97,6 @@ how promotion and publishing are run:
 - [Branching, protection and release](docs/ci-cd/branching-and-release.md)
 - [Desktop and supervised runtime](apps/desktop/README.md)
 - [CLI installation and troubleshooting](tools/cli/README.md)
-- [Self-hosting](deploy/self-host/README.md)
 - [Architecture](docs/architecture/workspace-topology.md) and
   [service boundaries](docs/architecture/service-boundaries.md)
 - [Development](CLAUDE.md) and [API testing](docs/dev-testing.md)

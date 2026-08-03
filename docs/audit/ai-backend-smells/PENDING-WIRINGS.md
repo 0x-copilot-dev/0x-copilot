@@ -43,24 +43,34 @@ the Delete/Wireable set is "confirm first," not "remove now."
 These are pending-wiring in the strict sense: the module names what it needs and
 that thing is not in the tree. Track the owner; do not delete.
 
-| Module                                                   |  LOC | Added | Waits on (unshipped)                                                                                                                  | Blocker location                                                                                                                                             |
-| -------------------------------------------------------- | ---: | ----- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_runtime.context.tool_result_admission_gate`       |  413 | 07-29 | `RuntimeControlMiddleware`'s result sweep to call the gate (docstring says "already routes" — source disagrees)                       | `runtime_tool_control.py` still bounds via the older `ToolResultAdmissionAdapter`; also a **T1.3 lever**                                                     |
-| `agent_runtime.observability.context_origin_conformance` | 1271 | 07-30 | invocation as a merge/CI gate ("cannot merge", "hard-fails CI")                                                                       | no caller; sibling `llm_seam` gate _is_ aggregated into `release/e2_final_conformance.py:216`, this one never was                                            |
-| `agent_runtime.capabilities.workspace.patch_plan`        |  804 | 07-27 | "an **eventual C1 overlay transaction** may consume" the validated plan                                                               | no `OverlayTransaction`/applier consumer (rest of the `workspace` package _is_ wired)                                                                        |
-| `agent_runtime.harness_quality.operational_corpus`       | 1521 | 07-29 | the **Step 15** promotion evaluator, same as its deleted importer                                                                     | inherited this row when `promotion_cohorts` — its only `src` importer — was deleted with F3 discovery; still exercised by three harness-quality test modules |
-| `agent_runtime.surfaces_v2.retention`                    |  696 | 07-25 | "a **future coordinator** supplies a trusted snapshot … owns the I/O"                                                                 | consumer is `PRD-FS-04` `workspace-trash.ts`; big name-collision with the wired `agent_runtime.retention` package                                            |
-| `agent_runtime.release.promotion`                        |  183 | 07-27 | the Step-15 driver that constructs `PairedPromotionEvaluator` (prose is silent; sibling `promotion_cohorts` names Step 15)            | persistence sink `put_paired_report` _is_ wired; no production caller                                                                                        |
-| `agent_runtime.api.inbox_fallback`                       |  316 | 05-18 | run-handler caller + `tenants.inbox_fallback_inactivity_ms` column                                                                    | `handlers/run.py` never calls `schedule_approval_fallback`; `InboxProducerPort` _is_ shipped                                                                 |
-| `agent_runtime.capabilities.tools.code_tool_adapter`     |  238 | 05-18 | the **P10-A2** route `/internal/v1/tools/{id}/code` + a Wave-11 container sandbox                                                     | route string appears only in its own docstring; `Tool.kind="code"` wired into no loader                                                                      |
-| `agent_runtime.capabilities.tools.privacy`               |  138 | 05-06 | run-start fetch + cache on `AgentRuntimeContext`; adapter `agent_runtime.api.privacy_fetcher`                                         | **that adapter module does not exist**; context slot is a generic dict with a "downcast as needed" comment                                                   |
-| `runtime_worker.jobs.proposal_extractor`                 |  620 | 05-18 | "the worker's **run-completed lifecycle hook** owns the wiring to the memory / routine / atlas-cron stores"                           | `handlers/run.py` emits `run_completed` but never enqueues; no consumer of its `*Proposal` types                                                             |
-| `runtime_worker.jobs.todo_extractor`                     |  465 | 05-18 | the **P3-A1** orchestrator hook to enqueue it post-run                                                                                | run handler never enqueues; sink `todo_extractions` table _is_ shipped                                                                                       |
-| `runtime_adapters.postgres.todo_extraction_store`        |  185 | 05-18 | **P3-A1** wiring (store docstring silent; blocker named in feature siblings)                                                          | never instantiated by the PG store facade; in-memory twin _is_ wired                                                                                         |
-| `runtime_worker.jobs.routine_scheduler`                  |  907 | 05-18 | real `RoutineRunSubmitter` + permission resolver + backend **P5-A1** `/internal/v1/routines/{claim,fires,advance}`                    | only null stubs in src; the P5-A1 endpoints are **not evidenced in `services/backend/src`**                                                                  |
-| `agent_runtime.capabilities.mcp.connection`              |  117 | 08-02 | the direct-connect MCP migration — "**additive and unwired** — nothing in the running app imports this module yet (P2-PLAN §3, P2-1)" | credential-plane contracts (endpoint/transport/short-lived token) for ai-backend opening MCP servers itself instead of proxying through `services/backend`   |
-| `agent_runtime.capabilities.mcp.connector_resolver`      |   75 | 08-02 | **P2-6** ("the stream seams gain a fallback to it") and **P2-8** ("the registration flip publishes it")                               | the native `tool_name → server_slug` map replacing `McpDispatcherUnwrap.effective_server_name` once each MCP tool is its own `BaseTool`                      |
-| `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                                    | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
+| Module                                                   |  LOC | Added | Waits on (unshipped)                                                                                                             | Blocker location                                                                                                                                             |
+| -------------------------------------------------------- | ---: | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent_runtime.context.tool_result_admission_gate`       |  413 | 07-29 | `RuntimeControlMiddleware`'s result sweep to call the gate (docstring says "already routes" — source disagrees)                  | `runtime_tool_control.py` still bounds via the older `ToolResultAdmissionAdapter`; also a **T1.3 lever**                                                     |
+| `agent_runtime.observability.context_origin_conformance` | 1271 | 07-30 | invocation as a merge/CI gate ("cannot merge", "hard-fails CI")                                                                  | no caller; sibling `llm_seam` gate _is_ aggregated into `release/e2_final_conformance.py:216`, this one never was                                            |
+| `agent_runtime.capabilities.workspace.patch_plan`        |  804 | 07-27 | "an **eventual C1 overlay transaction** may consume" the validated plan                                                          | no `OverlayTransaction`/applier consumer (rest of the `workspace` package _is_ wired)                                                                        |
+| `agent_runtime.harness_quality.operational_corpus`       | 1521 | 07-29 | the **Step 15** promotion evaluator, same as its deleted importer                                                                | inherited this row when `promotion_cohorts` — its only `src` importer — was deleted with F3 discovery; still exercised by three harness-quality test modules |
+| `agent_runtime.surfaces_v2.retention`                    |  696 | 07-25 | "a **future coordinator** supplies a trusted snapshot … owns the I/O"                                                            | consumer is `PRD-FS-04` `workspace-trash.ts`; big name-collision with the wired `agent_runtime.retention` package                                            |
+| `agent_runtime.release.promotion`                        |  183 | 07-27 | the Step-15 driver that constructs `PairedPromotionEvaluator` (prose is silent; sibling `promotion_cohorts` names Step 15)       | persistence sink `put_paired_report` _is_ wired; no production caller                                                                                        |
+| `agent_runtime.api.inbox_fallback`                       |  316 | 05-18 | run-handler caller + `tenants.inbox_fallback_inactivity_ms` column                                                               | `handlers/run.py` never calls `schedule_approval_fallback`; `InboxProducerPort` _is_ shipped                                                                 |
+| `agent_runtime.capabilities.tools.code_tool_adapter`     |  238 | 05-18 | the **P10-A2** route `/internal/v1/tools/{id}/code` + a Wave-11 container sandbox                                                | route string appears only in its own docstring; `Tool.kind="code"` wired into no loader                                                                      |
+| `agent_runtime.capabilities.tools.privacy`               |  138 | 05-06 | run-start fetch + cache on `AgentRuntimeContext`; adapter `agent_runtime.api.privacy_fetcher`                                    | **that adapter module does not exist**; context slot is a generic dict with a "downcast as needed" comment                                                   |
+| `runtime_worker.jobs.proposal_extractor`                 |  620 | 05-18 | "the worker's **run-completed lifecycle hook** owns the wiring to the memory / routine / atlas-cron stores"                      | `handlers/run.py` emits `run_completed` but never enqueues; no consumer of its `*Proposal` types                                                             |
+| `runtime_worker.jobs.todo_extractor`                     |  465 | 05-18 | the **P3-A1** orchestrator hook to enqueue it post-run                                                                           | run handler never enqueues; sink `todo_extractions` table _is_ shipped                                                                                       |
+| `runtime_adapters.postgres.todo_extraction_store`        |  185 | 05-18 | **P3-A1** wiring (store docstring silent; blocker named in feature siblings)                                                     | never instantiated by the PG store facade; in-memory twin _is_ wired                                                                                         |
+| `runtime_worker.jobs.routine_scheduler`                  |  907 | 05-18 | real `RoutineRunSubmitter` + permission resolver + backend **P5-A1** `/internal/v1/routines/{claim,fires,advance}`               | only null stubs in src; the P5-A1 endpoints are **not evidenced in `services/backend/src`**                                                                  |
+| `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                               | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
+| `agent_runtime.delegation.subagents.coordination`        |  574 | 07-27 | **ARQ-012** — "route the existing Atlas task tool through this one coordinator", plus server-derived budget/deadline reservation | `IMPLEMENTATION-BACKLOG.md` §ARQ-012, status **open**; it is the slice that closes ARQ-006. "Do not add a second subagent implementation."                   |
+| `agent_runtime.delegation.subagents.handoff`             |  202 | 04-30 | nothing of its own — it is the hard dependency of the row above (`DelegationCoordinator._build_handoff`)                         | also named by **ARQ-006** as one of the two uncomposed abstractions the F9 coordinator must bind                                                             |
+
+### The ratchet cannot see these two — a package `__init__` hides an orphan
+
+Neither module appears in [`orphan_ratchet_baseline.txt`](../../../services/ai-backend/tests/unit/orphan_ratchet_baseline.txt),
+and neither ever would: `delegation/subagents/__init__.py` re-exports their symbols, so
+`orphans.py` sees an importer and scores them reachable. Import-reachable is not
+call-reachable. **A package `__init__` that re-exports everything converts the whole
+package into one ratchet blind spot** — worth a scanner follow-up, because this is the
+same "landed, not yet wired" state the ratchet exists to surface, and it went unrecorded
+for three months. They are recorded here by hand.
 
 Two clusters dominate: the **todos/memory extraction pipeline** (`proposal_extractor`,
 `todo_extractor`, `postgres.todo_extraction_store`, and cross-service `routine_scheduler`)
@@ -149,6 +159,29 @@ _guard inside the file_, so these read as unreachable when they are not.
 **Scanner fix — done.** `orphans.py` now skips any module with a top-level
 `if __name__ == "__main__":` guard (AST-detected, so a docstring mention does not count),
 and these two are pruned from `orphan_ratchet_baseline.txt`. The scan reports 21 orphans, not 23.
+
+---
+
+## Wired up — blocker shipped, row retired (2)
+
+The state this ledger exists to reach. Recorded rather than silently erased, because
+"it was pending once" is the provenance a future reader needs when they find the
+module already wired and wonder whether that was deliberate.
+
+- **`agent_runtime.capabilities.mcp.connector_resolver`** (75, enrolled 08-02) — waited on
+  **P2-6** and **P2-8**; both shipped. `runtime_worker/stream_tools.py` imports
+  `ToolConnectorResolver` and publishes it per run (`publish_connector_resolver`, P2-6),
+  and `per_tool_registration.py` resolves it off the catalog under the P2-8 registration
+  flip (`833e7d25`).
+- **`agent_runtime.capabilities.mcp.connection`** (117, enrolled 08-02) — its row's claim
+  ("nothing in the running app imports this module yet") stopped being true at
+  **P2 Wave 1** (`498ec9a5`): `tool_source.py`, `per_tool_registration.py` and
+  `proxy_plane.py` all import it, and all three are reachable from `runtime_api.app`.
+
+Both were pruned from [`orphan_ratchet_baseline.txt`](../../../services/ai-backend/tests/unit/orphan_ratchet_baseline.txt)
+later than they should have been — the wiring commits did not prune in the same change,
+and the ratchet only fails on **new** orphans, so two stale entries rode along silently.
+That asymmetry is the ledger's one blind spot: it catches debt appearing, not debt clearing.
 
 ---
 

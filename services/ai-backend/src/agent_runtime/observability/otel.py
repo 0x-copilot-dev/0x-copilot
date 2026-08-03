@@ -1,6 +1,6 @@
 """OpenTelemetry bootstrap for the ai-backend (runtime API + worker).
 
-Runs FastAPI / httpx / psycopg auto-instrumentation with body capture
+Runs FastAPI / httpx auto-instrumentation with body capture
 disabled and installs a ``SafeAttributeSpanProcessor`` that strips
 disallowed span attributes before export. The processor is the structural
 analog of the metadata denylist in ``RuntimeLogger`` -- developers cannot
@@ -213,14 +213,6 @@ class TelemetryBootstrap:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
         HTTPXClientInstrumentor().instrument()
-
-    @classmethod
-    def instrument_psycopg(cls) -> None:
-        if cls._DISABLED:
-            return
-        from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
-
-        PsycopgInstrumentor().instrument()
 
     @classmethod
     def get_tracer(cls, name: str) -> trace.Tracer:

@@ -31,18 +31,6 @@ def build_artifact_cleanup_schedule_store(
         )
 
         return FileArtifactCleanupScheduleStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres artifact cleanup scheduling requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.artifact_cleanup_schedule_store import (
-            PostgresArtifactCleanupScheduleStore,
-        )
-
-        return PostgresArtifactCleanupScheduleStore(store=persistence)
     from runtime_adapters.in_memory.artifact_cleanup_schedule_store import (
         InMemoryArtifactCleanupScheduleStore,
     )

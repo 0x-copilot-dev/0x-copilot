@@ -222,7 +222,7 @@
     "tool_name": "subagent_dispatch",
     "capability": "subagent",
     "op": "dispatch",
-    "source": "delegation.subagents.runner",
+    "source": "delegation.subagents.atlas_task_tool",
     "kind": "subagent",
     "execution": "delegated",
     "model_visible": false

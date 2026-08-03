@@ -43,14 +43,13 @@ from runtime_adapters.offload import (
     OffloadReadError,
     OffloadWriterResolver,
 )
-from runtime_adapters.postgres.offload import PostgresOffloadWriter
 
 # Comfortably past the default inline budget (8k tokens ≈ 32k chars), so every
 # adapter must take the offload branch rather than sitting near the threshold.
 _OVERSIZED = "needle-" + ("x" * 200_000)
 _SMALL = "small tool result"
 
-ADAPTERS = ("in_memory", "file", "postgres")
+ADAPTERS = ("in_memory", "file")
 
 
 def _build_writer(name: str, root: Path) -> ContentAddressedOffloadWriter:
@@ -60,10 +59,6 @@ def _build_writer(name: str, root: Path) -> ContentAddressedOffloadWriter:
         return InMemoryOffloadWriter()
     if name == "file":
         return FileOffloadWriter(FileObjectStore(FileStoreLayout(root / "file")))
-    if name == "postgres":
-        # A Postgres deployment parks bytes on its durable shared root; the sink
-        # is the same content-addressed store, reachable from every node.
-        return PostgresOffloadWriter(FileObjectStore(FileStoreLayout(root / "shared")))
     raise AssertionError(f"unknown adapter {name!r}")
 
 
@@ -111,18 +106,6 @@ class TestEveryAdapterHasAWriter:
         resolved = OffloadWriterResolver.for_store(InMemoryRuntimeApiStore())
 
         assert isinstance(resolved, InMemoryOffloadWriter)
-
-    def test_resolver_selects_the_postgres_writer_when_a_sink_is_supplied(
-        self, tmp_path: Path
-    ) -> None:
-        """A shared sink is what makes the Postgres store bounded."""
-
-        resolved = OffloadWriterResolver.for_store(
-            object(),
-            shared_object_sink=FileObjectStore(FileStoreLayout(tmp_path / "s")),
-        )
-
-        assert isinstance(resolved, PostgresOffloadWriter)
 
 
 class TestAdmissionIsBoundedOnEveryAdapter:
@@ -295,39 +278,7 @@ class TestFailClosedOnEveryAdapter:
         with pytest.raises(OffloadDigestMismatch):
             writer(_OVERSIZED)
 
-    def test_postgres_writer_refuses_construction_without_a_shared_sink(
-        self,
-    ) -> None:
-        """Multi-node deployments must not offload to node-local scratch."""
-
-        with pytest.raises(ValueError, match="durable shared byte sink"):
-            PostgresOffloadWriter(None)  # type: ignore[arg-type]
-
     def test_resolver_returns_none_rather_than_guessing_a_writer(self) -> None:
         """An unknown store is unsupported, not silently unbounded."""
 
         assert OffloadWriterResolver.for_store(object()) is None
-
-
-class TestPostgresCoverageBoundary:
-    """State plainly what this suite does and does not prove for Postgres."""
-
-    def test_postgres_ledger_row_is_not_yet_written(self, tmp_path: Path) -> None:
-        """Pin the honest scope of the Postgres writer.
-
-        The writer bounds the result and stores the bytes — proven above without
-        a database, because no part of that decision reaches SQL. What is *not*
-        built is the durable raw-free ``runtime_context_payloads`` row
-        (``kind='tool_result'``, ``redaction_state='offloaded'``), the remaining
-        ARQ-008 clause. Proving that would need ``TEST_DATABASE_URL`` pointed at
-        a migrated database, as the DB-gated suite under
-        ``tests/unit/runtime_adapters/postgres/`` already does.
-
-        This test fails the moment a ledger is added, forcing the claim above to
-        be re-stated rather than silently going stale.
-        """
-
-        writer = _build_writer("postgres", tmp_path)
-
-        assert not hasattr(writer, "ledger")
-        assert not hasattr(writer, "record_payload")

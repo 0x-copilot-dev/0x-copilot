@@ -5,7 +5,7 @@ capture seam will not know which one they are talking to: identity is the
 measured attempt (not the row id), a run's series comes back oldest-first, and
 a scope filter narrows to one context window rather than mixing two.
 
-The Postgres adapter needs a live database and is exercised under
+Both remaining adapters run without any external service, so this is
 ``tests/integration``; its SQL contract is pinned statically in
 ``tests/unit/agent_runtime/persistence/test_context_occupancy_migration.py``.
 """
@@ -21,7 +21,6 @@ from agent_runtime.persistence.records import (
 )
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.postgres.runtime_api_store import PostgresRuntimeApiStore
 
 _CREATED_AT = datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc)
 _ORG_A = "org-a"
@@ -80,7 +79,6 @@ class TestContextOccupancyPortSurface:
         for adapter in (
             InMemoryRuntimeApiStore,
             FileRuntimeApiStore,
-            PostgresRuntimeApiStore,
         ):
             assert issubclass(adapter, ContextOccupancyStorePort), adapter
 

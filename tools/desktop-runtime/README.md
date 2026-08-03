@@ -60,24 +60,14 @@ backend/facade) plus `copilot-service-contracts` and
 
 ## Store-selection authority
 
-The supervised desktop target is `single_user_desktop` and **file-first** for
-the **ai-backend** runtime store. `apps/desktop/main/services/service-env.ts`
-is the sole resolver used by both the supervisor and the child-env builder:
+The supervised desktop target is `single_user_desktop`, and the **ai-backend**
+runtime store is the file-native one at `<userData>/agent-data/v1`
+(`RUNTIME_STORE_BACKEND=file`). There is no alternative to select: the Postgres
+arm was removed, so `apps/desktop/main/services/service-env.ts` sets the file
+store unconditionally and the ai-backend has no migration step.
 
-- unset, empty, and unrecognised `COPILOT_DESKTOP_FILE_STORE_V1` values resolve
-  to `RUNTIME_STORE_BACKEND=file` at `<userData>/agent-data/v1`;
-- an explicit truthy value also resolves to file;
-- only an explicit falsey value (`0`, `false`, `no`, `off`, or `disabled`)
-  selects the legacy `atlas_ai` Postgres store as a rollback escape hatch;
-- the supervisor may make a **one-boot** Postgres choice after a verified
-  Postgres-to-file carry-over cannot be trusted, preserving existing history
-  rather than opening an empty file store.
-
-The embedded PostgreSQL cluster remains required for `backend` identity, OAuth,
-and vault data in every desktop mode. It is not the default ai-backend runtime
-store. The actual GUI/supervisor validation path is
-`node tools/desktop-runtime/run-supervised.mjs`; this headless drill preserves
-the legacy Postgres lane on purpose and cannot prove file-first boot.
+`services/backend` still uses Postgres for identity / OAuth / vault, which is
+why this runtime stages a postmaster at all.
 
 ## Legacy Postgres compatibility boot contract (proven by run-local.mjs)
 

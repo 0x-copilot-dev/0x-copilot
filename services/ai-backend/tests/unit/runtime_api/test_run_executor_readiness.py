@@ -136,16 +136,6 @@ class TestClassifyRunExecutor:
         )
         assert RuntimeApiAppFactory.classify_run_executor(app) == RUN_EXECUTOR_ABSENT
 
-    async def test_external_for_server_profile_on_postgres(self) -> None:
-        # Multi-process: a dedicated runtime_worker owns the executor, so this
-        # API process is intentionally executor-less and still ready.
-        app = _classify_app(
-            task=None,
-            settings=_settings("postgres"),
-            deployment=_deployment("saas_multi_tenant"),
-        )
-        assert RuntimeApiAppFactory.classify_run_executor(app) == RUN_EXECUTOR_EXTERNAL
-
     async def test_absent_when_task_dead_fail_closed(self) -> None:
         # A finished (crashed / exited) task must NEVER read running — the
         # dead-executor state degrades to the same red light as no task at all.
@@ -195,12 +185,6 @@ class TestRunExecutorReadinessChecker:
 
 def _build_app(*, backend: str, profile: str):
     ports = RuntimeAdapterFactory.from_store(InMemoryRuntimeApiStore())
-    if backend == "postgres":
-        setattr(
-            ports.persistence,
-            "_role_connection",
-            lambda *_args, **_kwargs: _InMemoryRuntimeApiStoreRoleConnection(),
-        )
     return RuntimeApiAppFactory.create_app(
         ports=ports,
         settings=_settings(backend),

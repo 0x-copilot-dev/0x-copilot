@@ -16,8 +16,6 @@
 # repo had no ledger for (docs/plan/ai-backend-consolidation/HANDOFF.md §4-5).
 # wire an orphan up (or delete it), prune its line here in the same change — the
 agent_runtime.api.inbox_fallback
-agent_runtime.capabilities.mcp.connection
-agent_runtime.capabilities.mcp.connector_resolver
 agent_runtime.capabilities.mcp.credentials.backend
 agent_runtime.capabilities.tools.code_tool_adapter
 agent_runtime.capabilities.tools.privacy
@@ -28,7 +26,6 @@ agent_runtime.observability.context_origin_conformance
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
 agent_runtime.surfaces_v2.retention
-runtime_adapters.postgres.todo_extraction_store
 runtime_worker.jobs.encrypt_existing_columns
 runtime_worker.jobs.proposal_extractor
 runtime_worker.jobs.routine_scheduler

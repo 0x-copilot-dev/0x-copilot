@@ -35,7 +35,6 @@
 /CODEOWNERS                       @0x-copilot-dev @parthpahwa1
 /deploy/                          @0x-copilot-dev @parthpahwa1
 /deploy/branch-protection.json    @0x-copilot-dev @parthpahwa1
-/deploy/tenants.yml               @0x-copilot-dev @parthpahwa1
 /tools/apply_branch_protection.py @0x-copilot-dev @parthpahwa1
 /tools/cli_release.py             @0x-copilot-dev @parthpahwa1
 /tools/cli/                       @0x-copilot-dev @parthpahwa1

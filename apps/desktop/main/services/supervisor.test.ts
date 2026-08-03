@@ -124,7 +124,6 @@ describe("ServiceSupervisor.start", () => {
       "pg-create(5432,pg-pass)",
       "pg-start",
       "pg-db(atlas_backend)",
-      "pg-db(atlas_ai)",
       "migrate(backend)",
       "migrate(ai-backend)",
       "svc-create(backend)",

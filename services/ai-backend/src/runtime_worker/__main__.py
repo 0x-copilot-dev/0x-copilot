@@ -16,10 +16,6 @@ from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
 from agent_runtime.capabilities.desktop.workspace_attestation import (
     DesktopWorkspaceAttestationRegistry,
 )
-from agent_runtime.execution.deep_agent_builder import (
-    setup_runtime_checkpointer,
-    teardown_runtime_checkpointer,
-)
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
@@ -39,10 +35,6 @@ from runtime_worker.mcp_revision_composition import McpRevisionControlPlaneBuild
 from runtime_worker.loop import RuntimeWorker
 from runtime_worker.run_control_release_composition import (
     build_run_control_plane_builder,
-)
-from agent_runtime.observability.db_statement_metrics import (
-    DbStatementMetricsCollector,
-    DbStatementMetricsCollectorEnv,
 )
 from runtime_worker.jobs.approval_expiry_sweeper import (
     ApprovalExpirySweeper,
@@ -115,11 +107,6 @@ class RuntimeWorkerEntrypoint:
             )
         await async_ports.lifecycle.open()
         await async_ports.lifecycle.migrate()
-        # Durable graph checkpointer: on RUNTIME_STORE_BACKEND=postgres this
-        # opens the AsyncPostgresSaver pool and creates its checkpoint tables so
-        # graph state / paused approvals survive a worker restart. A no-op on
-        # every other backend (this standalone worker never runs the file store).
-        await setup_runtime_checkpointer()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         artifact_cleanup_execution_loop: ArtifactCleanupExecutionLoop | None = None
@@ -127,7 +114,6 @@ class RuntimeWorkerEntrypoint:
         audit_export_verification_loop: AuditExportVerificationSamplingLoop | None = (
             None
         )
-        statement_collector: DbStatementMetricsCollector | None = None
         approval_expiry_sweeper: ApprovalExpirySweeper | None = None
         try:
             # One worker-owned MCP revision assembly per process. It contains
@@ -450,38 +436,6 @@ class RuntimeWorkerEntrypoint:
                         "lease_seconds": lease_seconds,
                     },
                 )
-            # Opt-in (default off). Requires ``pg_stat_statements`` installed;
-            # the scraper logs once and exits if not.
-            if DbStatementMetricsCollectorEnv.env_bool(
-                DbStatementMetricsCollectorEnv.ENABLED, default=False
-            ):
-
-                async def _scrape_query(sql: str) -> list[dict]:
-                    # ``DbStatementMetricsCollector`` is a Postgres-only opt-in
-                    # diagnostic; ``postgres_store`` is None on every other
-                    # backend. The enabling env flag is documented as
-                    # Postgres-only, so reaching this branch on in-memory is a
-                    # config error worth surfacing loudly.
-                    pg_store = async_ports.postgres_store
-                    if pg_store is None:
-                        raise RuntimeError(
-                            "DbStatementMetricsCollector requires "
-                            "RUNTIME_STORE_BACKEND=postgres"
-                        )
-                    async with pg_store._role_connection("worker") as conn:
-                        async with conn.cursor() as cur:
-                            await cur.execute(sql)
-                            rows = await cur.fetchall()
-                    return list(rows)
-
-                statement_collector = DbStatementMetricsCollector(
-                    run_query=_scrape_query
-                )
-                await statement_collector.start()
-                logger.info(
-                    "db_statement_metrics_collector_started",
-                    metadata={"interval_seconds": statement_collector._interval},
-                )
             # Opt-in (default off). Stamps ``retention_until`` on historical rows
             # that pre-date retention policy enforcement. Runs once at startup.
             if RetentionBackfillJobEnv.env_bool(
@@ -544,14 +498,10 @@ class RuntimeWorkerEntrypoint:
                 await audit_export_verification_loop.stop()
             if repair_planning_loop is not None:
                 await repair_planning_loop.stop()
-            if statement_collector is not None:
-                await statement_collector.stop()
             if retention_loop is not None:
                 await retention_loop.stop()
             if rollup_loop is not None:
                 await rollup_loop.stop()
-            # Close the AsyncPostgresSaver pool opened above (no-op otherwise).
-            await teardown_runtime_checkpointer()
             await async_ports.lifecycle.close()
             # Idempotent — closes the pooled backend client used by the
             # BYOK policy resolver (and any capability HTTP callers).

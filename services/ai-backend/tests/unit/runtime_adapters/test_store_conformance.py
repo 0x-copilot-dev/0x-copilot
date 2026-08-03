@@ -40,34 +40,19 @@ from runtime_api.schemas import (
 )
 
 
-@pytest.fixture(
-    params=[
-        "in_memory",
-        "file",
-        pytest.param("postgres", marks=pytest.mark.postgres),
-    ]
-)
+@pytest.fixture(params=["in_memory", "file"])
 async def store(request, tmp_path):
     """Yield an opened runtime store for each conformance backend.
 
-    ``in_memory`` and ``file`` are the CI backends (no external service). The
-    ``postgres`` param is present so the shared contract *names* every backend,
-    but it skips unless a live database is wired up — the real Postgres
-    behaviours are exercised by the DB-gated suite under ``postgres/`` (the
-    PRD-08 tool-invocation ledger specifically by
-    ``postgres/test_tool_invocation_ledger.py``). It never requires a database
-    in CI.
+    Both shipped backends run without any external service, so the whole
+    contract is exercised in CI on every run — there is no skipped arm left to
+    read as covered.
     """
 
     if request.param == "in_memory":
         instance = InMemoryRuntimeApiStore()
-    elif request.param == "file":
-        instance = FileRuntimeApiStore(tmp_path / "store")
     else:
-        pytest.skip(
-            "postgres conformance needs a live database; covered by the "
-            "DB-gated suite under tests/unit/runtime_adapters/postgres/"
-        )
+        instance = FileRuntimeApiStore(tmp_path / "store")
     await instance.open()
     try:
         yield instance

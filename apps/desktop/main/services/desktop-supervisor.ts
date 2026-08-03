@@ -15,17 +15,9 @@ import { dirname, join } from "node:path";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
 import { loadOrCreateBootSecrets } from "./boot-secrets";
-import { resolveBootStoreBackend } from "./boot-store-backend";
 import { createCommandRunner } from "./exec";
-import { fileStoreHasConversations } from "./file-store-facts";
 import { waitForHealthy } from "./health";
-import { runBootMigration } from "./migration-runner";
-import {
-  pgToFileMigrationMarkerPath,
-  type StoreBackend,
-} from "./migration-policy";
 import { runMigrations } from "./migrations";
-import { postgresAiStoreHasRows } from "./pg-facts";
 import { allocateFreePorts } from "./ports";
 import { PostgresManager } from "./postgres";
 import { PythonService, type SpawnFn } from "./python-service";
@@ -36,10 +28,8 @@ import {
 } from "./runtime-paths";
 import {
   aiFileStoreV1Root,
-  AI_BACKEND_DB_NAME,
   buildServiceEnv,
   databaseUrl,
-  resolveAiStoreBackend,
   UVICORN_MODULES,
 } from "./service-env";
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
@@ -47,33 +37,6 @@ import type { BootSecrets } from "./boot-secrets";
 import { LocalServiceIdentityRegistry } from "./local-service-identity";
 import { MacosWorkspaceConfinement } from "./macos-workspace-confinement";
 import type { SecureStorageMode } from "./secure-storage-policy";
-
-// ENOENT -> false (marker absent); any other error propagates so the boot
-// store-backend resolver falls back to Postgres rather than guessing.
-async function markerFileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch (err) {
-    if (
-      typeof err === "object" &&
-      err !== null &&
-      "code" in err &&
-      (err as { code: unknown }).code === "ENOENT"
-    ) {
-      return false;
-    }
-    throw err;
-  }
-}
-
-// Record a completed, verified carry-over. The parent (the file store root) is
-// created by the migrator itself, but ensure it exists so the marker write is
-// robust even on an unusual ordering.
-async function writeMigrationMarker(path: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${new Date().toISOString()}\n`, { mode: 0o600 });
-}
 
 export interface DesktopSupervisorConfig {
   /** app.getPath("userData") — secrets, pgdata and logs live here. */
@@ -129,17 +92,10 @@ export function createDesktopSupervisor(
   const runner = createCommandRunner();
   const logsDir = join(config.userDataDir, "logs");
   const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
-  // Resolve the CONFIGURED ai-backend store backend ONCE at construction, from
-  // the SAME env buildServiceEnv reads. File-native is the default; Postgres is
-  // the explicit opt-out. This is the starting point; the EFFECTIVE backend for a
-  // boot can differ when the first-file-boot migration falls back to Postgres.
-  const configuredBackend = resolveAiStoreBackend(processEnv);
-
   const envInputs = (
     name: SupervisedServiceName,
     ports: AllocatedPorts,
     secrets: BootSecrets,
-    storeBackendOverride?: StoreBackend,
   ): Parameters<typeof buildServiceEnv>[1] => ({
     secrets,
     pgPort: ports.pg,
@@ -152,9 +108,6 @@ export function createDesktopSupervisor(
     // Staged frontend web assets (wallet.html + assets/); the facade serves the
     // SIWE wallet page from here (FACADE_WEB_DIST_DIR).
     webDir: paths.webDir,
-    // When set, forces the ai-backend store backend for this boot (post-migration
-    // gate); undefined preserves the pure env resolution.
-    storeBackendOverride,
     browserBroker: {
       enabled:
         processEnv.RUNTIME_ENABLE_DESKTOP_BROWSER?.trim().toLowerCase() ===
@@ -177,77 +130,6 @@ export function createDesktopSupervisor(
       signature: processEnv.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE,
     },
   });
-
-  // The store backend to serve THIS boot, resolved lazily during the migrations
-  // phase (postgres is up by then, ai-backend has not started yet) and reused,
-  // unchanged, when the ai-backend service is created. Memoized so the migration
-  // probe/import runs at most once. The first-file-boot Postgres->file carry-over
-  // is gated + executed here; on any failure it falls back to `postgres` so a bad
-  // import can never strand the user with an empty app.
-  let effectiveStoreBackend: StoreBackend | null = null;
-  let effectivePromise: Promise<StoreBackend> | null = null;
-  const migrationLog = (message: string): void => {
-    // Loud: the boot migration is data-sensitive, so its decisions/failures must
-    // be visible in the desktop main-process log.
-    console.warn(`[pg->file migration] ${message}`);
-  };
-  const resolveEffectiveBackend = (
-    ports: AllocatedPorts,
-    secrets: BootSecrets,
-  ): Promise<StoreBackend> => {
-    if (effectivePromise !== null) return effectivePromise;
-    effectivePromise = (async () => {
-      const destRoot = aiFileStoreV1Root(config.userDataDir);
-      const markerPath = pgToFileMigrationMarkerPath(config.userDataDir);
-      const sourceDatabaseUrl = databaseUrl({
-        pgPort: ports.pg,
-        pgPassword: secrets.pgPassword,
-        database: AI_BACKEND_DB_NAME,
-      });
-      const aiSitePackages = join(
-        paths.serviceDir("ai-backend"),
-        "site-packages",
-      );
-      const result = await resolveBootStoreBackend({
-        configuredBackend,
-        fileStoreHasData: () =>
-          fileStoreHasConversations(destRoot, { readdir }),
-        postgresHasData: () =>
-          postgresAiStoreHasRows({
-            pythonBin: paths.pythonBin,
-            pythonSitePackages: aiSitePackages,
-            pgPort: ports.pg,
-            pgPassword: secrets.pgPassword,
-            runner,
-          }),
-        markerExists: () => markerFileExists(markerPath),
-        runMigration: () =>
-          runBootMigration({
-            pythonBin: paths.pythonBin,
-            serviceDir: paths.serviceDir("ai-backend"),
-            sourceDatabaseUrl,
-            destRoot,
-            // Same env the file-mode ai-backend gets (PYTHONPATH + telemetry
-            // kill-switch); the CLI reads source/dest from argv, not env.
-            env: buildServiceEnv(
-              "ai-backend",
-              envInputs("ai-backend", ports, secrets, "file"),
-            ),
-            runner,
-            log: migrationLog,
-          }),
-        writeMarker: () => writeMigrationMarker(markerPath),
-        log: migrationLog,
-      });
-      migrationLog(
-        `boot store backend = ${result.backend} (${result.note}` +
-          `${result.migrated ? ", carried over from Postgres" : ""})`,
-      );
-      effectiveStoreBackend = result.backend;
-      return result.backend;
-    })();
-    return effectivePromise;
-  };
 
   return new ServiceSupervisor({
     loadSecrets: () =>
@@ -285,32 +167,14 @@ export function createDesktopSupervisor(
 
     runMigrations: async (service, { ports, secrets }) => {
       if (service === "ai-backend") {
-        // Resolve the EFFECTIVE backend for this boot first — this is where the
-        // first-file-boot Postgres->file carry-over is gated and run (postgres is
-        // up; ai-backend has not started). On file, the store has no relational
-        // migrations, so skip scripts/migrate.py (it would fail closed without a
-        // Postgres DB env). On a Postgres fallback we DO run them so the still-
-        // authoritative relational store is schema-current for this boot.
-        const backend = await resolveEffectiveBackend(ports, secrets);
-        if (backend === "file") {
-          logTiming(`${service}.migrations`);
-          return;
-        }
-        await runMigrations({
-          service,
-          pythonBin: paths.pythonBin,
-          serviceDir: paths.serviceDir(service),
-          env: buildServiceEnv(
-            service,
-            envInputs(service, ports, secrets, backend),
-          ),
-          runner,
-        });
+        // The ai-backend runs the file-native store — JSONL session folders the
+        // adapter provisions itself on open. There is no relational schema, so
+        // there is nothing to migrate.
         logTiming(`${service}.migrations`);
         return;
       }
-      // The backend keeps its own Postgres migrations (identity/OAuth/vault) in
-      // every mode.
+      // The backend still owns Postgres migrations (identity / OAuth / vault):
+      // it is the only remaining reason the desktop boots a postmaster.
       await runMigrations({
         service,
         pythonBin: paths.pythonBin,
@@ -327,14 +191,6 @@ export function createDesktopSupervisor(
         path: join(logsDir, `${name}.log`),
         fs: { appendFile, stat, rename, rm, mkdir },
       });
-      // By the services phase the migrations phase has already resolved the
-      // effective backend for the ai-backend (its runMigrations gate awaits it),
-      // so this read is populated. The `?? configuredBackend` is a defensive
-      // fallback only; buildServiceEnv ignores the override for other services.
-      const storeBackendOverride =
-        name === "ai-backend"
-          ? (effectiveStoreBackend ?? configuredBackend)
-          : undefined;
       const command = paths.pythonBin;
       const args = [
         "-m",
@@ -354,10 +210,7 @@ export function createDesktopSupervisor(
         command: confined.command,
         args: confined.args,
         cwd: paths.serviceDir(name),
-        env: buildServiceEnv(
-          name,
-          envInputs(name, ports, secrets, storeBackendOverride),
-        ),
+        env: buildServiceEnv(name, envInputs(name, ports, secrets)),
         spawnFn:
           workspaceChildConfinement?.spawnFor(
             name,

@@ -54,14 +54,3 @@ def test_file_ports_reuse_the_file_event_and_snapshot_stores(
             )
         )
     )
-
-
-def test_postgres_ports_reuse_the_postgres_event_and_snapshot_stores() -> None:
-    _assert_canonical_journal(
-        RuntimeAdapterFactory.from_settings(
-            _settings(
-                RUNTIME_STORE_BACKEND="postgres",
-                DATABASE_URL="postgresql://user:password@127.0.0.1:5432/runtime",
-            )
-        )
-    )

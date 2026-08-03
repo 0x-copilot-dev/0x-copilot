@@ -60,10 +60,6 @@ from agent_runtime.deployment import (
     resolve_or_exit,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
-from agent_runtime.execution.deep_agent_builder import (
-    setup_runtime_checkpointer,
-    teardown_runtime_checkpointer,
-)
 from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
@@ -117,7 +113,6 @@ from runtime_api.sse.event_bus import (
     EventBusBackend,
     InMemoryEventBus,
 )
-from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
 from runtime_worker.run_control_release_composition import (
     build_local_release_control_service,
@@ -1267,54 +1262,26 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def default_event_bus(cls, settings: RuntimeSettings) -> EventBusBackend:
-        """Pick the SSE event bus based on configuration.
+        """Return the SSE event bus.
 
-        ``in_memory`` (the default) returns the legacy single-process
-        ``InMemoryEventBus`` singleton — unchanged from pre-P2 behavior so
-        dev / test paths see no change.
-
-        ``postgres`` constructs a :class:`PostgresEventBus` whose
-        connection factory opens a dedicated psycopg ``AsyncConnection``
-        (autocommit-enabled, since ``LISTEN`` must take effect outside a
-        transaction). The bus is started + stopped by
-        :meth:`start_event_bus` / :meth:`stop_event_bus` in the lifespan.
+        There is one: the in-process ``InMemoryEventBus`` singleton. It is
+        sufficient because the API hosts the worker in-process
+        (``RUNTIME_START_IN_PROCESS_WORKER``), so a publish and its SSE handler
+        always share a process. The cross-process ``LISTEN/NOTIFY`` bus went
+        with the Postgres backend; a future multi-process deployment needs a
+        bus of its own, not a revival of that coupling.
         """
 
-        backend = settings.resolved_event_bus_backend()
-        if backend == "postgres":
-            database_url = settings.store.database_url
-            if not database_url:
-                # Defense-in-depth: the resolver only returns "postgres" when
-                # DATABASE_URL is set OR when the user explicitly chose
-                # "postgres". The explicit-without-DATABASE_URL case still
-                # needs the actionable error.
-                raise ValueError(
-                    "RUNTIME_EVENT_BUS_BACKEND=postgres requires DATABASE_URL "
-                    "to be configured."
-                )
-
-            async def _connection_factory() -> object:
-                import psycopg
-
-                # ``LISTEN`` is connection-bound and must run outside a
-                # transaction; autocommit is required so the LISTEN takes
-                # effect immediately and notifications are delivered as
-                # they arrive.
-                return await psycopg.AsyncConnection.connect(
-                    database_url, autocommit=True
-                )
-
-            return PostgresEventBus(connection_factory=_connection_factory)
+        del settings
         return InMemoryEventBus.get_default()
 
     @classmethod
     async def start_event_bus(cls, app: FastAPI) -> None:
         """Start the SSE event-bus background task if it has one.
 
-        ``InMemoryEventBus`` is purely in-process and has no background
-        task, so this is a no-op for it. ``PostgresEventBus`` spawns its
-        ``listen_loop`` task here and tears it down in
-        :meth:`stop_event_bus`.
+        ``InMemoryEventBus`` is purely in-process and has no background task,
+        so this is a no-op today. The hook stays because a bus that needs one is
+        exactly what a future multi-process deployment would add.
         """
 
         bus = getattr(app.state, "runtime_event_bus", None)
@@ -1514,12 +1481,6 @@ class RuntimeApiAppFactory:
         if ports is None:
             _log_decision(started=False, reason="no_ports")
             return
-        # Past every early-return gate: this process WILL run the executor, so
-        # open the durable graph checkpointer now. On a single_user_desktop
-        # Postgres deployment this opens the AsyncPostgresSaver pool + creates
-        # its tables; a no-op on the file store (AsyncSqliteSaver) and in-memory.
-        # Placed before the worker task is created so teardown always pairs.
-        await setup_runtime_checkpointer()
         if getattr(app.state, "mcp_discovery_cache", None) is None:
             cls.build_mcp_discovery_cache(app)
         event_bus = getattr(app.state, "runtime_event_bus", None)
@@ -1581,10 +1542,6 @@ class RuntimeApiAppFactory:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        # Close the AsyncPostgresSaver pool that start_in_process_worker opened
-        # (single_user_desktop Postgres). Reads the singleton directly and
-        # no-ops on the SQLite / in-memory savers and when no worker started.
-        await teardown_runtime_checkpointer()
 
 
 app = RuntimeApiAppFactory.create_app()

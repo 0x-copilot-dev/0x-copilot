@@ -79,25 +79,25 @@ class AccountMergeApiRoutes:
     ) -> tuple[dict[str, int], list[str]]:
         """Dispatch to the re-keyer matching the wired persistence backend.
 
-        The file-native (desktop) store fails closed with 501: reporting
-        success without moving data would let the saga proceed to its
-        destructive steps (disable + revoke) against an unmerged store.
+        An unknown backend still fails closed with 501: reporting success
+        without moving data would let the saga proceed to its destructive steps
+        (disable + revoke) against an unmerged store.
         """
 
         persistence = request.app.state.runtime_persistence
+        from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
         from runtime_adapters.in_memory.runtime_api_store import (
             InMemoryRuntimeApiStore,
         )
-        from runtime_adapters.postgres.runtime_api_store import (
-            PostgresRuntimeApiStore,
-        )
 
-        if isinstance(persistence, PostgresRuntimeApiStore):
-            from runtime_adapters.postgres.account_merge import (
-                PostgresAccountMergeRekeyer,
-            )
+        # The two stores are siblings under MaterializedViewStoreBase, not
+        # parent and child, so neither branch can shadow the other and this
+        # order is presentation only — desktop first because it is the
+        # shipping backend.
+        if isinstance(persistence, FileRuntimeApiStore):
+            from runtime_adapters.file.account_merge import FileAccountMergeRekeyer
 
-            return await PostgresAccountMergeRekeyer(persistence).rekey(
+            return FileAccountMergeRekeyer(persistence).rekey(
                 absorbed_org_id=payload.absorbed_org_id,
                 absorbed_user_id=payload.absorbed_user_id,
                 survivor_org_id=payload.survivor_org_id,

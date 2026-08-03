@@ -23,7 +23,7 @@ Practically, for anything you are asked to build:
 
 Monorepo with independently deployable components. Each Python service owns its own Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, `Dockerfile`, tests, and deploy path. The frontend and desktop apps share the npm workspace (`apps/*`, `packages/*`). Implemented paths only:
 
-- `services/ai-backend` — agent runtime (FastAPI + LangGraph + Deep Agents). Modules: `agent_runtime/` (domain), `runtime_api/` (HTTP/SSE), `runtime_worker/` (queued run executor), `runtime_adapters/` (in-memory + postgres stores).
+- `services/ai-backend` — agent runtime (FastAPI + LangGraph + Deep Agents). Modules: `agent_runtime/` (domain), `runtime_api/` (HTTP/SSE), `runtime_worker/` (queued run executor), `runtime_adapters/` (in-memory + file-native stores).
 - `services/backend` — core backend (`backend_app/`): MCP registration, OAuth state, token vault, user skills, audit events, identity (dev IdP, Google OAuth, SIWE, BYOK provider keys).
 - `services/backend-facade` — product-facing API (`backend_facade/`); proxies `/v1/*` to `backend` and `ai-backend`. **Apps must call only the facade.**
 - `apps/frontend` — Vite + React web surface. **DEPRECATED** (see above); keep green, do not extend.
@@ -70,13 +70,8 @@ COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" npm run dev --workspace @0x-co
 
 Details: `apps/desktop/README.md` (supervisor boot contract), `apps/desktop/SMOKE.md`, `tools/desktop-runtime/README.md`.
 
-Self-host (web stack via Docker + GHCR images):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/0x-copilot-dev/0x-copilot/main/deploy/self-host/install.sh | bash
-```
-
-See `deploy/self-host/README.md`, `docs/deployment/google-oauth-setup.md`, and `docs/deployment/wallet-login.md`.
+Auth provider setup (used by the desktop app): `docs/deployment/google-oauth-setup.md`
+and `docs/deployment/wallet-login.md`.
 
 Production build (validates required secrets, refuses to register the dev IdP routes when `BACKEND_ENVIRONMENT != development`):
 
@@ -129,7 +124,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8200/v1/me/profile
 - `agent_runtime/` — pure domain. `execution/` (graph, deep agent builder, runtime contracts), `capabilities/` (tools, skills, MCP loaders + middleware + permissions), `context/memory`, `delegation/subagents`, `persistence/` (records, schema, ports), `observability/`, `api/` (presentation/service layer for the runtime API).
 - `runtime_api/` — FastAPI app exposing conversations, runs, event replay, SSE streaming, cancel, approvals.
 - `runtime_worker/` — separate process that claims queued runs, drives the LangGraph execution, and emits typed `RuntimeEventEnvelope` records (`model_delta`, `final_response`, `run_completed`, tool/subagent/stream events). The API can also start an in-process worker via `RUNTIME_START_IN_PROCESS_WORKER=true` for local dev.
-- `runtime_adapters/` — `in_memory` for tests/dev, `postgres` for shared-store production-style runs. Selected by `RUNTIME_STORE_BACKEND`.
+- `runtime_adapters/` — `in_memory` for tests/dev, `file` (JSONL session folders) for the desktop. Selected by `RUNTIME_STORE_BACKEND`, dispatched through `runtime_adapters/registry.py`; adding a backend is a provider module plus one registration, with no edit to any dispatch code.
 
 **Streaming model:** events are persisted with monotonic `sequence_no` per run. Clients open `GET /v1/agent/runs/{run_id}/stream?after_sequence=N` and reconnect with the highest received `sequence_no` to resume without replay. Replay-only is `GET /v1/agent/runs/{run_id}/events`. Backend projects events into `activity_kind`/`display_title`/`summary`/`status` for the frontend; do not derive activity types from event-name prefixes.
 
@@ -337,7 +332,7 @@ When reviewing for bank, government, or other regulated buyers:
 
 - Python 3.13 everywhere. Services share constants from `packages/service-contracts/src` via `PYTHONPATH`; Docker installs the package during build.
 - Provider keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY`) live in `services/ai-backend/.env` for local dev; never in run-request bodies.
-- The older `services/ai-backend/docker-compose.yml` is a production-style API+worker+Postgres compose. Use `docker-compose.dev.yml` (root) for end-to-end local Docker.
+- Use `docker-compose.dev.yml` (root) for end-to-end local Docker.
 - Don't create shared packages for small duplication — share only stable contracts and truly cross-cutting primitives.
 - Don't commit secrets, real `.env` files, tokens, certificates, or production credentials.
 - `packages/chat-surface` is the **single-source-of-truth interaction layer** for the desktop redesign: both `apps/frontend` (web) and `apps/desktop` (Electron) mount the same `ChatShell` + destinations + Run cockpit + Settings + ⌘K palette, and bind data through their OWN host adapters (web `features/*/Route.tsx`, desktop `renderer/destinationBinders.tsx`) — no `apps/*→apps/*` imports. The package is substrate-agnostic (ports only; bare `window`/`fetch`/`localStorage` are eslint-banned). Tokens are the v2 "quiet" set in `packages/design-system/src/styles.css`. See `docs/plan/desktop-redesign/DEV-GUIDE.md` for the architecture map + extension recipes, and `packages/chat-surface/CLAUDE.md` for the SSOT pattern.

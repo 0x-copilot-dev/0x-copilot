@@ -33,7 +33,6 @@ class TestFileBackendFactoryGating:
         ports = RuntimeAdapterFactory.from_settings(_file_settings(tmp_path))
         assert ports.backend == "file"
         assert ports.persistence is ports.event_store
-        assert ports.postgres_store is None
         # Satellite ports are all wired.
         assert ports.draft_store is not None
         assert ports.share_store is not None

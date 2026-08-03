@@ -9,12 +9,10 @@ import type { BootSecrets } from "./boot-secrets";
 import { LocalServiceIdentityRegistry } from "./local-service-identity";
 import {
   aiFileStoreV1Root,
-  AI_FILE_STORE_V1_FLAG,
   buildServiceEnv,
   databaseUrl,
   ENV_PASSTHROUGH_ALLOWLIST,
   resolveDesktopStudioRuntimeEnv,
-  resolveAiStoreBackend,
   migrateDatabaseUrl,
   pythonPathValue,
   UVICORN_MODULES,
@@ -225,7 +223,6 @@ describe("buildServiceEnv(ai-backend)", () => {
     // user's Ollama binary. Without it the first-run card cannot distinguish
     // "not installed" from "stopped" and Restart Ollama has nothing to call.
     expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBe("true");
-    expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     // BYOK lane: the user-policies resolver needs the backend base URL (with
@@ -300,25 +297,6 @@ describe("buildServiceEnv(ai-backend)", () => {
 
     expect(env.ARTIFACT_EFFECTS_V2).toBe("false");
     expect(env.ARTIFACT_DRAFTS_V2).toBe("false");
-  });
-
-  it("pins the Postgres store (full DB contract) on explicit opt-out", () => {
-    const env = buildServiceEnv(
-      "ai-backend",
-      inputs({ [AI_FILE_STORE_V1_FLAG]: "0" }),
-    );
-    expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
-    expect(env.DATABASE_URL).toContain("postgresql://");
-    expect(env.DATABASE_URL).toContain("/atlas_ai");
-    // yoyo migrate URL uses the +psycopg driver marker.
-    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
-    expect(env.RUNTIME_DATABASE_URL).toContain("/atlas_ai");
-    // Auto-apply is off: migrations.ts owns the apply with the +psycopg URL.
-    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
-    expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
-    // Local-models stay enabled regardless of the store backend.
-    expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBe("true");
-    expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBe("true");
   });
 
   it("never grants runtime management to the sibling services", () => {
@@ -463,119 +441,6 @@ describe("buildServiceEnv(ai-backend)", () => {
   });
 });
 
-describe("buildServiceEnv(ai-backend) with storeBackendOverride", () => {
-  it("forces the file store even when the env resolves to Postgres", () => {
-    // Env opts OUT of file, but the supervisor has resolved the effective
-    // backend to file (post-migration) — the override must win.
-    const env = buildServiceEnv("ai-backend", {
-      ...inputs({ [AI_FILE_STORE_V1_FLAG]: "0" }),
-      storeBackendOverride: "file",
-    });
-    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
-    expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
-      join(USER_DATA_DIR, "agent-data", "v1"),
-    );
-    expect(env.DATABASE_URL).toBeUndefined();
-    expect(env.RUNTIME_DATABASE_URL).toBeUndefined();
-  });
-
-  it("forces the Postgres store (fail-safe fallback) even when the env resolves to file", () => {
-    // Env resolves to file (the default), but the migration could not be
-    // trusted, so the supervisor forces Postgres for this boot.
-    const env = buildServiceEnv("ai-backend", {
-      ...inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
-      storeBackendOverride: "postgres",
-    });
-    expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
-    expect(env.DATABASE_URL).toContain("/atlas_ai");
-    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
-    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
-    expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
-  });
-
-  it("is ignored for non-ai-backend services", () => {
-    const env = buildServiceEnv("backend", {
-      ...inputs(),
-      storeBackendOverride: "postgres",
-    });
-    expect(env.DATABASE_URL).toContain("/atlas_backend");
-    expect(env.RUNTIME_STORE_BACKEND).toBeUndefined();
-  });
-
-  it("undefined preserves the env-resolved behaviour", () => {
-    const env = buildServiceEnv("ai-backend", {
-      ...inputs(),
-      storeBackendOverride: undefined,
-    });
-    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
-  });
-});
-
-describe("resolveAiStoreBackend", () => {
-  it("defaults to the file store for unset/empty/unrecognized values", () => {
-    expect(resolveAiStoreBackend({})).toBe("file");
-    for (const raw of ["", " ", "nope", "2", "maybe"]) {
-      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
-        "file",
-      );
-    }
-  });
-
-  it("resolves an explicit truthy value to the file store", () => {
-    for (const raw of ["1", "true", "TRUE", " yes ", "On", "enabled"]) {
-      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
-        "file",
-      );
-    }
-  });
-
-  it("pins Postgres only on an explicit falsey value (rollback hatch)", () => {
-    for (const raw of ["0", "false", "FALSE", " off ", "no", "disabled"]) {
-      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
-        "postgres",
-      );
-    }
-  });
-});
-
-describe("desktop file-first documentation contract", () => {
-  it("keeps the published store-selection contract aligned with the resolver", () => {
-    // This test is intentionally alongside the resolver: the desktop runtime
-    // has a legacy Postgres compatibility drill, so prose which calls that drill
-    // the default would make the supported desktop topology ambiguous again.
-    expect(resolveAiStoreBackend({})).toBe("file");
-    expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: "off" })).toBe(
-      "postgres",
-    );
-
-    const desktopReadme = readFileSync(
-      join(REPOSITORY_ROOT, "apps/desktop/README.md"),
-      "utf8",
-    );
-    const runtimeReadme = readFileSync(
-      join(REPOSITORY_ROOT, "tools/desktop-runtime/README.md"),
-      "utf8",
-    );
-    const localDrill = readFileSync(
-      join(REPOSITORY_ROOT, "tools/desktop-runtime/run-local.mjs"),
-      "utf8",
-    );
-
-    expect(desktopReadme).toContain("**File-native AI store (default)**");
-    expect(runtimeReadme).toContain("## Store-selection authority");
-    expect(runtimeReadme).toContain("**file-first**");
-    expect(runtimeReadme).toContain(
-      "not the desktop ai-backend store-selection authority",
-    );
-    expect(runtimeReadme).toContain(
-      "legacy compatibility lane, not the production desktop default",
-    );
-    expect(localDrill).toContain(
-      "NOT\n * the production desktop store-selection authority",
-    );
-  });
-});
-
 describe("aiFileStoreV1Root", () => {
   it("derives <userData>/agent-data/v1 as an absolute path", () => {
     const root = aiFileStoreV1Root(USER_DATA_DIR);
@@ -585,12 +450,9 @@ describe("aiFileStoreV1Root", () => {
   });
 });
 
-describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () => {
+describe("buildServiceEnv(ai-backend) store wiring", () => {
   it("selects the file store and sets an absolute root under userData", () => {
-    const env = buildServiceEnv(
-      "ai-backend",
-      inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
-    );
+    const env = buildServiceEnv("ai-backend", inputs());
     expect(env.RUNTIME_STORE_BACKEND).toBe("file");
     expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
       join(USER_DATA_DIR, "agent-data", "v1"),
@@ -601,7 +463,6 @@ describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () =>
     // runtime factory for the file backend.
     expect(env.RUNTIME_START_IN_PROCESS_WORKER).toBe("true");
     expect(env.ENTERPRISE_DEPLOYMENT_PROFILE).toBe("single_user_desktop");
-    expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     // Store-agnostic wiring is preserved.
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
@@ -616,26 +477,11 @@ describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () =>
     expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBeUndefined();
   });
 
-  it("leaves the backend service on Postgres (flag scopes ai-backend only)", () => {
-    const env = buildServiceEnv(
-      "backend",
-      inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
-    );
+  it("leaves the backend service on Postgres (the file store is ai-backend only)", () => {
+    const env = buildServiceEnv("backend", inputs());
     expect(env.DATABASE_URL).toContain("/atlas_backend");
     expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
     expect(env.RUNTIME_STORE_BACKEND).toBeUndefined();
-  });
-
-  it("pins Postgres for explicit falsey flag values (rollback hatch)", () => {
-    for (const raw of ["0", "false", "off", "no", "disabled"]) {
-      const env = buildServiceEnv(
-        "ai-backend",
-        inputs({ [AI_FILE_STORE_V1_FLAG]: raw }),
-      );
-      expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
-      expect(env.DATABASE_URL).toContain("/atlas_ai");
-      expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
-    }
   });
 });
 

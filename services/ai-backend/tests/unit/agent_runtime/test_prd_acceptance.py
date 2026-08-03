@@ -40,14 +40,9 @@ from agent_runtime.capabilities.skills.sources import (
     SkillSourceRegistry,
 )
 from agent_runtime.delegation.subagents import (
-    AsyncSubagentLaunch,
-    AsyncSubagentLifecycle,
-    AsyncTaskStatus,
     DynamicSubagentCatalog,
     SubagentDefinition,
     SubagentHandoffBuilder,
-    SubagentResult,
-    SubagentTask,
 )
 from agent_runtime.capabilities.tools import (
     DynamicToolRegistry,
@@ -119,36 +114,6 @@ class FakeSubagentDefinitionProvider:
 
     def list_subagent_definitions(self) -> Sequence[SubagentDefinition]:
         return self.definitions
-
-
-@dataclass
-class FakeSubagentRunner:
-    started_tasks: list[SubagentTask] = field(default_factory=list)
-
-    async def start(
-        self,
-        definition: SubagentDefinition,
-        task: SubagentTask,
-    ) -> AsyncSubagentLaunch:
-        self.started_tasks.append(task)
-        return AsyncSubagentLaunch(
-            thread_id="thread_123",
-            run_id="run_123",
-            status=AsyncTaskStatus.RUNNING,
-        )
-
-    async def check(self, _state: object) -> SubagentResult:
-        return SubagentResult.ok(
-            response="Launch risks are owner gaps and unresolved blockers.",
-            execution_summary="Checked delegated research inputs and summarized the findings.",
-            plan_summary="Next verify owners for every unresolved launch blocker.",
-        )
-
-    async def update(self, _state: object, _task: SubagentTask) -> None:
-        return None
-
-    async def cancel(self, _state: object) -> None:
-        return None
 
 
 async def test_runtime_capability_stack_wires_together_without_live_llm_calls(
@@ -381,14 +346,5 @@ Use this only when source-backed research is needed.
         requested_skills=("research", "private_skill"),
         conversation_history=({"role": "user", "content": "full raw chat"},),
     )
-    runner = FakeSubagentRunner()
-    lifecycle = AsyncSubagentLifecycle(catalog=subagent_catalog, runner=runner)
-    started = await lifecycle.start(
-        context=context, subagent_name="researcher", task=task
-    )
-    checked = await lifecycle.check(started.state.task_id)  # type: ignore[union-attr]
     assert task.allowed_tools == frozenset({"doc_search"})
     assert "full raw chat" not in str(task.model_dump())
-    assert started.state is not None
-    assert checked.result is not None
-    assert checked.result.execution_summary is not None

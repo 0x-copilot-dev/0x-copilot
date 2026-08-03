@@ -121,6 +121,7 @@ from runtime_worker.dependencies import (
 )
 from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
+from runtime_worker.turn_content import AssistantTurnContent
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.run_control import (
@@ -219,6 +220,9 @@ class RuntimeApprovalHandler:
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # Same projection object as ``RuntimeRunHandler``: both terminal paths
+        # write the assistant message, and one fold rule serves both.
+        self._turn_content = AssistantTurnContent(self.event_store)
         # Test/extension seam for the desktop capability broker, mirroring
         # ``RuntimeRunHandler``. ``None`` in production leaves the wiring on the
         # process-shared loopback pool.
@@ -1149,6 +1153,15 @@ class RuntimeApprovalHandler:
                     run_id=run.run_id,
                     role=MessageRole.ASSISTANT,
                     content_text=final_text,
+                    # This is the resume-after-approval completion, so the turn
+                    # provably contains a mid-stream card — the approval the run
+                    # parked on. Persisting the ordered parts is what keeps the
+                    # prose on both sides of it after a reload.
+                    content=await self._turn_content.blocks(
+                        org_id=run.org_id,
+                        run_id=run.run_id,
+                        final_text=final_text,
+                    ),
                     parent_message_id=run.user_message_id,
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                     token_count=output_tokens

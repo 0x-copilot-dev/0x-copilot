@@ -103,6 +103,34 @@ const SAMPLE_MESSAGES: ReadonlyArray<TcChatMessage> = [
 
 const SAMPLE_RESPONSE: TcChatMessagesResponse = { messages: SAMPLE_MESSAGES };
 
+/**
+ * A turn shaped like a real agent loop: the model says something, acts, then
+ * says something else. Both text parts belong to ONE assistant turn and carry
+ * the `seq` they opened at, which is what lets a card render between them.
+ *
+ * This is the fixture the interleaving bug could not express: before parts were
+ * ordered, `text-before-tools` and `text-after-tools` were the same object with
+ * one anchor, so no ordering key could place a card between them.
+ */
+const INTERLEAVED_TURN: ReadonlyArray<TcChatMessage> = [
+  {
+    message_id: "u1",
+    role: "user",
+    parts: [{ type: "text", text: "What is the deploy status?" }],
+    created_at_ms: 1716000000000,
+  },
+  {
+    message_id: "a1",
+    role: "assistant",
+    run_id: "run-1",
+    created_at_ms: 1716000010000,
+    parts: [
+      { type: "text", text: "Let me check.", seq: 2 },
+      { type: "text", text: "It shipped at 09:14.", seq: 8 },
+    ],
+  },
+];
+
 // PR-3.8 — fleet fixtures for the inline SubagentFleetCard slot (FR-3.17a).
 function subagentEntry(overrides: Partial<SubagentEntry> = {}): SubagentEntry {
   return {
@@ -609,9 +637,11 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("interleaves the fleet card into the message stream by timestamp", async () => {
-    // Messages sit at t0 = …000000 and t1 = …060000; the fleet dispatched at
-    // …030000 must land between them.
+  it("interleaves the fleet card between the parts of the turn by sequence_no", async () => {
+    // The turn is `text → dispatch → text`. The fleet dispatched at seq 4, so it
+    // renders BETWEEN the two text parts — not after the whole turn, which is
+    // where wall-clock anchoring used to drain it (one bubble carries one
+    // timestamp, its first token, so every mid-turn card sorted after it).
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
       withTransport(
@@ -619,7 +649,9 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
         <TcChat
           conversationId="c"
           mode="studio"
-          fleets={[fleet({ createdAtMs: 1716000030000 })]}
+          activeRunId="run-1"
+          messages={INTERLEAVED_TURN}
+          fleets={[fleet({ sequenceNo: 4, createdAtMs: 1716000030000 })]}
         />,
       ),
     );
@@ -629,9 +661,10 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
       li.getAttribute("data-testid"),
     );
     expect(ids).toEqual([
-      "tc-chat-message-m1",
+      "tc-chat-message-u1",
+      "tc-chat-message-a1-part-0",
       "tc-chat-fleet-fleet-1",
-      "tc-chat-message-m2",
+      "tc-chat-message-a1-part-1",
     ]);
   });
 
@@ -833,9 +866,9 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
     );
   });
 
-  it("interleaves the tool card into the message stream by timestamp", async () => {
-    // Messages sit at t0 = …000000 and t1 = …060000; the tool ran at …030000
-    // and must land between them.
+  it("interleaves the tool card between the parts of the turn by sequence_no", async () => {
+    // THE REGRESSION TEST for the interleaving bug: text the model emitted
+    // BEFORE the tool call must still render, and must render above the card.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
       withTransport(
@@ -843,7 +876,9 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
         <TcChat
           conversationId="c"
           mode="studio"
-          toolCalls={[toolCall({ createdAtMs: 1716000030000 })]}
+          activeRunId="run-1"
+          messages={INTERLEAVED_TURN}
+          toolCalls={[toolCall({ sequenceNo: 4 })]}
         />,
       ),
     );
@@ -853,9 +888,56 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
       li.getAttribute("data-testid"),
     );
     expect(ids).toEqual([
-      "tc-chat-message-m1",
+      "tc-chat-message-u1",
+      "tc-chat-message-a1-part-0",
       "tc-chat-tool-call-1",
-      "tc-chat-message-m2",
+      "tc-chat-message-a1-part-1",
+    ]);
+    // Both halves of the turn survive — the pre-tool sentence used to be
+    // overwritten by `final_response` and never reached the DOM at all.
+    expect(screen.getByText("Let me check.")).toBeInTheDocument();
+    expect(screen.getByText("It shipped at 09:14.")).toBeInTheDocument();
+  });
+
+  it("keeps a prior run's turn out of the active run's seq merge", async () => {
+    // Every run numbers its events from 0, so a previous turn's seq 8 must NOT
+    // compete with this run's seq 4. The old turn keeps document order and
+    // stays above the live tail.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const priorTurn: ReadonlyArray<TcChatMessage> = [
+      {
+        message_id: "old",
+        role: "assistant",
+        run_id: "run-0",
+        parts: [
+          { type: "text", text: "Answer from the previous run.", seq: 8 },
+        ],
+      },
+      ...INTERLEAVED_TURN,
+    ];
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          activeRunId="run-1"
+          messages={priorTurn}
+          toolCalls={[toolCall({ sequenceNo: 4 })]}
+        />,
+      ),
+    );
+    await screen.findByTestId("tc-chat-tool-call-1");
+    const list = screen.getByTestId("tc-chat-messages");
+    const ids = Array.from(list.querySelectorAll("li")).map((li) =>
+      li.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual([
+      "tc-chat-message-old",
+      "tc-chat-message-u1",
+      "tc-chat-message-a1-part-0",
+      "tc-chat-tool-call-1",
+      "tc-chat-message-a1-part-1",
     ]);
   });
 
@@ -1943,12 +2025,12 @@ describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () =
           conversationId="c"
           mode="studio"
           toolCalls={[
-            toolCall({ id: "call-1", createdAtMs: 1716000010000 }),
-            toolCall({ id: "call-2", createdAtMs: 1716000020000 }),
-            toolCall({ id: "call-3", createdAtMs: 1716000040000 }),
-            toolCall({ id: "call-4", createdAtMs: 1716000050000 }),
+            toolCall({ id: "call-1", sequenceNo: 1 }),
+            toolCall({ id: "call-2", sequenceNo: 2 }),
+            toolCall({ id: "call-3", sequenceNo: 4 }),
+            toolCall({ id: "call-4", sequenceNo: 5 }),
           ]}
-          approvals={[approval({ createdAtMs: 1716000030000 })]}
+          approvals={[approval({ sequenceNo: 3 })]}
         />,
       ),
     );

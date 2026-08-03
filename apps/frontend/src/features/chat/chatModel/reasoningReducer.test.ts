@@ -137,4 +137,45 @@ describe("eventReducer reasoning case (PR 3.6)", () => {
       | undefined;
     expect(text?.text).toBe("Here's the announcement.");
   });
+
+  // The reported bug: thinking that happens BETWEEN two batches of tool calls.
+  // `appendReasoning` used to target `findIndex(isReasoningPart)` — the FIRST
+  // reasoning part of the turn — so span #2 appended into span #1, and the
+  // `reasoning_summary` cap (which replaces) deleted span #1 outright.
+  it("keeps each thinking span as its own part across tool batches", () => {
+    let items: ChatItem[] = [];
+    const push = (overrides: Parameters<typeof event>[0]) => {
+      items = applyRuntimeEvent(items, event(overrides));
+    };
+
+    push({
+      sequence_no: 1,
+      event_type: "reasoning_summary_delta",
+      payload: { delta: "First I check CI." },
+    });
+    push({
+      sequence_no: 2,
+      activity_kind: "tool",
+      event_type: "tool_call_started",
+      payload: { tool_call_id: "call_1", tool_name: "read_ci" },
+    });
+    push({
+      sequence_no: 3,
+      event_type: "reasoning_summary_delta",
+      payload: { delta: "CI is green; now the deploy log." },
+    });
+    push({
+      sequence_no: 4,
+      event_type: "reasoning_summary",
+      payload: { summary: "CI is green; now the deploy log." },
+    });
+
+    const spans = assistantContent(items).filter(
+      (part) => part.type === "reasoning",
+    ) as Array<{ text?: string }>;
+    expect(spans.map((span) => span.text)).toEqual([
+      "First I check CI.",
+      "CI is green; now the deploy log.",
+    ]);
+  });
 });
