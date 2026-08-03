@@ -49,7 +49,6 @@ from agent_runtime.surfaces_v2.ledger_models import (
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
 from runtime_adapters.file import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_adapters.postgres import PostgresRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord
 
 
@@ -70,7 +69,6 @@ class ComposedArtifactAuditMixin:
     RUNTIME_STORES = (
         InMemoryRuntimeApiStore,
         FileRuntimeApiStore,
-        PostgresRuntimeApiStore,
     )
 
     AUDIT_PARAMETERS = ("event_type", "record")
@@ -355,7 +353,7 @@ class TestEveryRuntimeStoreSatisfiesTheAuditPort(ComposedArtifactAuditMixin):
     ) -> None:
         """Every backend, so the cast cannot come true for only the tested one.
 
-        Checked on the classes rather than on live stores: the postgres and file
+        Checked on the classes rather than on live stores: the in-memory and file
         adapters own a pool and a directory tree, and the claim here is about the
         shape they declare, which needs neither. ``issubclass`` is available
         because the port is methods-only.

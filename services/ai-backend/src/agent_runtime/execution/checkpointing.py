@@ -29,7 +29,6 @@ CheckpointerBuilder = Callable[[], object | None]
 
 ENV_STORE_BACKEND = "RUNTIME_STORE_BACKEND"
 ENV_FILE_STORE_ROOT = "RUNTIME_FILE_STORE_ROOT"
-ENV_DATABASE_URL = "DATABASE_URL"
 
 
 class CheckpointerRegistry:
@@ -114,50 +113,10 @@ def build_file_store_checkpointer() -> object | None:
     return AsyncSqliteSaver(connection)
 
 
-def build_postgres_checkpointer() -> object | None:
-    """Build a durable ``AsyncPostgresSaver`` for a server deployment, or ``None``.
-
-    Returns ``None`` unless the server Postgres path is active:
-    ``RUNTIME_STORE_BACKEND=postgres`` **and** ``DATABASE_URL`` set. This is what
-    stops a multi-process server from losing in-flight graph state (and paused
-    approvals) to a process-local ``InMemorySaver`` on every worker restart.
-
-    The pool is constructed with ``open=False`` so selecting/importing the saver
-    never blocks on a live database — ``setup_runtime_checkpointer()`` opens it
-    and creates the checkpoint tables once at startup. ``autocommit=True`` +
-    ``row_factory=dict_row`` + ``prepare_threshold=0`` are the connection
-    settings ``AsyncPostgresSaver`` documents for pooled usage.
-
-    ``ImportError`` is deliberately NOT swallowed: a server that asked for the
-    Postgres backend but is missing the driver must fail loudly, not silently
-    degrade to a non-durable saver.
-    """
-
-    database_url = os.environ.get(ENV_DATABASE_URL, "").strip()
-    if selected_backend() != "postgres" or not database_url:
-        return None
-
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from psycopg.rows import dict_row
-    from psycopg_pool import AsyncConnectionPool
-
-    pool = AsyncConnectionPool(
-        conninfo=database_url,
-        open=False,
-        kwargs={
-            "autocommit": True,
-            "row_factory": dict_row,
-            "prepare_threshold": 0,
-        },
-    )
-    return AsyncPostgresSaver(pool)
-
-
 CHECKPOINTERS = CheckpointerRegistry()
 """The process-wide saver registry ``runtime_checkpointer()`` reads."""
 
 CHECKPOINTERS.register("file", build_file_store_checkpointer)
-CHECKPOINTERS.register("postgres", build_postgres_checkpointer)
 # ``in_memory`` / ``in_memory_async`` register nothing: a process-local store has
 # no durable saver to offer, and the in-memory fallback is already what they want.
 
@@ -168,6 +127,5 @@ __all__ = (
     "CheckpointerRegistry",
     "build_file_store_checkpointer",
     "build_in_memory_checkpointer",
-    "build_postgres_checkpointer",
     "selected_backend",
 )

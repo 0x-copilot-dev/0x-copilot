@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.harness_quality.ports import EvaluationObjectDeletionPolicy
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
@@ -49,52 +48,3 @@ def test_desktop_file_runtime_composes_evaluation_on_the_existing_file_root(
         ports.evaluation_repository._object_deletion_policy
         is EvaluationObjectDeletionPolicy.SHARED_STORE_METADATA_ONLY
     )
-
-
-def test_postgres_projection_requires_an_explicit_shared_evaluation_root() -> None:
-    settings = RuntimeSettings.load(
-        environ={
-            "RUNTIME_STORE_BACKEND": "postgres",
-            "DATABASE_URL": "postgresql://local:local@127.0.0.1/local",
-            "RUNTIME_EVALUATION_PROJECTION_ENABLED": "true",
-        }
-    )
-
-    with pytest.raises(
-        AgentRuntimeError,
-        match="RUNTIME_EVALUATION_STORE_ROOT",
-    ):
-        RuntimeAdapterFactory.from_settings(settings)
-
-
-def test_postgres_can_compose_the_locked_file_cas_evaluation_adapter(
-    tmp_path: Path,
-) -> None:
-    settings = RuntimeSettings.load(
-        environ={
-            "RUNTIME_STORE_BACKEND": "postgres",
-            "DATABASE_URL": "postgresql://local:local@127.0.0.1/local",
-            "RUNTIME_EVALUATION_STORE_ROOT": str(tmp_path),
-        }
-    )
-
-    ports = RuntimeAdapterFactory.from_settings(settings)
-
-    assert isinstance(ports.evaluation_repository, FileEvaluationRepository)
-    assert ports.evaluation_repository._object_store._quota.max_bytes == 536_870_912
-
-
-def test_postgres_evaluation_adapter_uses_its_explicit_quota(tmp_path: Path) -> None:
-    settings = RuntimeSettings.load(
-        environ={
-            "RUNTIME_STORE_BACKEND": "postgres",
-            "DATABASE_URL": "postgresql://local:local@127.0.0.1/local",
-            "RUNTIME_EVALUATION_STORE_ROOT": str(tmp_path),
-            "RUNTIME_EVALUATION_STORE_MAX_BYTES": "4096",
-        }
-    )
-
-    ports = RuntimeAdapterFactory.from_settings(settings)
-
-    assert isinstance(ports.evaluation_repository, FileEvaluationRepository)
-    assert ports.evaluation_repository._object_store._quota.max_bytes == 4096

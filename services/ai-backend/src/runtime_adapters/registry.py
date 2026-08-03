@@ -182,12 +182,6 @@ STORAGE_BACKENDS.register(
         provider_module="runtime_adapters.providers.file_provider",
     )
 )
-STORAGE_BACKENDS.register(
-    RuntimeStorageBackend(
-        name="postgres",
-        provider_module="runtime_adapters.providers.postgres_provider",
-    )
-)
 
 
 __all__ = (

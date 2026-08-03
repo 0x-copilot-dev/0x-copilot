@@ -70,36 +70,6 @@ class FileRepairLegalHoldLookup:
             return RepairLegalHoldState.UNKNOWN
 
 
-class PostgresRepairLegalHoldLookup:
-    """Use the established transaction-safe Postgres legal-hold predicate."""
-
-    def __init__(self, *, store: object) -> None:
-        self._store = store
-
-    async def resolve(
-        self,
-        *,
-        org_id: str,
-        user_id: str,
-        conversation_id: str,
-    ) -> RepairLegalHoldState:
-        try:
-            from runtime_adapters.postgres.artifact_hold_fence import (
-                has_active_hold_for_scope,
-            )
-
-            async with self._store._role_connection("worker") as conn:  # noqa: SLF001
-                held = await has_active_hold_for_scope(
-                    conn,
-                    org_id=org_id,
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                )
-            return RepairLegalHoldState.ACTIVE if held else RepairLegalHoldState.NONE
-        except Exception:
-            return RepairLegalHoldState.UNKNOWN
-
-
 def build_effect_claim_store(
     *, settings: RuntimeSettings, persistence: object
 ) -> EffectClaimStore:
@@ -117,18 +87,6 @@ def build_effect_claim_store(
         from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
 
         return FileEffectClaimStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres repair planning requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.effect_claim_store import (
-            PostgresEffectClaimStore,
-        )
-
-        return PostgresEffectClaimStore(store=persistence)
     from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 
     return InMemoryEffectClaimStore()
@@ -153,18 +111,6 @@ def build_repair_planning_snapshot_store(
         )
 
         return FileRepairPlanningSnapshotStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres repair planning requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.repair_planning_store import (
-            PostgresRepairPlanningSnapshotStore,
-        )
-
-        return PostgresRepairPlanningSnapshotStore(store=persistence)
     from runtime_adapters.in_memory.repair_planning_store import (
         InMemoryRepairPlanningSnapshotStore,
     )
@@ -179,10 +125,6 @@ def build_repair_legal_hold_lookup(
 
     if settings.store.backend == "file":
         return FileRepairLegalHoldLookup(persistence=persistence)
-    if settings.store.backend == "postgres" and hasattr(
-        persistence, "_role_connection"
-    ):
-        return PostgresRepairLegalHoldLookup(store=persistence)
     return UnknownRepairLegalHoldLookup()
 
 
@@ -209,18 +151,6 @@ def build_audit_export_verification_store(
         )
 
         return FileAuditExportVerificationStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres audit export verification requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.audit_export_verification_store import (
-            PostgresAuditExportVerificationStore,
-        )
-
-        return PostgresAuditExportVerificationStore(store=persistence)
     from runtime_adapters.in_memory.audit_export_verification_store import (
         InMemoryAuditExportVerificationStore,
     )
@@ -247,18 +177,6 @@ def build_legacy_migration_checkpoint_store(
         )
 
         return FileLegacyMigrationCheckpointStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres legacy migration requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.legacy_migration_store import (
-            PostgresLegacyMigrationCheckpointStore,
-        )
-
-        return PostgresLegacyMigrationCheckpointStore(store=persistence)
     from runtime_adapters.in_memory.legacy_migration_store import (
         InMemoryLegacyMigrationCheckpointStore,
     )
@@ -285,18 +203,6 @@ def build_legacy_stage_migration_store(
         )
 
         return FileLegacyStageMigrationStore(root=root)
-    if backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres legacy stage migration requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.legacy_stage_migration_store import (
-            PostgresLegacyStageMigrationStore,
-        )
-
-        return PostgresLegacyStageMigrationStore(store=persistence)
     from runtime_adapters.in_memory.legacy_stage_migration_store import (
         InMemoryLegacyStageMigrationStore,
     )
@@ -345,20 +251,6 @@ def build_legacy_stage_migration_service(
 
         queue_control = FileLegacyStageQueueControl(store=persistence)
         reservations = FileLegacyStageReservationStore(store=persistence, root=root)
-    elif backend == "postgres":
-        if not hasattr(persistence, "_role_connection"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "Postgres legacy stage migration requires the runtime worker store.",
-                retryable=False,
-            )
-        from runtime_adapters.postgres.legacy_stage_migration_control import (
-            PostgresLegacyStageQueueControl,
-            PostgresLegacyStageReservationStore,
-        )
-
-        queue_control = PostgresLegacyStageQueueControl(store=persistence)
-        reservations = PostgresLegacyStageReservationStore(store=persistence)
     else:
         from runtime_adapters.in_memory.legacy_stage_migration_control import (
             InMemoryLegacyStageQueueControl,
@@ -401,7 +293,6 @@ def build_legacy_stage_migration_service(
 
 __all__ = (
     "FileRepairLegalHoldLookup",
-    "PostgresRepairLegalHoldLookup",
     "UnknownRepairLegalHoldLookup",
     "build_effect_claim_store",
     "build_audit_export_verification_store",

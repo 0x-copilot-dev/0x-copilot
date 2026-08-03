@@ -18,7 +18,7 @@ What is added here is the part of the claim that was still taken on trust:
 * **Errors match, not merely occur.** The sibling asserts the typed class per
   adapter; a store swap is only safe if the *message* agrees too.
 * **Fail-closed against a real sink**, not a monkeypatched ``_persist`` — and the
-  Postgres sink-contract branches (bare-digest, unusable reference) that nothing
+  sink-contract branches (bare-digest, unusable reference) that nothing
   exercised.
 
 **The wiring gap.** :class:`TestWorkerWiringDoesNotYetSelectAWriter` is the
@@ -49,12 +49,10 @@ from runtime_adapters.offload import (
     ContentAddressedOffloadWriter,
     OffloadedPayloadFact,
     OffloadReadError,
-    OffloadWriterResolver,
 )
-from runtime_adapters.postgres.offload import PostgresOffloadWriter
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 
-ADAPTERS = ("in_memory", "file", "postgres")
+ADAPTERS = ("in_memory", "file")
 
 
 class OffloadAdapterMixin:
@@ -89,12 +87,6 @@ class OffloadAdapterMixin:
             return InMemoryOffloadWriter()
         if name == "file":
             return FileOffloadWriter(FileObjectStore(FileStoreLayout(root / "file")))
-        if name == "postgres":
-            # What a Postgres deployment must supply: a content-addressed sink on
-            # a durable shared root. No database is involved in the decision.
-            return PostgresOffloadWriter(
-                FileObjectStore(FileStoreLayout(root / "shared"))
-            )
         raise AssertionError(f"unknown adapter {name!r}")
 
     @staticmethod
@@ -116,48 +108,6 @@ class OffloadAdapterMixin:
         """Yield the result-admission writer for each store adapter."""
 
         return self.build_writer(adapter_name, tmp_path)
-
-
-class FakeSinkMixin:
-    """Deployment-supplied sinks that misbehave in the ways that matter."""
-
-    class ExplodingSink:
-        """A durable sink that is simply unavailable."""
-
-        def put(self, data: bytes, *, media_type: str = "", preview: str | None = None):
-            raise OSError("disk full")
-
-        def get(self, ref: object) -> bytes:
-            raise OSError("sink unreachable")
-
-    class BareDigestSink:
-        """A sink returning the digest as a plain string rather than a ref."""
-
-        def __init__(self) -> None:
-            self.blobs: dict[str, bytes] = {}
-
-        def put(
-            self, data: bytes, *, media_type: str = "", preview: str | None = None
-        ) -> str:
-            from hashlib import sha256
-
-            digest = sha256(data).hexdigest()
-            self.blobs[digest] = data
-            return digest
-
-        def get(self, ref: object) -> bytes:
-            return self.blobs[str(ref)]
-
-    class UnusableReferenceSink:
-        """A sink returning something that addresses nothing."""
-
-        def put(
-            self, data: bytes, *, media_type: str = "", preview: str | None = None
-        ) -> object:
-            return object()
-
-        def get(self, ref: object) -> bytes:
-            raise AssertionError("never reached")
 
 
 class TestPersistedFactIsRawFree(OffloadAdapterMixin):
@@ -335,51 +285,6 @@ class TestReadErrorParity(OffloadAdapterMixin):
         assert "objects/sha256" not in message
 
 
-class TestFailClosedWithARealSink(OffloadAdapterMixin, FakeSinkMixin):
-    """Fail-closed proven through the sink contract, not by patching internals."""
-
-    def test_failing_sink_propagates_instead_of_degrading_to_inline_admission(
-        self,
-    ) -> None:
-        """An unavailable sink must not quietly admit the raw result."""
-
-        writer = PostgresOffloadWriter(self.ExplodingSink())
-
-        with pytest.raises(OSError, match="disk full"):
-            ToolResultAdmissionAdapter(writer).admit(
-                self.deep_secret_content, trace_id="trace-sink"
-            )
-
-    def test_sink_returning_a_bare_digest_string_is_accepted(self) -> None:
-        """The documented non-``ObjectRef`` sink shape still resolves."""
-
-        sink = self.BareDigestSink()
-        writer = PostgresOffloadWriter(sink)
-
-        reference = writer(self.deep_secret_content)
-
-        assert reference.startswith("/large_tool_results/")
-        assert writer.read_offloaded(reference).decode("utf-8") == (
-            self.deep_secret_content
-        )
-
-    def test_sink_returning_an_unusable_reference_raises_a_typed_error(self) -> None:
-        """A locator the runtime cannot resolve is refused at write time."""
-
-        writer = PostgresOffloadWriter(self.UnusableReferenceSink())
-
-        with pytest.raises(OffloadReadError, match="unusable reference"):
-            writer(self.deep_secret_content)
-
-    def test_unreachable_sink_read_is_mapped_to_the_typed_offload_error(self) -> None:
-        """Adapter-specific sink failures never escape as raw sink errors."""
-
-        writer = PostgresOffloadWriter(self.ExplodingSink())
-
-        with pytest.raises(OffloadReadError, match="Large tool result not found"):
-            writer.read_offloaded("/large_tool_results/" + "a" * 64)
-
-
 class TestBoundaryContentParity(OffloadAdapterMixin):
     """The edges must agree too, not just the comfortable middle."""
 
@@ -406,42 +311,6 @@ class TestBoundaryContentParity(OffloadAdapterMixin):
         reference = writer(content)
 
         assert writer.read_offloaded(reference).decode("utf-8") == content
-
-
-class TestResolverPrecedence(OffloadAdapterMixin):
-    """Pin which writer wins when more than one arm could match."""
-
-    def test_a_shared_sink_outranks_the_in_memory_store(self, tmp_path: Path) -> None:
-        """Supplying a durable sink selects the durable writer.
-
-        Precedence worth pinning: an in-memory store *with* a shared sink
-        resolves to the Postgres writer, not the in-memory one, because a
-        deployment that went to the trouble of supplying durable shared storage
-        should not have its bytes parked in a process-local dict.
-        """
-
-        resolved = OffloadWriterResolver.for_store(
-            InMemoryRuntimeApiStore(),
-            shared_object_sink=FileObjectStore(FileStoreLayout(tmp_path / "sink")),
-        )
-
-        assert isinstance(resolved, PostgresOffloadWriter)
-
-    def test_the_file_store_ignores_a_shared_sink_and_keeps_its_own_bytes(
-        self, tmp_path: Path
-    ) -> None:
-        """A store that owns its bytes is never redirected."""
-
-        class _FileStoreShape:
-            layout = FileStoreLayout(tmp_path / "f")
-            object_store = FileObjectStore(FileStoreLayout(tmp_path / "f"))
-
-        resolved = OffloadWriterResolver.for_store(
-            _FileStoreShape(),
-            shared_object_sink=FileObjectStore(FileStoreLayout(tmp_path / "sink")),
-        )
-
-        assert isinstance(resolved, FileOffloadWriter)
 
 
 class TestWorkerWiringDoesNotYetSelectAWriter(OffloadAdapterMixin):

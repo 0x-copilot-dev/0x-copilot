@@ -408,10 +408,8 @@ def runtime_checkpointer(checkpointer: object | None = None) -> object:
     No backend name is branched on here — see ``checkpointing`` for the registry
     and for how a backend registers a saver.
 
-    A registered saver does NOT self-open any pool it holds. A server startup
-    seam must ``await setup_runtime_checkpointer()`` once (worker ``amain`` /
-    in-process worker start) and ``await teardown_runtime_checkpointer()`` on
-    shutdown; local savers need neither.
+    Every registered saver opens itself lazily on first use, so there is no
+    startup or shutdown seam to pair with.
     """
 
     if checkpointer is not None:
@@ -422,51 +420,6 @@ def runtime_checkpointer(checkpointer: object | None = None) -> object:
             CHECKPOINTERS.build(selected_backend()) or build_in_memory_checkpointer()
         )
     return _runtime_checkpointer
-
-
-async def setup_runtime_checkpointer() -> None:
-    """Open the Postgres checkpointer pool and create its tables, once at startup.
-
-    A no-op on every non-Postgres saver: the desktop ``AsyncSqliteSaver`` opens
-    its aiosqlite connection lazily on first use, and the in-memory saver needs
-    nothing. Duck-typed on the class name so importing this module on a desktop
-    build never drags in the postgres checkpointer package.
-
-    Idempotent enough for a startup seam: opening an already-open pool and
-    re-running ``AsyncPostgresSaver.setup()`` (``CREATE TABLE IF NOT EXISTS``
-    DDL) are both safe. Must be awaited inside the event loop the worker will run
-    on — ``AsyncPostgresSaver`` binds to the running loop at construction.
-    """
-
-    saver = runtime_checkpointer()
-    if type(saver).__name__ != "AsyncPostgresSaver":
-        return
-    from psycopg_pool import AsyncConnectionPool
-
-    conn = getattr(saver, "conn", None)
-    if isinstance(conn, AsyncConnectionPool):
-        await conn.open()
-        await conn.wait()
-    await saver.setup()
-
-
-async def teardown_runtime_checkpointer() -> None:
-    """Close the Postgres checkpointer pool on shutdown; a no-op otherwise.
-
-    Mirror of :func:`setup_runtime_checkpointer`. Reads the module singleton
-    directly rather than calling :func:`runtime_checkpointer` so shutdown never
-    *constructs* a saver, and does nothing when none was built or when the saver
-    is the desktop SQLite / in-memory variant.
-    """
-
-    saver = _runtime_checkpointer
-    if saver is None or type(saver).__name__ != "AsyncPostgresSaver":
-        return
-    from psycopg_pool import AsyncConnectionPool
-
-    conn = getattr(saver, "conn", None)
-    if isinstance(conn, AsyncConnectionPool):
-        await conn.close()
 
 
 def build_chat_model(

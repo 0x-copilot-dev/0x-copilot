@@ -10,16 +10,10 @@ told did not exist.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
 
 from agent_runtime.persistence.records import DefaultToolBudget, ToolBudgetEnforcement
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
-
-_MIGRATION = (
-    Path(__file__).resolve().parents[4] / "migrations" / "0001_runtime_baseline.sql"
-)
 
 
 class TestDefaultToolBudgetIsSingleSourced:
@@ -34,17 +28,6 @@ class TestDefaultToolBudgetIsSingleSourced:
     def test_in_memory_store_seeds_from_the_shared_definition(self) -> None:
         seeded = InMemoryRuntimeApiStore().tool_budgets[DefaultToolBudget.ID]
         assert seeded.max_calls_per_run == DefaultToolBudget.MAX_CALLS_PER_RUN
-
-    def test_sql_seed_matches_the_constant(self) -> None:
-        """The migration literal cannot drift from the Python constant."""
-
-        sql = _MIGRATION.read_text(encoding="utf-8")
-        match = re.search(
-            r"'seed_default',\s*NULL,\s*'\*',\s*(\d+),\s*'hard'",
-            sql,
-        )
-        assert match, "seed_default row not found in the baseline migration"
-        assert int(match.group(1)) == DefaultToolBudget.MAX_CALLS_PER_RUN
 
     def test_prompt_budget_matches_the_enforced_budget(self) -> None:
         """The cap rendered into the prompt is the cap the middleware applies.

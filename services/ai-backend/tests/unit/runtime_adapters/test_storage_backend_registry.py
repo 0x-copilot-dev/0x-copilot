@@ -142,10 +142,10 @@ class TestProviderContract:
 
 
 class TestShippedBackends:
-    def test_the_three_built_ins_are_registered_with_the_legacy_alias(self) -> None:
+    def test_the_built_ins_are_registered_with_the_legacy_alias(self) -> None:
         from runtime_adapters.registry import STORAGE_BACKENDS
 
-        assert STORAGE_BACKENDS.names() == ("file", "in_memory_async", "postgres")
+        assert STORAGE_BACKENDS.names() == ("file", "in_memory_async")
         assert STORAGE_BACKENDS.resolve("in_memory").name == "in_memory_async"
 
     def test_factory_dispatch_goes_through_the_registry(self, monkeypatch) -> None:

@@ -13,7 +13,6 @@ from agent_runtime.persistence.records import RuntimeWorkerResult
 from runtime_adapters.artifact_queue import ArtifactAwareRuntimeQueue
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
-from runtime_adapters.postgres.runtime_api_store import PostgresRuntimeApiStore
 from runtime_api.schemas import RuntimeEffectReconcileCommand
 
 pytestmark = pytest.mark.anyio
@@ -87,37 +86,6 @@ async def test_queue_adapters_persist_only_body_free_recovery_payload(
     await store.mark_complete(
         result=RuntimeWorkerResult(command_id=command.command_id, succeeded=True)
     )
-
-
-class _PostgresEnqueueSpy:
-    captured: dict[str, object] | None = None
-
-    async def _enqueue_command(self, **kwargs: object) -> bool:
-        self.captured = kwargs
-        return True
-
-
-async def test_postgres_queue_adapter_serializes_only_body_free_recovery_payload() -> (
-    None
-):
-    command = _command()
-    spy = _PostgresEnqueueSpy()
-
-    assert (  # type: ignore[arg-type]
-        await PostgresRuntimeApiStore.enqueue_effect_reconcile(spy, command)
-    ) is True
-
-    assert spy.captured is not None
-    assert spy.captured["command_type"] == (
-        PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED
-    )
-    assert spy.captured["org_id"] == command.org_id
-    assert spy.captured["aggregate_id"] == command.run_id
-    assert spy.captured["idempotent"] is True
-    payload = spy.captured["payload"]
-    assert isinstance(payload, dict)
-    assert _FORBIDDEN_SCOPE_KEYS.isdisjoint(payload)
-    assert payload == command.model_dump(mode="json")
 
 
 class _ArtifactQueueMirror:

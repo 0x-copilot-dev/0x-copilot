@@ -62,12 +62,10 @@ class TestRegistry:
 
         assert registry.names() == ("a", "b")
 
-    def test_the_shipped_registry_covers_file_and_postgres_but_not_in_memory(
-        self,
-    ) -> None:
+    def test_the_shipped_registry_covers_file_but_not_in_memory(self) -> None:
         from agent_runtime.execution.checkpointing import CHECKPOINTERS
 
-        assert CHECKPOINTERS.names() == ("file", "postgres")
+        assert CHECKPOINTERS.names() == ("file",)
         # A process-local store offering a "durable" saver would be a lie.
         assert CHECKPOINTERS.build("in_memory_async") is None
 

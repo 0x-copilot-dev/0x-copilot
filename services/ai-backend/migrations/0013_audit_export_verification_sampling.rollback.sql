@@ -1,3 +1,0 @@
-DROP TABLE IF EXISTS runtime_audit_export_verification_scan_state;
-DROP TABLE IF EXISTS runtime_audit_export_verification_outcomes;
-DROP TABLE IF EXISTS runtime_audit_export_verification_manifests;

@@ -81,28 +81,17 @@ class AccountMergeApiRoutes:
 
         The file-native (desktop) store fails closed with 501: reporting
         success without moving data would let the saga proceed to its
-        destructive steps (disable + revoke) against an unmerged store.
+        destructive steps (disable + revoke) against an unmerged store. That
+        gap predates this dispatcher — there has never been a file re-keyer —
+        and is tracked separately; linking an account on the desktop cannot
+        re-key runtime data until one exists.
         """
 
         persistence = request.app.state.runtime_persistence
         from runtime_adapters.in_memory.runtime_api_store import (
             InMemoryRuntimeApiStore,
         )
-        from runtime_adapters.postgres.runtime_api_store import (
-            PostgresRuntimeApiStore,
-        )
 
-        if isinstance(persistence, PostgresRuntimeApiStore):
-            from runtime_adapters.postgres.account_merge import (
-                PostgresAccountMergeRekeyer,
-            )
-
-            return await PostgresAccountMergeRekeyer(persistence).rekey(
-                absorbed_org_id=payload.absorbed_org_id,
-                absorbed_user_id=payload.absorbed_user_id,
-                survivor_org_id=payload.survivor_org_id,
-                survivor_user_id=payload.survivor_user_id,
-            )
         if isinstance(persistence, InMemoryRuntimeApiStore):
             return cls._rekey_in_memory(request, persistence, payload)
         raise RuntimeApiError(
