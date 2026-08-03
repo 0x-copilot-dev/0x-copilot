@@ -584,6 +584,68 @@ class DriverSession:
         assert self.wait_model_pill_resolved(), (
             "model pill never resolved after the key was added"
         )
+        # Opt-in cost control for a full-suite run: every journey that sends a
+        # message otherwise runs on whatever the picker auto-selects, which is
+        # the mid tier. Set COPILOT_JOURNEY_MODEL to pin the cheapest model the
+        # provider publishes. Harness-only — no product code reads it, so a
+        # normal run is unaffected.
+        preferred = os.environ.get("COPILOT_JOURNEY_MODEL", "").strip()
+        if preferred:
+            assert self.select_model(preferred), (
+                f"could not select the requested journey model {preferred!r}"
+            )
+
+    def select_model(self, name_fragment: str, timeout_s: int = 20) -> bool:
+        """Open the composer's model picker and choose the matching row.
+
+        Matches on the visible row name, case-insensitively, so a caller can
+        pass "haiku" rather than the exact catalog label. Returns False when no
+        enabled row matches — a keyless row is not selectable, and silently
+        continuing on the wrong model would misreport what was exercised.
+        """
+
+        self.click(".atlas-model-pill")
+        if not self.wait_for(".atlas-model-pill__item", timeout_s):
+            return False
+        clicked = self.evaluate(
+            """
+            (() => {
+              const want = %r.toLowerCase();
+              const rows = [...document.querySelectorAll('.atlas-model-pill__item')];
+              const row = rows.find((r) => {
+                const nm = r.querySelector('.atlas-model-pill__nm');
+                return nm && nm.innerText.toLowerCase().includes(want)
+                  && !r.disabled;
+              });
+              if (!row) return null;
+              row.click();
+              return row.innerText;
+            })()
+            """
+            % name_fragment
+        )
+        if not clicked:
+            # Close the popover so a failed selection cannot swallow the next
+            # click in the journey.
+            self.evaluate("document.body.click()")
+            return False
+        return self.wait_model_pill_contains(name_fragment, timeout_s)
+
+    def wait_model_pill_contains(self, fragment: str, timeout_s: int = 20) -> bool:
+        """Wait until the pill's own label reflects the chosen model."""
+
+        want = fragment.lower()
+        for _ in range(timeout_s * 2):
+            text = (
+                self.evaluate(
+                    '(document.querySelector(".atlas-model-pill")||{}).innerText||""'
+                )
+                or ""
+            ).lower()
+            if want in text:
+                return True
+            time.sleep(0.5)
+        return False
 
     #: Pill text while nothing is selected — `ModelPill` renders the trigger
     #: with an aria-label of "Select a model" and this short visible label.
