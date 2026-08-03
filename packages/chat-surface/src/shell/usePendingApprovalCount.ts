@@ -24,17 +24,23 @@ import { useTransport } from "../providers/TransportProvider";
 
 import { useRunActivityBus } from "./runActivityBus";
 
-const PENDING_WORK_PATH = "/v1/agent/pending-work-v2";
+// The v1 route, deliberately. `/v1/agent/pending-work-v2` is gated behind the
+// ai-backend's workspace-enforcement flag and 404s with it off — which is the
+// default, so a hook pointed there returns 0 forever and the badge never
+// appears. Verified live against the running app: v2 → HTTP 404, v1 → the
+// queue. `usePendingWork` (which fed the cross-run cards this badge replaces)
+// reads the same route.
+const PENDING_WORK_PATH = "/v1/agent/pending-work";
 const BUS_DEBOUNCE_MS = 250;
 const VISIBLE_POLL_MS = 30_000;
 
 /**
- * The one field this badge needs off `GET /v1/agent/pending-work-v2`.
+ * The one field this badge needs off `GET /v1/agent/pending-work`.
  *
- * `total` is preferred when the server sends it; otherwise the page's own item
- * count stands in. A paged response therefore under-counts rather than
- * over-counts, which is the right way round for a badge — it can say "at least
- * this much is waiting", never "more than there is".
+ * The route answers `{ v, items[], agents[] }`; `items` is the pending queue.
+ * `total` is honoured first in case a later revision adds it, so a paged
+ * response would under-count rather than over-count — the right way round for a
+ * badge, which may say "at least this much is waiting" but never more.
  */
 interface PendingWorkCountBody {
   readonly total?: number;
