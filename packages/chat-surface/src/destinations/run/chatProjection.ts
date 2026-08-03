@@ -130,6 +130,16 @@ interface DraftPart {
   closed: boolean;
 }
 
+/** True when `events` is already ascending by `sequence_no` — the normal case. */
+function isSortedBySequence(events: readonly RuntimeEventEnvelope[]): boolean {
+  for (let i = 1; i < events.length; i += 1) {
+    if (events[i - 1].sequence_no > events[i].sequence_no) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function parseMs(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -167,8 +177,14 @@ export function projectChatMessages(
   // The stream is append-only in arrival order, which is `sequence_no` order in
   // practice — but a replay tail stitched onto a live subscription can arrive
   // out of order, and the whole fix rests on this being the true total order.
-  // Sorting is O(n log n) on an already-sorted array and costs nothing real.
-  const ordered = [...events].sort((a, b) => a.sequence_no - b.sequence_no);
+  //
+  // Check before copying. This fold re-runs on EVERY streamed event, so an
+  // unconditional copy+sort is O(n log n) per event — quadratic-plus over a run,
+  // paid on the hot path of a long run to reorder an array that is already
+  // sorted. The scan is O(n) and the copy is skipped in the normal case.
+  const ordered = isSortedBySequence(events)
+    ? events
+    : [...events].sort((a, b) => a.sequence_no - b.sequence_no);
 
   /** Close the open part, if any. Idempotent. */
   const closeOpen = (): void => {
