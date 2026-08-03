@@ -179,7 +179,6 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
     fixed = (
         ("builtin", "web_search", "runtime_worker.dependencies.WebSearchToolRegistry"),
         ("builtin", "load_mcp_server", "execution.factory._model_visible_tools"),
-        ("builtin", "call_mcp_tool", "execution.factory._model_visible_tools"),
         ("builtin", "auth_mcp", "execution.factory._model_visible_tools"),
         ("builtin", "load_skill", "execution.factory._model_visible_tools"),
         ("builtin", "load_prior_tool_result", "execution.factory._model_visible_tools"),
@@ -199,6 +198,10 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("subagent", "dispatch", "delegation.subagents.atlas_task_tool"),
         ("workspace", "ls", "capabilities.desktop.workspace_backend"),
         ("workspace", "read", "capabilities.desktop.workspace_backend"),
+        # deepagents 0.7.1 added `delete` to FilesystemMiddleware; it is
+        # assembled like every other filesystem tool and must be declared
+        # here or the inventory gate reports it as an undeclared surface.
+        ("workspace", "delete", "capabilities.desktop.workspace_backend"),
         ("workspace", "glob", "capabilities.desktop.workspace_backend"),
         ("workspace", "grep", "capabilities.desktop.workspace_backend"),
         ("workspace", "write", "capabilities.desktop.workspace_backend"),

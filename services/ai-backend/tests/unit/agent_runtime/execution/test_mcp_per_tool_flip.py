@@ -59,7 +59,6 @@ from agent_runtime.capabilities.mcp.middleware.error_map_tool import (
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     HarnessBuiltinToolNames,
     McpPerToolCollaborators,
-    McpPerToolFlag,
     McpPerToolInterrupts,
     McpPerToolRegistrar,
     McpPerToolRegistration,
@@ -405,7 +404,6 @@ class PerToolFixtureMixin:
             ),
             gate=gate,
             reserved_names=reserved_names,
-            environ={McpPerToolFlag.ENV_VAR: "true" if enabled else "false"},
         )
 
     def names(self, registration: McpPerToolRegistration | None) -> tuple[str, ...]:
@@ -423,24 +421,8 @@ class PerToolFixtureMixin:
         return result[0]
 
 
-class TestFlagDefault:
-    def test_the_flag_is_off_when_unset(self) -> None:
-        assert McpPerToolFlag.enabled({}) is False
-
-    @pytest.mark.parametrize("raw", ["1", "true", "TRUE", " yes ", "on"])
-    def test_explicit_truthy_values_enable_it(self, raw: str) -> None:
-        assert McpPerToolFlag.enabled({McpPerToolFlag.ENV_VAR: raw}) is True
-
-    @pytest.mark.parametrize("raw", ["", "false", "0", "no", "off", "maybe"])
-    def test_everything_else_reads_off(self, raw: str) -> None:
-        assert McpPerToolFlag.enabled({McpPerToolFlag.ENV_VAR: raw}) is False
-
-
 class TestTheFlipDeclines(PerToolFixtureMixin):
     """Every "cannot register safely" road ends on the legacy gateway."""
-
-    async def test_flag_off_registers_nothing(self) -> None:
-        assert await self.build([self.read_tool()], enabled=False) is None
 
     async def test_absent_credential_plane_falls_back(self) -> None:
         # The desktop provider is blocked on a token writer, so this is the
@@ -453,7 +435,6 @@ class TestTheFlipDeclines(PerToolFixtureMixin):
                 collaborators=None,
                 gate=None,
                 reserved_names=frozenset(),
-                environ={McpPerToolFlag.ENV_VAR: "true"},
             )
             is None
         )
@@ -753,12 +734,21 @@ class TestComposedFactorySurface(PerToolFixtureMixin):
         names = tuple(str(getattr(tool, "name", "")) for tool in tools)
         return names, _model_tool_schema_revision(tools)
 
-    def test_flag_off_composes_the_untouched_legacy_surface(self) -> None:
+    def test_no_registration_composes_no_mcp_dispatch_tool(self) -> None:
+        """The surface when the connector plane did not resolve.
+
+        This used to compose the umbrella ``call_mcp_tool`` as a fallback. There
+        is none now, and that is the point: a dispatch tool whose credential
+        plane never resolved can only fail at call time, after the model has
+        committed a turn to it. ``load_mcp_server`` / ``auth_mcp`` stay -- they
+        are how a run discovers and connects a server, which is exactly what an
+        unresolved plane needs.
+        """
+
         names, _digest = self.surface(None)
         assert names == (
             "web_search",
             "load_mcp_server",
-            "call_mcp_tool",
             "auth_mcp",
             "ask_a_question",
             "list_connected_servers",
@@ -822,10 +812,10 @@ class TestFactoryWiring(PerToolFixtureMixin):
             mcp_connector_resolver_sink=sink,
         )
 
-    async def test_the_flag_is_read_from_the_process_environment(
+    async def test_an_unset_environment_registers_the_per_tool_surface(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv(McpPerToolFlag.ENV_VAR, raising=False)
+        """Unset is the shape production runs in — nothing sets this var."""
         assert (
             await _mcp_per_tool_registration(
                 runtime_context=self.context(),
@@ -834,13 +824,12 @@ class TestFactoryWiring(PerToolFixtureMixin):
                 ),
                 tools=(),
             )
-            is None
+            is not None
         )
 
     async def test_a_wrongly_typed_credential_plane_is_not_an_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv(McpPerToolFlag.ENV_VAR, "true")
         assert (
             await _mcp_per_tool_registration(
                 runtime_context=self.context(),
@@ -855,7 +844,6 @@ class TestFactoryWiring(PerToolFixtureMixin):
     async def test_the_resolver_is_published_to_the_stream_seam(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv(McpPerToolFlag.ENV_VAR, "true")
         sink = RecordingSink()
         context = self.context()
         registration = await _mcp_per_tool_registration(
@@ -874,7 +862,6 @@ class TestFactoryWiring(PerToolFixtureMixin):
     async def test_nothing_is_published_when_the_flip_declines(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv(McpPerToolFlag.ENV_VAR, "true")
         sink = RecordingSink()
         assert (
             await _mcp_per_tool_registration(

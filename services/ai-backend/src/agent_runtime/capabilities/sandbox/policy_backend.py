@@ -254,17 +254,22 @@ class PolicyEnforcedSandboxBackend(BaseSandbox):
     # that has no ``delete`` at all: the guard is the point, and refusing an
     # out-of-workspace path before discovering the base cannot serve it is the
     # right order.
-    def delete(self, path: str):  # type: ignore[override]
-        """Refuse any delete outside ``/workspace`` before it reaches a provider."""
+    def delete(self, file_path: str):  # type: ignore[override]
+        """Refuse any delete outside ``/workspace`` before it reaches a provider.
 
-        self._guard_path(path)
-        return self._super_or_unsupported("delete", path)
+        The parameter is ``file_path`` because that is what ``BaseSandbox``
+        calls it. Named anything else, a keyword call raises ``TypeError``
+        instead of being refused — the guard stops guarding without failing.
+        """
 
-    async def adelete(self, path: str):  # type: ignore[override]
+        self._guard_path(file_path)
+        return self._super_or_unsupported("delete", file_path)
+
+    async def adelete(self, file_path: str):  # type: ignore[override]
         """Async twin of :meth:`delete`, guarded identically."""
 
-        self._guard_path(path)
-        result = self._super_or_unsupported("adelete", path)
+        self._guard_path(file_path)
+        result = self._super_or_unsupported("adelete", file_path)
         return await result if inspect.isawaitable(result) else result
 
     def _super_or_unsupported(self, name: str, *args: object) -> object:

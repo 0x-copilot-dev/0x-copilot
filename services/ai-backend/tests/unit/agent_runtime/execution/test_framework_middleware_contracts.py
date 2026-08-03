@@ -20,7 +20,7 @@ from langchain.agents.middleware.types import ToolCallRequest
 
 
 _EXPECTED_FRAMEWORK_VERSIONS = {
-    "deepagents": "0.6.12",
+    "deepagents": "0.7.1",
     "langchain": "1.3.14",
     # ``ToolCallRequest`` is re-exported by LangChain but implemented by
     # LangGraph, so its distribution pin is part of this contract too.

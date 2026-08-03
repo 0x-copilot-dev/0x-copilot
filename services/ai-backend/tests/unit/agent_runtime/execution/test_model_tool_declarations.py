@@ -87,7 +87,6 @@ class ComposedSurfaceMixin:
     COMPOSED_SURFACE = (
         "web_search",
         "load_mcp_server",
-        "call_mcp_tool",
         "auth_mcp",
         "load_skill",
         "load_prior_tool_result",
@@ -108,7 +107,6 @@ class ComposedSurfaceMixin:
     EXPECTED_LABELS = {
         "web_search": "deepagents.middleware:web_search",
         "load_mcp_server": "agent_runtime.capabilities.mcp:load_mcp_server",
-        "call_mcp_tool": "agent_runtime.capabilities.mcp:call_mcp_tool",
         "auth_mcp": "agent_runtime.capabilities.mcp:auth_mcp",
         "load_skill": "agent_runtime.capabilities.skills:load_skill",
         "load_prior_tool_result": (

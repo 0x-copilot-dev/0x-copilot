@@ -35,6 +35,8 @@ from agent_runtime.control_plane.contracts import (
 )
 from agent_runtime.control_plane.feature_modes import FeatureModeSet
 from agent_runtime.control_plane.feature_modes import FeatureMode
+from langchain.agents.middleware import TodoListMiddleware
+
 from agent_runtime.execution import deep_agent_builder as builder_module
 from agent_runtime.execution.fake_model import DeterministicFakeChatModel
 from agent_runtime.execution.contracts import (
@@ -121,7 +123,6 @@ class _CategoryFanoutModel(BaseChatModel):
 
     _TOOL_ARGUMENTS: ClassVar[dict[str, dict[str, object]]] = {
         "registry_search": {"value": "registry"},
-        "call_mcp_tool": {"value": "mcp"},
         "load_skill": {"value": "skill"},
         "ask_a_question": {"value": "ask"},
         "load_prior_tool_result": {"value": "prior-result"},
@@ -310,12 +311,40 @@ def test_universal_middleware_is_materialized_for_supervisor_and_local_subagents
         ]
         for stack in captured_stacks
     ]
+    # Exactly one runtime boundary per graph. This is the invariant that
+    # matters and it still holds: two controllers on one graph would double
+    # every admission decision.
     assert all(len(instances) == 1 for instances in controls)
-    main_control = controls[-1][0]
-    subagent_controls = {id(instances[0]) for instances in controls[:-1]}
-    assert len(subagent_controls) == 2
-    assert main_control is root_control
-    assert id(root_control) not in subagent_controls
+    assert controls[-1][0] is root_control
+
+    # Instance IDENTITY is deliberately no longer asserted. It was a proxy for
+    # "a child cannot spend the supervisor's tool budget", and that property is
+    # owned elsewhere: production binds ONE run-scoped `RunControlContext`, and
+    # `RuntimeControlMiddleware` reads admission from it — the instance-local
+    # `_fallback_serial_admission` fires only when no binding exists, which the
+    # worker makes impossible (`loop.py` constructs a `RunControlPlaneBuilder`
+    # when the caller supplies none).
+    #
+    # 0.7.1 also makes per-graph identity unachievable without forking the
+    # library: it compiles TWO graphs per subagent and materializes harness
+    # middleware once per subagent PROFILE, so both of a child's graphs share
+    # one materialization by construction.
+    #
+    # What remains asserted is the thing that would make sharing dangerous: the
+    # middleware must carry no per-graph mutable state beyond the documented
+    # fallbacks. `_final_tool_surface` is the one exception and has no
+    # production reader — it is a test canary. If that ever changes, this
+    # assertion fails and the sharing question has to be reopened.
+    shared = {
+        name
+        for name, value in vars(root_control).items()
+        if name not in {"_excluded_tool_names", "_final_tool_surface"}
+        and not name.startswith("_fallback_")
+    }
+    assert shared == set(), (
+        f"RuntimeControlMiddleware grew per-graph mutable state {sorted(shared)}; "
+        "graphs share instances under 0.7.1, so this is now cross-graph state"
+    )
 
 
 def test_pinned_framework_cache_middleware_remains_on_root_and_local_children(
@@ -557,13 +586,20 @@ async def test_final_model_visible_tools_have_one_universal_controller(
     expected_local_tools = frozenset(
         {
             "catalog_read",
+            # deepagents 0.7.1 added `delete` to FilesystemMiddleware.
+            "delete",
             "edit_file",
             "glob",
             "grep",
             "ls",
             "read_file",
             "write_file",
-            "write_todos",
+            # `write_todos` is contributed by `TodoListMiddleware` rather than
+            # passed through `tools=`, and under 0.7.1 a middleware-contributed
+            # tool is not visible at THIS capture point. It is still bound and
+            # callable — `runtime_worker/test_todo_list_real_run.py` drives a
+            # real graph with the real middleware and asserts the tool runs — so
+            # asserting it here would pin the capture point, not the surface.
         }
     )
     expected_supervisor_tools = expected_local_tools | {"task"}
@@ -582,14 +618,24 @@ async def test_final_model_visible_tools_have_one_universal_controller(
         == 1
         for stack in captured_stacks
     )
-    for stack, bound_tools in zip(captured_stacks, bound_tool_sets, strict=True):
+    # `final_tool_surface` is per-INSTANCE, and 0.7.1 shares one instance across
+    # graphs, so every controller now reports the surface of whichever graph
+    # observed last — the supervisor's. Asserting it per graph would be pinning
+    # the sharing, not the surface. What is still worth holding is that the
+    # canary observed a real surface and that the exclusion set was honoured.
+    #
+    # This is the ONLY reader of `final_tool_surface` anywhere, production
+    # included, which is why the sharing is tolerable: see the note on instance
+    # identity in `test_universal_middleware_is_materialized_...` above.
+    supervisor_tools = max(bound_tool_sets, key=len)
+    for stack, _bound_tools in zip(captured_stacks, bound_tool_sets, strict=True):
         controller = next(
             middleware
             for middleware in stack
             if isinstance(middleware, RuntimeControlMiddleware)
         )
         assert controller.final_tool_surface is not None
-        assert frozenset(controller.final_tool_surface.tool_names) == bound_tools
+        assert frozenset(controller.final_tool_surface.tool_names) == supervisor_tools
         assert builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS.isdisjoint(
             controller.final_tool_surface.tool_names
         )
@@ -602,7 +648,6 @@ async def test_live_final_tool_categories_cross_one_runtime_admission(
 
     category_names = (
         "registry_search",
-        "call_mcp_tool",
         "load_skill",
         "ask_a_question",
         "load_prior_tool_result",
@@ -655,8 +700,14 @@ async def test_live_final_tool_categories_cross_one_runtime_admission(
             tools=tuple(category_tool(name) for name in category_names),
             model_config=_model_config(),
             system_prompt="Exercise every final tool category exactly once.",
-            middleware=(RuntimeControlMiddleware(),),
-            universal_middleware_factories=(RuntimeControlMiddleware,),
+            # `TodoListMiddleware` is declared here for the same reason the
+            # factory declares it: 0.7.1 no longer injects `write_todos`, so a
+            # graph that wants it in its admission canary has to compose it.
+            middleware=(RuntimeControlMiddleware(), TodoListMiddleware()),
+            universal_middleware_factories=(
+                RuntimeControlMiddleware,
+                TodoListMiddleware,
+            ),
         )
     )
 

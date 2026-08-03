@@ -1,177 +1,72 @@
-"""D2 — the runtime factory threads the tool-use policy into the built graph.
+"""D2 — where the MCP write axis is enforced, now that the umbrella is gone.
 
-End-to-end proof that the stored policy reaches the Deep Agents build request:
-the write axis controls whether ``call_mcp_tool`` is added to ``interrupt_on``
-(the existing HITL approval seam) or replaced by a blocked-result wrapper, and an
-unconfigured run stays byte-identical to today (write=ask → approval).
+This file used to prove the tool-use policy end to end against ``call_mcp_tool``:
+the write axis either added that one name to ``interrupt_on`` or replaced the
+tool with a blocked-result wrapper. Both mechanisms keyed on the NAME, and the
+name is deleted — per-tool registration replaced the umbrella.
+
+The property did not leave the product, it moved to a stronger owner, and that
+is worth stating precisely because "the enforcer's map is empty" reads like a
+regression:
+
+* the **PDP** (``capabilities/policy/service.py``) decides the write axis per
+  call, and a workspace ``BLOCK`` there is *terminal* — it survives both the
+  per-connector override and BYPASS. The gateway's wrapper had no such
+  guarantee. Covered by ``capabilities/policy/test_policy_service.py``
+  (``test_write_block_survives_bypass``,
+  ``test_allow_always_never_overrides_write_block``).
+* the **POLICY stage** of the per-tool pipeline applies that decision, parking a
+  gated write on the approval channel. Covered end to end by
+  ``execution/test_mcp_per_tool_flip.py``: a trusted read auto-runs, a write
+  parks and then executes exactly once after approval, and a declined write
+  never dispatches.
+
+What remains here is the tripwire the deletion created. ``ToolUsePolicyEnforcer``
+still lists ``call_mcp_tool`` in its gated-tool map, and that entry is now
+INERT — the map keys on a model-tool name, and no tool by that name is ever
+composed. Inert is fine; what is not fine is the entry becoming live again
+under a per-tool name, so that is what these assert.
 """
 
 from __future__ import annotations
 
-from typing import cast
-
-from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
-from agent_runtime.capabilities.mcp.gateway_context import (
-    McpOperationGatewayContext,
-    McpOperationGatewayServices,
-)
-from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
-from agent_runtime.capabilities.operations.context import (
-    OperationContext,
-    VerifiedOperationIdentity,
-)
-from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.tools.tool_use_enforcement import (
-    PolicyBlockedTool,
-    ToolUsePolicyResolver,
+    ToolUsePolicyEnforcer,
 )
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
-from agent_runtime.execution.factory import acreate_agent_runtime
-from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
-
-_CALL_MCP_TOOL = "call_mcp_tool"
 
 
-class _FakeMcpProvider:
-    async def list_server_cards(self) -> tuple[McpServerCard, ...]:
-        return (
-            McpServerCard(
-                name="drive_mcp",
-                display_name="Drive MCP",
-                short_description="Search Drive.",
-                transport="http",
-                auth_mode="oauth2",
-                auth_state=McpAuthState.AUTH_SKIPPED,
-                required_scopes=("docs:read",),
-                health="healthy",
-                load_cost=1,
-            ),
+class TestTheEnforcerNoLongerClaimsTheMcpSurface:
+    """The umbrella is gone; the enforcer must not pretend to gate MCP."""
+
+    def test_the_gated_names_never_intersect_the_composed_mcp_surface(self) -> None:
+        """A name-keyed MCP gate here would double-prompt every write.
+
+        The POLICY stage parks a gated write *after* the PDP decides. Deep
+        Agents' ``interrupt_on`` middleware interrupts BEFORE the tool runs, for
+        every call of a listed name, knowing nothing of the decision — so
+        listing an MCP tool here raises a second approval for one write. That is
+        the double-prompt ``McpPerToolInterrupts`` exists to avoid.
+        """
+
+        gated = set(ToolUsePolicyEnforcer._GATED_TOOL_SIDE_EFFECTS)
+        # The composed MCP surface is now the connectors' own tool names. The
+        # retired umbrella is the ONE name allowed to remain here, because
+        # nothing composes it any more — the entry is dead weight, not a gate.
+        live = gated - {"call_mcp_tool"}
+
+        assert live == set(), (
+            f"{sorted(live)} makes the enforcer gate a composed tool by name; if "
+            "any of those is an MCP tool the write is gated TWICE — here before "
+            "the call, and again by the POLICY stage after the PDP decides"
         )
 
-    def create_client(self, _name: str) -> object:
-        return object()
+    def test_the_retired_umbrella_is_the_only_entry_left(self) -> None:
+        """Pins the map's size so a new entry is a deliberate review, not a drift.
 
+        The routing machinery it drives (block -> refusal wrapper, require ->
+        approval interrupt) is still exercised by
+        ``capabilities/tools/test_tool_use_enforcement.py`` against this same
+        name, which is why the entry stays rather than being deleted outright.
+        """
 
-def _dependencies_with_mcp(
-    fake_dependencies: RuntimeDependencies,
-) -> RuntimeDependencies:
-    return fake_dependencies.model_copy(
-        update={"mcp_registry": DynamicMcpRegistry(providers=(_FakeMcpProvider(),))}
-    )
-
-
-def _tool_use(policy: dict[str, str]) -> dict[str, object]:
-    return {"tool_use": {"workspace": policy, "user": {}}}
-
-
-async def test_unconfigured_run_gates_call_mcp_tool_by_default(
-    runtime_context_admin: AgentRuntimeContext,
-    fake_dependencies: RuntimeDependencies,
-) -> None:
-    builder = CapturingAgentBuilder()
-    await acreate_agent_runtime(
-        context=runtime_context_admin,  # user_policies_json defaults to {}
-        dependencies=_dependencies_with_mcp(fake_dependencies),
-        agent_builder=builder,
-    )
-    request = builder.calls[0]
-    # Fail-open lane: deployment default write=ask → HITL approval, unchanged.
-    assert request.interrupt_on == {
-        _CALL_MCP_TOOL: {"allowed_decisions": ["approve", "edit", "reject"]}
-    }
-    assert not any(isinstance(tool, PolicyBlockedTool) for tool in request.tools)
-
-
-async def test_enforced_mcp_gateway_defers_policy_until_per_operation_classification(
-    runtime_context_admin: AgentRuntimeContext,
-    fake_dependencies: RuntimeDependencies,
-) -> None:
-    """D1 must not hold catalog reads at the generic MCP umbrella tool."""
-
-    builder = CapturingAgentBuilder()
-    operation_token = OperationContext.bind_for_run(
-        identity=VerifiedOperationIdentity(
-            org_id=runtime_context_admin.org_id,
-            user_id=runtime_context_admin.user_id,
-            conversation_id="conv_d1_factory",
-            run_id=runtime_context_admin.run_id,
-        ),
-        policy_snapshot=ToolUsePolicyResolver.resolve(runtime_context_admin),
-        ledger_emitter=None,
-        artifact_service=None,
-        mode=OperationGatewayMode.ENFORCE,
-        canonical_arguments_durable=True,
-    )
-    # Factory only tests whether authoritative services are bound.  The actual
-    # service graph is exercised by test_operation_gateway_adapter.py.
-    gateway_token = McpOperationGatewayContext.bind_for_run(
-        cast(McpOperationGatewayServices, object())
-    )
-    try:
-        await acreate_agent_runtime(
-            context=runtime_context_admin,
-            dependencies=_dependencies_with_mcp(fake_dependencies),
-            agent_builder=builder,
-        )
-    finally:
-        McpOperationGatewayContext.unbind(gateway_token)
-        OperationContext.unbind(operation_token)
-
-    assert builder.calls[0].interrupt_on == {}
-
-
-async def test_write_auto_removes_the_interrupt(
-    runtime_context_admin: AgentRuntimeContext,
-    fake_dependencies: RuntimeDependencies,
-) -> None:
-    builder = CapturingAgentBuilder()
-    context = runtime_context_admin.model_copy(
-        update={"user_policies_json": _tool_use({"write": "auto"})}
-    )
-    await acreate_agent_runtime(
-        context=context,
-        dependencies=_dependencies_with_mcp(fake_dependencies),
-        agent_builder=builder,
-    )
-    request = builder.calls[0]
-    assert request.interrupt_on == {}
-    tool_names = {str(getattr(tool, "name", "")) for tool in request.tools}
-    assert _CALL_MCP_TOOL in tool_names
-    assert not any(isinstance(tool, PolicyBlockedTool) for tool in request.tools)
-
-
-async def test_write_require_gates_call_mcp_tool(
-    runtime_context_admin: AgentRuntimeContext,
-    fake_dependencies: RuntimeDependencies,
-) -> None:
-    builder = CapturingAgentBuilder()
-    context = runtime_context_admin.model_copy(
-        update={"user_policies_json": _tool_use({"write": "require"})}
-    )
-    await acreate_agent_runtime(
-        context=context,
-        dependencies=_dependencies_with_mcp(fake_dependencies),
-        agent_builder=builder,
-    )
-    assert _CALL_MCP_TOOL in builder.calls[0].interrupt_on
-
-
-async def test_write_block_wraps_call_mcp_tool(
-    runtime_context_admin: AgentRuntimeContext,
-    fake_dependencies: RuntimeDependencies,
-) -> None:
-    builder = CapturingAgentBuilder()
-    context = runtime_context_admin.model_copy(
-        update={"user_policies_json": _tool_use({"write": "block"})}
-    )
-    await acreate_agent_runtime(
-        context=context,
-        dependencies=_dependencies_with_mcp(fake_dependencies),
-        agent_builder=builder,
-    )
-    request = builder.calls[0]
-    # Blocked: no approval interrupt; the umbrella tool is a blocked wrapper.
-    assert request.interrupt_on == {}
-    blocked = [tool for tool in request.tools if isinstance(tool, PolicyBlockedTool)]
-    assert len(blocked) == 1
-    assert blocked[0].name == _CALL_MCP_TOOL
+        assert set(ToolUsePolicyEnforcer._GATED_TOOL_SIDE_EFFECTS) == {"call_mcp_tool"}
