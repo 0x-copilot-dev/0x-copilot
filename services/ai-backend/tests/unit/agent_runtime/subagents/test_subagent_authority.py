@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import pytest
 
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
@@ -16,13 +16,14 @@ from agent_runtime.delegation.subagents.atlas_task_tool import (
 )
 from agent_runtime.delegation.subagents import (
     RuntimeContextReference,
+    SubagentAuthorityError,
     SubagentCapabilityGrant,
     SubagentHandoffBuilder,
+    SubagentHandoffPolicy,
     SubagentOperationIdentityFactory,
     SubagentPolicyGrant,
     SubagentTask,
 )
-from agent_runtime.delegation.subagents.contracts import SubagentErrorCode
 from agent_runtime.delegation.subagents.operation_identity import (
     SUBAGENT_DELEGATION_OPERATION_ID_KEY,
     SUBAGENT_PARENT_OPERATION_ID_KEY,
@@ -151,10 +152,17 @@ class TestSubagentAuthority(SubagentTestMixin):
         assert task.authority.policy.write is ToolUsePolicyMode.BLOCK
         assert task.authority.policy.destructive is ToolUsePolicyMode.BLOCK
 
-    def test_lifecycle_rejects_cross_tenant_handoff_before_runner_starts(
+    def test_dispatch_rejects_a_cross_tenant_handoff(
         self, runtime_context_admin
     ) -> None:
-        task = self.make_task(runtime_context_admin).model_copy(
+        """`enforce_existing_task` is the seam that refuses a foreign context.
+
+        Previously covered through `AsyncSubagentLifecycle.start`; the lifecycle
+        is gone, so this drives the surviving policy directly.
+        """
+
+        definition = self.make_definition()
+        foreign = self.make_task(runtime_context_admin).model_copy(
             update={
                 "runtime_context_ref": RuntimeContextReference(
                     user_id=runtime_context_admin.user_id,
@@ -164,30 +172,22 @@ class TestSubagentAuthority(SubagentTestMixin):
                 )
             }
         )
-        runner = self.make_runner()
-        lifecycle = self.make_lifecycle(runner=runner)
 
-        outcome = asyncio.run(
-            lifecycle.start(
+        with pytest.raises(SubagentAuthorityError):
+            SubagentHandoffPolicy.enforce_existing_task(
                 context=runtime_context_admin,
-                subagent_name=self.Values.RESEARCHER_NAME,
-                task=task,
+                definition=definition,
+                task=foreign,
+                parent_grant=None,
             )
-        )
 
-        assert outcome.error is not None
-        assert outcome.error.code is SubagentErrorCode.PERMISSION_DENIED
-        assert runner.started_tasks == []
-
-    def test_lifecycle_rebuilds_forged_task_against_parent_grant(
+    def test_dispatch_rebuilds_a_forged_task_against_the_parent_grant(
         self, runtime_context_admin
     ) -> None:
         definition = self.make_definition(
             tools=(self.Values.DOC_SEARCH_TOOL, "write_docs"),
             skills=(self.Values.RESEARCH_SKILL, "writer"),
         )
-        runner = self.make_runner()
-        lifecycle = self.make_lifecycle(definitions=(definition,), runner=runner)
         forged = SubagentTask(
             objective=self.Values.OBJECTIVE,
             relevant_summary=self.Values.RELEVANT_SUMMARY,
@@ -218,53 +218,35 @@ class TestSubagentAuthority(SubagentTestMixin):
             ),
         )
 
-        started = asyncio.run(
-            lifecycle.start(
-                context=runtime_context_admin,
-                subagent_name=self.Values.RESEARCHER_NAME,
-                task=forged,
-                parent_grant=parent_grant,
-            )
+        enforced = SubagentHandoffPolicy.enforce_existing_task(
+            context=runtime_context_admin,
+            definition=definition,
+            task=forged,
+            parent_grant=parent_grant,
         )
 
-        assert started.state is not None
-        assert runner.started_tasks[0].allowed_tools == frozenset(
-            {self.Values.DOC_SEARCH_TOOL}
-        )
-        assert runner.started_tasks[0].allowed_skills == frozenset(
-            {self.Values.RESEARCH_SKILL}
-        )
-        assert runner.started_tasks[0].authority == parent_grant
-        assert runner.started_tasks[
-            0
-        ].runtime_context_ref.permission_scopes == frozenset(
+        assert enforced.allowed_tools == frozenset({self.Values.DOC_SEARCH_TOOL})
+        assert enforced.allowed_skills == frozenset({self.Values.RESEARCH_SKILL})
+        assert enforced.authority == parent_grant
+        assert enforced.runtime_context_ref.permission_scopes == frozenset(
             {self.Values.DOCS_READ_SCOPE}
         )
 
-    def test_update_cannot_widen_authority_after_start(
+    def test_update_cannot_widen_authority_after_dispatch(
         self, runtime_context_admin
     ) -> None:
-        definition = self.make_definition(
-            tools=(self.Values.DOC_SEARCH_TOOL, "write_docs"),
-            skills=(self.Values.RESEARCH_SKILL, "writer"),
-        )
-        runner = self.make_runner()
-        lifecycle = self.make_lifecycle(definitions=(definition,), runner=runner)
-        parent_grant = SubagentCapabilityGrant(
+        effective_grant = SubagentCapabilityGrant(
             capabilities={"subagent"},
             tools={self.Values.DOC_SEARCH_TOOL},
             skills={self.Values.RESEARCH_SKILL},
             permission_scopes={self.Values.DOCS_READ_SCOPE},
         )
-        started = asyncio.run(
-            lifecycle.start(
-                context=runtime_context_admin,
-                subagent_name=self.Values.RESEARCHER_NAME,
-                task=self.make_task(runtime_context_admin),
-                parent_grant=parent_grant,
-            )
+        effective_ref = RuntimeContextReference(
+            user_id=runtime_context_admin.user_id,
+            org_id=runtime_context_admin.org_id,
+            trace_id=runtime_context_admin.trace_id,
+            permission_scopes=frozenset({self.Values.DOCS_READ_SCOPE}),
         )
-        assert started.state is not None
         widening_update = SubagentTask(
             objective=self.Values.OBJECTIVE,
             relevant_summary=self.Values.RELEVANT_SUMMARY,
@@ -282,13 +264,12 @@ class TestSubagentAuthority(SubagentTestMixin):
             ),
         )
 
-        updated = asyncio.run(lifecycle.update(started.state.task_id, widening_update))
+        updated = SubagentHandoffPolicy.enforce_task_update(
+            task=widening_update,
+            runtime_context_ref=effective_ref,
+            authority=effective_grant,
+        )
 
-        assert updated.state is not None
-        assert runner.updated_tasks[0].authority == parent_grant
-        assert runner.updated_tasks[0].allowed_tools == frozenset(
-            {self.Values.DOC_SEARCH_TOOL}
-        )
-        assert runner.updated_tasks[0].allowed_skills == frozenset(
-            {self.Values.RESEARCH_SKILL}
-        )
+        assert updated.authority == effective_grant
+        assert updated.allowed_tools == frozenset({self.Values.DOC_SEARCH_TOOL})
+        assert updated.allowed_skills == frozenset({self.Values.RESEARCH_SKILL})
