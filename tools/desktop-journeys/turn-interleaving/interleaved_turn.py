@@ -158,13 +158,23 @@ def main() -> int:
                 f"activity={row['activity']} :: {row['text'][:90]!r}"
             )
 
+        # ASSISTANT rows only. The user's own turn quotes both markers verbatim
+        # (they are in the prompt), so searching every row matches the request
+        # instead of the reply — and then "no activity between them" is trivially
+        # true because both indices land on row 0.
+        def assistant_row(mark: str) -> int:
+            return next(
+                (
+                    i
+                    for i, r in enumerate(settled)
+                    if r["role"] == "assistant" and mark in r["text"]
+                ),
+                -1,
+            )
+
         prose = [r for r in settled if not r["activity"] and r["text"]]
-        first_idx = next(
-            (i for i, r in enumerate(settled) if MARK_ONE in r["text"]), -1
-        )
-        second_idx = next(
-            (i for i, r in enumerate(settled) if MARK_TWO in r["text"]), -1
-        )
+        first_idx = assistant_row(MARK_ONE)
+        second_idx = assistant_row(MARK_TWO)
         activity_idx = [i for i, r in enumerate(settled) if r["activity"]]
 
         # Model compliance, not a product fact: if the model never spoke before
