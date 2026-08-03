@@ -116,6 +116,9 @@ class _ReviewedMiddleware:
     ROOT: Final[tuple[str, ...]] = (
         "RuntimeControlMiddleware",
         "ModelInvocationMiddleware",
+        # Ours to declare: 0.7.1 ships `TodoListMiddleware` only via the
+        # `_openai_codex` harness profile, which matches none of our models.
+        "TodoListMiddleware",
     )
     #: Unconditional child factories, in composition order.
     CHILD: Final[tuple[str, ...]] = ROOT

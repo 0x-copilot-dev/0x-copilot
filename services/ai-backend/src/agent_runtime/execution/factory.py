@@ -60,6 +60,8 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerTool,
 )
 
+from langchain.agents.middleware import TodoListMiddleware
+
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
@@ -534,6 +536,13 @@ async def _assemble_harness(
                 middleware=(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
+                    # 0.7.1 does NOT ship this: `TodoListMiddleware` is added
+                    # only by the `_openai_codex` harness profile, which matches
+                    # `gpt-5.{1,2,3}-codex` and none of our models. Without this
+                    # declaration `write_todos` is absent everywhere and the
+                    # cockpit's todo panel goes quiet — silently, because
+                    # `TodoListProjector` is fed only by that tool's frames.
+                    TodoListMiddleware(),
                     *_host_path_tool_middleware(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -543,6 +552,9 @@ async def _assemble_harness(
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
+                    # Subagents need their own: a child graph does not inherit
+                    # the supervisor's sequence for this middleware.
+                    TodoListMiddleware,
                     *_host_path_tool_middleware_factories(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
