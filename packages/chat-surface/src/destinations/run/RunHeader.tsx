@@ -199,10 +199,11 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
         </span>
       ) : null}
 
-      {/* D-2.4 — the highest-value thing the bar can show: whether the agent is
-          working. Self-hides on a terminal status, so a settled run costs
-          nothing. */}
-      <RunStatusPulse runStatus={runStatus} compact={compact} />
+      {/* The "● WAITING / ● WORKING" pulse is GONE from the header. The canvas
+          already states the run's condition in words a person can act on
+          ("Waiting for your approval or access"), the tool cards carry their own
+          per-step status, and the composer's send button reflects in-flight. A
+          fourth copy in the chrome was the least specific of the four. */}
 
       {/* D-2.6 — the kicker has no visible equivalent now that the goal is the
           title, so it stays for assistive tech. NOTHING rendered visibly is

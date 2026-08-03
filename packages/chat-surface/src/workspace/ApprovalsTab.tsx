@@ -16,6 +16,10 @@ import type { ApprovalsQueueItem, ApprovalsQueueProjection } from "./types";
 export interface ApprovalsTabProps {
   queue: ApprovalsQueueProjection;
   onJumpToApproval?: (approvalId: string, messageId: string) => void;
+  /** Approve a pending row in place. Omitted ⇒ the row shows its kind instead. */
+  onApprove?: (approvalId: string) => void;
+  /** Decline a pending row in place. */
+  onReject?: (approvalId: string) => void;
   /**
    * Scope heading, e.g. "This conversation". Supply it whenever the panel also
    * shows a cross-run queue: this tab's empty state is conversation-scoped and
@@ -29,6 +33,8 @@ export interface ApprovalsTabProps {
 export function ApprovalsTab({
   queue,
   onJumpToApproval,
+  onApprove,
+  onReject,
   groupLabel,
 }: ApprovalsTabProps): ReactElement {
   const { pending, recent } = queue;
@@ -67,6 +73,8 @@ export function ApprovalsTab({
           }
           items={pending}
           onJumpToApproval={onJumpToApproval}
+          onApprove={onApprove}
+          onReject={onReject}
         />
       ) : null}
       {recent.length > 0 ? (
@@ -86,11 +94,15 @@ function Section({
   description,
   items,
   onJumpToApproval,
+  onApprove,
+  onReject,
 }: {
   title: string;
   description: string;
   items: readonly ApprovalsQueueItem[];
   onJumpToApproval?: (approvalId: string, messageId: string) => void;
+  onApprove?: (approvalId: string) => void;
+  onReject?: (approvalId: string) => void;
 }): ReactElement {
   return (
     <section style={cardStyle} aria-label={`${title} approvals`}>
@@ -102,32 +114,62 @@ function Section({
       </div>
       <div role="list">
         {items.map((item) => (
-          <button
+          <div
             key={`${item.approvalId}-${item.messageId}`}
-            type="button"
             role="listitem"
             data-approval-id={item.approvalId}
             data-resolved={item.resolved ? "true" : undefined}
             style={rowStyle}
-            onClick={() => onJumpToApproval?.(item.approvalId, item.messageId)}
-            aria-label={`Open approval "${item.title}" in thread`}
           >
             <span aria-hidden="true" style={dotStyle(item.resolved)} />
-            <span style={rowTextStyle}>
+            {/* The title area jumps to the card in the thread; the actions
+                decide it here. Two buttons rather than one clickable row,
+                because a <button> inside a <button> is invalid markup and the
+                browser drops the inner one — the decision would have looked
+                clickable and done nothing. */}
+            <button
+              type="button"
+              style={rowMainStyle}
+              onClick={() =>
+                onJumpToApproval?.(item.approvalId, item.messageId)
+              }
+              aria-label={`Open approval "${item.title}" in thread`}
+            >
               <span style={rowTitleStyle}>{item.title}</span>
               {item.summary !== null && item.summary.length > 0 ? (
                 <span style={rowSubtitleStyle}>{item.summary}</span>
               ) : null}
-            </span>
+            </button>
             {item.target !== null && item.target.length > 0 ? (
               <span style={targetStyle}>{item.target}</span>
             ) : null}
-            <span style={metaStyle}>
-              {item.resolved && item.resolvedAt !== null
-                ? formatRelative(item.resolvedAt)
-                : kindLabel(item.approvalKind)}
-            </span>
-          </button>
+            {!item.resolved && onApprove !== undefined ? (
+              <span style={actionsStyle}>
+                <button
+                  type="button"
+                  className="ui-button ui-button--sm ui-button--primary"
+                  data-testid="approvals-row-approve"
+                  onClick={() => onApprove(item.approvalId)}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className="ui-button ui-button--sm"
+                  data-testid="approvals-row-decline"
+                  onClick={() => onReject?.(item.approvalId)}
+                >
+                  Decline
+                </button>
+              </span>
+            ) : (
+              <span style={metaStyle}>
+                {item.resolved && item.resolvedAt !== null
+                  ? formatRelative(item.resolvedAt)
+                  : kindLabel(item.approvalKind)}
+              </span>
+            )}
+          </div>
         ))}
       </div>
     </section>
@@ -183,23 +225,31 @@ const noteStyle: CSSProperties = {
 
 const rowStyle: CSSProperties = {
   alignItems: "center",
-  background: "transparent",
-  border: "none",
   borderBottom: "1px solid var(--color-border)",
-  color: "inherit",
-  cursor: "pointer",
   display: "flex",
   gap: 9,
   minWidth: 0,
   padding: "8px 11px",
-  textAlign: "left",
   width: "100%",
 };
 
-const rowTextStyle: CSSProperties = {
+const rowMainStyle: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  cursor: "pointer",
   display: "grid",
   gap: 1,
   minWidth: 0,
+  padding: 0,
+  textAlign: "left",
+};
+
+const actionsStyle: CSSProperties = {
+  display: "flex",
+  flex: "0 0 auto",
+  gap: 4,
+  marginLeft: "auto",
 };
 
 const rowTitleStyle: CSSProperties = {

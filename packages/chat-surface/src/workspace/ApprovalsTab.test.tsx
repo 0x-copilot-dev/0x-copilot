@@ -11,7 +11,7 @@
 // These pin the scope labelling, because the empty state is the half that looks
 // most obviously correct in isolation and is exactly the half that misleads.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { ApprovalsTab } from "./ApprovalsTab";
@@ -71,4 +71,63 @@ describe("ApprovalsTab — whose approvals is this list?", () => {
     );
     expect(screen.getByTestId("workspace-approvals-tab")).toBeTruthy();
   });
+
+  it("decides a pending row in place, without a trip to the transcript", () => {
+    // The panel that COUNTS the parked write can now resolve it. Before this
+    // the only affordance was "jump to the card in the thread", which is a
+    // detour when the row already says what the write is.
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    render(
+      <ApprovalsTab
+        onApprove={onApprove}
+        onReject={onReject}
+        queue={{ pending: [pendingItem()], recent: [] }}
+      />,
+    );
+
+    screen.getByTestId("approvals-row-approve").click();
+    expect(onApprove).toHaveBeenCalledWith("a1");
+    screen.getByTestId("approvals-row-decline").click();
+    expect(onReject).toHaveBeenCalledWith("a1");
+  });
+
+  it("a resolved row shows when it settled, not buttons to settle it again", () => {
+    render(
+      <ApprovalsTab
+        onApprove={() => {}}
+        queue={{
+          pending: [],
+          recent: [
+            {
+              ...pendingItem(),
+              resolved: true,
+              resolvedAt: new Date(0).toISOString(),
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.queryByTestId("approvals-row-approve")).toBeNull();
+  });
+
+  it("omits the buttons entirely when no decision handler is supplied", () => {
+    render(<ApprovalsTab queue={{ pending: [pendingItem()], recent: [] }} />);
+    expect(screen.queryByTestId("approvals-row-approve")).toBeNull();
+  });
 });
+
+function pendingItem() {
+  return {
+    approvalId: "a1",
+    messageId: "m1",
+    runId: "run_1",
+    approvalKind: "ask_a_question" as const,
+    title: "Create an issue in Parth-test",
+    summary: "Allow Linear to run save_issue?",
+    target: "linear",
+    resolved: false,
+    resolvedAt: null,
+  };
+}

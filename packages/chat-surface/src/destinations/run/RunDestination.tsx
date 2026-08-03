@@ -4308,19 +4308,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     </div>
   );
 
-  const v2HeaderStatus = surfacesV2 ? (
-    <span data-testid="run-v2-chip-bar" style={v2HeaderStatusStyle}>
-      <PostureChip bypassOn={ledger.bypassFromLedger} />
-      <PendingCounterChip
-        count={pendingWork.cards.length}
-        allElsewhere={
-          pendingWork.cards.length > 0 &&
-          pendingWork.cards.every((card) => card.runId !== session.runId)
-        }
-        onClick={handleOpenApprovals}
-      />
-    </span>
-  ) : undefined;
+  // The run header carried three status chips and now carries none.
+  //
+  // `PostureChip` ("Writes wait for you") stated the DEFAULT posture
+  // permanently; it only ever earned its space in the other state, and the
+  // composer's own pill already says which posture a send will use.
+  // `PendingCounterChip` ("N waiting") counted work in OTHER conversations from
+  // inside a run-scoped header — the reason it needed the word "elsewhere" to
+  // stay honest was that the placement, not the wording, was wrong. That count
+  // belongs on the nav rail's Chats badge, where a global number is expected.
+  const v2HeaderStatus = undefined;
 
   return (
     <div

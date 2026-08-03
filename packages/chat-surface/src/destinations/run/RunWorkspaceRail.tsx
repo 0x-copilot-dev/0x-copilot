@@ -220,9 +220,9 @@ export interface RunWorkspaceRailProps {
   readonly focusSourcesSignal?: number;
 
   /**
-   * PR-3.10 SEAM (do not build here): inline approve/reject resolution +
-   * Focus-mode `.conf-card` confirmation cards. Threaded through so PR-3.10 can
-   * wire them without changing this signature; unused in PR-3.6.
+   * Inline approve/reject resolution. Threaded since PR-3.6 and left unused —
+   * now the Approvals rows' own decision buttons, so a parked write can be
+   * decided from the panel that counts it instead of only from the transcript.
    */
   readonly onApprove?: (approvalId: string) => void;
   readonly onReject?: (approvalId: string) => void;
@@ -288,6 +288,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     subagentActivitiesByTask,
     subagentHistoryGroups,
     approvalsQueue = EMPTY_APPROVALS,
+    onApprove,
+    onReject,
     onJumpToApproval,
     scrubbed = false,
     pendingV2,
@@ -413,7 +415,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // PRD-E2: the cross-run pending cards ADD to the v1 approvals count so the
   // badge reflects everything in the one queue (absent ⇒ +0, byte-identical).
   const pendingV2Count = pendingV2?.cards.length ?? 0;
-  const pendingApprovals = approvalsQueue.pending.length + pendingV2Count;
+  const pendingApprovals = approvalsQueue.pending.length;
 
   // v3 order (copilot-v3.css): Chat · Agents · Approvals · Sources.
   const tabItems: WorkspaceTabsItem<RunRailTabId>[] = [
@@ -543,41 +545,18 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   const showsCrossRunQueue =
     pendingV2 !== undefined &&
     (pendingWorkV21 === undefined || pendingV2.cards.length > 0);
+  // PRD-E2's cross-run queue is GONE from this panel. It answered "what is
+  // parked anywhere?" inside a surface scoped to one conversation, which is why
+  // its cards had to sit above a "nothing here" empty state and why the header
+  // counter needed the word "elsewhere" to stay honest. Cross-conversation work
+  // belongs on the nav rail's Chats badge, where a global count is expected.
   const approvalsBody: ReactNode = (
-    <>
-      {/* E1 D6: canonical runtime work is Studio-only. Focus stays compact and
-          never expands a cross-run detail list. */}
-      {isStudio && pendingWorkV21 !== undefined ? (
-        <PendingWorkV2List
-          cards={pendingWorkV21.cards}
-          loading={pendingWorkV21.loading}
-          partial={pendingWorkV21.partial}
-          stale={pendingWorkV21.stale}
-          hasMore={pendingWorkV21.hasMore}
-          onReview={pendingWorkV21.onReview}
-          onLoadMore={pendingWorkV21.onLoadMore}
-        />
-      ) : null}
-      {/* PRD-E2 — the cross-run queue leads; the v1 in-chat approvals
-          (this conversation's) stay below.
-
-          Both lists carry a scope heading whenever both are mounted. Without
-          them the panel showed cross-run gate cards directly above "No pending
-          approvals in this conversation" — each statement true on its own,
-          and together a flat contradiction to anybody reading top to bottom. */}
-      {showsCrossRunQueue ? (
-        <PendingCardList
-          cards={pendingV2.cards}
-          onReview={pendingV2.onReview}
-          groupLabel="Other chats"
-        />
-      ) : null}
-      <ApprovalsTab
-        queue={approvalsQueue}
-        onJumpToApproval={onJumpToApproval}
-        groupLabel={showsCrossRunQueue ? "This conversation" : undefined}
-      />
-    </>
+    <ApprovalsTab
+      queue={approvalsQueue}
+      onJumpToApproval={onJumpToApproval}
+      onApprove={onApprove}
+      onReject={onReject}
+    />
   );
   const focusPanelBody: ReactNode =
     focusPanelTab === "agents"
