@@ -141,11 +141,17 @@ class _PerToolPlane:
             # A real `args_schema` per tool, not a shared/absent one: the
             # display wrapper subclasses whatever schema it is given, and a
             # missing schema makes it build a model with a duplicate base.
-            schema = create_model(
-                f"{connector_tool}_Args",
-                team=(str, ""),
-                title=(str, ""),
+            # Each tool declares exactly the arguments its callers send. A
+            # schema carrying a field the model did not supply would have
+            # pydantic fill the default, and the connector would then record an
+            # argument nobody asked for — which is what the recorded-call
+            # assertions below would (correctly) flag.
+            fields = (
+                {"team": (str, "")}
+                if connector_tool == _READ_TOOL
+                else {"title": (str, ""), "team": (str, "")}
             )
+            schema = create_model(f"{connector_tool}_Args", **fields)
 
             class _ConnectorTool(BaseTool):
                 # `content_and_artifact` is what langchain-mcp-adapters returns,
@@ -607,34 +613,20 @@ class TestWriteGateHoldsWhenSiblingCallsRunAlongsideIt(LinearMcpRunMixin):
     def _script_concurrent_read_read_write(monkeypatch) -> None:
         monkeypatch.setenv(FakeModelProvider.ENV_FLAG, "1")
         monkeypatch.setenv(FakeModelProvider.ENV_TOOL_CALLS, "1")
-        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, "call_mcp_tool")
+        # Per-tool: each sibling addresses the connector's own tool directly.
+        # The gate's shape is unchanged — two trusted reads ALLOW and dispatch
+        # concurrently while the write parks — but there is no umbrella to
+        # address them through.
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, _READ_TOOL)
         monkeypatch.setenv(
             FakeModelProvider.ENV_PARALLEL_TOOL_CALLS,
             json.dumps(
                 [
+                    {"name": _READ_TOOL, "args": {"team": "ENG"}},
+                    {"name": _READ_TOOL, "args": {"team": "DESIGN"}},
                     {
-                        "name": "call_mcp_tool",
-                        "args": {
-                            "server_name": _SERVER,
-                            "tool_name": "get_issues",
-                            "arguments": {"team": "ENG"},
-                        },
-                    },
-                    {
-                        "name": "call_mcp_tool",
-                        "args": {
-                            "server_name": _SERVER,
-                            "tool_name": "get_issues",
-                            "arguments": {"team": "DESIGN"},
-                        },
-                    },
-                    {
-                        "name": "call_mcp_tool",
-                        "args": {
-                            "server_name": _SERVER,
-                            "tool_name": "create_issue",
-                            "arguments": {"title": "Ship it", "team": "ENG"},
-                        },
+                        "name": _WRITE_TOOL,
+                        "args": {"title": "Ship it", "team": "ENG"},
                     },
                 ]
             ),
