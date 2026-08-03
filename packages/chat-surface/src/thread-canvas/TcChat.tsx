@@ -18,6 +18,7 @@ import { Composer } from "../composer/Composer";
 import { MarkdownText, type MarkdownTextProps } from "../messages/MarkdownText";
 import { PlainText } from "../messages/PlainText";
 import { Reasoning } from "../messages/Reasoning";
+import { ThinkingBlock, ThinkingShimmer } from "../messages/ThinkingShimmer";
 import type { MessagePartStatus } from "../messages/types";
 import { useTransport } from "../providers/TransportProvider";
 // PR-3.8 — inline parallel-subagent fleet card. Reuses the hoisted Phase-1D
@@ -546,6 +547,13 @@ export interface TcChatProps {
    * message, which keeps standalone usage and existing fixtures working.
    */
   readonly activeRunId?: string | null;
+  /**
+   * The bound run is live and has produced nothing visible yet — drives the
+   * "Thinking" shimmer that fills the gap between send and the first token.
+   * Host-owned: only the cockpit knows the run's status, and the transcript
+   * alone cannot tell "still thinking" from "finished with no output".
+   */
+  readonly awaitingFirstOutput?: boolean;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
@@ -610,6 +618,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     runFailed = false,
     compact = false,
     activeRunId = null,
+    awaitingFirstOutput = false,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -769,6 +778,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         runFailed={runFailed}
         compact={compact}
         activeRunId={activeRunId}
+        awaitingFirstOutput={awaitingFirstOutput}
       />
     </div>
   );
@@ -1254,6 +1264,16 @@ interface MessageListBodyProps {
    * see `mergeStream`. Omitted → inferred from the last seq-bearing message.
    */
   readonly activeRunId?: string | null;
+  /**
+   * The bound run is live and has produced nothing visible yet.
+   *
+   * Between send and the first token the column rendered NOTHING — measured at
+   * 5.16s on gpt-5.6-luna and 2.80s on claude-sonnet-5 for a trivial prompt, and
+   * longer on anything real. The host owns this because only it knows the run's
+   * status; the transcript alone cannot tell "still thinking" from "finished
+   * with no output".
+   */
+  readonly awaitingFirstOutput?: boolean;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1273,6 +1293,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     runFailed = false,
     compact = false,
     activeRunId,
+    awaitingFirstOutput = false,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1405,6 +1426,19 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
             </li>
           );
         })}
+        {/* The wait itself. Placed where the first prose part will land, so the
+            shimmer is replaced in place and nothing reflows when it arrives.
+            Dropped the moment ANY visible output exists — it must never compete
+            with the answer, and a second "thinking" under a streaming reply
+            would be a lie about what the model is doing. */}
+        {awaitingFirstOutput ? (
+          <li
+            style={messageItemStyle("assistant")}
+            data-testid="tc-chat-awaiting"
+          >
+            <ThinkingShimmer />
+          </li>
+        ) : null}
         {terminalBeat}
       </ul>
     </>
@@ -1419,8 +1453,24 @@ function renderPart(
 ): ReactNode {
   const status: MessagePartStatus = part.status ?? { type: "complete" };
   if (part.type === "reasoning") {
+    // Collapsed disclosure with a shimmering header while the span streams.
+    // Bare `<Reasoning>` rendered the raw chain of thought inline with the
+    // answer, unlabelled — indistinguishable from the reply on the surface
+    // where it matters, because the accordion that would have labelled it is
+    // styled from the web app's stylesheet, which desktop never loads.
+    const elapsed =
+      part.startedAtMs !== undefined && part.updatedAtMs !== undefined
+        ? Math.floor((part.updatedAtMs - part.startedAtMs) / 1000)
+        : 0;
     return (
-      <Reasoning key={key} type="reasoning" text={part.text} status={status} />
+      <ThinkingBlock
+        key={key}
+        text={part.text}
+        running={status.type === "running"}
+        elapsedSeconds={elapsed}
+      >
+        <Reasoning type="reasoning" text={part.text} status={status} />
+      </ThinkingBlock>
     );
   }
   // User input stays literal (a typed `| pipe |` is not markdown);

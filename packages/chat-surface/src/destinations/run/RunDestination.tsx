@@ -4070,6 +4070,22 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={conversationToolCalls.toolCalls}
+        // The gap between send and the first token, which rendered as an empty
+        // column. True only while the bound run is genuinely live AND has
+        // produced nothing visible — a run parked on an approval is NOT
+        // thinking, and saying so would be the indicator lying at exactly the
+        // moment the user needs the truth (the approval card is the real
+        // signal there).
+        awaitingFirstOutput={
+          running &&
+          session.runStatus !== "waiting_for_approval" &&
+          transcriptMessages.every(
+            (message) =>
+              message.role !== "assistant" ||
+              message.parts.every((part) => part.text === ""),
+          ) &&
+          conversationToolCalls.toolCalls.length === 0
+        }
         // The pinned checklist above the composer — the surface that replaced
         // both the raw `write_todos` card and the Focus "Plan".
         todos={todos}

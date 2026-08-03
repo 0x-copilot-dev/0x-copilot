@@ -96,14 +96,21 @@ collapse it to a slim icon rail and expand it back.
 
 ## BLOCKED-until
 
-- **Thinking / reasoning block** — the model's reasoning block
-  (`Reasoning`, rendered from a `reasoning` message part) only appears when the
-  **backing model emits reasoning summaries**. In this session a `gpt-5.4-mini`
-  run emitted **0 reasoning events**, so the thinking block never rendered. This is
-  a **BLOCKED-until** item: it needs a summary-emitting model (a reasoning model
-  configured to stream reasoning summaries). The journey does **not** fail when the
-  thinking block is absent — it prints a `BLOCKED` line noting the missing
-  capability.
+- **Thinking / reasoning block** — ~~BLOCKED-until~~ **RESOLVED.** The block only
+  appears when the backing model emits reasoning summaries, and this was recorded
+  as blocked because a `gpt-5.4-mini` run emitted **0 reasoning events**. That was
+  a property of the model the deployment defaulted to, not of the runtime: the
+  default is now `gpt-5.6-luna`, a reasoning model, and the runtime asks each
+  provider for reasoning in the shape it actually accepts (Anthropic
+  `thinking.display: summarized`, OpenAI `reasoning.summary`, gateways via
+  `extra_body.reasoning`, inline `<think>` tags via the scrubber).
+
+  Two model behaviours still produce a legitimately empty block, and neither is a
+  regression: adaptive thinking **skips easy inputs**, and OpenAI returns no
+  summary when it did not reason. The journey still prints `BLOCKED` rather than
+  failing when the block is absent, because it cannot tell "the model chose not
+  to think" from "we dropped it".
+
 - **Tool card / fleet card assertions depend on the model actually choosing to
   call the tool / dispatch a subagent.** If a keyed model declines the tool for a
   given prompt, the corresponding journey prints `BLOCKED` (capability present, not

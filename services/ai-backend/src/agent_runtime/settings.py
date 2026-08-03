@@ -712,7 +712,12 @@ class RuntimeSettings(BaseSettings):
             ),
             default_model=ModelConfig(
                 provider=_s(v, E.DEFAULT_PROVIDER, "openai"),
-                model_name=_s(v, E.DEFAULT_MODEL, "gpt-5.4-mini"),
+                # A REASONING model by default. `gpt-5.4-mini` emits no
+                # reasoning summaries at all, so every deployment that took the
+                # default got a transcript with no thinking in it — and the gap
+                # read as a bug in the runtime rather than a property of the
+                # model that had been chosen for it.
+                model_name=_s(v, E.DEFAULT_MODEL, "gpt-5.6-luna"),
                 max_input_tokens=int(_s(v, E.DEFAULT_MAX_INPUT_TOKENS, "128000")),
                 timeout_seconds=timeout,
                 temperature=float(_s(v, E.DEFAULT_TEMPERATURE, "0")),

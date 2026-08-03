@@ -395,6 +395,28 @@ class StreamOrchestrator:
             tool_result_offloader=tool_result_offloader,
         )
 
+    async def scrub_text_delta(
+        self, *, run: RunRecord, delta: str | None
+    ) -> str | None:
+        """Strip inline reasoning tags from a text delta before anyone sees it.
+
+        Delegates to the message processor, which owns the per-run scrubber
+        state. ``None`` in / ``None`` out so the executor's existing "no delta
+        on this chunk" path is unchanged, and a delta that was ENTIRELY
+        reasoning collapses to ``None`` rather than an empty string that would
+        publish a blank ``model_delta``.
+        """
+
+        if not delta:
+            return delta
+        visible = await self.message_processor.scrub_text_delta(run=run, delta=delta)
+        return visible or None
+
+    async def flush_text_scrubber(self, *, run: RunRecord) -> str | None:
+        """Release any prose the scrubber held back as a possible partial tag."""
+
+        return (await self.message_processor.flush_text_scrubber(run=run)) or None
+
     async def append_activity_events(
         self,
         *,

@@ -62,8 +62,12 @@ def main() -> int:
         assert "claude" in pill.lower(), (
             f"FTUE pill should show a Claude model for an Anthropic-only key, got {pill!r}"
         )
-        assert "gpt-5.4" not in pill.lower(), (
-            f"FTUE pill must not preselect the keyless GPT-5.4 default, got {pill!r}"
+        # Named by FAMILY, not by the current default's version string. This
+        # asserted `gpt-5.4` and silently stopped testing anything the day the
+        # deployment default moved to another OpenAI model.
+        assert "gpt" not in pill.lower(), (
+            f"FTUE pill must not preselect the keyless OpenAI deployment "
+            f"default when the user's only key is Anthropic, got {pill!r}"
         )
         print(f"PASS: FTUE pill shows a Claude model ({pill!r})")
 
