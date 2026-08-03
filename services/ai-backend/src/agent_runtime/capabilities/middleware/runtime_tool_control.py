@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import replace
 from typing import Annotated, Any
@@ -37,6 +38,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
+from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.control_plane.context import (
     RunControlContext,
     RunSerialAdmission,
@@ -81,6 +83,20 @@ AsyncToolHandler = Callable[
     [ToolCallRequest],
     Awaitable[ToolHandlerResult],
 ]
+
+#: The one graph-visible tool whose body is another agent rather than a leaf.
+#:
+#: Everything else this middleware wraps runs its own work and returns. ``task``
+#: awaits a whole child graph, and that child's tool calls come back through
+#: this same middleware, on the same run, and reach the same run-scoped
+#: admission gate. Taking the run's exclusive permit for the *container* would
+#: therefore mean a parent holding a non-reentrant lock its own child must
+#: acquire — a self-deadlock that ends only when the run timeout fires.
+#:
+#: Named here, from the canonical constant, because the name is already
+#: load-bearing in the worker's subagent projection: this is the same tool
+#: ``runtime_worker.stream_subagents`` keys its lifecycle frames on.
+DELEGATION_TOOL_NAME = ApiValues.Tool.TASK
 
 
 class RuntimeModelTurnReducer:
@@ -446,12 +462,24 @@ class RuntimeControlMiddleware(AgentMiddleware):
         ``sync_permit`` has no widened form to select: F6 gates children on
         ``asyncio`` futures and runs them through an awaitable runner, so a
         synchronous graph tool call is never a batch child.
+
+        Delegation is exempt here for the same reason it is exempt on the async
+        lane, and the sync lane is the worse of the two to get wrong: the
+        synchronous ``task`` body calls ``subagent.invoke`` on this very thread,
+        so the child's leaf calls re-enter this method and re-acquire a
+        non-reentrant :class:`threading.Lock` the caller already holds. That
+        blocks the thread outright, and no run timeout can interrupt it.
         """
 
         admission = (
             RunControlContext.serial_admission() or self._fallback_serial_admission
         )
-        with admission.sync_permit():
+        permit = (
+            nullcontext()
+            if self._is_delegation_call(request)
+            else admission.sync_permit()
+        )
+        with permit:
             identity = self._call_identity(request)
             with RuntimeCallContext.bind(identity):
                 execute = (
@@ -477,7 +505,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> ToolHandlerResult:
         """Asynchronously execute one graph-visible tool under the common gate.
 
-        The gate is unchanged and unconditional; only its *width* is now a
+        The gate is unchanged and covers every leaf call; only its *width* is a
         decision. Handing it this call's description is what lets an F6-admitted
         batch child overlap its siblings up to the width F6 already computed.
         Every other call — which is every call while F6 is dark — takes the same
@@ -490,12 +518,27 @@ class RuntimeControlMiddleware(AgentMiddleware):
         and *inside* the bound call identity, so a batch child is gated by
         everything a solo call is gated by and then by more. It is never a path
         around this seam: overlap is something the seam grants.
+
+        The one call that does *not* take the permit is delegation, and skipping
+        it there loses no serialization: ``task`` performs no tool work of its
+        own, it awaits a child graph whose every tool call arrives back here and
+        takes the permit itself. Holding an exclusive, non-reentrant lock across
+        that await is a parent waiting on a child that is waiting on the parent
+        — the run makes no further progress until it times out. Everything else
+        about the delegation call is unchanged: it still binds its call
+        identity, still opens and settles its lifecycle, still routes through
+        F6.
         """
 
         admission = (
             RunControlContext.serial_admission() or self._fallback_serial_admission
         )
-        async with admission.async_permit(self._admission_request(request)):
+        permit = (
+            nullcontext()
+            if self._is_delegation_call(request)
+            else admission.async_permit(self._admission_request(request))
+        )
+        async with permit:
             identity = self._call_identity(request)
             with RuntimeCallContext.bind(identity):
 
@@ -755,6 +798,20 @@ class RuntimeControlMiddleware(AgentMiddleware):
             tool_call_id=str(tool_call.get("id", "") or "").strip(),
             tool_name=str(tool_call.get("name", "") or "").strip(),
             execution_scope=cls._execution_scope(request),
+        )
+
+    @staticmethod
+    def _is_delegation_call(request: ToolCallRequest) -> bool:
+        """True when this call's body is a nested agent rather than leaf work.
+
+        Keyed on the model-visible tool name, which is the same key the worker's
+        subagent projection uses, and read exactly the way
+        :meth:`_admission_request` reads it — so a call this returns ``True``
+        for is a call the admission would otherwise have described as ``task``.
+        """
+
+        return (
+            str(request.tool_call.get("name", "") or "").strip() == DELEGATION_TOOL_NAME
         )
 
     @classmethod
