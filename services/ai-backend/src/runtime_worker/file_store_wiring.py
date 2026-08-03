@@ -69,31 +69,6 @@ class FileStoreWorkerWiring:
         self._ensure_tool_result_admission(store)
         return self._tool_result_admission
 
-    def schema_artifact_writer(self) -> object | None:
-        """Return the raw object-store write half, or ``None`` elsewhere.
-
-        F3.4 publishes an over-bound capability schema through the runtime's
-        existing oversized-payload seam rather than through a store of its own,
-        so this hands back the same ``OffloadWriter`` — a plain
-        ``Callable[[str], str]`` — that parks an oversized tool result in the
-        content-addressed object store and returns the ``/large_tool_results/``
-        locator the ordinary read path already resolves.
-
-        Deliberately *not* the tool-result offloader: that one applies a token
-        policy and a projection record meant for model context, and a schema
-        artifact is neither.  What is shared is the store and the locator
-        format, which is the whole point — one place bytes go, one path they are
-        read back through.  ``None`` off the file store means an over-bound
-        schema is reported unavailable, never truncated.
-        """
-
-        store = self.file_store()
-        if store is None:
-            return None
-        from runtime_adapters.file import FileOffloadWriter  # noqa: PLC0415
-
-        return FileOffloadWriter(store.object_store)
-
     def discard_tool_result_projections(self, *, run_id: str) -> None:
         """Release bounded projection records left by an interrupted run."""
 
