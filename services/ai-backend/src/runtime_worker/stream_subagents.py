@@ -682,7 +682,7 @@ class StreamUpdateProcessor:
                 tool_name = StreamTextHelper.extract(
                     payload.get("name")
                 ) or StreamTextHelper.extract(payload.get("tool_name"))
-                if tool_name != "task":
+                if tool_name != Values.Tool.TASK:
                     continue
                 call_id = StreamTextHelper.extract(
                     payload.get("id")
@@ -710,7 +710,7 @@ class StreamUpdateProcessor:
             tool_name = StreamTextHelper.extract(
                 payload.get("name")
             ) or StreamTextHelper.extract(payload.get("tool_name"))
-            if tool_name != "task":
+            if tool_name != Values.Tool.TASK:
                 continue
             call_id = (
                 StreamTextHelper.extract(payload.get("tool_call_id"))

@@ -421,6 +421,14 @@ class RunSerialAdmission:
     the effective width of every run ``1``, so no F6 batch plan could ever be
     observed to overlap.
 
+    "Every graph-visible tool call" turned out to include the ``task`` tool,
+    whose body is a *nested agent* rather than leaf work: it held this lock
+    while awaiting a child graph whose own tool calls then queued on it, and
+    every subagent that touched a tool hung its run until the run timeout. The
+    seam exempts that one container — see ``DELEGATION_TOOL_NAME`` in
+    ``capabilities.middleware.runtime_tool_control``. The child's leaf calls
+    still take this lock, so serialization of actual tool work is untouched.
+
     This class keeps the gate and makes the *width* conditional. Two lanes cross
     it, and neither one is a way around it:
 
