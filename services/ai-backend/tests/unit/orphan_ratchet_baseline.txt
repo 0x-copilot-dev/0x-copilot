@@ -26,7 +26,6 @@ agent_runtime.observability.context_origin_conformance
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
 agent_runtime.surfaces_v2.retention
-runtime_adapters.postgres.todo_extraction_store
 runtime_worker.jobs.encrypt_existing_columns
 runtime_worker.jobs.proposal_extractor
 runtime_worker.jobs.routine_scheduler

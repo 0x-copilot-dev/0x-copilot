@@ -1,4 +1,4 @@
-"""Unit tests for ``with_optimistic_retry`` (C3) and the runtime pool builder (C4)."""
+"""Unit tests for ``with_optimistic_retry`` (C3)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from agent_runtime.persistence.errors import (
     PersistenceError,
 )
 from agent_runtime.persistence.optimistic import with_optimistic_retry
-from runtime_adapters.postgres.runtime_api_store import _PoolEnv
 
 
 pytestmark = pytest.mark.anyio
@@ -115,56 +114,3 @@ class TestWithOptimisticRetry:
         )
         assert result == "done"
         assert attempts == 2
-
-
-class TestRuntimePoolEnv:
-    def test_default_options_include_application_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        for key in (
-            _PoolEnv.STATEMENT_TIMEOUT_MS,
-            _PoolEnv.LOCK_TIMEOUT_MS,
-            _PoolEnv.IDLE_IN_TXN_TIMEOUT_MS,
-        ):
-            monkeypatch.delenv(key, raising=False)
-        kwargs = _PoolEnv.build_pool_kwargs(role="api")
-        assert kwargs["row_factory"] is not None
-        options = kwargs["options"]
-        assert "application_name=ai-backend:api" in options
-        assert "statement_timeout=10000" in options
-        assert "lock_timeout=3000" in options
-        assert "idle_in_transaction_session_timeout=30000" in options
-
-    def test_role_appears_in_application_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        for key in (
-            _PoolEnv.STATEMENT_TIMEOUT_MS,
-            _PoolEnv.LOCK_TIMEOUT_MS,
-            _PoolEnv.IDLE_IN_TXN_TIMEOUT_MS,
-        ):
-            monkeypatch.delenv(key, raising=False)
-        kwargs = _PoolEnv.build_pool_kwargs(role="worker")
-        assert "application_name=ai-backend:worker" in kwargs["options"]
-
-    def test_env_var_overrides_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(_PoolEnv.STATEMENT_TIMEOUT_MS, "8000")
-        monkeypatch.setenv(_PoolEnv.LOCK_TIMEOUT_MS, "2000")
-        monkeypatch.setenv(_PoolEnv.IDLE_IN_TXN_TIMEOUT_MS, "45000")
-        kwargs = _PoolEnv.build_pool_kwargs(role="api")
-        options = kwargs["options"]
-        assert "statement_timeout=8000" in options
-        assert "lock_timeout=2000" in options
-        assert "idle_in_transaction_session_timeout=45000" in options
-
-    def test_env_int_falls_back_on_garbage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(_PoolEnv.POOL_MIN_SIZE, "garbage")
-        assert _PoolEnv.env_int(_PoolEnv.POOL_MIN_SIZE, 7) == 7
-
-    def test_env_float_falls_back_on_garbage(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv(_PoolEnv.POOL_ACQUIRE_TIMEOUT_SECONDS, "nope")
-        assert _PoolEnv.env_float(_PoolEnv.POOL_ACQUIRE_TIMEOUT_SECONDS, 1.5) == 1.5

@@ -50,10 +50,6 @@ from runtime_adapters.file.legacy_stage_migration_control import (
     FileLegacyStageQueueControl,
     FileLegacyStageReservationStore,
 )
-from runtime_adapters.postgres.legacy_stage_migration_control import (
-    PostgresLegacyStageQueueControl,
-)
-from runtime_adapters.postgres.runtime_api_store import PostgresRuntimeApiStore
 from runtime_adapters.repair_planning import build_legacy_stage_migration_service
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -62,8 +58,6 @@ from runtime_api.schemas import (
     RuntimeEventDraft,
 )
 from agent_runtime.surfaces_v2.legacy_stage_materialization import (
-    MATERIALIZATION_FENCE_METADATA_KEY,
-    LegacyStageMaterializationRejected,
     LegacyStageMaterializationState,
     LegacyStageReconciliationRecord,
     LegacyStageReconciliationState,
@@ -517,112 +511,6 @@ async def test_file_queue_cas_neutralizes_all_duplicates_or_freezes_without_a_pa
     assert store._queue_statuses["cmd_e2_file_duplicate_1"] is OutboxStatus.CLAIMED
 
 
-async def test_postgres_queue_cas_locks_all_duplicates_before_cancelling_any() -> None:
-    """The SQL adapter sees every duplicate and a claim blocks the whole set."""
-
-    source = _legacy_event()
-    source_digest = legacy_stage_source_digest(
-        run_id=RUN, state=StagedWriteFold.fold([source])[STAGE]
-    )
-
-    class _Cursor:
-        def __init__(self, *, one=None, rows=()):
-            self._one = one
-            self._rows = rows
-
-        async def fetchone(self):
-            return self._one
-
-        async def fetchall(self):
-            return self._rows
-
-    class _Connection:
-        def __init__(self, statuses):
-            self.statuses = statuses
-            self.executions = []
-
-        async def execute(self, statement, values):
-            self.executions.append((statement, values))
-            normalized = " ".join(statement.lower().split())
-            if normalized.startswith("select id from agent_runs"):
-                return _Cursor(one={"id": RUN})
-            if normalized.startswith("select event_type, sequence_no"):
-                return _Cursor(
-                    rows=(
-                        {
-                            "event_type": "write.staged",
-                            "sequence_no": 1,
-                            "payload_json_redacted": source.payload,
-                        },
-                    )
-                )
-            if normalized.startswith("select status from runtime_outbox_events"):
-                return _Cursor(
-                    rows=tuple({"status": status} for status in self.statuses)
-                )
-            if normalized.startswith("update runtime_outbox_events"):
-                return _Cursor(rows=({"id": "cmd_1"}, {"id": "cmd_2"}))
-            raise AssertionError(normalized)
-
-        class _Transaction:
-            async def __aenter__(self):
-                return None
-
-            async def __aexit__(self, *args):
-                return False
-
-        def transaction(self):
-            return self._Transaction()
-
-    class _Store:
-        def __init__(self, connection):
-            self.connection = connection
-
-        class _RoleConnection:
-            def __init__(self, connection):
-                self.connection = connection
-
-            async def __aenter__(self):
-                return self.connection
-
-            async def __aexit__(self, *args):
-                return False
-
-        def _role_connection(self, role):
-            assert role == "worker"
-            return self._RoleConnection(self.connection)
-
-    pending_connection = _Connection(("pending", "retry"))
-    pending = PostgresLegacyStageQueueControl(store=_Store(pending_connection))
-    assert (
-        await pending.cancel_unclaimed(
-            org_id=ORG, run_id=RUN, legacy_stage_id=STAGE, source_digest=source_digest
-        )
-        is LegacyQueueNeutralizationOutcome.CANCELLED
-    )
-    assert any(
-        "for update" in statement.lower()
-        for statement, _values in pending_connection.executions
-    )
-    assert any(
-        "status in ('pending', 'retry')" in statement.lower()
-        for statement, _values in pending_connection.executions
-    )
-
-    claimed_connection = _Connection(("pending", "claimed"))
-    claimed = PostgresLegacyStageQueueControl(store=_Store(claimed_connection))
-    assert (
-        await claimed.cancel_unclaimed(
-            org_id=ORG, run_id=RUN, legacy_stage_id=STAGE, source_digest=source_digest
-        )
-        is LegacyQueueNeutralizationOutcome.CLAIMED
-    )
-    assert not any(
-        statement.lstrip().lower().startswith("update runtime_outbox_events")
-        for statement, _values in claimed_connection.executions
-    )
-
-
 async def test_production_composition_canonicalizes_only_full_fact_evidence() -> None:
     """The real builder uses durable evidence rather than a no-op resolver."""
 
@@ -907,104 +795,6 @@ async def test_file_recovers_crash_after_reservation_before_append(tmp_path) -> 
         is LegacyStageMaterializationState.STAGED
     )
     assert store.effect_commit_commands == []
-
-
-async def test_postgres_append_fence_refolds_source_inside_its_insert_transaction() -> (
-    None
-):
-    """The Postgres path sees a post-reservation mutation before INSERT."""
-
-    source = _legacy_event()
-    expected = legacy_stage_source_digest(
-        run_id=RUN, state=StagedWriteFold.fold([source])[STAGE]
-    )
-
-    class _Cursor:
-        def __init__(self, one=None, many=()):
-            self._one = one
-            self._many = many
-
-        async def fetchone(self):
-            return self._one
-
-        async def fetchall(self):
-            return self._many
-
-    class _Connection:
-        def __init__(self):
-            self.calls = 0
-
-        async def execute(self, query, params):
-            del query, params
-            self.calls += 1
-            if self.calls == 1:
-                return _Cursor({"id": RUN})
-            if self.calls == 2:
-                return _Cursor(
-                    {
-                        "source_digest": expected,
-                        "idempotency_key": "e2stage_pg_race",
-                        "canonical_stage_id": "stg_00000000-0000-4000-8000-000000000001",
-                        "materialization_state": "reserved",
-                    }
-                )
-            return _Cursor(
-                many=(
-                    {
-                        "event_type": "write.staged",
-                        "sequence_no": 1,
-                        "payload_json_redacted": source.payload,
-                    },
-                    {
-                        "event_type": "revision.added",
-                        "sequence_no": 2,
-                        "payload_json_redacted": _legacy_revision_event().payload,
-                    },
-                )
-            )
-
-    event = SimpleNamespace(
-        org_id=ORG,
-        run_id=RUN,
-        payload={"stage_id": "stg_00000000-0000-4000-8000-000000000001"},
-        metadata={
-            MATERIALIZATION_FENCE_METADATA_KEY: {
-                "org_id": ORG,
-                "run_id": RUN,
-                "legacy_stage_id": STAGE,
-                "source_digest": expected,
-                "idempotency_key": "e2stage_pg_race",
-                "canonical_stage_id": "stg_00000000-0000-4000-8000-000000000001",
-            }
-        },
-    )
-
-    with pytest.raises(LegacyStageMaterializationRejected):
-        await PostgresRuntimeApiStore._assert_e2_legacy_materialization(
-            SimpleNamespace(), conn=_Connection(), event=event
-        )
-
-
-@pytest.mark.parametrize(
-    "event_type",
-    (
-        RuntimeApiEventType.WRITE_STAGED,
-        RuntimeApiEventType.REVISION_ADDED,
-        RuntimeApiEventType.DECISION_RECORDED,
-        RuntimeApiEventType.WRITE_APPLIED,
-    ),
-)
-def test_postgres_source_mutations_join_the_run_fence(
-    event_type: RuntimeApiEventType,
-) -> None:
-    """Only fold-driving legacy mutations serialize with materialization."""
-
-    assert PostgresRuntimeApiStore._requires_legacy_stage_run_fence(
-        SimpleNamespace(event_type=event_type)
-    )
-    assert not PostgresRuntimeApiStore._requires_legacy_stage_run_fence(
-        SimpleNamespace(event_type=RuntimeApiEventType.PROGRESS)
-    )
 
 
 async def test_reconciliation_reassesses_and_releases_after_restart_without_dispatch() -> (

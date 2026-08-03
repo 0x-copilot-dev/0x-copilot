@@ -572,6 +572,116 @@ class DriverSession:
         assert self.wait_for("[data-testid=first-run-composer]", 60), (
             "key connect did not reveal the composer"
         )
+        # The composer reveals as soon as the key is saved, but the model
+        # selection is NOT settled yet: the provider-keys port wraps its save
+        # with `refreshCatalog(provider)` (FirstRunGate.tsx), and that refetch
+        # of /v1/agent/models resolves a tick or two later. Reading the pill in
+        # the caller's next statement therefore races it and sees the
+        # pre-key value — the unselected placeholder, or whatever default was
+        # resolved while every cloud row still said "needs key". That is a
+        # harness race, not a product bug, and it produced a false failure that
+        # cost real debugging time. Wait for the selection to settle.
+        assert self.wait_model_pill_resolved(), (
+            "model pill never resolved after the key was added"
+        )
+        # Opt-in cost control for a full-suite run: every journey that sends a
+        # message otherwise runs on whatever the picker auto-selects, which is
+        # the mid tier. Set COPILOT_JOURNEY_MODEL to pin the cheapest model the
+        # provider publishes. Harness-only — no product code reads it, so a
+        # normal run is unaffected.
+        preferred = os.environ.get("COPILOT_JOURNEY_MODEL", "").strip()
+        if preferred:
+            assert self.select_model(preferred), (
+                f"could not select the requested journey model {preferred!r}"
+            )
+
+    def select_model(self, name_fragment: str, timeout_s: int = 20) -> bool:
+        """Open the composer's model picker and choose the matching row.
+
+        Matches on the visible row name, case-insensitively, so a caller can
+        pass "haiku" rather than the exact catalog label. Returns False when no
+        enabled row matches — a keyless row is not selectable, and silently
+        continuing on the wrong model would misreport what was exercised.
+
+        POLLS rather than looking once. `wait_model_pill_resolved` returns as
+        soon as the pill stops showing its placeholder, which can be BEFORE the
+        just-added provider's rows land in the catalog. Opening the menu at that
+        instant shows a shorter list, and a single look concluded "no such
+        model" for a model that was about to appear — a race that passed
+        standalone and failed under the load of a full-suite run.
+        """
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            self.click(".atlas-model-pill")
+            if self.wait_for(".atlas-model-pill__item", 5):
+                clicked = self.evaluate(
+                    """
+                    (() => {
+                      const want = %r.toLowerCase();
+                      const rows = [...document.querySelectorAll('.atlas-model-pill__item')];
+                      const row = rows.find((r) => {
+                        const nm = r.querySelector('.atlas-model-pill__nm');
+                        return nm && nm.innerText.toLowerCase().includes(want)
+                          && !r.disabled;
+                      });
+                      if (!row) return null;
+                      row.click();
+                      return row.innerText;
+                    })()
+                    """
+                    % name_fragment
+                )
+                if clicked:
+                    return self.wait_model_pill_contains(name_fragment, timeout_s)
+            # Close the popover before retrying: a stacked-open menu swallows
+            # the next click, and the catalog may still be refreshing.
+            self.evaluate("document.body.click()")
+            time.sleep(1.0)
+        return False
+
+    def wait_model_pill_contains(self, fragment: str, timeout_s: int = 20) -> bool:
+        """Wait until the pill's own label reflects the chosen model."""
+
+        want = fragment.lower()
+        for _ in range(timeout_s * 2):
+            text = (
+                self.evaluate(
+                    '(document.querySelector(".atlas-model-pill")||{}).innerText||""'
+                )
+                or ""
+            ).lower()
+            if want in text:
+                return True
+            time.sleep(0.5)
+        return False
+
+    #: Pill text while nothing is selected — `ModelPill` renders the trigger
+    #: with an aria-label of "Select a model" and this short visible label.
+    _UNRESOLVED_MODEL_PILL = frozenset({"", "model", "select a model"})
+
+    def wait_model_pill_resolved(self, timeout_s: int = 30) -> bool:
+        """Wait until the composer's model pill names an actual model.
+
+        Returns True when there is no pill to wait on — a surface that renders
+        no model picker (a local-model-only flow, say) has nothing to settle,
+        and blocking for the full timeout there would turn this guard into the
+        flake it exists to remove.
+        """
+
+        for _ in range(timeout_s * 2):
+            if not self.present(".atlas-model-pill"):
+                return True
+            text = (
+                self.evaluate(
+                    '(document.querySelector(".atlas-model-pill")||{}).innerText||""'
+                )
+                or ""
+            ).strip()
+            if text.lower() not in self._UNRESOLVED_MODEL_PILL:
+                return True
+            time.sleep(0.5)
+        return False
 
     def send_first_run_message(self, text: str) -> None:
         """Type + send in the FTUE composer."""

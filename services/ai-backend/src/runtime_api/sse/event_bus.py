@@ -11,10 +11,8 @@ Two backends:
   by design. Sub-50ms wakeup; the SSE poll fallback becomes a backstop (10s)
   rather than the primary mechanism.
 
-Selection is automatic by default (``RUNTIME_EVENT_BUS_BACKEND=auto``):
-``postgres`` when ``DATABASE_URL`` is configured, ``in_memory`` otherwise.
-Explicit ``in_memory`` / ``postgres`` overrides skip the resolver. The
-resolution lives in :meth:`agent_runtime.settings.RuntimeSettings.resolved_event_bus_backend`.
+There is one bus: this in-process one. It suffices because the API hosts the
+worker in-process, so every publish shares a process with its SSE handler.
 """
 
 from __future__ import annotations

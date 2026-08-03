@@ -68,7 +68,6 @@ export const UVICORN_MODULES: Record<SupervisedServiceName, string> = {
 };
 
 export const BACKEND_DB_NAME = "atlas_backend";
-export const AI_BACKEND_DB_NAME = "atlas_ai";
 export const PG_SUPERUSER = "atlas";
 
 /** PYTHONPATH for a staged service dir: `src<sep>site-packages`. */
@@ -99,51 +98,8 @@ export function migrateDatabaseUrl(opts: {
   return `postgresql+psycopg://${PG_SUPERUSER}:${password}@127.0.0.1:${opts.pgPort}/${opts.database}`;
 }
 
-// The file-native AI runtime store — conversations, runs, events, and subagent
-// traces persist as JSONL folders under userData instead of the Postgres
-// `atlas_ai` database — is the DEFAULT desktop store (see AC2b cutover). It is
-// the coherent substrate for a single-process desktop app: local-first,
-// inspectable on disk, no embedded RDBMS in the agent run path.
-// `COPILOT_DESKTOP_FILE_STORE_V1` is now an OVERRIDE, not an opt-in: an explicit
-// falsey value pins the legacy Postgres store (the rollback / escape hatch), an
-// explicit truthy value forces file, and unset resolves to file. Read ONCE at
-// boot from the desktop process env.
-//
-// Data continuity: a first file boot starts a FRESH store. Conversations
-// already written to the `atlas_ai` Postgres DB are preserved on disk but are
-// not shown until carried over with `python -m runtime_adapters.migrate` — or
-// pin Postgres via COPILOT_DESKTOP_FILE_STORE_V1=0. See
-// docs/operations/desktop-file-store-migration.md.
-export const AI_FILE_STORE_V1_FLAG = "COPILOT_DESKTOP_FILE_STORE_V1";
-
-const FILE_STORE_V1_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
-const FILE_STORE_V1_FALSEY = new Set(["0", "false", "no", "off", "disabled"]);
-
 /** Relative segments of the file store root under userData: `agent-data/v1`. */
 export const AI_FILE_STORE_V1_SEGMENTS = ["agent-data", "v1"] as const;
-
-/**
- * Resolve the desktop ai-backend store backend from the process env. File-native
- * is the DEFAULT; Postgres is opt-out. Deterministic and pure so BOTH consumers
- * (buildServiceEnv's store branch and the supervisor's migration-skip gate)
- * resolve identically off the same env — they can never diverge. Recognition is
- * case- and space-tolerant:
- *   - COPILOT_DESKTOP_FILE_STORE_V1 in {0,false,no,off,disabled} -> "postgres"
- *   - COPILOT_DESKTOP_FILE_STORE_V1 in {1,true,yes,on,enabled}   -> "file"
- *   - unset / empty / unrecognized                               -> "file"
- * Injectable env map so it is testable without mutating `process.env`.
- */
-export function resolveAiStoreBackend(
-  env: Readonly<Record<string, string | undefined>>,
-): "file" | "postgres" {
-  const raw = env[AI_FILE_STORE_V1_FLAG];
-  if (raw !== undefined) {
-    const normalized = raw.trim().toLowerCase();
-    if (FILE_STORE_V1_FALSEY.has(normalized)) return "postgres";
-    if (FILE_STORE_V1_TRUTHY.has(normalized)) return "file";
-  }
-  return "file";
-}
 
 /**
  * Canonical absolute root for the file-native AI runtime store, derived from
@@ -347,18 +303,6 @@ export interface ServiceEnvInputs {
   /** Injectable for path-separator tests; defaults to the host's. */
   readonly pathDelimiter?: string;
   /**
-   * Force the ai-backend store backend for THIS boot, bypassing
-   * `resolveAiStoreBackend(processEnv)`. The desktop supervisor sets it after
-   * the first-file-boot migration gate has run: `"file"` once the carry-over
-   * import has succeeded (or when a fresh/empty install stays on file), and
-   * `"postgres"` as the FAIL-SAFE fallback when the migration could not be
-   * trusted (verify mismatch / any error) — so a failed import serves the
-   * still-authoritative Postgres store this boot instead of an empty app.
-   * `undefined` (the default) preserves the env-resolved behaviour, so every
-   * other caller and the existing tests are unaffected.
-   */
-  readonly storeBackendOverride?: "file" | "postgres";
-  /**
    * Electron-main browser broker authority for the supervised ai-backend only.
    * Kept outside the global passthrough allowlist so its bearer can never enter
    * backend or backend-facade child environments.
@@ -556,48 +500,18 @@ export function buildServiceEnv(
         env.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE =
           workspaceAttestation.signature;
       }
-      // The override wins when the supervisor has resolved the effective backend
-      // for this boot (post-migration gate); otherwise fall back to the pure
-      // env resolution so buildServiceEnv and the supervisor stay single-sourced.
-      const aiBackend =
-        inputs.storeBackendOverride ?? resolveAiStoreBackend(inputs.processEnv);
-      if (aiBackend === "file") {
-        // DEFAULT file-native store (JSONL folders under userData) instead of
-        // the legacy Postgres `atlas_ai` DB. No relational DB env is set, so
-        // the ai-backend migration gate is skipped in desktop-supervisor.ts.
-        // ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop is already set
-        // above; the runtime factory requires it for the file backend. The
-        // desktop supervisor's verified carry-over gate resolves the effective
-        // backend before this environment is built; a failed carry-over instead
-        // supplies the explicit Postgres override below.
-        env.RUNTIME_STORE_BACKEND = "file";
-        env.RUNTIME_FILE_STORE_ROOT = aiFileStoreV1Root(inputs.userDataDir);
-        // Optional, bounded process-local persistence for provider circuit
-        // health. This is intentionally desktop/file-store only: it restores
-        // opaque endpoint/credential fingerprints after a local restart, never
-        // secrets, and does not introduce a shared database/daemon contract.
-        env.RUNTIME_PROVIDER_CIRCUIT_SNAPSHOT_ENABLED = "true";
-      } else {
-        // Explicit rollback or one-boot migration fallback: preserve the
-        // legacy Postgres AI store rather than starting an empty file store.
-        const dbUrl = databaseUrl({
-          pgPort: inputs.pgPort,
-          pgPassword: inputs.secrets.pgPassword,
-          database: AI_BACKEND_DB_NAME,
-        });
-        env.RUNTIME_STORE_BACKEND = "postgres";
-        env.DATABASE_URL = dbUrl;
-        // scripts/migrate.py runs yoyo, which needs the +psycopg driver marker.
-        env.RUNTIME_DATABASE_URL = migrateDatabaseUrl({
-          pgPort: inputs.pgPort,
-          pgPassword: inputs.secrets.pgPassword,
-          database: AI_BACKEND_DB_NAME,
-        });
-        // Migrations are a dedicated boot step (migrations.ts). Without this the
-        // store's startup auto-apply would re-enter yoyo with the bare
-        // postgresql:// DATABASE_URL and crash on the missing psycopg2 driver.
-        env.RUNTIME_MIGRATIONS_AUTO_APPLY = "false";
-      }
+      // The file-native store: JSONL session folders under userData. It is the
+      // only ai-backend store the desktop ships — there is no relational DB env
+      // to set, and no migration step (desktop-supervisor.ts skips it).
+      // ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop is already set above;
+      // the runtime factory requires it for the file backend.
+      env.RUNTIME_STORE_BACKEND = "file";
+      env.RUNTIME_FILE_STORE_ROOT = aiFileStoreV1Root(inputs.userDataDir);
+      // Optional, bounded process-local persistence for provider circuit
+      // health. This is intentionally desktop/file-store only: it restores
+      // opaque endpoint/credential fingerprints after a local restart, never
+      // secrets, and does not introduce a shared database/daemon contract.
+      env.RUNTIME_PROVIDER_CIRCUIT_SNAPSHOT_ENABLED = "true";
       env.RUNTIME_START_IN_PROCESS_WORKER = "true";
       // Enable the on-device local-models capability (/v1/local-models/*) for
       // the PACKAGED desktop build. The ai-backend Pydantic default is False
@@ -619,7 +533,6 @@ export function buildServiceEnv(
       // call. The ai-backend Pydantic default stays false (fail-safe); this is
       // a supervisor-scoped opt-in, mirrored in tools/desktop-runtime/run-local.mjs.
       env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME = "true";
-      env.RUNTIME_EVENT_BUS_BACKEND = "in_memory";
       env.MCP_BACKEND_REGISTRY_URL = backendUrl;
       env.SKILLS_BACKEND_REGISTRY_URL = backendUrl;
       // BYOK lane: UserPoliciesResolverFactory activates the runtime-policies

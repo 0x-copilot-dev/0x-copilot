@@ -4,7 +4,7 @@ name: ci-merge-live-gate
 # run automatically instead of by hand. In-memory analogues cannot prove the
 # things that break a real merge: raw re-key SQL against the actual schema,
 # FK-ordered deletes, the 0038 audit-immutability trigger firing, RLS
-# behavior, and — the crux — the ai-backend encryption-AAD re-wrap round-trip
+# behavior of the backend account-merge saga against a live database
 # (a row must decrypt under the survivor org and REFUSE the absorbed org).
 #
 # Deliberately cross-service: a migration in EITHER service, or a change to
@@ -18,9 +18,7 @@ on:
   pull_request:
     paths:
       - "services/backend/migrations/**"
-      - "services/ai-backend/migrations/**"
       - "services/backend/src/backend_app/identity/account_merge*.py"
-      - "services/ai-backend/src/runtime_adapters/**/account_merge.py"
       - "services/*/tests/integration/persistence/**"
       - "packages/service-contracts/**"
       - "packages/audit-chain/**"
@@ -31,9 +29,7 @@ on:
       - dev
     paths:
       - "services/backend/migrations/**"
-      - "services/ai-backend/migrations/**"
       - "services/backend/src/backend_app/identity/account_merge*.py"
-      - "services/ai-backend/src/runtime_adapters/**/account_merge.py"
       - "services/*/tests/integration/persistence/**"
       - "packages/service-contracts/**"
       - "packages/audit-chain/**"
@@ -122,50 +118,3 @@ jobs:
             tests/integration/persistence/test_projects_store_live.py \
             tests/integration/persistence/test_connectors_store_live.py \
             tests/integration/persistence/test_provider_default_model_live.py -q
-
-  ai-backend-merge-gate:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: merge
-          POSTGRES_PASSWORD: merge
-          POSTGRES_DB: merge_runtime
-          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U merge"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      PYTHONUTF8: "1"
-      MERGE_LIVE_TEST_DATABASE_URL: postgresql://merge@localhost:5432/merge_runtime
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: |
-            services/ai-backend/requirements.txt
-            services/ai-backend/requirements-dev.txt
-
-      - name: Install service deps (ai-backend)
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install ./packages/service-contracts
-          python -m pip install ./packages/audit-chain
-          # The live smoke below runs pytest, so it needs the test tooling.
-          python -m pip install -r services/ai-backend/requirements-dev.txt
-
-      - name: Run the ai-backend live re-key + AAD decrypt smoke (NFR-4)
-        run: |
-          cd services/ai-backend
-          PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
-            tests/integration/persistence/test_account_merge_live.py \
-            tests/integration/persistence/test_conversation_pin_live.py -q

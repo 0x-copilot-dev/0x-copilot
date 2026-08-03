@@ -7,7 +7,7 @@ Module split:
 - `agent_runtime/` — pure domain. `execution/` (graph, deep agent builder, runtime contracts), `capabilities/` (tools, skills, MCP loaders + middleware + permissions), `context/memory`, `delegation/subagents`, `persistence/` (records, schema, ports), `observability/`, `api/` (presentation/service layer).
 - `runtime_api/` — FastAPI app: conversations, runs, event replay, SSE streaming, cancel, approvals.
 - `runtime_worker/` — separate process that claims queued runs, drives LangGraph, and emits typed `RuntimeEventEnvelope` records. API can run an in-process worker via `RUNTIME_START_IN_PROCESS_WORKER=true` for local dev.
-- `runtime_adapters/` — `in_memory` for tests/dev, `postgres` for shared-store production-style runs. Selected by `RUNTIME_STORE_BACKEND`.
+- `runtime_adapters/` — `in_memory` for tests/dev, `file` (JSONL session folders) for the desktop. Selected by `RUNTIME_STORE_BACKEND` and dispatched through `runtime_adapters/registry.py`; the paired LangGraph saver comes from `agent_runtime/execution/checkpointing.py`. Adding a backend is a provider module plus one registration in each, with no edit to any dispatch code.
 
 ## What belongs in this service
 
