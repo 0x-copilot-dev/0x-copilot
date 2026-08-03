@@ -46,7 +46,7 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.cards import McpServerCard, McpToolCallRequest
+from agent_runtime.capabilities.mcp.cards import McpServerCard
 from agent_runtime.capabilities.mcp.catalog import (
     McpCatalogBuilder,
     McpCatalogPublisher,
@@ -56,11 +56,11 @@ from agent_runtime.capabilities.mcp.catalog import (
 from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
-from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
@@ -72,7 +72,6 @@ from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
-from langchain.agents.middleware import TodoListMiddleware
 
 from agent_runtime.capabilities.middleware import (
     ModelInvocationMiddleware,
@@ -548,17 +547,6 @@ async def _assemble_harness(
                 middleware=(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
-                    # `write_todos` used to arrive for free: deepagents included
-                    # `TodoListMiddleware` in its own stack. 0.7.1 stopped doing
-                    # that — the class lives in `langchain.agents.middleware` and
-                    # only the AUTO-INCLUSION went away. Nothing would have
-                    # failed loudly: the tool would simply be absent, the model
-                    # would stop emitting checklist frames, and the cockpit's
-                    # todo panel would go quiet, because
-                    # `stream_tools.TodoListProjector` is fed entirely by
-                    # `write_todos` tool frames. Declared here so the feature is
-                    # ours to keep rather than a side effect of a dependency.
-                    TodoListMiddleware(),
                     *_host_path_tool_middleware(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -568,10 +556,6 @@ async def _assemble_harness(
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
-                    # Subagents get the checklist too — it was in their stack
-                    # before 0.7.1 for the same reason it was in the
-                    # supervisor's.
-                    TodoListMiddleware,
                     *_host_path_tool_middleware_factories(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -583,6 +567,20 @@ async def _assemble_harness(
     except AgentRuntimeError:
         raise
     except Exception as exc:
+        # Log the CAUSE here, where the exception object still exists. The
+        # raise below is what every caller sees, and its safe message says only
+        # "could not be constructed" — correct for the model and the API, and
+        # useless for anyone debugging. `from exc` preserves the chain in
+        # Python but the worker logs the typed error, whose traceback stops at
+        # this frame: a live desktop failure showed `DETAIL: None` and a stack
+        # ending here, hiding an `AttributeError` from the filesystem
+        # middleware for an entire debugging session.
+        _LOGGER.error(
+            "agent runtime construction failed (trace_id=%s); "
+            "the typed error below carries only a safe message",
+            runtime_context.trace_id,
+            exc_info=True,
+        )
         raise AgentRuntimeError(
             RuntimeErrorCode.RUNTIME_FACTORY_ERROR,
             "The agent runtime could not be constructed.",
@@ -970,7 +968,6 @@ def _model_visible_tools(
     # operation reaches the Operation Gateway. A second construction here would
     # be a second dispatch route in everything but name.
     loader: McpLoader | None = None
-    mcp_dispatcher: CallMcpTool | None = None
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
@@ -991,38 +988,23 @@ def _model_visible_tools(
             )
         )
         if mcp_per_tool is not None:
-            # P2-8 flip — one model tool per REAL MCP tool, each already wrapped
-            # in the fixed POLICY → EXEC_POLICY → OBSERVE → ERROR_MAP →
-            # CITATIONS pipeline. The umbrella ``call_mcp_tool`` is not
-            # registered: the PDP decision it used to take is now taken by the
-            # POLICY stage of each of these tools, bound to a fixed
-            # ``(card, server, tool)`` instead of decoding one out of a
-            # model-supplied payload. ``mcp_dispatcher`` stays ``None``, so the
-            # F3 capability bridge (which borrows it as its dispatch route)
-            # registers nothing rather than reopening the retired gateway.
-            per_tool_mcp_tools = mcp_per_tool.tools
+            # One model tool per REAL MCP tool, each already wrapped in the
+            # fixed POLICY -> EXEC_POLICY -> OBSERVE -> ERROR_MAP -> CITATIONS
+            # -> PRESENT pipeline. The PDP decision the umbrella ``call_mcp_tool``
+            # used to take is now taken by each tool's POLICY stage, bound to a
+            # fixed ``(card, server, tool)`` instead of decoded out of a
+            # model-supplied payload; and its Work Ledger emission is the
+            # PRESENT stage.
             model_tools.extend(
                 ModelToolDeclaration.declared_all(
-                    per_tool_mcp_tools,
+                    mcp_per_tool.tools,
                     owner=ModelToolOwner.MCP,
                 )
             )
-        else:
-            mcp_dispatcher = CallMcpTool(
-                registry=mcp_registry,  # type: ignore[arg-type]
-                loader=loader,
-                runtime_context=runtime_context,
-                gate=_tool_access_gate(
-                    auth_session_creator=auth_session_creator,
-                    runtime_context=runtime_context,
-                ),
-            )
-            model_tools.append(
-                ModelToolDeclaration.declared(
-                    _structured_tool(mcp_dispatcher, McpToolCallRequest),
-                    owner=ModelToolOwner.MCP,
-                )
-            )
+        # There is no other branch. The umbrella gateway is gone, so a run whose
+        # registration produced nothing registers no MCP dispatch tool at all --
+        # the honest surface. Re-adding a fallback would mean advertising a
+        # dispatch route whose credential plane never resolved.
     if auth_session_creator is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
@@ -1115,7 +1097,6 @@ def _model_visible_tools(
                 catalog=capability_catalog,
                 bridge=capability_bridge,
                 loader=loader,
-                dispatcher=mcp_dispatcher,
                 local_tool_names=local_tool_names,
                 runtime_context=runtime_context,
             ),
@@ -1188,7 +1169,6 @@ def _capability_bridge_tools(
     catalog: object | None,
     bridge: object | None = None,
     loader: McpLoader | None = None,
-    dispatcher: CallMcpTool | None = None,
     local_tool_names: frozenset[str] = frozenset(),
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
@@ -1254,11 +1234,7 @@ def _capability_bridge_tools(
             catalog=catalog,
             runtime_context=runtime_context,
             seam=seam,
-            executor=_capability_executor(
-                seam=seam,
-                loader=loader,
-                dispatcher=dispatcher,
-            ),
+            executor=_capability_executor(seam=seam, loader=loader),
             revalidation=None if composition is None else composition.revalidation,
             schema_artifacts=(
                 None if composition is None else composition.schema_artifacts
@@ -1337,32 +1313,19 @@ def _capability_executor(
     *,
     seam: object | None,
     loader: McpLoader | None,
-    dispatcher: CallMcpTool | None,
 ) -> object | None:
-    """Build the one non-model route a disclosed capability may be dispatched by.
+    """The non-model dispatch route for a disclosed capability: there is none.
 
-    ``bindings`` is ``seam.disclosure`` — the *same object* the registrar hands
-    the catalog access, never a second ledger built from the same catalog.  A
-    foreign ledger is refused downstream, but relying on that refusal would mean
-    the safe construction is merely the one that happens to pass; taking it off
-    the seam makes it the only one available.
-
-    ``dispatcher`` is this run's own ``CallMcpTool``.  The executor type-checks
-    it, so a substitute callable cannot quietly become a parallel route to the
-    Operation Gateway, and there is nothing to substitute here anyway.
+    F3's bridge dispatched through the umbrella ``CallMcpTool``, which is gone --
+    per-tool registration replaced it, and a per-tool surface has no single
+    dispatcher to borrow. ``None`` is the same signal the unconfigured
+    deployment already produced (``F3_CAPABILITY_ACTIVATION`` is set nowhere in
+    this repo), so no run's behaviour changes; what changes is that the route is
+    absent by construction rather than by configuration.
     """
 
-    if seam is None or loader is None or dispatcher is None:
-        return None
-    from agent_runtime.capabilities.discovery.executor import (  # noqa: PLC0415
-        GatewayCapabilityExecutor,
-    )
-
-    return GatewayCapabilityExecutor(
-        bindings=seam.disclosure,  # type: ignore[attr-defined]
-        loader=loader,
-        dispatcher=dispatcher,
-    )
+    del seam, loader
+    return None
 
 
 def _capability_discovery_is_supplied(

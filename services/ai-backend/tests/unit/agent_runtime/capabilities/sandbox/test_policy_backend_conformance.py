@@ -34,6 +34,9 @@ class BaseSurfaceMixin:
     #: so the assertion below accepts either.
     PATH_TAKING = frozenset(
         {
+            # 0.7.1: `capture_path` is where a command's output is written.
+            "execute_with_offload",
+            "aexecute_with_offload",
             "ls",
             "read",
             "write",

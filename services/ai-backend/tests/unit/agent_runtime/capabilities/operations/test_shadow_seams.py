@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
 
-from agent_runtime.capabilities.mcp import (
-    CallMcpTool,
-    DynamicMcpRegistry,
-    McpLoader,
-)
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -19,118 +13,14 @@ from agent_runtime.capabilities.tools.builtin.ask_a_question import (
 from agent_runtime.delegation.subagents.atlas_task_tool import (
     build_atlas_task_tool,
 )
-from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.factory import _structured_tool
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from tests.unit.agent_runtime.capabilities.operations.helpers import (
     BoundContextMixin,
     RecordingEmitter as OperationEmitter,
 )
-from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 
-class TestMcpShadowSeam(DynamicMcpLoadingMixin, BoundContextMixin):
-    @pytest.mark.asyncio
-    async def test_off_and_shadow_hold_before_retired_provider_dispatch(
-        self,
-        runtime_context_admin: AgentRuntimeContext,
-    ) -> None:
-        client = self.FakeMcpClient(
-            tools=(self.make_tool(name="get_issue"),),
-            resources=(),
-            tool_outputs={"get_issue": {"issue": {"id": "ENG-1"}}},
-        )
-        original_call = client.call_tool
-        calls = 0
-
-        async def counting_call(**kwargs: object):
-            nonlocal calls
-            calls += 1
-            return await original_call(**kwargs)  # type: ignore[arg-type]
-
-        client.call_tool = counting_call  # type: ignore[method-assign]
-        provider = self.FakeMcpProvider(
-            cards=(self.make_card(name="linear"),),
-            clients={"linear": client},
-        )
-        registry = DynamicMcpRegistry(providers=(provider,))
-        tool = CallMcpTool(
-            registry=registry,
-            loader=McpLoader(registry),
-            runtime_context=runtime_context_admin,
-        )
-        arguments = {
-            "server_name": "linear",
-            "tool_name": "get_issue",
-            "arguments": {"id": "ENG-1"},
-        }
-
-        off_token = self.bind(mode=OperationGatewayMode.OFF)
-        try:
-            off_result = await tool.ainvoke(arguments)
-        finally:
-            OperationContext.unbind(off_token)
-
-        emitter = OperationEmitter(fail_on_call=2)
-        shadow_token = self.bind(emitter=emitter)
-        try:
-            shadow_result = await tool.ainvoke(arguments)
-        finally:
-            OperationContext.unbind(shadow_token)
-
-        assert shadow_result == off_result
-        assert shadow_result["output"]["status"] == "held"
-        assert calls == 0
-        assert emitter.calls == 0
-
-    @pytest.mark.asyncio
-    async def test_shadow_telemetry_failure_cannot_restore_provider_dispatch(
-        self,
-        runtime_context_admin: AgentRuntimeContext,
-    ) -> None:
-        client = self.FakeMcpClient(
-            tools=(self.make_tool(name="get_issue"),),
-            resources=(),
-            tool_outputs={"get_issue": {"issue": {"id": "ENG-1"}}},
-        )
-        original_call = client.call_tool
-        calls = 0
-
-        async def counting_call(**kwargs: object):
-            nonlocal calls
-            calls += 1
-            return await original_call(**kwargs)  # type: ignore[arg-type]
-
-        client.call_tool = counting_call  # type: ignore[method-assign]
-        provider = self.FakeMcpProvider(
-            cards=(self.make_card(name="linear"),),
-            clients={"linear": client},
-        )
-        registry = DynamicMcpRegistry(providers=(provider,))
-        tool = CallMcpTool(
-            registry=registry,
-            loader=McpLoader(registry),
-            runtime_context=runtime_context_admin,
-        )
-        emitter = OperationEmitter(fail_on_call=2)
-        token = self.bind(emitter=emitter)
-        try:
-            result = await tool.ainvoke(
-                {
-                    "server_name": "linear",
-                    "tool_name": "get_issue",
-                    "arguments": {"id": "ENG-1"},
-                }
-            )
-        finally:
-            OperationContext.unbind(token)
-
-        assert calls == 0
-        assert result["output"]["status"] == "held"
-        assert emitter.calls == 0
-
-
-@dataclass
 class CountingBuiltin:
     name: str = "ask_a_question"
     description: str = "Ask once."

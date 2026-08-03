@@ -179,7 +179,6 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
     fixed = (
         ("builtin", "web_search", "runtime_worker.dependencies.WebSearchToolRegistry"),
         ("builtin", "load_mcp_server", "execution.factory._model_visible_tools"),
-        ("builtin", "call_mcp_tool", "execution.factory._model_visible_tools"),
         ("builtin", "auth_mcp", "execution.factory._model_visible_tools"),
         ("builtin", "load_skill", "execution.factory._model_visible_tools"),
         ("builtin", "load_prior_tool_result", "execution.factory._model_visible_tools"),

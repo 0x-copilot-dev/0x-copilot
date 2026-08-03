@@ -116,12 +116,6 @@ class _ReviewedMiddleware:
     ROOT: Final[tuple[str, ...]] = (
         "RuntimeControlMiddleware",
         "ModelInvocationMiddleware",
-        # deepagents included `TodoListMiddleware` in its own stack until 0.7.1.
-        # We declare it now, so it is reviewed here rather than arriving as a
-        # side effect of a dependency — which is how it would have LEFT, too:
-        # silently, with `write_todos` simply absent and the cockpit's todo
-        # panel going quiet.
-        "TodoListMiddleware",
     )
     #: Unconditional child factories, in composition order.
     CHILD: Final[tuple[str, ...]] = ROOT

@@ -135,7 +135,7 @@ class UrnScheme(StrEnum):
 
 
 class MiddlewareStage(StrEnum):
-    """The five generic pipeline stages, named (PLAN §1).
+    """The six generic pipeline stages, named (PLAN §1).
 
     Ordering is expressed once by :data:`MIDDLEWARE_ORDER`; a concrete
     middleware advertises its stage so a composer can assert the stack is
@@ -147,6 +147,7 @@ class MiddlewareStage(StrEnum):
     OBSERVE = "observe"
     ERROR_MAP = "error_map"
     CITATIONS = "citations"
+    PRESENT = "present"
 
 
 #: The source that produced a tool. ``Literal`` (not ``StrEnum``) because the
@@ -313,6 +314,11 @@ MIDDLEWARE_ORDER: tuple[MiddlewareStage, ...] = (
     MiddlewareStage.OBSERVE,
     MiddlewareStage.ERROR_MAP,
     MiddlewareStage.CITATIONS,
+    # Innermost, and last for a reason: a result can only be put on the Work
+    # Ledger once it has survived every stage that could still refuse, retry or
+    # re-shape it. Presenting earlier would render a call the ERROR_MAP stage
+    # was about to turn into a failure.
+    MiddlewareStage.PRESENT,
 )
 
 

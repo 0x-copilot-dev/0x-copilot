@@ -29,8 +29,6 @@ from agent_runtime.capabilities.discovery import (
     CapabilityCatalogRevision,
     CapabilityCatalogScope,
 )
-from langchain.agents.middleware import TodoListMiddleware
-
 from agent_runtime.capabilities.middleware import (
     ModelInvocationMiddleware,
     RuntimeControlMiddleware,
@@ -395,12 +393,10 @@ class TestFeatureOffParity:
         assert [type(item) for item in request.middleware] == [
             RuntimeControlMiddleware,
             ModelInvocationMiddleware,
-            TodoListMiddleware,
         ]
         assert request.universal_middleware_factories == (
             RuntimeControlMiddleware,
             ModelInvocationMiddleware,
-            TodoListMiddleware,
         )
 
 
@@ -573,5 +569,4 @@ class TestDeferredBridgeRegistration:
         assert [type(item) for item in request.middleware] == [
             RuntimeControlMiddleware,
             ModelInvocationMiddleware,
-            TodoListMiddleware,
         ]

@@ -94,7 +94,6 @@ from agent_runtime.capabilities.mcp.cards import (
 from agent_runtime.capabilities.mcp.connection import McpServerConnectionConfig
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
-    McpPerToolFlag,
 )
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
@@ -480,7 +479,6 @@ class PerToolLinearRunMixin:
             "_build_dependencies",
             _with_per_tool_seams,
         )
-        monkeypatch.setenv(McpPerToolFlag.ENV_VAR, "true" if per_tool else "false")
         return connector, sink
 
     @staticmethod
@@ -737,44 +735,3 @@ class TestPerToolConnectorProvenance(PerToolLinearRunMixin):
         ]
         assert invocations, list(store.tool_invocations.values())
         assert {record.connector_slug for record in invocations} == {_SERVER}
-
-
-class TestFlagOffKeepsTheLegacyGateway(PerToolLinearRunMixin):
-    async def test_the_same_errand_still_runs_through_call_mcp_tool(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Identical fixtures, identical settings, identical errand — only
-        # MCP_PER_TOOL_ENABLED differs from T1.
-        connector, sink = self._wire(monkeypatch, per_tool=False)
-        self._script_gateway_call(
-            monkeypatch, tool_name=_READ_TOOL, arguments=_READ_ARGS
-        )
-        store = InMemoryRuntimeApiStore()
-        settings = self._settings()
-        blobs, references = self._artifact_stores()
-        runs, conversations, _approvals = self._coordinators(store, settings)
-        run_id = await self._enqueue_run(runs, conversations)
-
-        await self._drain(
-            store, settings, blobs=blobs, references=references, sink=sink
-        )
-
-        names = self._event_types(store, run_id)
-        assert "run_failed" not in names, names
-        assert "run_completed" in names
-        assert store.runs[run_id].status is AgentRunStatus.COMPLETED
-        assert self._pending_approvals(store, run_id) == []
-        # The connector saw the same call, by the legacy route: the proxy client
-        # WAS built, and the per-tool source published nothing.
-        assert connector.calls == [(_READ_TOOL, _READ_ARGS)]
-        assert connector.proxy_clients == [_SERVER]
-        assert sink.published == []
-        # The umbrella tool is what streamed, and it still carries provenance
-        # through the dispatcher unwrap.
-        gateway_payloads = self._tool_payloads(store, run_id, tool_name="call_mcp_tool")
-        assert gateway_payloads, self._event_types(store, run_id)
-        assert self._tool_payloads(store, run_id, tool_name=_READ_TOOL) == []
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(pytest.main([__file__, "-q"]))

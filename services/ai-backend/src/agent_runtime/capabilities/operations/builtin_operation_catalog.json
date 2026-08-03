@@ -18,15 +18,6 @@
     "model_visible": true
   },
   {
-    "tool_name": "call_mcp_tool",
-    "capability": "builtin",
-    "op": "call_mcp_tool",
-    "source": "capabilities.mcp.middleware.call_tool",
-    "kind": "builtin",
-    "execution": "gateway",
-    "model_visible": true
-  },
-  {
     "tool_name": "auth_mcp",
     "capability": "builtin",
     "op": "auth_mcp",

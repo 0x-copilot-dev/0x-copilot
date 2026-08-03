@@ -6,7 +6,9 @@ the conversation's paused server_ids materialise onto
 
     1. ``McpPermissionPolicy.is_server_card_authorized`` -> hides the card
        from ``list_server_cards`` and refuses ``load_server``.
-    2. ``CallMcpTool`` -> defense-in-depth re-check before a tool call.
+    2. the per-tool POLICY stage -> the re-check before a tool call, now
+       bound to a fixed ``(card, server, tool)`` rather than one decoded
+       from a model payload (see ``mcp/middleware/test_policy_tool.py``).
     3. ``runtime_connector_scopes`` (already correct) -> drops the entry.
 
 These tests pin the gates without booting the full agent graph.
@@ -14,17 +16,13 @@ These tests pin the gates without booting the full agent graph.
 
 from __future__ import annotations
 
-import asyncio
 
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthMode,
-    McpLoadErrorCode,
     McpServerCard,
     McpServerHealth,
-    McpToolCallResult,
     McpTransport,
 )
-from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
@@ -126,28 +124,3 @@ class _StubRegistry:
 
 class _StubLoader:
     timeout_seconds = 5.0
-
-
-class TestCallMcpToolPaused:
-    def _invoke(self, *, paused: frozenset[str]) -> dict[str, object]:
-        card = _card()
-        tool = CallMcpTool(
-            registry=_StubRegistry(card),  # type: ignore[arg-type]
-            loader=_StubLoader(),  # type: ignore[arg-type]
-            runtime_context=_context(paused=paused),
-        )
-        result = asyncio.run(
-            tool.ainvoke(
-                {"server_name": _LINEAR_SERVER_NAME, "tool_name": "list_issues"}
-            )
-        )
-        return result
-
-    def test_paused_server_call_returns_permission_denied(self) -> None:
-        result = self._invoke(paused=frozenset({_LINEAR_SERVER_ID}))
-        # The result is the model_dump of an McpToolCallResult.fail; rebuild
-        # the typed model to assert against the typed code rather than a
-        # string fragment.
-        typed = McpToolCallResult.model_validate(result)
-        assert typed.error is not None
-        assert typed.error.code == McpLoadErrorCode.PERMISSION_DENIED

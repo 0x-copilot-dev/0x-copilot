@@ -1,6 +1,6 @@
 """E3 cutover keystone (T4): the run ledger is v1-free, yet v2 canvas is complete.
 
-Drives an executed MCP read through :class:`CallMcpTool` with the run handler's
+Drives an executed MCP read through the per-tool pipeline with the run handler's
 real :class:`WorkLedgerEmitter` bound (built with ``SURFACES_V2`` **unset** — the
 E3 default-on posture, no env flag needed), then asserts:
 
@@ -23,10 +23,13 @@ from dataclasses import dataclass, field
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
-from agent_runtime.capabilities.mcp import (
-    CallMcpTool,
-    DynamicMcpRegistry,
-    McpLoader,
+from langchain_core.tools import BaseTool
+
+from agent_runtime.capabilities.mcp.cards import McpTransport
+from agent_runtime.capabilities.mcp.connection import McpServerConnectionConfig
+from agent_runtime.capabilities.mcp.per_tool_registration import (
+    McpPerToolCollaborators,
+    McpPerToolRegistrar,
 )
 from agent_runtime.capabilities.mcp.cards import McpAuthState
 from agent_runtime.capabilities.mcp.gateway_context import (
@@ -130,33 +133,75 @@ def _runtime_context_for_run(run_id: str) -> AgentRuntimeContext:
 
 
 class TestV1FreeLedger(DynamicMcpLoadingMixin):
-    def _call_tool(
+    async def _call_tool(
         self,
         runtime_context: AgentRuntimeContext,
         *,
         server: str,
         tool: str,
         output: Mapping[str, object],
-    ) -> CallMcpTool:
+    ):
+        """Build the per-tool MCP tool whose PRESENT stage reaches the ledger.
+
+        The gateway used to be what put a read on the Work Ledger. Per-tool
+        registration replaced it, and the PRESENT stage is where that job now
+        lives -- so this drives the real composed pipeline rather than a stand-in.
+        """
+
         card = self.make_card(name=server).model_copy(
             update={"auth_state": McpAuthState.AUTHENTICATED, "server_id": server}
         )
-        provider = self.FakeMcpProvider(
-            cards=(card,),
-            clients={
-                server: self.FakeMcpClient(
-                    tools=(self.make_tool(name=tool),),
-                    resources=(),
-                    tool_outputs={tool: output},
+
+        class _Inner(BaseTool):
+            name: str = tool
+            description: str = "ported"
+            response_format: str = "content_and_artifact"
+
+            def _run(self, *a, **k):
+                raise AssertionError("async only")
+
+            async def _arun(self, *a, **k):
+                return ("ok", dict(output))
+
+        class _Dir:
+            async def connection_for(self, server_id):
+                return McpServerConnectionConfig(
+                    url="https://mcp.invalid/mcp", transport=McpTransport.HTTP
                 )
-            },
-        )
-        registry = DynamicMcpRegistry(providers=(provider,))
-        return CallMcpTool(
-            registry=registry,
-            loader=McpLoader(registry),
+
+        class _Creds:
+            async def auth_for(self, server_id):
+                return {}
+
+        class _Client:
+            async def get_tools(self, *, server_name=None):
+                return [_Inner()]
+
+        class _Factory:
+            def create(self, connections):
+                return _Client()
+
+        class _Provider:
+            async def list_server_cards(self):
+                return (card,)
+
+        class _Registry:
+            providers = (_Provider(),)
+
+            def resolve_server(self, *a, **k):
+                return card
+
+        registration = await McpPerToolRegistrar.build(
             runtime_context=runtime_context,
+            mcp_registry=_Registry(),
+            collaborators=McpPerToolCollaborators(
+                directory=_Dir(), credentials=_Creds(), client_factory=_Factory()
+            ),
+            gate=None,
+            reserved_names=frozenset(),
         )
+        assert registration is not None, "per-tool registration must produce the tool"
+        return next(t for t in registration.tools if t.name == tool)
 
     def _bind_canonical_gateway(
         self,
@@ -244,7 +289,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         )
         runtime_context = _runtime_context_for_run(run_id)
 
-        tool = self._call_tool(
+        tool = await self._call_tool(
             runtime_context,
             server="linear",
             tool="get_issue",
@@ -259,12 +304,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         )
         try:
             result = await tool.ainvoke(
-                {
-                    "server_name": "linear",
-                    "tool_name": "get_issue",
-                    "arguments": {"query": "ENG-1421"},
-                    "tool_call_id": "call_linear_get_issue",
-                }
+                {**{"query": "ENG-1421"}, "tool_call_id": "call_linear_get_issue"}
             )
         finally:
             McpOperationGatewayContext.unbind(service_token)
@@ -347,7 +387,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         # The connector publishes `get_issue`; the caller asks for `Get_Issue`.
         # The MCP boundary folds the request onto the published name, which is
         # exactly why nothing downstream ever sees the caller's spelling.
-        tool = self._call_tool(
+        tool = await self._call_tool(
             runtime_context,
             server="linear",
             tool="get_issue",
@@ -434,7 +474,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         assert emitter is not None
         runtime_context = _runtime_context_for_run(run_id)
 
-        tool = self._call_tool(
+        tool = await self._call_tool(
             runtime_context,
             server="linear",
             tool="Get_Issue",
@@ -448,12 +488,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         )
         try:
             await tool.ainvoke(
-                {
-                    "server_name": "linear",
-                    "tool_name": "get_issue",
-                    "arguments": {"query": "ENG-1421"},
-                    "tool_call_id": "call_linear_get_issue",
-                }
+                {**{"query": "ENG-1421"}, "tool_call_id": "call_linear_get_issue"}
             )
         finally:
             McpOperationGatewayContext.unbind(service_token)

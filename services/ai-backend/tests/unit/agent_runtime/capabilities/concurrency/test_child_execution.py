@@ -3,7 +3,7 @@
 The central claim of this lane cannot be proved against a fake gateway, so
 :class:`TestChildIsAnOrdinaryGatewayOperation` composes the *real*
 :class:`~agent_runtime.capabilities.operations.gateway.OperationGateway`, the
-*real* ``CallMcpTool`` dispatcher, and the *real*
+*real* per-tool MCP dispatcher, and the *real*
 :class:`~agent_runtime.capabilities.concurrency.batch_coordinator.BatchExecutionCoordinator`,
 runs the same work twice — once as a solo call and once as a batched child —
 and compares the artifacts both left behind. Anything a fake produced would be a
@@ -32,7 +32,6 @@ import pytest
 from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
 from agent_runtime.capabilities.concurrency import (
     BatchChildDispatch,
-    BatchChildDispatchPort,
     BatchChildDispatchStatus,
     BatchChildExecutionError,
     BatchChildExecutionMessages,
@@ -64,7 +63,6 @@ from agent_runtime.capabilities.concurrency import (
     RunScopedBatchChildWork,
     SideEffectKind,
 )
-from agent_runtime.capabilities.mcp import CallMcpTool, DynamicMcpRegistry, McpLoader
 from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
@@ -551,19 +549,6 @@ class GatewayHarnessMixin(CoordinatorFixtureMixin, DynamicMcpLoadingMixin):
             update={"server_id": "srv_linear"}
         )
 
-    def mcp(self, context: AgentRuntimeContext):  # type: ignore[no-untyped-def]
-        client = _RecordingClient(
-            tools=(self.make_tool(name=_READ_TOOL, input_schema=dict(_READ_SCHEMA)),),
-            outputs={_READ_TOOL: {"items": [{"id": "L-1"}]}},
-        )
-        provider = self.FakeMcpProvider(cards=(self.card(),), clients={_SERVER: client})
-        registry = DynamicMcpRegistry(providers=(provider,))
-        return client, CallMcpTool(
-            registry=registry,
-            loader=McpLoader(registry),
-            runtime_context=context,
-        )
-
     def bind_gateway(self, context: AgentRuntimeContext):  # type: ignore[no-untyped-def]
         events = _RecordedOperationEvents()
         operation_token = OperationContext.bind_for_run(
@@ -614,147 +599,9 @@ class GatewayHarnessMixin(CoordinatorFixtureMixin, DynamicMcpLoadingMixin):
         )
         return events, result_store, operation_token, service_token
 
-    async def run_solo(self, *, model_tool_call_id: str) -> _GatewayArtifacts:
-        """Run one tool call exactly as the tool-control middleware would.
-
-        The middleware's own contribution is binding the derived identity around
-        the dispatch; everything after that is the dispatcher's. Reproducing
-        that binding here is what makes this the control the batched child is
-        compared against.
-        """
-
-        context = self.runtime_context()
-        run_token = RunControlContext.bind_for_run(self.binding())
-        try:
-            identity = self.identity(model_tool_call_id)
-            work = self.work(identity)
-            client, dispatcher = self.mcp(context)
-            events, results, op_token, svc_token = self.bind_gateway(context)
-            try:
-                with RuntimeCallContext.bind(identity):
-                    result = await dispatcher.ainvoke(work.dispatch_input())
-            finally:
-                McpOperationGatewayContext.unbind(svc_token)
-                OperationContext.unbind(op_token)
-        finally:
-            RunControlContext.unbind(run_token)
-        return _GatewayArtifacts(
-            events=events.comparable(),
-            result_store=results.calls,
-            connector_calls=client.calls,
-            dispatcher_result=result,
-            operation_ids=events.operation_ids(),
-            event_types=events.types(),
-        )
-
-    async def run_batched(self, *, model_tool_call_id: str) -> _GatewayArtifacts:
-        """Run the same tool call as an admitted child of a durable batch."""
-
-        context = self.runtime_context()
-        run_token = RunControlContext.bind_for_run(self.binding())
-        try:
-            identity = self.identity(model_tool_call_id)
-            work = self.work(identity)
-            plan = self.durable_plan(work.operation_id)
-            coordinator = self.coordinator()
-            coordinator.begin(plan)
-            client, dispatcher = self.mcp(context)
-            events, results, op_token, svc_token = self.bind_gateway(context)
-            try:
-                child = await coordinator.run_child(
-                    batch_id=plan.batch_id,
-                    operation_id=work.operation_id,
-                    runner=self.executor(dispatcher, (work,)).run,
-                )
-            finally:
-                McpOperationGatewayContext.unbind(svc_token)
-                OperationContext.unbind(op_token)
-        finally:
-            RunControlContext.unbind(run_token)
-        assert child.outcome.status is BatchChildStatus.SUCCEEDED
-        assert isinstance(child.value, BatchChildDispatch)
-        return _GatewayArtifacts(
-            events=events.comparable(),
-            result_store=results.calls,
-            connector_calls=client.calls,
-            dispatcher_result=child.value.result,
-            operation_ids=events.operation_ids(),
-            event_types=events.types(),
-        )
-
 
 class TestChildIsAnOrdinaryGatewayOperation(GatewayHarnessMixin):
     """A batched child is not equivalent to a solo call — it is one."""
-
-    async def test_a_batched_child_leaves_the_same_gateway_artifacts(self) -> None:
-        solo = await self.run_solo(model_tool_call_id="call-1")
-        batched = await self.run_batched(model_tool_call_id="call-1")
-
-        # Same ledger rows, under the same operation identity...
-        assert batched.events == solo.events
-        assert batched.event_types == [
-            LedgerEventType.OPERATION_REQUESTED.value,
-            LedgerEventType.OPERATION_CLASSIFIED.value,
-            LedgerEventType.OPERATION_COMPLETED.value,
-        ]
-        # ...the same durable read projection...
-        assert batched.result_store == solo.result_store
-        # ...the same single connector dispatch...
-        assert (
-            batched.connector_calls
-            == solo.connector_calls
-            == [(_READ_TOOL, {"team": "ENG"})]
-        )
-        # ...and the same model-visible result, verbatim.
-        assert batched.dispatcher_result == solo.dispatcher_result
-
-    async def test_the_childs_operation_id_is_the_one_the_parent_turn_derives(
-        self,
-    ) -> None:
-        run_token = RunControlContext.bind_for_run(self.binding())
-        try:
-            expected = self.identity("call-1").derived_operation_id(1)
-        finally:
-            RunControlContext.unbind(run_token)
-
-        batched = await self.run_batched(model_tool_call_id="call-1")
-
-        assert set(batched.operation_ids) == {expected}
-        assert batched.dispatcher_result["output"]["operation_id"] == expected
-
-    async def test_two_children_of_one_turn_get_distinct_derived_identities(
-        self,
-    ) -> None:
-        context = self.runtime_context()
-        run_token = RunControlContext.bind_for_run(self.binding())
-        try:
-            first = self.identity("call-1")
-            second = self.identity("call-2")
-            children = (self.work(first), self.work(second))
-            plan = self.durable_plan(*(item.operation_id for item in children))
-            coordinator = self.coordinator()
-            coordinator.begin(plan)
-            _client, dispatcher = self.mcp(context)
-            events, _results, op_token, svc_token = self.bind_gateway(context)
-            try:
-                await self.drive(coordinator, plan, self.executor(dispatcher, children))
-            finally:
-                McpOperationGatewayContext.unbind(svc_token)
-                OperationContext.unbind(op_token)
-        finally:
-            RunControlContext.unbind(run_token)
-
-        # Distinct operations, both derived from the same parent model turn.
-        assert first.operation_id != second.operation_id
-        assert set(events.operation_ids()) == {
-            first.operation_id,
-            second.operation_id,
-        }
-        assert (first.run_id, first.snapshot_id, first.model_turn) == (
-            second.run_id,
-            second.snapshot_id,
-            second.model_turn,
-        )
 
     async def test_the_child_dispatch_carries_the_citation_binding_tool_call_id(
         self,
@@ -1392,7 +1239,6 @@ class TestStructuralReuse(GatewayHarnessMixin):
         }
 
         forbidden = {
-            "CallMcpTool",
             "DynamicMcpRegistry",
             "EffectStager",
             "McpLoader",
@@ -1432,14 +1278,6 @@ class TestStructuralReuse(GatewayHarnessMixin):
             "agent_runtime.surfaces_v2",
         )
         assert not [name for name in modules if name.startswith(closed)]
-
-    def test_the_real_mcp_dispatcher_satisfies_the_dispatch_port(self) -> None:
-        """The production dispatcher composes without this module importing it."""
-
-        _client, dispatcher = self.mcp(self.runtime_context())
-
-        assert isinstance(dispatcher, BatchChildDispatchPort)
-        assert isinstance(dispatcher, CallMcpTool)
 
     def test_the_executor_run_method_is_the_coordinators_runner(self) -> None:
         executor = GatewayBatchChildExecutor(

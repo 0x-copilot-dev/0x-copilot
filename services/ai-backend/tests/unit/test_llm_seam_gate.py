@@ -173,7 +173,7 @@ def test_agent_topology_requires_exact_root_and_child_controller(
     factory = tmp_path / "agent_runtime" / "execution" / "factory.py"
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware()),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
         "    universal_middleware_factories=(OtherMiddleware,),\n"
         ")\n",
         encoding="utf-8",
@@ -183,9 +183,9 @@ def test_agent_topology_requires_exact_root_and_child_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware()),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
         "    universal_middleware_factories=(RuntimeControlMiddleware, "
-        "ModelInvocationMiddleware, TodoListMiddleware),\n"
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -196,7 +196,7 @@ def test_agent_topology_requires_exact_root_and_child_controller(
         "request = DeepAgentBuildRequest(\n"
         "    middleware=(OtherMiddleware(),),\n"
         "    universal_middleware_factories=(RuntimeControlMiddleware, "
-        "ModelInvocationMiddleware, TodoListMiddleware),\n"
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -206,7 +206,7 @@ def test_agent_topology_requires_exact_root_and_child_controller(
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
         "    universal_middleware_factories=(RuntimeControlMiddleware, "
-        "ModelInvocationMiddleware, TodoListMiddleware),\n"
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -215,9 +215,9 @@ def test_agent_topology_requires_exact_root_and_child_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware()),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
         "    universal_middleware_factories=(RuntimeControlMiddleware, "
-        "ModelInvocationMiddleware, TodoListMiddleware),\n"
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -245,9 +245,9 @@ class TestTheConditionalDesktopMiddlewareIsNamedNotWaved(_TopologyFixtureMixin):
     def test_the_reviewed_starred_helpers_are_accepted(self, tmp_path: Path) -> None:
         self.write_topology(
             tmp_path,
-            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware(), "
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
             "*_host_path_tool_middleware(workspace_backend)",
-            child="RuntimeControlMiddleware, ModelInvocationMiddleware, TodoListMiddleware, "
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware, "
             "*_host_path_tool_middleware_factories(workspace_backend)",
         )
 
@@ -256,9 +256,9 @@ class TestTheConditionalDesktopMiddlewareIsNamedNotWaved(_TopologyFixtureMixin):
     def test_an_unreviewed_starred_helper_is_refused(self, tmp_path: Path) -> None:
         self.write_topology(
             tmp_path,
-            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware(), "
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
             "*_whatever_middleware(workspace_backend)",
-            child="RuntimeControlMiddleware, ModelInvocationMiddleware, TodoListMiddleware, "
+            child="RuntimeControlMiddleware, ModelInvocationMiddleware, "
             "*_host_path_tool_middleware_factories(workspace_backend)",
         )
 
@@ -267,7 +267,7 @@ class TestTheConditionalDesktopMiddlewareIsNamedNotWaved(_TopologyFixtureMixin):
     def test_an_extra_constructed_middleware_is_refused(self, tmp_path: Path) -> None:
         self.write_topology(
             tmp_path,
-            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware(), "
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
             "SomethingElseMiddleware()",
             child="RuntimeControlMiddleware, ModelInvocationMiddleware",
         )
@@ -279,7 +279,7 @@ class TestTheConditionalDesktopMiddlewareIsNamedNotWaved(_TopologyFixtureMixin):
     ) -> None:
         self.write_topology(
             tmp_path,
-            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), TodoListMiddleware(), "
+            root="RuntimeControlMiddleware(), ModelInvocationMiddleware(), "
             "*_host_path_tool_middleware(workspace_backend), *_extra()",
             child="RuntimeControlMiddleware, ModelInvocationMiddleware",
         )
