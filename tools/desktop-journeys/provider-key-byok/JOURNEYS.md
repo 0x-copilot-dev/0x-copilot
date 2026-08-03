@@ -11,10 +11,10 @@ _through_ the running app.
 
 Two journeys, one script (`byok_first_run.py`, parametrized by provider):
 
-- **J-BYOK-OPENAI** — add an OpenAI key → `gpt-5.4-mini` (the deployment default)
+- **J-BYOK-OPENAI** — add an OpenAI key → `gpt-5.6-luna` (the deployment default)
   becomes runnable and is what the composer preselects.
 - **J-BYOK-ANTHROPIC** — add **only** an Anthropic key → Claude models become
-  runnable and the composer preselects a **Claude** model, _not_ `gpt-5.4-mini`.
+  runnable and the composer preselects a **Claude** model, _not_ `gpt-5.6-luna`.
 
 ```bash
 # from the repo root (see ../README.md for one-time build/stage + .env key setup)
@@ -37,17 +37,17 @@ codes ever surface.
 
 | Fact                                                                                                      | Where enforced                                          |
 | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `default_model_id == "gpt-5.4-mini"`                                                                      | `settings.default_model` (deployment default)           |
+| `default_model_id == "gpt-5.6-luna"`                                                                      | `settings.default_model` (deployment default)           |
 | `configured` = **env keys ∪ the user's BYOK key ∪ ALWAYS_SELECTABLE**                                     | `ModelCatalog._configured`                              |
 | `ALWAYS_SELECTABLE_PROVIDERS == {"openrouter"}` — OpenRouter reads `configured=true` even with **no** key | `ModelCatalog.ALWAYS_SELECTABLE_PROVIDERS`              |
 | `openai` / `anthropic` / `gemini` need a **real** key to be `configured`                                  | `ModelCatalog._configured` (no ALWAYS_SELECTABLE entry) |
-| After adding an OpenAI key → all `openai` models (incl. `gpt-5.4-mini`) `configured=true`                 | BYOK provider added to `user_key_providers`             |
+| After adding an OpenAI key → all `openai` models (incl. `gpt-5.6-luna`) `configured=true`                 | BYOK provider added to `user_key_providers`             |
 | After adding only an Anthropic key → all `anthropic` (Claude) models `configured=true`                    | same                                                    |
 
 The FTUE composer **preselect** walks provider priority
 **OpenAI > Anthropic > OpenRouter > Gemini** among **configured** models and never
 selects a keyless default. So an Anthropic-only key preselects a Claude model
-(not `gpt-5.4-mini`), while an OpenAI key preselects `gpt-5.4-mini`.
+(not `gpt-5.6-luna`), while an OpenAI key preselects `gpt-5.6-luna`.
 
 > **Preselect note.** The **FTUE composer** preselect was verified correct here.
 > The separate **Run-cockpit STANDBY composer** had its own preselect bug (it
@@ -66,8 +66,8 @@ selects a keyless default. So an Anthropic-only key preselects a Claude model
 | 1   | Sign-in gate, pick the no-account option | click `sign-in-button` ("Use locally, no account")                    | FTUE gate renders (H1 "First, give it a model.")                           |
 | 2   | Open the BYOK add-key form               | click `first-run-add-key` → `first-run-keyform` appears               | inline KeyForm with provider tri-toggle + `first-run-key-input`            |
 | 3   | Pick **OpenAI**, paste key, Connect      | radio "OpenAI" → fill `first-run-key-input` → `first-run-key-connect` | live-validates, flips to `first-run-composer` (State B)                    |
-| 4   | Read the catalog through the app         | `transport("GET","/v1/agent/models")`                                 | `default_model_id=="gpt-5.4-mini"`; every `openai` model `configured=true` |
-| 5   | Model pill reflects OpenAI               | read `.atlas-model-pill`                                              | pill text contains `gpt` (the preselected `gpt-5.4-mini`)                  |
+| 4   | Read the catalog through the app         | `transport("GET","/v1/agent/models")`                                 | `default_model_id=="gpt-5.6-luna"`; every `openai` model `configured=true` |
+| 5   | Model pill reflects OpenAI               | read `.atlas-model-pill`                                              | pill text contains `gpt` (the preselected `gpt-5.6-luna`)                  |
 | 6   | Send the first message                   | fill `composer-textarea` "hi" → `button[aria-label="Send message"]`   | run streams a real assistant reply                                         |
 | 7   | Assistant reply present, no error        | poll `[data-testid^=tc-chat-message-]`                                | ≥ 2 `tc-chat-message-*` and **no** `[data-testid*=error]`                  |
 
@@ -87,7 +87,7 @@ configured provider over the keyless deployment default.
 | 1   | Sign-in gate, pick the no-account option           | click `sign-in-button`                                                   | FTUE gate renders                                                                                                                 |
 | 2   | Open the BYOK add-key form                         | click `first-run-add-key` → `first-run-keyform`                          | inline KeyForm (Anthropic is the default provider toggle)                                                                         |
 | 3   | Pick **Anthropic**, paste key, Connect             | radio "Anthropic" → fill `first-run-key-input` → `first-run-key-connect` | live-validates, flips to `first-run-composer`                                                                                     |
-| 4   | Read the catalog through the app                   | `transport("GET","/v1/agent/models")`                                    | `default_model_id=="gpt-5.4-mini"`; every `anthropic` model `configured=true`; `openai`/`gemini` stay `configured=false` (no key) |
+| 4   | Read the catalog through the app                   | `transport("GET","/v1/agent/models")`                                    | `default_model_id=="gpt-5.6-luna"`; every `anthropic` model `configured=true`; `openai`/`gemini` stay `configured=false` (no key) |
 | 5   | Model pill reflects Anthropic, **not** the default | read `.atlas-model-pill`                                                 | pill text contains `claude` and **not** `gpt-5.4` (preselect avoided the keyless default)                                         |
 | 6   | Send the first message                             | fill `composer-textarea` "hi" → Send                                     | run streams a real assistant reply                                                                                                |
 | 7   | Assistant reply present, no error                  | poll `[data-testid^=tc-chat-message-]`                                   | ≥ 2 `tc-chat-message-*` and **no** `[data-testid*=error]`                                                                         |

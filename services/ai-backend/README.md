@@ -107,7 +107,7 @@ OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
 RUNTIME_DEFAULT_PROVIDER=openai
-RUNTIME_DEFAULT_MODEL=gpt-5.4-mini
+RUNTIME_DEFAULT_MODEL=gpt-5.6-luna
 RUNTIME_DEFAULT_TEMPERATURE=0
 RUNTIME_DEFAULT_TIMEOUT_SECONDS=180
 RUNTIME_MAX_RETRIES=2
@@ -143,7 +143,7 @@ Example run request body:
   "user_input": "Find launch risks.",
   "model": {
     "provider": "openai",
-    "model_name": "gpt-5.4-mini"
+    "model_name": "gpt-5.6-luna"
   },
   "request_context": {
     "roles": ["employee"],

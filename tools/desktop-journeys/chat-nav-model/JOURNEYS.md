@@ -101,7 +101,7 @@ model I can actually run — a Claude model — not silently sit on "GPT-5.4 Min
 which I have no key for and which would fail on send.
 
 **The bug (before #260).** `defaultSelectedModelId`'s fallback returned a naive
-`models[0]`. The catalog leads with the deployment default **`gpt-5.4-mini`**,
+`models[0]`. The catalog leads with the deployment default **`gpt-5.6-luna`**,
 so an Anthropic-only user was preselected onto an **unusable** OpenAI model.
 
 **The fix (#260, `548d064f`).** The fallback now walks an explicit provider
@@ -123,7 +123,7 @@ priority among **USABLE** (configured & not disabled) models only, returning
 **testIds / hooks:** `.atlas-model-pill` (composer pill text),
 `/v1/agent/models` (`ModelCatalogModel.configured` / `.provider`).
 **Expected outcome:** the preselected model is a Claude model the user can
-actually run; the keyless `gpt-5.4-mini` default is never auto-selected while
+actually run; the keyless `gpt-5.6-luna` default is never auto-selected while
 only Anthropic is keyed.
 
 Fixed in PR #260.
