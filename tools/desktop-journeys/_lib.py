@@ -602,34 +602,43 @@ class DriverSession:
         pass "haiku" rather than the exact catalog label. Returns False when no
         enabled row matches — a keyless row is not selectable, and silently
         continuing on the wrong model would misreport what was exercised.
+
+        POLLS rather than looking once. `wait_model_pill_resolved` returns as
+        soon as the pill stops showing its placeholder, which can be BEFORE the
+        just-added provider's rows land in the catalog. Opening the menu at that
+        instant shows a shorter list, and a single look concluded "no such
+        model" for a model that was about to appear — a race that passed
+        standalone and failed under the load of a full-suite run.
         """
 
-        self.click(".atlas-model-pill")
-        if not self.wait_for(".atlas-model-pill__item", timeout_s):
-            return False
-        clicked = self.evaluate(
-            """
-            (() => {
-              const want = %r.toLowerCase();
-              const rows = [...document.querySelectorAll('.atlas-model-pill__item')];
-              const row = rows.find((r) => {
-                const nm = r.querySelector('.atlas-model-pill__nm');
-                return nm && nm.innerText.toLowerCase().includes(want)
-                  && !r.disabled;
-              });
-              if (!row) return null;
-              row.click();
-              return row.innerText;
-            })()
-            """
-            % name_fragment
-        )
-        if not clicked:
-            # Close the popover so a failed selection cannot swallow the next
-            # click in the journey.
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            self.click(".atlas-model-pill")
+            if self.wait_for(".atlas-model-pill__item", 5):
+                clicked = self.evaluate(
+                    """
+                    (() => {
+                      const want = %r.toLowerCase();
+                      const rows = [...document.querySelectorAll('.atlas-model-pill__item')];
+                      const row = rows.find((r) => {
+                        const nm = r.querySelector('.atlas-model-pill__nm');
+                        return nm && nm.innerText.toLowerCase().includes(want)
+                          && !r.disabled;
+                      });
+                      if (!row) return null;
+                      row.click();
+                      return row.innerText;
+                    })()
+                    """
+                    % name_fragment
+                )
+                if clicked:
+                    return self.wait_model_pill_contains(name_fragment, timeout_s)
+            # Close the popover before retrying: a stacked-open menu swallows
+            # the next click, and the catalog may still be refreshing.
             self.evaluate("document.body.click()")
-            return False
-        return self.wait_model_pill_contains(name_fragment, timeout_s)
+            time.sleep(1.0)
+        return False
 
     def wait_model_pill_contains(self, fragment: str, timeout_s: int = 20) -> bool:
         """Wait until the pill's own label reflects the chosen model."""
