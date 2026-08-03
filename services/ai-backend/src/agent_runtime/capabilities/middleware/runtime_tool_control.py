@@ -1,10 +1,19 @@
-"""Graph-wide tool admission, result bounding, and serial-default execution.
+"""Graph-wide tool identity, budget accounting, and result bounding.
 
 Deep Agents adds todo, filesystem, execute, and task tools after the caller's
 tool list is assembled. A ``BaseTool`` decorator therefore cannot be the
 authoritative model/tool boundary. This LangChain middleware runs around every
 tool exposed by the completed graph, including framework-injected tools and the
 same tools inside locally compiled Deep Agents subagents.
+
+It does **not** decide what runs alongside what. This module used to open with
+"serial-default execution", and that was accurate while it held a run-wide
+exclusive permit around every graph-visible tool call. LangGraph schedules a
+turn's tool calls itself — its async node gathers them, its sync node fans them
+across a thread pool — and that scheduling is now what the runtime uses, bounded
+by the framework's own ``max_concurrency``. What remains here is per call, and
+the run-scoped state it touches (the lifecycle reducer, the budget ledger)
+guards itself rather than borrowing mutual exclusion from a lock upstream.
 """
 
 from __future__ import annotations
@@ -435,6 +444,16 @@ class RuntimeControlMiddleware(AgentMiddleware):
         time. What it still does — bind the call identity, charge the budget,
         record the lifecycle — is per call and safe to run concurrently, because
         the shared state each of those touches guards itself.
+
+        This is also what retires the delegation self-deadlock. ``task`` is a
+        container: it awaits a whole child graph whose own tool calls arrive
+        back at this very method, on the same run. While the permit existed and
+        was non-reentrant, a parent held it across that await and its child
+        queued on it forever, so every subagent that called any tool wedged the
+        run until the 180s timeout. That was fixed by exempting ``task`` from
+        the permit; with no permit at all the exemption has nothing to name, so
+        the class of bug is gone rather than special-cased. Nesting is no longer
+        a thing this seam has to reason about.
         """
 
         identity = self._call_identity(request)
