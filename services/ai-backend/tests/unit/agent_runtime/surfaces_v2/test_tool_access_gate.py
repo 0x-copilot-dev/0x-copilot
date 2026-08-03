@@ -652,3 +652,44 @@ def test_plain_ask_a_question_is_not_a_gate() -> None:
 
     assert GateLedger.is_write_gate(payload) is False
     assert GateLedger.opened_payload(interrupt_payload=payload) is None
+
+
+async def test_the_parked_writes_human_line_reaches_the_card() -> None:
+    """A write gate rides `ask_a_question`, whose allow-list describes QUESTIONS.
+
+    Every key that projection keeps — header, question, hint, options — belongs
+    to something you ANSWER. None of them describes an effect, so the card fell
+    through its whole title chain to the generic "Approve this action" over a
+    call that was about to file a real Linear issue.
+
+    This is the third instance of one shape in this file's neighbourhood: a
+    correct producer and a correct parser with the field deleted between them by
+    an allow-list nobody re-read. `_approval_requested_payload` already carries a
+    comment saying exactly that about `workspace_grant` and `path`.
+    """
+
+    payload = await _park_write(arguments={"title": "Fix login"})
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload=dict(payload),
+    )
+
+    assert projected["display_title"] == payload["gate"]["purpose"]
+    assert "create_issue" in projected["display_title"]
+    assert projected["connector"] == "linear"
+
+
+async def test_only_the_one_line_is_lifted_out_of_the_gate_block() -> None:
+    """The rest of the block is the ledger's business, not the card's."""
+
+    payload = await _park_write(arguments={"title": "Fix login"})
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload=dict(payload),
+    )
+
+    assert "gate" not in projected
+    assert "op_class" not in projected
+    assert "scopes" not in projected

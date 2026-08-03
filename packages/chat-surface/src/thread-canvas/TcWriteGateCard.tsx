@@ -111,7 +111,7 @@ export function TcWriteGateCard({
       <div style={actionsStyle}>
         <button
           type="button"
-          className="ui-button ui-button--primary"
+          className="ui-button ui-button--md ui-button--primary"
           data-testid="tc-write-gate-card-approve"
           disabled={busy}
           onClick={onApprove}
@@ -120,7 +120,7 @@ export function TcWriteGateCard({
         </button>
         <button
           type="button"
-          className="ui-button"
+          className="ui-button ui-button--md"
           data-testid="tc-write-gate-card-decline"
           disabled={busy}
           onClick={onDecline}
