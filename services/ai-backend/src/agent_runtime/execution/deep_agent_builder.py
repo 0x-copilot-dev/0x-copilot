@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from langchain_core.messages import SystemMessage
 
 from agent_runtime.execution.contracts import (
     ModelConfig,
+    ModelReasoningDisplay,
     ModelReasoningEffort,
     ModelThinkingMode,
     RuntimeErrorCode,
@@ -624,6 +626,14 @@ def build_chat_model(
             # Keyless local runtime (Ollama). ChatOpenAI rejects an empty
             # api_key, so pass a sentinel the endpoint ignores.
             kwargs["api_key"] = "ollama"
+        # Reasoning still has to be REQUESTED here, just not the way OpenAI's
+        # own endpoint wants it. Skipping `_openai_model_kwargs` (above) is
+        # correct — its payload re-routes onto `/responses` — but it also meant
+        # we asked these gateways for nothing at all, so every reasoning model
+        # behind OpenRouter streamed with no reasoning attached. OpenRouter takes
+        # a TOP-LEVEL `reasoning` on chat-completions, which travels in
+        # `extra_body` and never touches `/responses`.
+        _merge_compat_reasoning_kwargs(kwargs, model_config)
     elif is_custom_compat:
         # User-supplied custom OpenAI-compatible endpoint (BYOK decision D-2).
         # Same Chat-Completions-only posture as the registry gateways, but the
@@ -835,6 +845,71 @@ def _openai_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
     return kwargs
 
 
+def _merge_compat_reasoning_kwargs(
+    kwargs: dict[str, object], model_config: ModelConfig
+) -> None:
+    """Ask an OpenAI-wire gateway for reasoning, in the shape it actually takes.
+
+    Chat-Completions gateways carry reasoning as a TOP-LEVEL request field, not
+    as OpenAI's `/responses` ``reasoning`` kwarg — so it goes through
+    ``extra_body``, which ``ChatOpenAI`` forwards verbatim without switching
+    endpoints. This is the one seam that lets OpenRouter's reasoning models
+    (deepseek-r1 and friends) stream their thinking; a direct call to OpenRouter
+    confirms the response then carries a ``reasoning`` field.
+
+    Capability-gated on the same flag the catalog already publishes: sending
+    ``reasoning`` to a gateway model that does not support it is a request a
+    provider may reject outright, and a non-reasoning model must not pay for a
+    field it will never honour.
+    """
+    reasoning = model_config.reasoning
+    if reasoning is None or not reasoning.enabled:
+        return
+    if reasoning.effort is ModelReasoningEffort.NONE:
+        return
+    if not model_config.supports_reasoning:
+        return
+
+    payload: dict[str, object] = {"enabled": True}
+    if reasoning.effort is not None:
+        payload["effort"] = reasoning.effort.value
+    extra_body = kwargs.get("extra_body")
+    if isinstance(extra_body, dict):
+        # Never clobber an endpoint-specific body the caller already staged.
+        extra_body.setdefault("reasoning", payload)
+    else:
+        kwargs["extra_body"] = {"reasoning": payload}
+
+
+def _anthropic_is_adaptive_only(model_name: str) -> bool:
+    """Whether this Claude model REJECTS manual (`type: "enabled"`) thinking.
+
+    Extended thinking with an explicit ``budget_tokens`` is deprecated on the
+    4.6 generation and returns a 400 on 4.7 and later, where adaptive thinking
+    plus ``output_config.effort`` replaced it. A family predicate rather than a
+    list so a new model in a known generation does not silently reintroduce the
+    failure; unknown names keep the caller's mode, because guessing "adaptive"
+    for a model that only supports manual would break it the other way.
+    """
+
+    normalized = model_name.strip().lower().replace("_", "-")
+    if not normalized.startswith("claude"):
+        return False
+    # Parse the VERSION rather than substring-matching it. A bare `"-5" in name`
+    # test also matches `claude-sonnet-4-5`, which supports manual thinking
+    # perfectly well — coercing it to adaptive breaks a working model in the
+    # opposite direction, which is the failure this predicate exists to avoid.
+    match = re.search(r"claude-[a-z]+-(\d+)(?:[-.](\d+))?", normalized)
+    if match is None:
+        return False
+    major = int(match.group(1))
+    minor = int(match.group(2)) if match.group(2) is not None else 0
+    if major >= 5:
+        return True
+    # 4.7 dropped manual thinking; 4.6 deprecated it but still accepts it.
+    return major == 4 and minor >= 7
+
+
 def _anthropic_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
     """Return Anthropic extended-thinking kwargs derived from a model reasoning config."""
     reasoning = model_config.reasoning
@@ -848,11 +923,36 @@ def _anthropic_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
             if reasoning.budget_tokens is not None
             else ModelThinkingMode.ADAPTIVE
         )
+    # Manual thinking (`type: "enabled"` + `budget_tokens`) is REJECTED with a
+    # 400 on Claude 4.7 and later — "Use thinking.type.adaptive and
+    # output_config.effort to control thinking behavior". A deployment carrying
+    # `RUNTIME_DEFAULT_THINKING_MODE=enabled` (ours does) therefore failed EVERY
+    # run on Sonnet 5 / Opus 5, not just the thinking part of it. Honour the
+    # operator's intent — think, on a budget — by expressing it the way the
+    # model accepts, rather than passing through a request we know it rejects.
+    if mode is ModelThinkingMode.ENABLED and _anthropic_is_adaptive_only(
+        model_config.model_name
+    ):
+        mode = ModelThinkingMode.ADAPTIVE
     thinking: dict[str, object] = {"type": mode.value}
     if mode is ModelThinkingMode.ENABLED and reasoning.budget_tokens is not None:
         thinking["budget_tokens"] = reasoning.budget_tokens
-    if mode is ModelThinkingMode.ADAPTIVE and reasoning.display is not None:
-        thinking["display"] = reasoning.display.value
+    # `display` governs whether the thinking SUMMARY comes back at all, and it
+    # defaults to "omitted" on Sonnet 5 / Opus 5 / Fable 5 — which streams
+    # thinking blocks with an empty field and emits no thinking deltas. We were
+    # taking that default, so the runtime paid for every thinking token and threw
+    # the text away: measured 0 reasoning events on claude-sonnet-5, 3 with this
+    # line. The tokens are billed identically either way, so asking for the
+    # summary is free.
+    #
+    # Applied in BOTH modes — the API accepts `display` alongside `type:
+    # "adaptive"` and `type: "enabled"`; restricting it to adaptive left every
+    # budget-configured deployment dark for no reason.
+    #
+    # An explicit `omitted` is still honoured: a deployment that does not surface
+    # thinking gets faster time-to-first-text-token by opting out.
+    display = reasoning.display or ModelReasoningDisplay.SUMMARIZED
+    thinking["display"] = display.value
 
     kwargs: dict[str, object] = {"thinking": thinking}
     if (

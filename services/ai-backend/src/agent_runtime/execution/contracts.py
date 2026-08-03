@@ -198,6 +198,12 @@ class ModelConfig(RuntimeContract):
     temperature: float = Field(ge=0, le=2)
     supports_streaming: bool = True
     reasoning: ModelReasoningConfig | None = None
+    #: Whether this model is a reasoning model, resolved once from the provider
+    #: + model family at config time. Gates whether the builder REQUESTS
+    #: reasoning from an OpenAI-wire gateway, where an unsupported ``reasoning``
+    #: field can be rejected outright. Defaults False so any config built
+    #: without the capability check asks for nothing rather than risking a run.
+    supports_reasoning: bool = False
     # Per-run cap on repeat invocations of any single tool, scaled by
     # reasoning depth. The default MUST equal the enforced seed cap
     # ``DefaultToolBudget.MAX_CALLS_PER_RUN`` (10) — the number

@@ -346,6 +346,15 @@ class StreamingExecutor:
                         surfaces_v2_enabled=surfaces_v2_enabled,
                     )
                 delta = stream_event_mapper.stream_delta(chunk)
+                # Scrub inline reasoning tags FIRST — before the citation
+                # pipeline, before the coalescer, before anything persists or
+                # publishes. A model with no structured reasoning channel wraps
+                # its chain of thought in `<think>` inside the visible text; if
+                # any consumer downstream of here sees it, that reasoning has
+                # already become the user's answer. The reasoning is re-emitted
+                # as reasoning_summary_delta on the way through, so it still
+                # reaches the transcript as thinking.
+                delta = await stream_event_mapper.scrub_text_delta(run=run, delta=delta)
                 if citation_pipeline is not None:
                     # Hook the provider citation pipeline between the parsed
                     # delta and the wire emission. The pipeline returns the
@@ -456,6 +465,19 @@ class StreamingExecutor:
                         message_id=effective_message_id,
                         delta_text=delta,
                     )
+            # The scrubber holds back any trailing run of characters that could
+            # still become a reasoning tag. Once the stream is over it cannot,
+            # so release it — otherwise a reply ending in `"... 5 < 7"` silently
+            # loses its last characters. This MUST stay inside the coalescer's
+            # context: a delta added after `__aexit__` is never flushed.
+            tail = await stream_event_mapper.flush_text_scrubber(run=run)
+            if tail:
+                result.response_deltas.append(tail)
+                metrics.record_model_delta(tail)
+                await delta_coalescer.add_delta(
+                    payload={_Fields.DELTA: tail, _Fields.MESSAGE: tail},
+                    summary=tail,
+                )
         return result
 
     @classmethod

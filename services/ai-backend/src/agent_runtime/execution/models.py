@@ -150,6 +150,9 @@ class ModelConfigResolver:
                 selected=selected.reasoning,
                 default=default_model.reasoning,
             ),
+            supports_reasoning=self._model_supports_reasoning(
+                provider, selected.model_name or default_model.model_name
+            ),
             # Inherit the deployment-wide tool-call budget from settings;
             # depth scales it below. Keeps a single source of truth so an
             # operator that bumps the env var also bumps Deep's ceiling.
@@ -209,6 +212,59 @@ class ModelConfigResolver:
         if normalized.startswith(("o1", "o3", "o4")):
             return True
         return normalized.startswith("gpt-5")
+
+    #: Reasoning-model families reachable through an OpenAI-wire gateway
+    #: (OpenRouter, Ollama, a custom endpoint). Matched against the model name
+    #: with the vendor prefix stripped, so ``deepseek/deepseek-r1`` and a local
+    #: ``deepseek-r1:14b`` both hit.
+    _GATEWAY_REASONING_MARKERS: tuple[str, ...] = (
+        "deepseek-r1",
+        "qwq",
+        "qwen3",
+        "thinking",
+        "reasoner",
+        "magistral",
+        "minimax-m",
+        "phi-4-reasoning",
+    )
+
+    @classmethod
+    def _gateway_supports_reasoning(cls, model_name: str) -> bool:
+        """Whether a gateway-hosted model is a reasoning model.
+
+        A family predicate for the same reason as
+        :meth:`_openai_supports_reasoning`: the catalog's per-model
+        ``reasoning_efforts`` lives in the API layer and is not reachable here
+        without crossing a boundary, and a gateway may reject a ``reasoning``
+        field on a model that does not support one. Erring towards NOT asking is
+        the safe direction — a missed thinking stream degrades the transcript,
+        a rejected request kills the run.
+        """
+
+        normalized = model_name.strip().lower().replace("_", "-")
+        # Vendor-prefixed on OpenRouter (``deepseek/deepseek-r1``), tag-suffixed
+        # on Ollama (``deepseek-r1:14b``).
+        bare = normalized.rsplit("/", 1)[-1].split(":", 1)[0]
+        if "chat" in bare or "instruct" in bare:
+            return False
+        if any(marker in bare for marker in cls._GATEWAY_REASONING_MARKERS):
+            return True
+        # A gateway can also front a native reasoning family verbatim
+        # (``openai/gpt-5.6``, ``anthropic/claude-sonnet-5``).
+        return cls._openai_supports_reasoning(bare)
+
+    @classmethod
+    def _model_supports_reasoning(cls, provider: str, model_name: str) -> bool:
+        """Capability gate for whether to REQUEST reasoning from this model."""
+
+        if provider == "openai":
+            return cls._openai_supports_reasoning(model_name)
+        if provider == "anthropic":
+            # Thinking is a separate control on Anthropic and is negotiated by
+            # `_anthropic_model_kwargs`; this flag governs only the gateway
+            # `extra_body.reasoning` path.
+            return False
+        return cls._gateway_supports_reasoning(model_name)
 
     @classmethod
     def _normalize_provider(cls, provider: str) -> str:

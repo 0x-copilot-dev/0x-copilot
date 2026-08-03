@@ -28,6 +28,13 @@ class _ReasoningBlock:
     ANTHROPIC_SIGNATURE = "thinking_signature"
     OPENAI_DELTA = "reasoning_summary_text_delta"
     OPENAI_DONE = "reasoning_summary_text_done"
+    #: Sibling-field shape used by Chat-Completions gateways (OpenRouter,
+    #: DeepSeek, LM Studio). Reasoning arrives NOT as a typed content block but
+    #: as a peer of ``content`` on the delta and the assistant message, so it is
+    #: read off the message's extra fields rather than walked for block types.
+    #: Both spellings occur in the wild — DeepSeek ships ``reasoning_content``,
+    #: OpenRouter ships ``reasoning``.
+    COMPAT_FIELDS = ("reasoning_content", "reasoning")
 
 
 class _Fields:
@@ -43,6 +50,8 @@ class _Fields:
     MESSAGE = "message"
     TEXT = "text"
     CONTENT = "content"
+    ADDITIONAL_KWARGS = "additional_kwargs"
+    RESPONSE_METADATA = "response_metadata"
     NAME = "name"
     ID = "id"
     TOOL_CALL_ID = "tool_call_id"
@@ -346,12 +355,18 @@ class StreamMessageParser:
         """
 
         content = cls.raw_content(message)
-        if not isinstance(content, Sequence) or isinstance(
-            content, (str, bytes, bytearray)
-        ):
-            return None
+        # A gateway chunk carries `content` as a plain STRING with reasoning in a
+        # sibling field, so a non-block content must fall through to the compat
+        # check rather than short-circuiting — returning early here is what kept
+        # OpenRouter's reasoning invisible even once it was being requested.
+        blocks: Sequence[object] = (
+            content
+            if isinstance(content, Sequence)
+            and not isinstance(content, (str, bytes, bytearray))
+            else ()
+        )
         parts: list[str] = []
-        for block in content:
+        for block in blocks:
             if not isinstance(block, Mapping):
                 continue
             block_type = block.get(_Fields.TYPE)
@@ -367,7 +382,64 @@ class StreamMessageParser:
                 continue
             if value is not None:
                 parts.append(value)
-        return "".join(parts) or None
+        joined = "".join(parts)
+        if joined:
+            return joined
+        return cls.compat_reasoning_delta(message)
+
+    @classmethod
+    def compat_reasoning_delta(cls, message: object) -> str | None:
+        """Reasoning carried as a SIBLING FIELD rather than a content block.
+
+        Chat-Completions gateways do not use typed content blocks for reasoning:
+        OpenRouter puts it on ``reasoning`` and DeepSeek on
+        ``reasoning_content``, as peers of ``content`` on both the streaming
+        delta and the finished assistant message. Nothing in the block walk
+        above can see them, which is why every reasoning model behind a gateway
+        streamed with its thinking silently dropped.
+
+        Checked after the block walk so a provider that supplies both shapes
+        never double-counts.
+        """
+
+        for field in _ReasoningBlock.COMPAT_FIELDS:
+            value = cls.raw_text(cls._message_field(message, field))
+            if value:
+                return value
+        return None
+
+    @classmethod
+    def _message_field(cls, message: object, field: str) -> object:
+        """Read a top-level field off a chunk, mapping or model alike.
+
+        LangChain parks unmodelled provider fields on ``additional_kwargs`` /
+        ``response_metadata`` rather than promoting them to attributes, so a
+        gateway's reasoning field can arrive in any of the three places
+        depending on the client version.
+        """
+
+        if isinstance(message, Mapping):
+            direct = message.get(field)
+            if direct is not None:
+                return direct
+            containers: tuple[object, ...] = (
+                message.get(_Fields.ADDITIONAL_KWARGS),
+                message.get(_Fields.RESPONSE_METADATA),
+            )
+        else:
+            direct = getattr(message, field, None)
+            if direct is not None:
+                return direct
+            containers = (
+                getattr(message, _Fields.ADDITIONAL_KWARGS, None),
+                getattr(message, _Fields.RESPONSE_METADATA, None),
+            )
+        for container in containers:
+            if isinstance(container, Mapping):
+                value = container.get(field)
+                if value is not None:
+                    return value
+        return None
 
     @classmethod
     def reasoning_finalised(cls, message: object) -> bool:

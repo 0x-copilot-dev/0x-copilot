@@ -1073,10 +1073,76 @@ def test_deep_agent_builder_configures_claude_budgeted_thinking(
         )
     )
 
+    # `display` is now always sent, in BOTH thinking modes. It governs whether
+    # the thinking summary comes back at all and defaults to "omitted" on the
+    # newest Claude models, so taking the provider default meant paying for
+    # every thinking token and discarding the text (measured: 0 reasoning events
+    # on claude-sonnet-5, 3 with this field). The tokens are billed identically
+    # either way, so requesting the summary costs nothing.
     assert chat_models.calls[0].kwargs["thinking"] == {
         "type": "enabled",
         "budget_tokens": 10_000,
+        "display": "summarized",
     }
+
+
+def test_claude_5_rejects_manual_thinking_so_the_builder_sends_adaptive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A budgeted config must not be passed through verbatim to a 4.7+ model.
+
+    Manual thinking returns a 400 there — `"thinking.type.enabled" is not
+    supported for this model` — so a deployment carrying
+    ``RUNTIME_DEFAULT_THINKING_MODE=enabled`` (ours does) failed EVERY Anthropic
+    run on Sonnet 5, not merely the thinking part of it. The operator's intent
+    is honoured in the grammar the model accepts.
+    """
+
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="anthropic",
+                model_name="claude-sonnet-5",
+                max_input_tokens=200_000,
+                timeout_seconds=60,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=ModelReasoningConfig(
+                    budget_tokens=4_000,
+                    thinking_mode=ModelThinkingMode.ENABLED,
+                ),
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    thinking = chat_models.calls[0].kwargs["thinking"]
+    assert thinking["type"] == "adaptive"
+    # `budget_tokens` is meaningless in adaptive mode and is dropped rather than
+    # sent alongside a mode that ignores it.
+    assert "budget_tokens" not in thinking
+    assert thinking["display"] == "summarized"
+
+
+def test_older_claude_models_keep_manual_thinking() -> None:
+    """The coercion is scoped: guessing adaptive for a manual-only model would
+    break it in the opposite direction."""
+
+    assert not builder_module._anthropic_is_adaptive_only("claude-sonnet-4-5")
+    assert not builder_module._anthropic_is_adaptive_only("claude-opus-4-5")
+    assert builder_module._anthropic_is_adaptive_only("claude-sonnet-5")
+    assert builder_module._anthropic_is_adaptive_only("claude-opus-4-7")
+    assert builder_module._anthropic_is_adaptive_only("claude-fable-5")
+    # Not a Claude model at all — leave the caller's mode alone.
+    assert not builder_module._anthropic_is_adaptive_only("gpt-5.6")
 
 
 def test_subagent_checkpoint_suffix_keeps_tool_calls_in_continuing_messages() -> None:

@@ -32,6 +32,7 @@ from runtime_api.schemas import (
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
 from runtime_worker.stream_subagents import StreamUpdateProcessor
+from runtime_worker.think_scrubber import StreamingThinkScrubber
 from runtime_worker.tool_call_ledger import ToolCallLedger
 from runtime_worker.tool_result_offload import ToolResultOffloader
 
@@ -123,6 +124,10 @@ class StreamMessageProcessor:
         # on run discard). Subagent reasoning is intentionally dropped at
         # the extraction site, so this dict only ever sees main-agent runs.
         self._reasoning_buffers: dict[str, str] = {}
+        # One scrubber per run. Models with no structured reasoning channel emit
+        # their chain of thought inline in the visible text; without this, that
+        # text IS the answer as far as everything downstream is concerned.
+        self._think_scrubbers: dict[str, StreamingThinkScrubber] = {}
         # Resolves ``write_todos`` writes into the checklist snapshots the todo
         # panel renders. Held for the worker's lifetime (it keys its own state
         # per run + subagent) and freed per run in ``discard_ledger``.
@@ -164,6 +169,7 @@ class StreamMessageProcessor:
 
         self._ledgers.pop(run_id, None)
         self._reasoning_buffers.pop(run_id, None)
+        self._think_scrubbers.pop(run_id, None)
         self._todo_lists.discard_run(run_id)
         self._connector_resolvers.pop(run_id, None)
         # Per-call stream state was never dropped here. It survived every run
@@ -172,6 +178,63 @@ class StreamMessageProcessor:
         # leak in proportion to what the ledger fix added.
         for key in [key for key in self._tool_call_ids if key[0] == run_id]:
             del self._tool_call_ids[key]
+
+    async def scrub_text_delta(self, *, run: RunRecord, delta: str) -> str:
+        """Split an inline-tagged delta, emitting its reasoning and returning the prose.
+
+        Sits UPSTREAM of every consumer of the text delta, so no consumer can
+        publish raw chain of thought — the citation pipeline, the coalescer, the
+        SSE stream and the persisted transcript all see text that has already
+        been scrubbed. A consumer-side filter would have to be repeated in each
+        of them, and the one that got missed would be the leak.
+
+        Reasoning found here is emitted as the SAME ``reasoning_summary_delta``
+        event a provider's typed blocks produce, so an inline-tag model needs no
+        special case anywhere above this layer.
+        """
+
+        scrubber = self._think_scrubbers.setdefault(
+            run.run_id, StreamingThinkScrubber()
+        )
+        scrubbed = scrubber.feed(delta)
+        if scrubbed.reasoning:
+            await self._append_reasoning_delta(run=run, delta=scrubbed.reasoning)
+        return scrubbed.visible
+
+    async def flush_text_scrubber(self, *, run: RunRecord) -> str:
+        """Release anything the scrubber held back. Call once the stream ends.
+
+        A tail held back as a possible partial tag is prose the user is owed if
+        it never became one. Without this, a reply ending in ``"... 5 < 7"``
+        loses its last few characters.
+        """
+
+        scrubber = self._think_scrubbers.get(run.run_id)
+        if scrubber is None:
+            return ""
+        scrubbed = scrubber.flush()
+        if scrubbed.reasoning:
+            await self._append_reasoning_delta(run=run, delta=scrubbed.reasoning)
+        return scrubbed.visible
+
+    async def _append_reasoning_delta(self, *, run: RunRecord, delta: str) -> None:
+        """One emitter for reasoning deltas, whatever discovered them."""
+
+        buffer = self._reasoning_buffers.get(run.run_id, "")
+        self._reasoning_buffers[run.run_id] = buffer + delta
+        await self.event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.MODEL,
+            event_type=RuntimeApiEventType.REASONING_SUMMARY_DELTA,
+            payload={
+                Keys.Payload.DELTA: delta,
+                Keys.Field.SUMMARY: delta,
+            },
+            summary=delta,
+            metadata={},
+            parent_task_id=None,
+            subagent_id=None,
+        )
 
     async def emit_reasoning_events(
         self,
