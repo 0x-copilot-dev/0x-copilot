@@ -1,4 +1,4 @@
-"""Register one model tool per real MCP tool, behind a flag (migration P2-8).
+"""Register one model tool per real MCP tool. The only MCP dispatch surface.
 
 This is **the flip**. Everything it composes shipped in earlier increments and
 was inert: the per-tool :class:`~agent_runtime.capabilities.mcp.tool_source.McpToolSource`
@@ -8,23 +8,16 @@ was inert: the per-tool :class:`~agent_runtime.capabilities.mcp.tool_source.McpT
 is the one place they meet, and :meth:`McpPerToolRegistrar.build` is the single
 entry point ``execution.factory`` calls.
 
-**Default OFF, and OFF is byte-identical.** :class:`McpPerToolFlag` reads
-``MCP_PER_TOOL_ENABLED`` and defaults to disabled, so ``dev`` / ``main`` keep
-the proven ``call_mcp_tool`` gateway until the per-tool path is validated on a
-live stack. When the flag is off, :meth:`McpPerToolRegistrar.build` returns
-``None`` before touching anything, and the factory's legacy branch runs
-untouched.
+**There is no longer a gateway behind it.** The umbrella ``call_mcp_tool`` --
+and the ``MCP_PER_TOOL_ENABLED`` flag that chose between them -- are deleted.
+What made the flag necessary was direct-connect: ai-backend would have needed
+the vendor's bearer in-process and had no way to get one, so "on" risked
+registering a connector surface that could not answer. Routing the library
+through ``backend``'s proxy removed that risk rather than accepting it.
 
-**ON does not mean "assume the credential plane works".** The provider may
-simply not be composed for this run —
-:class:`~agent_runtime.capabilities.mcp.credentials.backend.BackendCredentialProvider`
-needs a reachable backend and a mintable access mode — so the collaborators are
-*injected*, and their absence is an ordinary,
-first-class outcome: ``build`` returns ``None`` and the run falls back to the
-legacy gateway. The same is true when the load produces no tools at all. The
-alternative — registering an empty or half-built connector surface because the
-flag was on — would take a run that could still reach its connectors through the
-proxy and leave it with no route at all.
+**A ``None`` return no longer means "fall back".** It means the run registers no
+MCP dispatch tool at all -- the honest surface for a connector plane that did
+not resolve, since the alternative is advertising a route that cannot dispatch.
 
 **Three things the flip publishes besides the tools:**
 
@@ -49,9 +42,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import logging
-import os
 from types import MappingProxyType
-from typing import ClassVar, Final
+from typing import Final
 
 from langchain_core.tools import BaseTool
 
@@ -70,6 +62,7 @@ from agent_runtime.capabilities.mcp.middleware.exec_policy_tool import (
     McpExecPolicyMiddleware,
 )
 from agent_runtime.capabilities.mcp.middleware.observe_tool import McpObserveMiddleware
+from agent_runtime.capabilities.mcp.middleware.present_tool import McpPresentMiddleware
 from agent_runtime.capabilities.mcp.middleware.policy_tool import PolicyToolMiddleware
 from agent_runtime.capabilities.mcp.tool_source import (
     AuthorizedCardLister,
@@ -90,41 +83,6 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class McpPerToolFlag:
-    """Whether MCP registers one model tool per real tool (default **off**).
-
-    Same reader shape as ``SurfacesV2Flag`` — a self-contained env flag rather
-    than a new field threaded through a central settings object — and the same
-    truthy set the runtime settings loader uses, so ``MCP_PER_TOOL_ENABLED``
-    behaves like every other boolean env var in this service.
-
-    The default is the whole de-risking strategy for P2-8: the flip is one flag,
-    the deletions are a separate increment, and a regression is a rollback of a
-    single environment value rather than a revert.
-    """
-
-    ENV_VAR: ClassVar[str] = "MCP_PER_TOOL_ENABLED"
-
-    #: Values that read as "on". Matches ``settings._BOOL_TRUTHY`` exactly.
-    _ENABLED_VALUES: ClassVar[frozenset[str]] = frozenset({"1", "true", "yes", "on"})
-
-    #: The default applied when the var is absent — **off**, until the per-tool
-    #: path is validated against a live stack (P2-9 flips it for desktop).
-    _DEFAULT_WHEN_UNSET: ClassVar[str] = "false"
-
-    @classmethod
-    def enabled(cls, environ: Mapping[str, str] | None = None) -> bool:
-        """Return ``True`` only when ``MCP_PER_TOOL_ENABLED`` is explicitly truthy.
-
-        ``environ`` is injectable so tests can assert both branches without
-        mutating process state; production reads ``os.environ``.
-        """
-
-        source = environ if environ is not None else os.environ
-        raw = source.get(cls.ENV_VAR, cls._DEFAULT_WHEN_UNSET).strip().lower()
-        return raw in cls._ENABLED_VALUES
 
 
 class HarnessBuiltinToolNames:
@@ -308,22 +266,15 @@ class McpPerToolRegistrar:
         collaborators: McpPerToolCollaborators | None,
         gate: ToolAccessGate | None,
         reserved_names: frozenset[str],
-        environ: Mapping[str, str] | None = None,
     ) -> McpPerToolRegistration | None:
         """Return the per-tool registration, or ``None`` to keep the legacy path.
 
-        ``None`` for any of: the flag is off; no credential plane was injected;
-        the registry exposes no MCP seam; the load raised; the load registered
-        nothing. Each of those leaves the run strictly better off on the legacy
-        gateway than on a connector surface that is empty or partly built.
+        ``None`` for any of: no credential plane resolved; the registry exposes
+        no MCP seam; the load raised; the load registered nothing. There is no
+        gateway behind this ``None`` -- the run simply gets no MCP dispatch tool.
         """
 
-        if not McpPerToolFlag.enabled(environ):
-            return None
         if collaborators is None:
-            # The credential plane is not wired for this deployment (desktop is
-            # blocked on a token writer). Falling back is the whole point of
-            # injecting it rather than importing it.
             return None
         if not callable(getattr(mcp_registry, "resolve_server", None)):
             return None
@@ -403,6 +354,7 @@ class McpPerToolRegistrar:
             McpObserveMiddleware(),
             McpErrorMapMiddleware(),
             McpCitationsMiddleware(),
+            McpPresentMiddleware(),
         )
 
     @classmethod
@@ -425,7 +377,6 @@ class McpPerToolRegistrar:
 __all__ = [
     "HarnessBuiltinToolNames",
     "McpPerToolCollaborators",
-    "McpPerToolFlag",
     "McpPerToolInterrupts",
     "McpPerToolRegistrar",
     "McpPerToolRegistration",

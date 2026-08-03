@@ -97,6 +97,7 @@ from agent_runtime.capabilities.desktop.host_path import (
 
 if TYPE_CHECKING:
     from deepagents.backends.protocol import (
+        DeleteResult,
         EditResult,
         FileInfo,
         GlobResult,
@@ -135,6 +136,13 @@ class HostFsToolArgs:
         "edit_file": ("file_path",),
         "glob": ("path", "pattern"),
         "grep": ("path",),
+        # deepagents 0.7.1 added `delete` to `FilesystemMiddleware`. Left out,
+        # the desktop translator does not recognise it and harness assembly
+        # fails — which is not a degraded filesystem but a runtime that cannot
+        # be constructed at all, so every run dies before the model is called.
+        # A destructive tool is also exactly the one whose path must reach the
+        # consent gate rather than the host unchecked.
+        "delete": ("file_path",),
     }
 
     @classmethod
@@ -401,6 +409,21 @@ class NativeHostPathBackend:
         """List ``path`` on the host, returning canonical entry paths."""
 
         return self._with_entries(await self._inner.als(self._native(path)))  # type: ignore[attr-defined]
+
+    # `delete` arrived with deepagents 0.7.1. Declared on the CLASS rather than
+    # left to `__getattr__`, because 0.7.1 type-probes the attribute: an
+    # instance-only proxy reads as "this backend cannot delete", and the
+    # filesystem middleware then refuses to build — taking the whole harness
+    # with it.
+    def delete(self, file_path: str) -> "DeleteResult":
+        """Delete ``file_path`` on the host, in the host's own grammar."""
+
+        return self._inner.delete(self._native(file_path))  # type: ignore[attr-defined]
+
+    async def adelete(self, file_path: str) -> "DeleteResult":
+        """Delete ``file_path`` on the host, in the host's own grammar."""
+
+        return await self._inner.adelete(self._native(file_path))  # type: ignore[attr-defined]
 
     # --- read ---------------------------------------------------------------
 

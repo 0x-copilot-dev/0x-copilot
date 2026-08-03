@@ -788,6 +788,16 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
                 )
             )
+            # Subagents need settling on THIS path too. A child's terminal frame
+            # comes from the `task` tool's result message, so a run that ends
+            # mid-delegation emits none and the cockpit keeps a spinning card
+            # forever. Appended BEFORE `_emit_receipt_then_terminate` because
+            # that is what seals the prefix: settle after it and the append is
+            # refused by the seal guard, so the run dies with a
+            # `LedgerSealViolation` that hides the real terminal reason.
+            await (
+                self.stream_event_mapper.update_processor
+            ).close_open_subagents_as_cancelled(run=run)
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
@@ -859,6 +869,16 @@ class RuntimeRunHandler:
                 correlation_id=command.trace_id,
                 default_message="We couldn't complete this run. Please try again.",
             )
+            # Subagents need settling on THIS path too. A child's terminal frame
+            # comes from the `task` tool's result message, so a run that ends
+            # mid-delegation emits none and the cockpit keeps a spinning card
+            # forever. Appended BEFORE `_emit_receipt_then_terminate` because
+            # that is what seals the prefix: settle after it and the append is
+            # refused by the seal guard, so the run dies with a
+            # `LedgerSealViolation` that hides the real terminal reason.
+            await (
+                self.stream_event_mapper.update_processor
+            ).close_open_subagents_as_cancelled(run=run)
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.FAILED,

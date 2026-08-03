@@ -1,7 +1,7 @@
 """Unit tests for the P2-5 exec-policy / error-map / citations / observe stages.
 
 All four stages plus the composer are additive and unwired, so these tests are
-the whole proof that the pipeline is safe before P2-8 composes it. They pin five
+the whole proof that the pipeline is safe before P2-8 composes it. They pin six
 properties, three of which are security- or provenance-bearing:
 
 * **Schema identity.** Every stage returns a tool the model cannot tell apart
@@ -67,6 +67,9 @@ from agent_runtime.capabilities.mcp.middleware.error_map_tool import (
 from agent_runtime.capabilities.mcp.middleware.exec_policy_tool import (
     McpExecPolicyMiddleware,
     McpExecPolicyTable,
+)
+from agent_runtime.capabilities.mcp.middleware.present_tool import (
+    McpPresentMiddleware,
 )
 from agent_runtime.capabilities.mcp.middleware.observe_tool import (
     McpCallBindingScope,
@@ -344,7 +347,7 @@ class MiddlewareFixtureMixin:
         )
 
     def stages(self) -> tuple[ToolMiddleware, ...]:
-        """The four P2-5 stages plus a recording stand-in for POLICY."""
+        """The five P2-5 stages plus a recording stand-in for POLICY."""
 
         return (
             RecordingMiddleware(stage=MiddlewareStage.POLICY),
@@ -352,6 +355,7 @@ class MiddlewareFixtureMixin:
             McpObserveMiddleware(),
             McpErrorMapMiddleware(),
             McpCitationsMiddleware(),
+            McpPresentMiddleware(),
         )
 
     def compose(
@@ -390,6 +394,7 @@ class TestSchemaIdentity(MiddlewareFixtureMixin):
             McpObserveMiddleware(),
             McpErrorMapMiddleware(),
             McpCitationsMiddleware(),
+            McpPresentMiddleware(),
         ):
             wrapped = middleware.wrap(inner, descriptor)
             assert wrapped.name == inner.name
@@ -404,6 +409,7 @@ class TestSchemaIdentity(MiddlewareFixtureMixin):
             McpObserveMiddleware(),
             McpErrorMapMiddleware(),
             McpCitationsMiddleware(),
+            McpPresentMiddleware(),
         ):
             wrapped = middleware.wrap(inner, descriptor)
             # Without this the MCP tuple return reaches the model as a repr.
@@ -499,7 +505,8 @@ class TestCompose(MiddlewareFixtureMixin):
             RecordingMiddleware(stage=MiddlewareStage.EXEC_POLICY),
             RecordingMiddleware(stage=MiddlewareStage.OBSERVE),
             RecordingMiddleware(stage=MiddlewareStage.ERROR_MAP),
-            RenamingMiddleware(stage=MiddlewareStage.CITATIONS),
+            RecordingMiddleware(stage=MiddlewareStage.CITATIONS),
+            RenamingMiddleware(stage=MiddlewareStage.PRESENT),
         )
         with pytest.raises(MiddlewareCompositionError) as excinfo:
             self.compose(self.tool(), self.descriptor(), stack)

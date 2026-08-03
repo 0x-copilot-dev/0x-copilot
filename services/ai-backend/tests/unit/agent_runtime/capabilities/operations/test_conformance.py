@@ -191,6 +191,8 @@ class TestOperationConformance:
             ("workspace", "read"),
             ("workspace", "write"),
             ("workspace", "edit"),
+            # deepagents 0.7.1 added `delete` to the filesystem surface.
+            ("workspace", "delete"),
             ("workspace", "glob"),
             ("workspace", "grep"),
         }

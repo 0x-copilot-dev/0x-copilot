@@ -275,9 +275,12 @@ class TestBackendMcpProviderRolloutGating:
                 runtime_context=runtime_context_admin,
             )
         }
+        # `call_mcp_tool` is retired: MCP dispatch is per-tool now, so the
+        # umbrella no longer appears. `load_mcp_server` / `auth_mcp` are what a
+        # run uses to DISCOVER and CONNECT a server, which is what this
+        # rollout-gating test is actually about.
         assert {
             "load_mcp_server",
-            "call_mcp_tool",
             "auth_mcp",
         }.issubset(tool_names)
 

@@ -181,9 +181,16 @@ class Values:
     ELLIPSIS = "…"
     #: Between a tool's name/class prefix and its one-line summary.
     INDEX_SEPARATOR = " — "
-    #: Every catalog file names this tool as the way to actually run something.
-    #: Discovery never dispatches; the gateway keeps the policy decision.
-    DISPATCH_TOOL = "call_mcp_tool"
+    #: How a catalog file tells the model to actually run something.
+    #:
+    #: There is no umbrella tool any more: per-tool registration puts each
+    #: connector tool on the model surface under its OWN name, so a descriptor
+    #: is invoked by calling that name directly. This string used to be
+    #: `call_mcp_tool`, and a live run showed exactly what a stale value costs —
+    #: the model read all 52 Linear descriptors, then called a tool that no
+    #: longer exists and returned a successful-looking nothing. Discovery still
+    #: never dispatches; the POLICY stage still keeps the decision.
+    DISPATCH_GUIDANCE = "call the tool by its own name"
     #: The tool that turns a seeded stub into the full tool tree.
     LOAD_TOOL = "load_mcp_server"
     #: Joins server slugs in one log line.
@@ -577,9 +584,9 @@ class McpCatalogRenderer:
             f"to find a tool, or `read_file "
             f"{McpCatalogPaths.tools_dir(card.name)}<tool>.json` for its full "
             "input schema.\n"
-            f"3. Call `{Values.DISPATCH_TOOL}` with `server_name`, `tool_name`, "
-            "and `arguments`. A write may pause for the user's approval; that "
-            "is expected.\n\n"
+            f"3. {Values.DISPATCH_GUIDANCE} — each tool below is callable "
+            "directly, with its own arguments. A write may pause for the "
+            "user's approval; that is expected.\n\n"
             "## Tools\n\n"
             f"{Messages.Seed.INDEX_PLACEHOLDER}\n"
         )
@@ -614,10 +621,15 @@ class McpCatalogRenderer:
             Keys.Field.ACTION: action.value,
             Keys.Field.DESCRIPTION: descriptor.description,
             Keys.Field.INPUT_SCHEMA: dict(descriptor.input_schema),
+            # The machine-readable half of the same instruction, and the one
+            # the model actually follows. Under per-tool registration the tool
+            # IS the descriptor's name — there is no umbrella to address and no
+            # `{server_name, tool_name}` envelope to fill in. `server_name` stays
+            # for provenance: the reader still needs to know which connector a
+            # descriptor came from.
             Keys.Field.INVOKE_WITH: {
-                Keys.Field.TOOL: Values.DISPATCH_TOOL,
+                Keys.Field.TOOL: descriptor.name,
                 Keys.Field.SERVER_NAME: server_name,
-                Keys.Field.TOOL_NAME: descriptor.name,
             },
             Keys.Field.NAME: descriptor.name,
             Keys.Field.OUTPUT_SHAPE: dict(descriptor.output_shape),
@@ -664,7 +676,7 @@ class McpCatalogRenderer:
             f'index, or run `grep "<term>" {McpCatalogPaths.server_dir(server_name)}/` '
             f"to search descriptions. Then `read_file "
             f"{McpCatalogPaths.tools_dir(server_name)}<tool>.json` for one "
-            f"tool's full schema, and invoke it with `{Values.DISPATCH_TOOL}`. "
+            f"tool's full schema, then {Values.DISPATCH_GUIDANCE}. "
             "Do not ask for the descriptors again — they are on the filesystem."
         )
 
@@ -695,9 +707,9 @@ class McpCatalogRenderer:
             "search every description.\n"
             f"2. `read_file {McpCatalogPaths.tools_dir(card.name)}<tool>.json` "
             "for its full input schema.\n"
-            f"3. Call `{Values.DISPATCH_TOOL}` with `server_name`, `tool_name`, "
-            "and `arguments`. A write may pause for the user's approval; that "
-            "is expected.\n\n"
+            f"3. {Values.DISPATCH_GUIDANCE} — each tool below is callable "
+            "directly, with its own arguments. A write may pause for the "
+            "user's approval; that is expected.\n\n"
             "## Tools\n\n"
         )
 

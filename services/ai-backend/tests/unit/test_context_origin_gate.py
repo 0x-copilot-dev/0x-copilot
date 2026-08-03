@@ -79,15 +79,12 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         "agent_runtime.capabilities.mcp:20_mcp_cards",
         "agent_runtime.capabilities.mcp:AuthMcpTool",
         "agent_runtime.capabilities.mcp:LoadMcpServerTool",
-        "agent_runtime.capabilities.mcp:mcp_dispatcher",
-        # The P2-8 per-tool flip. Not additional rent: this site and
-        # ``mcp_dispatcher`` above are the two arms of one branch, and exactly
-        # one of them composes on any given run. What it changes is the *shape*
-        # of the same budget — one umbrella schema whose arguments are a server
-        # name and a payload becomes N real tool schemas — so the cost moves
-        # from constant to proportional to the connectors a user has installed.
-        # That is the tradeoff being accepted here, and it is why the flag
-        # defaults off until it has been measured on a live stack.
+        # The per-tool MCP surface — now the ONLY arm. `mcp_dispatcher` was
+        # the other, and it is deleted along with the umbrella `call_mcp_tool`.
+        # The cost this declares is therefore no longer a choice between two
+        # shapes: one umbrella schema whose arguments were a server name and a
+        # payload has become N real tool schemas, so the rent is proportional
+        # to the connectors a user has installed rather than constant.
         "agent_runtime.capabilities.mcp:per_tool_mcp_tools",
         "agent_runtime.capabilities.sandbox:sandbox_execute_tool",
         "agent_runtime.capabilities.skills:30_skill_cards",
@@ -146,7 +143,9 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
         if label.rsplit(":", 1)[0] in tool_owners
         and not label.rsplit(":", 1)[1][:1].isdigit()
     ]
-    assert len(composed) == 15
+    # 14 since the umbrella `call_mcp_tool` was retired: it was one composed
+    # site, and the per-tool surface that replaced it is a single site too.
+    assert len(composed) == 14
 
 
 class PlantedSourceTreeMixin:

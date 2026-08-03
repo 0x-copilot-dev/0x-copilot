@@ -76,7 +76,6 @@ from agent_runtime.capabilities.mcp.files import (
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
-from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.registry import (
     DynamicMcpRegistry,
     McpServerProvider,
@@ -84,7 +83,6 @@ from agent_runtime.capabilities.mcp.registry import (
 
 __all__ = [
     "AuthMcpTool",
-    "CallMcpTool",
     "DynamicMcpRegistry",
     "FileMcpConfigStore",
     "FileMcpServerProvider",

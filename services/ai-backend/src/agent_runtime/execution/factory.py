@@ -45,7 +45,7 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.cards import McpServerCard, McpToolCallRequest
+from agent_runtime.capabilities.mcp.cards import McpServerCard
 from agent_runtime.capabilities.mcp.catalog import (
     McpCatalogBuilder,
     McpCatalogPublisher,
@@ -55,20 +55,25 @@ from agent_runtime.capabilities.mcp.catalog import (
 from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
-from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+
+from langchain.agents.middleware import TodoListMiddleware
+
+from agent_runtime.capabilities.mcp.backend_provider import BackendMcpServiceAuth
 from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
     McpPerToolRegistrar,
     McpPerToolRegistration,
 )
+from agent_runtime.capabilities.mcp.proxy_plane import ProxyCredentialPlane
 from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
+
 from agent_runtime.capabilities.middleware import (
     ModelInvocationMiddleware,
     RuntimeControlMiddleware,
@@ -531,6 +536,13 @@ async def _assemble_harness(
                 middleware=(
                     RuntimeControlMiddleware(),
                     ModelInvocationMiddleware(),
+                    # 0.7.1 does NOT ship this: `TodoListMiddleware` is added
+                    # only by the `_openai_codex` harness profile, which matches
+                    # `gpt-5.{1,2,3}-codex` and none of our models. Without this
+                    # declaration `write_todos` is absent everywhere and the
+                    # cockpit's todo panel goes quiet — silently, because
+                    # `TodoListProjector` is fed only by that tool's frames.
+                    TodoListMiddleware(),
                     *_host_path_tool_middleware(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -540,6 +552,9 @@ async def _assemble_harness(
                 universal_middleware_factories=(
                     RuntimeControlMiddleware,
                     ModelInvocationMiddleware,
+                    # Subagents need their own: a child graph does not inherit
+                    # the supervisor's sequence for this middleware.
+                    TodoListMiddleware,
                     *_host_path_tool_middleware_factories(
                         workspace_backend,
                         granted_host_roots=granted_host_roots,
@@ -551,6 +566,20 @@ async def _assemble_harness(
     except AgentRuntimeError:
         raise
     except Exception as exc:
+        # Log the CAUSE here, where the exception object still exists. The
+        # raise below is what every caller sees, and its safe message says only
+        # "could not be constructed" — correct for the model and the API, and
+        # useless for anyone debugging. `from exc` preserves the chain in
+        # Python but the worker logs the typed error, whose traceback stops at
+        # this frame: a live desktop failure showed `DETAIL: None` and a stack
+        # ending here, hiding an `AttributeError` from the filesystem
+        # middleware for an entire debugging session.
+        _LOGGER.error(
+            "agent runtime construction failed (trace_id=%s); "
+            "the typed error below carries only a safe message",
+            runtime_context.trace_id,
+            exc_info=True,
+        )
         raise AgentRuntimeError(
             RuntimeErrorCode.RUNTIME_FACTORY_ERROR,
             "The agent runtime could not be constructed.",
@@ -595,7 +624,9 @@ async def _mcp_per_tool_registration(
     registration = await McpPerToolRegistrar.build(
         runtime_context=runtime_context,
         mcp_registry=runtime_dependencies.mcp_registry,
-        collaborators=_mcp_per_tool_collaborators(runtime_dependencies),
+        collaborators=_mcp_per_tool_collaborators(
+            runtime_dependencies, runtime_context=runtime_context
+        ),
         gate=_tool_access_gate(  # type: ignore[arg-type]
             auth_session_creator=_auth_session_creator(
                 runtime_dependencies.mcp_registry
@@ -619,18 +650,89 @@ async def _mcp_per_tool_registration(
 
 def _mcp_per_tool_collaborators(
     runtime_dependencies: RuntimeDependencies,
+    *,
+    runtime_context: AgentRuntimeContext,
 ) -> McpPerToolCollaborators | None:
-    """Narrow the injected credential plane to its concrete type, or ``None``.
+    """Return this run's credential plane: injected if any, else the proxy one.
 
-    An unset (or wrongly-typed) field is not an error: it is the production
-    default while the desktop keychain writer is missing, and it means "keep the
-    legacy gateway" — never "register a connector surface with no credentials".
+    The injected field stays honoured because tests supply fakes through it. In
+    production nothing injects, and the fallback is what actually runs: the
+    proxy plane, built from the registry the run already talks to.
+
+    The old default here was ``None`` — "keep the legacy gateway" — because
+    direct-connect needed a vendor bearer this process had no way to obtain. The
+    proxy removes that premise rather than satisfying it: there is no vendor
+    credential to hold, so there is nothing left to be missing, and the plane
+    can be built for every run.
     """
 
     collaborators = runtime_dependencies.mcp_per_tool_collaborators
     if isinstance(collaborators, McpPerToolCollaborators):
         return collaborators
-    return None
+    return _proxy_collaborators(
+        runtime_dependencies.mcp_registry, runtime_context=runtime_context
+    )
+
+
+def _proxy_collaborators(
+    mcp_registry: object,
+    *,
+    runtime_context: AgentRuntimeContext,
+) -> McpPerToolCollaborators | None:
+    """Build the proxy credential plane from a backend-backed MCP registry.
+
+    Declines when nothing behind the registry is backend-backed — an in-memory
+    or fake registry has no proxy to route through, and inventing a URL for it
+    would register a connector surface that cannot answer.
+
+    The URL lives on the PROVIDER, not on the registry. ``DynamicMcpRegistry``
+    holds ``providers``; ``BackendMcpProvider`` holds ``backend_url``. Reading it
+    off the registry — as this did — returned ``None`` on every real run, so the
+    plane was never built, per-tool registration always declined, and NO MCP
+    tool was ever registered. Nothing caught it because every per-tool test
+    injects the collaborators directly, which is precisely the seam this
+    function is: the one that decides whether production takes the path at all.
+    """
+
+    backend_url, timeout = _backend_proxy_endpoint(mcp_registry)
+    if backend_url is None:
+        return None
+    directory, credentials, client_factory = ProxyCredentialPlane.build(
+        backend_url=backend_url,
+        org_id=runtime_context.org_id,
+        user_id=runtime_context.user_id,
+        service_headers=BackendMcpServiceAuth.headers(runtime_context),
+        timeout_seconds=float(timeout) if timeout is not None else 10.0,
+    )
+    return McpPerToolCollaborators(
+        directory=directory,
+        credentials=credentials,
+        client_factory=client_factory,
+    )
+
+
+def _backend_proxy_endpoint(
+    mcp_registry: object,
+) -> tuple[str | None, float | None]:
+    """Return ``(backend_url, timeout_seconds)`` from the registry's providers.
+
+    Structural rather than nominal: anything exposing a usable ``backend_url``
+    is the backend provider, so a wrapper or a test double satisfies this
+    without importing a concrete class into the factory. The registry itself is
+    checked first only so a future registry that carries the URL directly keeps
+    working.
+    """
+
+    candidates: list[object] = [mcp_registry]
+    providers = getattr(mcp_registry, "providers", None)
+    if isinstance(providers, Sequence):
+        candidates.extend(providers)
+    for candidate in candidates:
+        url = getattr(candidate, "backend_url", None)
+        if isinstance(url, str) and url.strip():
+            timeout = getattr(candidate, "timeout_seconds", None)
+            return url, timeout if isinstance(timeout, (int, float)) else None
+    return None, None
 
 
 def _with_mcp_per_tool_interrupts(
@@ -893,7 +995,6 @@ def _model_visible_tools(
     # operation reaches the Operation Gateway. A second construction here would
     # be a second dispatch route in everything but name.
     loader: McpLoader | None = None
-    mcp_dispatcher: CallMcpTool | None = None
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
@@ -914,15 +1015,13 @@ def _model_visible_tools(
             )
         )
         if mcp_per_tool is not None:
-            # P2-8 flip — one model tool per REAL MCP tool, each already wrapped
-            # in the fixed POLICY → EXEC_POLICY → OBSERVE → ERROR_MAP →
-            # CITATIONS pipeline. The umbrella ``call_mcp_tool`` is not
-            # registered: the PDP decision it used to take is now taken by the
-            # POLICY stage of each of these tools, bound to a fixed
-            # ``(card, server, tool)`` instead of decoding one out of a
-            # model-supplied payload. ``mcp_dispatcher`` stays ``None``, so the
-            # F3 capability bridge (which borrows it as its dispatch route)
-            # registers nothing rather than reopening the retired gateway.
+            # One model tool per REAL MCP tool, each already wrapped in the
+            # fixed POLICY -> EXEC_POLICY -> OBSERVE -> ERROR_MAP -> CITATIONS
+            # -> PRESENT pipeline. The PDP decision the umbrella ``call_mcp_tool``
+            # used to take is now taken by each tool's POLICY stage, bound to a
+            # fixed ``(card, server, tool)`` instead of decoded out of a
+            # model-supplied payload; and its Work Ledger emission is the
+            # PRESENT stage.
             per_tool_mcp_tools = mcp_per_tool.tools
             model_tools.extend(
                 ModelToolDeclaration.declared_all(
@@ -930,22 +1029,10 @@ def _model_visible_tools(
                     owner=ModelToolOwner.MCP,
                 )
             )
-        else:
-            mcp_dispatcher = CallMcpTool(
-                registry=mcp_registry,  # type: ignore[arg-type]
-                loader=loader,
-                runtime_context=runtime_context,
-                gate=_tool_access_gate(
-                    auth_session_creator=auth_session_creator,
-                    runtime_context=runtime_context,
-                ),
-            )
-            model_tools.append(
-                ModelToolDeclaration.declared(
-                    _structured_tool(mcp_dispatcher, McpToolCallRequest),
-                    owner=ModelToolOwner.MCP,
-                )
-            )
+        # There is no other branch. The umbrella gateway is gone, so a run whose
+        # registration produced nothing registers no MCP dispatch tool at all --
+        # the honest surface. Re-adding a fallback would mean advertising a
+        # dispatch route whose credential plane never resolved.
     if auth_session_creator is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
