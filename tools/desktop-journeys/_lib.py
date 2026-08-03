@@ -572,6 +572,45 @@ class DriverSession:
         assert self.wait_for("[data-testid=first-run-composer]", 60), (
             "key connect did not reveal the composer"
         )
+        # The composer reveals as soon as the key is saved, but the model
+        # selection is NOT settled yet: the provider-keys port wraps its save
+        # with `refreshCatalog(provider)` (FirstRunGate.tsx), and that refetch
+        # of /v1/agent/models resolves a tick or two later. Reading the pill in
+        # the caller's next statement therefore races it and sees the
+        # pre-key value — the unselected placeholder, or whatever default was
+        # resolved while every cloud row still said "needs key". That is a
+        # harness race, not a product bug, and it produced a false failure that
+        # cost real debugging time. Wait for the selection to settle.
+        assert self.wait_model_pill_resolved(), (
+            "model pill never resolved after the key was added"
+        )
+
+    #: Pill text while nothing is selected — `ModelPill` renders the trigger
+    #: with an aria-label of "Select a model" and this short visible label.
+    _UNRESOLVED_MODEL_PILL = frozenset({"", "model", "select a model"})
+
+    def wait_model_pill_resolved(self, timeout_s: int = 30) -> bool:
+        """Wait until the composer's model pill names an actual model.
+
+        Returns True when there is no pill to wait on — a surface that renders
+        no model picker (a local-model-only flow, say) has nothing to settle,
+        and blocking for the full timeout there would turn this guard into the
+        flake it exists to remove.
+        """
+
+        for _ in range(timeout_s * 2):
+            if not self.present(".atlas-model-pill"):
+                return True
+            text = (
+                self.evaluate(
+                    '(document.querySelector(".atlas-model-pill")||{}).innerText||""'
+                )
+                or ""
+            ).strip()
+            if text.lower() not in self._UNRESOLVED_MODEL_PILL:
+                return True
+            time.sleep(0.5)
+        return False
 
     def send_first_run_message(self, text: str) -> None:
         """Type + send in the FTUE composer."""
