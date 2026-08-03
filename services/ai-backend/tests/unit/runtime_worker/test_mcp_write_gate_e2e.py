@@ -487,5 +487,117 @@ class TestNonOAuthWriteParksThenApproveExecutes(NonOAuthLocalMcpRunMixin):
         ]
 
 
+class TestWriteGateHoldsWhenSiblingCallsRunAlongsideIt(LinearMcpRunMixin):
+    """The gate under a *concurrent* turn, not a turn of one call.
+
+    The runtime no longer serializes a turn's tool calls, so a gated write is
+    now dispatched alongside its siblings rather than alone. That is exactly the
+    shape in which a gate can leak: the interrupt has to propagate out of one
+    branch of a concurrent tool node while the other branches are mid-flight,
+    and the write must still make no external change before a human decides.
+
+    The reads here are the control. They are trusted (``readOnlyHint``) so they
+    ALLOW and dispatch; if the assertion below saw only the reads because the
+    write silently never ran, that would be indistinguishable from a gate that
+    worked — so the parked approval is asserted too.
+    """
+
+    @staticmethod
+    def _script_concurrent_read_read_write(monkeypatch) -> None:
+        monkeypatch.setenv(FakeModelProvider.ENV_FLAG, "1")
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_CALLS, "1")
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, "call_mcp_tool")
+        monkeypatch.setenv(
+            FakeModelProvider.ENV_PARALLEL_TOOL_CALLS,
+            json.dumps(
+                [
+                    {
+                        "name": "call_mcp_tool",
+                        "args": {
+                            "server_name": _SERVER,
+                            "tool_name": "get_issues",
+                            "arguments": {"team": "ENG"},
+                        },
+                    },
+                    {
+                        "name": "call_mcp_tool",
+                        "args": {
+                            "server_name": _SERVER,
+                            "tool_name": "get_issues",
+                            "arguments": {"team": "DESIGN"},
+                        },
+                    },
+                    {
+                        "name": "call_mcp_tool",
+                        "args": {
+                            "server_name": _SERVER,
+                            "tool_name": "create_issue",
+                            "arguments": {"title": "Ship it", "team": "ENG"},
+                        },
+                    },
+                ]
+            ),
+        )
+
+    async def test_gated_write_parks_while_sibling_reads_dispatch(
+        self, monkeypatch
+    ) -> None:
+        provider = self._provider()
+        self._patch_registry(monkeypatch, provider)
+        self._script_concurrent_read_read_write(monkeypatch)
+        store = InMemoryRuntimeApiStore()
+        settings = self._settings()
+        blobs, references = self._artifact_stores()
+        runs, conversations, approvals = self._coordinators(store, settings)
+        run_id = await self._enqueue_run(runs, conversations)
+
+        # --- Act 1: one turn, three concurrent calls, one of them gated. ---
+        await self._drain(store, settings, blobs=blobs, references=references)
+
+        names = self._event_types(store, run_id)
+        assert store.runs[run_id].status is AgentRunStatus.WAITING_FOR_APPROVAL, names
+        pending = self._pending_approvals(store, run_id)
+        assert len(pending) == 1, [a.approval_id for a in pending]
+        # The gate held: the write made no external change, and the run did not
+        # seal past it while its siblings were still running.
+        assert ("create_issue", {"title": "Ship it", "team": "ENG"}) not in (
+            provider.client.calls
+        ), provider.client.calls
+        assert "run_completed" not in names, names
+        # …and the control: both trusted reads in the same turn DID dispatch,
+        # so the gate refused one specific call rather than the whole turn
+        # failing to run. Compared as a SET on purpose — the two reads are
+        # concurrent, so which of them reaches the connector first is the
+        # framework's business and asserting an order here would be asserting
+        # the absence of the concurrency this change exists to allow.
+        assert {
+            (name, tuple(sorted(arguments.items())))
+            for name, arguments in provider.client.calls
+            if name == "get_issues"
+        } == {
+            ("get_issues", (("team", "ENG"),)),
+            ("get_issues", (("team", "DESIGN"),)),
+        }, provider.client.calls
+
+        # --- Act 2: approve, then re-drain. --------------------------------
+        await approvals.record_approval_decision(
+            org_id=_ORG_ID,
+            approval_id=pending[0].approval_id,
+            request=ApprovalDecisionRequest(
+                decision="approved", decided_by_user_id=_USER_ID, answer="yes"
+            ),
+        )
+        await self._drain(store, settings, blobs=blobs, references=references)
+
+        assert "run_failed" not in self._event_types(store, run_id)
+        assert store.runs[run_id].status is AgentRunStatus.COMPLETED
+        # Exactly once, and only after the decision — the concurrent siblings
+        # did not cause the approved effect to be replayed.
+        writes = [call for call in provider.client.calls if call[0] == "create_issue"]
+        assert writes == [("create_issue", {"title": "Ship it", "team": "ENG"})], (
+            provider.client.calls
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

@@ -87,19 +87,6 @@ _F3_FAMILIES = (
 _F4_FAMILIES = tuple(
     family for family in OPERATIONAL_TASK_FAMILIES if family.startswith("task_policy_")
 )
-#: The F6 families. ``parallel_write_after_planned_reads`` and
-#: ``parallel_approval_gated_unplannable`` are the safety half — a write that
-#: joined an overlap, or an approval-gated call that was planned into one, are
-#: outcomes no latency win offsets — so every cohort that runs them protects
-#: them via :data:`SAFETY_FAMILIES`.
-_F6_FAMILIES = (
-    "parallel_independent_reads_overlap",
-    "parallel_unknown_capability_serialized",
-    "parallel_write_after_planned_reads",
-    "parallel_approval_gated_unplannable",
-    "parallel_sibling_failure_isolated",
-    "parallel_cancel_restart_no_invention",
-)
 _EVIDENCE_FAMILIES = (
     "evidence_supported",
     "evidence_conflicting",
@@ -121,8 +108,6 @@ SAFETY_FAMILIES = frozenset(
         "evidence_revoked",
         "evidence_stale",
         "mcp_auth",
-        "parallel_write_after_planned_reads",
-        "parallel_approval_gated_unplannable",
     }
 )
 
@@ -417,38 +402,6 @@ _MATRIX: tuple[PromotionCohort, ...] = (
         ),
     ),
     PromotionCohort(
-        cohort_id="f6_safe_parallel_reads",
-        stage=9,
-        deployment_profile=PROFILE_SINGLE_USER_DESKTOP,
-        feature_modes=_modes(
-            f2=_ENFORCE,
-            f3=_ENFORCE,
-            f4=_ENFORCE,
-            f5=_ENFORCE,
-            f6=_ENFORCE,
-            f8=_ENFORCE,
-        ),
-        capability_activation=CapabilityActivationMode.DEFERRED,
-        task_families=(
-            *_F6_FAMILIES,
-            "safe_parallel_reads",
-            "conflicting_writes",
-            "dataflow",
-            UNAUTHORIZED_PROBE_FAMILY,
-        ),
-        protected_families=(
-            "conflicting_writes",
-            "parallel_write_after_planned_reads",
-            "parallel_approval_gated_unplannable",
-            UNAUTHORIZED_PROBE_FAMILY,
-        ),
-        rationale=(
-            "F6 widens admission, so its cohort pairs the family it is meant to "
-            "speed up with the family it must never touch. Conflicting writes "
-            "overlapping is the one F6 outcome no latency win can offset."
-        ),
-    ),
-    PromotionCohort(
         cohort_id="integrated_enforce_desktop",
         stage=10,
         deployment_profile=PROFILE_SINGLE_USER_DESKTOP,
@@ -458,7 +411,6 @@ _MATRIX: tuple[PromotionCohort, ...] = (
             f3=_ENFORCE,
             f4=_ENFORCE,
             f5=_ENFORCE,
-            f6=_ENFORCE,
             f8=_ENFORCE,
             f9=_ENFORCE,
             f10=_ENFORCE,
@@ -473,7 +425,7 @@ _MATRIX: tuple[PromotionCohort, ...] = (
             "step has landed is on at once, over the whole corpus, because a "
             "matrix of one-feature cohorts cannot catch an interaction. F7 "
             "stays off: §11 Step 11 gates it behind a re-justification "
-            "measured with F3, F5, and F6 already enabled."
+            "measured with F3 and F5 already enabled."
         ),
     ),
     PromotionCohort(
@@ -486,7 +438,6 @@ _MATRIX: tuple[PromotionCohort, ...] = (
             f3=_ENFORCE,
             f4=_ENFORCE,
             f5=_ENFORCE,
-            f6=_ENFORCE,
             f8=_ENFORCE,
             f9=_ENFORCE,
             f10=_ENFORCE,

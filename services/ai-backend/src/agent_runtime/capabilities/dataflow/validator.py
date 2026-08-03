@@ -9,7 +9,7 @@ import hashlib
 import heapq
 import json
 
-from agent_runtime.capabilities.concurrency.contracts import (
+from agent_runtime.capabilities.dataflow.capability_policy import (
     ConcurrencyMode,
     PolicySource,
     SideEffectKind,

@@ -24,7 +24,6 @@ from runtime_api.schemas import (
     AgentRunStatus,
     RuntimeCancelCommand,
 )
-from runtime_worker.batch_concurrency_composition import LiveBatchAdmissionRegistry
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.run_cancellation import LiveRunRegistry
@@ -45,7 +44,6 @@ class RuntimeCancelHandler:
         model_invocation_store: ModelInvocationStorePort | None = None,
         usage_recorder: UsageRecorder | None = None,
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
-        live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
         live_runs: LiveRunRegistry | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -59,10 +57,6 @@ class RuntimeCancelHandler:
             terminal_observer=terminal_run_observer,
         )
         self._run_control_builder = run_control_builder
-        # F6 batch work executing in *this* process for the run being cancelled.
-        # ``None`` — the default, and what an unconfigured deployment gets —
-        # means this handler behaves exactly as it did before W4.
-        self._live_batch_admissions = live_batch_admissions
         # The run itself executing in *this* process. Stopping it is the only
         # thing that stops an in-process subagent, because the ``task`` tool
         # awaits the child graph inside the parent's own tool call.
@@ -103,25 +97,7 @@ class RuntimeCancelHandler:
             # constant exists precisely to stop this literal drifting.
             if run.status not in ACTIVE_RUN_STATUSES:
                 return
-            # W4 — F6.6's cancellation, on the path a run is actually cancelled
-            # by. Its position before the status flip and the terminal event is
-            # not stylistic. Two things follow from it, in this order of
-            # importance:
-            #
-            # 1. Admission stops at the earliest moment this process knows the
-            #    run is over, so the window in which another child can still be
-            #    admitted is as short as the handler can make it.
-            # 2. The ``indeterminate`` transitions land while the run's stream
-            #    is still open. The batch journal writes through the raw event
-            #    store rather than ``append_api_event``, so the causal-prefix
-            #    seal would not *refuse* a later append — it would do something
-            #    quieter and worse, leaving a durable fact that no live client
-            #    ever receives, because the stream closes on the seal.
-            #
-            # Inside the status guard, so a repeated cancel command does not
-            # re-cancel a run that is already terminal.
-            await self._cancel_live_batches(run.run_id)
-            # Then the run itself, and — because subagents are in-process —
+            # The run itself, and — because subagents are in-process —
             # every subagent it is awaiting. The drain is awaited *before* the
             # status flip and the terminal event on purpose: the run's own
             # cancellation path settles its in-flight tool calls and closes its
@@ -183,33 +159,11 @@ class RuntimeCancelHandler:
             # observation cannot be recorded; the charge is idempotent by run.
             pass
 
-    async def _cancel_live_batches(self, run_id: str) -> None:
-        """Stop this run's F6 batch work in this process, if it is here.
-
-        A miss is the ordinary case, not a fault: F6 may be unconfigured, the
-        run may have planned no batch, or — in a multi-worker deployment — the
-        cancel command may simply have been claimed by a process that is not the
-        one executing the run. All three answer ``None`` and leave this handler
-        doing exactly what it did before, which is the honest degradation. It is
-        deliberately not papered over with a broadcast: reaching a coordinator in
-        another process is a real distributed problem, and pretending to have
-        solved it here would be worse than not solving it.
-        """
-
-        if self._live_batch_admissions is None:
-            return
-        admission = self._live_batch_admissions.admission_for(run_id)
-        if admission is None:
-            return
-        # ``acancel`` is total, so no exception from a run that is already over
-        # can stop it from becoming terminal.
-        await admission.acancel()
-
     async def _cancel_live_run(self, run_id: str) -> None:
         """Stop this run's graph execution in this process, if it is here.
 
-        The same honest degradation as ``_cancel_live_batches``: a miss is the
-        ordinary multi-worker case, not a fault, and it leaves this handler
+        A miss is the ordinary multi-worker case, not a fault, and it leaves
+        this handler
         doing exactly what it did before — record the cancellation and let the
         run finish wherever it is actually running. What a miss must never do is
         pretend, so nothing here reports a stopped run it did not stop.

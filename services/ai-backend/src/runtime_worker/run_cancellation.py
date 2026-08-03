@@ -24,8 +24,7 @@ have solved it here would be worse than not solving it.
 unwinding; it does not guarantee it.  A run wedged in an uninterruptible section
 must not be able to hold the user's Stop button open forever, so the wait has a
 ceiling and :attr:`RunCancellationOutcome.drained` says whether the ceiling was
-reached — never inferred, in the same spirit as
-:attr:`~agent_runtime.capabilities.concurrency.batch_cancellation.BatchCancellationReport.drained`.
+reached — reported, never inferred.
 
 *Why the drain exists at all.*  The run's own cancellation path emits the facts
 that close the user's screen: in-flight tool calls settle, and every subagent

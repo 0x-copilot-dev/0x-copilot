@@ -1,4 +1,4 @@
-"""Graph-wide F4/F5 admission and F6 serial-default middleware tests."""
+"""Graph-wide F4/F5 admission middleware tests, at the seam and on a live graph."""
 
 from __future__ import annotations
 
@@ -111,6 +111,28 @@ class _RecordingGuard:
             tool_name="write_todos",
         )
 
+    def admit_and_charge(
+        self,
+        *,
+        tool_name: str,
+        estimated_input_tokens: int,
+    ) -> tuple[object, str | None]:
+        """Mirror the real guard's one atomic check-then-charge entry point."""
+
+        decision = self.check_admit(
+            tool_name=tool_name,
+            estimated_input_tokens=estimated_input_tokens,
+        )
+        if isinstance(decision, ToolBudgetReject):
+            return (decision, None)
+        return (
+            decision,
+            self.record_started(
+                tool_name=tool_name,
+                estimated_input_tokens=estimated_input_tokens,
+            ),
+        )
+
     def rejection_error(self, _decision: object) -> Exception:
         return ToolBudgetRejected("Stop calling this tool and finalize.")
 
@@ -185,7 +207,7 @@ class _FanoutModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
-        return "serial-fanout-test"
+        return "concurrent-fanout-test"
 
     @staticmethod
     def _reply(messages: list[BaseMessage]) -> AIMessage:
@@ -228,17 +250,58 @@ class _FanoutModel(BaseChatModel):
         return self
 
 
-async def test_async_multi_tool_fanout_is_serial_by_default() -> None:
+#: How long a sibling waits for the rest of its turn to arrive before the test
+#: gives up and reports serialization. Only reached on failure — when the calls
+#: really are concurrent the rendezvous completes on the first pass through the
+#: loop — so it never adds wall-clock time to a green run.
+_RENDEZVOUS_TIMEOUT_SECONDS = 5.0
+
+
+class _Rendezvous:
+    """Prove N calls were in flight at once, without sleeping on the clock.
+
+    Each arrival counts itself in and then waits for the rest. If the seam
+    serializes, the first arrival waits for siblings that cannot start until it
+    returns, and the wait times out — reported as a peak of one rather than as a
+    hang. If the calls really are concurrent, the last arrival releases everyone
+    immediately. Either way the verdict is a count, not a duration.
+    """
+
+    def __init__(self, expected: int) -> None:
+        self._expected = expected
+        self._all_present = asyncio.Event()
+        self.peak = 0
+        self._active = 0
+
+    async def arrive(self) -> None:
+        self._active += 1
+        self.peak = max(self.peak, self._active)
+        if self._active >= self._expected:
+            self._all_present.set()
+        try:
+            await asyncio.wait_for(
+                self._all_present.wait(),
+                timeout=_RENDEZVOUS_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            pass
+        finally:
+            self._active -= 1
+
+
+async def test_async_multi_tool_fanout_is_not_serialized_by_the_seam() -> None:
+    """The seam adds no admission gate, so gathered calls really do overlap.
+
+    This asserted ``maximum_active == 1`` while the middleware took a run-wide
+    exclusive lock around every graph-visible tool call. Scheduling belongs to
+    the framework now; a lock reintroduced here would show up as a peak of one.
+    """
+
     middleware = RuntimeToolControlMiddleware()
-    active = 0
-    maximum_active = 0
+    rendezvous = _Rendezvous(3)
 
     async def handler(request: ToolCallRequest) -> ToolMessage:
-        nonlocal active, maximum_active
-        active += 1
-        maximum_active = max(maximum_active, active)
-        await asyncio.sleep(0)
-        active -= 1
+        await rendezvous.arrive()
         return ToolMessage(
             content=request.tool_call["name"],
             tool_call_id=request.tool_call["id"],
@@ -250,19 +313,20 @@ async def test_async_multi_tool_fanout_is_serial_by_default() -> None:
         middleware.awrap_tool_call(_request(call_id="call-3"), handler),
     )
 
-    assert maximum_active == 1
+    assert rendezvous.peak == 3
 
 
-async def test_live_langchain_multi_tool_turn_is_serial_by_default() -> None:
-    active = 0
-    maximum_active = 0
+async def test_live_langchain_multi_tool_turn_runs_concurrently() -> None:
+    """The same property through a real compiled graph, not the seam alone.
+
+    LangChain's tool node gathers a turn's calls into concurrent tasks. This is
+    the end-to-end reading of that: three sibling calls, all in flight at once.
+    """
+
+    rendezvous = _Rendezvous(3)
 
     async def observed_tool(value: int) -> str:
-        nonlocal active, maximum_active
-        active += 1
-        maximum_active = max(maximum_active, active)
-        await asyncio.sleep(0)
-        active -= 1
+        await rendezvous.arrive()
         return str(value)
 
     tool = StructuredTool.from_function(
@@ -280,7 +344,7 @@ async def test_live_langchain_multi_tool_turn_is_serial_by_default() -> None:
         {"messages": [HumanMessage(content="Run all observations.")]}
     )
 
-    assert maximum_active == 1
+    assert rendezvous.peak == 3
     assert result["messages"][-1].content == "done"
 
 

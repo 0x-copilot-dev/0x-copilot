@@ -801,7 +801,6 @@ export type RuntimeApiEventType =
   | "model.invocation.recovery.v1"
   | "model.invocation.completed.v1"
   | "model.invocation.failed.v1"
-  | "operation_batch.journal.v1"
   | "context_occupancy"
   | "workspace_snapshot_captured";
 
@@ -896,7 +895,6 @@ export const RUNTIME_API_EVENT_TYPES = [
   "model.invocation.recovery.v1",
   "model.invocation.completed.v1",
   "model.invocation.failed.v1",
-  "operation_batch.journal.v1",
   "context_occupancy",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
@@ -3081,195 +3079,6 @@ export interface TaskPolicyJournalPayload {
   record: TaskPolicyJournalRecord;
 }
 
-/** F6 capability-concurrency vocabulary. Every member is ordered narrowest
- * first on the backend, where declaration order *is* the authority rank. */
-export type ConcurrencyFeatureMode = QualityFeatureMode;
-export type ConcurrencyMode =
-  | "serial"
-  | "same_subject_serial"
-  | "parallel_safe";
-export type ConcurrencySideEffectKind =
-  | "unknown"
-  | "irreversible_write"
-  | "reversible_write"
-  | "read"
-  | "none";
-export type ConcurrencyIdempotencyKind = "none" | "keyed" | "natural";
-export type ConcurrencyScope =
-  | "unknown"
-  | "global"
-  | "profile"
-  | "installation"
-  | "user"
-  | "connector"
-  | "capability";
-export type ConcurrencyOrderingRequirement =
-  | "input_order"
-  | "completion_order"
-  | "none";
-export type ConcurrencyProviderSessionConstraint =
-  | "unknown"
-  | "installation_serial"
-  | "session_serial"
-  | "session_parallel_safe";
-export type ConcurrencyPolicySource =
-  | "conservative_default"
-  | "trusted_provider"
-  | "user_approved_override"
-  | "product_catalog";
-export type ConcurrencyResourceKeyDimension =
-  | "connector"
-  | "installation"
-  | "session"
-  | "account"
-  | "subject"
-  | "container"
-  | "object"
-  | "region";
-export type BatchSegmentMode = "serial" | "parallel";
-export type BatchSegmentReason =
-  | "independent_reads"
-  | "batch_serial_default"
-  | "conservative_policy_default"
-  | "policy_requires_serial"
-  | "policy_parallelism_disabled"
-  | "unknown_side_effect"
-  | "effectful_operation"
-  | "unknown_dependencies"
-  | "explicit_dependencies"
-  | "unknown_resources"
-  | "same_subject_requires_resource"
-  | "resource_conflict"
-  | "authorization_epoch_barrier"
-  | "insufficient_parallel_members";
-export type BatchFailurePolicy = "fail_fast" | "collect_all" | "stop_new";
-export type ConcurrencyKillSwitchReason =
-  | "snapshot_governs"
-  | "snapshot_already_serial"
-  | "global_kill_switch"
-  | "connector_kill_switch"
-  | "capability_kill_switch"
-  | "unknown_target"
-  | "unparseable_switch_config"
-  | "switch_source_unavailable";
-export type ConcurrencyKillSwitchScope = "global" | "connector" | "capability";
-export type BatchJournalRecordKind = "plan_bound" | "child_transition";
-
-/** Authority to overlap capability work. Both bounds must be satisfied at
- * once, so width alone never authorizes overlap. */
-export interface ConcurrencyAllowance {
-  mode: ConcurrencyFeatureMode;
-  max_parallelism: number;
-}
-
-/** Closed template that renders one keyed, digested resource scope key. It
- * stores dimension *names* only — rendered values leave the backend solely as
- * an `hmac-sha256:<64 hex>` digest. */
-export interface ConcurrencyResourceKeyTemplate {
-  dimensions: readonly ConcurrencyResourceKeyDimension[];
-}
-
-/** Resolved concurrency policy for one operation. Every default is its
- * vocabulary's conservative floor, so an undeclared capability cannot
- * authorize parallel execution. */
-export interface ConcurrencyPolicy {
-  mode: ConcurrencyMode;
-  side_effect: ConcurrencySideEffectKind;
-  idempotency: ConcurrencyIdempotencyKind;
-  resource_key_template: ConcurrencyResourceKeyTemplate | null;
-  max_parallelism: number | null;
-  rate_limit_scope: ConcurrencyScope;
-  ordering_requirement: ConcurrencyOrderingRequirement;
-  provider_session_constraint: ConcurrencyProviderSessionConstraint;
-  policy_source: ConcurrencyPolicySource;
-}
-
-/** Planning facts for one already-authorized operation. `dependency_ids` and
- * `resource_fingerprints` are `null` for *unknown*, never for empty; empty
- * lists are an explicit attestation. Fingerprints are keyed HMAC digests. */
-export interface BatchOperation {
-  operation_id: string;
-  authorization_epoch: string;
-  dependency_ids: readonly string[] | null;
-  resource_fingerprints: readonly string[] | null;
-}
-
-export interface PlannedOperation {
-  operation: BatchOperation;
-  capability_ref: string;
-  policy: ConcurrencyPolicy;
-  policy_digest: string;
-}
-
-/** One deterministic serial or parallel section of a plan. */
-export interface BatchSegment {
-  segment_index: number;
-  mode: BatchSegmentMode;
-  operation_ids: readonly string[];
-  reason: BatchSegmentReason;
-  allowance: ConcurrencyAllowance;
-}
-
-export interface BatchJournalRecordBase {
-  schema_version: 1;
-  record_kind: BatchJournalRecordKind;
-  record_id: string;
-  record_digest: string;
-  run_id: string;
-  snapshot_id: string;
-  created_at: string;
-}
-
-/** The ordering decision for one tool-call group, durable BEFORE any child of
- * the batch is dispatched. It carries both the decision (`segments`) and the
- * inputs it was decided from, so a replay re-derives the identical plan
- * instead of trusting the stored segmentation. */
-export interface BatchPlanBoundRecord extends BatchJournalRecordBase {
-  record_kind: "plan_bound";
-  batch_id: string;
-  parent_operation_id: string | null;
-  turn_ordinal: number;
-  concurrency_policy_revision: string;
-  snapshot_allowance: ConcurrencyAllowance;
-  effective_allowance: ConcurrencyAllowance;
-  kill_switch_reason: ConcurrencyKillSwitchReason;
-  kill_switch_scope: ConcurrencyKillSwitchScope | null;
-  failure_policy: BatchFailurePolicy;
-  deadline_at: string | null;
-  operations: readonly PlannedOperation[];
-  segments: readonly BatchSegment[];
-  plan_digest: string;
-}
-
-/** Durable phase of one batch child, recorded so restart can tell "never
- * started" from "started and the outcome was lost". Absence of a settled
- * transition is never read as success or as rollback. */
-export type BatchChildTransitionPhase = "dispatch_intent" | "settled";
-
-/** How a batch child ended, when it is known at all. */
-export type BatchChildTransitionDisposition =
-  | "succeeded"
-  | "failed"
-  | "indeterminate";
-
-export interface BatchChildTransitionRecord extends BatchJournalRecordBase {
-  record_kind: "child_transition";
-  batch_id: string;
-  operation_id: string;
-  phase: BatchChildTransitionPhase;
-  /** Present only when `phase` is `settled`. */
-  disposition: BatchChildTransitionDisposition | null;
-}
-
-export type BatchJournalRecord =
-  | BatchPlanBoundRecord
-  | BatchChildTransitionRecord;
-
-/** Internal F6 journal payload. All detail is content-free and digest-bound. */
-export interface OperationBatchJournalPayload {
-  record: BatchJournalRecord;
-}
-
 export type PromptCacheOwner = "none" | "framework" | "product";
 export type PromptAssemblyOutcome =
   | "enforced"
@@ -4052,7 +3861,6 @@ export interface RuntimeEventPayloadByType
   /** F6.2 — the ordering decision for one tool-call group, durable before any
    * child is dispatched. INTERNAL/REDACTED: identities, closed vocabularies,
    * keyed resource-scope digests, allowances, and reason codes only. */
-  "operation_batch.journal.v1": OperationBatchJournalPayload;
   /** Context Occupancy Ledger — one per measured model call: the context window
    * decomposed into who occupies it. Carries the SAME snapshot shape
    * `GET /v1/agent/runs/{run_id}/context/occupancy` returns, so a client folds

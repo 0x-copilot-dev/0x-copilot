@@ -274,153 +274,7 @@ class TrajectoryProjector:
             discovery_result_tokens=cls._discovery_int(payload, "result_tokens"),
             discovery_model_turns=cls._discovery_int(payload, "model_turns"),
             discovery_counts_observed=cls._discovery_counts_observed(payload),
-            parallel_record_kind=cls._parallel_text(event, payload, "record_kind"),
-            parallel_segment_modes=cls._parallel_segment_field(event, payload, "mode"),
-            parallel_parallel_segment_reasons=cls._parallel_segment_field(
-                event,
-                payload,
-                "reason",
-                mode="parallel",
-            ),
-            parallel_serial_segment_reasons=cls._parallel_segment_field(
-                event,
-                payload,
-                "reason",
-                mode="serial",
-            ),
-            parallel_kill_switch_reason=cls._parallel_text(
-                event,
-                payload,
-                "kill_switch_reason",
-            ),
-            parallel_child_phase=cls._parallel_text(event, payload, "phase"),
-            parallel_child_disposition=cls._parallel_text(
-                event,
-                payload,
-                "disposition",
-            ),
-            parallel_planned_operations=cls._parallel_width(event, payload),
-            parallel_overlapping_operations=cls._parallel_width(
-                event,
-                payload,
-                mode="parallel",
-            ),
-            parallel_maximum_segment_width=cls._parallel_widest(event, payload),
-            parallel_counts_observed=cls._parallel_segments(event, payload) is not None,
             payload_digest=canonical_json_sha256(payload),
-        )
-
-    @staticmethod
-    def _parallel_record(
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-    ) -> Mapping[str, object] | None:
-        """Return the F6 journal record carried by one batch-journal event.
-
-        Gated on the event type rather than on the record's own shape, because
-        ``plan_bound`` is a record kind F4 uses too. Reading the nested record
-        without that gate would let an F4 controller row populate F6 columns and
-        an F6 plan populate F4 ones, and a case would then be graded against a
-        feature that never ran.
-        """
-
-        if event.event_type is not RuntimeApiEventType.OPERATION_BATCH_JOURNAL:
-            return None
-        record = payload.get("record")
-        return record if isinstance(record, Mapping) else None
-
-    @classmethod
-    def _parallel_text(
-        cls,
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-        key: str,
-    ) -> str | None:
-        record = cls._parallel_record(event, payload)
-        if record is None:
-            return None
-        value = record.get(key)
-        return value if isinstance(value, str) and value.strip() else None
-
-    @classmethod
-    def _parallel_segments(
-        cls,
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-    ) -> tuple[Mapping[str, object], ...] | None:
-        """Return the plan's segments in order, or ``None`` when unmeasured.
-
-        ``None`` and ``()`` are deliberately different answers. A child
-        transition carries no segments and must not read as a plan that
-        overlapped nothing, because every ``maximum_`` width ceiling below is
-        satisfied by a zero. This is the distinction ``parallel_counts_observed``
-        carries forward to the scorer.
-        """
-
-        record = cls._parallel_record(event, payload)
-        if record is None:
-            return None
-        segments = record.get("segments")
-        if not isinstance(segments, Sequence) or isinstance(segments, (str, bytes)):
-            return None
-        return tuple(item for item in segments if isinstance(item, Mapping))
-
-    @staticmethod
-    def _segment_width(segment: Mapping[str, object]) -> int:
-        """Return how many operations one segment holds, never their ids."""
-
-        operations = segment.get("operation_ids")
-        if not isinstance(operations, Sequence) or isinstance(operations, (str, bytes)):
-            return 0
-        return len(operations)
-
-    @classmethod
-    def _parallel_width(
-        cls,
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-        *,
-        mode: str | None = None,
-    ) -> int:
-        return sum(
-            cls._segment_width(segment)
-            for segment in cls._parallel_segments(event, payload) or ()
-            if mode is None or segment.get("mode") == mode
-        )
-
-    @classmethod
-    def _parallel_widest(
-        cls,
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-    ) -> int:
-        return max(
-            (
-                cls._segment_width(segment)
-                for segment in cls._parallel_segments(event, payload) or ()
-            ),
-            default=0,
-        )
-
-    @classmethod
-    def _parallel_segment_field(
-        cls,
-        event: RuntimeEventEnvelope,
-        payload: Mapping[str, object],
-        key: str,
-        *,
-        mode: str | None = None,
-    ) -> tuple[str, ...]:
-        """Project one closed segment field, in plan order, optionally by mode."""
-
-        segments = cls._parallel_segments(event, payload)
-        if segments is None:
-            return ()
-        return tuple(
-            value
-            for segment in segments
-            if mode is None or segment.get("mode") == mode
-            if isinstance(value := segment.get(key), str) and value.strip()
         )
 
     @staticmethod
@@ -474,11 +328,11 @@ class TrajectoryProjector:
     ) -> Mapping[str, object] | None:
         """Return the F4 controller record carried by one tool-policy event.
 
-        Gated on the event type for the same reason ``_parallel_record`` is, in
-        the opposite direction: ``plan_bound`` is a record kind F6 uses too, so
-        an ungated read lets an F6 batch plan populate the F4 columns. A family
-        asserting ``required_record_kinds: ["plan_bound"]`` would then pass on a
-        run where the controller never bound a plan and only F6 did.
+        Gated on the event type rather than on the record's own shape:
+        ``plan_bound`` is a record kind more than one feature has used, so an
+        ungated read could let another feature's record populate the F4 columns
+        and a family asserting ``required_record_kinds: ["plan_bound"]`` would
+        pass on a run where the controller never bound a plan.
         """
 
         if event.event_type is not RuntimeApiEventType.TOOL_POLICY_JOURNAL:
