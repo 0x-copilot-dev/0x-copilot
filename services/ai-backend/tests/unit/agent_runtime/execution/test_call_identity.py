@@ -198,6 +198,11 @@ class _CountingGuard:
         self.started += 1
         return "canonical-budget-call"
 
+    def admit_and_charge(self, **kwargs: object) -> tuple[object, str]:
+        """Mirror the real guard's one atomic check-then-charge entry point."""
+
+        return (self.check_admit(**kwargs), self.record_started(**kwargs))
+
     def record_settled(self, **_kwargs: object) -> None:
         self.settled += 1
 

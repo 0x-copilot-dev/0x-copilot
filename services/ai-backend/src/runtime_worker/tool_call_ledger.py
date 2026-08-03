@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from threading import RLock
 
 
 @dataclass
@@ -71,7 +72,30 @@ class ToolCallEntry:
 
 
 class ToolCallLedger:
-    """Per-run in-memory tracker of in-flight tool calls; not threadsafe (single-run serial writer)."""
+    """Per-run in-memory tracker of in-flight tool calls.
+
+    **Concurrent by assumption, not by accident.** This used to say "single-run
+    serial writer", and that held only because a run-wide lock let exactly one
+    graph-visible tool call execute at a time. LangGraph schedules a turn's tool
+    calls itself now — its async node gathers them into concurrent tasks and its
+    sync node fans them across a thread pool — so several callers really do
+    reach this object at once.
+
+    Two consequences, both of which bit before this lock existed:
+
+    - Every counting read here iterates ``_entries``. A concurrent insert during
+      that iteration raises ``RuntimeError: dictionary changed size during
+      iteration`` — a hard failure of an unrelated tool call, not a lost count.
+    - ``started`` is a check-then-set. Two callers with the same id could both
+      pass the membership test and the second would overwrite the first entry.
+
+    ``RLock`` rather than ``Lock`` so a future method that composes two of these
+    cannot deadlock against itself. The critical sections are all in-memory
+    arithmetic — no I/O, no awaits — so contention is a few microseconds and
+    this cannot serialize the tools themselves. It does **not** make a
+    read-then-write pair across two calls atomic; a caller that needs that (the
+    budget guard's check-then-charge) holds its own lock over both.
+    """
 
     def __init__(self, run_id: str) -> None:
         """Initialise an empty ledger for ``run_id``."""
@@ -81,6 +105,7 @@ class ToolCallLedger:
         # ``observed_settled`` calls land in the same microsecond
         # (Python's ``datetime.now`` resolution is platform-dependent).
         self._settle_counter: int = 0
+        self._lock = RLock()
 
     def started(
         self,
@@ -100,16 +125,17 @@ class ToolCallLedger:
         exists.
         """
 
-        if call_id in self._entries:
-            return
-        self._entries[call_id] = ToolCallEntry(
-            call_id=call_id,
-            tool_name=tool_name,
-            parent_task_id=parent_task_id,
-            subagent_id=subagent_id,
-            connector_slug=connector_slug,
-            budget_scoped=budget_scoped,
-        )
+        with self._lock:
+            if call_id in self._entries:
+                return
+            self._entries[call_id] = ToolCallEntry(
+                call_id=call_id,
+                tool_name=tool_name,
+                parent_task_id=parent_task_id,
+                subagent_id=subagent_id,
+                connector_slug=connector_slug,
+                budget_scoped=budget_scoped,
+            )
 
     def observed_settled(self, call_id: str) -> None:
         """Mark the call as naturally settled (a `tool_result` fired).
@@ -122,13 +148,14 @@ class ToolCallLedger:
         LLM emit in matching scope reads it.
         """
 
-        entry = self._entries.get(call_id)
-        if entry is not None:
-            entry.settled = True
-            if entry.settled_at is None:
-                entry.settled_at = datetime.now(timezone.utc)
-                self._settle_counter += 1
-                entry.settle_order = self._settle_counter
+        with self._lock:
+            entry = self._entries.get(call_id)
+            if entry is not None:
+                entry.settled = True
+                if entry.settled_at is None:
+                    entry.settled_at = datetime.now(timezone.utc)
+                    self._settle_counter += 1
+                    entry.settle_order = self._settle_counter
 
     def pop_pending_attribution(
         self,
@@ -136,13 +163,14 @@ class ToolCallLedger:
     ) -> ToolCallEntry | None:
         """Return the most-recently settled, unconsumed entry scoped to ``scope_key``, marking all eligible as consumed."""
 
-        eligible = [
-            entry
-            for entry in self._entries.values()
-            if entry.settled
-            and not entry.consumed_for_attribution
-            and entry.subagent_id == scope_key
-        ]
+        with self._lock:
+            eligible = [
+                entry
+                for entry in self._entries.values()
+                if entry.settled
+                and not entry.consumed_for_attribution
+                and entry.subagent_id == scope_key
+            ]
         if not eligible:
             return None
         # Latest by ``settle_order`` (monotonic per ledger, set when
@@ -164,7 +192,8 @@ class ToolCallLedger:
         client never sees a "Running" card outlive the run.
         """
 
-        return [entry for entry in self._entries.values() if not entry.settled]
+        with self._lock:
+            return [entry for entry in self._entries.values() if not entry.settled]
 
     def has_entries(self) -> bool:
         """Return ``True`` when the ledger has at least one recorded entry."""
@@ -184,24 +213,26 @@ class ToolCallLedger:
         the model could be permanently locked out by a single bad call.
         """
 
-        return sum(
-            1
-            for entry in self._entries.values()
-            if entry.tool_name == tool_name
-            and entry.budget_charged
-            and entry.budget_scoped
-        )
+        with self._lock:
+            return sum(
+                1
+                for entry in self._entries.values()
+                if entry.tool_name == tool_name
+                and entry.budget_charged
+                and entry.budget_scoped
+            )
 
     def total_input_tokens(self, tool_name: str) -> int:
         """Sum observed input tokens across admitted calls to ``tool_name``."""
 
-        return sum(
-            entry.input_tokens or 0
-            for entry in self._entries.values()
-            if entry.tool_name == tool_name
-            and entry.budget_charged
-            and entry.budget_scoped
-        )
+        with self._lock:
+            return sum(
+                entry.input_tokens or 0
+                for entry in self._entries.values()
+                if entry.tool_name == tool_name
+                and entry.budget_charged
+                and entry.budget_scoped
+            )
 
     def record_input_tokens(self, call_id: str, tokens: int) -> None:
         """Stamp observed input tokens on an entry. No-op for unknown call_ids."""

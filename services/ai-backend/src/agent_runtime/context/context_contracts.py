@@ -42,8 +42,7 @@ retrieved material from claiming the safety tier.  Every one of those is
 re-checked on parse, so no construction path -- builder, adapter, test, or a
 later lane -- can route around them.
 
-**The plan is reconstructable, not merely reproducible.**  Lane F6.2 set the
-precedent: :class:`~agent_runtime.capabilities.concurrency.batch_journal.BatchPlanBoundRecord`
+**The plan is reconstructable, not merely reproducible.**  A durable plan record
 stores both a decision and every input it was made from, and re-plans on every
 parse.  A :class:`ContextPlan` stores its candidates, its limits, and its
 revisions beside its decisions, and :class:`ContextPlanReconstruction` re-derives

@@ -35,11 +35,11 @@ overstatement this programme has corrected — and the first one I authored _and
 
 A pattern worth naming, because two of these are mine from this programme:
 
-| Change                              | Why it does nothing                                                                                                                   |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **PR #502** `provider_hints`        | Wired at `batch_concurrency_composition.py:502`, inside `_compose`, which line 616 gates behind `F6_BATCH_CONCURRENCY` — set nowhere. |
-| **PR #505** approval-expiry sweeper | Postgres — the only backend that topology allows — implements **neither port method** the sweeper calls.                              |
-| **`MCP_PER_TOOL_ENABLED=true`**     | Still registers **zero** tools: `RuntimeDependencies.mcp_per_tool_collaborators` is assigned **only in test files**.                  |
+| Change                              | Why it does nothing                                                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **PR #502** `provider_hints`        | Wired at `batch_concurrency_composition.py:502`, inside `_compose`, which line 616 gates behind `F6_BATCH_CONCURRENCY` — set nowhere. **Deleted with F6; it never had production effect.** |
+| **PR #505** approval-expiry sweeper | Postgres — the only backend that topology allows — implements **neither port method** the sweeper calls.                                                                                   |
+| **`MCP_PER_TOOL_ENABLED=true`**     | Still registers **zero** tools: `RuntimeDependencies.mcp_per_tool_collaborators` is assigned **only in test files**.                                                                       |
 
 All three passed CI. Green tests over an unreachable branch prove nothing about
 production. **Any future "wire it" task must end by driving the real path, not by
@@ -62,6 +62,7 @@ asserting on an injected collaborator.**
 |       290 | `mcp/files.py`                                     | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
 |       216 | `encrypt_existing_columns`                         | OBSOLETE             | one-shot migration; banned in this service                                                                                                                                                                                                                                                                                                                                   |
 |       151 | `sandbox/providers/langsmith.py`                   | REDUNDANT            | deepagents ships `LangSmithSandbox` (275 LOC); ours adds only `isolation_ready`, hardcoded `False`.                                                                                                                                                                                                                                                                          |
+|    ~10.9k | F6 batch concurrency + `RunSerialAdmission`        | **DONE**             | Deleted. It existed only to grant width back through a lock we installed ourselves; langgraph schedules the turn's tool calls natively. See below.                                                                                                                                                                                                                           |
 
 ### Why the `f5` enum member survived the F5 deletion
 
@@ -144,7 +145,7 @@ in-process worker constructs zero loops. Every job question is moot for the prod
 
 ## Needs your decision (~50k)
 
-- **F6 batch concurrency (10,797)** — see below; the one with a live cost.
+- ~~**F6 batch concurrency (10,797)**~~ — **DECIDED AND DONE.** See below.
 - **F1 (10,961)** — trajectory projection (~6.8k) is wired and **empirically works**, but
   nothing consumes it; fixture-only eval (~4.2k) has no entry point in any shipped process.
 - **Sandbox (8,632)** — HALF*BUILT, not dark: with \_every* documented flag ON,
@@ -157,15 +158,36 @@ in-process worker constructs zero loops. Every job question is moot for the prod
   manifest** (no private-key input, no signing operation), so
   `RUNTIME_HARNESS_RELEASE_CONFIG_PATH` does nothing on its own.
 
-### F6 is the one with a live cost today
+### F6 was the one with a live cost — resolved by deleting it
 
-Measured on a real graph: bare langchain `ToolNode` → **3/3 tool calls simultaneous**;
-add our `RuntimeControlMiddleware` with F6 dark → **1/3**. `RunSerialAdmission`
-(`control_plane/context.py:415`) is an exclusive per-run lock and **F6 is the only seam
-that widens it**. So F6 being off is not neutral — _we serialize tool calls that
-langgraph would have run in parallel_. Enabling it needs three switches shipped nowhere
-plus an operator catalog with no authoring UI, and under the default `write=ask` MCP
-calls stay serial regardless.
+The finding, as measured here: bare langchain `ToolNode` → **3/3 tool calls
+simultaneous**; add our `RuntimeControlMiddleware` with F6 dark → **1/3**.
+`RunSerialAdmission` was an exclusive per-run lock and **F6 was the only seam that
+widened it**, so F6 being off was not neutral — _we serialized tool calls that langgraph
+would have run in parallel_.
+
+**Resolution (owner's call): stop governing concurrency ourselves and let
+langgraph/deepagents schedule it natively.** The lock is gone and the apparatus that
+existed only to grant width back is deleted — `capabilities/concurrency/` (9,073),
+`runtime_worker/batch_concurrency_composition.py` (633),
+`batch_approval_authority.py` (155), `control_plane/parallel_admission.py` (221), the
+batch-journal event family, and the eval lane that graded it.
+
+Re-measured on a real graph after the change: **4/4 simultaneous**, and the framework's
+own `max_concurrency` (already set from `execution.max_parallel_tasks`, default 4) is
+what bounds it — the control the deleted subsystem was reinventing.
+
+Two real races were exposed by removing the lock and fixed with it, both proven by
+driving a real graph and both regression-tested
+(`tests/unit/runtime_worker/test_tool_concurrency_contract.py`):
+
+1. **`ToolCallLedger` iteration vs. insert** — every counting read walks the entry dict;
+   a concurrent insert raises `RuntimeError: dictionary changed size during iteration`.
+   Observed **deterministically** on the synchronous (thread-pool) tool node.
+2. **Per-tool budget check-then-charge** — `check_admit` reads and `record_started`
+   writes, and nothing held the pair together. Observed **46 executions against a cap of
+   40**. Fixed by `ToolBudgetGuard.admit_and_charge`, which is now the only place a cap
+   is enforced.
 
 ## Do not plan these twice — Lineara owns them
 

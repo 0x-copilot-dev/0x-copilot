@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.capabilities.concurrency.contracts import (
+from agent_runtime.capabilities.dataflow.capability_policy import (
     ConcurrencyMode,
     ConcurrencyPolicy,
     PolicySource,

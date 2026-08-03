@@ -14,7 +14,7 @@ from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from agent_runtime.capabilities.concurrency.contracts import ConcurrencyPolicy
+from agent_runtime.capabilities.dataflow.capability_policy import ConcurrencyPolicy
 from agent_runtime.execution.contracts import JsonValue, RuntimeContract
 from agent_runtime.surfaces_v2.ledger_models import EffectClass
 

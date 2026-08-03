@@ -67,6 +67,13 @@ class AgentQualityFeature(StrEnum):
     F3_CAPABILITY_DISCOVERY = "f3"
     F4_TOOL_USE_CONTROLLER = "f4"
     F5_CONTEXT_BUDGETING = "f5"
+    # Vestigial. The runtime no longer decides which capability calls may
+    # overlap — LangGraph's tool node schedules a turn's tool calls and nothing
+    # reads this feature's mode. The identifier survives because it is a
+    # *persisted* one: every ``quality.control_bound.v1`` event already on disk
+    # carries a ``feature_mode_f6`` value, and that payload forbids extra keys,
+    # so dropping the slot would fail replay for every run ever executed. Do not
+    # wire anything to it.
     F6_CAPABILITY_CONCURRENCY = "f6"
     F7_GOVERNED_DATAFLOW = "f7"
     F8_MCP_CONTROL_PLANE = "f8"
@@ -81,10 +88,15 @@ class FeatureFallback(StrEnum):
 
     ``DENY_NEW_WORK`` is scoped to the new feature path.  It never revokes a
     pre-existing product authority or bypasses an existing fallback contract.
+
+    There is no ``SERIAL`` member. One feature claimed it — capability
+    concurrency — by holding a run-wide lock around every tool call, and that
+    lock is gone: LangGraph schedules a turn's tool calls, so no feature here
+    can fall back to running them one at a time. A member no policy can name is
+    a fallback nothing would ever take.
     """
 
     OFF = "off"
-    SERIAL = "serial"
     DENY_NEW_WORK = "deny_new_work"
 
 
@@ -115,7 +127,10 @@ AGENT_QUALITY_FEATURE_POLICIES: Mapping[AgentQualityFeature, FeatureModePolicy] 
                 AgentQualityFeature.F3_CAPABILITY_DISCOVERY: FeatureFallback.OFF,
                 AgentQualityFeature.F4_TOOL_USE_CONTROLLER: FeatureFallback.OFF,
                 AgentQualityFeature.F5_CONTEXT_BUDGETING: FeatureFallback.OFF,
-                AgentQualityFeature.F6_CAPABILITY_CONCURRENCY: FeatureFallback.SERIAL,
+                # ``OFF``, not ``SERIAL``: nothing serializes on this feature
+                # any more, so a serial fallback would describe behaviour that
+                # no longer exists.
+                AgentQualityFeature.F6_CAPABILITY_CONCURRENCY: FeatureFallback.OFF,
                 AgentQualityFeature.F7_GOVERNED_DATAFLOW: FeatureFallback.DENY_NEW_WORK,
                 AgentQualityFeature.F8_MCP_CONTROL_PLANE: FeatureFallback.OFF,
                 AgentQualityFeature.F9_PARALLEL_DELEGATION: (

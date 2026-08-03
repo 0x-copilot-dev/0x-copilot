@@ -40,9 +40,12 @@ def test_policy_map_is_closed_and_complete_for_all_twelve_features() -> None:
 
 
 def test_safe_fallbacks_are_scoped_to_their_feature_owned_paths() -> None:
+    # Capability concurrency has no fallback of its own any more: the runtime
+    # does not decide which tool calls overlap, so there is nothing for it to
+    # fall back *to* and ``OFF`` is the honest answer.
     assert (
         feature_mode_policy(AgentQualityFeature.F6_CAPABILITY_CONCURRENCY).safe_fallback
-        is FeatureFallback.SERIAL
+        is FeatureFallback.OFF
     )
     deny_features = {
         AgentQualityFeature.F7_GOVERNED_DATAFLOW,
@@ -70,7 +73,7 @@ def test_missing_and_unknown_modes_default_to_safe_off_without_echoing_input() -
     assert missing.effective_mode is FeatureMode.OFF
     assert missing.reason is FeatureModeDecisionReason.DEFAULTED_OFF
     assert unknown.effective_mode is FeatureMode.OFF
-    assert unknown.safe_fallback is FeatureFallback.SERIAL
+    assert unknown.safe_fallback is FeatureFallback.OFF
     assert unknown.reason is FeatureModeDecisionReason.UNKNOWN_DEFAULTED_SAFE
     assert "secret-bearing" not in repr(unknown)
     assert "secret-bearing" not in unknown.model_dump_json()
@@ -121,7 +124,7 @@ def test_kill_switch_wins_and_activates_feature_specific_safe_fallback() -> None
     )
 
     assert decision.effective_mode is FeatureMode.OFF
-    assert decision.safe_fallback is FeatureFallback.SERIAL
+    assert decision.safe_fallback is FeatureFallback.OFF
     assert decision.reason is FeatureModeDecisionReason.KILL_SWITCHED
     assert decision.kill_switch_asserted
     assert decision.fallback_active
