@@ -40,6 +40,9 @@ class Keys:
         # PRD-C2 gate.opened / gate.resolved payload keys (SDR §5, verbatim).
         GATE_ID = "gate_id"
         PURPOSE = "purpose"
+        # The human line for a WRITE gate. ``purpose`` is the auditor's row; a
+        # queue that renders it asks a person to act on a compliance string.
+        DISPLAY_TITLE = "display_title"
         SCOPES = "scopes"
         AUTH_STATE = "auth_state"
         OUTCOME = "outcome"

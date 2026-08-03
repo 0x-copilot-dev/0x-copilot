@@ -28,7 +28,12 @@ from agent_runtime.surfaces_v2.gate import (
     GateResume,
     ToolAccessGate,
 )
-from agent_runtime.surfaces_v2.ledger_models import GateAuthState
+from agent_runtime.surfaces_v2.ledger_models import (
+    GateAuthState,
+    GateOpenedPayload,
+)
+from runtime_api.schemas import RuntimeApiEventType
+from runtime_api.schemas.events import RuntimeEventPresentationProjector
 
 
 # --------------------------------------------------------------------------- #
@@ -454,9 +459,103 @@ async def test_write_gate_opened_payload_is_the_full_safe_field_set() -> None:
         "gate_id": "mcp_write:run_abcdef:call_1",
         "connector": "linear",
         "purpose": "approve write create_issue on linear",
+        "display_title": "Create issue · Linear",
         "scopes": ["docs:read", "docs:write"],
         "auth_state": GateAuthState.INSUFFICIENT.value,
     }
+
+
+async def test_the_display_title_survives_the_ledger_contract_and_presentation() -> (
+    None
+):
+    """The two chokepoints between the emitter and the client both strip.
+
+    ``GateOpenedPayload`` is ``extra="forbid"`` — an unlisted key does not ride
+    along quietly, it raises at the validation chokepoint. Presentation then
+    projects through a second, independent allow-list that drops anything not
+    named. A field can therefore be emitted perfectly and still never reach a
+    client, which is what the queue's title depends on.
+    """
+
+    payload = await _park_write(arguments={"title": "Fix login"})
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+    assert opened is not None
+
+    # 1. the ledger contract accepts it
+    validated = GateOpenedPayload.model_validate(opened)
+    assert validated.display_title == "Create issue · Linear"
+
+    # 2. presentation's allow-list admits it
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.GATE_OPENED,
+        payload=dict(opened),
+    )
+    assert projected["display_title"] == "Create issue · Linear"
+
+
+async def test_presentation_still_drops_an_unlisted_gate_field() -> None:
+    """Admitting one field must not turn the allow-list into a pass-through."""
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.GATE_OPENED,
+        payload={
+            "v": 1,
+            "gate_id": "mcp_write:run_a:call_1",
+            "display_title": "Create issue · Linear",
+            "auth_url": "https://linear.app/oauth?token=secret",
+            "arguments": {"title": "ada.lovelace@example.com"},
+        },
+    )
+
+    assert "auth_url" not in projected
+    assert "arguments" not in projected
+    assert "ada.lovelace" not in repr(projected)
+
+
+async def test_connect_gate_carries_no_display_title() -> None:
+    """Only a WRITE gate needs the second string.
+
+    A connect gate's ``purpose`` is already written for a person
+    ("Authenticate Linear to continue…"), so a display title would be a second
+    copy of the same sentence riding a durable record.
+    """
+
+    opened = GateLedger.opened_payload(
+        interrupt_payload={
+            "api_event_type": "mcp_auth_required",
+            "approval_id": "mcp_auth:run_abcdef:linear",
+            "server_name": "linear",
+            "gate": {
+                "v": 1,
+                "purpose": "Authenticate Linear to continue using this MCP server.",
+                "scopes": [],
+                "auth_state": GateAuthState.MISSING.value,
+                "op": "list_issues",
+                "op_class": "read",
+            },
+        }
+    )
+
+    assert opened is not None
+    assert "display_title" not in opened
+
+
+async def test_write_gate_display_title_never_carries_tool_arguments() -> None:
+    """The human line is grammar over the SAME tokens — never a new source.
+
+    It exists because the queue rendered the auditor's line at a person. The
+    fix would be worthless if it bought readability by copying the interactive
+    card's argument-bearing purpose into the durable row, so this pins that it
+    is still built from op + connector only.
+    """
+
+    secret = "ada.lovelace@example.com wants **root** at https://evil.example/x"
+    payload = await _park_write(arguments={"title": secret})
+
+    opened = GateLedger.opened_payload(interrupt_payload=payload)
+    assert opened is not None
+    assert opened["display_title"] == "Create issue · Linear"
+    assert "ada.lovelace" not in repr(opened)
 
 
 async def test_write_gate_ledger_purpose_never_carries_tool_arguments() -> None:

@@ -83,6 +83,7 @@ class _GateKey:
     AUTH_STATE = "auth_state"
     OP = "op"
     OP_CLASS = "op_class"
+    DISPLAY_TITLE = "display_title"
 
 
 class _ResumeKey:
@@ -143,6 +144,32 @@ class _Messages:
         """
 
         return f"approve {op_class} {op} on {connector}"
+
+    @staticmethod
+    def ledger_display_title(*, op: str, connector: str) -> str:
+        """The ``gate.opened`` line a PERSON reads, for the cross-run queue.
+
+        The queue had no human string to render, so it fell back to
+        :meth:`ledger_purpose` — the auditor's line — and every queued write read
+        ``approve destructive save_issue on linear``. That is a correct
+        compliance row and a poor thing to ask somebody to act on.
+
+        This is built from the SAME two identifier-sanitised tokens, and
+        deliberately carries no argument: ``gate.opened`` is durable, so the
+        interactive card's argument-bearing purpose
+        (:class:`GatePurposeBuilder`) must not leak into it just because the
+        result would read better. What changes is grammar, not information —
+        ``save_issue`` on ``linear`` becomes "Save issue · Linear".
+
+        Both tokens arrive capped at 64 chars, so the line is bounded by
+        construction.
+        """
+
+        verb = op.replace("_", " ").replace("-", " ").strip()
+        verb = verb[:1].upper() + verb[1:] if verb else "Run tool"
+        surface = connector.replace("_", " ").replace("-", " ").strip()
+        surface = surface[:1].upper() + surface[1:] if surface else ""
+        return f"{verb} · {surface}" if surface else verb
 
 
 class GateResume(RuntimeContract):
@@ -631,7 +658,7 @@ class GateLedger:
         connector = interrupt_payload.get(_PayloadKey.SERVER_NAME)
         scopes = block.get(_GateKey.SCOPES)
         safe_connector = connector if isinstance(connector, str) else ""
-        return {
+        payload = {
             _GateKey.V: _Values.PAYLOAD_V,
             "gate_id": gate_id if isinstance(gate_id, str) else "",
             "connector": safe_connector,
@@ -641,6 +668,35 @@ class GateLedger:
             _GateKey.SCOPES: list(scopes) if isinstance(scopes, (list, tuple)) else [],
             _GateKey.AUTH_STATE: cls._auth_state(interrupt_payload, block),
         }
+        display_title = cls._display_title(
+            interrupt_payload, block, connector=safe_connector
+        )
+        if display_title is not None:
+            payload[_GateKey.DISPLAY_TITLE] = display_title
+        return payload
+
+    @classmethod
+    def _display_title(
+        cls,
+        interrupt_payload: Mapping[str, Any],
+        block: Mapping[str, Any],
+        *,
+        connector: str,
+    ) -> str | None:
+        """The human line for a WRITE gate, or ``None`` for a connect gate.
+
+        A connect gate's ``purpose`` is already written for a person
+        ("Authenticate Linear to continue…"), so it needs no second string and
+        omitting the key keeps the payload as small as it was. Only the write
+        gate — whose purpose is the auditor's line — gets one.
+        """
+
+        if not cls.is_write_gate(interrupt_payload):
+            return None
+        return _Messages.ledger_display_title(
+            op=GatePurposeBuilder.sanitize_identifier(str(block.get(_GateKey.OP, ""))),
+            connector=GatePurposeBuilder.sanitize_identifier(connector),
+        )
 
     @classmethod
     def _purpose(

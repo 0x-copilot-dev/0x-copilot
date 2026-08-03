@@ -1439,10 +1439,16 @@ class RuntimeEventPresentationProjector:
         """Project ``gate.opened`` through a strict allow-list (PRD-C2, SDR §5).
 
         Keeps exactly ``v`` / ``gate_id`` / ``connector`` / ``purpose`` /
-        ``scopes[]`` / ``auth_state`` — so a gate emit can never over-share (the
-        interrupt payload carries the connect URL + display copy; none of it
-        rides the ledger row). ``scopes`` is re-built from its own list so a
-        non-string element can't slip through.
+        ``display_title`` / ``scopes[]`` / ``auth_state`` — so a gate emit can
+        never over-share (the interrupt payload carries the connect URL +
+        display copy; none of it rides the ledger row). ``scopes`` is re-built
+        from its own list so a non-string element can't slip through.
+
+        ``display_title`` is the human sibling of ``purpose`` and is subject to
+        the same rule: the emitter builds it from the op + connector tokens
+        ONLY, so admitting it here cannot let a tool argument onto the ledger.
+        It is optional — a connect gate omits it, because its ``purpose`` is
+        already written for a person.
         """
 
         safe_payload: JsonObject = {}
@@ -1451,6 +1457,7 @@ class RuntimeEventPresentationProjector:
             _LedgerKeys.Field.GATE_ID,
             _LedgerKeys.Field.CONNECTOR,
             _LedgerKeys.Field.PURPOSE,
+            _LedgerKeys.Field.DISPLAY_TITLE,
             _LedgerKeys.Field.AUTH_STATE,
         ):
             value = cls._text(payload.get(text_key))

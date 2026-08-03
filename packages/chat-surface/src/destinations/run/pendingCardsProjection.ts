@@ -91,7 +91,11 @@ function gateCard(gate: LedgerGate, runId: string): PendingCard {
     gateId: gate.gateId,
     stageId: null,
     surfaceId: null,
-    title: gate.purpose,
+    // `purpose` is the AUDITOR's line ("approve destructive save_issue on
+    // linear") and reads as machine noise in a queue somebody has to act on.
+    // The emitter now ships a human sibling built from the same argument-free
+    // tokens; falling back keeps every pre-existing event rendering.
+    title: gate.displayTitle.length > 0 ? gate.displayTitle : gate.purpose,
     connector: gate.connector,
     ledgerId: gate.ledgerId,
     openedSeq: gate.createdSeq,

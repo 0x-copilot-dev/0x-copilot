@@ -146,6 +146,10 @@ export interface LedgerGate {
   readonly serverId: string;
   readonly connector: string;
   readonly purpose: string;
+  /** The line a PERSON reads. `purpose` is the auditor's row — a queue that
+   *  renders it asks somebody to act on a compliance string. Empty for a
+   *  connect gate, whose `purpose` is already human copy. */
+  readonly displayTitle: string;
   readonly scopes: readonly string[];
   readonly authState: LedgerGateAuthState;
   readonly opClass: LedgerGateOpClass;
@@ -377,6 +381,7 @@ interface GateAccumulator {
   serverId: string;
   connector: string;
   purpose: string;
+  displayTitle: string;
   scopes: readonly string[];
   authState: LedgerGateAuthState;
   opClass: LedgerGateOpClass;
@@ -637,6 +642,7 @@ function applyGateOpened(
     // Upsert (replay): refresh mutable fields, keep the first anchor.
     existing.connector = strOr(payload.connector, existing.connector);
     existing.purpose = strOr(payload.purpose, existing.purpose);
+    existing.displayTitle = strOr(payload.display_title, existing.displayTitle);
     existing.scopes = scopes;
     existing.authState = normalizeAuthState(payload.auth_state);
     if (seq > existing.lastSeq) existing.lastSeq = seq;
@@ -647,6 +653,7 @@ function applyGateOpened(
     serverId: serverIdFromGateId(gateId, runId),
     connector: strOr(payload.connector, ""),
     purpose: strOr(payload.purpose, ""),
+    displayTitle: strOr(payload.display_title, ""),
     scopes,
     authState: normalizeAuthState(payload.auth_state),
     // op_class is not on the ledger row — fail closed to write (§Design C2).
@@ -1076,6 +1083,7 @@ function freezeGate(acc: GateAccumulator): LedgerGate {
     serverId: acc.serverId,
     connector: acc.connector,
     purpose: acc.purpose,
+    displayTitle: acc.displayTitle,
     scopes: acc.scopes,
     authState: acc.authState,
     opClass: acc.opClass,
