@@ -64,12 +64,22 @@ from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
 )
+from langchain_core.tools import BaseTool
+from pydantic import create_model
+
+from agent_runtime.capabilities.mcp.connection import McpServerConnectionConfig
+from agent_runtime.capabilities.mcp.per_tool_registration import (
+    McpPerToolCollaborators,
+)
+from agent_runtime.execution import factory as factory_module
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
 
 _ORG_ID = "org_123"
 _USER_ID = "user_123"
 _SERVER = "linear"
+_READ_TOOL = "get_issues"
+_WRITE_TOOL = "create_issue"
 # The four capabilities the model-facing MCP operation gateway requires to
 # compose for an enforced run (mirrors ``test_mcp_operation_composition``).
 _GATEWAY_CAPABILITIES = (
@@ -101,6 +111,100 @@ class _RecordingFakeClient:
     ) -> Mapping[str, object]:
         self.calls.append((tool_name, dict(arguments)))
         return self.tool_outputs.get(tool_name, {"ok": True})
+
+
+class _PerToolPlane:
+    """The credential plane the per-tool path needs, over the same fake client.
+
+    Production builds this from the registry's ``backend_url`` (see
+    ``factory._proxy_collaborators``); a fake registry has none, so the plane
+    resolves to ``None`` and NO MCP tool registers — which is why this file went
+    quiet after the umbrella was retired rather than failing loudly. Injecting it
+    here is what restores the altitude these tests exist for: a real worker, a
+    real graph, and a real approval coordinator over a connector that answers.
+    """
+
+    @staticmethod
+    def tools_for(client: "_RecordingFakeClient") -> list[BaseTool]:
+        """One ``BaseTool`` per connector tool, dispatching to the fake client.
+
+        ``read_only`` puts the camelCase ``readOnlyHint`` on ``metadata`` — the
+        shape ``langchain-mcp-adapters`` actually returns, and what the source
+        ingests to derive ``action``. Without it the read derives WRITE
+        fail-closed and gets gated, which is the very bug T1 exists to catch.
+        """
+
+        def make(connector_tool: str, *, read_only: bool = False) -> BaseTool:
+            # `connector_tool` is deliberately NOT called `name`: a class body
+            # that assigns `name` makes it class-local, so `name: str = name`
+            # raises `NameError` instead of closing over the parameter.
+            # A real `args_schema` per tool, not a shared/absent one: the
+            # display wrapper subclasses whatever schema it is given, and a
+            # missing schema makes it build a model with a duplicate base.
+            schema = create_model(
+                f"{connector_tool}_Args",
+                team=(str, ""),
+                title=(str, ""),
+            )
+
+            class _ConnectorTool(BaseTool):
+                # `content_and_artifact` is what langchain-mcp-adapters returns,
+                # and every wrapper in the pipeline depends on the two-tuple.
+                name: str = connector_tool
+                description: str = f"fake {connector_tool}"
+                response_format: str = "content_and_artifact"
+                args_schema: type = schema
+                metadata: dict = {"readOnlyHint": True} if read_only else {}
+
+                def _run(self, *a: object, **k: object) -> object:
+                    raise AssertionError("MCP tools are driven asynchronously.")
+
+                async def _arun(self, *a: object, **k: object) -> object:
+                    payload = {
+                        key: value for key, value in k.items() if key != "tool_call_id"
+                    }
+                    out = await client.call_tool(
+                        tool_name=connector_tool, arguments=payload
+                    )
+                    return (json.dumps(out), dict(out))
+
+            return _ConnectorTool()
+
+        return [make(_READ_TOOL, read_only=True), make(_WRITE_TOOL)]
+
+    @classmethod
+    def install(cls, monkeypatch, client: "_RecordingFakeClient") -> None:
+        """Point the factory's credential-plane seam at this fake."""
+
+        tools = cls.tools_for(client)
+
+        class _Directory:
+            async def connection_for(self, server_id: str) -> object:
+                return McpServerConnectionConfig(
+                    url="https://mcp.invalid/mcp", transport=McpTransport.HTTP
+                )
+
+        class _Credentials:
+            async def auth_for(self, server_id: str) -> Mapping[str, str]:
+                return {}
+
+        class _Client:
+            async def get_tools(self, *, server_name: str | None = None):
+                return list(tools)
+
+        class _Factory:
+            def create(self, connections: Mapping[str, object]) -> object:
+                return _Client()
+
+        monkeypatch.setattr(
+            factory_module,
+            "_mcp_per_tool_collaborators",
+            lambda dependencies, *, runtime_context: McpPerToolCollaborators(
+                directory=_Directory(),
+                credentials=_Credentials(),
+                client_factory=_Factory(),
+            ),
+        )
 
 
 @dataclass
@@ -219,25 +323,28 @@ class LinearMcpRunMixin:
         )
 
     @staticmethod
-    def _patch_registry(monkeypatch, provider: _LinearMcpProvider) -> None:
+    def _patch_registry(monkeypatch, provider) -> None:
         registry = DynamicMcpRegistry(providers=(provider,))
         monkeypatch.setattr(
             DefaultRuntimeDependenciesFactory,
             "_mcp_registry",
             lambda self, context, **kwargs: registry,
         )
+        # The registry alone is no longer enough: per-tool registration also
+        # needs a credential plane, which production derives from the registry's
+        # `backend_url`. A fake registry has none, so without this the run gets
+        # NO MCP tools and every assertion below goes quiet rather than red.
+        _PerToolPlane.install(monkeypatch, provider.client)
 
     @staticmethod
     def _script_one_mcp_call(monkeypatch, *, tool_name: str, arguments: dict) -> None:
         monkeypatch.setenv(FakeModelProvider.ENV_FLAG, "1")
         monkeypatch.setenv(FakeModelProvider.ENV_TOOL_CALLS, "1")
-        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, "call_mcp_tool")
-        monkeypatch.setenv(
-            FakeModelProvider.ENV_TOOL_ARGS,
-            json.dumps(
-                {"server_name": _SERVER, "tool_name": tool_name, "arguments": arguments}
-            ),
-        )
+        # Per-tool registration means the model calls the connector's own tool
+        # by name with its own arguments. There is no umbrella to address, and
+        # no `{server_name, tool_name, arguments}` envelope to decode.
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, tool_name)
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_ARGS, json.dumps(arguments))
 
     @classmethod
     def _coordinators(cls, store, settings):
@@ -337,9 +444,7 @@ class TestTrustedReadAutoRuns(LinearMcpRunMixin):
         assert self._pending_approvals(store, run_id) == []
         assert "mcp_auth_required" not in names
         assert "approval_requested" not in names
-        # The read actually dispatched to the connector exactly once (a staged
-        # op never constructs a client).
-        assert provider.created_clients == [_SERVER]
+        # The read actually dispatched to the connector exactly once.
         assert provider.client.calls == [("get_issues", {"team": "ENG"})]
 
 
@@ -368,7 +473,6 @@ class TestWriteParksThenApproveExecutes(LinearMcpRunMixin):
         pending = self._pending_approvals(store, run_id)
         assert len(pending) == 1, [a.approval_id for a in pending]
         # The orphan guard: NO external change and NO run seal before approval.
-        assert provider.created_clients == []
         assert provider.client.calls == []
         assert "run_completed" not in names, names
 
@@ -388,7 +492,6 @@ class TestWriteParksThenApproveExecutes(LinearMcpRunMixin):
         assert store.runs[run_id].status is AgentRunStatus.COMPLETED
         # The write executed in the SAME run, exactly once (no double-dispatch
         # across the interrupt replay), and only after approval.
-        assert provider.created_clients == [_SERVER]
         assert provider.client.calls == [
             ("create_issue", {"title": "Ship it", "team": "ENG"})
         ]
@@ -461,7 +564,6 @@ class TestNonOAuthWriteParksThenApproveExecutes(NonOAuthLocalMcpRunMixin):
         pending = self._pending_approvals(store, run_id)
         assert len(pending) == 1, [a.approval_id for a in pending]
         # PARKED, not refused: no external change and no seal before approval.
-        assert provider.created_clients == []
         assert provider.client.calls == []
         assert "run_completed" not in names, names
 
@@ -481,7 +583,6 @@ class TestNonOAuthWriteParksThenApproveExecutes(NonOAuthLocalMcpRunMixin):
         assert store.runs[run_id].status is AgentRunStatus.COMPLETED
         # The write executed in the SAME run exactly once, only after approval —
         # on a connector with NO OAuth provider wired.
-        assert provider.created_clients == [_SERVER]
         assert provider.client.calls == [
             ("create_issue", {"title": "Ship it", "team": "ENG"})
         ]

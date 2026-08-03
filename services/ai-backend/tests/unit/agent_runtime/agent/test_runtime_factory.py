@@ -12,6 +12,8 @@ from agent_runtime.capabilities.task_policy import (
     TaskPolicySelection,
     TaskPolicySelectionReason,
 )
+from langchain.agents.middleware import TodoListMiddleware
+
 from agent_runtime.capabilities.middleware import (
     ModelInvocationMiddleware,
     RuntimeControlMiddleware,
@@ -177,12 +179,14 @@ async def test_factory_propagates_permissions_to_runtime_ports(
     assert "ask_a_question" in tool_names
     assert call.subagents == ("researcher",)
     assert call.memory_backend is None
-    assert len(call.middleware) == 2
+    assert len(call.middleware) == 3
     assert isinstance(call.middleware[0], RuntimeControlMiddleware)
     assert isinstance(call.middleware[1], ModelInvocationMiddleware)
+    assert isinstance(call.middleware[2], TodoListMiddleware)
     assert call.universal_middleware_factories == (
         RuntimeControlMiddleware,
         ModelInvocationMiddleware,
+        TodoListMiddleware,
     )
     assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
 
@@ -606,7 +610,6 @@ async def test_factory_composes_all_runtime_tool_categories_behind_one_stack(
     assert {
         "registry_search",
         "load_mcp_server",
-        "call_mcp_tool",
         "load_skill",
         "load_prior_tool_result",
         "ask_a_question",
@@ -614,12 +617,14 @@ async def test_factory_composes_all_runtime_tool_categories_behind_one_stack(
         "invoke_capability",
         "execute_dataflow",
     }.issubset(tool_names)
-    assert len(call.middleware) == 2
+    assert len(call.middleware) == 3
     assert isinstance(call.middleware[0], RuntimeControlMiddleware)
     assert isinstance(call.middleware[1], ModelInvocationMiddleware)
+    assert isinstance(call.middleware[2], TodoListMiddleware)
     assert call.universal_middleware_factories == (
         RuntimeControlMiddleware,
         ModelInvocationMiddleware,
+        TodoListMiddleware,
     )
 
 
@@ -640,7 +645,6 @@ async def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
 
     tool_names = {getattr(tool, "name", "") for tool in builder.calls[0].tools}
     assert "load_mcp_server" in tool_names
-    assert "call_mcp_tool" in tool_names
     assert "drive_search" not in tool_names
     assert "answer directly from these cards" in builder.calls[0].system_prompt
 

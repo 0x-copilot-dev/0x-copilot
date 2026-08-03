@@ -369,14 +369,20 @@ class TestLoadActuallyReadsTheDocument:
     ) -> None:
         from agent_runtime.settings import RuntimeSettings
 
-        default = RuntimeSettings.load(environ={}).execution.max_parallel_runs
+        # `env_file` points at nothing on purpose: `environ={}` empties the
+        # process environment but NOT the on-disk `.env` layer, and a developer's
+        # `.env` carries deprecated-but-still-honoured tunables that would
+        # override the document under test. Without this the failure reproduces
+        # only on machines set up to actually run the product — never in CI.
+        hermetic = {"environ": {}, "env_file": tmp_path / "absent.env"}
+        default = RuntimeSettings.load(**hermetic).execution.max_parallel_runs
         changed = default + 3
         path = self._document_with(tmp_path, max_parallel_runs=changed)
         monkeypatch.setattr(
             HyperparameterLoader, "candidate_paths", classmethod(lambda cls: (path,))
         )
 
-        settings = RuntimeSettings.load(environ={})
+        settings = RuntimeSettings.load(**hermetic)
 
         assert settings.execution.max_parallel_runs == changed
         assert settings.hyperparameters.execution.max_parallel_runs == changed
@@ -392,7 +398,8 @@ class TestLoadActuallyReadsTheDocument:
         )
 
         settings = RuntimeSettings.load(
-            environ={"COPILOT_HP__EXECUTION__MAX_PARALLEL_RUNS": "11"}
+            environ={"COPILOT_HP__EXECUTION__MAX_PARALLEL_RUNS": "11"},
+            env_file=tmp_path / "absent.env",
         )
 
         assert settings.execution.max_parallel_runs == 11
@@ -413,7 +420,7 @@ class TestLoadActuallyReadsTheDocument:
         )
 
         with pytest.raises(HyperparameterError):
-            RuntimeSettings.load(environ={})
+            RuntimeSettings.load(environ={}, env_file=tmp_path / "absent.env")
 
 
 class TestTheSearchSectionReachesTheTool:
