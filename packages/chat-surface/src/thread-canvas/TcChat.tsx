@@ -68,6 +68,7 @@ import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
+import { TcWriteGateRow } from "./TcWriteGateRow";
 
 export type TcChatMode = "studio" | "focus";
 
@@ -174,6 +175,18 @@ function isMcpAuthApproval(approval: TcChatApproval): boolean {
 // emits, so any kind can carry one. Checked before the `mcp_auth` branch —
 // which folder to hand over is a different question from which vendor to sign
 // in to, and only one of the two cards names a path.
+// A parked WRITE is recognised by its approval id, the same way an mcp_auth gate
+// is: `PolicyToolMiddleware` parks on a deterministic `mcp_write:<run>:<call>`
+// (policy_tool.py), chosen so the id is stable across LangGraph's node replay.
+// Its wire shape is `ask_a_question` — the gate deliberately reuses that resume
+// plumbing — so without this it falls into the generic question branch and a
+// yes/no about a real side effect renders as a free-text box.
+const WRITE_GATE_APPROVAL_PREFIX = "mcp_write:";
+
+function isWriteGateApproval(approval: TcChatApproval): boolean {
+  return approval.approvalId.startsWith(WRITE_GATE_APPROVAL_PREFIX);
+}
+
 function isWorkspaceGrantApproval(approval: TcChatApproval): boolean {
   return (approval.workspaceGrant ?? null) !== null;
 }
@@ -754,6 +767,9 @@ function renderApprovalItem(
   mode: TcChatMode,
   handlers: ApprovalHandlers,
 ): ReactNode {
+  if (!approval.resolved && isWriteGateApproval(approval)) {
+    return renderWriteGateRow(approval, handlers);
+  }
   if (approval.question !== null) {
     return renderQuestionCard(approval, handlers.onAnswer);
   }
@@ -805,6 +821,11 @@ interface ApprovalHandlers {
   ) => void;
   readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
   readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
+  /**
+   * Open a parked write's detail on the canvas. The compact row keeps only the
+   * ask; everything a reviewer needs to judge it lives on the Studio surface.
+   */
+  readonly onReviewWriteGate?: (approvalId: string) => void;
 }
 
 function renderStudioApprovalCard(
@@ -1016,6 +1037,44 @@ function renderConfCard(
 // A question renders the SAME card in both modes. Focus and Studio differ in
 // how much context sits around the chat, not in what an interrupt looks like —
 // and unlike an approval there is no denser variant worth having.
+function renderWriteGateRow(
+  approval: TcChatApproval,
+  handlers: ApprovalHandlers,
+): ReactNode {
+  return (
+    <div
+      key={`write-gate-${approval.approvalId}`}
+      data-testid={`tc-chat-write-gate-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+    >
+      <TcWriteGateRow
+        title={approval.title}
+        connector={approval.category?.vendor ?? null}
+        irreversible={isIrreversible(approval)}
+        onApprove={() => handlers.onApprove?.(approval.approvalId)}
+        onDecline={() => handlers.onReject?.(approval.approvalId)}
+        onReview={() => handlers.onReviewWriteGate?.(approval.approvalId)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Whether this write cannot be undone from inside the app.
+ *
+ * The PDP knows — it sorts every tool onto a read / write / destructive axis —
+ * but `op_class` is NOT on the `gate.opened` ledger row, so the canvas fold
+ * fails closed to "write" for every gate and cannot answer this. The projected
+ * approval's access label is the only signal that survives to the client today,
+ * so an unlabelled gate reads as reversible: it keeps the ordinary Approve
+ * button rather than inventing a severity nobody asserted.
+ */
+function isIrreversible(approval: TcChatApproval): boolean {
+  return (approval.category?.access ?? "")
+    .toLowerCase()
+    .includes("destructive");
+}
+
 function renderQuestionCard(
   approval: TcChatApproval,
   onAnswer?: (approvalId: string, answer: QuestionAnswer) => void,
