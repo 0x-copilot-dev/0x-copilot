@@ -18,11 +18,11 @@
 # version that disagrees with the lock is a divergence nobody sees until deploy.
 
 # -- service surface ----------------------------------------------------------
-fastapi==0.139.2
+fastapi==0.141.1
 # `from starlette import status` is used directly across runtime_api/ and
 # runtime_adapters/. FastAPI happens to require it; the import is still ours.
 starlette==1.3.1
-uvicorn==0.51.0
+uvicorn==0.52.0
 gunicorn==26.0.0
 httpx==0.28.1
 python-multipart==0.0.32
@@ -34,14 +34,14 @@ PyYAML==6.0.3
 # -- agent runtime ------------------------------------------------------------
 deepagents==0.7.1
 langchain==1.3.14
-langchain-openai==1.3.5
+langchain-openai==1.4.1
 langchain-anthropic==1.5.3
 langchain-google-genai==4.3.2
-langgraph==1.2.9
+langgraph==1.2.10
 # SQLite-backed LangGraph checkpointer for the single_user_desktop file store
 # (durable graph/approval continuation across worker restart). Desktop path
 # only; postgres/in-memory keep InMemorySaver.
-langgraph-checkpoint-sqlite==3.1.0
+langgraph-checkpoint-sqlite==3.1.1
 # `import aiosqlite` in execution/deep_agent_builder.py is a DIRECT import even
 # though langgraph-checkpoint-sqlite also requires it.
 aiosqlite==0.22.1
@@ -51,18 +51,18 @@ aiosqlite==0.22.1
 # than as a resolver change — pinning it here is what keeps the lock honest.
 # MultiServerMCPClient + descriptor conversion (capabilities/mcp/tool_source.py).
 langchain-mcp-adapters==0.3.1
-openai==2.46.0
+openai==2.52.0
 anthropic==0.120.2
 # Upstream authority for provider model metadata, pricing, and preflight token
 # counting. Never replaced by a locally-maintained per-model catalog.
-litellm==1.93.0
+litellm==1.94.1
 ddgs==9.14.4
 # Main-content extraction for `web_search` (PRD local-search-extraction, S1).
 # Search gives us four URLs; this turns each page into the article text a
 # snippet-anchored window can be cut from. Without it the whole extraction path
 # degrades to returning the engine snippet — which is correct, and is also why
 # the feature shipped inert: the code was live and the dependency was not.
-trafilatura==2.0.0
+trafilatura==2.2.0
 
 # -- storage ------------------------------------------------------------------
 
