@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agent_runtime.prompts.guidance import GuidanceLibrary
+
 
 # Stated here once instead of in every tool's ``args_schema``.
 #
@@ -91,7 +93,12 @@ DEFAULT_INSTRUCTIONS = (
     "must use double square brackets with a positive integer (e.g. "
     "`[[3]]`, `[[47]]`), with no spaces inside the brackets. Do not "
     "invent ordinals that were not shown to you; if no pointer was "
-    "provided for the source you used, omit the marker."
+    "provided for the source you used, omit the marker.\n\n"
+    # Behavioural guidance blocks (prompts/guidance/*.md). Appended LAST so the
+    # runtime's own identity, evidence and formatting rules are read first and
+    # the guidance reads as elaboration rather than replacement. Applied to
+    # every model — see guidance.py for why there is no family gate.
+     + GuidanceLibrary.text()
 )
 
 # The order below is the load-bearing part, and it is stated first because the
