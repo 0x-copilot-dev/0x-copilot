@@ -127,7 +127,6 @@ RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
 # here for single-process runs; ``postgres`` enables LISTEN/NOTIFY for
 # cross-process SSE wakeups (drops p50 SSE delivery from ~1s to ~50ms in
 # multi-process deploys; needs DATABASE_URL configured).
-RUNTIME_EVENT_BUS_BACKEND=in_memory
 ```
 
 Run requests should not include API keys. Provider credentials are loaded by

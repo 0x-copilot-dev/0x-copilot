@@ -81,7 +81,10 @@ const SERVICES = [
   },
   {
     name: "ai-backend",
-    copyDirs: ["src", "migrations", "scripts", "config", "skills"],
+    // No "migrations" / "scripts": the ai-backend runs the file-native store,
+    // which has no relational schema, so neither the migration chain nor the
+    // migrate/restore CLIs that drove it exist any more.
+    copyDirs: ["src", "config", "skills"],
     requireHashes: false,
   },
 ];

@@ -262,20 +262,15 @@ boot error — never silently regenerated, because the postgres password and
 `logs/{backend,ai-backend,backend-facade}.log` (10 MB × 3 rotation),
 `logs/postgres.log`.
 
-**File-native AI store (default)** — the **ai-backend** runtime store is the
-file-native JSONL store under `<userData>/agent-data/v1`
-(`RUNTIME_STORE_BACKEND=file`; adapter provisions the tree `0o700`), and its
-Postgres migration gate is skipped. `backend`'s own Postgres
-(identity/OAuth/vault) is untouched. `COPILOT_DESKTOP_FILE_STORE_V1` is an
-**override**, not an opt-in: a falsey value (`0`/`false`/`no`/`off`/`disabled`)
-pins the legacy Postgres `atlas_ai` store (the rollback / escape hatch), a
-truthy value forces file, and unset resolves to file. **Data continuity**: a
-first file boot starts a **fresh** store — conversations already written to the
-`atlas_ai` Postgres DB are preserved on disk but not shown until carried over
-with `python -m runtime_adapters.migrate` (see
-`docs/operations/desktop-file-store-migration.md`), or pin Postgres with
-`COPILOT_DESKTOP_FILE_STORE_V1=0`. The file backend rides the in-process worker;
-the `single_user_desktop` profile is what starts it.
+**File-native AI store** — the **ai-backend** runtime store is the file-native
+JSONL store under `<userData>/agent-data/v1` (`RUNTIME_STORE_BACKEND=file`;
+the adapter provisions the tree `0o700`). It is the only store the desktop
+ships: there is no relational schema and therefore no migration step. The file
+backend rides the in-process worker; the `single_user_desktop` profile is what
+starts it.
+
+`backend`'s own Postgres (identity / OAuth / vault) is untouched, and is the
+only remaining reason the app boots a postmaster at all.
 
 **Crash policy**: children restart with 1s→2s→4s→…→30s backoff;
 ≥ 5 crashes in 5 minutes is a `FatalCrashLoop` surfaced on the boot

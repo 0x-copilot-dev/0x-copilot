@@ -25,6 +25,14 @@ export interface PendingCardListProps {
   readonly onReview: (card: PendingCard) => void;
   /** Empty-state copy; a sensible default when the queue is clear. */
   readonly emptyCopy?: string;
+  /**
+   * Scope heading, e.g. "Other chats". Supply it whenever a sibling list with a
+   * DIFFERENT scope renders in the same panel: the Approvals rail stacks this
+   * cross-run queue above the conversation-scoped one, and unlabelled that read
+   * as cards sitting on top of "No pending approvals in this conversation" —
+   * both statements true, together nonsense.
+   */
+  readonly groupLabel?: string;
 }
 
 const DEFAULT_EMPTY = "Nothing waiting on you.";
@@ -33,66 +41,81 @@ export function PendingCardList({
   cards,
   onReview,
   emptyCopy = DEFAULT_EMPTY,
+  groupLabel,
 }: PendingCardListProps): ReactElement {
+  const heading =
+    groupLabel === undefined ? null : (
+      <p
+        className="ui-eyebrow"
+        data-testid="pending-card-list-group"
+        style={groupStyle}
+      >
+        {cards.length > 0 ? `${groupLabel} · ${cards.length}` : groupLabel}
+      </p>
+    );
   if (cards.length === 0) {
     return (
       <div data-testid="pending-card-list-empty" style={emptyStyle}>
+        {heading}
         {emptyCopy}
       </div>
     );
   }
   return (
-    <ul
-      data-testid="pending-card-list"
-      aria-label="Pending work"
-      style={listStyle}
-    >
-      {cards.map((card) => (
-        <li
-          key={cardKey(card)}
-          data-item-kind={card.itemKind}
-          style={cardStyle}
-        >
-          <div style={headRowStyle}>
-            <span className="ui-eyebrow" data-testid="pending-card-kind">
-              {kindLabel(card)}
-            </span>
-            <Badge tone="neutral" data-testid="pending-card-connector">
-              {card.connector}
-            </Badge>
-          </div>
-          <div style={titleStyle} data-testid="pending-card-title">
-            {card.title}
-          </div>
-          {rowCountLabel(card) !== null ? (
-            <span
-              className="ui-pill"
-              data-testid="pending-card-rows"
-              style={pillStyle}
-            >
-              {rowCountLabel(card)}
-            </span>
-          ) : null}
-          <div style={footRowStyle}>
-            <span
-              className="ui-mono-caps ui-mono-caps--9"
-              data-testid="pending-card-ledger-id"
-            >
-              {card.ledgerId}
-            </span>
-            <button
-              type="button"
-              className="ui-button ui-button--sm"
-              data-testid="pending-card-review"
-              onClick={() => onReview(card)}
-              aria-label={`Review "${card.title}"`}
-            >
-              Review →
-            </button>
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      {heading}
+      <ul
+        data-testid="pending-card-list"
+        aria-label="Pending work"
+        style={listStyle}
+      >
+        {cards.map((card) => (
+          <li
+            key={cardKey(card)}
+            data-item-kind={card.itemKind}
+            style={cardStyle}
+          >
+            <div style={headRowStyle}>
+              <span className="ui-eyebrow" data-testid="pending-card-kind">
+                {kindLabel(card)}
+              </span>
+              <Badge tone="neutral" data-testid="pending-card-connector">
+                {card.connector}
+              </Badge>
+            </div>
+            <div style={titleStyle} data-testid="pending-card-title">
+              {card.title}
+            </div>
+            {rowCountLabel(card) !== null ? (
+              <span
+                className="ui-pill"
+                data-testid="pending-card-rows"
+                style={pillStyle}
+              >
+                {rowCountLabel(card)}
+              </span>
+            ) : null}
+            <div style={footRowStyle}>
+              <span
+                className="ui-mono-caps ui-mono-caps--9"
+                data-testid="pending-card-ledger-id"
+              >
+                {card.ledgerId}
+              </span>
+              <button
+                type="button"
+                className="ui-button ui-button--sm"
+                data-testid="pending-card-review"
+                onClick={() => onReview(card)}
+                aria-label={`Review "${card.title}"`}
+              >
+                Review →
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -157,6 +180,11 @@ const footRowStyle: CSSProperties = {
 
 const pillStyle: CSSProperties = {
   alignSelf: "flex-start",
+};
+
+const groupStyle: CSSProperties = {
+  margin: 0,
+  padding: "var(--space-2xs, 4px) var(--space-2xs, 4px) 0",
 };
 
 const emptyStyle: CSSProperties = {

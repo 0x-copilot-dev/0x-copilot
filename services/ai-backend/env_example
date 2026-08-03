@@ -53,7 +53,6 @@ RUNTIME_EVENT_WRITE_CONSOLIDATED=true
 # point at Postgres without us wanting LISTEN/NOTIFY overhead. Prod
 # leaves this unset → ``auto`` → ``postgres`` once DATABASE_URL is
 # present (drops SSE delivery latency from ~1s to ~50ms).
-RUNTIME_EVENT_BUS_BACKEND=in_memory
 # P7 PR2 — switch the citation projector to one batched
 # `sources_ingested` event per tool result (vs. N `source_ingested`
 # events under the legacy per-source loop). Default false (PR2 ships
@@ -84,8 +83,7 @@ RUNTIME_BATCH_SOURCE_INGESTION=false
 # reads os.environ directly, so a value here (or in .env) is silently ignored.
 # Export it into the process environment instead:
 #   OLLAMA_BASE_URL=http://127.0.0.1:11500/v1 make dev
-# Container stacks already set it explicitly (docker-compose.dev.yml,
-# deploy/self-host/docker-compose.prod.yml).
+# The container stack already sets it explicitly (docker-compose.dev.yml).
 MCP_BACKEND_REGISTRY_URL=
 MCP_AUTH_REDIRECT_URI=http://127.0.0.1:5173/mcp/oauth/callback
 SKILLS_BACKEND_REGISTRY_URL=

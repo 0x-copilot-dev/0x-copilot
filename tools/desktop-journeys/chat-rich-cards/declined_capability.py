@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import sys
+import os
 import time
 from pathlib import Path
 
@@ -34,7 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _lib import DriverSession, load_env_key  # noqa: E402
 
-PROVIDER = "openai"
+# Overridable like every sibling journey: a full-suite run pins one provider
+# (and one cheap model) across all of them, which a hardcoded value blocked.
+PROVIDER = os.environ.get("RICH_CHAT_PROVIDER", "openai")
 
 # The prompt from the report, verbatim.
 PROMPT = (

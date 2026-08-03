@@ -96,33 +96,6 @@ describe("RunWorkspaceRail pendingV2 (PRD-E2)", () => {
     expect(screen.queryByTestId("agent-fleet-list")).toBeNull();
   });
 
-  it("present: the Approvals panel leads with the cross-run PendingCardList", () => {
-    render(
-      <RunWorkspaceRail
-        mode="studio"
-        chatSlot={chatSlot()}
-        pendingV2={pendingV2()}
-      />,
-    );
-    fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
-    expect(screen.getByTestId("pending-card-list")).toBeInTheDocument();
-    expect(screen.getByTestId("pending-card-review")).toBeInTheDocument();
-  });
-
-  it("Studio mounts canonical v2.1 cards above the legacy queue", () => {
-    render(
-      <RunWorkspaceRail
-        mode="studio"
-        chatSlot={chatSlot()}
-        pendingV2={pendingV2()}
-        pendingWorkV21={pendingWorkV21()}
-      />,
-    );
-    fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
-    expect(screen.getByTestId("pending-work-v2-list")).toBeInTheDocument();
-    expect(screen.getByTestId("pending-card-list")).toBeInTheDocument();
-  });
-
   it("Focus stays compact: canonical cards never mount in its Run-details rail", () => {
     render(
       <RunWorkspaceRail
@@ -165,19 +138,39 @@ describe("RunWorkspaceRail pendingV2 (PRD-E2)", () => {
     expect(screen.getByText(/Subagents run here/i)).toBeInTheDocument();
   });
 
-  it("the approvals badge count adds the cross-run cards", () => {
+  // PRD-E2's cross-run queue is GONE from this panel — both the legacy
+  // `PendingCardList` and the canonical `PendingWorkV2List`.
+  //
+  // It answered "what is parked ANYWHERE?" from inside a surface scoped to one
+  // conversation. That is why its cards had to render above a "nothing pending
+  // in this conversation" empty state, and why the header counter needed the
+  // word "elsewhere" to stay honest: the placement was wrong, not the wording.
+  // A global count belongs on the nav rail's Chats badge.
+  it("the Approvals panel shows THIS conversation only, never cross-run work", () => {
     render(
       <RunWorkspaceRail
         mode="studio"
         chatSlot={chatSlot()}
-        pendingV2={pendingV2({
-          cards: [gateCard({ gateId: "a" }), gateCard({ gateId: "b" })],
-        })}
+        defaultTab="approvals"
+        pendingV2={pendingV2({ cards: [gateCard(), gateCard()] })}
       />,
     );
-    // No v1 in-chat approvals + 2 cross-run cards → badge reads "2".
-    expect(screen.getByTestId("run-rail-approvals-badge").textContent).toBe(
-      "2",
+
+    expect(screen.queryByTestId("pending-card-list")).toBeNull();
+    expect(screen.queryByTestId("pending-work-v2-list")).toBeNull();
+  });
+
+  it("the approvals badge counts this conversation only", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        pendingV2={pendingV2({ cards: [gateCard(), gateCard()] })}
+        approvalsQueue={{ pending: [], recent: [] }}
+      />,
     );
+
+    const tab = screen.getByRole("tab", { name: /approvals/i });
+    expect(tab.textContent).not.toContain("2");
   });
 });

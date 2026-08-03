@@ -1,4 +1,4 @@
-"""Stable artifact command envelope and atomic Postgres insertion."""
+"""Stable artifact command envelope and per-adapter outbox behaviour."""
 
 from __future__ import annotations
 
@@ -15,11 +15,6 @@ from agent_runtime.persistence.records import RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
 from copilot_service_contracts.deployment_profile import ENV_DEPLOYMENT_PROFILE
 from runtime_adapters.factory import RuntimeAdapterFactory
-from runtime_adapters.file._paths import FileStoreLayout
-from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
-from runtime_adapters.postgres.artifact_store import (
-    PostgresArtifactMetadataStore,
-)
 from runtime_api.schemas.commands import RuntimeArtifactEventCommand
 from tests.unit.runtime_adapters._artifact_fixtures import make_create_command
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -127,64 +122,6 @@ class _Parent:
 
 async def _chunks(body: bytes) -> AsyncIterator[bytes]:
     yield body
-
-
-async def test_postgres_metadata_and_outbox_share_one_transaction(
-    tmp_path,
-) -> None:
-    parent = _Parent()
-    blobs = FileArtifactBlobStore(FileStoreLayout(tmp_path / "shared-blobs"))
-    store = PostgresArtifactMetadataStore(parent, blobs)
-    command = make_create_command()
-    body = b"revision one"
-    await blobs.put_stream(
-        expected_digest=command.record.current_revision.blob_key,
-        chunks=_chunks(body),
-        byte_limit=len(body),
-    )
-
-    await store.create_artifact(command)
-
-    assert parent.org_ids == [command.record.artifact.org_id]
-    assert parent.connection.transaction_depth == 0
-    assert parent.connection.executions
-    assert all(depth == 1 for _, _, depth in parent.connection.executions)
-    statements = [" ".join(sql.split()) for sql, _, _ in parent.connection.executions]
-    artifact_index = next(
-        index
-        for index, sql in enumerate(statements)
-        if sql.startswith("INSERT INTO runtime_artifacts")
-    )
-    revision_index = next(
-        index
-        for index, sql in enumerate(statements)
-        if sql.startswith("INSERT INTO runtime_artifact_revisions")
-    )
-    outbox_index = next(
-        index
-        for index, sql in enumerate(statements)
-        if sql.startswith("INSERT INTO runtime_outbox_events")
-    )
-    idempotency_index = next(
-        index
-        for index, sql in enumerate(statements)
-        if sql.startswith("INSERT INTO runtime_artifact_idempotency")
-    )
-    assert artifact_index < revision_index < outbox_index < idempotency_index
-
-    _, outbox_params, _ = parent.connection.executions[outbox_index]
-    expected = artifact_event_outbox_row(
-        command.ledger_events[0],
-        artifact_id=command.record.artifact.artifact_id,
-    )
-    assert outbox_params[0:5] == (
-        expected["id"],
-        expected["aggregate_type"],
-        expected["aggregate_id"],
-        expected["org_id"],
-        expected["event_type"],
-    )
-    assert outbox_params[5].obj == expected["payload_json"]
 
 
 async def _exercise_existing_queue(ports) -> None:

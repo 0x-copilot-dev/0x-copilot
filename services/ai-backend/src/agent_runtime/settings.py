@@ -116,7 +116,6 @@ class _EnvFields:
     # SSE event bus backend. ``in_memory`` uses the single-process
     # ``asyncio.Condition`` path; ``postgres`` switches to ``LISTEN/NOTIFY`` so
     # the worker's append wakes SSE adapters in a separate API process.
-    EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
     ENABLE_LOCAL_MODELS = "RUNTIME_ENABLE_LOCAL_MODELS"
     # PRD-P8 D2 — allow this server to detect and spawn the host's Ollama
     # binary. Only ``tools/desktop-runtime`` + ``apps/desktop`` set it true;
@@ -278,7 +277,7 @@ class RuntimeExecutionSettings(RuntimeContract):
     remain *fields* because the deprecation shim still lets a legacy
     ``RUNTIME_*`` variable set them, and because every existing consumer reads
     them through this object. The switches (``start_in_process_worker``,
-    ``event_bus_backend``, the rollout block, ...) are genuine deployment
+    the rollout block, ...) are genuine deployment
     concerns and stay authored here.
     """
 
@@ -312,11 +311,6 @@ class RuntimeExecutionSettings(RuntimeContract):
     delta_coalesce_max_chunks: int = Field(
         default=_EXECUTION.delta_coalesce_max_chunks, ge=1, le=1024
     )
-    # SSE event bus backend. ``auto`` (the default) resolves to ``postgres``
-    # when ``DATABASE_URL`` is configured and ``in_memory`` otherwise — see
-    # ``RuntimeSettings.resolved_event_bus_backend``. Explicit values
-    # (``in_memory`` | ``postgres``) skip the resolver and pass through.
-    event_bus_backend: str = "auto"
     # Round 2 — expose the local-models (Ollama) management API. Off by
     # default (cloud/multi-tenant can't run a user's local GPU model); the
     # desktop-runtime and self-host set it true. Every /v1/local-models route
@@ -565,31 +559,6 @@ class RuntimeSettings(BaseSettings):
             return ProviderSettings()
         raise ValueError(f"Unsupported model provider: {provider}")
 
-    def resolved_event_bus_backend(self) -> str:
-        """Resolve the SSE event bus to ``"postgres"`` or ``"in_memory"``.
-
-        ``auto`` (the default) picks ``postgres`` when ``DATABASE_URL`` is
-        configured and ``in_memory`` otherwise. Explicit values pass through.
-
-        Why this matters: API and worker run in separate processes in prod.
-        ``InMemoryEventBus`` only delivers within one process, so a separate
-        worker's ``notify_sync`` never wakes the API's SSE handler — the
-        2-second poll fallback becomes the actual delivery mechanism (~1s
-        p50 latency). ``PostgresEventBus`` uses ``LISTEN/NOTIFY`` for
-        sub-50ms cross-process wakeups. The right default in prod is
-        "postgres when postgres is available," not "in_memory with a
-        2-second floor."
-
-        Both ``RuntimeAdapterFactory`` (notify_after_append flag) and
-        ``RuntimeApiAppFactory.default_event_bus`` (bus construction) read
-        this; keep the selection in one place so they cannot disagree.
-        """
-
-        explicit = self.execution.event_bus_backend.lower()
-        if explicit == "auto":
-            return "postgres" if self.store.database_url else "in_memory"
-        return explicit
-
     @classmethod
     def configure_sdk_environment(cls, settings: "RuntimeSettings") -> None:
         """Expose provider API keys to SDKs that read credentials from os.environ.
@@ -820,7 +789,6 @@ class RuntimeSettings(BaseSettings):
                         str(execution_tunables.delta_coalesce_max_chunks),
                     )
                 ),
-                event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "auto").lower(),
                 enable_local_models=_s(v, E.ENABLE_LOCAL_MODELS, "false").lower()
                 in _truthy,
                 local_models_manage_runtime=_s(

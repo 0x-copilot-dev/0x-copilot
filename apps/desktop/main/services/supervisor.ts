@@ -3,7 +3,7 @@ import type { BootPhase, BootStatusPayload } from "@0x-copilot/chat-transport";
 import type { BootSecrets } from "./boot-secrets";
 import type { FatalCrashLoop } from "./python-service";
 import type { SupervisedServiceName } from "./runtime-paths";
-import { AI_BACKEND_DB_NAME, BACKEND_DB_NAME } from "./service-env";
+import { BACKEND_DB_NAME } from "./service-env";
 
 // Orchestration only. Every capability (secrets, ports, postgres,
 // migrations, children, health) is a narrow injected dependency so the
@@ -141,10 +141,10 @@ export class ServiceSupervisor {
       });
       this.#postgres = postgres;
       await postgres.start();
-      await Promise.all([
-        postgres.ensureDatabase(BACKEND_DB_NAME),
-        postgres.ensureDatabase(AI_BACKEND_DB_NAME),
-      ]);
+      // Only the backend has a relational schema. The ai-backend runs the
+      // file-native store, so `atlas_ai` is not created: it was an empty
+      // database (a ~7 MB template copy plus a process spawn) on every install.
+      await postgres.ensureDatabase(BACKEND_DB_NAME);
     });
 
     await this.#phase("migrations", "Setting up the database…", async () => {

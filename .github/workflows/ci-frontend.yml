@@ -1,7 +1,7 @@
 name: ci-frontend
 
 # Typecheck + build for the web app, mirroring what apps/frontend/Dockerfile
-# runs so a break surfaces on the PR instead of in release-images on main.
+# runs so a TypeScript break surfaces on the PR rather than on main.
 #
 # Path filter covers apps/frontend and EVERY workspace package the frontend
 # compiles. That is wider than apps/frontend/package.json declares: the app also
@@ -9,7 +9,7 @@ name: ci-frontend
 # which resolve only through npm-workspace hoisting. Until those two are
 # declared as real dependencies, this list is the only thing tying them to the
 # frontend's CI — leaving chat-surface/surface-renderers out is exactly how a
-# TS break reached main and failed release-images instead of the PR.
+# TS break reached main instead of failing on the PR.
 
 on:
   pull_request:

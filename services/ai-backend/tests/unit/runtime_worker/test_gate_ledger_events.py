@@ -244,6 +244,7 @@ class TestWriteGateOpened(GateInterruptMixin):
             "gate_id": self.WRITE_GATE_ID,
             "connector": "linear",
             "purpose": "approve write create_issue on linear",
+            "display_title": "Create issue · Linear",
             "scopes": ["docs:read", "docs:write"],
             "auth_state": GateAuthState.INSUFFICIENT.value,
         }
@@ -359,6 +360,7 @@ class TestWriteGateOpensInsideTheCausalPrefix(GateInterruptMixin, SealedRunMixin
             "gate_id": self.WRITE_GATE_ID,
             "connector": "linear",
             "purpose": "approve write create_issue on linear",
+            "display_title": "Create issue · Linear",
             "scopes": ["docs:read", "docs:write"],
             "auth_state": GateAuthState.INSUFFICIENT.value,
         }

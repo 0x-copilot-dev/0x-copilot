@@ -12,7 +12,7 @@
  *
  * Sequence:
  *   1. initdb into a temp dir, pg_ctl start on a free port
- *   2. create databases `backend` + `ai_backend` (via staged python+psycopg —
+ *   2. create database `backend` (via staged python+psycopg —
  *      the zonky postgres bundle ships NO psql/createdb)
  *   3. run both services' scripts/migrate.py apply with the staged interpreter
  *   4. start backend (backend_app.desktop_app:app), ai-backend (in-proc
@@ -599,9 +599,7 @@ async function main() {
   // yoyo needs the explicit +psycopg (v3) driver marker, same as CI's
   // postgres-restore-drill workflow.
   const backendDbUrl = `postgresql://postgres@127.0.0.1:${pgPort}/backend`;
-  const aiDbUrl = `postgresql://postgres@127.0.0.1:${pgPort}/ai_backend`;
   const backendMigrateUrl = `postgresql+psycopg://postgres@127.0.0.1:${pgPort}/backend`;
-  const aiMigrateUrl = `postgresql+psycopg://postgres@127.0.0.1:${pgPort}/ai_backend`;
   runSync(
     pythonExe,
     [
@@ -609,7 +607,7 @@ async function main() {
       `
 import psycopg
 conn = psycopg.connect("postgresql://postgres@127.0.0.1:${pgPort}/postgres", autocommit=True)
-for db in ("backend", "ai_backend"):
+for db in ("backend",):
     exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db,)).fetchone()
     if not exists:
         conn.execute(f'CREATE DATABASE "{db}"')
@@ -621,7 +619,7 @@ conn.close()
     ],
     { env: servicePythonEnv(runtimeDir, "backend") },
   );
-  record("create databases", true, "backend, ai_backend");
+  record("create database", true, "backend");
 
   // --- 3. migrations via the staged interpreter ---------------------------
   log("backend migrations: scripts/migrate.py apply");
@@ -639,22 +637,6 @@ conn.close()
     },
   );
   record("backend migrate apply", true);
-
-  log("ai-backend migrations: scripts/migrate.py apply");
-  runSync(
-    pythonExe,
-    [
-      path.join(runtimeDir, "services", "ai-backend", "scripts", "migrate.py"),
-      "apply",
-    ],
-    {
-      env: {
-        ...servicePythonEnv(runtimeDir, "ai-backend"),
-        RUNTIME_DATABASE_URL: aiMigrateUrl,
-      },
-    },
-  );
-  record("ai-backend migrate apply", true);
 
   // --- 4. start the three services -----------------------------------------
   // Shared desktop-profile env (see docs/deployment/profiles.md and
@@ -710,7 +692,10 @@ conn.close()
     extraEnv: {
       ...profileEnv,
       RUNTIME_ENVIRONMENT: "production",
-      RUNTIME_STORE_BACKEND: "postgres",
+      // The file-native store — the only ai-backend store there is. Mirrors
+      // apps/desktop/main/services/service-env.ts.
+      RUNTIME_STORE_BACKEND: "file",
+      RUNTIME_FILE_STORE_ROOT: path.join(state.workDir, "agent-data", "v1"),
       RUNTIME_START_IN_PROCESS_WORKER: "true",
       // BYOK trusted-backend lane — mirror service-env.ts so the supervised
       // topology matches the real desktop app: BACKEND_BASE_URL + the shared
@@ -744,7 +729,6 @@ conn.close()
       // OLLAMA_BASE_URL points at host.docker.internal — it can neither see nor
       // spawn a host binary. Mirrors apps/desktop/main/services/service-env.ts.
       RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME: "true",
-      DATABASE_URL: aiDbUrl,
       AUDIT_HMAC_KEY: secrets.auditHmacKey,
       MCP_BACKEND_REGISTRY_URL: `http://127.0.0.1:${backendPort}`,
       SKILLS_BACKEND_REGISTRY_URL: `http://127.0.0.1:${backendPort}`,

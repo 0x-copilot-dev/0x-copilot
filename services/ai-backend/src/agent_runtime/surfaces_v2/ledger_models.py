@@ -526,6 +526,16 @@ class GateOpenedPayload(LedgerPayload):
     purpose: str
     scopes: tuple[str, ...]
     auth_state: GateAuthState
+    # The line a PERSON reads, for a WRITE gate only (a connect gate's
+    # ``purpose`` is already human copy, so it omits this and the payload stays
+    # the size it was). Optional with a default so it stays out of the schema's
+    # ``required`` array — the SSOT parity pin reads that array, and history
+    # written before this field must keep validating.
+    #
+    # It is NOT a second source of truth: the emitter builds it from the same
+    # argument-free op + connector tokens as ``purpose``. See
+    # ``_Messages.ledger_display_title``.
+    display_title: str | None = None
 
 
 class GateResolvedPayload(LedgerPayload):

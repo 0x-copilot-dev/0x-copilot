@@ -195,22 +195,16 @@ class OffloadWriterResolver:
     ) -> ContentAddressedOffloadWriter | None:
         """Return the writer for ``store``, or ``None`` if none applies.
 
-        ``shared_object_sink`` is the durable, cross-node byte store a Postgres
-        deployment must supply; it is ignored for stores that own their bytes.
+        ``shared_object_sink`` is accepted for signature stability and ignored:
+        every remaining store owns its own bytes.
         """
 
         if hasattr(store, "object_store") and hasattr(store, "layout"):
-            # Desktop file runtime — imported lazily so the web/Postgres images
-            # never load the file adapter.
+            # Desktop file runtime — imported lazily so an in-memory process
+            # never loads the file adapter.
             from runtime_adapters.file.offload import FileOffloadWriter  # noqa: PLC0415
 
             return FileOffloadWriter(store.object_store)
-        if shared_object_sink is not None:
-            from runtime_adapters.postgres.offload import (  # noqa: PLC0415
-                PostgresOffloadWriter,
-            )
-
-            return PostgresOffloadWriter(shared_object_sink)
         from runtime_adapters.in_memory import (  # noqa: PLC0415
             InMemoryRuntimeApiStore,
         )

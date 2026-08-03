@@ -288,6 +288,12 @@ function reduceRequested(
   byId.set(approvalId, {
     approvalId,
     title:
+      // A parked WRITE carries a line written for the person deciding
+      // (`GatePurposeBuilder`: verb + the sanitised primary argument). It leads,
+      // because every generic fallback below describes the CARD rather than the
+      // effect — a live gate rendered "Approve this action" over a call that was
+      // about to file a Linear issue.
+      gatePurpose(payload) ??
       stringField(payload.display_name) ??
       stringField(payload.tool_name) ??
       event.display_title ??
@@ -535,6 +541,27 @@ function mergeConnectorTrust(
     authHost: next.authHost ?? existing.authHost,
     sourceTool: next.sourceTool ?? existing.sourceTool,
   };
+}
+
+/**
+ * The gate block's human purpose line, when this approval is a parked write.
+ *
+ * Untrusted by origin — it embeds a tool argument — but the emitter already
+ * caps its length and strips newlines, markdown and URLs
+ * (`GatePurposeBuilder.build`), and it is rendered as a text node. Read
+ * defensively anyway: the block is additive and absent on every non-gate
+ * approval.
+ */
+function gatePurpose(payload: Record<string, unknown>): string | null {
+  // Presentation lifts the one line out of the additive gate block and ships it
+  // as `display_title`; the raw block is read as a fallback so a payload that
+  // predates that projection still renders the effect rather than the generic
+  // card copy.
+  const lifted = stringField(payload.display_title);
+  if (lifted !== null) return lifted;
+  const gate = payload.gate;
+  if (typeof gate !== "object" || gate === null) return null;
+  return stringField((gate as Record<string, unknown>).purpose);
 }
 
 function stringField(value: unknown): string | null {

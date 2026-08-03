@@ -285,7 +285,7 @@
         "scopes",
         "auth_state"
       ],
-      "optional": [],
+      "optional": ["display_title"],
       "enum_fields": { "auth_state": "auth_state" }
     },
     "gate.resolved": {

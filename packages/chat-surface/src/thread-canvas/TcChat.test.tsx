@@ -1001,6 +1001,78 @@ function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
   };
 }
 
+describe("TcChat — a parked write is one row, not a question", () => {
+  // The gate borrows the `ask_a_question` WIRE shape so it can reuse the
+  // ApprovalCoordinator resume plumbing. Nothing about that makes it a
+  // question, and routed as one it rendered a free-text box for a yes/no about
+  // a real side effect — the backend ignores that text entirely and decides on
+  // `decision`. The id prefix is what tells them apart.
+  const writeGate = (over: Partial<TcChatApproval> = {}) =>
+    approval({
+      approvalId: "mcp_write:run_abc:call_1",
+      approvalKind: "ask_a_question",
+      title: "Create an issue in Parth-test",
+      question: {
+        header: "Approve write",
+        question: "Allow Linear to run save_issue?",
+        hint: null,
+        options: [],
+        multiSelect: false,
+        allowFreeText: true,
+      },
+      category: { vendor: "linear", access: "WRITE" },
+      ...over,
+    });
+
+  it("routes a parked write to the compact row, not the question card", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[writeGate()]} />,
+      ),
+    );
+
+    expect(screen.getByTestId("tc-write-gate-row")).toBeTruthy();
+    expect(
+      screen.queryByTestId("tc-chat-question-card-mcp_write:run_abc:call_1"),
+    ).toBeNull();
+  });
+
+  it("leaves a genuine agent question on the question card", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[writeGate({ approvalId: "appr-q1" })]}
+        />,
+      ),
+    );
+
+    expect(screen.queryByTestId("tc-write-gate-row")).toBeNull();
+    expect(screen.getByTestId("tc-chat-question-card-appr-q1")).toBeTruthy();
+  });
+
+  it("a resolved write keeps its receipt rather than re-asking", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[writeGate({ resolved: true, decision: "approved" })]}
+        />,
+      ),
+    );
+
+    expect(screen.queryByTestId("tc-write-gate-row")).toBeNull();
+  });
+});
+
 describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
   it("renders a pending approval as the 4-zone ApprovalCard in Studio", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));

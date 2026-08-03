@@ -702,14 +702,6 @@ class RuntimeWorker:
             )
 
             return InMemoryWorkspaceOverlayStore()
-        if self.settings.store.backend == "postgres" and hasattr(
-            self.persistence, "_role_connection"
-        ):
-            from runtime_adapters.postgres.workspace_overlay_store import (
-                PostgresWorkspaceOverlayStore,
-            )
-
-            return PostgresWorkspaceOverlayStore(store=self.persistence)
         # Keep an unrecognised/incompletely composed backend fail-closed. The
         # C1 writer cannot fall through to a host filesystem mutation.
         return None
@@ -724,14 +716,6 @@ class RuntimeWorker:
             from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
 
             return FileEffectClaimStore(root=self.settings.store.file_store_root)
-        if self.settings.store.backend == "postgres" and hasattr(
-            self.persistence, "_role_connection"
-        ):
-            from runtime_adapters.postgres.effect_claim_store import (
-                PostgresEffectClaimStore,
-            )
-
-            return PostgresEffectClaimStore(store=self.persistence)
         from runtime_adapters.in_memory.effect_claim_store import (
             InMemoryEffectClaimStore,
         )
