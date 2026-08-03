@@ -88,31 +88,11 @@ def main() -> int:
         s.ftue_add_key(PROVIDER, key)
         log(f"PASS  BYOK ready for {PROVIDER}")
 
-        # -- pick a reasoning model, the way a user does -------------------
-        if not s.wait_for("[data-testid=composer-model-toggle]", 30):
-            emit("blocked", "composer model toggle never rendered")
-            return 2
-        s.click("[data-testid=composer-model-toggle]")
-        if not s.wait_for("[data-testid=model-picker]", 15):
-            emit("blocked", "model picker never opened")
-            return 2
-        rows = json.loads(s.evaluate(JS_MODEL_ROWS) or "[]")
-        target = next(
-            (
-                r
-                for r in rows
-                if MODEL_MATCH.lower() in r["id"].lower()
-                or MODEL_MATCH.lower() in r["text"].lower()
-            ),
-            None,
-        )
-        if target is None:
-            log(f"available models: {[r['id'] for r in rows][:20]}")
-            emit("blocked", f"no model row matching {MODEL_MATCH!r}")
-            return 2
-        s.click(f"[data-testid={target['id']}]")
-        log(f"PASS  model switched to {target['text']!r}")
-        time.sleep(1)
+        # No model picking: the deployment default IS a reasoning model now
+        # (gpt-5.6-luna). The FTUE composer has no model toggle anyway — that
+        # control lives in the run cockpit, which does not exist until a run
+        # does. Asserting the pill after the fact is the honest check.
+        target = {"text": os.environ.get("MODEL_MATCH", "gpt-5.6-luna")}
 
         # -- send, and catch the shimmer on the way past ------------------
         s.send_first_run_message(PROMPT)
