@@ -1,4 +1,4 @@
-"""Subagent catalog, handoff, and async lifecycle primitives."""
+"""Subagent catalog, handoff, authority, and delegation-planning primitives."""
 
 from agent_runtime.delegation.subagents.contracts import (
     AsyncSubagentLaunch,
@@ -52,14 +52,8 @@ from agent_runtime.delegation.subagents.handoff import (
     SubagentHandoffBuilder,
     SubagentHandoffPolicy,
 )
-from agent_runtime.delegation.subagents.runner import (
-    AsyncSubagentLifecycle,
-    InMemoryAsyncTaskStore,
-    SubagentRunner,
-)
 
 __all__ = [
-    "AsyncSubagentLifecycle",
     "AsyncSubagentLaunch",
     "AsyncTaskLifecycleResult",
     "AsyncTaskState",
@@ -76,7 +70,6 @@ __all__ = [
     "DelegationPlanEntry",
     "DelegationRequest",
     "DynamicSubagentCatalog",
-    "InMemoryAsyncTaskStore",
     "RegisteredSubagent",
     "RuntimeContextReference",
     "SUBAGENT_DELEGATION_OPERATION_ID_KEY",
@@ -98,7 +91,6 @@ __all__ = [
     "SubagentOutputContract",
     "SubagentPermissionPolicy",
     "SubagentResult",
-    "SubagentRunner",
     "SubagentTask",
     "SubagentTransport",
     "SubagentPolicyGrant",

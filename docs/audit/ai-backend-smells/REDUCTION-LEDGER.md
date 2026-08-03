@@ -47,22 +47,22 @@ asserting on an injected collaborator.**
 
 ## Clean deletions — adjudicated, deduplicated (~19–22k)
 
-|       LOC | Block                                              | Verdict              | Why                                                                                                                                                                                                                                                                                                                                                                          |
-| --------: | -------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|     8,037 | F3 capability discovery                            | REDUNDANT            | Lineara's MCP filesystem catalog delivers the same search→describe→invoke chain, finer-grained, unflagged, wired every run, in 1,982 LOC. F3's "constant-size replacement" prompt block measures **122 chars larger** than the header it suppresses.                                                                                                                         |
-|     3,908 | ~~F5 context budgeting~~ — **DELETED**             | REDUNDANT            | **No gate reads `f5` at all.** Four ports, zero production implementers. Flipping it changes only a persisted enum. deepagents' summarization already ships unconditionally. **Executed:** `context/planning/` + `context/evidence_registry.py` removed (3,908 src + 4,256 test LOC). The `f5` enum member and `FeatureModeSet.f5` field were **kept** — see the note below. |
-|     2,375 | `file`↔`in_memory` duplicate bodies                | REDUNDANT            | Already in flight (`MaterializedViewStoreBase`). **But smaller than sold: 1,237 identical + 1,138 near LOC — the "73% shared" was name-level, not body-level.**                                                                                                                                                                                                              |
-| ~~1,727~~ | ~~E2 cohort selector + shadow~~                    | **RETRACTED — LIVE** | **This row was wrong and the deletion was refused. See §Retraction below.**                                                                                                                                                                                                                                                                                                  |
-|     1,427 | `answer_verification.py`                           | HALF_BUILT           | Only 2 enums imported.                                                                                                                                                                                                                                                                                                                                                       |
-|     1,291 | `delegation/subagents` runner+coordination+handoff | REDUNDANT            | Reachable only from tests. _Correction: the previously-reported 1,499 wrongly included `authority.py` (208), which is live._                                                                                                                                                                                                                                                 |
-|       744 | `presentation_v2_1` E2 shadow lane                 | OBSOLETE             | (inside E2 5,971 — count once)                                                                                                                                                                                                                                                                                                                                               |
-|       690 | `code_sandbox.py` + `code_tool_adapter.py`         | MIXED                | **Code execution is not a product surface**: deepagents' `execute` is explicitly withheld from the model (`tool_surface.py:43`).                                                                                                                                                                                                                                             |
-|       531 | `mcp/credentials/desktop.py`                       | OBSOLETE             | superseded by `credentials.backend`                                                                                                                                                                                                                                                                                                                                          |
-|       301 | `observability/db_statement_metrics.py`            | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
-|       290 | `mcp/files.py`                                     | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
-|       216 | `encrypt_existing_columns`                         | OBSOLETE             | one-shot migration; banned in this service                                                                                                                                                                                                                                                                                                                                   |
-|       151 | `sandbox/providers/langsmith.py`                   | REDUNDANT            | deepagents ships `LangSmithSandbox` (275 LOC); ours adds only `isolation_ready`, hardcoded `False`.                                                                                                                                                                                                                                                                          |
-|    ~10.9k | F6 batch concurrency + `RunSerialAdmission`        | **DONE**             | Deleted. It existed only to grant width back through a lock we installed ourselves; langgraph schedules the turn's tool calls natively. See below.                                                                                                                                                                                                                           |
+|           LOC | Block                                         | Verdict              | Why                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------: | --------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|         8,037 | F3 capability discovery                       | REDUNDANT            | Lineara's MCP filesystem catalog delivers the same search→describe→invoke chain, finer-grained, unflagged, wired every run, in 1,982 LOC. F3's "constant-size replacement" prompt block measures **122 chars larger** than the header it suppresses.                                                                                                                         |
+|         3,908 | ~~F5 context budgeting~~ — **DELETED**        | REDUNDANT            | **No gate reads `f5` at all.** Four ports, zero production implementers. Flipping it changes only a persisted enum. deepagents' summarization already ships unconditionally. **Executed:** `context/planning/` + `context/evidence_registry.py` removed (3,908 src + 4,256 test LOC). The `f5` enum member and `FeatureModeSet.f5` field were **kept** — see the note below. |
+|         2,375 | `file`↔`in_memory` duplicate bodies           | REDUNDANT            | Already in flight (`MaterializedViewStoreBase`). **But smaller than sold: 1,237 identical + 1,138 near LOC — the "73% shared" was name-level, not body-level.**                                                                                                                                                                                                              |
+|     ~~1,727~~ | ~~E2 cohort selector + shadow~~               | **RETRACTED — LIVE** | **This row was wrong and the deletion was refused. See §Retraction below.**                                                                                                                                                                                                                                                                                                  |
+|         1,427 | `answer_verification.py`                      | HALF_BUILT           | Only 2 enums imported.                                                                                                                                                                                                                                                                                                                                                       |
+| ~~1,291~~ 515 | `delegation/subagents` — **`runner.py` only** | **PARTLY RETRACTED** | Only `runner.py` (515) was dead-and-unclaimed and is **deleted**. `coordination.py` (574) and `handoff.py` (202) are **kept**: an open backlog item names them. See §Partial retraction below. _The earlier 1,499 also wrongly included `authority.py` (208), which is live._                                                                                                |
+|           744 | `presentation_v2_1` E2 shadow lane            | OBSOLETE             | (inside E2 5,971 — count once)                                                                                                                                                                                                                                                                                                                                               |
+|           690 | `code_sandbox.py` + `code_tool_adapter.py`    | MIXED                | **Code execution is not a product surface**: deepagents' `execute` is explicitly withheld from the model (`tool_surface.py:43`).                                                                                                                                                                                                                                             |
+|           531 | `mcp/credentials/desktop.py`                  | OBSOLETE             | superseded by `credentials.backend`                                                                                                                                                                                                                                                                                                                                          |
+|           301 | `observability/db_statement_metrics.py`       | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
+|           290 | `mcp/files.py`                                | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
+|           216 | `encrypt_existing_columns`                    | OBSOLETE             | one-shot migration; banned in this service                                                                                                                                                                                                                                                                                                                                   |
+|           151 | `sandbox/providers/langsmith.py`              | REDUNDANT            | deepagents ships `LangSmithSandbox` (275 LOC); ours adds only `isolation_ready`, hardcoded `False`.                                                                                                                                                                                                                                                                          |
+|        ~10.9k | F6 batch concurrency + `RunSerialAdmission`   | **DONE**             | Deleted. It existed only to grant width back through a lock we installed ourselves; langgraph schedules the turn's tool calls natively. See below.                                                                                                                                                                                                                           |
 
 ### Why the `f5` enum member survived the F5 deletion
 
@@ -132,6 +132,53 @@ runs on the hot path from `execution/factory.py:1807` and
 posture**, not just the default — and check `git log` for the gate's own age. A finding
 older than the feature it describes is not a finding.
 
+## Partial retraction: only `runner.py` of the delegation trio was deletable
+
+The row above said "runner+coordination+handoff, 1,291, reachable only from tests,
+superseded for live parallelism by `capabilities/concurrency`." Re-verified at HEAD
+(`40c5afa9`), **two of its three claims do not hold**:
+
+1. **The supersession premise was never true, and is now unverifiable.**
+   `capabilities/concurrency/` never imported any of the three — checked at `2def1cff^`,
+   the last commit before F6 was deleted, where the only files referencing
+   `DelegationCoordinator` / `AsyncSubagentLifecycle` / `SubagentHandoff*` were the
+   package `__init__` and the three modules themselves. PR #527 then deleted
+   `capabilities/concurrency/` outright, so the successor the row credited no longer
+   exists. What survives of the row is the weaker, true claim: _reachable only from
+   tests_.
+
+2. **`coordination.py` is claimed by open work the ledger did not consult.**
+   `docs/plan/agent-runtime-quality/IMPLEMENTATION-BACKLOG.md` **§ARQ-012** enrols
+   `DelegationCoordinator` by name as landed-ahead-of-wiring, remaining work "route the
+   existing Atlas task tool through this one coordinator", status **open**, and closes
+   with _"Do not add a second subagent implementation."_ **§ARQ-006** (also open) names
+   `SubagentHandoffBuilder` as one of the two uncomposed abstractions the F9 coordinator
+   must bind. `coordination.py` landed `30712e54`, **2026-07-27 — six days before this
+   ledger row** (`581a5b49`, 2026-08-03), which is the same shape as the E2 mistake
+   above: a finding written after the thing it declares dark, without accounting for it.
+   `handoff.py` is additionally a **hard import** of `coordination.py`
+   (`DelegationCoordinator._build_handoff`), so it cannot go while the coordinator stays.
+
+**Deleted: `runner.py` (515) only.** It is a leaf — nothing in `src` imports it — it is
+95 days old (`6e0c3113`, 2026-04-30, outside the 30-day author-ask window), and its
+`SubagentRunner` protocol has **zero implementations anywhere in `src`**; the only one in
+the repo is a test fake. It is not merely unwired but un-wireable without new code, and
+the plan's own successor for ARQ-006 (`DelegationCoordinator`) does not use it. Its
+`AsyncTask*` contracts in `contracts.py` were left in place — `contracts.py` is live via
+`definitions.py` → `runtime_worker/dependencies.py` — so trimming them is a separate,
+smaller question.
+
+**Left standing on purpose:** `SubagentHandoffPolicy.enforce_existing_task` /
+`enforce_task_update` lose their last caller with `runner.py` and are now exercised only
+by tests, and `SubagentAuthorityPolicy` (~80 of `authority.py`'s 208) loses its last
+non-`handoff`/`coordination` caller. Both are the "bounded handoff seam" ARQ-006 names;
+removing them belongs to whoever closes ARQ-006, not to a deletion PR.
+
+**Rule this adds:** the orphan ratchet cannot see a module that only a package
+`__init__` re-exports. All three of these were import-reachable and call-unreachable for
+three months and never appeared in `orphan_ratchet_baseline.txt`. Import-reachable is
+not call-reachable.
+
 ## Genuine gaps — keep, and in two cases wire
 
 - **`retention_sweeper` + `retention_backfill` (561)** and **`audit_export_verification` (614)** — real **compliance** obligations, currently unwired. **WIRE_IT.**
@@ -199,15 +246,15 @@ settling before either team acts.
 
 ## Corrections to earlier documents in this programme
 
-| Document                 | Claim                                        | Correction                                            |
-| ------------------------ | -------------------------------------------- | ----------------------------------------------------- |
-| LEAN-RUNTIME-SPIKES §3   | 87,632 LOC dark                              | **~19–22k** genuinely deletable; `off` ≠ gated off    |
-| LEAN-RUNTIME-SPIKES §3   | browser, artifacts, effects/gateway dark     | **LIVE**                                              |
-| ADAPTER-COLLAPSE-REALITY | `file`↔`in_memory` ~5–8k, "73% shared"       | **1.4–2.4k**; the 73% was name-level                  |
-| S1-D spike               | "drop 2 of 3 stores"                         | Does not survive: all three build in a shipped config |
-| BOUNDARY-AUDIT §4        | `context_contracts` DEAD                     | Transitively **live** via `tool_result_admission`     |
-| BOUNDARY-AUDIT §4        | delegation 1,499                             | **1,291** — `authority.py` (208) is live              |
-| PENDING-WIRINGS          | `encrypt_existing_columns` precondition live | Corrected: obsolete                                   |
+| Document                 | Claim                                        | Correction                                                                          |
+| ------------------------ | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| LEAN-RUNTIME-SPIKES §3   | 87,632 LOC dark                              | **~19–22k** genuinely deletable; `off` ≠ gated off                                  |
+| LEAN-RUNTIME-SPIKES §3   | browser, artifacts, effects/gateway dark     | **LIVE**                                                                            |
+| ADAPTER-COLLAPSE-REALITY | `file`↔`in_memory` ~5–8k, "73% shared"       | **1.4–2.4k**; the 73% was name-level                                                |
+| S1-D spike               | "drop 2 of 3 stores"                         | Does not survive: all three build in a shipped config                               |
+| BOUNDARY-AUDIT §4        | `context_contracts` DEAD                     | Transitively **live** via `tool_result_admission`                                   |
+| BOUNDARY-AUDIT §4        | delegation 1,499                             | **515** — `authority.py` live; `coordination`+`handoff` claimed by open ARQ-012/006 |
+| PENDING-WIRINGS          | `encrypt_existing_columns` precondition live | Corrected: obsolete                                                                 |
 
 _Method: 11 agents, each scoped to a bounded block, required to verify framework claims
 by import or execution and to name overlapping findings so nothing is double-counted._

@@ -26,7 +26,7 @@ execution plan did not survive contact with the source — see §Corrections.
 
 | State             | Meaning                                                                                      | Count |
 | ----------------- | -------------------------------------------------------------------------------------------- | ----: |
-| **Blocked**       | Names a specific **unshipped** dependency (route, hook, consumer, column). Cannot wire yet.  |    16 |
+| **Blocked**       | Names a specific **unshipped** dependency (route, hook, consumer, column). Cannot wire yet.  |    18 |
 | **Wireable**      | No unshipped blocker — every dep is present; the decision is **wire-or-drop**, not a wait.   |     5 |
 | **Delete**        | No blocker **and** superseded by a wired twin / stale shim / redundant scaffolding.          |     3 |
 | **Not an orphan** | Live `python -m` entrypoint (`__main__` guard) the scanner mis-flags. Exclude from the scan. |     2 |
@@ -38,7 +38,7 @@ the Delete/Wireable set is "confirm first," not "remove now."
 
 ---
 
-## Blocked — waiting on named, unshipped work (16)
+## Blocked — waiting on named, unshipped work (18)
 
 These are pending-wiring in the strict sense: the module names what it needs and
 that thing is not in the tree. Track the owner; do not delete.
@@ -61,6 +61,18 @@ that thing is not in the tree. Track the owner; do not delete.
 | `agent_runtime.capabilities.mcp.connection`              |  117 | 08-02 | the direct-connect MCP migration — "**additive and unwired** — nothing in the running app imports this module yet (P2-PLAN §3, P2-1)" | credential-plane contracts (endpoint/transport/short-lived token) for ai-backend opening MCP servers itself instead of proxying through `services/backend`   |
 | `agent_runtime.capabilities.mcp.connector_resolver`      |   75 | 08-02 | **P2-6** ("the stream seams gain a fallback to it") and **P2-8** ("the registration flip publishes it")                               | the native `tool_name → server_slug` map replacing `McpDispatcherUnwrap.effective_server_name` once each MCP tool is its own `BaseTool`                      |
 | `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                                    | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
+| `agent_runtime.delegation.subagents.coordination`        |  574 | 07-27 | **ARQ-012** — "route the existing Atlas task tool through this one coordinator", plus server-derived budget/deadline reservation      | `IMPLEMENTATION-BACKLOG.md` §ARQ-012, status **open**; it is the slice that closes ARQ-006. "Do not add a second subagent implementation."                   |
+| `agent_runtime.delegation.subagents.handoff`             |  202 | 04-30 | nothing of its own — it is the hard dependency of the row above (`DelegationCoordinator._build_handoff`)                              | also named by **ARQ-006** as one of the two uncomposed abstractions the F9 coordinator must bind                                                             |
+
+### The ratchet cannot see these two — a package `__init__` hides an orphan
+
+Neither module appears in [`orphan_ratchet_baseline.txt`](../../../services/ai-backend/tests/unit/orphan_ratchet_baseline.txt),
+and neither ever would: `delegation/subagents/__init__.py` re-exports their symbols, so
+`orphans.py` sees an importer and scores them reachable. Import-reachable is not
+call-reachable. **A package `__init__` that re-exports everything converts the whole
+package into one ratchet blind spot** — worth a scanner follow-up, because this is the
+same "landed, not yet wired" state the ratchet exists to surface, and it went unrecorded
+for three months. They are recorded here by hand.
 
 Two clusters dominate: the **todos/memory extraction pipeline** (`proposal_extractor`,
 `todo_extractor`, `postgres.todo_extraction_store`, and cross-service `routine_scheduler`)
