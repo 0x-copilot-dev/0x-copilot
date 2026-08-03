@@ -384,6 +384,31 @@ describe("ordered turn parts", () => {
     expect(msg.parts[0].text).toBe("| a | b |\n| - | - |");
   });
 
+  it("does not split a part on an INTERNAL tool frame (it renders no card)", () => {
+    // `write_todos` is stamped internal and filtered out of the timeline, so a
+    // break here would leave a gap with nothing between the halves.
+    const [msg] = projectChatMessages([
+      ev({
+        event_type: "model_delta",
+        sequence_no: 1,
+        payload: { delta: "Let me plan this out" },
+      }),
+      ev({
+        event_type: "tool_call_started",
+        sequence_no: 2,
+        visibility: "internal",
+      }),
+      ev({ event_type: "tool_result", sequence_no: 3, visibility: "internal" }),
+      ev({
+        event_type: "model_delta",
+        sequence_no: 4,
+        payload: { delta: " before I start." },
+      }),
+    ]);
+    expect(msg.parts).toHaveLength(1);
+    expect(msg.parts[0].text).toBe("Let me plan this out before I start.");
+  });
+
   it("orders parts by sequence_no even if events arrive out of order", () => {
     const [msg] = projectChatMessages([
       ev({

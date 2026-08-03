@@ -102,6 +102,7 @@ class TurnPartsProjection:
             SUBAGENT_ID = "subagent_id"
             PAYLOAD = "payload"
             SUMMARY = "summary"
+            VISIBILITY = "visibility"
             CREATED_AT = "created_at"
             CREATED_AT_MS = "created_at_ms"
 
@@ -181,7 +182,7 @@ class TurnPartsProjection:
                 seen.add(event_id)
 
             event_type = str(event.get(cls.Keys.Event.EVENT_TYPE) or "")
-            if event_type in cls.PART_BREAKING_EVENT_TYPES:
+            if event_type in cls.PART_BREAKING_EVENT_TYPES and cls._is_visible(event):
                 # The model stopped talking and acted. Whatever was open ended
                 # here; the next delta opens a NEW part, which is what lets text
                 # render on both sides of the card this event produces.
@@ -368,6 +369,18 @@ class TurnPartsProjection:
                 closed=True,
             )
         )
+
+    @classmethod
+    def _is_visible(cls, event: Mapping[str, object]) -> bool:
+        """False for frames the user never sees, so they never break a part.
+
+        An internal frame renders no card (``write_todos`` and friends are
+        stamped ``visibility: "internal"`` by
+        ``StreamMessageProcessor.internal_tool_names`` and filtered out of the
+        timeline). Breaking a part on one would split a paragraph with nothing
+        between the halves -- mid-sentence, if the tool ran between two deltas.
+        """
+        return event.get(cls.Keys.Event.VISIBILITY) not in {"internal", "audit"}
 
     @classmethod
     def _payload_text(cls, event: Mapping[str, object]) -> str:

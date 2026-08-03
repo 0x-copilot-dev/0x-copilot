@@ -23,12 +23,16 @@ import corpus from "../../../../service-contracts/src/copilot_service_contracts/
 
 import { projectChatMessages } from "./chatProjection";
 
+// Every field the fold reads must be forwarded by `hydrate` below. A field the
+// corpus sets and the harness drops makes one side blind to it — which reads as
+// a fold divergence and is really a harness gap (`visibility` was exactly that).
 type CorpusEvent = {
   readonly sequence_no: number;
   readonly event_type: string;
   readonly payload?: Record<string, unknown>;
   readonly summary?: string;
   readonly subagent_id?: string;
+  readonly visibility?: string;
 };
 
 type CorpusCase = {
@@ -66,6 +70,9 @@ function hydrate(events: readonly CorpusEvent[]): RuntimeEventEnvelope[] {
         ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
         ...(entry.subagent_id !== undefined
           ? { subagent_id: entry.subagent_id }
+          : {}),
+        ...(entry.visibility !== undefined
+          ? { visibility: entry.visibility }
           : {}),
         created_at: new Date(
           EPOCH_MS + entry.sequence_no * STEP_MS,

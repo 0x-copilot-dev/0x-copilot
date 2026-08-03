@@ -218,6 +218,15 @@ export function projectChatMessages(
     }
 
     if (PART_BREAKING_EVENT_TYPES.has(event.event_type)) {
+      // A part only breaks on an event the USER can see. An internal frame
+      // renders no card (`write_todos` and friends are stamped
+      // `visibility: "internal"` by `StreamMessageProcessor.internal_tool_names`
+      // and filtered out of the timeline), so breaking on one would split a
+      // paragraph with nothing between the halves — a gap the user cannot
+      // account for, and mid-sentence if the tool ran between two deltas.
+      if (event.visibility === "internal" || event.visibility === "audit") {
+        continue;
+      }
       // The model stopped talking and acted. Whatever was open ended here; the
       // next delta opens a NEW part, which is what lets text render on both
       // sides of the card this event produces.

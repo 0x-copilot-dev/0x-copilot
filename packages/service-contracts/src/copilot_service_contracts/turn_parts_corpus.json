@@ -142,6 +142,34 @@
       ]
     },
     {
+      "id": "internal-tool-frames-do-not-split-a-part",
+      "shape": "write_todos renders no card, so breaking on it leaves an unexplained gap",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "Let me plan this out" }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "tool_call_started",
+          "visibility": "internal",
+          "payload": { "tool_name": "write_todos" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "tool_result",
+          "visibility": "internal",
+          "payload": { "ok": true }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "model_delta",
+          "payload": { "delta": " before I start." }
+        }
+      ]
+    },
+    {
       "id": "out-of-order-replay-tail",
       "shape": "a replay tail stitched onto a live subscription",
       "events": [

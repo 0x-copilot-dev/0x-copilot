@@ -119,6 +119,23 @@ class TestOrderedTurn:
             ]
         ) == ["| a | b |\n| - | - |"]
 
+    def test_internal_tool_frames_do_not_split_a_part(self) -> None:
+        # `write_todos` and friends are stamped internal and render no card, so
+        # breaking on one would leave a gap the user cannot account for --
+        # mid-sentence, since the tool ran between two deltas.
+        internal = [
+            {**tool(2), "visibility": "internal"},
+            {
+                "sequence_no": 3,
+                "event_type": "tool_result",
+                "visibility": "internal",
+                "payload": {},
+            },
+        ]
+        assert texts(
+            [delta(1, "Let me plan this out"), *internal, delta(4, " before I start.")]
+        ) == ["Let me plan this out before I start."]
+
     def test_orders_by_sequence_no_not_arrival(self) -> None:
         assert texts([delta(5, "second"), tool(3), delta(1, "first")]) == [
             "first",
