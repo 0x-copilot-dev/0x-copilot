@@ -9,7 +9,7 @@ import pytest
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
-from runtime_adapters import factory as factory_module
+from runtime_adapters.providers import postgres_provider
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -74,8 +74,10 @@ class TestArtifactFactory:
             def configure_artifact_lifecycle(self, jobs) -> None:
                 self.artifact_lifecycle_jobs = jobs
 
+        # The Postgres store is constructed by its provider module, which the
+        # registry imports on demand — patch it where it is looked up.
         monkeypatch.setattr(
-            factory_module,
+            postgres_provider,
             "PostgresRuntimeApiStore",
             FakePostgresStore,
         )
@@ -105,8 +107,10 @@ class TestArtifactFactory:
             def __init__(self, *args, **kwargs) -> None:
                 pass
 
+        # The Postgres store is constructed by its provider module, which the
+        # registry imports on demand — patch it where it is looked up.
         monkeypatch.setattr(
-            factory_module,
+            postgres_provider,
             "PostgresRuntimeApiStore",
             FakePostgresStore,
         )

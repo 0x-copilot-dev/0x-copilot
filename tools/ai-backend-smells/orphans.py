@@ -52,6 +52,34 @@ def imported_names(path: pathlib.Path) -> set[str]:
     return found
 
 
+def dotted_string_constants(path: pathlib.Path) -> set[str]:
+    """Return every dotted-looking string literal in *path*.
+
+    A registry that resolves plugins by dotted path — ``importlib.import_module``
+    over a table of provider modules — imports its targets for real, but does so
+    with a string the AST import walk cannot see. Treating those modules as
+    orphans would be wrong: they are wired, just late.
+
+    The caller intersects this with the real module set, so only a literal that
+    exactly names an existing module counts. A leaf-name text match would be too
+    loose; a full dotted path that resolves to a module is a reference either
+    way, even if it appears in prose.
+    """
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return set()
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "." in node.value
+        and all(part.isidentifier() for part in node.value.split("."))
+    }
+
+
 def has_main_guard(path: pathlib.Path) -> bool:
     """True when the module has a top-level ``if __name__ == "__main__":`` guard.
 
@@ -88,10 +116,14 @@ def has_main_guard(path: pathlib.Path) -> bool:
 def main() -> None:
     src_mods = modules(SRC)
 
-    # Every module name imported by any src file.
+    # Every module name imported by any src file, statically or by dotted
+    # string (a plugin registry resolving providers via importlib).
     imported_by_src: set[str] = set()
+    dotted_literals: set[str] = set()
     for p in src_mods.values():
         imported_by_src |= imported_names(p)
+        dotted_literals |= dotted_string_constants(p)
+    imported_by_src |= dotted_literals & set(src_mods)
 
     test_text = ""
     if TESTS.exists():

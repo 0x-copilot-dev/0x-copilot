@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from copilot_service_contracts.deployment_profile import (
     ENV_DEPLOYMENT_PROFILE,
@@ -83,27 +83,21 @@ from runtime_adapters.in_memory.evaluation_repository import (
 from runtime_adapters.in_memory.share_store import InMemoryShareStore
 from runtime_adapters.in_memory.source_store import InMemorySourceStore
 from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
-from runtime_adapters.postgres import PostgresRuntimeApiStore
-from runtime_adapters.postgres.artifact_store import (
-    PostgresArtifactMetadataStore,
-)
 from runtime_adapters.artifact_references import (
     ArtifactReferenceRepositoryPort,
     FileArtifactReferenceStore,
     InMemoryArtifactReferenceStore,
-    PostgresArtifactReferenceStore,
 )
-from runtime_adapters.postgres.artifact_gc import PostgresArtifactGarbageCollector
-from runtime_adapters.postgres.conversation_tool_ordinal_store import (
-    PostgresConversationToolOrdinalStore,
-)
-from runtime_adapters.postgres.draft_store import PostgresDraftStore
-from runtime_adapters.postgres.share_store import PostgresShareStore
-from runtime_adapters.postgres.source_store import PostgresSourceStore
-from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
+from runtime_adapters.registry import STORAGE_BACKENDS
+
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    # Referenced solely by the ``RuntimePorts.postgres_store`` annotation. Kept
+    # out of the runtime import graph so selecting any other backend never
+    # imports the database driver.
+    from runtime_adapters.postgres import PostgresRuntimeApiStore
 
 
-def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
+def build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
     """Construct the file-native ``RuntimePorts`` for the desktop profile.
 
     Fails closed (``CONFIGURATION_ERROR``) unless every precondition holds:
@@ -287,7 +281,7 @@ class RuntimePorts:
     # so the opt-in ``DbStatementMetricsCollector`` can reach the pool via
     # ``_role_connection``. Every other consumer should use the typed ports
     # above and stay backend-agnostic.
-    postgres_store: PostgresRuntimeApiStore | None = None
+    postgres_store: "PostgresRuntimeApiStore | None" = None
     # Backend-correct citation store for the run WRITE path. Every construction
     # site sets it: the Postgres store itself (it satisfies CitationStorePort),
     # the durable ``FileCitationStore`` for the file backend (the SAME instance
@@ -455,237 +449,69 @@ class RuntimeAdapterFactory:
     ) -> RuntimePorts:
         """Construct and return all runtime ports from application settings.
 
-        ``role`` is stamped on the pool's ``application_name`` so connections
-        are identifiable in ``pg_stat_activity``. The caller must open and
-        close the pool via ``ports.lifecycle``.
+        Dispatch is registry-driven: ``RUNTIME_STORE_BACKEND`` names a backend
+        in :data:`runtime_adapters.registry.STORAGE_BACKENDS`, whose provider
+        module is imported only now. No backend name is branched on here, so
+        adding or removing a store never touches this method.
+
+        ``role`` ("api" / "worker") is passed through for backends that stamp a
+        connection identity. The caller must open and close any resources the
+        backend acquired via ``ports.lifecycle``.
         """
 
-        backend = settings.store.backend
-        # When the SSE bus uses Postgres LISTEN/NOTIFY, the adapter must fire a
-        # NOTIFY after every event append so the API process's listener wakes
-        # the SSE handler cross-process.  The in-memory bus uses asyncio.Condition
-        # and does not need an explicit notification.
-        notify_after_append = settings.resolved_event_bus_backend() == "postgres"
-        # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
-        # route to the async-native InMemoryRuntimeApiStore.
-        if backend in {"in_memory_async", "in_memory"}:
-            in_memory_store = InMemoryRuntimeApiStore()
-            run_control_store = EventJournalRunControlStore(in_memory_store)
-            in_memory_citation = InMemoryCitationStore()
-            bundle = (
-                cls._in_memory_artifact_bundle()
-                if settings.execution.artifact_effects_v2
-                else None
-            )
-            queue: RuntimeQueuePort = in_memory_store
-            if bundle is not None:
-                in_memory_store.configure_artifact_lifecycle(bundle.lifecycle_jobs)
-                queue = ArtifactAwareRuntimeQueue(
-                    in_memory_store, bundle.metadata_store
-                )
-            return RuntimePorts(
-                persistence=in_memory_store,
-                event_store=in_memory_store,
-                queue=queue,
-                backend=backend,
-                lifecycle=in_memory_store,
-                draft_store=InMemoryDraftStore(),
-                share_store=InMemoryShareStore(),
-                conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
-                run_control_snapshot_store=run_control_store,
-                run_control_decision_store=run_control_store,
-                prompt_observation_store=EventJournalPromptObservationStore(
-                    events=in_memory_store,
-                    snapshots=run_control_store,
-                ),
-                model_invocation_store=EventJournalModelInvocationStore(
-                    events=in_memory_store,
-                    snapshots=run_control_store,
-                ),
-                subagent_store=InMemorySubagentStore(in_memory_store),
-                # Shared instance: read-side projector and write-side port agree.
-                source_store=InMemorySourceStore(in_memory_citation),
-                evaluation_repository=InMemoryEvaluationRepository(),
-                citation_store=in_memory_citation,
-                artifact_source_lookup=RuntimeArtifactSourceLookup(in_memory_store),
-                artifact_effects_v2=settings.execution.artifact_effects_v2,
-                artifact_repository=bundle,
-                artifact_metadata_store=bundle.metadata_store if bundle else None,
-                artifact_blob_store=bundle.blob_store if bundle else None,
-                artifact_reference_provider=(
-                    bundle.reference_provider if bundle else None
-                ),
-                artifact_garbage_collector=(
-                    bundle.garbage_collector if bundle else None
-                ),
-                artifact_retention_purger=(bundle.retention_purger if bundle else None),
-                artifact_quarantine_reaper=(
-                    bundle.quarantine_reaper if bundle else None
-                ),
-                artifact_lifecycle_jobs=bundle.lifecycle_jobs if bundle else None,
-                artifact_event_publication=queue if bundle else None,
-            )
-        if backend == "postgres":
-            if settings.store.database_url is None:
-                raise AgentRuntimeError(
-                    RuntimeErrorCode.CONFIGURATION_ERROR,
-                    "DATABASE_URL is required when RUNTIME_STORE_BACKEND=postgres.",
-                    retryable=False,
-                )
-            artifact_blob_root: str | None = None
-            if settings.execution.artifact_effects_v2:
-                artifact_blob_root = settings.store.artifact_blob_root
-                if (
-                    not artifact_blob_root
-                    or not Path(artifact_blob_root).is_absolute()
-                    or Path(artifact_blob_root) == Path("/")
-                ):
-                    raise AgentRuntimeError(
-                        RuntimeErrorCode.CONFIGURATION_ERROR,
-                        "RUNTIME_ARTIFACT_BLOB_ROOT must be an explicit absolute "
-                        "durable shared root when RUNTIME_STORE_BACKEND=postgres.",
-                        retryable=False,
-                    )
-            postgres_store = PostgresRuntimeApiStore(
-                settings.store.database_url,
-                role=role,
-                notify_after_append=notify_after_append,
-            )
-            run_control_store = EventJournalRunControlStore(postgres_store)
-            bundle = (
-                cls._postgres_artifact_bundle(postgres_store, artifact_blob_root or "")
-                if settings.execution.artifact_effects_v2
-                else None
-            )
-            if bundle is not None:
-                postgres_store.configure_artifact_lifecycle(bundle.lifecycle_jobs)
-            return RuntimePorts(
-                persistence=postgres_store,
-                event_store=postgres_store,
-                queue=postgres_store,
-                backend=backend,
-                lifecycle=postgres_store,
-                draft_store=PostgresDraftStore(postgres_store),
-                share_store=PostgresShareStore(postgres_store),
-                conversation_tool_ordinal_store=PostgresConversationToolOrdinalStore(
-                    postgres_store
-                ),
-                run_control_snapshot_store=run_control_store,
-                run_control_decision_store=run_control_store,
-                prompt_observation_store=EventJournalPromptObservationStore(
-                    events=postgres_store,
-                    snapshots=run_control_store,
-                ),
-                model_invocation_store=EventJournalModelInvocationStore(
-                    events=postgres_store,
-                    snapshots=run_control_store,
-                ),
-                subagent_store=PostgresSubagentStore(postgres_store),
-                source_store=PostgresSourceStore(postgres_store),
-                evaluation_repository=cls._shared_evaluation_repository(settings),
-                postgres_store=postgres_store,
-                # The Postgres store IS a CitationStorePort — same instance the
-                # worker resolved historically, so write behavior is unchanged.
-                citation_store=postgres_store,
-                artifact_source_lookup=RuntimeArtifactSourceLookup(postgres_store),
-                artifact_effects_v2=settings.execution.artifact_effects_v2,
-                artifact_repository=bundle,
-                artifact_metadata_store=bundle.metadata_store if bundle else None,
-                artifact_blob_store=bundle.blob_store if bundle else None,
-                artifact_reference_provider=(
-                    bundle.reference_provider if bundle else None
-                ),
-                artifact_garbage_collector=(
-                    bundle.garbage_collector if bundle else None
-                ),
-                artifact_retention_purger=(bundle.retention_purger if bundle else None),
-                artifact_quarantine_reaper=(
-                    bundle.quarantine_reaper if bundle else None
-                ),
-                artifact_lifecycle_jobs=bundle.lifecycle_jobs if bundle else None,
-                artifact_event_publication=postgres_store if bundle else None,
-            )
-        if backend == "file":
-            return _build_file_ports(settings)
-        raise AgentRuntimeError(
-            RuntimeErrorCode.CONFIGURATION_ERROR,
-            f"Unsupported async runtime store backend '{backend}'. "
-            "Use 'in_memory_async', 'postgres', or 'file'.",
-            retryable=False,
+        return STORAGE_BACKENDS.build_ports(settings.store.backend, settings, role=role)
+
+    @classmethod
+    def build_in_memory_ports(cls, settings: RuntimeSettings) -> RuntimePorts:
+        """Compose the in-memory port surface. Entry point of its provider."""
+
+        in_memory_store = InMemoryRuntimeApiStore()
+        run_control_store = EventJournalRunControlStore(in_memory_store)
+        in_memory_citation = InMemoryCitationStore()
+        bundle = (
+            cls._in_memory_artifact_bundle()
+            if settings.execution.artifact_effects_v2
+            else None
         )
-
-    @staticmethod
-    def _shared_evaluation_repository(
-        settings: RuntimeSettings,
-    ) -> EvaluationRepositoryPort | None:
-        """Compose a multi-process-safe file/CAS repository only on an explicit root."""
-
-        root = settings.store.evaluation_store_root
-        if root is None:
-            if settings.evaluation.projection_enabled:
-                raise AgentRuntimeError(
-                    RuntimeErrorCode.CONFIGURATION_ERROR,
-                    "RUNTIME_EVALUATION_STORE_ROOT is required when evaluation "
-                    "projection is enabled with the Postgres runtime store.",
-                    retryable=False,
-                )
-            return None
-        path = Path(root)
-        if not path.is_absolute() or path == Path("/"):
-            raise AgentRuntimeError(
-                RuntimeErrorCode.CONFIGURATION_ERROR,
-                "RUNTIME_EVALUATION_STORE_ROOT must be an explicit absolute root.",
-                retryable=False,
-            )
-        from runtime_adapters.file._paths import FileStoreLayout
-        from runtime_adapters.file._capacity import QuotaGuard
-        from runtime_adapters.file.evaluation_repository import (
-            FileEvaluationRepository,
-        )
-        from runtime_adapters.file.object_store import FileObjectStore
-
-        layout = FileStoreLayout(path)
-        object_store = FileObjectStore(
-            layout,
-            quota=QuotaGuard(
-                layout,
-                max_bytes=settings.store.evaluation_store_max_bytes,
+        queue: RuntimeQueuePort = in_memory_store
+        if bundle is not None:
+            in_memory_store.configure_artifact_lifecycle(bundle.lifecycle_jobs)
+            queue = ArtifactAwareRuntimeQueue(in_memory_store, bundle.metadata_store)
+        return RuntimePorts(
+            persistence=in_memory_store,
+            event_store=in_memory_store,
+            queue=queue,
+            backend=settings.store.backend,
+            lifecycle=in_memory_store,
+            draft_store=InMemoryDraftStore(),
+            share_store=InMemoryShareStore(),
+            conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+            run_control_snapshot_store=run_control_store,
+            run_control_decision_store=run_control_store,
+            prompt_observation_store=EventJournalPromptObservationStore(
+                events=in_memory_store,
+                snapshots=run_control_store,
             ),
-        )
-        return FileEvaluationRepository(layout, object_store=object_store)
-
-    @staticmethod
-    def _postgres_artifact_bundle(parent, root: str) -> ArtifactRepositoryBundle:
-        """Construct one shared coordinator/blob instance for Postgres."""
-
-        from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
-        from runtime_adapters.file._paths import FileStoreLayout
-        from runtime_adapters.file.artifact_publication import (
-            FileArtifactPublicationCoordinator,
-        )
-
-        layout = FileStoreLayout(Path(root))
-        coordinator = FileArtifactPublicationCoordinator(layout)
-        blob_store = FileArtifactBlobStore(layout, coordinator)
-        reference_store = PostgresArtifactReferenceStore(parent, blob_store)
-        metadata_store = PostgresArtifactMetadataStore(parent, blob_store)
-        gc = PostgresArtifactGarbageCollector(parent, blob_store)
-        lifecycle = ArtifactLifecycleJobs(
-            store=metadata_store,
-            retention_purger=metadata_store,
-            garbage_collector=gc,
-            quarantine_reaper=gc,
-        )
-        return ArtifactRepositoryBundle(
-            coordinator=coordinator,
-            metadata_store=metadata_store,
-            blob_store=blob_store,
-            reference_provider=reference_store,
-            garbage_collector=gc,
-            retention_purger=metadata_store,
-            quarantine_reaper=gc,
-            canonical_outbox=metadata_store,
-            lifecycle_jobs=lifecycle,
+            model_invocation_store=EventJournalModelInvocationStore(
+                events=in_memory_store,
+                snapshots=run_control_store,
+            ),
+            subagent_store=InMemorySubagentStore(in_memory_store),
+            # Shared instance: read-side projector and write-side port agree.
+            source_store=InMemorySourceStore(in_memory_citation),
+            evaluation_repository=InMemoryEvaluationRepository(),
+            citation_store=in_memory_citation,
+            artifact_source_lookup=RuntimeArtifactSourceLookup(in_memory_store),
+            artifact_effects_v2=settings.execution.artifact_effects_v2,
+            artifact_repository=bundle,
+            artifact_metadata_store=bundle.metadata_store if bundle else None,
+            artifact_blob_store=bundle.blob_store if bundle else None,
+            artifact_reference_provider=(bundle.reference_provider if bundle else None),
+            artifact_garbage_collector=(bundle.garbage_collector if bundle else None),
+            artifact_retention_purger=(bundle.retention_purger if bundle else None),
+            artifact_quarantine_reaper=(bundle.quarantine_reaper if bundle else None),
+            artifact_lifecycle_jobs=bundle.lifecycle_jobs if bundle else None,
+            artifact_event_publication=queue if bundle else None,
         )
 
     @staticmethod
