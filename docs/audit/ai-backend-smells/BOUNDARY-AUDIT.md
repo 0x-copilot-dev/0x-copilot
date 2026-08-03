@@ -20,13 +20,13 @@ that counted only `execution/` + `context/` + `prompts/` + `delegation/` as runt
 
 **That was wrong. ~80% genuinely IS runtime.**
 
-| Verdict       |         LOC | Meaning                                                                           |
-| ------------- | ----------: | --------------------------------------------------------------------------------- |
-| **RUNTIME**   | **180,461** | genuinely the agent runtime — keep                                                |
-| **SPLIT**     |      71,227 | a half moves (usually: authoring/storage/admin → `backend`; enforcement stays)    |
-| **MISPLACED** |  **35,949** | product/tenant/billing/admin concern, target home is `backend`                    |
-| **DEAD**      |   **9,032** | unreachable — see §4, the largest genuinely deletable find of the whole programme |
-| **SHARED**    |       3,771 | belongs in `packages/service-contracts`                                           |
+| Verdict       |         LOC | Meaning                                                                          |
+| ------------- | ----------: | -------------------------------------------------------------------------------- |
+| **RUNTIME**   | **180,461** | genuinely the agent runtime — keep                                               |
+| **SPLIT**     |      71,227 | a half moves (usually: authoring/storage/admin → `backend`; enforcement stays)   |
+| **MISPLACED** |  **35,949** | product/tenant/billing/admin concern, target home is `backend`                   |
+| **DEAD**      |   **7,342** | unreachable — see §4 (was 9,032; `context_contracts.py` is live). 3,908 deleted. |
+| **SHARED**    |       3,771 | belongs in `packages/service-contracts`                                          |
 
 Rolled up by the readers: **~209.9k runtime vs ~52.2k misplaced ≈ 20% misplaced.**
 
@@ -111,19 +111,25 @@ authoring / storage / scheduling / export**:
 **Never per-call HTTP.** Every move above must use the pattern that already works:
 **snapshot-at-run-start** for policy data, **POST-the-facts** for telemetry/usage.
 
-## 4. DEAD — 9,032 LOC, and the scanner blind spot that hid it
+## 4. DEAD — 7,342 LOC (was reported as 9,032), and the scanner blind spot that hid it
+
+> **Correction, applied when F5 was actually deleted:** the 9,032 figure counted
+> `context/context_contracts.py` (1,690) as dead. It is not — `tool_result_admission.py`
+> imports it and is itself reached from `tool_budget_guard` and `file_store_wiring`.
+> The honest DEAD total for this section is **7,342**, of which the **3,908 F5 lines
+> (`context/planning/` + `context/evidence_registry.py`) are now deleted**.
 
 The single largest genuinely-deletable find of the whole programme, and **the orphan
 ratchet could not see any of it**:
 
-|   LOC | Module                                    | Note                                                        |
-| ----: | ----------------------------------------- | ----------------------------------------------------------- |
-| 2,298 | `context/planning/` (providers, budgeter) | the F5 context-planning lane…                               |
-| 1,690 | `context/context_contracts.py`            | …**zero importers outside `agent_runtime/context/`** —      |
-| 1,610 | `context/evidence_registry.py`            | …5,598 LOC as one dead subsystem                            |
-| 1,522 | `capabilities/render_adapter_generator/`  | desktop's 6C consumer shipped; the producer was never wired |
-| 1,499 | `delegation/subagents` unmounted half     | reachable only from unit tests                              |
-|   413 | `context/tool_result_admission_gate.py`   | already a known pending wiring                              |
+|   LOC | Module                                          | Note                                                                                                                                                   |
+| ----: | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2,298 | ~~`context/planning/`~~ **DELETED**             | the F5 context-planning lane…                                                                                                                          |
+| 1,690 | `context/context_contracts.py` — **LIVE, KEPT** | **correction:** transitively live via `context/tool_result_admission.py`, which `tool_budget_guard` and `file_store_wiring` both reach. Not deletable. |
+| 1,610 | ~~`context/evidence_registry.py`~~ **DELETED**  | …3,908 LOC deleted as one dead subsystem                                                                                                               |
+| 1,522 | `capabilities/render_adapter_generator/`        | desktop's 6C consumer shipped; the producer was never wired                                                                                            |
+| 1,499 | `delegation/subagents` unmounted half           | reachable only from unit tests                                                                                                                         |
+|   413 | `context/tool_result_admission_gate.py`         | already a known pending wiring                                                                                                                         |
 
 **Scanner bug (mine, from T0.2/PR1):** [`orphans.py`](../../../tools/ai-backend-smells/orphans.py)
 puts `__init__` in `ENTRY_HINTS`, so **a package reachable only via its own `__init__`

@@ -109,7 +109,7 @@ hard-coded pair moves.
 | `runtime_api/schemas/context_occupancy.py:117,231` | `Limits`                | `MAX_LABEL`, `MAX_DETAIL`, `MAX_IDENTIFIER`, `MAX_PROVIDER`                                                                                                         | **I** — see §4.1                                         |
 | `runtime_adapters/offload.py:96`                   | —                       | `PREVIEW_CHARS 200`                                                                                                                                                 | **T**                                                    |
 | `context/memory/summarization.py:134-135`          | —                       | `PREVIEW_LINE_LIMIT 10`, `PREVIEW_CHAR_LIMIT 2_000`                                                                                                                 | **T**                                                    |
-| `context/planning/providers.py:244`                | `ContextProviderBounds` | `MAX_INLINE_TOKENS 8_000`                                                                                                                                           | **I** (it is the `le=` on `:390`)                        |
+| ~~`context/planning/providers.py:244`~~ (deleted)  | `ContextProviderBounds` | ~~`MAX_INLINE_TOKENS 8_000`~~ — F5 context budgeting was deleted; the constant no longer exists                                                                     | n/a                                                      |
 | `runtime_worker/mcp_operation_storage.py:73`       | —                       | `MAX_MODEL_RESULT_PREVIEW_BYTES 8_192`                                                                                                                              | **T**                                                    |
 
 ### 1f. Behavioural tunables currently living in `settings.py` (env)
@@ -307,8 +307,9 @@ an invariant. If it appears as a _default value_ the caller may already override
 - **`capabilities/mcp/catalog.py` `MIN_NEWLINES_PER_FILE 2`** — the structural guarantee the whole
   catalog exists to provide (a line-oriented file is readable by `read_file` offset/limit). Tuning
   it to `0` reintroduces the exact 70 KB single-line bug. Invariant, with its test.
-- **`context/planning/providers.py:244` `MAX_INLINE_TOKENS 8000`** — it is literally the `le=` at
-  `:390`. The `max_inline_tokens` _field_ is the tunable; the bound is not.
+- ~~**`context/planning/providers.py:244` `MAX_INLINE_TOKENS 8000`**~~ — **moot**: the F5
+  context-budgeting subsystem that owned `ContextProviderBounds` was deleted (it had no gate, no
+  caller and no production implementer). Nothing to move.
 - **`delegation/subagents/constants.py:95` `TIMEOUT_MAX_SECONDS` / `CONCURRENCY_LIMIT_MAX`** — these
   bound the tunables in `Defaults`. They become the `le=` on the JSON fields.
 

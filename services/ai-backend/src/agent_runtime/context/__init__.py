@@ -1,4 +1,4 @@
-"""Runtime context planning, model admission, memory, and compression."""
+"""Runtime model admission, memory, and compression."""
 
 from __future__ import annotations
 
