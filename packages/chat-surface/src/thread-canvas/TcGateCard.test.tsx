@@ -10,6 +10,7 @@ function gate(overrides: Partial<LedgerGate> = {}): LedgerGate {
     serverId: "seed:linear",
     connector: "linear",
     purpose: "to run create_issue on Linear",
+    displayTitle: "",
     scopes: ["docs:read", "docs:write"],
     authState: "missing",
     opClass: "write",

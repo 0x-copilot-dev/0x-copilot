@@ -139,9 +139,6 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("run-header-status")).toHaveStyle({
       flex: "none",
     });
-    expect(screen.getByTestId("run-header-status-pulse")).toHaveStyle({
-      flexShrink: "0",
-    });
     expect(screen.getByTestId("run-mode-switcher")).toHaveStyle({
       flexShrink: "0",
       marginLeft: "auto",
@@ -165,94 +162,28 @@ describe("RunHeader", () => {
     expect(getComputedStyle(kicker).clip).toBe("rect(0px, 0px, 0px, 0px)");
   });
 
-  // PRD-02 D-2.2 / FR-2.9 — narrow surface behaviour.
-  it("shortens the mode control and hides the pulse LABEL at compact", () => {
-    const { rerender } = render(
-      <RunHeader
-        goal="G"
-        mode="focus"
-        onModeChange={() => {}}
-        runStatus="running"
-      />,
-    );
-    expect(screen.getByTestId("run-mode-focus").textContent).toBe("Focus");
-    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
-      "working",
-    );
-
-    rerender(
-      <RunHeader
-        goal="G"
-        mode="focus"
-        onModeChange={() => {}}
-        runStatus="running"
-        compact
-      />,
-    );
-    expect(screen.getByTestId("run-mode-focus").textContent).toBe("F");
-    // The full label is still in the accessible name — a lone dot means nothing.
-    expect(
-      screen.getByTestId("run-mode-focus").getAttribute("aria-label"),
-    ).toBe("Focus mode");
-    // The dot survives; only its label is visually hidden.
-    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
-    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
-      "working",
-    );
-  });
-
-  // WC-P6b — the `● working` pulse chip is driven by `runStatus`.
-  it("renders the pulsing status dot for an active run, with a per-state label", () => {
-    const { rerender } = render(
-      <RunHeader
-        goal="G"
-        mode="studio"
-        onModeChange={() => {}}
-        runStatus="running"
-      />,
-    );
-    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
-    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
-      "working",
-    );
-
-    rerender(
-      <RunHeader
-        goal="G"
-        mode="studio"
-        onModeChange={() => {}}
-        runStatus="waiting_for_approval"
-      />,
-    );
-    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
-    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
-      "waiting",
-    );
-  });
-
-  it("shows NO pulse dot for a terminal run or when runStatus is null/absent", () => {
-    const { rerender } = render(
-      <RunHeader
-        goal="G"
-        mode="studio"
-        onModeChange={() => {}}
-        runStatus="completed"
-      />,
-    );
-    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
-
-    rerender(
-      <RunHeader
-        goal="G"
-        mode="studio"
-        onModeChange={() => {}}
-        runStatus={null}
-      />,
-    );
-    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
-
-    // Absent prop (default) → no dot either.
-    rerender(<RunHeader goal="G" mode="studio" onModeChange={() => {}} />);
-    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
+  // The `● working` / `● WAITING` pulse was REMOVED from the header (it was one
+  // of three status chips there). The canvas already states the run's condition
+  // in words a person can act on, each tool card carries its own status, and the
+  // composer reflects in-flight — the chrome copy was the least specific of the
+  // four and the first thing a user asked to lose.
+  it("renders no status pulse, in any run state", () => {
+    for (const runStatus of [
+      "running",
+      "waiting_for_approval",
+      "completed",
+    ] as const) {
+      const { unmount } = render(
+        <RunHeader
+          goal="G"
+          mode="studio"
+          onModeChange={() => {}}
+          runStatus={runStatus}
+        />,
+      );
+      expect(screen.queryByTestId("run-header-status-pulse")).toBeNull();
+      expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
+      unmount();
+    }
   });
 });

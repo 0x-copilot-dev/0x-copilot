@@ -15,28 +15,40 @@ import type { ReactElement } from "react";
 export interface PendingCounterChipProps {
   /** Merged cross-run pending total. */
   readonly count: number;
+  /**
+   * True when NONE of the counted items belongs to the run on screen.
+   *
+   * It sits beside `PostureChip`, so "Writes wait for you" + "2 waiting" reads
+   * as one sentence — "2 writes are waiting for you, here" — while every item
+   * can be parked in some other conversation. Saying "elsewhere" costs one word
+   * and stops the reader hunting this thread for work that is not in it.
+   */
+  readonly allElsewhere?: boolean;
   /** Opens the Approvals rail tab. */
   readonly onClick: () => void;
 }
 
 export function PendingCounterChip({
   count,
+  allElsewhere = false,
   onClick,
 }: PendingCounterChipProps): ReactElement | null {
   if (count <= 0) {
     // Hidden at zero — nothing is waiting, so the chip does not exist.
     return null;
   }
+  const label = allElsewhere ? "elsewhere" : "waiting";
   return (
     <button
       type="button"
       className="ui-pill"
       data-testid="pending-counter-chip"
       data-count={count}
+      data-scope={allElsewhere ? "elsewhere" : "here"}
       onClick={onClick}
-      aria-label={`${count} pending — open Approvals`}
+      aria-label={`${count} pending ${allElsewhere ? "in other chats" : "here"} — open Approvals`}
     >
-      {count} waiting
+      {count} {label}
     </button>
   );
 }

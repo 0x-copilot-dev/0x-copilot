@@ -1439,10 +1439,16 @@ class RuntimeEventPresentationProjector:
         """Project ``gate.opened`` through a strict allow-list (PRD-C2, SDR §5).
 
         Keeps exactly ``v`` / ``gate_id`` / ``connector`` / ``purpose`` /
-        ``scopes[]`` / ``auth_state`` — so a gate emit can never over-share (the
-        interrupt payload carries the connect URL + display copy; none of it
-        rides the ledger row). ``scopes`` is re-built from its own list so a
-        non-string element can't slip through.
+        ``display_title`` / ``scopes[]`` / ``auth_state`` — so a gate emit can
+        never over-share (the interrupt payload carries the connect URL +
+        display copy; none of it rides the ledger row). ``scopes`` is re-built
+        from its own list so a non-string element can't slip through.
+
+        ``display_title`` is the human sibling of ``purpose`` and is subject to
+        the same rule: the emitter builds it from the op + connector tokens
+        ONLY, so admitting it here cannot let a tool argument onto the ledger.
+        It is optional — a connect gate omits it, because its ``purpose`` is
+        already written for a person.
         """
 
         safe_payload: JsonObject = {}
@@ -1451,6 +1457,7 @@ class RuntimeEventPresentationProjector:
             _LedgerKeys.Field.GATE_ID,
             _LedgerKeys.Field.CONNECTOR,
             _LedgerKeys.Field.PURPOSE,
+            _LedgerKeys.Field.DISPLAY_TITLE,
             _LedgerKeys.Field.AUTH_STATE,
         ):
             value = cls._text(payload.get(text_key))
@@ -2221,7 +2228,36 @@ class RuntimeEventPresentationProjector:
             flag = payload.get(flag_key)
             if isinstance(flag, bool):
                 safe_payload[flag_key] = flag
+        display_title = cls._gate_display_title(payload)
+        if display_title is not None:
+            safe_payload[_LedgerKeys.Field.DISPLAY_TITLE] = display_title
+            safe_payload[_LedgerKeys.Field.CONNECTOR] = cls._text(
+                payload.get(Keys.Field.SERVER_NAME)
+            )
         return safe_payload
+
+    @classmethod
+    def _gate_display_title(cls, payload: JsonObject) -> str | None:
+        """A parked WRITE's human line, lifted out of the additive gate block.
+
+        A write gate rides the ``ask_a_question`` wire shape, so it lands in this
+        projection — where every key above describes a QUESTION and none of them
+        describes an effect. The card fell through its whole title chain to the
+        generic "Approve this action" over a call that was about to file a real
+        Linear issue.
+
+        Only the one line is lifted, not the block: the rest of the gate (scopes,
+        op class, auth state) is the ledger's business and has no card to render
+        it. ``GatePurposeBuilder`` already caps the line's length and strips
+        newlines, markdown and URLs, so the sanitised primary argument it carries
+        is safe to show — that is the whole reason the interactive purpose exists
+        separately from the argument-free ledger one.
+        """
+
+        gate = payload.get("gate")
+        if not isinstance(gate, dict):
+            return None
+        return cls._text(gate.get(_LedgerKeys.Field.PURPOSE))
 
     @classmethod
     def _safe_question_options(cls, options: list | tuple) -> list[JsonObject]:

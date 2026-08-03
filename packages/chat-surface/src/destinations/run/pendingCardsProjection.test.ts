@@ -274,6 +274,55 @@ describe("projectPendingCards — row-set predicate (D3 accounting)", () => {
   });
 });
 
+describe("projectPendingCards — the title a person reads", () => {
+  it("prefers the human display title over the auditor's purpose line", () => {
+    seq = 0;
+    const cards = projectPendingCards(
+      [
+        ev("gate.opened", {
+          v: 1,
+          gate_id: "g1",
+          connector: "linear",
+          purpose: "approve destructive save_issue on linear",
+          display_title: "Save issue · Linear",
+          scopes: [],
+          auth_state: "insufficient",
+        }),
+      ],
+      "run_1",
+    );
+    expect(cards[0].title).toBe("Save issue · Linear");
+  });
+
+  it("falls back to purpose, so events written before the field still render", () => {
+    seq = 0;
+    const cards = projectPendingCards(
+      [gateOpened("g1", "approve destructive save_issue on linear")],
+      "run_1",
+    );
+    expect(cards[0].title).toBe("approve destructive save_issue on linear");
+  });
+
+  it("an empty display title is not a title", () => {
+    seq = 0;
+    const cards = projectPendingCards(
+      [
+        ev("gate.opened", {
+          v: 1,
+          gate_id: "g1",
+          connector: "linear",
+          purpose: "approve write create_issue on linear",
+          display_title: "",
+          scopes: [],
+          auth_state: "insufficient",
+        }),
+      ],
+      "run_1",
+    );
+    expect(cards[0].title).toBe("approve write create_issue on linear");
+  });
+});
+
 describe("projectPendingCards — hostile input", () => {
   it("a hostile purpose survives as plain data (rendered as text only)", () => {
     seq = 0;

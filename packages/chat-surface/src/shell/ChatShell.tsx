@@ -38,6 +38,7 @@ import { RunActivityBusProvider } from "./runActivityBus";
 import { ShellWidthProvider } from "./ShellWidthProvider";
 import { TOPBAR_HEIGHT, Topbar } from "./Topbar";
 import { useActiveRunCount } from "./useActiveRunCount";
+import { usePendingApprovalCount } from "./usePendingApprovalCount";
 import { useObservedWidthClass } from "./useContainerWidth";
 
 // PRD-09 D5 — the two shell decisions are INDEPENDENT, matching the design:
@@ -251,6 +252,9 @@ function ShellGrid({
   // hook, fed to the rail's Run badge. No host passes it — deleting the prop
   // makes the desktop "badge never wired" gap structurally impossible.
   const activeRunCount = useActiveRunCount();
+  // Cross-conversation parked work, moved here from the Run header's
+  // "N waiting" chip — a global count reads correctly on a global surface.
+  const pendingApprovalCount = usePendingApprovalCount();
   // PRD-00 FR-0.3 — ONE ResizeObserver for the whole surface, on the shell root,
   // published via context. Descendants read `useShellWidthClass()`; nothing
   // threads a width prop. `wide` until the first observer callback, so the first
@@ -351,7 +355,7 @@ function ShellGrid({
           // AppRail takes the raw display name and derives the glyph/title itself
           // (PRD-12 D5). `null` → the neutral glyph.
           identity={railIdentity ?? undefined}
-          badges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
+          badges={railBadges(activeRunCount, pendingApprovalCount)}
         />
         {showContextPanel ? (
           <ContextPanelSlot
@@ -433,4 +437,19 @@ function isContextPanelProps(value: unknown): value is ContextPanelProps {
     "title" in (value as object) &&
     typeof (value as { title: unknown }).title === "string"
   );
+}
+
+/**
+ * Rail badge counts. `AppRail` renders a badge only when the count is > 0 AND
+ * that destination is not the active one, so an omitted key and a zero read the
+ * same — build the object from whatever is non-zero and let the rail decide.
+ */
+function railBadges(
+  activeRunCount: number,
+  pendingApprovalCount: number,
+): Partial<Record<ShellDestinationSlug, number>> | undefined {
+  const badges: Partial<Record<ShellDestinationSlug, number>> = {};
+  if (activeRunCount > 0) badges.run = activeRunCount;
+  if (pendingApprovalCount > 0) badges.chats = pendingApprovalCount;
+  return Object.keys(badges).length > 0 ? badges : undefined;
 }

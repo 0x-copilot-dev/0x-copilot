@@ -26,4 +26,29 @@ describe("PendingCounterChip", () => {
     screen.getByTestId("pending-counter-chip").click();
     expect(onClick).toHaveBeenCalledTimes(1);
   });
+
+  it("says 'elsewhere' when every counted item is in another chat", () => {
+    // Beside PostureChip this chip reads as one sentence — "Writes wait for
+    // you · 2 waiting" — so an unqualified count sends the reader hunting THIS
+    // thread for work parked somewhere else.
+    render(
+      <PendingCounterChip count={2} allElsewhere onClick={() => undefined} />,
+    );
+    const chip = screen.getByTestId("pending-counter-chip");
+    expect(chip.textContent).toBe("2 elsewhere");
+    expect(chip.getAttribute("data-scope")).toBe("elsewhere");
+  });
+
+  it("stays 'waiting' when any item belongs to the run on screen", () => {
+    render(
+      <PendingCounterChip
+        count={2}
+        allElsewhere={false}
+        onClick={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId("pending-counter-chip").textContent).toBe(
+      "2 waiting",
+    );
+  });
 });

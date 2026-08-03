@@ -1301,6 +1301,10 @@ export {
 export {
   TcGateCard,
   type TcGateCardProps,
+  TcWriteGateRow,
+  type TcWriteGateRowProps,
+  TcWriteGateCard,
+  type TcWriteGateCardProps,
   type LedgerGate,
   type LedgerGateAuthState,
   type LedgerGateOutcome,

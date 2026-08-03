@@ -639,8 +639,25 @@ textarea {
 .ui-icon-button,
 .ui-link-button {
   align-items: center;
-  border: 1px solid transparent;
+  /* The base MUST paint a background. Without one a button carrying no tone
+   * variant falls through to the UA `buttonface`, which under a dark
+   * color-scheme is an opaque mid-grey slab — measured live as
+   * `rgb(107, 107, 107)` on the write-gate row's Decline and on every
+   * "Review →" in the approvals queue. Thirteen call sites in chat-surface use
+   * a bare `.ui-button` (or size tier alone), so this was never one component's
+   * mistake; the recipe simply had no defined resting state.
+   *
+   * Transparent + a visible border is the right default for a system whose own
+   * rule is "emphasis is the TONE variant's job, not the base's": untoned reads
+   * as a quiet outline button rather than shouting in undefined grey. The tones
+   * that must NOT show that border reset it below. */
+  background: transparent;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  /* Measured `rgb(255,255,255)` on an untoned button — the UA default, brighter
+     than the app's own body ink (`#ececf1`) and the one thing on the row louder
+     than the primary action. */
+  color: var(--color-text);
   cursor: pointer;
   display: inline-flex;
   /* Managed label type so button text stops inheriting whatever the
@@ -706,6 +723,9 @@ textarea {
 .ui-button--primary,
 .ui-link-button {
   background: var(--color-accent);
+  /* A filled tone owns the whole surface; the base outline would draw a rim
+     around the fill. */
+  border-color: transparent;
   color: var(--color-accent-contrast);
   font-weight: var(--font-weight-semibold);
 }
@@ -723,6 +743,8 @@ textarea {
 
 .ui-button--ghost {
   background: transparent;
+  /* Ghost means no chrome — the base outline would make it a secondary. */
+  border-color: transparent;
   color: var(--color-text-muted);
 }
 
