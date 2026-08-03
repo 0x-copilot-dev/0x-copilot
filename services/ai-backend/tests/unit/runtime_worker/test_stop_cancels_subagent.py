@@ -377,6 +377,14 @@ class TestOpenSubagentsCloseOnCancellation(SubagentLedgerMixin):
         terminal = producer.events[2]["payload"]
         assert isinstance(started, dict) and isinstance(terminal, dict)
         assert terminal["status"] == "cancelled"
+        # ...and on the ENVELOPE, which is the field the client actually reads.
+        # `subagentProjection` closes a child with
+        # `normaliseTerminalStatus(event.status)` and falls back to `completed`
+        # when that is absent — so a payload-only status clears the spinner (the
+        # property that matters) while LABELLING a stopped child as completed.
+        # This assertion is the one that was missing: the payload half was
+        # already correct, so the label bug survived a test that looked green.
+        assert producer.events[2].get("status") == "cancelled"
         assert terminal["task_id"] == "call_subagent_1"
         # The terminal frame names the child the started frame named — the
         # cockpit keys its card on ``task_id`` but labels it by name.

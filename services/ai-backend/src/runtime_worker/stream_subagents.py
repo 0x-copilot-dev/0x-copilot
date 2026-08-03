@@ -125,6 +125,7 @@ class StreamUpdateProcessor:
                 event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                 payload=payload,
                 metadata=dict(frame_metadata),
+                status=Values.Status.CANCELLED,
             )
             if fleet_id is not None:
                 await self._maybe_emit_fleet_finished(
@@ -169,8 +170,17 @@ class StreamUpdateProcessor:
         payload: JsonObject,
         metadata: JsonObject,
         parent_task_id: str | None = None,
+        status: str | None = None,
     ) -> None:
-        """Persist a deduplicated subagent lifecycle event, enriching COMPLETED with duration and usage."""
+        """Persist a deduplicated subagent lifecycle event, enriching COMPLETED with duration and usage.
+
+        ``status`` rides the ENVELOPE, not just the payload. The client projects
+        a terminal frame with ``normaliseTerminalStatus(event.status)`` and falls
+        back to ``completed`` when that field is absent — so a cancelled child
+        whose status lives only in the payload clears its spinner (the property
+        that matters) while being LABELLED as completed. Passing it here is what
+        makes a stopped subagent read as stopped.
+        """
         task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
         if task_id is not None:
             key = (run.run_id, event_type, task_id)
@@ -206,6 +216,7 @@ class StreamUpdateProcessor:
             metadata=metadata,
             parent_task_id=parent_task_id,
             subagent_id=subagent_id,
+            status=status,
         )
 
     @classmethod
