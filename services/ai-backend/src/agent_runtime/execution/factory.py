@@ -681,27 +681,58 @@ def _proxy_collaborators(
 ) -> McpPerToolCollaborators | None:
     """Build the proxy credential plane from a backend-backed MCP registry.
 
-    Declines when the registry is not backend-backed — an in-memory or fake
-    registry has no proxy to route through, and inventing a URL for it would
-    register a connector surface that cannot answer.
+    Declines when nothing behind the registry is backend-backed — an in-memory
+    or fake registry has no proxy to route through, and inventing a URL for it
+    would register a connector surface that cannot answer.
+
+    The URL lives on the PROVIDER, not on the registry. ``DynamicMcpRegistry``
+    holds ``providers``; ``BackendMcpProvider`` holds ``backend_url``. Reading it
+    off the registry — as this did — returned ``None`` on every real run, so the
+    plane was never built, per-tool registration always declined, and NO MCP
+    tool was ever registered. Nothing caught it because every per-tool test
+    injects the collaborators directly, which is precisely the seam this
+    function is: the one that decides whether production takes the path at all.
     """
 
-    backend_url = getattr(mcp_registry, "backend_url", None)
-    if not isinstance(backend_url, str) or not backend_url.strip():
+    backend_url, timeout = _backend_proxy_endpoint(mcp_registry)
+    if backend_url is None:
         return None
-    timeout = getattr(mcp_registry, "timeout_seconds", None)
     directory, credentials, client_factory = ProxyCredentialPlane.build(
         backend_url=backend_url,
         org_id=runtime_context.org_id,
         user_id=runtime_context.user_id,
         service_headers=BackendMcpServiceAuth.headers(runtime_context),
-        timeout_seconds=float(timeout) if isinstance(timeout, (int, float)) else 10.0,
+        timeout_seconds=float(timeout) if timeout is not None else 10.0,
     )
     return McpPerToolCollaborators(
         directory=directory,
         credentials=credentials,
         client_factory=client_factory,
     )
+
+
+def _backend_proxy_endpoint(
+    mcp_registry: object,
+) -> tuple[str | None, float | None]:
+    """Return ``(backend_url, timeout_seconds)`` from the registry's providers.
+
+    Structural rather than nominal: anything exposing a usable ``backend_url``
+    is the backend provider, so a wrapper or a test double satisfies this
+    without importing a concrete class into the factory. The registry itself is
+    checked first only so a future registry that carries the URL directly keeps
+    working.
+    """
+
+    candidates: list[object] = [mcp_registry]
+    providers = getattr(mcp_registry, "providers", None)
+    if isinstance(providers, Sequence):
+        candidates.extend(providers)
+    for candidate in candidates:
+        url = getattr(candidate, "backend_url", None)
+        if isinstance(url, str) and url.strip():
+            timeout = getattr(candidate, "timeout_seconds", None)
+            return url, timeout if isinstance(timeout, (int, float)) else None
+    return None, None
 
 
 def _with_mcp_per_tool_interrupts(
