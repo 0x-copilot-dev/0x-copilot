@@ -43,7 +43,7 @@ class TestBuiltinOperationCatalog:
         assert {entry.tool_name for entry in entries} == {
             "ask_a_question",
             "auth_mcp",
-            "call_mcp_tool",
+            "delete",
             "edit",
             "execute",
             "glob",

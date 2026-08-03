@@ -154,6 +154,15 @@
     "model_visible": true
   },
   {
+    "tool_name": "delete",
+    "capability": "workspace",
+    "op": "delete",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
     "tool_name": "glob",
     "capability": "workspace",
     "op": "glob",
