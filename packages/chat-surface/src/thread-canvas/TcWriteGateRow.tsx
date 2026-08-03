@@ -117,12 +117,29 @@ export function TcWriteGateRow({
   );
 }
 
+/**
+ * Row geometry, measured against the cards it sits between.
+ *
+ * `.ui-card` is a PANEL recipe — `--radius-xl` (16px) and `--space-xl` padding.
+ * Borrowing it for a row and then fighting it with 2px inline padding produced a
+ * 30px box with a 16px radius, i.e. `height / 2`: a pill, not a card. Beside it
+ * the tool cards run 42px, so the ask read as a chip that had swallowed two
+ * buttons, and the 24px buttons filled 80% of their own container with 3px of
+ * clearance — which is what made the primary look oversized. The button was
+ * never the problem; the box around it was.
+ *
+ * `--radius-lg` puts it back in the card family, and `--space-sm` (8px) of
+ * vertical padding gives 24 + 16 + 2 = 42px — the tool card's exact height, so
+ * the ask sits ON the column's rhythm instead of near it. Buttons then fill 57%
+ * rather than 80%. (`--space-xs` is 4px, not 6: guessing it produced 34px.)
+ */
 const rowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: "var(--space-xs, 6px)",
-  padding: "var(--space-2xs, 4px) var(--space-2xs, 4px)",
-  paddingLeft: "var(--space-sm, 8px)",
+  padding: "var(--space-sm, 8px)",
+  paddingLeft: "var(--space-md, 12px)",
+  borderRadius: "var(--radius-lg, 12px)",
   minWidth: 0,
 };
 
