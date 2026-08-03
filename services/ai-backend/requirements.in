@@ -58,6 +58,12 @@ anthropic==0.117.0
 # counting. Never replaced by a locally-maintained per-model catalog.
 litellm==1.93.0
 ddgs==9.14.4
+# Main-content extraction for `web_search` (PRD local-search-extraction, S1).
+# Search gives us four URLs; this turns each page into the article text a
+# snippet-anchored window can be cut from. Without it the whole extraction path
+# degrades to returning the engine snippet — which is correct, and is also why
+# the feature shipped inert: the code was live and the dependency was not.
+trafilatura==2.0.0
 
 # -- storage ------------------------------------------------------------------
 psycopg[binary,pool]==3.3.4
