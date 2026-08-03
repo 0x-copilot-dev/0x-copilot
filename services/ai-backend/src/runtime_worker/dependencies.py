@@ -123,7 +123,12 @@ class WebSearchToolRegistry:
             "search.enrichment_failed; returning engine snippets unchanged"
         )
 
-    def __init__(self, *, enrichment: SearchEnrichment | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enrichment: SearchEnrichment | None = None,
+        content_budget: object | None = None,
+    ) -> None:
         """Bind the local extraction pipeline, or resolve it on first search.
 
         A caller that passes ``enrichment`` explicitly (every test) decides the
@@ -131,10 +136,16 @@ class WebSearchToolRegistry:
         that constructing the registry — which the production capability-mode
         guard does on a bare ``None`` context — stays free of filesystem and
         environment work.
+
+        ``content_budget`` is the document's ``search`` section, handed down by
+        the composition root because that is the only layer that has read the
+        document. ``None`` — every test, and any caller outside the worker —
+        keeps the model's own defaults, which the document equals.
         """
 
         self._enrichment = enrichment
         self._enrichment_resolved = enrichment is not None
+        self._content_budget = content_budget
 
     def list_available_tools(self, context: object) -> Sequence[object]:
         """Return the built-in tool list, honoring the per-run web-search toggle.
@@ -243,8 +254,34 @@ class WebSearchToolRegistry:
 
         if not self._enrichment_resolved:
             self._enrichment_resolved = True
-            self._enrichment = SearchEnrichment.for_environment(os.environ)
+            self._enrichment = SearchEnrichment.for_environment(
+                os.environ, **self._budget_override()
+            )
         return self._enrichment
+
+    def _budget_override(self) -> dict[str, Any]:
+        """Translate the document's ``search`` section into a pipeline override.
+
+        Built here rather than in `SearchEnrichment` so the capability package
+        keeps knowing nothing about the hyperparameters document — it takes a
+        budget object, and where that came from is the worker's business.
+        """
+
+        section = self._content_budget
+        if section is None:
+            return {}
+        from agent_runtime.capabilities.search.contracts import (  # noqa: PLC0415
+            SearchContentBudget,
+        )
+
+        return {
+            "content_budget": SearchContentBudget(
+                content_token_budget=section.content_token_budget,
+                window_chars=section.window_chars,
+                lead_chars=section.lead_chars,
+                min_window_chars=section.min_window_chars,
+            )
+        }
 
 
 class EmptyMcpRegistry:
@@ -359,7 +396,18 @@ class DefaultRuntimeDependenciesFactory:
             rollout_facts=rollout_facts,
         )
         tool_registry = ToolErrorPolicyRegistry(
-            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
+            inner=CitationCapturingRegistry(
+                # The composition root is the only place that has read the
+                # document, so it is the only place that can hand a section to
+                # a consumer. Without this the search budget would bind the
+                # model's own field defaults at import and editing
+                # `hyperparameters.json` would change nothing — which is what
+                # "the JSON is a mirror, not a source" meant for every section
+                # except `execution`.
+                inner=WebSearchToolRegistry(
+                    content_budget=self.settings.hyperparameters.search
+                )
+            )
         )
         # Single gate read per run: on the desktop file store this returns the
         # wiring that persists memory / skills / subagent defs as files; on the
