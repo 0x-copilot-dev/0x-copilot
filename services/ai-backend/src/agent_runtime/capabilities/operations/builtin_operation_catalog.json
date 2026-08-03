@@ -72,33 +72,6 @@
     "model_visible": true
   },
   {
-    "tool_name": "search_capabilities",
-    "capability": "builtin",
-    "op": "search_capabilities",
-    "source": "capabilities.discovery.tool_bridge",
-    "kind": "builtin",
-    "execution": "pure",
-    "model_visible": true
-  },
-  {
-    "tool_name": "describe_capability",
-    "capability": "builtin",
-    "op": "describe_capability",
-    "source": "capabilities.discovery.tool_bridge",
-    "kind": "builtin",
-    "execution": "pure",
-    "model_visible": true
-  },
-  {
-    "tool_name": "invoke_capability",
-    "capability": "builtin",
-    "op": "invoke_capability",
-    "source": "capabilities.discovery.tool_bridge",
-    "kind": "builtin",
-    "execution": "gateway",
-    "model_visible": true
-  },
-  {
     "tool_name": "run_code_mode",
     "capability": "builtin",
     "op": "run_code_mode",
