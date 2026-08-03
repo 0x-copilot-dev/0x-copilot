@@ -132,6 +132,16 @@ def _runtime_context_for_run(run_id: str) -> AgentRuntimeContext:
     )
 
 
+class _WorkerToolResult:
+    """The `tool_result` event the worker emits for every tool call."""
+
+    event_type = "tool_result"
+    sequence_no = 10_000
+
+    def __init__(self, *, payload: dict) -> None:
+        self.payload = payload
+
+
 class TestV1FreeLedger(DynamicMcpLoadingMixin):
     async def _call_tool(
         self,
@@ -400,14 +410,11 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
             run=run,
         )
         try:
-            await tool.ainvoke(
-                {
-                    "server_name": "linear",
-                    "tool_name": "Get_Issue",
-                    "arguments": {"query": "ENG-1421"},
-                    "tool_call_id": "call_jira",
-                }
-            )
+            # Per-tool: the connector's own tool, addressed directly. The
+            # `Get_Issue` spelling this test used to type went into the
+            # envelope's `tool_name`; there is no envelope now, and the served
+            # name is the registered one — which is the property asserted below.
+            await tool.ainvoke({"query": "ENG-1421", "tool_call_id": "call_jira"})
         finally:
             McpOperationGatewayContext.unbind(service_token)
             OperationContext.unbind(operation_token)
@@ -434,8 +441,18 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         # v2 fold, and it is `get_issue` — the name as it survived the MCP
         # boundary, NOT re-lowercased a second time by the surface layer, and
         # not the `Get_Issue` the test typed (which never reached this code).
+        # `fold` hydrates a surface from the run's `tool_result` STREAM event —
+        # a generic tool event the WORKER emits for every tool call, not
+        # something the surfaces emitter produces. This test drives the tool
+        # directly, so it stands in for the worker; under the umbrella the event
+        # arrived because the test bound the Operation Gateway, which the
+        # per-tool path does not traverse.
+        worker_tool_result = _WorkerToolResult(
+            payload={"call_id": "call_jira", "output": _LINEAR_ISSUE_OUTPUT}
+        )
         content = SurfaceContentProjection.fold(
-            events, surface_payload_refs={created["surface_id"]: created["payload_ref"]}
+            [*events, worker_tool_result],
+            surface_payload_refs={created["surface_id"]: created["payload_ref"]},
         )
         served = content[created["surface_id"]]["source"]
         assert served == {"server": "linear", "tool": "get_issue"}
