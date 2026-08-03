@@ -7,7 +7,11 @@ import {
   type ReactNode,
 } from "react";
 
-import type { CitationSourceRef } from "@0x-copilot/api-types";
+import type {
+  AssistantTurnPartBlock,
+  CitationSourceRef,
+  RunContentPart,
+} from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import { Composer } from "../composer/Composer";
@@ -141,8 +145,15 @@ export interface TcChatApproval {
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
   readonly decision: "approved" | "rejected" | null;
-  /** Dispatch time (epoch ms) — the conversation anchor. */
+  /** Dispatch time (epoch ms) — retained for display, no longer the anchor. */
   readonly createdAtMs: number | null;
+  /**
+   * `sequence_no` of the request event — the conversation anchor. `RunApproval`
+   * has always carried this; the chat used `createdAtMs` instead and paid for
+   * it (wall-clock across producers is not a total order, and ms collisions are
+   * routine at streaming rates).
+   */
+  readonly sequenceNo?: number;
 }
 
 /** OAuth-success receipt retained while the cockpit rebinds to the next run. */
@@ -188,6 +199,21 @@ export interface TcChatMessagePart {
    * blinking cursor onto the markdown renderer (FR-3.19).
    */
   readonly status?: MessagePartStatus;
+  /**
+   * `sequence_no` of the event that OPENED this part, within its message's
+   * `run_id` event space. This is the ordering key that lets tool / fleet /
+   * approval cards interleave BETWEEN the parts of one turn — a turn is
+   * `text → tools → text`, and before this existed the whole turn carried a
+   * single anchor (its first token) so every mid-turn card sorted after it.
+   *
+   * Optional: user turns and pre-ordering historical messages carry none, and
+   * those keep document order (see `mergeStream`).
+   */
+  readonly seq?: number;
+  /** Epoch ms of the first event in this part — drives the reasoning stamp. */
+  readonly startedAtMs?: number;
+  /** Epoch ms of the latest event applied to this part. */
+  readonly updatedAtMs?: number;
 }
 
 export interface TcChatMessage {
@@ -195,6 +221,13 @@ export interface TcChatMessage {
   readonly role: "user" | "assistant" | "system" | "tool";
   readonly parts: ReadonlyArray<TcChatMessagePart>;
   readonly created_at_ms?: number;
+  /**
+   * The run whose `sequence_no` space this message's part `seq` values live in.
+   * Only parts belonging to the ACTIVE run may be seq-merged against that run's
+   * cards — every run numbers its events from 0, so merging across runs would
+   * collide run 2's seq 5 with run 7's seq 5.
+   */
+  readonly run_id?: string | null;
 }
 
 export interface TcChatMessagesResponse {
@@ -211,31 +244,87 @@ interface ApiChatMessage {
   readonly message_id: string;
   readonly role: TcChatMessage["role"];
   readonly content_text?: string | null;
+  readonly content?: ReadonlyArray<
+    AssistantTurnPartBlock | RunContentPart
+  > | null;
   readonly created_at?: string | null;
   readonly parts?: ReadonlyArray<TcChatMessagePart>;
   readonly created_at_ms?: number;
+  readonly run_id?: string | null;
 }
 interface ApiChatMessagesResponse {
   readonly messages?: ReadonlyArray<ApiChatMessage>;
 }
+
+/**
+ * Read the assistant turn's ORDERED parts off the wire `content` blocks.
+ *
+ * The worker folds the run's sealed ledger into `MessageRecord.content` at seal
+ * time, so a completed turn reloads as what it was — `text → tools → text` —
+ * instead of collapsing to its last sentence. `content_text` is still written
+ * and still correct; it is the FINAL text, for previews and model context, and
+ * remains the fallback for every message written before this existed.
+ *
+ * Scoped to the assistant: user `content` blocks are composer parts
+ * (attachments, quotes) with their own vocabulary, and nothing is gained by
+ * reinterpreting them here.
+ */
+function partsFromContentBlocks(
+  message: ApiChatMessage,
+): TcChatMessagePart[] | null {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return null;
+  }
+  const parts: TcChatMessagePart[] = [];
+  for (const block of message.content) {
+    const type = block.type;
+    const text = block.text;
+    if ((type !== "text" && type !== "reasoning") || typeof text !== "string") {
+      continue;
+    }
+    const status = block.status;
+    const statusType =
+      status !== null && typeof status === "object"
+        ? (status as Record<string, unknown>).type
+        : undefined;
+    parts.push({
+      type,
+      text,
+      status:
+        statusType === "running" ? { type: "running" } : { type: "complete" },
+      ...(typeof block.seq === "number" ? { seq: block.seq } : {}),
+      ...(typeof block.startedAtMs === "number"
+        ? { startedAtMs: block.startedAtMs }
+        : {}),
+      ...(typeof block.updatedAtMs === "number"
+        ? { updatedAtMs: block.updatedAtMs }
+        : {}),
+    });
+  }
+  return parts.length > 0 ? parts : null;
+}
+
 function toTcChatMessage(message: ApiChatMessage): TcChatMessage {
   if (Array.isArray(message.parts)) {
     return {
       message_id: message.message_id,
       role: message.role,
       parts: message.parts,
+      ...(message.run_id != null ? { run_id: message.run_id } : {}),
       ...(message.created_at_ms != null
         ? { created_at_ms: message.created_at_ms }
         : {}),
     };
   }
-  const text = message.content_text ?? "";
   const createdAt =
     message.created_at != null ? Date.parse(message.created_at) : Number.NaN;
+  const blockParts = partsFromContentBlocks(message);
+  const text = message.content_text ?? "";
   return {
     message_id: message.message_id,
     role: message.role,
-    parts: text.length > 0 ? [{ type: "text", text }] : [],
+    parts: blockParts ?? (text.length > 0 ? [{ type: "text", text }] : []),
+    ...(message.run_id != null ? { run_id: message.run_id } : {}),
     ...(Number.isNaN(createdAt) ? {} : { created_at_ms: createdAt }),
   };
 }
@@ -435,6 +524,15 @@ export interface TcChatProps {
     readonly disabled: boolean;
     readonly placeholder: string;
   }) => ReactNode;
+  /**
+   * The active run — the `sequence_no` space shared by the projected cards and
+   * the active turn's part `seq` values. Only that run's parts join the
+   * seq-ordered interleave in `mergeStream`; a prior run's turn keeps document
+   * order, because every run numbers its events from 0 and merging across runs
+   * would collide their seqs. Omitted → inferred from the last seq-bearing
+   * message, which keeps standalone usage and existing fixtures working.
+   */
+  readonly activeRunId?: string | null;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
@@ -498,6 +596,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     terminalBeat,
     runFailed = false,
     compact = false,
+    activeRunId = null,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -656,6 +755,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         terminalBeat={terminalBeat}
         runFailed={runFailed}
         compact={compact}
+        activeRunId={activeRunId}
       />
     </div>
   );
@@ -1089,6 +1189,12 @@ interface MessageListBodyProps {
   readonly runFailed?: boolean;
   /** PRD-03 D-3.6 — narrow surface; shortens the group's summary label. */
   readonly compact?: boolean;
+  /**
+   * The run whose `sequence_no` space the cards and the active turn's part
+   * `seq` values share. Only that run's parts join the seq-ordered interleave —
+   * see `mergeStream`. Omitted → inferred from the last seq-bearing message.
+   */
+  readonly activeRunId?: string | null;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1107,6 +1213,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     terminalBeat,
     runFailed = false,
     compact = false,
+    activeRunId,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1143,7 +1250,13 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   // Messages (GET) plus the three projected-off-the-run-stream card families —
   // fleet cards (PR-3.8), tool-call cards (Workstream D) and approvals — are
   // interleaved by timestamp so each lands where it happened in the flow.
-  const items = mergeStream(messages, fleets, toolCalls, approvals);
+  const items = mergeStream(
+    messages,
+    fleets,
+    toolCalls,
+    approvals,
+    activeRunId ?? null,
+  );
 
   const renderItem = (item: StreamItem): ReactNode => {
     if (item.kind === "fleet") {
@@ -1151,6 +1264,14 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     }
     if (item.kind === "tool") {
       return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
+    }
+    if (item.kind === "part") {
+      return renderMessagePartItem(
+        item.message,
+        item.part,
+        item.index,
+        markdownComponents,
+      );
     }
     if (item.kind === "approval") {
       return (
@@ -1231,6 +1352,37 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   );
 }
 
+function renderPart(
+  part: TcChatMessagePart,
+  role: TcChatMessage["role"],
+  key: number | string,
+  markdownComponents?: MarkdownTextProps["components"],
+): ReactNode {
+  const status: MessagePartStatus = part.status ?? { type: "complete" };
+  if (part.type === "reasoning") {
+    return (
+      <Reasoning key={key} type="reasoning" text={part.text} status={status} />
+    );
+  }
+  // User input stays literal (a typed `| pipe |` is not markdown);
+  // agent/tool/system text routes through the citation-safe streaming
+  // markdown path so conversational GFM tables render as real tables
+  // with the incremental blinking cursor, never as half-parsed raw
+  // pipes (FR-3.19).
+  if (role === "user") {
+    return <PlainText key={key} type="text" text={part.text} status={status} />;
+  }
+  return (
+    <MarkdownText
+      key={key}
+      type="text"
+      text={part.text}
+      status={status}
+      components={markdownComponents}
+    />
+  );
+}
+
 function renderMessage(
   m: TcChatMessage,
   markdownComponents?: MarkdownTextProps["components"],
@@ -1242,40 +1394,35 @@ function renderMessage(
       data-testid={`tc-chat-message-${m.message_id}`}
       data-role={m.role}
     >
-      {(m.parts ?? []).map((part, idx) => {
-        const status: MessagePartStatus = part.status ?? {
-          type: "complete",
-        };
-        if (part.type === "reasoning") {
-          return (
-            <Reasoning
-              key={idx}
-              type="reasoning"
-              text={part.text}
-              status={status}
-            />
-          );
-        }
-        // User input stays literal (a typed `| pipe |` is not markdown);
-        // agent/tool/system text routes through the citation-safe streaming
-        // markdown path so conversational GFM tables render as real tables
-        // with the incremental blinking cursor, never as half-parsed raw
-        // pipes (FR-3.19).
-        if (m.role === "user") {
-          return (
-            <PlainText key={idx} type="text" text={part.text} status={status} />
-          );
-        }
-        return (
-          <MarkdownText
-            key={idx}
-            type="text"
-            text={part.text}
-            status={status}
-            components={markdownComponents}
-          />
-        );
-      })}
+      {(m.parts ?? []).map((part, idx) =>
+        renderPart(part, m.role, idx, markdownComponents),
+      )}
+    </li>
+  );
+}
+
+/**
+ * One part of a seq-ordered turn, as its own stream item so cards can sit
+ * between the parts. The assistant `<li>` is transparent and full-bleed
+ * (`messageItemStyle`), so splitting a turn across several of them is visually
+ * identical to the single-`<li>` render — no bubble is being broken up.
+ */
+function renderMessagePartItem(
+  m: TcChatMessage,
+  part: TcChatMessagePart,
+  index: number,
+  markdownComponents?: MarkdownTextProps["components"],
+): ReactNode {
+  return (
+    <li
+      key={`${m.message_id}-part-${index}`}
+      style={messageItemStyle(m.role)}
+      data-testid={`tc-chat-message-${m.message_id}-part-${index}`}
+      data-role={m.role}
+      data-part-type={part.type}
+      data-part-seq={typeof part.seq === "number" ? part.seq : undefined}
+    >
+      {renderPart(part, m.role, index, markdownComponents)}
     </li>
   );
 }
@@ -1341,77 +1488,135 @@ function renderToolCard(
 
 type StreamItem =
   | { readonly kind: "message"; readonly message: TcChatMessage }
+  | {
+      readonly kind: "part";
+      readonly message: TcChatMessage;
+      readonly part: TcChatMessagePart;
+      readonly index: number;
+    }
   | { readonly kind: "fleet"; readonly fleet: FleetProjection }
   | { readonly kind: "tool"; readonly toolCall: ToolCallEntry }
   | { readonly kind: "approval"; readonly approval: TcChatApproval };
 
-/** A non-message card anchored to a timestamp, for the interleave pass. */
+/** An item anchored to a `sequence_no`, for the interleave pass. */
 interface AnchoredItem {
-  readonly at: number;
+  readonly seq: number;
   readonly item: StreamItem;
 }
 
 /**
- * Interleave the projected card families (fleets, tool calls) into the message
- * stream WITHOUT reordering messages: messages keep their exact GET order (they
- * may lack timestamps), and each card slots in just before the first message
- * dated after its anchor. Any card with no earlier-dated message anchor falls
- * to the end. Fleets are pushed before tool calls, so cards sharing a timestamp
- * keep a stable fleet-then-tool order (ES sort is stable). Approvals anchor on
- * `createdAtMs` — the field has always been documented as "the conversation
- * anchor" and went unused while approvals lived in a pinned strip.
+ * The run whose seq space the tail of the transcript lives in, when the host
+ * did not name one. The active turn is always the LAST message carrying
+ * seq-bearing parts, so its `run_id` is the answer.
+ */
+function inferActiveRunId(
+  messages: ReadonlyArray<TcChatMessage>,
+): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (
+      message.run_id != null &&
+      message.parts.some((part) => typeof part.seq === "number")
+    ) {
+      return message.run_id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Interleave the projected card families (fleets, tool calls, approvals) with
+ * the assistant turn's PARTS, ordered by `sequence_no`.
+ *
+ * THIS USED TO ANCHOR ON WALL-CLOCK TIMESTAMPS, and that was the render half of
+ * the interleaving bug. A turn is `text → tools → text → tools`, but the whole
+ * turn arrived as ONE message carrying ONE anchor (`created_at_ms` of its first
+ * token). Every card that ran mid-turn therefore compared as "after the
+ * message" and drained to the tail — one bubble, then a pile of cards,
+ * regardless of what actually happened when. No timestamp fix could have solved
+ * it: text-before-tools and text-after-tools were the same object with one
+ * anchor. They are separate parts now, and each carries the seq it opened at.
+ *
+ * `sequence_no` is the runtime's monotonic total order per run and is what the
+ * ledger seals; wall-clock is not an ordering key across producers and collides
+ * routinely at streaming rates.
+ *
+ * SCOPE — only parts belonging to `activeRunId` join the seq merge. Every run
+ * numbers its events from 0, so seq-merging a prior run's turn would collide
+ * its seq 5 with this run's seq 5. Everything else keeps document order and
+ * renders ahead of the merged tail, which is where history belongs anyway.
  */
 function mergeStream(
   messages: ReadonlyArray<TcChatMessage>,
   fleets: readonly FleetProjection[],
   toolCalls: readonly ToolCallEntry[],
   approvals: readonly TcChatApproval[],
+  activeRunId: string | null,
 ): readonly StreamItem[] {
-  if (fleets.length === 0 && toolCalls.length === 0 && approvals.length === 0) {
-    return messages.map((message) => ({ kind: "message", message }));
-  }
+  const runId = activeRunId ?? inferActiveRunId(messages);
   const anchored: AnchoredItem[] = [];
+  const out: StreamItem[] = [];
+
+  for (const message of messages) {
+    const seqBearing =
+      runId !== null &&
+      message.run_id === runId &&
+      message.parts.some((part) => typeof part.seq === "number");
+    if (!seqBearing) {
+      out.push({ kind: "message", message });
+      continue;
+    }
+    message.parts.forEach((part, index) => {
+      anchored.push({
+        seq: typeof part.seq === "number" ? part.seq : Number.MAX_SAFE_INTEGER,
+        item: { kind: "part", message, part, index },
+      });
+    });
+  }
+
+  // Fleets are pushed before tool calls so cards sharing a seq keep a stable
+  // fleet-then-tool order (ES sort is stable).
   for (const fleet of fleets) {
-    anchored.push({ at: fleetAt(fleet), item: { kind: "fleet", fleet } });
+    anchored.push({
+      seq: cardSeq(fleet.sequenceNo),
+      item: { kind: "fleet", fleet },
+    });
   }
   for (const toolCall of toolCalls) {
-    anchored.push({ at: toolAt(toolCall), item: { kind: "tool", toolCall } });
+    anchored.push({
+      seq: cardSeq(toolCall.sequenceNo),
+      item: { kind: "tool", toolCall },
+    });
   }
   for (const approval of approvals) {
     anchored.push({
-      at: approvalAt(approval),
+      seq: cardSeq(approval.sequenceNo),
       item: { kind: "approval", approval },
     });
   }
-  anchored.sort((a, b) => a.at - b.at);
-  const out: StreamItem[] = [];
-  let ai = 0;
-  for (const message of messages) {
-    const at =
-      typeof message.created_at_ms === "number" ? message.created_at_ms : null;
-    while (ai < anchored.length && at !== null && anchored[ai].at <= at) {
-      out.push(anchored[ai].item);
-      ai += 1;
-    }
-    out.push({ kind: "message", message });
-  }
-  while (ai < anchored.length) {
-    out.push(anchored[ai].item);
-    ai += 1;
+
+  anchored.sort((a, b) => a.seq - b.seq);
+  for (const entry of anchored) {
+    out.push(entry.item);
   }
   return out;
 }
 
-function fleetAt(fleet: FleetProjection): number {
-  return fleet.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+/** A card with no seq sorts to the tail rather than to the head. */
+function cardSeq(sequenceNo: number | undefined): number {
+  return typeof sequenceNo === "number" ? sequenceNo : Number.MAX_SAFE_INTEGER;
 }
 
-function toolAt(toolCall: ToolCallEntry): number {
-  return toolCall.createdAtMs ?? Number.MAX_SAFE_INTEGER;
-}
-
+/**
+ * Ordering anchor for "which pending approval is oldest". Prefers `sequenceNo`
+ * for the same reason the interleave does; falls back to `createdAtMs` only for
+ * a projection that predates the field. The two are never mixed in one
+ * comparison in practice — a run's approvals all come from one projection.
+ */
 function approvalAt(approval: TcChatApproval): number {
-  return approval.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+  return typeof approval.sequenceNo === "number"
+    ? approval.sequenceNo
+    : (approval.createdAtMs ?? Number.MAX_SAFE_INTEGER);
 }
 
 function filterFleetsByScrub(

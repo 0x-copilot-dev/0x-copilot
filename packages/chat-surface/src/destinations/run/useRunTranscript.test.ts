@@ -150,6 +150,77 @@ describe("useRunTranscript", () => {
     });
   });
 
+  it("drops the overlay for an INTERLEAVED turn, whose parts outnumber content_text", async () => {
+    // The dedupe used to compare the concatenation of every text part against
+    // history's `content_text`. Once a turn can speak before it acts, those two
+    // stop being the same string — "Checking.It shipped." vs "It shipped." —
+    // the overlay would never drop, and the reply would render twice. The
+    // comparison is on the FINAL text part, which both shapes agree on.
+    const historyRef = {
+      current: {
+        messages: [{ message_id: "u1", role: "user", content_text: "do it" }],
+      },
+    };
+    const transport = makeTransport(historyRef);
+    const streaming = [
+      ev({
+        event_type: "model_delta",
+        sequence_no: 1,
+        payload: { delta: "Checking." },
+      }),
+      ev({ event_type: "tool_call_started", sequence_no: 2 }),
+      ev({
+        event_type: "model_delta",
+        sequence_no: 3,
+        payload: { delta: "It shipped." },
+      }),
+    ];
+    const finished = [
+      ...streaming,
+      ev({
+        event_type: "final_response",
+        sequence_no: 4,
+        payload: { message: "It shipped." },
+      }),
+    ];
+
+    const { result, rerender } = renderHook(
+      (props: { runStatus: AgentRunStatus; events: RuntimeEventEnvelope[] }) =>
+        useRunTranscript({
+          conversationId: "c",
+          runId: "r1",
+          runStatus: props.runStatus,
+          events: props.events,
+        }),
+      {
+        wrapper: wrapper(transport),
+        initialProps: {
+          runStatus: "running" as AgentRunStatus,
+          events: streaming,
+        },
+      },
+    );
+    // Streaming: the live turn carries BOTH halves as separate parts.
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    expect(result.current.messages[1].parts.map((p) => p.text)).toEqual([
+      "Checking.",
+      "It shipped.",
+    ]);
+
+    historyRef.current = {
+      messages: [
+        { message_id: "u1", role: "user", content_text: "do it" },
+        { message_id: "a1", role: "assistant", content_text: "It shipped." },
+      ],
+    };
+    rerender({ runStatus: "completed", events: finished });
+
+    await waitFor(() => {
+      expect(result.current.messages).toHaveLength(2);
+      expect(result.current.messages[1].message_id).toBe("a1");
+    });
+  });
+
   // WC-P4 (AD-9): optimistic user echo.
   it("echoes the pending user message at the tail before the re-seed absorbs it", async () => {
     const historyRef = {

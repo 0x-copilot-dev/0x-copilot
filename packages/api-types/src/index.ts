@@ -1654,15 +1654,53 @@ export interface ConversationStreamEnvelope {
   cursor: string;
 }
 
+/**
+ * One ordered span of an assistant turn, as persisted in `Message.content`.
+ *
+ * A turn is `text → tools → text → tools → text`. `content_text` carries only
+ * the FINAL assistant text — correct for previews and for the next turn's model
+ * context, but not a transcript: rendering from it alone drops everything the
+ * model said before it acted. The runtime therefore folds the run's sealed
+ * ledger into these blocks at completion, so a reloaded turn is what it was.
+ *
+ * `seq` is the `sequence_no` the span opened at, within its message's `run_id`
+ * event space. It is the ordering key clients use to interleave tool /
+ * approval / subagent cards BETWEEN the spans of one turn — those cards carry
+ * the same `sequence_no`, and wall-clock timestamps are not a total order
+ * across producers.
+ *
+ * Cards are deliberately NOT blocks here: they already have their own
+ * projections off the same ledger, and duplicating them into the message would
+ * create a second source of truth for the same facts.
+ */
+export interface AssistantTurnPartBlock {
+  type: "text" | "reasoning";
+  text: string;
+  /** `sequence_no` this span opened at; absent on pre-ordering messages. */
+  seq?: number;
+  status?: { type: "running" | "complete" };
+  startedAtMs?: number;
+  updatedAtMs?: number;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
   org_id: string;
   run_id: string | null;
   role: MessageRole;
+  /**
+   * The message's text. For an assistant turn this is the FINAL text only —
+   * see `AssistantTurnPartBlock` for the ordered transcript in `content`.
+   */
   content_text: string;
   content_format: string;
-  content?: RunContentPart[];
+  /**
+   * Composer parts on a user turn; the ordered turn spans on an assistant one.
+   * Empty on assistant messages written before turn folding existed, where
+   * `content_text` remains the only transcript available.
+   */
+  content?: (RunContentPart | AssistantTurnPartBlock)[];
   attachments?: RunAttachmentRequest[];
   quote?: RunQuoteMetadata | null;
   metadata?: Record<string, unknown>;

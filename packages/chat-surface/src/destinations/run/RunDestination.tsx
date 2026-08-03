@@ -4034,6 +4034,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         conversationId={conversationId as unknown as string}
         mode={mode}
         messages={transcriptMessages}
+        // The seq space shared by the cards below and the active turn's parts.
+        // Named explicitly rather than inferred: the cockpit knows which run is
+        // bound, and a prior turn's seq must never compete with this run's.
+        activeRunId={session.runId as unknown as string | null}
         // WC-P6a: the host chip dispatcher (`{ a: MarkdownLink }`) — resolves
         // `[[N]]` / `[c<id>]` anchors against the provider above.
         markdownComponents={markdownComponents}

@@ -455,6 +455,28 @@ function lastTextPartIndex(content: ThreadMessageContent): number {
   return -1;
 }
 
+/**
+ * The reasoning part currently OPEN, i.e. the tail part when it is a reasoning
+ * part still `running`. Anything else means the previous span already closed —
+ * `closeReasoningIfRunning` fires on the first text delta, tool dispatch or
+ * final response — so the next span must become its own part.
+ *
+ * This replaced `content.findIndex(isReasoningPart)`, which found the FIRST
+ * reasoning part of the whole turn. Combined with replace-on-cap, an agent that
+ * thought, called tools, then thought again had span #1's text overwritten by
+ * span #2 the moment the provider emitted its close marker. The thinking
+ * between two batches of tool calls did not merely render in the wrong place —
+ * it was destroyed.
+ */
+function openReasoningIndex(content: ThreadMessageContent): number {
+  const index = content.length - 1;
+  if (index < 0) {
+    return -1;
+  }
+  const last = content[index];
+  return isReasoningPart(last) && last.status?.type === "running" ? index : -1;
+}
+
 export function appendReasoning(
   content: ThreadMessageContent,
   text: string,
@@ -463,7 +485,7 @@ export function appendReasoning(
   partStatus?: { type: "running" | "complete" },
 ): ThreadMessageContent {
   const status = partStatus ?? { type: replace ? "complete" : "running" };
-  const index = content.findIndex(isReasoningPart);
+  const index = openReasoningIndex(content);
   if (index === -1) {
     return [
       ...content,

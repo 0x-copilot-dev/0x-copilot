@@ -82,6 +82,30 @@ function messageText(message: TcChatMessage): string {
     .join("");
 }
 
+/**
+ * The message's FINAL text part — the identity used to recognise "history
+ * already carries this reply".
+ *
+ * It cannot be the concatenation any more. A turn is now an ordered part list
+ * (`text → tools → text`), while the persisted message's `content_text` is only
+ * the final assistant text the worker wrote. Comparing concatenations would
+ * therefore never match for any turn that spoke before it acted, the overlay
+ * would never drop, and the reply would render twice.
+ *
+ * Comparing the last text part matches both shapes: a legacy single-blob
+ * history message IS its own last part, and a parts-bearing one ends on the
+ * same final text.
+ */
+function finalText(message: TcChatMessage): string {
+  for (let i = message.parts.length - 1; i >= 0; i -= 1) {
+    const part = message.parts[i];
+    if (part.type === "text") {
+      return part.text;
+    }
+  }
+  return "";
+}
+
 /** True while any part is still streaming. */
 function isStreaming(message: TcChatMessage): boolean {
   return message.parts.some((part) => part.status?.type === "running");
@@ -157,8 +181,8 @@ export function useRunTranscript(
         last !== undefined &&
         last.role === "assistant" &&
         !isStreaming(liveMessage) &&
-        messageText(liveMessage) !== "" &&
-        messageText(last) === messageText(liveMessage);
+        finalText(liveMessage) !== "" &&
+        finalText(last) === finalText(liveMessage);
       liveTail = alreadyPersisted ? [] : live;
     }
 
