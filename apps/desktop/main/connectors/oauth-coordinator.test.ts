@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { LoopbackHandle } from "../auth/loopback-server";
 
 import {
+  CONNECT_CANCELLED,
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
 } from "./oauth-coordinator";
@@ -94,6 +95,7 @@ function makeCoordinator(
   fetchImpl: typeof fetch,
   loopback: () => Promise<LoopbackHandle>,
   openExternal: (url: string) => Promise<void>,
+  facadeTimeoutMs?: number,
 ): ConnectorOAuthCoordinator {
   return new ConnectorOAuthCoordinator({
     facadeBaseUrl: "http://127.0.0.1:8200",
@@ -101,6 +103,7 @@ function makeCoordinator(
     getBearer: async () => "bearer-abc",
     fetch: fetchImpl,
     loopback,
+    ...(facadeTimeoutMs === undefined ? {} : { facadeTimeoutMs }),
   });
 }
 
@@ -306,5 +309,67 @@ describe("ConnectorOAuthCoordinator — cancellation", () => {
 
     await expect(pending).rejects.toThrow(/connect cancelled/);
     expect(controls.closed).toBe(true);
+  });
+});
+
+describe("ConnectorOAuthCoordinator — an unreachable facade fails, it does not spin", () => {
+  // The shipped bug: `timeoutMs` bounded only the loopback — the step that
+  // cannot hang, because it is a local listener we own. The facade call that
+  // runs BEFORE it had no deadline, so a backend that accepted the connection
+  // and never answered left `connect` awaiting forever: no browser opened, no
+  // error surfaced, and the row sat on "Connecting…". The only escape was the
+  // cancel button, which is why the logs recorded `connect cancelled` for a
+  // failure that was never a cancellation.
+  const hangingFetch = ((_url: string, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      // Exactly what a real unanswered request does: settle only on the
+      // caller's signal. With no signal wired, this never settles at all.
+      init?.signal?.addEventListener("abort", () => {
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      });
+    })) as unknown as typeof fetch;
+
+  it("rejects with a named cause rather than awaiting forever", async () => {
+    const { loopback } = fakeLoopback();
+    const openExternal = vi.fn(async () => {});
+    // A real 20ms deadline rather than fake timers: `AbortSignal.timeout` runs
+    // on a platform timer that `vi.useFakeTimers` does not intercept, so
+    // advancing fake time would leave the request genuinely pending.
+    const coordinator = makeCoordinator(
+      hangingFetch,
+      loopback,
+      openExternal,
+      20,
+    );
+
+    await expect(coordinator.connect("atlassian")).rejects.toThrow(
+      /could not reach/i,
+    );
+
+    // The browser is never opened for a flow that never started — a consent
+    // screen for an unstarted authorization is worse than no screen at all.
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("does not report an unreachable backend as a user cancellation", async () => {
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      hangingFetch,
+      loopback,
+      async () => {},
+      20,
+    );
+
+    const error = await coordinator
+      .connect("atlassian")
+      .then(() => null)
+      .catch((caught: unknown) => caught as Error);
+
+    // The distinction that matters in a log: this failure is the backend's,
+    // not the user's. Reporting it as `connect cancelled` is what sent the
+    // original investigation looking at the renderer's cancel wiring.
+    expect(error).toBeInstanceOf(ConnectorOAuthError);
+    expect(error?.message).not.toContain(CONNECT_CANCELLED);
+    expect(error?.message).toMatch(/could not reach/i);
   });
 });

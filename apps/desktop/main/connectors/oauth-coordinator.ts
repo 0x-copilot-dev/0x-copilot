@@ -95,6 +95,23 @@ export class ConnectorOAuthError extends Error {
  */
 export const CONNECT_CANCELLED = "connect cancelled";
 
+/**
+ * Why an unreachable facade must fail rather than spin.
+ *
+ * `timeoutMs` used to bound only the loopback — the step that CANNOT hang,
+ * because it is a local listener we own. The facade calls before and after it
+ * had no deadline at all, so a facade that accepted the connection and never
+ * answered left `authorize` awaiting forever: no browser opened, no error
+ * surfaced, and the row sat on "Connecting…" until the user pressed Cancel.
+ * That is why this shipped looking like a cancellation — the only escape was
+ * the cancel button, so `connect cancelled` is what the logs recorded.
+ */
+export const FACADE_UNREACHABLE =
+  "the app could not reach its backend to start the connection";
+
+/** Bounds every facade call in this file. Generous: a slow start is not a hang. */
+export const FACADE_TIMEOUT_MS = 20_000;
+
 export interface ConnectorOAuthDeps {
   readonly facadeBaseUrl: string;
   /** Opens a URL in the OS default browser (never exposed to the renderer). */
@@ -104,6 +121,10 @@ export interface ConnectorOAuthDeps {
   readonly fetch?: typeof fetch;
   readonly loopback?: typeof awaitLoopbackCode;
   readonly timeoutMs?: number;
+  /** Deadline for facade calls. Injectable for the same reason `timeoutMs` is:
+   *  a test must be able to drive the expiry without a real wall-clock wait,
+   *  and `AbortSignal.timeout` is not intercepted by fake timers. */
+  readonly facadeTimeoutMs?: number;
   readonly logger?: {
     info: (msg: string, ctx?: Record<string, unknown>) => void;
     warn: (msg: string, ctx?: Record<string, unknown>) => void;
@@ -131,11 +152,40 @@ export class ConnectorOAuthCoordinator {
   private readonly doFetch: typeof fetch;
   private readonly loopback: typeof awaitLoopbackCode;
   private readonly timeoutMs: number;
+  private readonly facadeTimeoutMs: number;
   private readonly logger: NonNullable<ConnectorOAuthDeps["logger"]>;
 
   // state (256-bit, minted server-side) → pending session. The single source
   // of truth for which in-flight flow owns a given OAuth callback.
   private readonly pending = new Map<string, PendingSession>();
+
+  /**
+   * Fetch with a deadline, translating an expiry into a typed `start` failure.
+   *
+   * `AbortSignal.timeout` rejects with an `AbortError`; surfaced raw it reads as
+   * a mystery. Naming it here is what makes an unhealthy backend diagnosable
+   * from the toast alone rather than from a spinner that never resolves.
+   */
+  private async fetchWithDeadline(
+    url: string,
+    init: RequestInit,
+    stage: ConnectorOAuthError["stage"],
+  ): Promise<Response> {
+    try {
+      return await this.doFetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(this.facadeTimeoutMs),
+      });
+    } catch (error) {
+      const aborted =
+        error instanceof Error &&
+        (error.name === "AbortError" || error.name === "TimeoutError");
+      if (aborted) {
+        throw new ConnectorOAuthError(stage, FACADE_UNREACHABLE);
+      }
+      throw error;
+    }
+  }
 
   constructor(deps: ConnectorOAuthDeps) {
     this.facadeBaseUrl = trimTrailingSlash(deps.facadeBaseUrl);
@@ -144,6 +194,7 @@ export class ConnectorOAuthCoordinator {
     this.doFetch = deps.fetch ?? globalThis.fetch.bind(globalThis);
     this.loopback = deps.loopback ?? awaitLoopbackCode;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.facadeTimeoutMs = deps.facadeTimeoutMs ?? FACADE_TIMEOUT_MS;
     this.logger = deps.logger ?? defaultLogger;
   }
 
@@ -293,7 +344,7 @@ export class ConnectorOAuthCoordinator {
         ? { oauth_client: options.oauthClient }
         : {}),
     };
-    const response = await this.doFetch(
+    const response = await this.fetchWithDeadline(
       `${this.facadeBaseUrl}/v1/connectors/${encodeURIComponent(slug)}/desktop/start-oauth`,
       {
         method: "POST",
@@ -304,6 +355,7 @@ export class ConnectorOAuthCoordinator {
         },
         body: JSON.stringify(body),
       },
+      "start",
     );
     if (!response.ok) {
       throw new ConnectorOAuthError(
@@ -331,7 +383,7 @@ export class ConnectorOAuthCoordinator {
       state: start.state,
       code,
     };
-    const response = await this.doFetch(
+    const response = await this.fetchWithDeadline(
       `${this.facadeBaseUrl}/v1/connectors/desktop/oauth-callback`,
       {
         method: "POST",
@@ -342,6 +394,7 @@ export class ConnectorOAuthCoordinator {
         },
         body: JSON.stringify(body),
       },
+      "callback",
     );
     if (!response.ok) {
       throw new ConnectorOAuthError(
@@ -451,7 +504,7 @@ export class ConnectorOAuthCoordinator {
     redirectUri: string,
     bearer: string,
   ): Promise<{ readonly auth_url: string }> {
-    const response = await this.doFetch(
+    const response = await this.fetchWithDeadline(
       `${this.facadeBaseUrl}/v1/mcp/servers/${encodeURIComponent(serverId)}/auth/start`,
       {
         method: "POST",
@@ -463,6 +516,7 @@ export class ConnectorOAuthCoordinator {
         // Identity is server-derived from the bearer; only the callback is ours.
         body: JSON.stringify({ redirect_uri: redirectUri }),
       },
+      "start",
     );
     if (!response.ok) {
       throw new ConnectorOAuthError(
