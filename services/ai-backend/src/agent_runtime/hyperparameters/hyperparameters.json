@@ -56,5 +56,11 @@
   },
   "citations": {
     "per_result_max": 25
+  },
+  "search": {
+    "content_token_budget": 1200,
+    "window_chars": 1200,
+    "lead_chars": 900,
+    "min_window_chars": 200
   }
 }

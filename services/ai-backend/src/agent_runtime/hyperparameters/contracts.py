@@ -50,6 +50,11 @@ class DeferLoadingPolicy(StrEnum):
     ALL = "all"
 
 
+#: The tokenizer-free ratio `SearchContentBudget` converts with. Mirrored
+#: rather than imported to keep this module free of capability imports.
+_CHARS_PER_TOKEN: Final[int] = 4
+
+
 class HyperparameterBounds:
     """Ceilings this document introduces, each naming the site it mirrors.
 
@@ -96,6 +101,11 @@ class HyperparameterBounds:
     RESULT_PREVIEW_BYTES_MAX: Final[int] = 1_048_576
     #: Per-result citation fan-out; a connector page rarely exceeds a few dozen.
     CITATIONS_PER_RESULT_MAX: Final[int] = 1_000
+    #: `SearchContentBudget` in capabilities/search/contracts.py. A ceiling
+    #: rather than a target: past a few thousand tokens per search the tool
+    #: is no longer summarising the web, it is pasting it.
+    SEARCH_CONTENT_TOKENS_MAX: Final[int] = 8_000
+    SEARCH_PASSAGE_CHARS_MAX: Final[int] = 20_000
 
 
 class _FrozenContract(BaseModel):
@@ -379,6 +389,60 @@ class ModelMapperHyperparameters(HyperparameterSection):
     )
 
 
+class SearchHyperparameters(HyperparameterSection):
+    """What ``web_search`` may spend to read the page instead of the snippet.
+
+    This is the cost control the local-search PRD names in §5: with no ranking
+    stage, "the window size IS the cost control". It is a tunable rather than a
+    constant because the right answer was only knowable once the feature ran —
+    measured across four live queries, extraction costs **3.6x** the snippet-only
+    baseline (~735 -> ~2650 tokens over three searches) while staying inside the
+    1200-token per-search budget. Whether that price is worth reading the page is
+    a product judgement someone should be able to make with a diff, not a patch.
+
+    ``content_token_budget`` bounds the whole model-visible payload for ONE
+    search; the three ``*_chars`` values bound individual passages inside it.
+    Lower the budget first: it is the bound that holds regardless of how the
+    passages are chosen.
+    """
+
+    content_token_budget: int = Field(
+        default=1_200, ge=100, le=HyperparameterBounds.SEARCH_CONTENT_TOKENS_MAX
+    )
+    #: Upper bound on one snippet-anchored window.
+    window_chars: int = Field(
+        default=1_200, ge=200, le=HyperparameterBounds.SEARCH_PASSAGE_CHARS_MAX
+    )
+    #: Upper bound on an article lead, used when the snippet is not locatable.
+    lead_chars: int = Field(
+        default=900, ge=200, le=HyperparameterBounds.SEARCH_PASSAGE_CHARS_MAX
+    )
+    #: Below this a window cannot reliably contain the answer, so the source
+    #: keeps its engine snippet rather than spending tokens on a stub.
+    min_window_chars: int = Field(
+        default=200, ge=50, le=HyperparameterBounds.SEARCH_PASSAGE_CHARS_MAX
+    )
+
+    @model_validator(mode="after")
+    def _window_must_fit_the_budget(self) -> "SearchHyperparameters":
+        """A single window wider than the whole budget starves every other source.
+
+        Four sources share ``content_token_budget``. A ``window_chars`` above it
+        means the first source can consume the entire allowance and the rest fall
+        back to snippets — technically within budget, and not what anyone setting
+        a window size intends.
+        """
+
+        if self.window_chars > self.content_token_budget * _CHARS_PER_TOKEN:
+            raise ValueError(
+                "search.window_chars exceeds the whole content budget; one "
+                "source would starve the others"
+            )
+        if self.min_window_chars > self.window_chars:
+            raise ValueError("search.min_window_chars exceeds search.window_chars")
+        return self
+
+
 class ObservabilityHyperparameters(HyperparameterSection):
     """Bounds applied while projecting runtime events onto the stream."""
 
@@ -424,6 +488,7 @@ class Hyperparameters(_FrozenContract):
         default_factory=ObservabilityHyperparameters
     )
     citations: CitationHyperparameters = Field(default_factory=CitationHyperparameters)
+    search: SearchHyperparameters = Field(default_factory=SearchHyperparameters)
 
 
 class HyperparameterOverride(_FrozenContract):
