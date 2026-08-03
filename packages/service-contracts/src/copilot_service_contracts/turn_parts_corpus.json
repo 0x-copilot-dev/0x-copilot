@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "description": "Executable, transport-envelope-lite corpus for differential assistant-turn part folding. Every case is projected at every source-order replay prefix; no projected output is stored here. The Python fold (agent_runtime.presentation.turn_parts) and the TypeScript twin (chat-surface chatProjection) must agree at every prefix.",
+  "cases": [
+    {
+      "id": "text-tools-text-single-turn",
+      "shape": "the interleaved turn the bucketed fold could not express",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "Checking the deploy" }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "model_delta",
+          "payload": { "delta": " status." }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "tool_call_started",
+          "payload": { "tool_name": "read_ci" }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "tool_result",
+          "payload": { "ok": true }
+        },
+        {
+          "sequence_no": 5,
+          "event_type": "model_delta",
+          "payload": { "delta": "It shipped at 09:14." }
+        },
+        {
+          "sequence_no": 6,
+          "event_type": "final_response",
+          "payload": { "message": "It shipped at 09:14." }
+        }
+      ]
+    },
+    {
+      "id": "two-thinking-spans-across-two-tool-batches",
+      "shape": "the reported bug: thinking between two separate lists of tool calls",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "delta": "First check CI." }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "tool_call_started",
+          "payload": { "tool_name": "read_ci" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "tool_call_started",
+          "payload": { "tool_name": "read_logs" }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "tool_result",
+          "payload": { "ok": true }
+        },
+        {
+          "sequence_no": 5,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "delta": "CI is green; now the deploy log." }
+        },
+        {
+          "sequence_no": 6,
+          "event_type": "reasoning_summary",
+          "payload": { "summary": "CI is green; now the deploy log." }
+        },
+        {
+          "sequence_no": 7,
+          "event_type": "tool_call_started",
+          "payload": { "tool_name": "read_deploy" }
+        },
+        {
+          "sequence_no": 8,
+          "event_type": "model_delta",
+          "payload": { "delta": "All good." }
+        },
+        {
+          "sequence_no": 9,
+          "event_type": "final_response",
+          "payload": { "message": "All good." }
+        }
+      ]
+    },
+    {
+      "id": "reasoning-cap-must-not-hit-the-first-span",
+      "shape": "findIndex(isReasoningPart) + replace-on-cap deleted span #1",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "delta": "span one" }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "tool_call_started",
+          "payload": {}
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "delta": "span two" }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "reasoning_summary",
+          "payload": { "summary": "span two, capped" }
+        }
+      ]
+    },
+    {
+      "id": "incidental-frames-do-not-split-a-part",
+      "shape": "a GFM table split across two parts parses as half a document",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "| a | b |\n" }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "todo_list_updated",
+          "payload": { "todos": [] }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "run_started",
+          "payload": {}
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "model_delta",
+          "payload": { "delta": "| - | - |" }
+        }
+      ]
+    },
+    {
+      "id": "out-of-order-replay-tail",
+      "shape": "a replay tail stitched onto a live subscription",
+      "events": [
+        {
+          "sequence_no": 5,
+          "event_type": "model_delta",
+          "payload": { "delta": "second" }
+        },
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "first" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "tool_call_started",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "id": "approval-parks-mid-turn-then-text-resumes",
+      "shape": "an approval card is a part boundary like any other card",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "I need to post this." }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "approval_requested",
+          "payload": { "approval_id": "ap_1" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "approval_resolved",
+          "payload": { "approval_id": "ap_1", "decision": "approved" }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "model_delta",
+          "payload": { "delta": "Posted." }
+        }
+      ]
+    },
+    {
+      "id": "subagent-deltas-never-enter-the-main-reply",
+      "shape": "subagent streams belong to the Agents tab",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "Delegating." }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "model_delta",
+          "subagent_id": "sub-1",
+          "payload": { "delta": "child chatter" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "model_delta",
+          "payload": { "delta": " Done." }
+        }
+      ]
+    },
+    {
+      "id": "final-response-after-a-card-opens-its-own-part",
+      "shape": "the tail is not a text part, so the answer cannot reconcile into it",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "Looking." }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "tool_call_started",
+          "payload": {}
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "final_response",
+          "payload": { "message": "Here is the answer." }
+        }
+      ]
+    },
+    {
+      "id": "final-response-summary-fallback",
+      "shape": "payload carries no message; summary is the declared fallback",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "model_delta",
+          "payload": { "delta": "partial" }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "final_response",
+          "payload": {},
+          "summary": "Summarised reply"
+        }
+      ]
+    },
+    {
+      "id": "reasoning-then-text-closes-the-span",
+      "shape": "visible text means the model stopped thinking",
+      "events": [
+        {
+          "sequence_no": 1,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "summary": "Plan: ", "delta": "Plan: " }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "reasoning_summary_delta",
+          "payload": { "summary": "Plan: step 1", "delta": "step 1" }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "model_delta",
+          "payload": { "delta": "Done", "message": "Done" }
+        }
+      ]
+    }
+  ]
+}

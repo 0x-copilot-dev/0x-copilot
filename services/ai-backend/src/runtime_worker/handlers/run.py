@@ -159,6 +159,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.audit import WorkerAuditEmitter
+from runtime_worker.turn_content import AssistantTurnContent
 from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
 )
@@ -236,6 +237,9 @@ class RuntimeRunHandler:
         BRANCH_ID = "branch_id"
         SOURCE_MESSAGE_ID = "source_message_id"
         PARENT_MESSAGE_ID = "parent_message_id"
+        SEQUENCE_NO = "sequence_no"
+        EVENT_TYPE = "event_type"
+        PAYLOAD = "payload"
 
     def __init__(
         self,
@@ -277,6 +281,10 @@ class RuntimeRunHandler:
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # The turn's ordered parts, folded from this run's own ledger at seal
+        # time. Shared with the approval handler's terminal path so there is one
+        # projection rule, not one per completion route.
+        self._turn_content = AssistantTurnContent(self.event_store)
         # One explicit desktop writer/admission composition per handler. The
         # pre-model wrapper and durable event projector must share this object;
         # constructing the gate ad hoc would create two unrelated decisions.
@@ -739,6 +747,20 @@ class RuntimeRunHandler:
                         run_id=command.run_id,
                         role=MessageRole.ASSISTANT,
                         content_text=final_text,
+                        # The turn's ORDERED parts, folded from this run's own
+                        # sealed ledger. `content_text` stays what it honestly
+                        # is — the final assistant text, used for previews and
+                        # the next turn's model context — while `content` is
+                        # what the turn actually looked like: text, then tools,
+                        # then more text. Without this the terminal re-seed
+                        # replaces a correctly interleaved live transcript with
+                        # a single blob, which is why the mid-turn prose
+                        # appeared to vanish the moment a run completed.
+                        content=await self._turn_content.blocks(
+                            org_id=command.org_id,
+                            run_id=command.run_id,
+                            final_text=final_text,
+                        ),
                         parent_message_id=run.user_message_id,
                         branch_id=self._trace_text(
                             command.runtime_context, self._Fields.BRANCH_ID
