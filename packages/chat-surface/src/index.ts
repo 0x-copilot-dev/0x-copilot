@@ -133,6 +133,18 @@ export {
   type ReasoningGroupProps,
 } from "./messages/ReasoningGroup";
 // === end Phase 1 (PR-1.1) ===
+// === Thinking indicator — the send→first-token gap, and reasoning spans ===
+// Self-styled on purpose: `ReasoningGroup` above is styled from the WEB app's
+// stylesheet, which the desktop host never loads, so it renders unlabelled on
+// the surface that matters. These carry their own appearance.
+export {
+  ThinkingShimmer,
+  type ThinkingShimmerProps,
+  ThinkingBlock,
+  type ThinkingBlockProps,
+  reasoningTitle,
+} from "./messages/ThinkingShimmer";
+// === end Thinking indicator ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,
