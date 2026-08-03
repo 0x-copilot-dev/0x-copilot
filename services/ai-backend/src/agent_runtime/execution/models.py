@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
+import re
 
 from agent_runtime.execution.contracts import (
     ModelConfig,
@@ -193,7 +194,32 @@ class ModelConfigResolver:
             return default
         if provider == "openai" and cls._openai_supports_reasoning(model_name):
             return ModelReasoningConfig(summary=ModelReasoningSummary.AUTO)
+        # Anthropic thinking models need the same synthesis, and for a second
+        # reason that is not about thinking at all. `build_chat_model` sends
+        # `temperature` only when reasoning is absent — and Claude 4.7+ REJECTS
+        # `temperature` outright ("`temperature` is deprecated for this model").
+        # So a packaged deployment with no reasoning env defaults produced
+        # `reasoning=None` -> temperature sent -> 400 on EVERY Anthropic run.
+        # Synthesizing here fixes the outage and turns thinking on; the builder
+        # supplies the adaptive mode and `display: summarized`.
+        if provider == "anthropic" and cls._anthropic_supports_thinking(model_name):
+            return ModelReasoningConfig()
         return None
+
+    @staticmethod
+    def _anthropic_supports_thinking(model_name: str) -> bool:
+        """Whether this Claude model has extended thinking.
+
+        Generation 4 and later. A family predicate for the same reason as its
+        OpenAI sibling — the catalog's per-model capability lives in the API
+        layer and is not reachable from the run path.
+        """
+
+        normalized = model_name.strip().lower().replace("_", "-").replace(".", "-")
+        if not normalized.startswith("claude"):
+            return False
+        match = re.search(r"claude-[a-z]+-(\d+)", normalized)
+        return match is not None and int(match.group(1)) >= 4
 
     @staticmethod
     def _openai_supports_reasoning(model_name: str) -> bool:

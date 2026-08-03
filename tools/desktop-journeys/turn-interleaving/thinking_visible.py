@@ -98,7 +98,16 @@ def main() -> int:
         log(f"PASS  BYOK ready for {PROVIDER}; credential value withheld")
 
         s.send_first_run_message(PROMPT)
-        assert s.wait_for("[data-testid=tc-chat]", 60), "transcript never opened"
+        if not s.wait_for("[data-testid=tc-chat]", 120):
+            # Screenshot BEFORE failing. "transcript never opened" with no
+            # artifact is undiagnosable after the app is torn down — the reason
+            # (an error banner, a model picker, a stuck composer) is only ever
+            # visible on screen.
+            s.shot(f"00-{PROVIDER}-no-transcript")
+            body = s.evaluate("document.body.innerText.slice(0,600)") or ""
+            log(f"VISIBLE UI:\n{body}")
+            emit("blocked", "transcript never opened; see 00-*-no-transcript.png")
+            return 2
 
         deadline, previous, stable = time.time() + 300, None, 0
         rows: list[dict] = []

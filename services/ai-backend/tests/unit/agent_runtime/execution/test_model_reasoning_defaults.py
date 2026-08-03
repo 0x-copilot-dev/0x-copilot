@@ -115,10 +115,30 @@ class TestResolverDefaultsReasoningSummary:
             )
             assert config.reasoning is None, model_name
 
-    def test_anthropic_model_not_defaulted(self) -> None:
+    def test_anthropic_thinking_model_is_defaulted(self) -> None:
+        """Anthropic MUST get a synthesized config, for two separate reasons.
+
+        This assertion used to be `is None`, and that pin was the outage.
+        `build_chat_model` sends `temperature` only when reasoning is absent,
+        and Claude 4.7+ rejects `temperature` with a 400 — so a deployment with
+        no reasoning env defaults (the packaged desktop app) failed EVERY
+        Anthropic run, with an error that named temperature and gave no hint
+        that the reasoning config was the lever. The second reason is the
+        obvious one: without a config the builder never asks for thinking.
+        """
+
         resolver = ModelConfigResolver(settings=_settings())
         config = resolver.resolve(
             ModelSelection(provider="anthropic", model_name="claude-opus-4-8"),
+        )
+        assert config.reasoning is not None
+        assert config.reasoning.enabled
+
+    def test_pre_thinking_anthropic_models_stay_none(self) -> None:
+        # Generation 3 has no extended thinking and still accepts temperature.
+        resolver = ModelConfigResolver(settings=_settings())
+        config = resolver.resolve(
+            ModelSelection(provider="anthropic", model_name="claude-3-haiku"),
         )
         assert config.reasoning is None
 
