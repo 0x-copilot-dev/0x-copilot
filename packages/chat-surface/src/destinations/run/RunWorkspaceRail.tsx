@@ -538,6 +538,11 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       />
     </>
   );
+  // Narrowed once so the render and the two scope headings cannot disagree
+  // about whether a second scope is on screen.
+  const showsCrossRunQueue =
+    pendingV2 !== undefined &&
+    (pendingWorkV21 === undefined || pendingV2.cards.length > 0);
   const approvalsBody: ReactNode = (
     <>
       {/* E1 D6: canonical runtime work is Studio-only. Focus stays compact and
@@ -554,17 +559,23 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         />
       ) : null}
       {/* PRD-E2 — the cross-run queue leads; the v1 in-chat approvals
-          (this conversation's) stay below. */}
-      {pendingV2 !== undefined &&
-      (pendingWorkV21 === undefined || pendingV2.cards.length > 0) ? (
+          (this conversation's) stay below.
+
+          Both lists carry a scope heading whenever both are mounted. Without
+          them the panel showed cross-run gate cards directly above "No pending
+          approvals in this conversation" — each statement true on its own,
+          and together a flat contradiction to anybody reading top to bottom. */}
+      {showsCrossRunQueue ? (
         <PendingCardList
           cards={pendingV2.cards}
           onReview={pendingV2.onReview}
+          groupLabel="Other chats"
         />
       ) : null}
       <ApprovalsTab
         queue={approvalsQueue}
         onJumpToApproval={onJumpToApproval}
+        groupLabel={showsCrossRunQueue ? "This conversation" : undefined}
       />
     </>
   );

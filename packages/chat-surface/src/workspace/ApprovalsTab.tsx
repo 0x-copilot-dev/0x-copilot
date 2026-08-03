@@ -17,33 +17,54 @@ import type { ApprovalsQueueItem, ApprovalsQueueProjection } from "./types";
 export interface ApprovalsTabProps {
   queue: ApprovalsQueueProjection;
   onJumpToApproval?: (approvalId: string, messageId: string) => void;
+  /**
+   * Scope heading, e.g. "This conversation". Supply it whenever the panel also
+   * shows a cross-run queue: this tab's empty state is conversation-scoped and
+   * correct, but unlabelled it reads as speaking for the whole panel — which is
+   * how cards ended up rendering directly above "No pending approvals in this
+   * conversation."
+   */
+  groupLabel?: string;
 }
 
 export function ApprovalsTab({
   queue,
   onJumpToApproval,
+  groupLabel,
 }: ApprovalsTabProps): ReactElement {
   const { pending, recent } = queue;
+  const heading =
+    groupLabel === undefined ? null : (
+      <p className="ui-eyebrow" data-testid="workspace-approvals-group">
+        {groupLabel}
+      </p>
+    );
   if (pending.length === 0 && recent.length === 0) {
     return (
       <div
         className="atlas-workspace-tab atlas-workspace-tab--empty"
         data-testid="workspace-approvals-tab-empty"
       >
-        <p>No pending approvals in this conversation.</p>
+        {heading}
+        <p>
+          {groupLabel === undefined
+            ? "No pending approvals in this conversation."
+            : "Nothing waiting here."}
+        </p>
       </div>
     );
   }
 
   return (
     <div className="atlas-workspace-tab" data-testid="workspace-approvals-tab">
+      {heading}
       {pending.length > 0 ? (
         <Section
           title="Pending"
           description={
             pending.length === 1
               ? "Copilot is waiting on you."
-              : `Atlas is waiting on ${pending.length} decisions.`
+              : `Copilot is waiting on ${pending.length} decisions.`
           }
           items={pending}
           onJumpToApproval={onJumpToApproval}

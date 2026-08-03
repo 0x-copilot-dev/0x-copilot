@@ -4270,6 +4270,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       <PostureChip bypassOn={ledger.bypassFromLedger} />
       <PendingCounterChip
         count={pendingWork.cards.length}
+        allElsewhere={
+          pendingWork.cards.length > 0 &&
+          pendingWork.cards.every((card) => card.runId !== session.runId)
+        }
         onClick={handleOpenApprovals}
       />
     </span>
