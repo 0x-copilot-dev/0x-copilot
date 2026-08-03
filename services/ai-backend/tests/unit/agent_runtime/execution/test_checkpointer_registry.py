@@ -9,6 +9,7 @@ in-flight graph state (paused approvals included) dies with the process.
 from __future__ import annotations
 
 import pytest
+from langgraph.checkpoint.base import empty_checkpoint
 
 from agent_runtime.execution import deep_agent_builder
 from agent_runtime.execution.checkpointing import (
@@ -95,9 +96,66 @@ class TestRuntimeCheckpointerSelection:
         saver = deep_agent_builder.runtime_checkpointer()
 
         assert type(saver).__name__ == "AsyncSqliteSaver"
-        # Beside the disposable catalog index, never inside it: wiping
-        # index/catalog.sqlite3 must not drop in-flight graph state.
         assert (tmp_path / "store" / "index").is_dir()
+
+    async def test_a_checkpoint_survives_a_worker_restart(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The point of a durable saver: state outlives the process.
+
+        Asserting the saver's *type* proves wiring, not durability. This writes
+        a checkpoint, drops the singleton the way a worker restart does, and
+        reads it back through a freshly constructed saver.
+        """
+
+        root = tmp_path / "store"
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "file")
+        monkeypatch.setenv("RUNTIME_FILE_STORE_ROOT", str(root))
+        config = {"configurable": {"thread_id": "thread-1", "checkpoint_ns": ""}}
+
+        saver = deep_agent_builder.runtime_checkpointer()
+        checkpoint = empty_checkpoint()
+        await saver.aput(
+            config, checkpoint, {"source": "loop", "step": 1, "parents": {}}, {}
+        )
+        assert (root / "index" / "checkpoints.sqlite3").is_file()
+        # Close the aiosqlite connection so its worker thread does not linger.
+        await saver.conn.close()
+
+        deep_agent_builder._runtime_checkpointer = None
+        reopened = deep_agent_builder.runtime_checkpointer()
+
+        restored = await reopened.aget_tuple(config)
+        assert restored is not None
+        assert restored.checkpoint["id"] == checkpoint["id"]
+        await reopened.conn.close()
+
+    async def test_checkpoints_do_not_live_in_the_disposable_catalog_index(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """`index/` is wipeable; in-flight graph state must not go with it.
+
+        The catalog index is rebuilt from the JSONL on every open, so anything
+        stored *in* it is disposable. Checkpoints are not — they sit beside it
+        in their own database file.
+        """
+
+        root = tmp_path / "store"
+        monkeypatch.setenv("RUNTIME_STORE_BACKEND", "file")
+        monkeypatch.setenv("RUNTIME_FILE_STORE_ROOT", str(root))
+
+        saver = deep_agent_builder.runtime_checkpointer()
+        await saver.aput(
+            {"configurable": {"thread_id": "t", "checkpoint_ns": ""}},
+            empty_checkpoint(),
+            {"source": "loop", "step": 1, "parents": {}},
+            {},
+        )
+
+        checkpoints = root / "index" / "checkpoints.sqlite3"
+        assert checkpoints.is_file()
+        assert checkpoints.name != "catalog.sqlite3"
+        await saver.conn.close()
 
     def test_the_file_backend_without_a_root_falls_back_rather_than_crashing(
         self, monkeypatch
