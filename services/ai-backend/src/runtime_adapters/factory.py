@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from copilot_service_contracts.deployment_profile import (
     ENV_DEPLOYMENT_PROFILE,
@@ -89,12 +88,6 @@ from runtime_adapters.artifact_references import (
     InMemoryArtifactReferenceStore,
 )
 from runtime_adapters.registry import STORAGE_BACKENDS
-
-if TYPE_CHECKING:  # pragma: no cover — typing only
-    # Referenced solely by the ``RuntimePorts.postgres_store`` annotation. Kept
-    # out of the runtime import graph so selecting any other backend never
-    # imports the database driver.
-    from runtime_adapters.postgres import PostgresRuntimeApiStore
 
 
 def build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
@@ -277,14 +270,8 @@ class RuntimePorts:
     # and explicitly configured shared deployments use the bounded file/CAS
     # adapter.
     evaluation_repository: EvaluationRepositoryPort | None = None
-    # Postgres-only escape hatch. Populated only when ``backend == "postgres"``
-    # so the opt-in ``DbStatementMetricsCollector`` can reach the pool via
-    # ``_role_connection``. Every other consumer should use the typed ports
-    # above and stay backend-agnostic.
-    postgres_store: "PostgresRuntimeApiStore | None" = None
     # Backend-correct citation store for the run WRITE path. Every construction
-    # site sets it: the Postgres store itself (it satisfies CitationStorePort),
-    # the durable ``FileCitationStore`` for the file backend (the SAME instance
+    # site sets it: the durable ``FileCitationStore`` for the file backend (the SAME instance
     # ``source_store`` reads), or a shared ``InMemoryCitationStore``. Defaults
     # None so any legacy constructor still works — the worker then falls back to
     # its historical isinstance resolution.

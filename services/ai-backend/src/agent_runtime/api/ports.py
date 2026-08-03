@@ -2,7 +2,7 @@
 
 Async-native end-to-end. Every method is `async def`; both the in-memory
 adapter (`runtime_adapters.in_memory.InMemoryRuntimeApiStore`) and the
-Postgres adapter (`runtime_adapters.postgres.PostgresRuntimeApiStore`)
+file adapter (`runtime_adapters.file.FileRuntimeApiStore`)
 implement the same surface. There is no sync mirror — the dev / test
 in-memory store is itself async.
 """
