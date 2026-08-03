@@ -29,6 +29,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
+from agent_runtime.execution.sampling_support import SamplingParameterSupport
 from agent_runtime.execution.tool_surface import (
     DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES,
 )
@@ -442,7 +443,14 @@ def build_chat_model(
         return FakeModelProvider.build(model_config)
 
     kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
-    if model_config.reasoning is None or not model_config.reasoning.enabled:
+    # Two independent reasons to omit `temperature`, and both must hold before
+    # we send it. Reasoning-enabled models take their sampling from the
+    # thinking config. Separately, the Claude 4.7+ generation removed the
+    # sampling parameters entirely and rejects a non-default value with a 400 —
+    # our default is 0.0, so sending it there fails every run on that model.
+    if (
+        model_config.reasoning is None or not model_config.reasoning.enabled
+    ) and SamplingParameterSupport.accepts_temperature(model_config.model_name):
         kwargs["temperature"] = model_config.temperature
     # ``max_tokens`` is the LangChain-canonical key for the output cap and is
     # honoured by every supported provider (OpenAI, Anthropic, Gemini). We
