@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -40,15 +40,6 @@ from agent_runtime.rollout_admission import (
     PersistedRunCohortFactsProvider,
 )
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
-from runtime_worker.capability_discovery_composition import (
-    CapabilityDiscoveryComposer,
-    CapabilityDiscoveryEnvironment,
-    RunCapabilityDiscovery,
-)
-
-if TYPE_CHECKING:  # pragma: no cover - typing only.
-    from agent_runtime.capabilities.mcp.cards import McpServerCard
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,29 +55,6 @@ _LOGGER = logging.getLogger(__name__)
 # dotted segment blinds deepagents' glob matcher, and every shipped skill
 # failed with `permission_denied; skipping`. One definition, one verdict.
 BUILTIN_SKILLS_ROOT = builtin_skills_root()
-
-
-async def compose_capability_discovery(
-    factory: object,
-    dependencies: RuntimeDependencies,
-    context: AgentRuntimeContext,
-) -> RuntimeDependencies:
-    """Fold this run's F3 composition into ``dependencies``, or change nothing.
-
-    Both worker composition roots — the initial run and the approval resume —
-    call this one function rather than each reaching into the factory, for the
-    reason bug R1 taught in :mod:`runtime_worker.file_store_wiring`: two paths
-    that must wire a seam identically will eventually wire it differently. A
-    resumed run whose bridge was composed differently from its own first turn
-    would mint references its earlier turns cannot explain.
-
-    A caller-supplied factory (every test that injects one) is not a
-    :class:`DefaultRuntimeDependenciesFactory` and is left entirely alone.
-    """
-
-    if not isinstance(factory, DefaultRuntimeDependenciesFactory):
-        return dependencies
-    return await factory.with_capability_discovery(dependencies, context)
 
 
 class WebSearchToolRegistry:
@@ -123,7 +91,12 @@ class WebSearchToolRegistry:
             "search.enrichment_failed; returning engine snippets unchanged"
         )
 
-    def __init__(self, *, enrichment: SearchEnrichment | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enrichment: SearchEnrichment | None = None,
+        content_budget: object | None = None,
+    ) -> None:
         """Bind the local extraction pipeline, or resolve it on first search.
 
         A caller that passes ``enrichment`` explicitly (every test) decides the
@@ -131,10 +104,16 @@ class WebSearchToolRegistry:
         that constructing the registry — which the production capability-mode
         guard does on a bare ``None`` context — stays free of filesystem and
         environment work.
+
+        ``content_budget`` is the document's ``search`` section, handed down by
+        the composition root because that is the only layer that has read the
+        document. ``None`` — every test, and any caller outside the worker —
+        keeps the model's own defaults, which the document equals.
         """
 
         self._enrichment = enrichment
         self._enrichment_resolved = enrichment is not None
+        self._content_budget = content_budget
 
     def list_available_tools(self, context: object) -> Sequence[object]:
         """Return the built-in tool list, honoring the per-run web-search toggle.
@@ -243,8 +222,34 @@ class WebSearchToolRegistry:
 
         if not self._enrichment_resolved:
             self._enrichment_resolved = True
-            self._enrichment = SearchEnrichment.for_environment(os.environ)
+            self._enrichment = SearchEnrichment.for_environment(
+                os.environ, **self._budget_override()
+            )
         return self._enrichment
+
+    def _budget_override(self) -> dict[str, Any]:
+        """Translate the document's ``search`` section into a pipeline override.
+
+        Built here rather than in `SearchEnrichment` so the capability package
+        keeps knowing nothing about the hyperparameters document — it takes a
+        budget object, and where that came from is the worker's business.
+        """
+
+        section = self._content_budget
+        if section is None:
+            return {}
+        from agent_runtime.capabilities.search.contracts import (  # noqa: PLC0415
+            SearchContentBudget,
+        )
+
+        return {
+            "content_budget": SearchContentBudget(
+                content_token_budget=section.content_token_budget,
+                window_chars=section.window_chars,
+                lead_chars=section.lead_chars,
+                min_window_chars=section.min_window_chars,
+            )
+        }
 
 
 class EmptyMcpRegistry:
@@ -284,19 +289,10 @@ class DefaultRuntimeDependenciesFactory:
         settings: RuntimeSettings | None = None,
         *,
         mcp_discovery_cache: object | None = None,
-        capability_discovery: CapabilityDiscoveryComposer | None = None,
     ) -> None:
-        """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``.
-
-        ``capability_discovery`` is the optional F3 composer. When absent, the
-        factory builds a default one only for a deployment that has configured
-        F3 activation at all, and that default has no card snapshot to project,
-        so it resolves dark. Every deployment that has configured nothing is
-        byte-identical to the pre-F3 disclosure path.
-        """
+        """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
         self.mcp_discovery_cache = mcp_discovery_cache
-        self.capability_discovery = capability_discovery
         self._rollout_admission = E2RolloutAdmission(
             resolution=self.settings.execution.rollout,
             cohorts=self.settings.execution.rollout_cohorts,
@@ -320,22 +316,13 @@ class DefaultRuntimeDependenciesFactory:
         *,
         rollout_admission: E2RolloutAdmission,
         rollout_facts: PersistedRunCohortFactsProvider,
-        mcp_server_cards: Sequence["McpServerCard"] | None = None,
     ) -> RuntimeDependencies:
-        """Build dependencies for one persisted, authenticated runtime run.
-
-        ``mcp_server_cards`` is the already-awaited, already permission-filtered
-        card snapshot the F3 catalog is projected from. The runtime dependency
-        factory is synchronous by contract while the MCP registry lists cards
-        asynchronously, so the caller — which has already awaited them — is the
-        only place the snapshot can come from. ``None`` leaves F3 dark.
-        """
+        """Build dependencies for one persisted, authenticated runtime run."""
 
         return self._build_dependencies(
             context,
             rollout_admission=rollout_admission,
             rollout_facts=rollout_facts,
-            mcp_server_cards=mcp_server_cards,
         )
 
     def _build_dependencies(
@@ -344,7 +331,6 @@ class DefaultRuntimeDependenciesFactory:
         *,
         rollout_admission: E2RolloutAdmission | None = None,
         rollout_facts: PersistedRunCohortFactsProvider | None = None,
-        mcp_server_cards: Sequence["McpServerCard"] | None = None,
     ) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
 
@@ -359,21 +345,24 @@ class DefaultRuntimeDependenciesFactory:
             rollout_facts=rollout_facts,
         )
         tool_registry = ToolErrorPolicyRegistry(
-            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
+            inner=CitationCapturingRegistry(
+                # The composition root is the only place that has read the
+                # document, so it is the only place that can hand a section to
+                # a consumer. Without this the search budget would bind the
+                # model's own field defaults at import and editing
+                # `hyperparameters.json` would change nothing — which is what
+                # "the JSON is a mirror, not a source" meant for every section
+                # except `execution`.
+                inner=WebSearchToolRegistry(
+                    content_budget=self.settings.hyperparameters.search
+                )
+            )
         )
         # Single gate read per run: on the desktop file store this returns the
         # wiring that persists memory / skills / subagent defs as files; on the
         # web / postgres / in-memory images it is ``None`` and every branch below
         # falls back to the prior behavior byte-identically.
         file_agent_wiring = self._file_agent_wiring()
-        # Single gate read per run for F3, mirroring the file-store gate above:
-        # ``None`` on every deployment that has configured nothing, so the
-        # factory registers no bridge tool and the model-visible surface is
-        # byte-identical to the pre-F3 disclosure path.
-        discovery = self._capability_discovery(
-            context,
-            mcp_server_cards=mcp_server_cards,
-        )
         return RuntimeDependencies(
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
@@ -382,100 +371,7 @@ class DefaultRuntimeDependenciesFactory:
             memory_backend_factory=self._memory_backend_factory(file_agent_wiring),
             subagent_catalog=self._subagent_catalog(file_agent_wiring),
             mcp_discovery_cache=self.mcp_discovery_cache,
-            capability_activation=(
-                discovery.activation if discovery is not None else None
-            ),
-            capability_catalog=discovery.catalog if discovery is not None else None,
-            # The invocation seam travels with the pair it is keyed to. A
-            # dependency set that carried a bridge without a catalog, or a
-            # bridge keyed to a different catalog, is unrepresentable because
-            # all three come from the one composition or from none of it.
-            capability_bridge=discovery.bridge if discovery is not None else None,
         )
-
-    async def with_capability_discovery(
-        self,
-        dependencies: RuntimeDependencies,
-        context: AgentRuntimeContext,
-    ) -> RuntimeDependencies:
-        """Re-compose F3 against the run's already-authorized MCP card snapshot.
-
-        This method exists because two contracts disagree and neither may bend.
-        ``RuntimeDependencies`` is built synchronously, and the authorized card
-        snapshot the catalog is projected from is only obtainable by awaiting the
-        MCP registry — which does not exist until those very dependencies are
-        built.  Awaiting *here*, against ``dependencies.mcp_registry``, resolves
-        that without a second registry: a second one would mean a second
-        provider set and a second backend fetch per run, and the cards it listed
-        would be a different snapshot from the one the run actually uses.
-
-        The permission filter is the registry's own
-        (:class:`~agent_runtime.capabilities.mcp.permissions.McpPermissionPolicy`),
-        so the catalog is projected from exactly the cards this run was already
-        authorized to see — never a wider set assembled for F3's benefit.
-
-        A deployment that has configured nothing holds no composer, returns on
-        the first line, and performs no listing at all: the extra round trip is
-        a cost of the activated posture only, so the dark path is unchanged in
-        behaviour *and* in work done.  Every failure below returns the
-        dependencies untouched, leaving the run on the pre-F3 path.
-
-        The same await is what lets the F8 descriptor revisions reach the
-        generation this catalog is stamped with.  ``acompose`` reads them from
-        the revision authority the worker already owns, keyed to the very cards
-        listed above, *before* the catalog is projected — the ordering the
-        generation contract requires.  With no revision authority wired it reads
-        nothing and composes exactly what ``compose`` composed before.
-        """
-
-        composer = self.capability_discovery
-        if composer is None:
-            return dependencies
-        try:
-            cards = await dependencies.mcp_registry.list_available_servers(context)
-        except Exception:
-            _LOGGER.warning(
-                "Authorized MCP card snapshot is unavailable; "
-                "keeping the pre-F3 disclosure path.",
-                exc_info=True,
-            )
-            return dependencies
-        discovery = await composer.acompose(context, mcp_server_cards=tuple(cards))
-        if discovery is None:
-            return dependencies
-        return dependencies.model_copy(
-            update={
-                "capability_activation": discovery.activation,
-                "capability_catalog": discovery.catalog,
-                "capability_bridge": discovery.bridge,
-            }
-        )
-
-    def _capability_discovery(
-        self,
-        context: AgentRuntimeContext,
-        *,
-        mcp_server_cards: Sequence["McpServerCard"] | None = None,
-    ) -> RunCapabilityDiscovery | None:
-        """Return this run's composed F3 inputs, or ``None`` to stay dark.
-
-        The presence gate is read first and cheaply so an unconfigured
-        deployment never constructs a composer and never imports the discovery
-        package at all — the same shape the file-store gate uses, and the
-        property W1's ``_capability_bridge_tools`` documents for the dark path.
-
-        Testing *presence* rather than meaning is deliberate: it is not a second
-        activation vocabulary. Any value that is present, including a
-        misspelling, still goes through the one F3 resolver and still resolves
-        to the conservative default.
-        """
-
-        composer = self.capability_discovery
-        if composer is None:
-            if not CapabilityDiscoveryEnvironment.is_configured():
-                return None
-            composer = CapabilityDiscoveryComposer()
-        return composer.compose(context, mcp_server_cards=mcp_server_cards)
 
     @staticmethod
     def _file_agent_wiring() -> object | None:

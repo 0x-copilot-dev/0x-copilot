@@ -116,12 +116,8 @@ from runtime_api.schemas import (
     RunRecord,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.capability_discovery_composition import (
-    build_capability_discovery_composer,
-)
 from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
-    compose_capability_discovery,
 )
 from runtime_worker.agent_scratch_wiring import AgentScratchWorkerWiring
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
@@ -202,7 +198,6 @@ class RuntimeApprovalHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
         mcp_discovery_cache: object | None = None,
-        mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
         # P1b: the durable stores + queue the model-facing MCP operation gateway
@@ -282,13 +277,6 @@ class RuntimeApprovalHandler:
             DefaultRuntimeDependenciesFactory(
                 self.settings,
                 mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
-                capability_discovery=build_capability_discovery_composer(
-                    decision_store=run_control_decision_store,
-                    schema_artifact_writer=(
-                        self._file_store_wiring.schema_artifact_writer()
-                    ),
-                    descriptor_revision_resolver=mcp_revision_resolver,
-                ),
             )
         )
         self.agent_factory = agent_factory
@@ -515,15 +503,6 @@ class RuntimeApprovalHandler:
                 if prepared_run_control is not None
                 else None
             ),
-        )
-        # The resumed run composes F3 exactly as its first turn did: the
-        # authorized card snapshot is awaited off this run's own registry and
-        # the catalog is re-projected under the same reference key. Skipping it
-        # here is what bug R1 was — one path wiring a seam the other did not.
-        dependencies = await compose_capability_discovery(
-            self.dependencies_factory,
-            dependencies,
-            running.runtime_context,
         )
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)

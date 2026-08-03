@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 import re
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TypeAlias
 from uuid import uuid4
 
 from pydantic import (
@@ -34,24 +33,6 @@ from agent_runtime.observability.constants import Keys as ObservabilityKeys
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
-
-if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
-    from agent_runtime.capabilities.discovery.activation import (
-        CapabilityExpansionLimits,
-    )
-    from agent_runtime.capabilities.discovery.contracts import (
-        CapabilityReferenceMinter,
-    )
-    from agent_runtime.capabilities.discovery.revision_authority import (
-        CapabilityRefRevalidation,
-    )
-    from agent_runtime.capabilities.discovery.schema_artifacts import (
-        RunScopedSchemaArtifactPublisher,
-    )
-    from agent_runtime.capabilities.discovery.telemetry import (
-        CapabilityDiscoveryObserver,
-        CapabilityExpansionObserver,
-    )
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
@@ -611,51 +592,6 @@ class AgentRuntimeContext(RuntimeContract):
         )
 
 
-@dataclass(frozen=True, slots=True)
-class CapabilityBridgeComposition:
-    """The F3 invocation-seam inputs only a composition root can supply.
-
-    The bridge is built from two halves that live on opposite sides of this
-    module.  The runtime factory owns the *model-framework* half — it is the one
-    place a run's :class:`~agent_runtime.capabilities.mcp.loader.McpLoader` and
-    its single :class:`~agent_runtime.capabilities.mcp.tools.CallMcpTool` exist,
-    and reusing those instances is what keeps F3 a reuse of the one MCP dispatch
-    route rather than a second one.  The worker owns the *run-scoped* half
-    collected here: none of it is derivable inside the factory, and none of it
-    is derivable inside the discovery package either.
-
-    Every field is independently optional and every one of them fails dark:
-
-    * no ``minter`` means no second-tier expansion, so the bridge registers the
-      catalog-only search it registered before;
-    * no ``revalidation`` means ``invoke_capability`` is not registered at all,
-      because a reference that cannot be revalidated at use time must never be
-      offered; and
-    * no ``observer`` or ``schema_artifacts`` changes nothing the bridge *does* —
-      the run is merely unmeasured, and an over-bound schema is reported
-      ``unavailable`` rather than deferred to an artifact.
-
-    ``minter`` carries the load-bearing invariant.  It must be keyed exactly as
-    the :class:`~agent_runtime.capabilities.discovery.builder.AuthorizedCatalogBuilder`
-    that projected the catalog beside it was, because expansion mints references
-    for that catalog's own id — a different key would mint references the run's
-    catalog identity cannot explain.  Supplying the builder's *own* minter object
-    rather than a second one built from the same bytes is how the composition
-    root makes that unrepresentable rather than merely true.
-
-    The annotations resolve only under ``TYPE_CHECKING``: the discovery contracts
-    import this module, so a runtime import here would close a cycle and would
-    also drag the discovery package onto the dark path's import graph.
-    """
-
-    minter: CapabilityReferenceMinter | None = None
-    revalidation: CapabilityRefRevalidation | None = None
-    observer: CapabilityDiscoveryObserver | None = None
-    expansion_observer: CapabilityExpansionObserver | None = None
-    schema_artifacts: RunScopedSchemaArtifactPublisher | None = None
-    expansion_limits: CapabilityExpansionLimits | None = None
-
-
 class RuntimeDependencies(RuntimeContract):
     """Dependency-injected runtime ports.
 
@@ -767,22 +703,6 @@ class RuntimeDependencies(RuntimeContract):
     # Kept as an object here to preserve the execution-contract module's
     # dependency direction; PromptRuntimeBinding validates the concrete use.
     prompt_assembly_observer: object | None = None
-    # Optional F3 capability-discovery inputs: the resolved
-    # ``CapabilityActivationDecision`` and the authorization-projected
-    # ``CapabilityCatalog``. Both are built per run *after* verified identity,
-    # connector scope, the F4 policy selection, and the F8 descriptor revision
-    # are known; the factory hands the pair to the single
-    # ``CapabilityBridgeRegistrar`` entry point, which registers the bounded
-    # discovery bridge tools only in the ``deferred`` posture and only for a
-    # catalog that can mint a revalidatable ref. ``None`` — the production
-    # default while F3 is dark — registers nothing, so the model-visible tool
-    # surface is byte-identical to the pre-F3 disclosure path. Kept as
-    # ``object`` here (like ``prompt_assembly_observer``) to preserve this
-    # module's dependency direction: the discovery contracts import from it, so
-    # a typed field would close an import cycle. The factory validates the
-    # concrete types and narrows to no bridge tools when either is unresolved.
-    capability_activation: object | None = None
-    capability_catalog: object | None = None
     # Optional P2-8 per-tool MCP credential plane: an
     # ``McpPerToolCollaborators`` (connection directory + credential provider).
     # Supplied per deployment by the composition root; ``None`` — the production
@@ -801,13 +721,6 @@ class RuntimeDependencies(RuntimeContract):
     # ``None`` everywhere the legacy gateway is active — the seam then resolves
     # exactly as it did, through ``McpDispatcherUnwrap``.
     mcp_connector_resolver_sink: object | None = None
-    # Optional F3 invocation seam: the run-scoped inputs only a composition root
-    # can know (the keyed reference minter, the live revalidation, the telemetry
-    # observers, and the protected-schema publisher). See
-    # :class:`CapabilityBridgeComposition`. ``None`` — the production default —
-    # leaves the registrar with the catalog-only search and describe pair it
-    # registered before, so nothing about the dark path changes.
-    capability_bridge: object | None = None
 
     @field_validator(
         "tool_registry",

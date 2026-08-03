@@ -400,7 +400,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
         this seam adds identity, budget accounting, and lifecycle observation
         around whatever it hands over. The state those three touch carries its
         own locking (see :class:`RuntimeToolLifecycleReducer` and
-        ``ToolBudgetGuard.charge_admitted``) rather than relying on a run-wide
+        ``ToolBudgetGuard.admit_and_charge``) rather than relying on a run-wide
         lock to hold every call apart.
         """
 

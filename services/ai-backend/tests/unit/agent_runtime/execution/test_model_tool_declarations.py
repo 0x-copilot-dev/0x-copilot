@@ -22,25 +22,8 @@ name the package a reader can actually open.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
-
 from langchain_core.tools import StructuredTool
 
-from agent_runtime.capabilities.discovery import (
-    AuthorizedCatalogBuilder,
-    CapabilityActivationMode,
-    CapabilityActivationResolver,
-    CapabilityBridgeToolName,
-    CapabilityCatalog,
-    CapabilityCatalogScope,
-)
-from agent_runtime.capabilities.mcp.cards import (
-    McpAuthMode,
-    McpServerCard,
-    McpServerHealth,
-    McpTransport,
-)
-from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.factory import (
     _model_tool_schema_revision,
@@ -147,10 +130,6 @@ class ComposedSurfaceMixin:
 
     THIRD_PARTY_TOOLS = frozenset({"web_search"})
 
-    NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
-    REFERENCE_KEY = b"prd03-declaration-reference-key-32-by!!"
-    SELECTION_REF = f"task-policy-selection://run_1/research/sha256/{'c' * 64}"
-
     def tool(self, name: str) -> StructuredTool:
         async def invoke(value: str = "") -> str:
             return value
@@ -167,8 +146,6 @@ class ComposedSurfaceMixin:
         *,
         registry_tools: Sequence[object] | None = None,
         gated: bool = True,
-        capability_activation: object | None = None,
-        capability_catalog: object | None = None,
     ) -> tuple[object, ...]:
         """Compose the model surface with every optional seam supplied."""
 
@@ -189,46 +166,8 @@ class ComposedSurfaceMixin:
             skill_registry=_SkillRegistry(),
             prior_tool_result_loader=object(),
             mcp_discovery_cache=None,
-            capability_activation=capability_activation,
-            capability_catalog=capability_catalog,
             runtime_context=runtime_context,
             **(gated_tools if gated else {}),  # type: ignore[arg-type]
-        )
-
-    def deferred_activation(self) -> object:
-        """Resolve the one posture that registers F3 bridge tools."""
-
-        return CapabilityActivationResolver().resolve_configured(
-            raw_mode=FeatureMode.ENFORCE.value,
-            raw_activation=CapabilityActivationMode.DEFERRED.value,
-        )
-
-    def catalog(self, runtime_context: AgentRuntimeContext) -> CapabilityCatalog:
-        """Build a real authorization-projected catalog, never a hand-made one."""
-
-        return AuthorizedCatalogBuilder(reference_key=self.REFERENCE_KEY).build(
-            context=runtime_context,
-            scope=CapabilityCatalogScope.from_context(
-                runtime_context,
-                profile_id="research",
-                policy_revision="policy_7",
-                connector_scope_revision="scope_9",
-            ),
-            task_policy_selection_ref=self.SELECTION_REF,
-            mcp_server_cards=(
-                McpServerCard(
-                    name="drive_server",
-                    display_name="Drive Server",
-                    short_description="Find relevant drive records.",
-                    transport=McpTransport.HTTP,
-                    auth_mode=McpAuthMode.OAUTH2,
-                    required_scopes=frozenset({"Docs:Read"}),
-                    health=McpServerHealth.HEALTHY,
-                    load_cost=2,
-                    connector_slug="Google-Drive",
-                ),
-            ),
-            expires_at=self.NOW + timedelta(minutes=15),
         )
 
     def footprints(
@@ -390,77 +329,6 @@ class TestComposedSurfaceIsFullyDeclared(ComposedSurfaceMixin):
         owners = {label.split(":", 1)[0] for label in self.EXPECTED_LABELS.values()}
 
         assert owners <= {str(owner) for owner in ModelToolOwner}
-
-
-class TestCapabilityBridgeToolsAreDeclared(ComposedSurfaceMixin):
-    """The F3 bridge composes tools the factory does not name individually."""
-
-    def test_bridge_tools_carry_the_discovery_owner(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        # ``_capability_bridge_tools`` returns a set decided by the registrar,
-        # so the factory declares the group's owner and each tool still gets its
-        # own label off its own name — a group declaration is shorthand for the
-        # owner, never a roll-up that costs the report per-tool granularity.
-        footprints = self.footprints(
-            runtime_context_admin,
-            capability_activation=self.deferred_activation(),
-            capability_catalog=self.catalog(runtime_context_admin),
-        )
-
-        assert footprints[CapabilityBridgeToolName.SEARCH_CAPABILITIES.value].label == (
-            f"{ModelToolOwner.DISCOVERY}"
-            f":{CapabilityBridgeToolName.SEARCH_CAPABILITIES.value}"
-        )
-        assert footprints[CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value].label == (
-            f"{ModelToolOwner.DISCOVERY}"
-            f":{CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value}"
-        )
-
-    def test_a_deferred_surface_is_fully_declared(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        footprints = self.footprints(
-            runtime_context_admin,
-            capability_activation=self.deferred_activation(),
-            capability_catalog=self.catalog(runtime_context_admin),
-        )
-
-        assert all(footprint.declared for footprint in footprints.values())
-
-    def test_bridge_tools_are_first_party(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        footprints = self.footprints(
-            runtime_context_admin,
-            capability_activation=self.deferred_activation(),
-            capability_catalog=self.catalog(runtime_context_admin),
-        )
-
-        assert (
-            footprints[CapabilityBridgeToolName.SEARCH_CAPABILITIES.value].third_party
-            is False
-        )
-
-    def test_the_bridge_widens_the_measured_surface(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        # The point of measuring per tool: turning the bridge on is a context
-        # cost, and the ledger has to be able to say how much.
-        dark = self.footprints(runtime_context_admin)
-        deferred = self.footprints(
-            runtime_context_admin,
-            capability_activation=self.deferred_activation(),
-            capability_catalog=self.catalog(runtime_context_admin),
-        )
-
-        assert set(deferred) - set(dark) == {
-            CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
-            CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,
-        }
-        assert sum(footprint.estimated_tokens for footprint in deferred.values()) > sum(
-            footprint.estimated_tokens for footprint in dark.values()
-        )
 
 
 class TestDeclaringIsInert(ComposedSurfaceMixin):

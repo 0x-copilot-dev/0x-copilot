@@ -23,6 +23,7 @@ A ``LocalShellBackend`` or raw host subprocess is never constructed here.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 
 from deepagents.backends.protocol import (
@@ -194,6 +195,93 @@ class PolicyEnforcedSandboxBackend(BaseSandbox):
         if path is not None:
             self._guard_path(path)
         return super().glob(pattern, path)
+
+    # The async twins. On the base these do NOT reuse the guarded sync methods —
+    # `aread`/`awrite`/`aedit`/`als`/`agrep`/`aglob` each build a shell command
+    # and hand it to `aexecute`, which bounds budget and timeout but has no
+    # opinion about paths. So the `/workspace` containment applied on the sync
+    # surface simply did not exist on the async one, and which surface a caller
+    # reached decided whether the boundary held. Guarding here makes the two
+    # agree; the sandbox container is still the outer boundary either way.
+    async def als(self, path: str):  # type: ignore[override]
+        """Async ``ls``, contained identically to the sync form."""
+        self._guard_path(path)
+        return await super().als(path)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000):  # type: ignore[override]
+        """Async ``read``, contained identically to the sync form."""
+        self._guard_path(file_path)
+        return await super().aread(file_path, offset, limit)
+
+    async def awrite(self, file_path: str, content: str):  # type: ignore[override]
+        """Async ``write``, contained identically to the sync form."""
+        self._guard_path(file_path)
+        return await super().awrite(file_path, content)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ):  # type: ignore[override]  # noqa: FBT001, FBT002
+        """Async ``edit``, contained identically to the sync form."""
+        self._guard_path(file_path)
+        return await super().aedit(file_path, old_string, new_string, replace_all)
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ):  # type: ignore[override]
+        """Async ``grep``, contained identically to the sync form."""
+        if path is not None:
+            self._guard_path(path)
+        return await super().agrep(pattern, path, glob)
+
+    async def aglob(self, pattern: str, path: str | None = None):  # type: ignore[override]
+        """Async ``glob``, contained identically to the sync form."""
+        if path is not None:
+            self._guard_path(path)
+        return await super().aglob(pattern, path)
+
+    # ``delete`` does not exist on ``BaseSandbox`` in the pinned 0.6.12 — these
+    # are written AHEAD of it on purpose. 0.7.1 adds a concrete implementation
+    # backed by ``rm -rf``, and because this class guards by overriding a fixed
+    # list of names, a method the base GAINS arrives unguarded and destructive.
+    # Upgrading would have silently widened the blast radius of the one
+    # operation where that matters most.
+    #
+    # ``super()`` is called through ``getattr`` so this stays valid on a version
+    # that has no ``delete`` at all: the guard is the point, and refusing an
+    # out-of-workspace path before discovering the base cannot serve it is the
+    # right order.
+    def delete(self, path: str):  # type: ignore[override]
+        """Refuse any delete outside ``/workspace`` before it reaches a provider."""
+
+        self._guard_path(path)
+        return self._super_or_unsupported("delete", path)
+
+    async def adelete(self, path: str):  # type: ignore[override]
+        """Async twin of :meth:`delete`, guarded identically."""
+
+        self._guard_path(path)
+        result = self._super_or_unsupported("adelete", path)
+        return await result if inspect.isawaitable(result) else result
+
+    def _super_or_unsupported(self, name: str, *args: object) -> object:
+        """Call ``BaseSandbox.<name>`` when this version has it, else refuse.
+
+        A typed refusal rather than ``AttributeError`` so a caller on an older
+        deepagents gets the same safe, classified failure it gets for a denied
+        path — never an unhandled exception mid-run.
+        """
+
+        method = getattr(super(), name, None)
+        if not callable(method):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_PATH_NOT_ALLOWED,
+                "This sandbox backend does not support that operation.",
+            )
+        return method(*args)
 
     # -- internals ----------------------------------------------------------
 

@@ -26,6 +26,23 @@ protocol failure, and no amount of further migration fixes it.
 
 ### The program at a glance
 
+> **Status, 2026-08-03.** Every item below is resolved. Three shipped, three were
+> closed on evidence rather than built, and each closure is recorded where the
+> work would otherwise have been picked up later. The pattern across all of them:
+> the plan's premise was checked against source before execution, and three times
+> the source disagreed.
+>
+> | #   | Item                        | Outcome                                                                                                                                                                                                    |
+> | --- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | 1   | MCP filesystem catalog      | **Shipped**, real files, verified live against Linear                                                                                                                                                      |
+> | 2   | Backend scoped-token mint   | **Shipped** (`d472c80b`)                                                                                                                                                                                   |
+> | 3   | Retire desktop broker route | **Deleted** (`15814fc1`) — 531 src + 607 test lines                                                                                                                                                        |
+> | 4   | Hyperparameters JSON        | **Shipped**; `execution` + `search` are real sources, the rest is a mirror pinned by test                                                                                                                  |
+> | 5   | deepagents 0.7.1            | **Evaluated, still not upgraded** — but its blocker is fixed: the `/workspace` guard now covers the async surface and `delete`, with a conformance test that fails when the base gains an unguarded method |
+> | 6   | Anthropic Tool Search       | **Closed as framed** — connector tools are files behind a backend mount, so nothing is resident to defer                                                                                                   |
+> | 7   | Per-tool approval-id        | **Verified by mutation** — collapsing the per-call suffix fails 3 tests                                                                                                                                    |
+> | 8   | Three independent bugs      | **All fixed and verified live**                                                                                                                                                                            |
+
 | #     | Item                                            | Kind        | Why now                                                                     | Gate                         |
 | ----- | ----------------------------------------------- | ----------- | --------------------------------------------------------------------------- | ---------------------------- |
 | **1** | MCP filesystem catalog (progressive disclosure) | **P0**      | A live journey failed with EMPTY SUCCESS; the descriptor is unreachable     | none — ship first            |
