@@ -347,10 +347,18 @@ class InMemoryAccountMergeRekeyer:
         self._count(table, moved)
 
     def _rekey_tool_completions(self, store: InMemoryRuntimeApiStore) -> None:
-        """Rewrite the ``(org_id, run_id, connector_slug, completed_at)`` seed tuples."""
+        """Rewrite the ``(org_id, run_id, connector_slug, completed_at)`` seed tuples.
+
+        Absent on the file-native store, which shares this re-keyer through
+        ``MaterializedViewStoreBase`` but does not carry this seed list. A
+        structure a backend does not have has nothing to move — skip it rather
+        than making the caller special-case the backend.
+        """
 
         moved = 0
-        completions = store.tool_invocation_completions
+        completions = getattr(store, "tool_invocation_completions", None)
+        if completions is None:
+            return
         for index, entry in enumerate(completions):
             if entry[0] == self._absorbed_org:
                 completions[index] = (self._survivor_org, *entry[1:])
