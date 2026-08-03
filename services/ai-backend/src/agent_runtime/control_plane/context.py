@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
 from typing import (
     TYPE_CHECKING,
-    AsyncIterator,
     Awaitable,
     Callable,
-    Iterator,
     Mapping,
     Protocol,
 )
@@ -38,13 +34,6 @@ from agent_runtime.control_plane.model_reliability import (
     ModelReliabilityControl,
     ModelReliabilityReleaseDecision,
     ModelReliabilityReleaseResolver,
-)
-from agent_runtime.control_plane.parallel_admission import (
-    ParallelAdmissionBounds,
-    ParallelAdmissionGrant,
-    ParallelAdmissionPort,
-    ParallelAdmissionResolver,
-    ToolAdmissionRequest,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -227,10 +216,6 @@ _CURRENT_BINDING: ContextVar[RunControlBinding | None] = ContextVar(
     "agent_runtime_run_control_binding",
     default=None,
 )
-_CURRENT_SERIAL_ADMISSION: ContextVar["RunSerialAdmission | None"] = ContextVar(
-    "agent_runtime_run_serial_admission",
-    default=None,
-)
 _CURRENT_LIFECYCLE_REDUCER: ContextVar["RuntimeToolLifecycleReducer | None"] = (
     ContextVar(
         "agent_runtime_tool_lifecycle_reducer",
@@ -396,242 +381,9 @@ class RuntimeToolLifecycleReducer:
         return (normalized_call, normalized_attempt)
 
 
-@dataclass(slots=True)
-class _CohortGate:
-    """The bounded slot table one grant cohort's calls share while it is live.
-
-    ``references`` counts waiters *and* holders, so a cohort is only evicted
-    once nobody is queued behind it. ``max_parallelism`` is fixed for the life
-    of one generation: a semaphore cannot be safely narrowed after coroutines
-    are already queued on it, so a grant that disagrees with a live cohort's
-    width is answered serially rather than by reshaping the gate underneath it.
-    """
-
-    semaphore: asyncio.Semaphore
-    max_parallelism: int
-    references: int = 0
-
-
-class RunSerialAdmission:
-    """The run's one tool-call gate: serial by default, F6-widenable by grant.
-
-    Step 2 installed this as an unconditional exclusive lock around every
-    graph-visible tool call, which is what makes the §8 middleware ordering
-    enforceable for framework-injected and delegated tools alike. It also made
-    the effective width of every run ``1``, so no F6 batch plan could ever be
-    observed to overlap.
-
-    This class keeps the gate and makes the *width* conditional. Two lanes cross
-    it, and neither one is a way around it:
-
-    - **Exclusive** — the Step-2 behaviour, byte-for-byte. Taken by every call
-      without a grant, which is every call while F6 is dark.
-    - **Shared** — taken only by a call an installed
-      :class:`~agent_runtime.control_plane.parallel_admission.ParallelAdmissionPort`
-      positively named. Bounded twice: by the grant's own cohort semaphore, and
-      by the shared lane itself. A grant of width *one* is a shared-lane call
-      too, and a narrow one: it waits behind its own cohort instead of behind
-      every other call in the run, which is what lets a grantor with its own
-      ordering barrier make progress at all. When the cohort table cannot hold a
-      cohort, :meth:`_unrepresentable_cohort_lane` says which of the two lanes
-      answers.
-
-    The two lanes are mutually exclusive, which is the point. The shared lane is
-    a *lightswitch*: the first entrant takes the same exclusive lock a serial
-    call would, and the last one out releases it. So a serial call still cannot
-    overlap anything — it waits behind the whole parallel group — and a parallel
-    group still cannot start while a serial call is running. Overlap is
-    something this gate *grants*; it is never a path that skips it.
-
-    Ordering is cohort-then-shared for every shared caller, and exclusive
-    callers take only the exclusive lock, so the two lanes cannot form a cycle.
-    The leave path never awaits, so a cancellation between the last release and
-    the counter update cannot strand the run's lock.
-    """
-
-    def __init__(
-        self,
-        *,
-        parallel_admission: ParallelAdmissionPort | None = None,
-    ) -> None:
-        self._async_lock = asyncio.Lock()
-        self._sync_lock = Lock()
-        self._parallel_admission = parallel_admission
-        self._shared_gate = asyncio.Lock()
-        self._shared_holders = 0
-        self._cohorts: dict[str, _CohortGate] = {}
-
-    def install_parallel_admission(self, port: ParallelAdmissionPort) -> None:
-        """Install the one F6 source that may widen this run's admission.
-
-        Install-once, matching the F2/F10 runtime slots: a second, different
-        source would mean two authorities disagreeing about which calls may
-        overlap, and the gate would have no principled way to choose.
-        """
-
-        if (
-            self._parallel_admission is not None
-            and self._parallel_admission is not port
-        ):
-            raise RuntimeError("parallel admission is already installed")
-        self._parallel_admission = port
-
-    @asynccontextmanager
-    async def async_permit(
-        self,
-        request: ToolAdmissionRequest | None = None,
-    ) -> AsyncIterator[None]:
-        """Admit one async tool call, serially unless F6 granted otherwise.
-
-        ``request`` is omitted by callers that have nothing to identify, and an
-        omitted request can never match a grant — so the no-argument call is the
-        pre-F6 exclusive permit exactly.
-        """
-
-        grant = ParallelAdmissionResolver.resolve(self._parallel_admission, request)
-        if grant is None:
-            async with self._async_lock:
-                yield
-            return
-        cohort = self._bind_cohort(grant)
-        if cohort is None:
-            async with self._unrepresentable_cohort_lane(grant):
-                yield
-            return
-        try:
-            async with cohort.semaphore:
-                await self._join_shared()
-                try:
-                    yield
-                finally:
-                    self._leave_shared()
-        finally:
-            self._release_cohort(grant, cohort)
-
-    @asynccontextmanager
-    async def _unrepresentable_cohort_lane(
-        self,
-        grant: ParallelAdmissionGrant,
-    ) -> AsyncIterator[None]:
-        """Admit a granted call whose cohort this gate cannot currently hold.
-
-        Two things can make a cohort unrepresentable: the bounded cohort table is
-        full, or a live cohort already fixed a different width. Either way this
-        gate has no slot through which to apply the grant's width, and it has
-        exactly two ways to answer.
-
-        The exclusive lock is the fail-closed answer and stays the default,
-        because a grantor that does not enforce its own width has no other
-        enforcer and admitting it unbounded would widen the run.
-
-        It is also, on its own, a way to *stall* a grantor that orders its calls
-        behind a barrier: a member waiting for an earlier sibling would hold this
-        lock while that sibling waits for it. So a grantor that positively states
-        it enforces the width itself is admitted into the shared lane without a
-        slot. Nothing is unbounded there — the shared lane still takes the run's
-        exclusive lock on the group's behalf, so granted work still cannot
-        overlap ungranted work, and the grantor's own gate still decides how many
-        of its members run at once.
-        """
-
-        if not grant.width_enforced_by_grantor:
-            async with self._async_lock:
-                yield
-            return
-        await self._join_shared()
-        try:
-            yield
-        finally:
-            self._leave_shared()
-
-    @contextmanager
-    def sync_permit(self) -> Iterator[None]:
-        """Admit one synchronous tool call for this run, always exclusively.
-
-        The sync path is never widened. F6 drives children through an awaitable
-        ``BatchChildRunner`` and gates them on ``asyncio`` futures, so a
-        synchronous graph tool call is never a batch child and a grant for one
-        could not be honestly produced. Keeping this lane exclusive means the
-        widening story needs no threading lightswitch for work that cannot
-        arrive on it.
-        """
-
-        with self._sync_lock:
-            yield
-
-    def _bind_cohort(self, grant: ParallelAdmissionGrant) -> _CohortGate | None:
-        """Reserve a reference on this grant's cohort, or refuse to widen.
-
-        Synchronous and await-free, so the check and the reservation are atomic
-        against every other coroutine on the loop. ``None`` means this gate holds
-        no slot for the grant — the cohort table is full, or a live cohort
-        already fixed a different width — and
-        :meth:`_unrepresentable_cohort_lane` decides what a call with no slot is
-        answered by.
-        """
-
-        cohort = self._cohorts.get(grant.cohort_id)
-        if cohort is None:
-            if len(self._cohorts) >= ParallelAdmissionBounds.MAX_TRACKED_COHORTS:
-                return None
-            cohort = _CohortGate(
-                semaphore=asyncio.Semaphore(grant.max_parallelism),
-                max_parallelism=grant.max_parallelism,
-            )
-            self._cohorts[grant.cohort_id] = cohort
-        elif cohort.max_parallelism != grant.max_parallelism:
-            return None
-        cohort.references += 1
-        return cohort
-
-    def _release_cohort(
-        self,
-        grant: ParallelAdmissionGrant,
-        cohort: _CohortGate,
-    ) -> None:
-        """Drop one reference and evict the cohort once nobody is queued."""
-
-        cohort.references -= 1
-        if cohort.references <= 0 and self._cohorts.get(grant.cohort_id) is cohort:
-            del self._cohorts[grant.cohort_id]
-
-    async def _join_shared(self) -> None:
-        """Take the run's exclusive lock on behalf of the whole shared group.
-
-        The first member to arrive takes exactly the lock a serial call takes,
-        and holds it until the last member leaves. That is what keeps a serial
-        call from overlapping a parallel group in either direction, and it is
-        why "may overlap" never means "skipped the gate".
-
-        The turnstile serializes the count-zero acquisition so two first-movers
-        cannot both block on the exclusive lock and deadlock each other behind
-        it. Returning normally is the caller's signal — and the only signal —
-        that :meth:`_leave_shared` is owed.
-        """
-
-        async with self._shared_gate:
-            if self._shared_holders == 0:
-                await self._async_lock.acquire()
-            self._shared_holders += 1
-
-    def _leave_shared(self) -> None:
-        """Release the group's hold once its last member is done.
-
-        Deliberately await-free. A leave that could suspend could also be
-        cancelled between the decrement and the release, stranding the run's
-        exclusive lock for the life of the run; single-threaded loop semantics
-        make an await-free body atomic against every other coroutine.
-        """
-
-        self._shared_holders -= 1
-        if self._shared_holders == 0:
-            self._async_lock.release()
-
-
 @dataclass(frozen=True)
 class _RunControlContextToken:
     binding: Token[RunControlBinding | None]
-    serial_admission: Token[RunSerialAdmission | None]
     lifecycle_reducer: Token[RuntimeToolLifecycleReducer | None]
     task_policy: Token[TaskPolicyRuntimeBinding | None]
     prompt_runtime: Token[_PromptRuntimeSlot | None]
@@ -651,7 +403,6 @@ class RunControlContext:
 
         return _RunControlContextToken(
             binding=_CURRENT_BINDING.set(binding),
-            serial_admission=_CURRENT_SERIAL_ADMISSION.set(RunSerialAdmission()),
             lifecycle_reducer=_CURRENT_LIFECYCLE_REDUCER.set(
                 RuntimeToolLifecycleReducer()
             ),
@@ -676,28 +427,6 @@ class RunControlContext:
         if binding is None:
             raise RuntimeError("run control is not bound")
         return binding
-
-    @staticmethod
-    def serial_admission() -> RunSerialAdmission | None:
-        """Return the run-shared serial permit, including in local subagents."""
-
-        return _CURRENT_SERIAL_ADMISSION.get()
-
-    @staticmethod
-    def install_parallel_admission(port: ParallelAdmissionPort) -> None:
-        """Install the one F6 source that may widen this run's tool admission.
-
-        Root wires this after ``bind_for_run`` because F6's coordinator is built
-        per run, the same way the F2 prompt runtime and the F10 invocation
-        runtime are installed into their slots. Until it is called — which is
-        every run while F6 is dark — the admission is exactly the Step-2 serial
-        permit.
-        """
-
-        admission = _CURRENT_SERIAL_ADMISSION.get()
-        if admission is None:
-            raise RuntimeError("run control is not bound")
-        admission.install_parallel_admission(port)
 
     @staticmethod
     def lifecycle_reducer() -> RuntimeToolLifecycleReducer | None:
@@ -807,19 +536,12 @@ class RunControlContext:
         _CURRENT_PROMPT_RUNTIME.reset(token.prompt_runtime)
         _CURRENT_TASK_POLICY.reset(token.task_policy)
         _CURRENT_LIFECYCLE_REDUCER.reset(token.lifecycle_reducer)
-        _CURRENT_SERIAL_ADMISSION.reset(token.serial_admission)
         _CURRENT_BINDING.reset(token.binding)
 
 
 __all__ = [
-    "ParallelAdmissionBounds",
-    "ParallelAdmissionGrant",
-    "ParallelAdmissionPort",
-    "ParallelAdmissionResolver",
     "RunControlBinding",
     "RunControlContext",
-    "RunSerialAdmission",
-    "ToolAdmissionRequest",
     "TaskPolicyCapabilityProgress",
     "TaskPolicyControllerPort",
     "TaskPolicyFingerprintPort",

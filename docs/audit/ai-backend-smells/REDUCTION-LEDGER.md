@@ -35,11 +35,11 @@ overstatement this programme has corrected — and the first one I authored _and
 
 A pattern worth naming, because two of these are mine from this programme:
 
-| Change                              | Why it does nothing                                                                                                                   |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **PR #502** `provider_hints`        | Wired at `batch_concurrency_composition.py:502`, inside `_compose`, which line 616 gates behind `F6_BATCH_CONCURRENCY` — set nowhere. |
-| **PR #505** approval-expiry sweeper | Postgres — the only backend that topology allows — implements **neither port method** the sweeper calls.                              |
-| **`MCP_PER_TOOL_ENABLED=true`**     | Still registers **zero** tools: `RuntimeDependencies.mcp_per_tool_collaborators` is assigned **only in test files**.                  |
+| Change                              | Why it does nothing                                                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **PR #502** `provider_hints`        | Wired at `batch_concurrency_composition.py:502`, inside `_compose`, which line 616 gates behind `F6_BATCH_CONCURRENCY` — set nowhere. **Deleted with F6; it never had production effect.** |
+| **PR #505** approval-expiry sweeper | Postgres — the only backend that topology allows — implements **neither port method** the sweeper calls.                                                                                   |
+| **`MCP_PER_TOOL_ENABLED=true`**     | Still registers **zero** tools: `RuntimeDependencies.mcp_per_tool_collaborators` is assigned **only in test files**.                                                                       |
 
 All three passed CI. Green tests over an unreachable branch prove nothing about
 production. **Any future "wire it" task must end by driving the real path, not by
@@ -47,21 +47,22 @@ asserting on an injected collaborator.**
 
 ## Clean deletions — adjudicated, deduplicated (~19–22k)
 
-|   LOC | Block                                              | Verdict    | Why                                                                                                                                                                                                                                                                                                                                                                          |
-| ----: | -------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 8,037 | F3 capability discovery                            | REDUNDANT  | Lineara's MCP filesystem catalog delivers the same search→describe→invoke chain, finer-grained, unflagged, wired every run, in 1,982 LOC. F3's "constant-size replacement" prompt block measures **122 chars larger** than the header it suppresses.                                                                                                                         |
-| 3,908 | ~~F5 context budgeting~~ — **DELETED**             | REDUNDANT  | **No gate reads `f5` at all.** Four ports, zero production implementers. Flipping it changes only a persisted enum. deepagents' summarization already ships unconditionally. **Executed:** `context/planning/` + `context/evidence_registry.py` removed (3,908 src + 4,256 test LOC). The `f5` enum member and `FeatureModeSet.f5` field were **kept** — see the note below. |
-| 2,375 | `file`↔`in_memory` duplicate bodies                | REDUNDANT  | Already in flight (`MaterializedViewStoreBase`). **But smaller than sold: 1,237 identical + 1,138 near LOC — the "73% shared" was name-level, not body-level.**                                                                                                                                                                                                              |
-| 1,727 | E2 cohort selector + shadow                        | OBSOLETE   | `explicit_enforced` is empty in every shipped config, so every admission is `legacy_passthrough`. Cohort rollout is meaningless for one user.                                                                                                                                                                                                                                |
-| 1,427 | `answer_verification.py`                           | HALF_BUILT | Only 2 enums imported.                                                                                                                                                                                                                                                                                                                                                       |
-| 1,291 | `delegation/subagents` runner+coordination+handoff | REDUNDANT  | Reachable only from tests. _Correction: the previously-reported 1,499 wrongly included `authority.py` (208), which is live._                                                                                                                                                                                                                                                 |
-|   744 | `presentation_v2_1` E2 shadow lane                 | OBSOLETE   | (inside E2 5,971 — count once)                                                                                                                                                                                                                                                                                                                                               |
-|   690 | `code_sandbox.py` + `code_tool_adapter.py`         | MIXED      | **Code execution is not a product surface**: deepagents' `execute` is explicitly withheld from the model (`tool_surface.py:43`).                                                                                                                                                                                                                                             |
-|   531 | `mcp/credentials/desktop.py`                       | OBSOLETE   | superseded by `credentials.backend`                                                                                                                                                                                                                                                                                                                                          |
-|   301 | `observability/db_statement_metrics.py`            | OBSOLETE   |                                                                                                                                                                                                                                                                                                                                                                              |
-|   290 | `mcp/files.py`                                     | OBSOLETE   |                                                                                                                                                                                                                                                                                                                                                                              |
-|   216 | `encrypt_existing_columns`                         | OBSOLETE   | one-shot migration; banned in this service                                                                                                                                                                                                                                                                                                                                   |
-|   151 | `sandbox/providers/langsmith.py`                   | REDUNDANT  | deepagents ships `LangSmithSandbox` (275 LOC); ours adds only `isolation_ready`, hardcoded `False`.                                                                                                                                                                                                                                                                          |
+|       LOC | Block                                              | Verdict              | Why                                                                                                                                                                                                                                                                                                                                                                          |
+| --------: | -------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     8,037 | F3 capability discovery                            | REDUNDANT            | Lineara's MCP filesystem catalog delivers the same search→describe→invoke chain, finer-grained, unflagged, wired every run, in 1,982 LOC. F3's "constant-size replacement" prompt block measures **122 chars larger** than the header it suppresses.                                                                                                                         |
+|     3,908 | ~~F5 context budgeting~~ — **DELETED**             | REDUNDANT            | **No gate reads `f5` at all.** Four ports, zero production implementers. Flipping it changes only a persisted enum. deepagents' summarization already ships unconditionally. **Executed:** `context/planning/` + `context/evidence_registry.py` removed (3,908 src + 4,256 test LOC). The `f5` enum member and `FeatureModeSet.f5` field were **kept** — see the note below. |
+|     2,375 | `file`↔`in_memory` duplicate bodies                | REDUNDANT            | Already in flight (`MaterializedViewStoreBase`). **But smaller than sold: 1,237 identical + 1,138 near LOC — the "73% shared" was name-level, not body-level.**                                                                                                                                                                                                              |
+| ~~1,727~~ | ~~E2 cohort selector + shadow~~                    | **RETRACTED — LIVE** | **This row was wrong and the deletion was refused. See §Retraction below.**                                                                                                                                                                                                                                                                                                  |
+|     1,427 | `answer_verification.py`                           | HALF_BUILT           | Only 2 enums imported.                                                                                                                                                                                                                                                                                                                                                       |
+|     1,291 | `delegation/subagents` runner+coordination+handoff | REDUNDANT            | Reachable only from tests. _Correction: the previously-reported 1,499 wrongly included `authority.py` (208), which is live._                                                                                                                                                                                                                                                 |
+|       744 | `presentation_v2_1` E2 shadow lane                 | OBSOLETE             | (inside E2 5,971 — count once)                                                                                                                                                                                                                                                                                                                                               |
+|       690 | `code_sandbox.py` + `code_tool_adapter.py`         | MIXED                | **Code execution is not a product surface**: deepagents' `execute` is explicitly withheld from the model (`tool_surface.py:43`).                                                                                                                                                                                                                                             |
+|       531 | `mcp/credentials/desktop.py`                       | OBSOLETE             | superseded by `credentials.backend`                                                                                                                                                                                                                                                                                                                                          |
+|       301 | `observability/db_statement_metrics.py`            | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
+|       290 | `mcp/files.py`                                     | OBSOLETE             |                                                                                                                                                                                                                                                                                                                                                                              |
+|       216 | `encrypt_existing_columns`                         | OBSOLETE             | one-shot migration; banned in this service                                                                                                                                                                                                                                                                                                                                   |
+|       151 | `sandbox/providers/langsmith.py`                   | REDUNDANT            | deepagents ships `LangSmithSandbox` (275 LOC); ours adds only `isolation_ready`, hardcoded `False`.                                                                                                                                                                                                                                                                          |
+|    ~10.9k | F6 batch concurrency + `RunSerialAdmission`        | **DONE**             | Deleted. It existed only to grant width back through a lock we installed ourselves; langgraph schedules the turn's tool calls natively. See below.                                                                                                                                                                                                                           |
 
 ### Why the `f5` enum member survived the F5 deletion
 
@@ -87,6 +88,50 @@ so annotating it means re-signing that map — a governance change that does not
 a deletion PR. Its status is `proposed`, which remains literally true; this ledger is the
 record that the partial implementation is gone.
 
+## Retraction: the E2 cohort selector is LIVE — I was wrong
+
+**The deletion was attempted and correctly refused.** The agent proved by execution
+that the cohort selector is the active gate on the desktop's host-filesystem write
+lane, and stopped rather than removing it.
+
+What I got wrong: I checked the **default** desktop posture, where
+`explicit_enforced` is empty and all 10 lanes resolve `legacy_passthrough` — that part
+is true. But the shipped **operator opt-in** is a different posture.
+`apps/desktop/main/services/service-env.ts:295` (`cohortPolicy`) emits
+`E2_ROLLOUT_COHORTS_JSON` plus six `*_MODE=enforce` vars when `workspaceEffect=enforce`
+**and** a local principal exists **and** `app.isPackaged`. Under that env,
+`explicit_enforced` holds 6 caps, `_is_explicitly_controlled` is True, and
+`RolloutCohortPolicy.admit` **executes** — measured `outcome=admitted`,
+`match_scope=composite`.
+
+Its consumer is the write lane: `handlers/run.py:1731` calls `permits_all(...)` and on
+denial returns `_workspace_read_only('rollout_admission_denied')`. **Deleting the cohort
+selector would have removed the only mechanism that opens that gate** — i.e. the agent
+could no longer edit files in a folder the user attached. A live journey,
+`tools/desktop-journeys/filesystem-access/jJ_principal_unlocks_writes.py`, exists
+specifically to prove that behaviour.
+
+**The finding was stale on arrival.** Cohort support shipped 2026-08-01 in `08429d13`,
+`99106915` and `f0c84471` ("the agent can finally edit files in a folder you attached").
+The ledger row declaring it dark is `581a5b49`, dated **2026-08-03** — it postdates the
+feature by two days and did not account for it.
+
+The sharpest part of the reviewer's critique, which I accept: the ledger **quoted the
+liveness evidence** — _"the desktop even had to write a cohort file naming its own
+principal"_ — **and read it as absurdity rather than as proof the path runs.** That is a
+reasoning failure, not a data failure. Headline overstatement number **eight**.
+
+**The shadow half is not separably deletable either.** `rollout_control.py` must survive
+because `RolloutCohortPolicy` is live, and the same module owns the shadow-fed D6 ladder
+(`RolloutSoakMetrics.shadow_comparisons`, `evaluate_soak`, and `validate_transition`'s
+rule that enforce must promote _from_ shadow). `OperationShadowProbe.invoke_legacy` also
+runs on the hot path from `execution/factory.py:1807` and
+`delegation/subagents/atlas_task_tool.py:332,354`.
+
+**Rule this establishes:** before deleting anything gated, enumerate **every shipped
+posture**, not just the default — and check `git log` for the gate's own age. A finding
+older than the feature it describes is not a finding.
+
 ## Genuine gaps — keep, and in two cases wire
 
 - **`retention_sweeper` + `retention_backfill` (561)** and **`audit_export_verification` (614)** — real **compliance** obligations, currently unwired. **WIRE_IT.**
@@ -100,7 +145,7 @@ in-process worker constructs zero loops. Every job question is moot for the prod
 
 ## Needs your decision (~50k)
 
-- **F6 batch concurrency (10,797)** — see below; the one with a live cost.
+- ~~**F6 batch concurrency (10,797)**~~ — **DECIDED AND DONE.** See below.
 - **F1 (10,961)** — trajectory projection (~6.8k) is wired and **empirically works**, but
   nothing consumes it; fixture-only eval (~4.2k) has no entry point in any shipped process.
 - **Sandbox (8,632)** — HALF*BUILT, not dark: with \_every* documented flag ON,
@@ -113,15 +158,36 @@ in-process worker constructs zero loops. Every job question is moot for the prod
   manifest** (no private-key input, no signing operation), so
   `RUNTIME_HARNESS_RELEASE_CONFIG_PATH` does nothing on its own.
 
-### F6 is the one with a live cost today
+### F6 was the one with a live cost — resolved by deleting it
 
-Measured on a real graph: bare langchain `ToolNode` → **3/3 tool calls simultaneous**;
-add our `RuntimeControlMiddleware` with F6 dark → **1/3**. `RunSerialAdmission`
-(`control_plane/context.py:415`) is an exclusive per-run lock and **F6 is the only seam
-that widens it**. So F6 being off is not neutral — _we serialize tool calls that
-langgraph would have run in parallel_. Enabling it needs three switches shipped nowhere
-plus an operator catalog with no authoring UI, and under the default `write=ask` MCP
-calls stay serial regardless.
+The finding, as measured here: bare langchain `ToolNode` → **3/3 tool calls
+simultaneous**; add our `RuntimeControlMiddleware` with F6 dark → **1/3**.
+`RunSerialAdmission` was an exclusive per-run lock and **F6 was the only seam that
+widened it**, so F6 being off was not neutral — _we serialized tool calls that langgraph
+would have run in parallel_.
+
+**Resolution (owner's call): stop governing concurrency ourselves and let
+langgraph/deepagents schedule it natively.** The lock is gone and the apparatus that
+existed only to grant width back is deleted — `capabilities/concurrency/` (9,073),
+`runtime_worker/batch_concurrency_composition.py` (633),
+`batch_approval_authority.py` (155), `control_plane/parallel_admission.py` (221), the
+batch-journal event family, and the eval lane that graded it.
+
+Re-measured on a real graph after the change: **4/4 simultaneous**, and the framework's
+own `max_concurrency` (already set from `execution.max_parallel_tasks`, default 4) is
+what bounds it — the control the deleted subsystem was reinventing.
+
+Two real races were exposed by removing the lock and fixed with it, both proven by
+driving a real graph and both regression-tested
+(`tests/unit/runtime_worker/test_tool_concurrency_contract.py`):
+
+1. **`ToolCallLedger` iteration vs. insert** — every counting read walks the entry dict;
+   a concurrent insert raises `RuntimeError: dictionary changed size during iteration`.
+   Observed **deterministically** on the synchronous (thread-pool) tool node.
+2. **Per-tool budget check-then-charge** — `check_admit` reads and `record_started`
+   writes, and nothing held the pair together. Observed **46 executions against a cap of
+   40**. Fixed by `ToolBudgetGuard.admit_and_charge`, which is now the only place a cap
+   is enforced.
 
 ## Do not plan these twice — Lineara owns them
 

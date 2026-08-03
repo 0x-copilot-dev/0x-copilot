@@ -729,16 +729,23 @@ async def test_live_final_tool_categories_cross_one_runtime_admission(
     assert result["messages"][-1].content == "done"
 
 
-async def test_distinct_supervisor_and_child_instances_share_run_serial_permit() -> (
-    None
-):
-    """One verified run permit serializes calls across independently built graphs."""
+async def test_distinct_supervisor_and_child_instances_share_one_run_ledger() -> None:
+    """Independently built graphs share the run's records — not a serial lock.
+
+    Deep Agents materializes a fresh middleware stack for every locally compiled
+    subagent, so "one object per run, reachable from every graph" is the property
+    that has to hold. It used to be demonstrated with the run-scoped exclusive
+    permit, which also meant a supervisor call and a delegated call could never
+    overlap. Scheduling is the framework's now, so the two halves are asserted
+    separately: they do overlap, and they still land in the same run ledger.
+    """
 
     supervisor = RuntimeControlMiddleware()
     child = RuntimeControlMiddleware()
     assert supervisor is not child
     active = 0
     maximum_active = 0
+    both_present = asyncio.Event()
 
     def request(call_id: str) -> ToolCallRequest:
         return ToolCallRequest(
@@ -757,7 +764,14 @@ async def test_distinct_supervisor_and_child_instances_share_run_serial_permit()
         nonlocal active, maximum_active
         active += 1
         maximum_active = max(maximum_active, active)
-        await asyncio.sleep(0)
+        if active >= 2:
+            both_present.set()
+        try:
+            # Times out rather than hangs if something serializes the two, so
+            # the failure is a peak of one instead of a stuck suite.
+            await asyncio.wait_for(both_present.wait(), timeout=5.0)
+        except TimeoutError:
+            pass
         active -= 1
         return ToolMessage(
             content="done",
@@ -770,10 +784,16 @@ async def test_distinct_supervisor_and_child_instances_share_run_serial_permit()
             supervisor.awrap_tool_call(request("supervisor-call"), handler),
             child.awrap_tool_call(request("child-call"), handler),
         )
+        # The run-scoped object both graphs reached: one ledger, both calls, and
+        # neither middleware fell back to its instance-local reducer.
+        reducer = RunControlContext.lifecycle_reducer()
+        assert reducer is not None
+        recorded = {record.operation_id for record in reducer.records()}
     finally:
         RunControlContext.unbind(token)
 
-    assert maximum_active == 1
+    assert maximum_active == 2
+    assert len(recorded) == 2, recorded
 
 
 def test_deep_agent_builder_configures_openai_responses_reasoning(

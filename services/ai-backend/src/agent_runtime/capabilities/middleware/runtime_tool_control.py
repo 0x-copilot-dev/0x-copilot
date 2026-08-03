@@ -1,10 +1,19 @@
-"""Graph-wide tool admission, result bounding, and serial-default execution.
+"""Graph-wide tool identity, budget accounting, and result bounding.
 
 Deep Agents adds todo, filesystem, execute, and task tools after the caller's
 tool list is assembled. A ``BaseTool`` decorator therefore cannot be the
 authoritative model/tool boundary. This LangChain middleware runs around every
 tool exposed by the completed graph, including framework-injected tools and the
 same tools inside locally compiled Deep Agents subagents.
+
+It does **not** decide what runs alongside what. This module used to open with
+"serial-default execution", and that was accurate while it held a run-wide
+exclusive permit around every graph-visible tool call. LangGraph schedules a
+turn's tool calls itself — its async node gathers them, its sync node fans them
+across a thread pool — and that scheduling is now what the runtime uses, bounded
+by the framework's own ``max_concurrency``. What remains here is per call, and
+the run-scoped state it touches (the lifecycle reducer, the budget ledger)
+guards itself rather than borrowing mutual exclusion from a lock upstream.
 """
 
 from __future__ import annotations
@@ -39,12 +48,9 @@ from agent_runtime.capabilities.tool_budget_middleware import (
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
 from agent_runtime.control_plane.context import (
     RunControlContext,
-    RunSerialAdmission,
     RuntimeToolControlOutcome,
     RuntimeToolLifecycleReducer,
-    ToolAdmissionRequest,
 )
-from agent_runtime.execution.contracts import RuntimeBatchAdmissionContext
 from agent_runtime.execution.tool_errors import BudgetExceeded
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
 from agent_runtime.execution.tool_error_policy import DefaultToolErrorPolicy
@@ -144,9 +150,8 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> None:
         # Legacy/test graphs may not have a verified run-control binding. Their
         # fallback stays instance-local; production uses the one run-scoped
-        # admission object inherited by supervisor and local subagents.
+        # reducer inherited by supervisor and local subagents.
         self._excluded_tool_names = frozenset(excluded_tool_names)
-        self._fallback_serial_admission = RunSerialAdmission()
         self._fallback_lifecycle_reducer = RuntimeToolLifecycleReducer()
         self._final_tool_surface: RuntimeToolSurfaceSnapshot | None = None
 
@@ -262,13 +267,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
         state: RuntimeControlState,
         runtime: object,
     ) -> None:
-        """Synchronous compatibility adapter for the reserved seam.
-
-        Deliberately still a no-op. Recording a batch plan is a durable append,
-        so it cannot happen without awaiting, and a synchronous turn's tool calls
-        take the never-widened ``sync_permit`` anyway — planning them would
-        journal an ordering nothing could ever act on.
-        """
+        """Reserved content-free post-model observation seam."""
 
         del state, runtime
         return None
@@ -278,53 +277,16 @@ class RuntimeControlMiddleware(AgentMiddleware):
         state: RuntimeControlState,
         runtime: object,
     ) -> None:
-        """Durably record this turn's tool-group ordering before it dispatches.
+        """Reserved content-free post-model observation seam.
 
-        This is the Step-6 seam, now occupied. The framework runs this hook to
-        completion before it routes to the tool node, so a plan recorded here is
-        durable before any child it names can be admitted — the ordering is a
-        property of the graph's topology rather than of a lock somebody has to
-        hold correctly.
-
-        With no F6 binding installed this reads one context variable and returns,
-        which is what every deployment without F6 configured does. The planner
-        itself is total: an unplannable turn simply has no plan, and a turn with
-        no plan is the serial turn it has always been.
+        Deliberately a no-op. This hook used to record a durable ordering for
+        the turn's tool calls, which only ever mattered while the runtime itself
+        decided which of them could overlap. LangGraph schedules the turn's tool
+        node now, so there is no ordering here that is ours to author.
         """
 
-        admission = RuntimeBatchAdmissionContext.current()
-        if admission is None:
-            return None
-        await admission.aplan_model_batch(
-            execution_scope=self._execution_scope_for_runtime(runtime),
-            model_turn=max(self._model_turn(state), 1),
-            tool_calls=self._emitted_tool_calls(state),
-        )
+        del state, runtime
         return None
-
-    @staticmethod
-    def _emitted_tool_calls(state: object) -> tuple[Mapping[str, Any], ...]:
-        """Return the tool calls the model just emitted, in model order.
-
-        Total by construction: a state shape this does not recognize yields no
-        tool calls, which yields no plan, which yields the serial default. It
-        reads the last message only — the one the model turn just produced — so
-        an earlier turn's calls can never be re-planned into this turn's batch.
-        """
-
-        messages = (
-            state.get("messages") if isinstance(state, Mapping) else None
-        ) or getattr(state, "messages", None)
-        if (
-            not isinstance(messages, Sequence)
-            or isinstance(messages, (str, bytes))
-            or not messages
-        ):
-            return ()
-        tool_calls = getattr(messages[-1], "tool_calls", None)
-        if not isinstance(tool_calls, Sequence):
-            return ()
-        return tuple(call for call in tool_calls if isinstance(call, Mapping))
 
     def after_agent(
         self,
@@ -440,113 +402,76 @@ class RuntimeControlMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: ToolHandler,
     ) -> ToolHandlerResult:
-        """Synchronously execute one graph-visible tool under the common gate.
+        """Synchronously execute one graph-visible tool.
 
-        This lane is never widened. It passes no admission request because
-        ``sync_permit`` has no widened form to select: F6 gates children on
-        ``asyncio`` futures and runs them through an awaitable runner, so a
-        synchronous graph tool call is never a batch child.
+        No admission gate. LangGraph's synchronous ``ToolNode`` fans a turn's
+        calls out across a thread pool, and the framework owns that scheduling;
+        this seam adds identity, budget accounting, and lifecycle observation
+        around whatever it hands over. The state those three touch carries its
+        own locking (see :class:`RuntimeToolLifecycleReducer` and
+        ``ToolBudgetGuard.admit_and_charge``) rather than relying on a run-wide
+        lock to hold every call apart.
         """
 
-        admission = (
-            RunControlContext.serial_admission() or self._fallback_serial_admission
-        )
-        with admission.sync_permit():
-            identity = self._call_identity(request)
-            with RuntimeCallContext.bind(identity):
-                execute = (
-                    (
-                        lambda: self._execute_policy_blocked(
-                            request=request,
-                            handler=handler,
-                        )
+        identity = self._call_identity(request)
+        with RuntimeCallContext.bind(identity):
+            execute = (
+                (
+                    lambda: self._execute_policy_blocked(
+                        request=request,
+                        handler=handler,
                     )
-                    if isinstance(request.tool, PolicyBlockedTool)
-                    else (lambda: self._execute(request=request, handler=handler))
                 )
-                return self._observe_sync_tool_lifecycle(
-                    request=request,
-                    identity=identity,
-                    execute=execute,
-                )
+                if isinstance(request.tool, PolicyBlockedTool)
+                else (lambda: self._execute(request=request, handler=handler))
+            )
+            return self._observe_sync_tool_lifecycle(
+                request=request,
+                identity=identity,
+                execute=execute,
+            )
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: AsyncToolHandler,
     ) -> ToolHandlerResult:
-        """Asynchronously execute one graph-visible tool under the common gate.
+        """Asynchronously execute one graph-visible tool.
 
-        The gate is unchanged and unconditional; only its *width* is now a
-        decision. Handing it this call's description is what lets an F6-admitted
-        batch child overlap its siblings up to the width F6 already computed.
-        Every other call — which is every call while F6 is dark — takes the same
-        exclusive permit Step 2 installed, and a call the admission cannot
-        positively identify is one of them.
+        The framework decides what runs alongside what. LangGraph's ``ToolNode``
+        already gathers a turn's tool calls into concurrent tasks, and this seam
+        no longer takes a run-wide lock that collapsed that back to one call at a
+        time. What it still does — bind the call identity, charge the budget,
+        record the lifecycle — is per call and safe to run concurrently, because
+        the shared state each of those touches guards itself.
 
-        The body is then routed through F6's coordinator, which narrows a second
-        time — segment slot, then permit table — and makes the child's dispatch
-        durable before it is awaited. That routing happens *inside* the permit
-        and *inside* the bound call identity, so a batch child is gated by
-        everything a solo call is gated by and then by more. It is never a path
-        around this seam: overlap is something the seam grants.
+        This is also what retires the delegation self-deadlock. ``task`` is a
+        container: it awaits a whole child graph whose own tool calls arrive
+        back at this very method, on the same run. While the permit existed and
+        was non-reentrant, a parent held it across that await and its child
+        queued on it forever, so every subagent that called any tool wedged the
+        run until the 180s timeout. That was fixed by exempting ``task`` from
+        the permit; with no permit at all the exemption has nothing to name, so
+        the class of bug is gone rather than special-cased. Nesting is no longer
+        a thing this seam has to reason about.
         """
 
-        admission = (
-            RunControlContext.serial_admission() or self._fallback_serial_admission
-        )
-        async with admission.async_permit(self._admission_request(request)):
-            identity = self._call_identity(request)
-            with RuntimeCallContext.bind(identity):
+        identity = self._call_identity(request)
+        with RuntimeCallContext.bind(identity):
 
-                async def execute() -> ToolHandlerResult:
-                    if isinstance(request.tool, PolicyBlockedTool):
-                        # User policy is the outer rejection gate. A blocked
-                        # call never reaches budget admission.
-                        await self._aobserve_upstream_policy_block(request)
-                        return await handler(request)
-                    return await self._aexecute(request=request, handler=handler)
+            async def execute() -> ToolHandlerResult:
+                if isinstance(request.tool, PolicyBlockedTool):
+                    # User policy is the outer rejection gate. A blocked
+                    # call never reaches budget admission.
+                    await self._aobserve_upstream_policy_block(request)
+                    return await handler(request)
+                return await self._aexecute(request=request, handler=handler)
 
-                return await self._observe_async_tool_lifecycle(
-                    request=request,
-                    identity=identity,
-                    execute=self._batch_routed(request, execute),
-                )
-
-    @staticmethod
-    def _batch_routed(
-        request: ToolCallRequest,
-        execute: Callable[[], Awaitable[ToolHandlerResult]],
-    ) -> Callable[[], Awaitable[ToolHandlerResult]]:
-        """Return ``execute``, routed through F6 when this call is a planned child.
-
-        Returning the *same callable* when no F6 binding is installed is the
-        point: the dark path gains one context-variable read and no wrapper, no
-        extra frame, and no new object on the tool path.
-
-        The coordinator's own re-entry — permit acquisition and the durable
-        dispatch-intent append — happens between the lifecycle open and the body,
-        so a child that waited for a permit is a child whose observed lifetime
-        includes the wait. That is the honest reading: the call really did start
-        when the graph handed it over.
-        """
-
-        admission = RuntimeBatchAdmissionContext.current()
-        if admission is None:
-            return execute
-        tool_call_id = str(request.tool_call.get("id", "") or "").strip()
-        if not tool_call_id:
-            # An unidentifiable call can never be matched to a durable plan, so
-            # it is not a batch child and takes the unmediated path.
-            return execute
-
-        async def routed() -> ToolHandlerResult:
-            return await admission.arun_tool_body(
-                tool_call_id=tool_call_id,
-                body=execute,
+            return await self._observe_async_tool_lifecycle(
+                request=request,
+                identity=identity,
+                execute=execute,
             )
-
-        return routed
 
     def _observe_sync_tool_lifecycle(
         self,
@@ -739,25 +664,6 @@ class RuntimeControlMiddleware(AgentMiddleware):
         return RuntimeToolControlOutcome.SUCCESS
 
     @classmethod
-    def _admission_request(cls, request: ToolCallRequest) -> ToolAdmissionRequest:
-        """Describe this call for the admission, without validating it.
-
-        Deliberately total: a call missing its provider id or its registered
-        name still produces a request, one that carries an empty identifier no
-        grant can ever authorize, so the unidentifiable case is admitted
-        *serially* rather than refused before the gate. :meth:`_call_identity`
-        still raises on that same malformed call inside the permit, exactly
-        where it did when the permit was unconditionally exclusive.
-        """
-
-        tool_call = request.tool_call
-        return ToolAdmissionRequest(
-            tool_call_id=str(tool_call.get("id", "") or "").strip(),
-            tool_name=str(tool_call.get("name", "") or "").strip(),
-            execution_scope=cls._execution_scope(request),
-        )
-
-    @classmethod
     def _call_identity(
         cls,
         request: ToolCallRequest,
@@ -857,7 +763,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
             )
         except ToolBudgetRejected as exc:
             return _surface_rejection(exc, request=request)
-        decision = guard.check_admit(
+        decision, call_id = guard.admit_and_charge(
             tool_name=tool_name,
             estimated_input_tokens=estimated,
         )
@@ -866,14 +772,12 @@ class RuntimeControlMiddleware(AgentMiddleware):
             if isinstance(rejection, ToolBudgetRejected):
                 return _surface_rejection(rejection, request=request)
             raise rejection
+        if call_id is None or not isinstance(
+            decision, (ToolBudgetAdmit, ToolBudgetWarn)
+        ):
+            raise BudgetExceeded("Tool call was not admitted by runtime middleware.")
         if isinstance(decision, ToolBudgetWarn):
             _schedule_warning(guard=guard, decision=decision)
-        if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
-            raise BudgetExceeded("Tool call was not admitted by runtime middleware.")
-        call_id = guard.record_started(
-            tool_name=tool_name,
-            estimated_input_tokens=estimated,
-        )
         try:
             result = handler(request)
         except BaseException as exc:
@@ -923,7 +827,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
             )
         except ToolBudgetRejected as exc:
             return _surface_rejection(exc, request=request)
-        decision = guard.check_admit(
+        decision, call_id = guard.admit_and_charge(
             tool_name=tool_name,
             estimated_input_tokens=estimated,
         )
@@ -932,14 +836,14 @@ class RuntimeControlMiddleware(AgentMiddleware):
             if isinstance(rejection, ToolBudgetRejected):
                 return _surface_rejection(rejection, request=request)
             raise rejection
+        if call_id is None or not isinstance(
+            decision, (ToolBudgetAdmit, ToolBudgetWarn)
+        ):
+            raise BudgetExceeded("Tool call was not admitted by runtime middleware.")
+        # Emitted after the charge, never inside it: the append awaits, and the
+        # cap must not be readable by a sibling call while this one waits.
         if isinstance(decision, ToolBudgetWarn):
             await guard.emit_warning(decision=decision)
-        if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
-            raise BudgetExceeded("Tool call was not admitted by runtime middleware.")
-        call_id = guard.record_started(
-            tool_name=tool_name,
-            estimated_input_tokens=estimated,
-        )
         try:
             result = await handler(request)
         except BaseException as exc:

@@ -8,6 +8,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
+from threading import Lock
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -172,6 +173,15 @@ class ToolBudgetGuard:
             prior_progress=prior_task_policy_progress,
         )
         self._tool_result_admission = tool_result_admission
+        # Guards the read-then-charge pair below. A cap is enforced by reading
+        # how much is spent and then spending, and the graph now runs a turn's
+        # tool calls concurrently — so two callers that both read "one left"
+        # would both be admitted and the cap would be overrun by however many
+        # calls the model happened to emit together. Held only across the
+        # in-memory ledger arithmetic, never across an await or an I/O call, so
+        # it costs one uncontended acquire per tool call and cannot serialize
+        # the tools themselves.
+        self._accounting_lock = Lock()
 
     @classmethod
     def bind_for_run(cls, guard: "ToolBudgetGuard") -> object:
@@ -202,6 +212,42 @@ class ToolBudgetGuard:
             estimated_input_tokens=estimated_input_tokens,
         )
 
+    def admit_and_charge(
+        self,
+        *,
+        tool_name: str,
+        estimated_input_tokens: int,
+    ) -> tuple[ToolBudgetDecision, str | None]:
+        """Resolve the budget and charge an admitted call, indivisibly.
+
+        The one place a per-run cap is actually enforced. :meth:`check_admit`
+        answers from the ledger and :meth:`record_started` writes to it, and a
+        cap only holds if nothing can read between those two — which stopped
+        being free the moment a turn's tool calls started running concurrently.
+        Returns the decision plus the ledger call id, or ``None`` for a call
+        that was refused and therefore charged nothing.
+
+        The lock is deliberately not held across the *warning* emission a soft
+        cap triggers: that awaits an event append, and holding a lock across it
+        would reintroduce exactly the run-wide serialization this replaces. The
+        caller emits it after the charge instead — a warning is an observation
+        about a call that was already admitted, so nothing depends on it landing
+        first.
+        """
+
+        with self._accounting_lock:
+            decision = self.check_admit(
+                tool_name=tool_name,
+                estimated_input_tokens=estimated_input_tokens,
+            )
+            if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
+                return (decision, None)
+            call_id = self.record_started(
+                tool_name=tool_name,
+                estimated_input_tokens=estimated_input_tokens,
+            )
+        return (decision, call_id)
+
     def rejection_error(self, decision: ToolBudgetReject) -> Exception:
         """Return the exception to raise for a hard-cap rejection.
 
@@ -223,8 +269,9 @@ class ToolBudgetGuard:
         fatal :class:`BudgetExceeded` to stop the loop.
         """
 
-        self._surfaced_rejections += 1
-        exhausted = self._surfaced_rejections > self._max_surfaced_rejections
+        with self._accounting_lock:
+            self._surfaced_rejections += 1
+            exhausted = self._surfaced_rejections > self._max_surfaced_rejections
         _LOGGER.info(
             "tool_budget_rejected_fatal" if exhausted else "tool_budget_rejected",
             extra={
@@ -959,7 +1006,7 @@ class ToolBudgetGuardedTool(DelegatingTool):
             tool_name=self.name, args=args, kwargs=kwargs
         )
         estimated = _Estimator.estimate(args, kwargs)
-        decision = guard.check_admit(
+        decision, call_id = guard.admit_and_charge(
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
@@ -967,12 +1014,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
             # enforced here. The guard decides only whether the refusal
             # is surfaced to the model or ends the run.
             raise guard.rejection_error(decision)
+        if call_id is None:
+            raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
         if isinstance(decision, ToolBudgetWarn):
             # Sync path: schedule warning emission on the running loop; fall back to log.
             self._schedule_warning(guard=guard, decision=decision)
-        call_id = guard.record_started(
-            tool_name=self.name, estimated_input_tokens=estimated
-        )
         try:
             result = self.delegate(*args, config=config, **kwargs)
         except BaseException as exc:
@@ -1005,20 +1051,19 @@ class ToolBudgetGuardedTool(DelegatingTool):
             tool_name=self.name, args=args, kwargs=kwargs
         )
         estimated = _Estimator.estimate(args, kwargs)
-        decision = guard.check_admit(
+        decision, call_id = guard.admit_and_charge(
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
             raise guard.rejection_error(decision)
-        if isinstance(decision, ToolBudgetWarn):
-            await guard.emit_warning(decision=decision)
-        if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
+        if call_id is None or not isinstance(
+            decision, (ToolBudgetAdmit, ToolBudgetWarn)
+        ):
             # Defensive: treat any unknown decision variant as a hard reject so
             # future variants can never silently bypass the gate.
             raise BudgetExceeded("Tool call was not admitted by the budget middleware.")
-        call_id = guard.record_started(
-            tool_name=self.name, estimated_input_tokens=estimated
-        )
+        if isinstance(decision, ToolBudgetWarn):
+            await guard.emit_warning(decision=decision)
         try:
             result = await self.adelegate(*args, config=config, **kwargs)
         except BaseException as exc:

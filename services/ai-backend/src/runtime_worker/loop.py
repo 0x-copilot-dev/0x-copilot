@@ -75,10 +75,6 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
-from runtime_worker.batch_concurrency_composition import (
-    LiveBatchAdmissionRegistry,
-    build_batch_concurrency_composer,
-)
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
@@ -338,30 +334,11 @@ class RuntimeWorker:
         if self._provider_circuit_snapshot is not None:
             self._provider_circuit_snapshot.restore(self._provider_circuit_health)
         circuit_registry = ProviderCircuitHealthRegistry(self._provider_circuit_health)
-        # One F6 composer per worker, handed to both composition roots. It is
-        # ``None`` unless an operator configured F6, and the gate that decides
-        # that is read before any F6 module is imported — so an unconfigured
-        # worker loads exactly the modules it loaded before F6 existed.
-        batch_concurrency_composer = build_batch_concurrency_composer(
-            events=self.event_store,
-            snapshots=run_control_snapshot_store,
-            environ=worker_environment,
-        )
-        self.batch_concurrency_composer = batch_concurrency_composer
-        # The join between the two claims cancellation is split across: the run
-        # claim owns the live coordinator, the cancel claim learns the run is
-        # over. Built only when F6 is, so an unconfigured worker gains neither
-        # the object nor the bookkeeping.
-        live_batch_admissions = (
-            LiveBatchAdmissionRegistry()
-            if batch_concurrency_composer is not None
-            else None
-        )
-        self.live_batch_admissions = live_batch_admissions
-        # The same join, one level up: which runs are *executing* in this
-        # process. Unlike F6 it is unconditional, because the thing it stops is
-        # not an optional subsystem — it is the run, and with it every subagent
-        # the run is awaiting in-process. See ``runtime_worker.run_cancellation``.
+        # Which runs are *executing* in this process: the join between the two
+        # claims cancellation is split across — the run claim owns the live
+        # execution, the cancel claim learns the run is over. The thing it stops
+        # is the run, and with it every subagent the run is awaiting in-process.
+        # See ``runtime_worker.run_cancellation``.
         self.live_runs = LiveRunRegistry()
         model_invocation_composer = ModelInvocationWorkerComposer(
             settings=self.settings,
@@ -463,8 +440,6 @@ class RuntimeWorker:
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
-            batch_concurrency_composer=batch_concurrency_composer,
-            live_batch_admissions=live_batch_admissions,
         )
         # Give artifact publication its live path. Without this the artifact's
         # ledger events only reach the run through the outbox, which is drained
@@ -497,7 +472,6 @@ class RuntimeWorker:
             model_invocation_store=self.model_invocation_store,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
-            live_batch_admissions=live_batch_admissions,
             live_runs=self.live_runs,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
@@ -524,8 +498,6 @@ class RuntimeWorker:
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
-            batch_concurrency_composer=batch_concurrency_composer,
-            live_batch_admissions=live_batch_admissions,
         )
         self.artifact_event_handler = (
             artifact_event_handler

@@ -72,7 +72,6 @@ from agent_runtime.capabilities.conversation_ordinals import (
 )
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
-    RuntimeBatchAdmissionContext,
     RuntimeDependencies,
     RuntimeErrorCode,
     StreamEventSource,
@@ -117,11 +116,6 @@ from runtime_api.schemas import (
     RunRecord,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.batch_concurrency_composition import (
-    BatchConcurrencyComposer,
-    LiveBatchAdmissionRegistry,
-    activate_batch_admission,
-)
 from runtime_worker.dependencies import (
     DefaultRuntimeDependenciesFactory,
 )
@@ -221,8 +215,6 @@ class RuntimeApprovalHandler:
         usage_recorder: UsageRecorder | None = None,
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
-        batch_concurrency_composer: BatchConcurrencyComposer | None = None,
-        live_batch_admissions: LiveBatchAdmissionRegistry | None = None,
         workspace_broker_http_client: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -232,14 +224,6 @@ class RuntimeApprovalHandler:
         # process-shared loopback pool.
         self._workspace_broker_http_client = workspace_broker_http_client
         self.settings = settings or RuntimeSettings.load()
-        # F6 batch concurrency. ``None`` is both the default and what an
-        # unconfigured deployment gets: a resumed run then installs no
-        # admission and stays exactly as serial as it was before F6 existed.
-        self._batch_concurrency_composer = batch_concurrency_composer
-        # Publishes this run's live admission so the *cancel* claim — a
-        # different claim, in a different coroutine — can reach the
-        # coordinator that is actually holding the work.
-        self._live_batch_admissions = live_batch_admissions
         self._model_invocation_composer = (
             model_invocation_composer
             or ModelInvocationWorkerComposer(
@@ -531,8 +515,6 @@ class RuntimeApprovalHandler:
             else None
         )
         run_control_token: object | None = None
-        batch_admission_token: object | None = None
-        live_admission_token: object | None = None
         metrics = AssistantRunMetrics.from_run(running)
         try:
             if prepared_run_control is not None:
@@ -550,36 +532,6 @@ class RuntimeApprovalHandler:
                 if composed_model_invocation is not None:
                     RunControlContext.install_model_invocation_runtime(
                         composed_model_invocation.binding
-                    )
-                # A resumed run is a run: its remaining turns emit tool calls
-                # through the same middleware, so it needs the same admission.
-                # Composing it here rather than inheriting it is deliberate —
-                # the coordinator is per run *and* per process, and the process
-                # that resumes a run is not necessarily the one that started it.
-                batch_admission = self._compose_batch_admission(
-                    run=running,
-                    control=prepared_run_control.control,
-                )
-                if batch_admission is not None:
-                    serial_admission = RunControlContext.serial_admission()
-                    if serial_admission is not None:
-                        serial_admission.install_parallel_admission(batch_admission)
-                    batch_admission_token = RuntimeBatchAdmissionContext.install(
-                        batch_admission
-                    )
-                    # W4: the same two obligations the run path has. A resume
-                    # is the *other* moment a process starts executing a run
-                    # it may not have started, so it needs the journal's answer
-                    # just as much — and it must be cancellable while it runs.
-                    live_admission_token = await activate_batch_admission(
-                        composer=self._batch_concurrency_composer,
-                        registry=self._live_batch_admissions,
-                        admission=batch_admission,
-                        org_id=running.org_id,
-                        run_id=running.run_id,
-                        subject_fingerprint=(
-                            prepared_run_control.control.snapshot.subject_fingerprint
-                        ),
                     )
                 if composed_model_invocation is not None:
                     model_invocation_effect_tracker = (
@@ -713,10 +665,6 @@ class RuntimeApprovalHandler:
             await self._observe_e2_shadow_projections(failed)
             raise
         finally:
-            if self._live_batch_admissions is not None:
-                self._live_batch_admissions.release(live_admission_token)
-            if batch_admission_token is not None:
-                RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
@@ -948,33 +896,6 @@ class RuntimeApprovalHandler:
         if isinstance(roots, tuple):
             return roots
         return await self._workspace_wiring().granted_host_roots()
-
-    def _compose_batch_admission(
-        self,
-        *,
-        run: object,
-        control: object,
-    ) -> object | None:
-        """Return this run's F6 admission, or ``None`` to stay strictly serial.
-
-        The same three-way agreement the run handler requires: an operator
-        configured F6, the run's control snapshot resolved F6 to ``enforce``,
-        and the operator declared at least one capability's concurrency policy.
-
-        And the same run-scoped approval authority, read off the same persisted
-        context. A resume is where this matters most: the run being resumed is
-        one that already parked on a human, so a resumed turn planning the very
-        capability that parked it would be the BUG-19 defect at its loudest.
-        """
-
-        if self._batch_concurrency_composer is None:
-            return None
-        return self._batch_concurrency_composer.compose(
-            org_id=run.org_id,  # type: ignore[attr-defined]
-            trace_id=run.trace_id,  # type: ignore[attr-defined]
-            control=control,  # type: ignore[arg-type]
-            runtime_context=run.runtime_context,  # type: ignore[attr-defined]
-        )
 
     def _dependencies_for_resume(
         self,

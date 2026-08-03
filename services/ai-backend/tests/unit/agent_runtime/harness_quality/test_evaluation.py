@@ -162,20 +162,21 @@ def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
 
 
 def test_projector_reads_task_policy_columns_only_from_the_f4_journal() -> None:
-    """An F6 batch plan must not populate the F4 controller columns.
+    """Another family's ``plan_bound`` must not populate the F4 columns.
 
-    ``plan_bound`` is a record kind both features use, and several F4 corpus
-    families assert ``required_record_kinds: ["plan_bound"]``. Ungated, an F6
-    batch plan satisfies that assertion on a run where the F4 controller never
-    bound a plan, so the family would be graded against a feature that never
-    ran.
+    ``record_kind`` is a shared vocabulary across the journal families, and
+    several F4 corpus families assert ``required_record_kinds: ["plan_bound"]``.
+    Ungated, some other family's record satisfies that assertion on a run where
+    the F4 controller never bound a plan, so the family would be graded against
+    a feature that never ran. The gate is the *event type*, which is why this
+    drives a real non-F4 journal event carrying an F4-shaped record.
     """
 
     payload = {
         "record": {
             "record_kind": "plan_bound",
             "disposition": "succeeded",
-            "reason_codes": ["batch_admitted"],
+            "reason_codes": ["admitted"],
             "exhausted_dimensions": ["operations"],
         }
     }
@@ -186,7 +187,7 @@ def test_projector_reads_task_policy_columns_only_from_the_f4_journal() -> None:
             _journal_event(
                 1,
                 payload,
-                event_type=RuntimeApiEventType.OPERATION_BATCH_JOURNAL,
+                event_type=RuntimeApiEventType.MODEL_INVOCATION_PLANNED,
             ),
         ),
     )
