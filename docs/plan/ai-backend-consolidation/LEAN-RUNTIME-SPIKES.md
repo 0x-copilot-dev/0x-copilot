@@ -78,7 +78,17 @@ HTTP surface, or observability. Add those and tests, and a realistic lean runtim
 wrong, and so was my "~25–35k" — both were anchored on subtracting from today's
 architecture rather than measuring what the job costs.)
 
-## 3. S2-C — **87,632 LOC (28.3%) is dark in every shipped configuration**
+## 3. S2-C — ~~**87,632 LOC (28.3%) is dark in every shipped configuration**~~
+
+> **⚠️ CORRECTED — this number is wrong. See
+> [REDUCTION-LEDGER.md](../../audit/ai-backend-smells/REDUCTION-LEDGER.md).**
+> The census treated the E2 rollout lanes as on/off gates. They are not:
+> `permits_all()` returns **True** via `legacy_passthrough` when a lane is not
+> _explicitly enforced_ (`rollout_admission.py:274-276`, executed). So `MODE=off` does
+> not mean gated off. Verified live, not dark: the operation gateway + effect stager
+> (~9.2k, switched by `SURFACES_V2`, default true), `capabilities/browser`, the artifact
+> publish/revise + rowset builtins, and the citation cluster. **Honest deletable total is
+> ~19–22k, not 87.6k.** The section below is retained as the original record.
 
 The single most actionable finding of the entire programme, and it needs **no rewrite**.
 
