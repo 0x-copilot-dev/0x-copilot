@@ -114,6 +114,7 @@ export {
 // === Surfaces v2 — PRD-C2 tool-access gate card ===
 export { TcGateCard, type TcGateCardProps } from "./TcGateCard";
 export { TcWriteGateRow, type TcWriteGateRowProps } from "./TcWriteGateRow";
+export { TcWriteGateCard, type TcWriteGateCardProps } from "./TcWriteGateCard";
 // === end PRD-C2 ===
 // === Surfaces v2 — PRD-D1 staged-write engine (client) ===
 export {

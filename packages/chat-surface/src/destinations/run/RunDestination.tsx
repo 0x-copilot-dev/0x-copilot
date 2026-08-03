@@ -143,7 +143,19 @@ import {
 import { ReceiptV2LaunchCard, ReceiptV2Surface } from "../../surfaces/receipt";
 import type { FilesystemBypassSelection } from "../../composer/filesystemBypass";
 import { PostureChip } from "./PostureChip";
+import { TcWriteGateCard } from "../../thread-canvas/TcWriteGateCard";
+import type { TcChatApproval } from "../../thread-canvas/TcChat";
 import { PendingCounterChip } from "./PendingCounterChip";
+
+// The same marker TcChat's approval router uses: `PolicyToolMiddleware` parks a
+// write on a deterministic `mcp_write:<run>:<call>` id (policy_tool.py). Both
+// gate kinds ride `gate.opened`, so this is what keeps a write off the OAuth
+// connect card.
+const WRITE_GATE_ID_PREFIX = "mcp_write:";
+
+function isWriteGate(gateId: string): boolean {
+  return gateId.startsWith(WRITE_GATE_ID_PREFIX);
+}
 import { usePendingWork } from "./usePendingWork";
 import { usePendingWorkV2 } from "./usePendingWorkV2";
 import {
@@ -2084,6 +2096,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const handleReject = useCallback(
     (approvalId: string): void => resolveApproval(approvalId, "rejected"),
     [resolveApproval],
+  );
+
+  // The canvas card's payload comes from the APPROVAL, never the ledger row:
+  // `gate.opened` is a durable compliance record and carries no tool arguments
+  // by design, so the arguments a reviewer needs can only come from the
+  // interrupt the approval was projected from. A gate whose approval has not
+  // arrived yet still renders — title and ledger id off the ledger — rather
+  // than blanking the surface somebody is waiting on.
+  const writeGateApproval = useCallback(
+    (gateId: string): TcChatApproval | undefined =>
+      chatApprovals.find((approval) => approval.approvalId === gateId),
+    [chatApprovals],
   );
 
   // `ask_a_question` resumes the harness with the ANSWER, not a bare approval:
@@ -4237,18 +4261,37 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       !legacyV2ReadOnlyStream &&
       ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
-          {ledger.openGates.map((gate) => (
-            <TcGateCard
-              key={gate.gateId}
-              gate={gate}
-              writePolicy={gatePolicies.get(gate.gateId) ?? "ask_first"}
-              onConnect={handleGateConnect}
-              onSkip={handleGateSkip}
-              onPolicyChange={(policy) =>
-                handleGatePolicyChange(gate.gateId, gate.serverId, policy)
-              }
-            />
-          ))}
+          {ledger.openGates.map((gate) =>
+            // Both gate KINDS ride `gate.opened`, so this list carries write
+            // gates too — and a write gate reports `auth_state: insufficient`,
+            // which the connect card labels "More access needed" above a
+            // Connect button for a connector that is already connected.
+            isWriteGate(gate.gateId) ? (
+              <TcWriteGateCard
+                key={gate.gateId}
+                title={
+                  writeGateApproval(gate.gateId)?.title ?? gate.displayTitle
+                }
+                connector={gate.connector}
+                params={writeGateApproval(gate.gateId)?.params ?? []}
+                ledgerId={gate.ledgerId}
+                irreversible={false}
+                onApprove={() => handleApprove(gate.gateId)}
+                onDecline={() => handleReject(gate.gateId)}
+              />
+            ) : (
+              <TcGateCard
+                key={gate.gateId}
+                gate={gate}
+                writePolicy={gatePolicies.get(gate.gateId) ?? "ask_first"}
+                onConnect={handleGateConnect}
+                onSkip={handleGateSkip}
+                onPolicyChange={(policy) =>
+                  handleGatePolicyChange(gate.gateId, gate.serverId, policy)
+                }
+              />
+            ),
+          )}
         </div>
       ) : null}
       <div style={v2CanvasThreadStyle}>{canvasEl}</div>
