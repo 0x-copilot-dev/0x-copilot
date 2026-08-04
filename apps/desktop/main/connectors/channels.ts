@@ -46,6 +46,22 @@ export const CONNECTOR_CHANNELS = {
 } as const;
 
 /**
+ * The message a SUPERSEDED connect rejects with — a newer connect took the one
+ * pending slot in main (see `ConnectorService.runCancellable`).
+ *
+ * It lives here, beside the channel names, for exactly the reason they do: only
+ * an Error MESSAGE survives the IPC hop, so the string IS the contract and both
+ * sides must read it from one source. The renderer half needs it because the
+ * shared flow has to BRANCH — a superseded attempt is not a failure, and
+ * reporting it as one told the user a connector they had just started was
+ * broken, quoting an internal string at them.
+ *
+ * `packages/chat-surface` cannot import from `apps/*`, so the desktop binder is
+ * where this string becomes the typed `ConnectSupersededError` the flow knows.
+ */
+export const CONNECT_SUPERSEDED = "connect superseded";
+
+/**
  * What `connector.authorize` resolves with — the payload half of the same
  * contract, and it lives HERE for the same reason the channel names do: main,
  * preload, and the renderer must agree on it from one source, and this is the

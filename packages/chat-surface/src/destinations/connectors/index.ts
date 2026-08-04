@@ -20,6 +20,7 @@ export type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 export {
   useConnectFlow,
   ConnectOAuthClientRequiredError,
+  ConnectSupersededError,
 } from "./useConnectFlow";
 export type {
   ConnectFlow,

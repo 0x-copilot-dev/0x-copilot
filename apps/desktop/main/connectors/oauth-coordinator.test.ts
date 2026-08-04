@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { LoopbackHandle } from "../auth/loopback-server";
 
+import { CONNECT_SUPERSEDED } from "./channels";
 import {
   CONNECT_CANCELLED,
   ConnectorOAuthCoordinator,
@@ -371,5 +372,100 @@ describe("ConnectorOAuthCoordinator — an unreachable facade fails, it does not
     expect(error).toBeInstanceOf(ConnectorOAuthError);
     expect(error?.message).not.toContain(CONNECT_CANCELLED);
     expect(error?.message).toMatch(/could not reach/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Supersede vs cancel
+// ---------------------------------------------------------------------------
+//
+// Main holds ONE pending connect slot, so starting a second connect aborts the
+// first. Both aborts used to reject with the same `connect cancelled` string,
+// and only the renderer that pressed Cancel knew to stay quiet — so the
+// SUPERSEDED attempt fell through to the error branch and told the user a
+// connector they had just started had failed.
+//
+// The reason is the whole contract here: only an Error message survives the IPC
+// hop, so if the coordinator does not say WHY, nothing downstream can.
+
+describe("ConnectorOAuthCoordinator — supersede carries its own reason", () => {
+  it("rejects a superseded connect distinctly from a user cancel", async () => {
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: (reason?: "user" | "superseded") => void = () => undefined;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    cancel("superseded");
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_SUPERSEDED));
+  });
+
+  it("still says `cancelled` when the user is the one who stopped it", async () => {
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: (reason?: "user" | "superseded") => void = () => undefined;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // No argument: the Cancel button passes none, and the default must not
+    // silently become "superseded".
+    cancel();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_CANCELLED));
+  });
+
+  it("keeps the reason when the supersede lands BEFORE the browser opens", async () => {
+    // `start-oauth` is a real round-trip. A supersede inside that window takes
+    // the pre-browser throw path, which is a SECOND place the message is built
+    // — it reported a user cancel until the reason was threaded through it too.
+    const { loopback } = fakeLoopback();
+    const openExternal = vi.fn(async () => undefined);
+    let releaseStart: () => void = () => undefined;
+    const startHeld = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const inner = fakeFetch();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/desktop/start-oauth")) await startHeld;
+      return inner(input, init);
+    }) as unknown as typeof fetch;
+    const coordinator = makeCoordinator(fetchImpl, loopback, openExternal);
+
+    let cancel: ((reason?: "user" | "superseded") => void) | null = null;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+
+    // The hook is handed out as soon as the port binds — before the held start
+    // POST resolves — which is exactly the window this test is about.
+    await vi.waitFor(() => expect(cancel).not.toBeNull());
+    cancel!("superseded");
+    releaseStart();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_SUPERSEDED));
+    // A consent screen for a flow that was already abandoned would let the user
+    // complete an authorization nothing is waiting for.
+    expect(openExternal).not.toHaveBeenCalled();
   });
 });

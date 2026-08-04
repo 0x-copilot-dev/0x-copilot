@@ -47,6 +47,7 @@ import {
   useMcpConfig,
   useNotify,
   ConnectOAuthClientRequiredError,
+  ConnectSupersededError,
   useTransport,
   type ConnectorAccessPort,
   type McpConfigDocumentPayload,
@@ -93,7 +94,10 @@ import type {
 // AC9 — connector IPC channel names (dependency-free constants module; safe to
 // bundle into the renderer). The connect flow is owned by Electron MAIN
 // (loopback binding + system browser); the renderer only asks by slug.
-import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
+import {
+  CONNECTOR_CHANNELS,
+  CONNECT_SUPERSEDED,
+} from "../main/connectors/channels";
 // Composer parity: the desktop Run cockpit's in-chat composer (steer an active
 // run) + empty-state composer (the design's "What should we run first?" surface
 // — start the first run). Both share `AssistantComposer` bound to desktop
@@ -432,6 +436,14 @@ export function ConnectorsBinder({
         });
       } catch (error: unknown) {
         const raw = error instanceof Error ? error.message : String(error);
+        // A newer connect took this one's slot in main. Typed, because it is
+        // not a failure at all: the flow has to stay silent rather than tell
+        // the user a connector they just started is broken. Only the message
+        // survives the IPC hop, and `chat-surface` cannot import from `apps/*`,
+        // so this binder is where the string becomes a type.
+        if (raw.includes(CONNECT_SUPERSEDED)) {
+          throw new ConnectSupersededError(request.slug);
+        }
         // The one failure the user can resolve gets a typed error, so the flow
         // can open its client form instead of printing a sentence at them.
         if (
