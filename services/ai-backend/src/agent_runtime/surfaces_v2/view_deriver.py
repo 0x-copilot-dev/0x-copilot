@@ -1,20 +1,22 @@
-"""ViewDeriver — explicit, auditable per-surface view state (PRD-B3, SDR §3/§7 S5).
+"""ViewDeriver — the user-invited re-derivation of a surface's view (PRD-B3, SDR §3/§7 S5).
 
 v1 encoded view tier implicitly ("spec absent ⇒ tier-3"). v2 makes it explicit
 ledger state: every surface's view is a ``view.derived`` event carrying a
 ``tier`` (raw / generic / shaped) and a ``basis`` (schema / registry / generated).
-This module owns the two transitions that produce those events as a pure function
-of the **stored** tool response — never a re-fetch:
 
-* :meth:`ViewDeriver.derive` runs the honest ladder on the read path — registry
-  hit ⇒ ``shaped`` / ``registry`` immediately; miss on a structured payload ⇒
-  ``generic`` / ``schema`` *now* (never blocking on shaping) then a bounded
-  background shape attempt via the reused ``SurfaceGenerationScheduler``; a
-  non-mapping payload ⇒ ``raw`` / ``schema`` (B2's lossless fallback).
-* :meth:`ViewDeriver.regenerate` is the user-invited "Looks wrong? Regenerate"
-  (FR-A6) — it re-derives from the same stored payload with **zero** new
-  connector traffic (it never touches the MCP client), bounded by a per-surface
-  cap, metered per attempt (``purpose: view_shaping``, ``surface_id`` set).
+**This module owns exactly one transition:** :meth:`ViewDeriver.regenerate`, the
+user-invited "Looks wrong? Regenerate" (FR-A6). It re-derives from the surface's
+**stored** payload with **zero** new connector traffic (it never touches the MCP
+client), bounded by a per-surface cap, metered per attempt (``purpose:
+view_shaping``, ``surface_id`` set). Its one caller is
+``api/surface_view_coordinator.SurfaceViewCoordinator.regenerate_view``.
+
+The *read*-path ladder is **not** here. B3 landed a ``derive(...)`` twin of it,
+but the read path never adopted it: ``WorkLedgerEmitter`` emits ``view.derived``
+itself, mapping the projector's own ``spec_rung`` through
+``emitter._ViewDerivation.resolve`` — one producer, reading the envelope the
+projector already resolved. The twin was removed rather than left as a second,
+silently-diverging answer to "what tier is this surface?".
 
 The v1 generation subsystem (redaction, lint, injection kill-switch, retry) is
 reused underneath unchanged (``capabilities/surfaces/generator``). This module is
@@ -25,7 +27,6 @@ a clean sibling of the A1/A3 contracts: it emits through the injected
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -130,59 +131,21 @@ class _SurfaceScopedInvocation:
 
 @dataclass(frozen=True)
 class ViewDeriver:
-    """Derive + regenerate per-surface view state (see the module docstring)."""
+    """Re-derive one surface's view state on request (see the module docstring)."""
 
     store: SurfaceSpecStorePort
     emit: EmitFn
     generator: SurfaceSpecGenerator | None = None
+    # Accepted and IGNORED. Only the deleted read-path ``derive`` ever read it,
+    # to fire a background shape attempt; regenerate deliberately bypasses the
+    # scheduler (its per-run dedup would suppress a user-requested retry). The
+    # field survives solely because ``SurfaceViewCoordinator._build_deriver``
+    # still passes ``scheduler=None`` explicitly — delete that one kwarg and
+    # this field together.
     scheduler: SurfaceGenerationScheduler | None = None
     # The shaping model id backing ``generator`` — used for ``StoredSpec`` and the
     # ``gen.model`` provenance block. ``None`` when no generator is configured.
     model_id: str | None = None
-
-    # -- derive (read path) -------------------------------------------------
-
-    async def derive(
-        self,
-        *,
-        surface_id: str,
-        server: str,
-        tool: str,
-        payload: object,
-        tool_descriptor: GenToolDescriptor | None = None,
-    ) -> ViewDerivation:
-        """Run the honest ladder for a freshly-created surface.
-
-        Registry hit (builtin or store) ⇒ ``shaped`` / ``registry``. Miss on a
-        structured Mapping payload ⇒ ``generic`` / ``schema`` emitted immediately
-        (never blocking on shaping — NFR-1), then a bounded background attempt is
-        scheduled. A non-mapping payload ⇒ ``raw`` / ``schema`` (B2 fallback).
-        """
-
-        spec_ref = self._registry_spec_ref(server=server, tool=tool)
-        if spec_ref is not None:
-            return await self._emit_shaped_registry(
-                surface_id=surface_id, spec_ref=spec_ref
-            )
-        if not isinstance(payload, Mapping):
-            return await self._emit_tier(
-                surface_id=surface_id,
-                tier=ViewTier.RAW,
-                basis=ViewBasis.SCHEMA,
-            )
-        derivation = await self._emit_tier(
-            surface_id=surface_id,
-            tier=ViewTier.GENERIC,
-            basis=ViewBasis.SCHEMA,
-        )
-        self._maybe_schedule(
-            server=server,
-            tool=tool,
-            payload=payload,
-            surface_id=surface_id,
-            tool_descriptor=tool_descriptor,
-        )
-        return derivation
 
     # -- regenerate (user-invited, out-of-run; zero connector traffic) ------
 
@@ -302,28 +265,6 @@ class ViewDeriver:
             StoredSpec.from_generation(
                 key=key, spec=spec, generator_model=self.model_id
             ),
-        )
-
-    def _maybe_schedule(
-        self,
-        *,
-        server: str,
-        tool: str,
-        payload: Mapping[str, object],
-        surface_id: str,
-        tool_descriptor: GenToolDescriptor | None,
-    ) -> None:
-        """Schedule a bounded background shape attempt (best-effort, non-blocking)."""
-
-        if self.scheduler is None:
-            return
-        descriptor = tool_descriptor or GenToolDescriptor(name=tool)
-        self.scheduler.maybe_schedule(
-            server=server,
-            tool=tool,
-            tool_descriptor=descriptor,
-            output=payload,
-            surface_uri=surface_id,
         )
 
     @staticmethod

@@ -165,21 +165,29 @@ class McpPresentedTool(DelegatingTool):
 
     @staticmethod
     def _call_id(kwargs: dict[str, Any]) -> str:
-        """This call's id: the injected kwarg, else the OBSERVE binding.
+        """This call's id, or :data:`PresentValues.ANONYMOUS_CALL`.
 
-        The kwarg exists only when the inner tool's schema declares
-        ``InjectedToolCallId``, which an MCP tool's schema does not — so on the
-        live agent path it is simply absent, and reading it alone stamped every
-        surface ``payload_ref: "call:unattributed"``. That reference is the only
-        join between a surface and the ``tool_result`` holding its payload, so a
-        constant sentinel meant the fold could never resolve one and every live
-        surface rendered empty. Unit tests pass ``call_id`` explicitly and never
-        entered the state.
+        **On the live agent path this is ALWAYS anonymous, and that is a
+        structural fact rather than a bug to patch here.** Three independent
+        doors into the tool layer are shut, each verified:
 
-        The OBSERVE stage sits directly outside this one in the pinned
-        middleware order and binds the real id for the duration of the call, so
-        this is the same fallback :class:`McpCitedTool` already relies on — one
-        id, agreed by every stage that reports on the call.
+        * the kwarg arrives only for a tool whose ``args_schema`` declares
+          ``Annotated[str, InjectedToolCallId]``. An MCP tool's ``args_schema``
+          is the server's raw JSON-Schema **dict**, not a ``BaseModel``, so
+          there is nowhere to hang the annotation — and synthesising a model to
+          host it would replace every argument the connector declares (see
+          ``ToolSchemaIdentity``);
+        * the OBSERVE binding reads the same absent kwarg, so it carries no id
+          either;
+        * the ToolCall itself never reaches a wrapper. A live probe showed the
+          outermost wrapper receiving bare arguments (``keys=[]``) — the call
+          envelope is unwrapped upstream.
+
+        So the id is joined where it EXISTS instead: ``SurfaceContentProjection``
+        matches a surface to its ``tool_result`` by ``(connector, op)`` and event
+        order. The kwarg is still read first because a caller that does supply a
+        real id (every unit test, and any future injected path) should win over
+        the positional join.
         """
 
         value = kwargs.get(_TOOL_CALL_ID)

@@ -120,6 +120,52 @@ class FloorJourney:
             time.sleep(2)
         return False
 
+    def diagnose(self) -> None:
+        """Split the last hop: does the SERVER serve state, and what URI does the
+        CLIENT look it up under?
+
+        The event on disk provably carries ``state{spec,source,data}``, and the
+        renderer provably shows none. Exactly two links remain between them, and
+        this prints both rather than reasoning about either.
+        """
+
+        run_id = self.session.evaluate(
+            "(()=>{const el=document.querySelector('[data-run-id]');"
+            "return el?el.getAttribute('data-run-id'):'';})()"
+        )
+        print(f"[diag] run_id from DOM: {run_id!r}")
+        if run_id:
+            try:
+                served = self.session.transport(
+                    "GET", f"/v1/agent/runs/{run_id}/surfaces"
+                )
+                for row in (served or {}).get("surfaces", []):
+                    state = row.get("state")
+                    print(
+                        f"[diag] SERVER surface_id={row.get('surface_id')!r} "
+                        f"state={'None' if state is None else sorted(state)}"
+                    )
+            except Exception as exc:  # noqa: BLE001 — diagnostic only
+                print(f"[diag] surfaces endpoint failed: {exc}")
+
+        diag = self.session.evaluate(
+            "JSON.stringify((globalThis.__DIAG||[]).slice(-12))"
+        )
+        print("[diag] CLIENT trace:")
+        try:
+            for row in json.loads(diag or "[]"):
+                print("   ", json.dumps(row))
+        except Exception:  # noqa: BLE001 — diagnostic only
+            print("   raw:", diag)
+
+        tabs = self.session.evaluate(
+            "(()=>{const t=[...document.querySelectorAll('[data-testid^=tc-tab]')]"
+            ".map(e=>e.getAttribute('data-uri')||e.getAttribute('data-tab-uri')||e.textContent.trim());"
+            "const slot=document.querySelector('[data-canvas-slot-testid=tc-surface-slot]');"
+            "return JSON.stringify({tabs, activeUri: slot?slot.getAttribute('data-active-uri'):null});})()"
+        )
+        print(f"[diag] CLIENT tabs/activeUri: {tabs}")
+
     def read_surface(self) -> dict:
         """Read what is actually on screen, out of the live DOM."""
 
@@ -164,6 +210,7 @@ class FloorJourney:
             print("\n".join(self.findings))
             return 1
 
+        self.diagnose()
         surface = self.read_surface()
         print("[floor] on-screen surface:", json.dumps(surface, indent=2)[:900])
 

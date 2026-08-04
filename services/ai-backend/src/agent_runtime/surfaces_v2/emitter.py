@@ -9,16 +9,31 @@ event log, what the v1 pipeline already does: an executed MCP tool read
 lands in PRD-C1) and never fails a tool call: every method swallows its own
 exceptions.
 
-``surface.created`` also **carries the resolved spec inline** (generative-UI
-floor PRD §3.2b). It used to ship only ``{v, surface_id, kind, source, title,
-payload_ref}``, so a curated (rung-1) or stored (rung-2) spec was matched
-backend-side, stamped ``basis: registry`` on ``view.derived``, and then never
-put on the wire — the client rendered the spec-less view while the ledger
-claimed the surface was shaped. Only the async generator's out-of-band
-``surface_spec_generated`` could ever reach the renderer. The spec now rides the
-same event that declares the surface, so every rung of the ladder is delivered
-by one record and the ledger's ``tier``/``basis`` describes what was actually
-sent.
+``surface.created`` also **carries the renderer's whole state inline** —
+``{spec?, source?, data}``, the exact ``SurfaceState`` the projector built
+(generative-UI floor PRD §3.2b, widened from ``spec`` to the full state).
+
+It used to ship only ``{v, surface_id, kind, source, title, payload_ref}``. The
+projector had already assembled one coherent object; the pipeline then took it
+apart and shipped the pieces separately, so reassembling it needed FOUR hops to
+all work — and each one broke independently in production while the unit suite
+stayed green:
+
+* the transport allow-list silently stripped the spec;
+* ``payload_ref`` is always ``call:unattributed`` on the live agent path,
+  because the tool call id is structurally unobtainable in the tool layer
+  (three doors verified shut — see ``McpPresentedTool._call_id``), so the
+  id-based join to the payload could never resolve;
+* the persisted ``tool_result.output`` is the MODEL-facing content half,
+  doubly JSON-encoded, while the spec was inferred from the ARTIFACT half —
+  one payload in two registers, and ``items_path`` resolved against neither;
+* the client's own id round-trip lost the surface on the way back.
+
+Carrying the state removes the reassembly rather than repairing it: the record
+that declares a surface now also carries what to draw in it, in the same
+register the spec was written against. ``payload_ref`` stays on the event as
+provenance (the receipt/audit path reads it, and historic replay still resolves
+through it) — it simply stops being the only way to reach the payload.
 
 Layering: this module takes an :data:`EmitFn` closure that maps an event-type
 *value* (a raw A1 ``LedgerEventType`` string) to the runtime event producer, so
@@ -169,6 +184,56 @@ class _ViewDerivation:
             if derived is not None:
                 return derived
         return cls._UNSTATED
+
+
+class _CarriedState:
+    """The ``{spec?, source?, data}`` renderer state carried on ``surface.created``.
+
+    A restatement of the envelope's own ``state``, not a second derivation of
+    it. The projector assembled this object; this class copies the three keys
+    the renderer contract declares and drops everything else, so a future
+    envelope field cannot silently widen what a client is handed.
+
+    ``source`` is the one member rebuilt rather than copied, from the
+    ``(connector, op)`` pair :meth:`WorkLedgerEmitter._emit_surface` already
+    resolved — which IS the envelope's ``state.source`` when it declared one,
+    and the call's own names when it did not. That keeps one producer for the
+    served tool name (the defect this layer already fixed once) and it means a
+    surface whose envelope named no source still reaches the renderer able to
+    say which tool it is showing.
+    """
+
+    @classmethod
+    def build(
+        cls,
+        state: object,
+        *,
+        connector: str,
+        op: str,
+    ) -> dict[str, object] | None:
+        """Return the carried state, or ``None`` when the envelope has none."""
+
+        if not isinstance(state, Mapping):
+            return None
+        carried: dict[str, object] = {}
+        spec = state.get(_EnvelopeKey.SPEC)
+        if isinstance(spec, Mapping):
+            # Copied, not referenced: the envelope belongs to the caller and an
+            # event payload is a durable record of what was sent.
+            carried[_StateKey.SPEC] = dict(spec)
+        if connector and op:
+            carried[_StateKey.SOURCE] = {
+                _StateKey.SERVER: connector,
+                _StateKey.TOOL: op,
+            }
+        # Present only when the envelope carried it. ``SurfaceState.data`` is a
+        # required field, so its absence here means the dump excluded a ``None``
+        # — a surface with nothing to draw. Writing ``data: null`` anyway would
+        # tell the fold this surface is hydrated and empty, which is the
+        # fabricated body the whole path is written to avoid.
+        if _EnvelopeKey.DATA in state:
+            carried[_StateKey.DATA] = state[_EnvelopeKey.DATA]
+        return carried or None
 
 
 @dataclass(frozen=True)
@@ -393,29 +458,31 @@ class WorkLedgerEmitter:
     ) -> None:
         """Emit ``surface.created`` + the first ``view.derived`` for one surface.
 
-        ``spec`` rides ``surface.created`` whenever the envelope resolved one.
-        This is the delivery: the ladder's builtin/store/inferred rungs all
-        resolve backend-side and had no way onto the wire, so the client fell
-        through to the spec-less view no matter what we matched (PRD §3.2b). It
-        is READ OUT OF THE ENVELOPE for the same reason ``source`` is — the
-        projector resolved it, and a second resolution here could disagree with
+        ``state`` — the renderer's whole ``{spec?, source?, data}`` — rides
+        ``surface.created``. This is the delivery. The ladder's
+        builtin/store/inferred rungs all resolve backend-side and had no way
+        onto the wire, and neither did the payload the spec was resolved
+        AGAINST, so the client fell through to the spec-less view over an empty
+        body no matter what we matched (PRD §3.2b).
+
+        It is READ OUT OF THE ENVELOPE rather than reassembled here, which is
+        the whole point: the projector produced one coherent object, and every
+        attempt to ship its pieces separately and rejoin them downstream failed
+        at a different hop. A second resolution here could also disagree with
         the one the ``view.derived`` basis describes. A later
         ``surface_spec_generated`` refines the same subject in place; the fold
-        takes the last spec it sees, which is the ladder's own order.
+        overlays the generated spec on the delivered state, which is the
+        ladder's own order.
 
         ``source`` is the surface's provenance in the DISPLAY register, not the
-        lookup slugs: the v2 content fold restates exactly this pair as the
-        renderer's ``state.source {server, tool}``, and the tier-3 note prints
-        it — "No spec matched ``<tool>``".
-
-        It is READ OUT OF THE ENVELOPE rather than recomputed here, which is the
-        whole point. ``SurfaceProjector._state_source`` already produced this
-        pair; the two used to derive it separately — this one through
-        ``tool_slug``, the projector not — so one tool could be served under two
-        names depending on which path a client read. One producer, one value:
-        this emitter restates what the envelope says and can no longer disagree
-        with it. The call's own names remain the fallback for an envelope that
-        carries no source (a nameless tool).
+        lookup slugs, and it is read out of the envelope for the same reason:
+        the tier-3 note prints it — "No spec matched ``<tool>``".
+        ``SurfaceProjector._state_source`` already produced this pair; the two
+        used to derive it separately — this one through ``tool_slug``, the
+        projector not — so one tool could be served under two names depending on
+        which path a client read. One producer, one value. The call's own names
+        remain the fallback for an envelope that carries no source (a nameless
+        tool).
 
         Nothing keys off this value: every registry/store/spec-ref lookup that
         later receives it (``ViewDeriver.regenerate`` via
@@ -457,10 +524,9 @@ class WorkLedgerEmitter:
             Keys.Field.TITLE: title,
             Keys.Field.PAYLOAD_REF: payload_ref,
         }
-        if spec is not None:
-            # Copied, not referenced: the envelope belongs to the caller and an
-            # event payload is a durable record of what was sent.
-            created[_AdditiveField.SPEC] = dict(spec)
+        carried = _CarriedState.build(state, connector=connector, op=op)
+        if carried is not None:
+            created[_AdditiveField.STATE] = carried
         await self.emit(
             LedgerEventType.SURFACE_CREATED.value, created, Messages.SURFACE_CREATED
         )
@@ -552,15 +618,31 @@ class WorkLedgerEmitter:
 class _AdditiveField:
     """Ledger payload keys this emitter writes that ``Keys.Field`` does not name.
 
-    ``Keys.Field`` mirrors the A3-frozen SDR §5 field set. ``surface.created.spec``
-    is additive to it (generative-UI floor PRD §3.2b) and its constant belongs
-    with the contract pass that must also declare the key on
-    ``SurfaceCreatedPayload``, in ``work_ledger.json``, in the ``runtime_api``
-    payload allow-list, and in the ``packages/api-types`` mirror — one key, one
-    pass. Until then it lives here rather than being inlined twice.
+    ``Keys.Field`` mirrors the A3-frozen SDR §5 field set.
+    ``surface.created.state`` is additive to it (generative-UI floor PRD §3.2b)
+    and is declared in the same pass on ``SurfaceCreatedPayload``, in
+    ``work_ledger.json``, in the ``runtime_api`` payload allow-list, and in the
+    ``packages/api-types`` mirror — one key, four declarations, no drift.
+    """
+
+    STATE = "state"
+
+
+class _StateKey:
+    """Keys of the ``SurfaceState`` contract the renderers consume.
+
+    Deliberately not :class:`_EnvelopeKey`: those name what the v1 envelope
+    dump spells, these name the wire shape shared with
+    ``packages/api-types`` and ``packages/surface-renderers``. The two agree on
+    ``spec``/``data`` and differ on ``source``, whose members the ledger calls
+    ``connector``/``op`` and the renderer calls ``server``/``tool``.
     """
 
     SPEC = "spec"
+    SOURCE = "source"
+    DATA = "data"
+    SERVER = "server"
+    TOOL = "tool"
 
 
 class _EnvelopeKey:

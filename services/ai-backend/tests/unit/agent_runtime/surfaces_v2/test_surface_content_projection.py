@@ -1,4 +1,4 @@
-"""Declared-reference content hydration — pure, total, and envelope-free."""
+"""Surface content resolution — carried state first, pure, total, envelope-free."""
 
 from __future__ import annotations
 
@@ -24,17 +24,43 @@ def _surface(
     surface_id: str,
     call_id: str,
     source: object = None,
-    spec: object = None,
+    state: object = None,
 ) -> _Event:
+    """A ``surface.created`` record.
+
+    ``state`` is the carried renderer state, as production emits it; ``source``
+    is the ledger's own ``{connector, op}`` spelling, which historic records
+    carry INSTEAD of a state. Passing only ``source`` therefore builds a
+    pre-carry record, which is what the reference-resolution tests want.
+    """
+
     payload: dict[str, object] = {
         "surface_id": surface_id,
         "payload_ref": f"call:{call_id}",
     }
     if source is not None:
         payload["source"] = source
-    if spec is not None:
-        payload["spec"] = spec
+    if state is not None:
+        payload["state"] = state
     return _Event(event_type="surface.created", payload=payload)
+
+
+def _carrying(
+    surface_id: str,
+    call_id: str,
+    *,
+    data: object,
+    spec: object = None,
+    source: object = None,
+) -> _Event:
+    """A ``surface.created`` carrying its state, the way production emits it."""
+
+    state: dict[str, object] = {"data": data}
+    if spec is not None:
+        state["spec"] = spec
+    if source is not None:
+        state["source"] = source
+    return _surface(surface_id, call_id, state=state)
 
 
 def _tool_result(call_id: str, output: object) -> _Event:
@@ -95,26 +121,37 @@ class TestSurfaceContentProjection:
         )
         assert content == {"s1": {"data": {"id": 1}, "spec": {"archetype": "record"}}}
 
-    def test_the_spec_declared_on_the_surface_record_is_hydrated(self) -> None:
-        # The builtin / store / inferred rungs resolve backend-side and ride
-        # the record that declares the surface. Sourcing the spec from
-        # generation alone left every one of them stranded.
+    def test_the_state_carried_on_the_surface_record_is_read_back(self) -> None:
+        # The builtin / store / inferred rungs resolve backend-side, and so does
+        # the payload they resolved against. Both ride the record that declares
+        # the surface — no tool_result in this stream at all, because none is
+        # needed.
         content = SurfaceContentProjection.fold(
-            [
-                _surface("s1", "call-1", spec={"archetype": "table"}),
-                _tool_result("call-1", {"rows": []}),
-            ]
+            [_carrying("s1", "call-1", data={"rows": []}, spec={"archetype": "table"})]
         )
         assert content == {"s1": {"data": {"rows": []}, "spec": {"archetype": "table"}}}
 
-    def test_generated_refinement_replaces_the_declared_spec(self) -> None:
+    def test_carried_data_wins_over_the_referenced_payload(self) -> None:
+        # The two are the same read in two representations, and the spec was
+        # written against the carried one. Preferring the reference would rebind
+        # ``items_path`` to an encoding it does not describe — the live defect.
+        content = SurfaceContentProjection.fold(
+            [
+                _carrying("s1", "call-1", data={"issues": [{"id": 1}]}),
+                _tool_result("call-1", {"content": '[{"text": "…"}]'}),
+            ]
+        )
+        assert content == {"s1": {"data": {"issues": [{"id": 1}]}}}
+
+    def test_generated_refinement_replaces_the_carried_spec(self) -> None:
         # The model refines; it never authors from a blank page. It also
         # arrives later in the stream, so last-writer-wins is the ladder's own
         # order rather than a tiebreak.
         content = SurfaceContentProjection.fold(
             [
-                _surface("s1", "call-1", spec={"archetype": "table"}),
-                _tool_result("call-1", {"rows": []}),
+                _carrying(
+                    "s1", "call-1", data={"rows": []}, spec={"archetype": "table"}
+                ),
                 _Event(
                     event_type="surface_spec_generated",
                     payload={
@@ -129,16 +166,43 @@ class TestSurfaceContentProjection:
             "title_path": "team.name",
         }
 
-    def test_a_declared_spec_is_not_hydrated_for_an_undeclared_subject(self) -> None:
-        # Same authorization posture the generated branch already has: the
-        # caller names the subjects it may hydrate, and a spec does not widen
-        # that set.
+    def test_a_repeat_read_refreshes_data_without_demoting_the_shape(self) -> None:
+        # A repeat read of one record re-emits ``surface.created``. Merging the
+        # two sources in stream order would let that later record overwrite a
+        # generated spec with the rung it had already improved on — the ladder
+        # running backwards.
         content = SurfaceContentProjection.fold(
             [
-                _surface("s1", "call-1", spec={"archetype": "record"}),
-                _surface("s2", "call-2", spec={"archetype": "table"}),
-                _tool_result("call-1", 1),
-                _tool_result("call-2", 2),
+                _carrying(
+                    "s1", "call-1", data={"rows": [1]}, spec={"archetype": "table"}
+                ),
+                _Event(
+                    event_type="surface_spec_generated",
+                    payload={
+                        "surface_uri": "s1",
+                        "spec": {"archetype": "table", "title_path": "team.name"},
+                    },
+                ),
+                _carrying(
+                    "s1", "call-1", data={"rows": [1, 2]}, spec={"archetype": "table"}
+                ),
+            ]
+        )
+        assert content == {
+            "s1": {
+                "data": {"rows": [1, 2]},
+                "spec": {"archetype": "table", "title_path": "team.name"},
+            }
+        }
+
+    def test_carried_state_is_not_read_for_an_undeclared_subject(self) -> None:
+        # Same authorization posture the generated branch already has: the
+        # caller names the subjects it may hydrate, and carrying the state on
+        # the record does not widen that set.
+        content = SurfaceContentProjection.fold(
+            [
+                _carrying("s1", "call-1", data=1, spec={"archetype": "record"}),
+                _carrying("s2", "call-2", data=2, spec={"archetype": "table"}),
             ],
             surface_payload_refs={"s2": "call:call-2"},
         )
@@ -147,14 +211,25 @@ class TestSurfaceContentProjection:
     @pytest.mark.parametrize(
         "spec", ["table", 7, ["archetype"]], ids=["string", "number", "list"]
     )
-    def test_a_malformed_declared_spec_is_ignored(self, spec: object) -> None:
+    def test_a_malformed_carried_spec_is_ignored(self, spec: object) -> None:
         content = SurfaceContentProjection.fold(
-            [
-                _surface("s1", "call-1", spec=spec),
-                _tool_result("call-1", {"id": 1}),
-            ]
+            [_carrying("s1", "call-1", data={"id": 1}, spec=spec)]
         )
         assert content == {"s1": {"data": {"id": 1}}}
+
+    @pytest.mark.parametrize(
+        "state", ["table", 7, ["data"], None], ids=["string", "number", "list", "null"]
+    )
+    def test_a_malformed_carried_state_leaves_the_surface_unhydrated(
+        self, state: object
+    ) -> None:
+        # Total over an untrusted record. No content event ⇒ the honest
+        # skeleton, never a fabricated body.
+        content = SurfaceContentProjection.fold(
+            [_Event("surface.created", {"surface_id": "s1", "state": state})],
+            surface_payload_refs={"s1": "call:call-1"},
+        )
+        assert content == {}
 
     def test_legacy_presentation_envelope_is_ignored(self) -> None:
         content = SurfaceContentProjection.fold(
@@ -197,9 +272,79 @@ class TestSurfaceContentProjection:
         assert events[1].payload == {"call_id": "call-1", "output": {"id": 1}}
 
 
+class TestCarriedProvenance:
+    """``state.source`` as production now delivers it: carried, not translated."""
+
+    def test_the_carried_source_is_served_verbatim(self) -> None:
+        content = SurfaceContentProjection.fold(
+            [
+                _carrying(
+                    "s1",
+                    "call-1",
+                    data={"id": 7},
+                    source={"server": "PagerDuty", "tool": "getIncident"},
+                )
+            ]
+        )
+
+        # Carried, not re-derived. The emitter resolved this pair once; a
+        # second derivation here is how one tool came to be served under two
+        # names depending which path a client read.
+        assert content == {
+            "s1": {
+                "data": {"id": 7},
+                "source": {"server": "PagerDuty", "tool": "getIncident"},
+            }
+        }
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "pagerduty",
+            {"server": "pagerduty"},
+            {"tool": "read"},
+            {"server": "", "tool": "read"},
+            {"server": "pagerduty", "tool": "   "},
+            {"server": 7, "tool": 9},
+        ],
+        ids=[
+            "not-an-object",
+            "no-tool",
+            "no-server",
+            "blank-server",
+            "blank-tool",
+            "non-strings",
+        ],
+    )
+    def test_a_half_named_carried_source_is_no_source(self, source: object) -> None:
+        content = SurfaceContentProjection.fold(
+            [_carrying("s1", "call-1", data={"id": 1}, source=source)]
+        )
+
+        assert content == {"s1": {"data": {"id": 1}}}
+
+    def test_carried_source_alone_never_hydrates_an_empty_surface(self) -> None:
+        content = SurfaceContentProjection.fold(
+            [
+                _surface(
+                    "s1",
+                    "call-1",
+                    state={"source": {"server": "linear", "tool": "read"}},
+                )
+            ]
+        )
+
+        assert content == {}
+
+
 class TestSurfaceProvenance:
-    """``state.source`` — the only thing that can name the tool on a surface
-    that has no spec to name it (PRD-02 requirement 1)."""
+    """``state.source`` on a HISTORIC record, which carries no state of its own.
+
+    These drive the pre-carry shape deliberately: ``surface.created`` with the
+    ledger's ``{connector, op}`` and the payload in a sibling ``tool_result``.
+    That pairing is pinned by the frozen ``legacy_v2_replay_corpus.json``
+    vectors, so it is a contract with a TypeScript twin, not dead history.
+    """
 
     def test_declared_source_is_restated_in_renderer_vocabulary(self) -> None:
         content = SurfaceContentProjection.fold(
@@ -347,8 +492,10 @@ class ServedNameMixin:
                 latency_ms=11,
             )
         )
+        # No ``tool_result`` in this stream. The emitted ledger events are the
+        # whole input, because the state rides them.
         content = SurfaceContentProjection.fold(
-            [_tool_result(self.CALL_ID, dict(self.OUTPUT)), *recorded],
+            recorded,
             surface_payload_refs={envelope.surface_uri: f"call:{self.CALL_ID}"},
         )
         return content[envelope.surface_uri]
@@ -434,8 +581,10 @@ class CuratedSpecMixin:
                 spec_rung=SpecRung.BUILTIN,
             )
         )
+        # No ``tool_result`` in this stream. The emitted ledger events are the
+        # whole input, because the state rides them.
         content = SurfaceContentProjection.fold(
-            [_tool_result(self.CALL_ID, dict(self.OUTPUT)), *recorded],
+            recorded,
             surface_payload_refs={envelope.surface_uri: f"call:{self.CALL_ID}"},
         )
         return content[envelope.surface_uri], recorded

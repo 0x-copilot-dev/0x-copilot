@@ -123,8 +123,6 @@ import {
   type RunTodosProjection,
   projectLedger,
   projectCanonicalRowsetReviewModel,
-  surfaceIdForTabUri,
-  tabUriForSurface,
   type TcTab,
   type ToolCallEntry,
   type PendingDiffHandle,
@@ -2621,12 +2619,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         }
         const surface = ledger.surfaces.get(subject.subjectId);
         if (surface !== undefined) {
-          add(
-            tabUriForSurface(surface),
-            subject.title,
-            subject.lastSeq,
-            subject.key,
-          );
+          // The tab URI IS the surface id — the projector already minted it as
+          // `<archetype>://<connector>/<tool>/<id>` (see the identity note in
+          // `ledgerProjection.ts`). Nothing to encode, nothing to decode.
+          add(surface.surfaceId, subject.title, subject.lastSeq, subject.key);
         }
         continue;
       }
@@ -2656,7 +2652,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         add(
           surface === undefined
             ? effectStageUri(subject.subjectId)
-            : tabUriForSurface(surface),
+            : surface.surfaceId,
           subject.title,
           subject.lastSeq,
           subject.key,
@@ -2888,16 +2884,39 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     surfacesV2 === true,
   );
   // The v2 surface-state resolver handed to ThreadCanvas ONLY when `surfacesV2`.
-  // Uses the exported inverse to recover the surface_id — never hand-parses.
+  //
+  // A tab URI IS the `surface_id`, so this is a straight map lookup against the
+  // hydration payload — and the map is also the AUTHORITY on whether the URI
+  // names a v2 surface at all. That matters: this join used to run through a
+  // `<scheme>://surfaces-v2/<id>` decode, and a decode returning `null` is
+  // indistinguishable here from "no data yet" — the card says "the tool
+  // returned an empty payload" either way. A miss is now a genuine absence — an
+  // artifact / effect-stage / receipt tab, or content not yet fetched — never a
+  // string that failed to parse. (The live empty card was NOT this decode; see
+  // the identity note in `ledgerProjection.ts` and FINDINGS §4.7a/b.)
   const resolveSurfaceState = useMemo(
     () =>
       surfacesV2
         ? (uri: string) => {
-            if (v2CanvasTabs.legacyUris.has(uri)) {
-              return legacyV2StateByUri.get(uri);
+            const legacy = v2CanvasTabs.legacyUris.has(uri);
+            const resolved = legacy
+              ? legacyV2StateByUri.get(uri)
+              : hydration.stateFor(uri);
+            // TEMP DIAGNOSTIC — remove before merge.
+            try {
+              const g = globalThis as unknown as Record<string, unknown>;
+              const log = (g.__DIAG ??= []) as unknown[];
+              log.push({
+                at: "resolve",
+                uri,
+                legacy,
+                resolved: resolved !== undefined,
+                status: hydration.status,
+              });
+            } catch {
+              /* diagnostic only */
             }
-            const id = surfaceIdForTabUri(uri);
-            return id !== null ? hydration.stateFor(id) : undefined;
+            return resolved;
           }
         : undefined,
     [surfacesV2, hydration, legacyV2StateByUri, v2CanvasTabs],
@@ -2985,21 +3004,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // PRD-B3: the active surface's folded view-lifecycle state (tier ladder +
   // preference + regen), read off the SAME ledger fold — no second projector.
   // Null off the v2 path or before a `view.derived` lands.
+  //
+  // `activeUri` is the surface id, so the fold answers directly: a tab the fold
+  // does not know (artifact, effect stage, receipt, legacy replay) simply misses.
   const activeViewState = useMemo(() => {
     if (!surfacesV2) return null;
     if (v2CanvasTabs.legacyUris.has(activeUri)) return null;
-    const id = surfaceIdForTabUri(activeUri);
-    if (id === null) return null;
-    return ledger.surfaces.get(id)?.viewState ?? null;
+    return ledger.surfaces.get(activeUri)?.viewState ?? null;
   }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
 
   // PRD-B4: the active surface's folded "Suggest a shape" state (idle by default).
   const activeShapeRequest = useMemo<LedgerShapeRequestState>(() => {
     if (!surfacesV2) return "idle";
     if (v2CanvasTabs.legacyUris.has(activeUri)) return "idle";
-    const id = surfaceIdForTabUri(activeUri);
-    if (id === null) return "idle";
-    return ledger.surfaces.get(id)?.shapeRequest ?? "idle";
+    return ledger.surfaces.get(activeUri)?.shapeRequest ?? "idle";
   }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
 
   // ============================================================
@@ -3608,8 +3626,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const handleReviewCard = useCallback(
     (card: PendingCard): void => {
       if (card.surfaceId === null) return;
-      const surface = ledger.surfaces.get(card.surfaceId);
-      if (surface !== undefined) setPinnedUri(tabUriForSurface(surface));
+      // The card's `surfaceId` IS the tab URI. The fold is still consulted, as
+      // an existence check: pinning a URI the strip does not carry would park
+      // the canvas on a tab that never appears.
+      if (ledger.surfaces.has(card.surfaceId)) setPinnedUri(card.surfaceId);
     },
     [ledger],
   );
@@ -3846,9 +3866,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           />
         );
       }
-      const id = surfaceIdForTabUri(uri);
-      if (id === null) return null;
-      const stage = stageBySurfaceId.get(id);
+      // `uri` is the surface id; `stageBySurfaceId` is keyed by the same value,
+      // so a hit means this tab is a staged draft and a miss means it is not.
+      const stage = stageBySurfaceId.get(uri);
       if (stage !== undefined) {
         if (stage.rows !== null) {
           // Historical `write.staged` rowsets are compatibility-read only.
@@ -3858,8 +3878,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         return (
           <TcStagedDraftSurface
             stage={stage}
-            bodyText={draftBodyText(hydration.stateFor(id))}
-            presentation={draftMessagePresentation(hydration.stateFor(id))}
+            bodyText={draftBodyText(hydration.stateFor(uri))}
+            presentation={draftMessagePresentation(hydration.stateFor(uri))}
             onSubmitEdit={handleStageEdit}
             onApprove={handleStageApprove}
             onReject={handleStageReject}

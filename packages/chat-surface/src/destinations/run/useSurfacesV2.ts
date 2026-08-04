@@ -108,11 +108,39 @@ export function useSurfacesV2(
         })
         .then((res) => {
           fetchedSeqRef.current = targetSeq;
+          // TEMP DIAGNOSTIC — remove before merge.
+          try {
+            const g = globalThis as unknown as Record<string, unknown>;
+            const log = (g.__DIAG ??= []) as unknown[];
+            log.push({
+              at: "fetch",
+              runId,
+              targetSeq,
+              count: res.surfaces?.length ?? 0,
+              ids: (res.surfaces ?? []).map((s) => s.surface_id),
+              hasState: (res.surfaces ?? []).map(
+                (s) => (s as unknown as Record<string, unknown>).state !== null,
+              ),
+              mounted: mountedRef.current,
+              runMatches: runIdRef.current === runId,
+            });
+          } catch {
+            /* diagnostic only */
+          }
           if (!mountedRef.current || runIdRef.current !== runId) return;
           const next = new Map<string, SurfacePayload>();
           for (const snapshot of res.surfaces ?? []) {
             const payload = snapshotToPayload(snapshot);
             if (payload !== undefined) next.set(snapshot.surface_id, payload);
+          }
+          try {
+            const g = globalThis as unknown as Record<string, unknown>;
+            (g.__DIAG as unknown[]).push({
+              at: "stored",
+              keys: [...next.keys()],
+            });
+          } catch {
+            /* diagnostic only */
           }
           setById(next);
           setStatus("ready");

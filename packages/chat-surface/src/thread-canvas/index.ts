@@ -65,10 +65,10 @@ export { TcTodoList, type TcTodoListProps } from "./TcTodoList";
 // Pure PEER of `projectSurfaceTabs` over the SAME `session.events` array — folds
 // the v2 Work Ledger (`surface.created`/`view.derived`) into named tabs. Its
 // `toParitySnapshot` byte-matches PRD-A3's Python SurfaceStore fold.
+//
+// A surface's mount/tab URI IS its `surfaceId`, so there is no codec to export.
 export {
   projectLedger,
-  tabUriForSurface,
-  surfaceIdForTabUri,
   ledgerTabsAsSurfaceTabs,
   toParitySnapshot,
   type LedgerProjection,

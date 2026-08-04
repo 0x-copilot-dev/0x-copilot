@@ -1,17 +1,20 @@
-"""``ViewDeriver`` — the auditable per-surface view lifecycle (PRD-B3).
+"""``ViewDeriver.regenerate`` — the user-invited re-derivation (PRD-B3).
 
 Fakes only (no network, no live model): a fake spec store, a fake / real
 ``SurfaceSpecGenerator`` driven by a fake ``SpecCompletionPort``, a collector
 ``emit`` closure, and an adversarial MCP seam that raises on any invocation to
 prove the regenerate path never re-fetches. Pins:
 
-* the honest ladder — registry hit ⇒ shaped/registry, miss ⇒ generic/schema now
-  then a scheduled shape attempt, non-mapping ⇒ raw/schema;
 * regenerate is a pure function of the STORED payload — zero connector traffic on
   every branch, bypasses the scheduler dedup, overwrites the cached spec, and
   stays honestly generic on a generation failure;
+* a curated/team spec landing since first render is honoured (shaped/registry);
 * the per-surface cap raises a typed error at the limit;
 * shaping is metered per attempt with ``purpose=view_shaping`` + ``surface_id``.
+
+The read-path ``derive`` ladder these tests also covered is gone — the live read
+path emits ``view.derived`` from ``WorkLedgerEmitter`` off the projector's own
+``spec_rung``, and is pinned by ``surfaces_v2/test_ledger_emitter.py``.
 """
 
 from __future__ import annotations
@@ -34,7 +37,6 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.observability.attribution import Purpose
 from agent_runtime.observability.usage_meter import MeteredModelInvocation, UsageMeter
 from agent_runtime.surfaces_v2.ledger_models import (
-    LedgerEventType,
     ViewBasis,
     ViewTier,
 )
@@ -133,16 +135,6 @@ class ExplodingMcp:
         )
 
 
-class FakeScheduler:
-    """Records ``maybe_schedule`` calls; never actually generates."""
-
-    def __init__(self) -> None:
-        self.scheduled: list[dict[str, object]] = []
-
-    def maybe_schedule(self, **kwargs: object) -> None:
-        self.scheduled.append(kwargs)
-
-
 class RecordingUsageRecorder:
     """Captures every ``RuntimeModelCallUsageRecord`` the meter builds."""
 
@@ -193,83 +185,6 @@ def _valid_spec() -> SurfaceSpec:
     candidate = dict(_VALID_CANDIDATE)
     candidate["source"] = {"server": "linear", "tool": "get_issue"}
     return validate_surface_spec(candidate)
-
-
-# ---------------------------------------------------------------------------
-# derive — the honest ladder
-# ---------------------------------------------------------------------------
-
-
-class TestDerive:
-    async def test_registry_miss_emits_generic_immediately_then_schedules(self) -> None:
-        emit = _EmitCollector()
-        scheduler = FakeScheduler()
-        deriver = ViewDeriver(store=FakeStore(), emit=emit, scheduler=scheduler)
-
-        derivation = await deriver.derive(
-            surface_id="s1",
-            server="unknownsrv",
-            tool="mystery",
-            payload=_LINEAR_SAMPLE,
-        )
-
-        # Generic emitted immediately (before any shaping).
-        assert derivation.tier is ViewTier.GENERIC
-        assert derivation.basis is ViewBasis.SCHEMA
-        event_type, payload, _ = emit.last
-        assert event_type == LedgerEventType.VIEW_DERIVED.value
-        assert payload["tier"] == "generic"
-        assert payload["basis"] == "schema"
-        # And a bounded background shape attempt was scheduled.
-        assert len(scheduler.scheduled) == 1
-        assert scheduler.scheduled[0]["surface_uri"] == "s1"
-
-    async def test_builtin_hit_emits_shaped_registry_with_spec_ref(self) -> None:
-        emit = _EmitCollector()
-        deriver = ViewDeriver(store=FakeStore(), emit=emit)
-
-        derivation = await deriver.derive(
-            surface_id="s1", server="github", tool="get_issue", payload={"x": 1}
-        )
-
-        assert derivation.tier is ViewTier.SHAPED
-        assert derivation.basis is ViewBasis.REGISTRY
-        assert derivation.spec_ref == "spec:github/get_issue"
-        _, payload, _ = emit.last
-        assert payload["spec_ref"] == "spec:github/get_issue"
-
-    async def test_store_hit_emits_shaped_registry(self) -> None:
-        store = FakeStore()
-        store._by_tool[("customsrv", "custom_tool")] = _valid_spec()
-        emit = _EmitCollector()
-        deriver = ViewDeriver(store=store, emit=emit)
-
-        derivation = await deriver.derive(
-            surface_id="s1",
-            server="customsrv",
-            tool="custom_tool",
-            payload={"x": 1},
-        )
-
-        assert derivation.tier is ViewTier.SHAPED
-        assert derivation.basis is ViewBasis.REGISTRY
-
-    async def test_non_mapping_payload_emits_raw_schema(self) -> None:
-        emit = _EmitCollector()
-        scheduler = FakeScheduler()
-        deriver = ViewDeriver(store=FakeStore(), emit=emit, scheduler=scheduler)
-
-        derivation = await deriver.derive(
-            surface_id="s1",
-            server="unknownsrv",
-            tool="blob",
-            payload="a raw text blob",
-        )
-
-        assert derivation.tier is ViewTier.RAW
-        assert derivation.basis is ViewBasis.SCHEMA
-        # A non-mapping payload never schedules shaping.
-        assert scheduler.scheduled == []
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +251,28 @@ class TestRegenerate:
         )
         assert derivation.tier is ViewTier.SHAPED
         assert derivation.basis is ViewBasis.GENERATED
+
+    async def test_store_hit_emits_shaped_registry_with_spec_ref(self) -> None:
+        # A curated/team spec that landed since first render must be honoured on
+        # the regenerate path — shaped/registry, with the stable ``spec:`` ref.
+        store = FakeStore()
+        store._by_tool[("customsrv", "custom_tool")] = _valid_spec()
+        emit = _EmitCollector()
+        deriver = ViewDeriver(store=store, emit=emit)
+
+        derivation = await deriver.regenerate(
+            surface_id="s1",
+            server="customsrv",
+            tool="custom_tool",
+            payload=_LINEAR_SAMPLE,
+            regen_count=0,
+        )
+
+        assert derivation.tier is ViewTier.SHAPED
+        assert derivation.basis is ViewBasis.REGISTRY
+        assert derivation.spec_ref == "spec:customsrv/custom_tool"
+        _, payload, _ = emit.last
+        assert payload["spec_ref"] == "spec:customsrv/custom_tool"
 
     async def test_missing_payload_raises_surface_not_found(self) -> None:
         deriver = ViewDeriver(store=FakeStore(), emit=_EmitCollector())

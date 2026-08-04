@@ -349,46 +349,60 @@ class TestOnToolResult(RecordingEmitMixin):
 
 
 class TestSpecDelivery(RecordingEmitMixin):
-    """The resolved spec must ride ``surface.created`` (PRD floor §3.2b).
+    """The resolved renderer state must ride ``surface.created`` (floor PRD §3.2b).
 
     The defect this pins was silent by construction: the ladder matched a
     curated spec, ``view.derived`` recorded the surface as ``shaped`` /
     ``registry``, and the spec was then dropped on the floor because no event
     carried it. The ledger described a screen nobody was looking at.
+
+    ``data`` is asserted alongside ``spec`` throughout, never on its own. A spec
+    delivered without the payload it was resolved against renders a correctly
+    shaped table over zero rows — the same blank screen by another route, and
+    the state the pipeline was actually in after the spec half was fixed.
     """
 
-    def test_created_carries_the_resolved_spec(self) -> None:
+    def test_created_carries_the_resolved_state(self) -> None:
         emitter, recorded = self._make_emitter()
         env = self._spec_envelope()
 
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
 
         created = recorded[2]["payload"]
-        assert created["spec"] == {
-            "archetype": "record",
-            "title_path": "issue.title",
+        assert created["state"] == {
+            "spec": {"archetype": "record", "title_path": "issue.title"},
+            "source": {"server": "seed:linear", "tool": "Get_Issue"},
+            "data": {"issue": {"title": "ENG-142 Fix streaming reconnect"}},
         }
 
-    def test_specless_envelope_omits_the_key_entirely(self) -> None:
-        # Absent, not ``None``: a null spec would read as "we looked and there
-        # is nothing", which is a different claim from "this record does not
-        # speak to the question".
+    def test_specless_envelope_still_delivers_its_payload(self) -> None:
+        # The floor: no spec is not no surface. The data and the tool's name
+        # ride regardless, which is what lets the generic view render a real
+        # body and name what produced it.
         emitter, recorded = self._make_emitter()
         env = self._specless_envelope()
 
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
 
-        assert "spec" not in recorded[2]["payload"]
+        state = recorded[2]["payload"]["state"]
+        assert "spec" not in state
+        assert state["data"] == {"rows": [1, 2, 3]}
+        assert state["source"] == {"server": "seed:linear", "tool": "Get_Issue"}
 
     def test_a_non_mapping_spec_is_not_delivered(self) -> None:
-        # Total over an untrusted envelope, like every other field here.
+        # Total over an untrusted envelope, like every other field here. The
+        # payload still ships: a malformed spec costs the surface its shaping,
+        # never its body.
         emitter, recorded = self._make_emitter()
         env = self._spec_envelope()
         env["state"]["spec"] = "record"
 
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
 
-        assert "spec" not in recorded[2]["payload"]
+        assert "spec" not in recorded[2]["payload"]["state"]
+        assert recorded[2]["payload"]["state"]["data"] == {
+            "issue": {"title": "ENG-142 Fix streaming reconnect"}
+        }
         assert recorded[3]["payload"]["tier"] == "generic"
 
     def test_the_emitted_spec_is_a_copy_not_the_caller_s_mapping(self) -> None:
@@ -400,7 +414,32 @@ class TestSpecDelivery(RecordingEmitMixin):
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
         env["state"]["spec"]["title_path"] = "rewritten.after.the.fact"
 
-        assert recorded[2]["payload"]["spec"]["title_path"] == "issue.title"
+        assert recorded[2]["payload"]["state"]["spec"]["title_path"] == "issue.title"
+
+    def test_an_envelope_with_no_state_omits_the_key_entirely(self) -> None:
+        # Absent, not ``None`` or ``{}``: a present-but-empty state would read
+        # as "hydrated, and the tool returned nothing", which is a different
+        # claim from "this record does not speak to the question". The fold
+        # keys its honest-skeleton decision on exactly that distinction.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+        env["state"] = "not-a-mapping"
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        assert "state" not in recorded[2]["payload"]
+
+    def test_a_null_payload_is_not_reported_as_an_empty_body(self) -> None:
+        # ``SurfaceState.data`` is required, so its absence from the dump means
+        # the projector excluded a ``None``. Writing ``data: null`` anyway would
+        # tell the fold this surface is hydrated and empty.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+        del env["state"]["data"]
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        assert "data" not in recorded[2]["payload"]["state"]
 
 
 class TestViewDerivationRung(RecordingEmitMixin):

@@ -1,17 +1,20 @@
 // Unit tests for the pure `projectLedger` fold (PRD-B1). The cross-language
 // parity gate lives in `ledgerProjection.parity.test.ts`; this file pins the
-// fold invariants + the URI codec + the tolerate-and-ignore contract.
+// fold invariants + mount/tab identity + the tolerate-and-ignore contract.
 
+import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import {
-  ledgerTabsAsSurfaceTabs,
-  projectLedger,
-  surfaceIdForTabUri,
-  tabUriForSurface,
-} from "./ledgerProjection";
+  clearRegistry,
+  registerAdapter,
+  resolveAdapter,
+  surfaceHueForUri,
+  type SaaSRendererAdapter,
+} from "../surfaces";
+import { ledgerTabsAsSurfaceTabs, projectLedger } from "./ledgerProjection";
 
 const RUN = "a7f3c9d2e5b14f60";
 
@@ -185,32 +188,56 @@ describe("projectLedger — tolerate + ignore (adversarial)", () => {
     expect(projectLedger([bad]).surfaces.size).toBe(0);
   });
 
-  it("falls an unknown kind to the raw scheme (tier-3)", () => {
+  it("falls an unknown kind to raw (tier-3)", () => {
     const p = projectLedger([created("s1", { kind: "wormhole" })]);
-    const s = p.surfaces.get("s1");
-    expect(s?.kind).toBe("raw");
-    expect(tabUriForSurface(s!)).toBe("raw://surfaces-v2/s1");
+    expect(p.surfaces.get("s1")?.kind).toBe("raw");
   });
 });
 
-describe("URI codec", () => {
-  it("maps call → record and round-trips surfaceId", () => {
-    const p = projectLedger([created("s1", { kind: "call" })]);
-    const s = p.surfaces.get("s1")!;
-    const uri = tabUriForSurface(s);
-    expect(uri).toBe("record://surfaces-v2/s1");
-    expect(surfaceIdForTabUri(uri)).toBe("s1");
+// The projector's own id shape: `<archetype>://<connector>/<tool>/<identifier>`
+// (`SurfaceProjector._build_uri`). Every identity test below uses a real one,
+// because the whole point of the change is that this string travels intact.
+const TABLE_ID = "table://incidents/list_incidents/1532a206699e";
+const DOC_ID = "doc://notion/get_page/9f2c11";
+
+describe("mount/tab identity — the URI IS the surface id", () => {
+  it("carries the surface id through to the tab strip unchanged", () => {
+    const p = projectLedger([
+      created(TABLE_ID, { kind: "table" }),
+      derived(TABLE_ID),
+    ]);
+    const tabs = ledgerTabsAsSurfaceTabs(p);
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toEqual({
+      uri: TABLE_ID,
+      archetype: "table",
+      title: `Title ${TABLE_ID}`,
+      lastSeq: 2,
+    });
+    // The round trip that used to run through a codec is now the identity.
+    expect(p.surfaces.get(tabs[0].uri)?.surfaceId).toBe(TABLE_ID);
   });
 
-  it("keeps raw/receipt/gate on their own scheme (no adapter → tier-3)", () => {
-    for (const kind of ["raw", "receipt", "gate"] as const) {
-      const p = projectLedger([created(`s_${kind}`, { kind })]);
-      const s = p.surfaces.get(`s_${kind}`)!;
-      expect(tabUriForSurface(s)).toBe(`${kind}://surfaces-v2/s_${kind}`);
-    }
+  it("reads the archetype off the id, not off the lossier ledger kind", () => {
+    // `SurfaceKind` has no `doc`: the projector's `doc` archetype folds to
+    // `record` on the ledger. Deriving the mount scheme from `kind` therefore
+    // routed a doc surface to the record renderer; the id knows better.
+    const p = projectLedger([created(DOC_ID, { kind: "record" })]);
+    const [tab] = ledgerTabsAsSurfaceTabs(p);
+    expect(tab.uri).toBe(DOC_ID);
+    expect(tab.archetype).toBe("doc");
   });
 
-  it("round-trips surfaceId across every kind", () => {
+  it("falls back to `kind` for a surface id that is not a URI", () => {
+    // Defensive: `surface_id` is untrusted wire input. A bare id still yields a
+    // usable archetype rather than an empty scheme.
+    const p = projectLedger([created("s1", { kind: "message" })]);
+    const [tab] = ledgerTabsAsSurfaceTabs(p);
+    expect(tab.uri).toBe("s1");
+    expect(tab.archetype).toBe("message");
+  });
+
+  it("keeps every id verbatim across every kind (no rewriting, no marker)", () => {
     for (const kind of [
       "record",
       "message",
@@ -220,31 +247,83 @@ describe("URI codec", () => {
       "receipt",
       "gate",
     ] as const) {
-      const p = projectLedger([created("abc-123", { kind })]);
-      const s = p.surfaces.get("abc-123")!;
-      expect(surfaceIdForTabUri(tabUriForSurface(s))).toBe("abc-123");
+      const id = `${kind}://acme/op_${kind}/abc-123`;
+      const p = projectLedger([created(id, { kind })]);
+      const [tab] = ledgerTabsAsSurfaceTabs(p);
+      expect(tab.uri).toBe(id);
+      expect(tab.uri).not.toContain("surfaces-v2");
     }
   });
 
-  it("returns null for non-surfaces-v2 URIs (v1, garbage)", () => {
-    expect(surfaceIdForTabUri("sheet-row://legacy/xyz")).toBeNull();
-    expect(surfaceIdForTabUri("record://surfaces-v2/")).toBeNull();
-    expect(surfaceIdForTabUri("not a uri")).toBeNull();
-    expect(surfaceIdForTabUri("")).toBeNull();
+  it("agrees with surfaceHueForUri — one URI, one identity colour", () => {
+    // The tab strip and the surface card read the SAME string, so the hue the
+    // strip shows and the hue the card shows cannot drift.
+    const p = projectLedger([created(TABLE_ID, { kind: "table" })]);
+    const [tab] = ledgerTabsAsSurfaceTabs(p);
+    expect(surfaceHueForUri(tab.uri)).toBe("jade");
+    expect(surfaceHueForUri(DOC_ID)).toBe("violet");
   });
 });
 
-describe("ledgerTabsAsSurfaceTabs", () => {
-  it("adapts to the SurfaceTab strip shape (uri, archetype, title, lastSeq)", () => {
-    const p = projectLedger([created("s1", { kind: "table" }), derived("s1")]);
-    const tabs = ledgerTabsAsSurfaceTabs(p);
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]).toEqual({
-      uri: "table://surfaces-v2/s1",
-      archetype: "table",
-      title: "Title s1",
-      lastSeq: 2,
-    });
+describe("mount/tab identity — adapter resolution by scheme", () => {
+  beforeEach(() => {
+    clearRegistry();
+  });
+
+  function stubAdapter(scheme: string): SaaSRendererAdapter {
+    return {
+      scheme,
+      matches: (uri: string) => uri.startsWith(`${scheme}://`),
+      renderCurrent: () => null as unknown as ReactElement,
+      renderDiff: () => null as unknown as ReactElement,
+      metadata: { origin: "first-party", schemaVersion: 1 },
+    };
+  }
+
+  it("resolves the archetype adapter straight off a projector-minted id", () => {
+    // The registry matches on the text before `://`, and a surface id already
+    // starts with its archetype — so removing the outer wrapper cannot break
+    // resolution. This is the assertion that proves it rather than assuming it.
+    const table = stubAdapter("table");
+    registerAdapter(table);
+    const p = projectLedger([created(TABLE_ID, { kind: "table" })]);
+    const [tab] = ledgerTabsAsSurfaceTabs(p);
+    expect(resolveAdapter(tab.uri)).toBe(table);
+  });
+
+  it("routes a doc surface to the doc adapter, which the old scheme could not", () => {
+    const doc = stubAdapter("doc");
+    const record = stubAdapter("record");
+    registerAdapter(doc);
+    registerAdapter(record);
+    const p = projectLedger([created(DOC_ID, { kind: "record" })]);
+    const [tab] = ledgerTabsAsSurfaceTabs(p);
+    expect(resolveAdapter(tab.uri)).toBe(doc);
+  });
+
+  it("leaves raw/receipt/gate unmatched so tier-3 renders them honestly", () => {
+    registerAdapter(stubAdapter("table"));
+    for (const kind of ["raw", "receipt", "gate"] as const) {
+      const id = `${kind}://acme/op/1`;
+      const p = projectLedger([created(id, { kind })]);
+      const [tab] = ledgerTabsAsSurfaceTabs(p);
+      expect(resolveAdapter(tab.uri)).toBeNull();
+    }
+  });
+
+  it("does not resolve a legacy/explicit tab URI as a surface", () => {
+    // Artifact, effect-stage and legacy-replay tabs share the strip. They are
+    // distinguished by the AUTHORITY that owns them (the artifact registry, the
+    // `legacyUris` set, the hydration map), never by parsing the string — but
+    // they must not accidentally collide with an archetype adapter either.
+    registerAdapter(stubAdapter("table"));
+    for (const uri of [
+      "artifact-dataset://art_1@2",
+      "effect-stage://stage_1",
+      "sheet-row://legacy/xyz",
+    ]) {
+      expect(resolveAdapter(uri)).toBeNull();
+    }
   });
 });
 

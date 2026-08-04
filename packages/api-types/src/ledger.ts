@@ -387,29 +387,53 @@ export interface ReadExecutedPayload {
   payload_ref: string;
 }
 
+/**
+ * The renderer state a surface was created with, carried on the record that
+ * declares it.
+ *
+ * `spec` is the rung the acquisition ladder resolved synchronously — builtin,
+ * stored, or structurally inferred. `data` is the payload it was resolved
+ * AGAINST, in the same representation, which is the reason the two travel
+ * together: a spec's `items_path` is meaningless against a different encoding
+ * of the same read. `source` names the tool this came from, and is the only
+ * thing a spec-less surface can use to say what it is showing.
+ *
+ * Every member is optional to a consumer. The later model refinement does NOT
+ * arrive here — it rides its own `surface_spec_generated` event and supersedes
+ * `spec` by surface id — and replay of a run recorded before this field existed
+ * carries no state at all, resolving its payload through `payload_ref` instead.
+ * So absence means "not carried", never "the surface is empty".
+ *
+ * `spec` and `data` are typed `unknown` on purpose. `SurfaceSpec` is a
+ * presentation contract owned by `@0x-copilot/surface-renderers` and the ledger
+ * types must not depend on it to state that a spec was carried; `data` is
+ * untrusted connector output. Consumers narrow both at the point of render,
+ * which is where a malformed value should degrade to the generic view.
+ */
+export interface SurfaceCreatedState {
+  spec?: unknown;
+  source?: { server: string; tool: string };
+  data?: unknown;
+}
+
 export interface SurfaceCreatedPayload {
   v: 1;
   surface_id: string;
   kind: SurfaceKind;
+  /**
+   * Provenance in the ledger's own vocabulary. `state.source` states the same
+   * two facts in the renderer's (`{server, tool}`).
+   */
   source: LedgerOpRef;
   title: string;
-  payload_ref: string;
   /**
-   * The spec the acquisition ladder resolved synchronously for this surface —
-   * the builtin, stored, or structurally-inferred rung. Absent when the ladder
-   * produced none, and absent on replay of runs recorded before this field
-   * existed, so treat it as optional rather than as "the surface is unshaped".
-   *
-   * The later model refinement does NOT arrive here; it rides its own
-   * `surface_spec_generated` event and supersedes this value by surface id.
-   *
-   * Typed as `unknown` on purpose. `SurfaceSpec` is a presentation contract
-   * owned by `@0x-copilot/surface-renderers`, and the ledger types must not
-   * take a dependency on it to state that a spec was carried. Consumers narrow
-   * it at the point of render, which is where a malformed spec should degrade
-   * to the generic view.
+   * Where this surface's payload was persisted, as `call:<call_id>`. Kept as
+   * provenance — the receipt and audit folds read it — and it is how a historic
+   * run with no carried `state` still resolves its body. It is no longer the
+   * only way to reach the payload, which is what it used to be.
    */
-  spec?: unknown;
+  payload_ref: string;
+  state?: SurfaceCreatedState;
 }
 
 export interface ViewDerivedPayload {

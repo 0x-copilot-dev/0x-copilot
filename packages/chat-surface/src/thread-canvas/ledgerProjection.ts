@@ -306,51 +306,45 @@ export interface LedgerProjection {
 }
 
 // ---------------------------------------------------------------------------
-// URI codec — mount/tab URIs. `<scheme>://surfaces-v2/<surface_id>`.
+// Mount/tab identity
 // ---------------------------------------------------------------------------
-
-const SURFACES_V2_MARKER = "surfaces-v2";
-
-const KNOWN_KINDS: ReadonlySet<string> = new Set<LedgerSurfaceKind>([
-  "record",
-  "message",
-  "table",
-  "call",
-  "raw",
-  "receipt",
-  "gate",
-]);
-
-/** kind → mount scheme. 1:1 except `call → record` (FR-A3): a call surface
- *  renders through the RecordRenderer. `raw`/`receipt`/`gate` keep their own
- *  scheme so NO adapter matches — TcSurfaceMount's tier-3 fallback renders them
- *  honestly (D29), no mount branch. An unknown kind falls to `raw` (tier-3). */
-function schemeForKind(kind: string): string {
-  if (kind === "call") return "record";
-  if (KNOWN_KINDS.has(kind)) return kind;
-  return "raw";
-}
-
-/** Mount/tab URI for a surface: `<scheme>://surfaces-v2/<surface_id>`. */
-export function tabUriForSurface(surface: LedgerSurface): string {
-  return `${schemeForKind(surface.kind)}://${SURFACES_V2_MARKER}/${surface.surfaceId}`;
-}
-
-/** Recover the `surface_id` from a surfaces-v2 tab/mount URI (the path tail
- *  after the last `/`), scheme-independent so it works for every kind. Returns
- *  `null` for a URI that is not a surfaces-v2 URI (v1 URIs, garbage) — the host
- *  uses this to build `resolveSurfaceState`. Round-trips:
- *  `surfaceIdForTabUri(tabUriForSurface(s)) === s.surfaceId`. */
-export function surfaceIdForTabUri(uri: string): string | null {
-  if (typeof uri !== "string") return null;
-  const schemeIdx = uri.indexOf("://");
-  if (schemeIdx <= 0) return null;
-  const rest = uri.slice(schemeIdx + 3);
-  const marker = `${SURFACES_V2_MARKER}/`;
-  if (!rest.startsWith(marker)) return null;
-  const id = rest.slice(marker.length);
-  return id.length > 0 ? id : null;
-}
+//
+// A surface's mount/tab URI IS its `surfaceId`. There is no codec, because
+// there is nothing to encode: the id the projector mints is ALREADY a URI —
+// `<archetype>://<connector-slug>/<tool>/<identifier>`, e.g.
+// `table://incidents/list_incidents/1532a206699e` (`SurfaceProjector._build_uri`).
+//
+// This module used to wrap that URI in a second one,
+// `<scheme-for-kind>://surfaces-v2/<surface_id>`, and slice the id back out to
+// hydrate content. Two things were wrong with it:
+//
+//  1. **A wrong renderer, live.** The outer scheme was derived from the
+//     ledger's `kind`, and `kind` is a LOSSY projection of the archetype —
+//     `SurfaceArchetype.BOARD → SurfaceKind.TABLE`, and doc / event / timeline /
+//     dashboard / file / form all → `RECORD` (`surfaces_v2/emitter.py`). So a
+//     `doc://notion/get_page/…` surface mounted as `record://surfaces-v2/…` and
+//     the registry handed it to the RECORD adapter — not the one the spec was
+//     authored for. Mounting on the id's own scheme routes a `doc://` surface
+//     to the doc renderer and a `board://` one to the board renderer, which is
+//     what the projector chose in the first place.
+//  2. **A second identity across the state join.** Every consumer — state,
+//     provenance, view tier, stage — keys on `surface_id`, so each had to
+//     decode first, and a decode that returns `null` is indistinguishable from
+//     "this surface has no data": the card reads "the tool returned an empty
+//     payload" over a payload that arrived intact. Be precise about blame,
+//     though — the decode was arithmetically total for a well-formed wrapped
+//     id, so it is NOT what emptied the card on the live run. That was
+//     FINDINGS §4.7a/§4.7b, both backend-side (`payload_ref` pinned to
+//     `call:unattributed`, and a spec inferred from the artifact half while the
+//     data was served from the content half). What removing the wrapper buys is
+//     that the client can no longer contribute a failure of that shape at all.
+//
+// Scheme resolution therefore still works, unchanged: `SurfaceRegistry`
+// matches on the text before `://`, and that is now the archetype rather than a
+// re-derivation of it. Consumers that must ask "is this tab a surface at all?"
+// (a tab strip also holds artifact / receipt / effect-stage / legacy-replay
+// URIs) ask the AUTHORITY — `LedgerProjection.surfaces`, `projectProvenance`,
+// or the hydration map — never a parse of the string.
 
 // ---------------------------------------------------------------------------
 // Fold
@@ -485,6 +479,16 @@ function normalizeAuthState(value: unknown): LedgerGateAuthState {
     ? (value as LedgerGateAuthState)
     : "missing";
 }
+
+const KNOWN_KINDS: ReadonlySet<string> = new Set<LedgerSurfaceKind>([
+  "record",
+  "message",
+  "table",
+  "call",
+  "raw",
+  "receipt",
+  "gate",
+]);
 
 function normalizeKind(value: unknown): LedgerSurfaceKind {
   // Unknown / missing kind is tolerated as `raw` (tier-3, honest — §7).
@@ -1286,14 +1290,26 @@ function safeLedgerId(runId: string, seq: number): string {
 // Adapters — bridge to the shared strip shape + the cross-language parity snapshot
 // ---------------------------------------------------------------------------
 
+/** A surface's archetype: the scheme its own id carries (`table://…` → `table`).
+ *
+ *  Read off the id rather than re-derived from `kind`, because `kind` is the
+ *  lossy projection of the archetype (`SurfaceKind` has no `doc` or `board`) and
+ *  two producers of one fact is how the strip's label came to disagree with the
+ *  renderer the mount resolved. Falls back to `kind` for an id that is not a
+ *  URI — the fold is total over an untrusted `surface_id`. */
+function archetypeOf(surface: LedgerSurface): string {
+  const separator = surface.surfaceId.indexOf("://");
+  return separator > 0 ? surface.surfaceId.slice(0, separator) : surface.kind;
+}
+
 /** Adapt the ledger tabs to the existing {@link SurfaceTab} strip shape so the
  *  cockpit's pin/close/`activeUri` logic is shared unchanged with the v1 path. */
 export function ledgerTabsAsSurfaceTabs(
   p: LedgerProjection,
 ): readonly SurfaceTab[] {
   return p.tabs.map((surface) => ({
-    uri: tabUriForSurface(surface),
-    archetype: schemeForKind(surface.kind),
+    uri: surface.surfaceId,
+    archetype: archetypeOf(surface),
     title: surface.title,
     lastSeq: surface.lastSeq,
   }));

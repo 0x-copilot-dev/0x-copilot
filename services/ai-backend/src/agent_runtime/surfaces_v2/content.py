@@ -1,18 +1,34 @@
-"""Declared-reference hydration for v2 surfaces (PRD-B3 D8).
+"""Surface content resolution for the v2 canvas (PRD-B3 D8 + the floor PRD).
 
-The metadata fold owns a surface's identity and ``payload_ref``.  This module
-only resolves that declared reference against a production ``tool_result``
-event.  It deliberately does not inspect historical presentation envelopes or
-invent a surface-shaped body from arbitrary event fields.
+A surface's renderer state — ``{spec?, source?, data}`` — is **carried on the
+``surface.created`` record that declares it**. This module's main job is to read
+it back out and merge the one upgrade that legitimately arrives later (a
+model-refined spec on ``surface_spec_generated``).
 
-That makes hydration replayable, scope-preserving, and independent of the old
-v1 renderer path: a missing or malformed reference simply leaves the surface
-unhydrated for the client to show its honest raw/loading state.
+That is a deliberate reversal. The state used to be shipped in pieces and
+rejoined here: the spec from one event, the payload from another via
+``payload_ref`` → ``call_id`` → ``tool_result.output``. Four hops had to work
+for one object to arrive, and every one of them broke independently in
+production — the live path cannot obtain a tool call id at all, and the payload
+the run persists is a different *representation* of the read than the one the
+spec was inferred from. Rejoining two registers of one payload by an id nobody
+holds is not a hydration strategy; carrying the object is.
+
+The reference path survives for **historic replay only**, where it is the only
+thing that exists: runs recorded before the state was carried have a
+``surface.created`` with a real ``call_id`` in ``payload_ref`` and their payload
+sitting in a sibling ``tool_result``. That pairing is pinned by the frozen
+cross-language corpus ``legacy_v2_replay_corpus.json``, so it is contract, not
+convenience. Carried state always wins over it.
+
+Either way this stays replayable, scope-preserving, and free of the retired v1
+presentation envelope: a surface with neither carried state nor a resolvable
+reference is simply left unhydrated for the client to show its honest raw or
+loading state, never a body invented from arbitrary event fields.
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping
 
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
@@ -29,8 +45,11 @@ class _Key:
     CALL_ID = "call_id"
     OUTPUT = "output"
     PAYLOAD_REF = "payload_ref"
-    # Read from BOTH ``surface.created`` (the ladder's resolved spec) and
-    # ``surface_spec_generated`` (the model's later refinement of it).
+    #: The carried renderer state on ``surface.created`` — this module's
+    #: primary input.
+    STATE = "state"
+    #: Read from ``surface_spec_generated`` (the model's later refinement) and,
+    #: inside ``state``, from ``surface.created`` (the ladder's resolved spec).
     SPEC = "spec"
     SURFACE_ID = "surface_id"
     # ``surface_spec_generated`` predates v2 ledger events and publishes the
@@ -61,89 +80,69 @@ class _StateKey:
     TOOL = "tool"
 
 
-class _McpContentDecoder:
-    """Recover the renderer's payload from the MODEL-facing persisted output.
+class _CarriedState:
+    """Read the renderer state off the record that declared the surface.
 
-    A surface binds its spec to the *structured* half of an MCP result — the
-    projector inferred ``items_path: "incidents"`` from ``{"incidents": [...]}``.
-    What the run persists on ``tool_result`` is the half the MODEL read, and for
-    an MCP tool that is a content-block envelope whose text happens to be the
-    same JSON, encoded twice:
-
-        {"content": "[{\\"id\\": \\"lc_…\\", \\"text\\": \\"{\\\\\\"incidents\\\\\\": …}\\"}]"}
-
-    Binding a spec against that shape resolves nothing, so a live surface
-    rendered its columns over zero rows. The two halves are the same data in two
-    registers; this turns the persisted one back into the register the spec was
-    written against.
-
-    Total by construction. Anything it does not recognise is returned unchanged,
-    because the honest failure here is "render the payload as persisted", never
-    an exception on a read that already succeeded.
+    Rebuilt member by member rather than copied wholesale, for the same reason
+    the transport allow-list rebuilds it: this becomes what a user is shown, and
+    a key nobody declared must not ride through to a renderer just because it
+    was on a trusted event type. Total over junk — every member degrades on its
+    own and an unreadable state is simply no state.
     """
 
-    _CONTENT = "content"
-    _TEXT = "text"
-    #: Nesting is bounded — one envelope, one block, one JSON body. A payload
-    #: that needs more than this is not the shape described above.
-    _MAX_BLOCKS = 32
-
     @classmethod
-    def decode(cls, output: object) -> object:
-        """Return the structured payload behind an MCP content envelope."""
-
-        if not isinstance(output, Mapping) or set(output) != {cls._CONTENT}:
-            return output
-        blocks = cls._as_blocks(output[cls._CONTENT])
-        if blocks is None:
-            return output
-        for block in blocks[: cls._MAX_BLOCKS]:
-            if not isinstance(block, Mapping):
-                continue
-            decoded = cls._json(block.get(cls._TEXT))
-            if isinstance(decoded, Mapping):
-                return decoded
-        return output
-
-    @classmethod
-    def _as_blocks(cls, value: object) -> list[object] | None:
-        """The block list, whether it was persisted as a list or as JSON text."""
-
-        if isinstance(value, list):
-            return list(value)
-        parsed = cls._json(value)
-        return list(parsed) if isinstance(parsed, list) else None
+    def read(cls, payload: Mapping[str, object]) -> dict[str, object] | None:
+        state = payload.get(_Key.STATE)
+        if not isinstance(state, Mapping):
+            return None
+        carried: dict[str, object] = {}
+        spec = state.get(_StateKey.SPEC)
+        if isinstance(spec, Mapping):
+            carried[_StateKey.SPEC] = dict(spec)
+        source = cls._source(state.get(_StateKey.SOURCE))
+        if source is not None:
+            carried[_StateKey.SOURCE] = source
+        if _StateKey.DATA in state:
+            carried[_StateKey.DATA] = state[_StateKey.DATA]
+        return carried or None
 
     @staticmethod
-    def _json(value: object) -> object | None:
-        if not isinstance(value, str):
+    def _source(value: object) -> dict[str, str] | None:
+        """The carried ``{server, tool}`` pair, or ``None`` if half-named."""
+
+        if not isinstance(value, Mapping):
             return None
-        try:
-            return json.loads(value)
-        except (ValueError, TypeError):
+        server = SurfaceContentProjection._text(value.get(_StateKey.SERVER))
+        tool = SurfaceContentProjection._text(value.get(_StateKey.TOOL))
+        if server is None or tool is None:
             return None
+        return {_StateKey.SERVER: server, _StateKey.TOOL: tool}
 
 
 class SurfaceContentProjection:
-    """Resolve declared surface references into ``{data, spec?, source?}`` state.
+    """Resolve surfaces into the ``{spec?, source?, data}`` state renderers read.
 
-    ``source`` is the read's own ``surface.created`` provenance re-spelled in the
-    renderer's vocabulary — never inferred from the payload, and never invented
-    for a subject the caller did not declare.
+    Three inputs, in precedence order:
 
-    ``spec`` has two sources, both declared on the ledger by the runtime and
-    both keyed on the same surface identity: the resolved spec carried by
-    ``surface.created`` (the builtin / store / inferred rungs, which resolve
-    backend-side with no latency), and the later ``surface_spec_generated``
-    refinement. Sourcing it from generation alone is what left a matched
-    curated spec stranded backend-side.
+    * the state **carried** on ``surface.created`` — the projector's own object,
+      spec and payload in the register they were resolved together in;
+    * for historic runs that carry none, the declared ``payload_ref`` resolved
+      against this run's ``tool_result`` (see the module docstring);
+    * the later ``surface_spec_generated`` refinement, overlaid on whichever of
+      those produced the surface — the model refines a delivered spec, it never
+      authors from a blank page, and it never un-delivers one.
+
+    ``source`` is the read's own provenance as the runtime recorded it — never
+    inferred from the payload, because a payload that could name its own
+    provenance could claim to be any tool.
 
     ``surface_payload_refs`` is normally supplied from ``SurfaceStoreState`` so
     the HTTP endpoint explicitly declares which subjects it is authorized to
-    hydrate.  The optional structural fallback only reads the same durable
-    ``surface.created`` records; it exists for coordinators that already have a
-    replay batch but not the folded state.  Neither path falls back to retired
-    presentation envelopes.
+    hydrate; the optional structural fallback reads the same durable
+    ``surface.created`` records. Note what that argument now is: purely an
+    **authorization filter** naming the subjects this caller may see. It was
+    also the data path, which is why an unresolvable reference used to mean an
+    empty surface rather than merely an unnamed one.
     """
 
     @staticmethod
@@ -169,8 +168,8 @@ class SurfaceContentProjection:
             return {}
 
         output_by_call: dict[str, object] = {}
-        spec_by_surface: dict[str, Mapping[str, object]] = {}
-        source_by_surface: dict[str, dict[str, str]] = {}
+        carried_by_surface: dict[str, dict[str, object]] = {}
+        generated_by_surface: dict[str, Mapping[str, object]] = {}
         for event in ordered:
             event_type, payload = SurfaceContentProjection._fields(event)
             if event_type == _EventType.TOOL_RESULT:
@@ -184,63 +183,63 @@ class SurfaceContentProjection:
                     payload.get(_Key.SURFACE_ID)
                 )
                 if surface_id is not None and surface_id in refs:
-                    source = SurfaceContentProjection._state_source(payload)
-                    if source is not None:
-                        source_by_surface[surface_id] = source
-                    # The ladder's builtin / store / inferred rungs all resolve
-                    # backend-side and ride the record that declares the
-                    # surface. Reading only the generated branch below is what
-                    # made a matched curated spec vanish between the projector
-                    # and the screen, while ``view.derived`` recorded the
-                    # surface as shaped.
-                    spec = payload.get(_Key.SPEC)
-                    if isinstance(spec, Mapping):
-                        spec_by_surface[surface_id] = dict(spec)
+                    carried = _CarriedState.read(payload)
+                    if carried is not None:
+                        carried_by_surface[surface_id] = carried
+                    elif surface_id not in carried_by_surface:
+                        # Historic record with no carried state. Keep a place
+                        # for it so the reference path below can still name the
+                        # surface's provenance from the ledger's own spelling.
+                        legacy = SurfaceContentProjection._legacy_source(payload)
+                        if legacy is not None:
+                            carried_by_surface[surface_id] = {_StateKey.SOURCE: legacy}
             elif event_type == _EventType.SURFACE_SPEC_GENERATED:
-                # The model's refinement of an already-delivered spec. Later in
-                # the stream than the ``surface.created`` that declared the
-                # subject, so last-writer-wins is the ladder's own order: the
-                # upgrade replaces the rung it improved on, and never the
-                # reverse.
+                # The model's refinement of an already-delivered spec, keyed on
+                # the same surface identity. Held apart from the delivered state
+                # rather than merged in stream order: a repeat read of the same
+                # record re-emits ``surface.created``, and that must refresh the
+                # DATA without demoting the shape back down the ladder.
                 surface_id = SurfaceContentProjection._text(
                     payload.get(_Key.SURFACE_URI)
                 ) or SurfaceContentProjection._text(payload.get(_Key.SURFACE_ID))
                 spec = payload.get(_Key.SPEC)
                 if surface_id in refs and isinstance(spec, Mapping):
-                    spec_by_surface[surface_id] = dict(spec)
+                    generated_by_surface[surface_id] = dict(spec)
 
         content: dict[str, dict[str, object]] = {}
         for surface_id, payload_ref in refs.items():
-            call_id = SurfaceContentProjection._call_id_from_ref(payload_ref)
-            state: dict[str, object] = {}
-            if call_id is not None and call_id in output_by_call:
-                state[_StateKey.DATA] = _McpContentDecoder.decode(
-                    output_by_call[call_id]
-                )
-            spec = spec_by_surface.get(surface_id)
-            if spec is not None:
-                state[_StateKey.SPEC] = dict(spec)
-            if state:
+            state = dict(carried_by_surface.get(surface_id, {}))
+            if _StateKey.DATA not in state:
+                # Historic replay only — see the module docstring.
+                call_id = SurfaceContentProjection._call_id_from_ref(payload_ref)
+                if call_id is not None and call_id in output_by_call:
+                    state[_StateKey.DATA] = output_by_call[call_id]
+            generated = generated_by_surface.get(surface_id)
+            if generated is not None:
+                state[_StateKey.SPEC] = dict(generated)
+            if _StateKey.DATA in state or _StateKey.SPEC in state:
                 # Provenance rides only on a state that already has content.
                 # A ``source``-only state would flip an unhydrated surface from
                 # "no content event yet" (the honest skeleton) to "hydrated with
-                # nothing in it", which is the fabricated body this module exists
-                # to avoid.
-                source = source_by_surface.get(surface_id)
-                if source is not None:
-                    state[_StateKey.SOURCE] = dict(source)
+                # nothing in it", which is the fabricated body this module
+                # exists to avoid.
                 content[surface_id] = state
         return content
 
     @staticmethod
-    def _state_source(payload: Mapping[str, object]) -> dict[str, str] | None:
+    def _legacy_source(payload: Mapping[str, object]) -> dict[str, str] | None:
         """Translate ``surface.created``'s ``source {connector, op}`` into the
         renderer contract's ``source {server, tool}``.
 
-        This is the only thing that can name the tool on a spec-less surface:
+        Only for records that carry no ``state`` of their own: current emission
+        puts this pair inside the state, produced once, so translating it a
+        second time here would re-open the split where one tool could be served
+        under two names depending which path a client read.
+
+        This is the only thing that can name the tool on a spec-less surface —
         the tier-3 note reads ``state.source.tool``, and a generic surface has
         no spec to read it from. Returns ``None`` unless BOTH members resolve to
-        non-blank strings — a half-named source would put "unknown" in front of
+        non-blank strings: a half-named source would put "unknown" in front of
         the user in a register that says "this is what the system knows".
         """
 
