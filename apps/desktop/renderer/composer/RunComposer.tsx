@@ -9,6 +9,7 @@ import {
 import {
   AssistantComposer,
   ComposerConnectorsButton,
+  modelSelectionForId,
   parseTransportError,
   type CompleteAttachment,
   type ComposerConnectorsPort,
@@ -16,8 +17,6 @@ import {
   type RunStartRequest,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
-
-import { modelSelectionForId } from "./desktopModelCatalog";
 import { useDesktopComposerBypass } from "./useDesktopComposerBypass";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";

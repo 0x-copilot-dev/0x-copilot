@@ -66,8 +66,17 @@ host. A duplicated projection is exactly how desktop kept reading stale
 `metadata.*` keys for chat preview/model/pinned while web migrated to the
 first-class fields. Pure api-types projections therefore live here: chats in
 `src/projections/` (`toChatArchiveRow`), activity in
-`src/destinations/activity/activityProjection.ts` (PRD-04). When you change a
-destination's props, update BOTH binders.
+`src/destinations/activity/activityProjection.ts` (PRD-04), the composer's model
+catalog in `src/composer/modelCatalog.ts`. When you change a destination's props,
+update BOTH binders.
+
+`modelCatalog.ts` is the cautionary tale for why this rule is not pedantry. Both
+hosts had their own `defaultSelectedModelId`; the desktop copy learned to rank by
+the backend's `tier` (a per-provider preferred rung, never an off-ladder
+specialty row) while the web FTUE copy stayed "first configured row in catalog
+order" — so the same catalog opened an Anthropic-only user on Sonnet in one host
+and on Claude Fable 5, the dearest model Anthropic sells, in the other. Neither
+copy was buggy in isolation; the duplication was the bug.
 
 ## Module map
 

@@ -19,6 +19,7 @@ import {
   createFirstRunLocalModelsPort,
   createModelsPort,
   createProviderKeysPort,
+  modelSelectionForId,
   type ProviderKeysPort,
   firstRunAckAction,
   firstRunAckLines,
@@ -47,7 +48,6 @@ import {
   skillInstructionPrompt,
 } from "./composer/composerPrompts";
 import { createDesktopAttachmentAdapter } from "./composer/desktopAttachmentAdapter";
-import { modelSelectionForId } from "./composer/desktopModelCatalog";
 import {
   AIRDROP_CLAIMS_CSV_ATTACHMENT_ID,
   resolveAirdropClaimsCsv,
