@@ -12,6 +12,7 @@ import {
   type ArtifactKind,
   type ArtifactRevision,
 } from "./ledger";
+import { wireKeys } from "./wireKeys";
 
 export interface ArtifactCreateMultipartFields {
   readonly kind: ArtifactKind;
@@ -92,25 +93,6 @@ function hasOnlyKeys(
   allowed: ReadonlySet<string>,
 ): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
-}
-
-/**
- * The wire keys of `T`, as a set the compiler forces to stay complete.
- *
- * `hasOnlyKeys` is a CLOSED check, so a field the server already serves but
- * this file has not enumerated rejects the WHOLE response. That is not a
- * theoretical risk — `accent` was added to `Artifact` (and to its Python twin)
- * without being added to the key list here, and from then on every
- * `GET /v1/agent/artifacts/{id}` failed the guard, so the Studio canvas never
- * left its loading placeholder for any artifact of any kind.
- *
- * Typing the source as `Record<keyof T, true>` makes the omission a compile
- * error instead: adding a field to one of these interfaces stops the build
- * until its key is listed. Prefer this over a bare `new Set([...])` for every
- * guard in this file — the set literal is exactly what drifted.
- */
-function wireKeys<T>(keys: Record<keyof T, true>): ReadonlySet<string> {
-  return new Set(Object.keys(keys));
 }
 
 const ARTIFACT_KEYS = wireKeys<Artifact>({
