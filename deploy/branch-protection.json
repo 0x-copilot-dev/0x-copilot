@@ -148,7 +148,8 @@
             "required_status_checks": [
               { "context": "lint-and-secrets" },
               { "context": "tenants-lint" },
-              { "context": "repo-gates" }
+              { "context": "repo-gates" },
+              { "context": "host-typecheck" }
             ]
           }
         }
