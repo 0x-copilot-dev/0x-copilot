@@ -127,6 +127,12 @@ export interface ThreadCanvasProps {
   readonly activeUri: string;
   readonly onActivateTab: (uri: string) => void;
   readonly onCloseTab: (uri: string) => void;
+  /**
+   * Resume auto-follow — forwarded verbatim to the strip, which renders its
+   * "Follow live" chip only while this is supplied. The host decides WHEN that
+   * is (a held pin over a still-producing run); the canvas just plumbs it.
+   */
+  readonly onFollowLive?: () => void;
   /** Transport for surface mount + provider-less callsites. */
   readonly transport: Transport;
   /** Pending diff overlay for the active surface. */
@@ -268,6 +274,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     activeUri,
     onActivateTab,
     onCloseTab,
+    onFollowLive,
     transport,
     pendingDiff,
     onApprove,
@@ -500,6 +507,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
             activeUri={activeUri}
             onActivate={onActivateTab}
             onClose={onCloseTab}
+            {...(onFollowLive === undefined ? {} : { onFollowLive })}
           />
         </div>
       ) : null}

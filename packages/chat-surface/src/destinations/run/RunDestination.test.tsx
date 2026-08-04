@@ -1843,6 +1843,13 @@ describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
     return transport;
   }
 
+  /** The tab element for `uri`, from the live strip. */
+  function surfaceTab(uri: string): HTMLElement {
+    return screen
+      .getByTestId("tc-tabs")
+      .querySelector(`[data-uri="${uri}"]`) as HTMLElement;
+  }
+
   it("auto-opens the newest surface as tabs stream in", async () => {
     const transport = await renderWithSession();
     act(() => {
@@ -1852,10 +1859,13 @@ describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
     await waitFor(() => expect(surfaceTabCount()).toBe(2));
     // Newest surface (b) auto-opens; no pin → no follow-live affordance.
     expect(activeSurfaceTabUri()).toBe("record://b");
-    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    expect(screen.queryByTestId("tc-tabs-follow-live")).toBeNull();
+    // …and it carries the live pulse: this is where the next surface lands.
+    expect(surfaceTab("record://b").getAttribute("data-live")).toBe("true");
+    expect(surfaceTab("record://a").getAttribute("data-live")).toBe("false");
   });
 
-  it("pins on a manual tab click and un-pins via follow live", async () => {
+  it("pins on a manual tab click and un-pins via the strip's follow-live chip", async () => {
     const transport = await renderWithSession();
     act(() => {
       transport.emit(surfaceToolResult("record://a", "sa"));
@@ -1864,24 +1874,130 @@ describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
     await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
 
     // Click the older tab → pins it (active follows the click, not the newest).
-    const olderTab = screen
-      .getByTestId("tc-tabs")
-      .querySelector('[data-uri="record://a"]') as HTMLElement;
     act(() => {
-      fireEvent.click(olderTab);
+      fireEvent.click(surfaceTab("record://a"));
     });
     expect(activeSurfaceTabUri()).toBe("record://a");
-    // A newer surface exists → the "follow live" affordance appears.
-    expect(
-      screen.getByTestId("run-follow-live-banner").getAttribute("role"),
-    ).toBe("status");
+    // A newer surface exists AND the run is live → the chip appears IN the
+    // strip. It is deliberately not a banner above the canvas: mounting one
+    // there reflowed the surface being read on a plain tab click.
+    expect(screen.getByTestId("tc-tabs-follow-live")).toBeTruthy();
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    // The pinned tab reports the paused state continuously…
+    expect(surfaceTab("record://a").getAttribute("data-pinned")).toBe("true");
 
     // Follow live → un-pins; active snaps back to the newest surface.
     act(() => {
-      fireEvent.click(screen.getByTestId("run-follow-live"));
+      fireEvent.click(screen.getByTestId("tc-tabs-follow-live"));
     });
-    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    expect(screen.queryByTestId("tc-tabs-follow-live")).toBeNull();
     expect(activeSurfaceTabUri()).toBe("record://b");
+  });
+
+  it("releases the pin from the tab's own pin glyph", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+    act(() => {
+      fireEvent.click(surfaceTab("record://a"));
+    });
+
+    // The glyph REPLACES the close button, so it has to be the release control
+    // itself — otherwise a pinned tab has no way out once the run goes terminal
+    // and the chip stops rendering.
+    expect(screen.queryByTestId("tc-tabs-close-record://a")).toBeNull();
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-tabs-unpin-record://a"));
+    });
+    expect(activeSurfaceTabUri()).toBe("record://b");
+    expect(screen.queryByTestId("tc-tabs-follow-live")).toBeNull();
+  });
+
+  // The regression this whole change exists for. `showFollowLive` never read run
+  // status, so on a FINISHED run — no live tail, nothing left to follow —
+  // clicking between two completed artifacts raised a full-bleed banner saying
+  // "the run has moved on" and offered to follow a stream that had ended.
+  it("shows no follow-live affordance once the run is terminal", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    act(() => {
+      transport.emit(event({ event_type: "run_completed" }));
+    });
+
+    act(() => {
+      fireEvent.click(surfaceTab("record://a"));
+    });
+    // Switching tabs still works — it is just tab switching now.
+    expect(activeSurfaceTabUri()).toBe("record://a");
+    expect(screen.queryByTestId("tc-tabs-follow-live")).toBeNull();
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    // No pulse either: a terminal run cannot land work anywhere.
+    expect(surfaceTab("record://b").getAttribute("data-live")).toBe("false");
+    // …and NO pin chrome. The glyph is the release control, so rendering it
+    // here — where the chip is correctly suppressed — would leave a button
+    // wired to an undefined `onFollowLive`, i.e. a dead control that has also
+    // taken the tab's only close button away.
+    expect(surfaceTab("record://a").getAttribute("data-pinned")).toBe("false");
+    expect(screen.queryByTestId("tc-tabs-unpin-record://a")).toBeNull();
+    expect(screen.getByTestId("tc-tabs-close-record://a")).toBeTruthy();
+  });
+
+  // The invariant behind the one-derivation rule: the pin glyph and the chip are
+  // two views of a single fact, so neither may ever render without the other.
+  it("never renders a pin glyph without its follow-live chip", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    const glyphAndChipAgree = (): boolean => {
+      const glyphs = screen
+        .getByTestId("tc-tabs")
+        .querySelectorAll('[data-pinned="true"]').length;
+      const chips =
+        screen.queryByTestId("tc-tabs-follow-live") === null ? 0 : 1;
+      return glyphs > 0 === chips > 0;
+    };
+
+    expect(glyphAndChipAgree()).toBe(true); // live, unpinned
+    act(() => {
+      fireEvent.click(surfaceTab("record://a"));
+    });
+    expect(glyphAndChipAgree()).toBe(true); // live, pinned to the older tab
+    act(() => {
+      transport.emit(event({ event_type: "run_completed" }));
+    });
+    expect(glyphAndChipAgree()).toBe(true); // terminal, pin released
+  });
+
+  // Clicking the surface we would auto-follow to anyway pauses nothing the user
+  // can perceive. It used to still count as a pin, which silently swallowed that
+  // tab's close button (`TcTabs` hides `×` on `pinned`) with no visible cause.
+  it("clicking the newest tab reports no pin and keeps its close button", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    act(() => {
+      fireEvent.click(surfaceTab("record://b"));
+    });
+    expect(activeSurfaceTabUri()).toBe("record://b");
+    expect(surfaceTab("record://b").getAttribute("data-pinned")).toBe("false");
+    expect(screen.getByTestId("tc-tabs-close-record://b")).toBeTruthy();
+    expect(screen.queryByTestId("tc-tabs-follow-live")).toBeNull();
   });
 
   it("renders the on-surface diff controls and POSTs the decision on approve", async () => {

@@ -34,16 +34,7 @@ import {
   type TcChatMessage,
 } from "../../thread-canvas/TcChat";
 import { projectChatMessages } from "./chatProjection";
-
-// A run is still producing output in these states; anything else is terminal.
-// Mirrors useRunSession's NON_TERMINAL_STATUSES (kept local to avoid a
-// cross-module coupling on an internal const).
-const ACTIVE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
-  "queued",
-  "running",
-  "waiting_for_approval",
-  "cancelling",
-]);
+import { isRunActive } from "./runActivity";
 
 // WC-P4 (AD-9): stable id for the optimistic user echo. The projection never
 // emits user turns and the run stream carries none, so a freshly sent user
@@ -142,11 +133,7 @@ export function useRunTranscript(
   // On terminal, re-seed so history absorbs the just-persisted reply, then mark
   // the run settled so the live overlay can drop without a duplicate.
   useEffect(() => {
-    if (
-      runId === null ||
-      runStatus === null ||
-      ACTIVE_RUN_STATUSES.has(runStatus)
-    ) {
+    if (runId === null || isRunActive(runStatus)) {
       return;
     }
     let cancelled = false;
