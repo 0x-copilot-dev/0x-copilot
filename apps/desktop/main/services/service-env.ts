@@ -364,19 +364,23 @@ export function buildServiceEnv(
   }
   env.PYTHONPATH = pythonPathValue(inputs.pathDelimiter);
   env.PYTHONUNBUFFERED = "1";
-  // Preview connectors ON by default in the desktop app; the passthrough above
-  // still lets an operator set "false" to turn them off.
+  // Preview connectors OFF by default in the desktop app; the passthrough above
+  // still lets an operator set "true" to turn them on.
   //
-  // The flag was written for a multi-tenant deployment where an admin decides
-  // what their users may reach. On a single-user desktop the user IS the
-  // operator, so defaulting it off meant the only person who could flip it was
-  // also the person who would have to discover an undocumented env var to do
-  // it — which is indistinguishable from the feature not existing. Gmail and
-  // Drive point at documented Google endpoints and now authorize with the
-  // app's own OAuth client, so there is nothing left for the gate to protect
-  // against.
+  // This defaulted ON, reasoning that on a single-user desktop the user IS the
+  // operator, and that Gmail and Drive "now authorize with the app's own OAuth
+  // client, so there is nothing left for the gate to protect against". That
+  // premise no longer holds. Both profiles request Google RESTRICTED scopes
+  // (gmail.readonly, gmail.compose, drive.readonly), and Google will not
+  // authorize those for our client until OAuth verification plus a CASA
+  // security assessment completes. Until it does, the only reachable outcome
+  // of Connect is Google's own rejection at the consent screen — which is
+  // precisely what this gate was written to prevent a user from walking into.
+  //
+  // Flip back to "true" once CASA clears, or set the env var to exercise the
+  // flow against a client already verified for those scopes.
   env.DESKTOP_CONNECTORS_ALLOW_PREVIEW =
-    inputs.processEnv.DESKTOP_CONNECTORS_ALLOW_PREVIEW?.trim() || "true";
+    inputs.processEnv.DESKTOP_CONNECTORS_ALLOW_PREVIEW?.trim() || "false";
   // OTel kill switch: the desktop runs on a laptop with no collector. Without
   // it, ai-backend's TelemetryBootstrap fails closed under *_ENVIRONMENT=production
   // ("OTEL_EXPORTER_OTLP_ENDPOINT must be set in production").
