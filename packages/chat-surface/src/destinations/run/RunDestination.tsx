@@ -238,7 +238,7 @@ import { ThreadSwitcherHost } from "./ThreadSwitcherHost";
 import { useThreadSwitcherOpen } from "./useThreadSwitcherOpen";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
-import { useRailWidth } from "./useRailWidth";
+import { cockpitDefaultRailWidth, useRailWidth } from "./useRailWidth";
 import {
   useRunMode,
   useRunPanelCollapsed,
@@ -1454,20 +1454,26 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       : 0);
   const focusPanelFitsBesideChat = canvasWidth >= FOCUS_DETAILS_MIN_CANVAS;
 
-  // PRD-00 FR-0.7 (the other half) — clamp the persisted Studio rail to what the
+  // PRD-00 FR-0.7 (the other half) — resolve the Studio rail against what the
   // canvas can actually give it.
   //
-  // `useRailWidth` is a GLOBAL preference (default 584) with no upper bound tied
-  // to the container. In a 640px window the canvas is 392px, so the Studio grid
-  // (`surface | 1px handle | rail`) laid out a 584px chat column inside 392px:
-  // the transcript overflowed the window and the composer ran off the right
-  // edge with its send button clipped.
+  // Two things happen here, both because this is the first place that knows how
+  // wide the canvas is:
+  //
+  //   1. `railWidth === null` (nobody has dragged the handle) resolves to the
+  //      canvas-relative default — ~32% chat, ~68% surface. `useRailWidth` runs
+  //      before the ResizeObserver has measured anything, so it cannot do this.
+  //   2. A stored preference is clamped to the room available. It is a GLOBAL
+  //      px value with no upper bound tied to the container: in a 640px window
+  //      the canvas is 392px, so the Studio grid (`surface | 1px handle | rail`)
+  //      laid a 584px chat column inside 392px — the transcript overflowed the
+  //      window and the composer ran off the right edge, send button clipped.
   //
   // The clamp is applied HERE, at the consumer, not inside `useRailWidth` — the
   // stored preference must survive a narrow window and come back when the user
   // widens again. Persist what they chose; render what fits.
   const effectiveRailWidth = Math.min(
-    railWidth,
+    railWidth ?? cockpitDefaultRailWidth(canvasWidth),
     Math.max(STUDIO_RAIL_MIN, canvasWidth - STUDIO_HANDLE_PX),
   );
   const closeThreadSwitcher = useCallback(() => {
