@@ -10,10 +10,12 @@
  *
  * 2) INTEGRATE THE NATIVE TITLE BAR. macOS `titleBarStyle: "hiddenInset"` (see
  *    main/window.ts) renders the traffic-light buttons over web content. The
- *    compact application header is therefore also the native title bar: in a
- *    window, the turbine clears the traffic lights horizontally; in native
- *    fullscreen, the controls disappear and the turbine returns to the rail.
- *    There is no permanently reserved vertical strip.
+ *    compact application header is therefore also the native title bar. The
+ *    controls land in the RAIL's top corner — they end at x=66 and the rail is
+ *    48px wide — so in a window the rail reserves that band vertically and its
+ *    first item starts below it, while the headers to the rail's right inset by
+ *    the 22px overhang only. In native fullscreen the controls disappear, the
+ *    rail reclaims the band, and the headers keep their own padding.
  *
  * 3) THE DOCUMENT NEVER SCROLLS. The window is a fixed application frame:
  *    `.desktop-window-frame` is `height: 100%; overflow: hidden` and every
@@ -50,6 +52,12 @@ body {
      but shares the same integrated native-control treatment. */
   --desktop-titlebar-height: 38px;
   --desktop-traffic-light-clearance: 70px;
+  /* Mirrors `APP_RAIL_WIDTH` (packages/chat-surface/src/shell/AppRail.tsx).
+     Every in-shell header begins to the RIGHT of this column, so an inset
+     measured from the window's left edge has to subtract it or it lands a full
+     rail-width too far in. DesktopWindowFrame.test.tsx asserts the two stay
+     equal against the exported constant. */
+  --desktop-app-rail-width: 48px;
 }
 
 #root {
@@ -100,11 +108,16 @@ body {
 
 /* In the shell, the rail and main header meet on one uninterrupted title-bar
    band. The divider begins below that band instead of cutting through the
-   native traffic-light cluster. */
+   native traffic-light cluster. `position: relative` is for that divider; the
+   `overflow: visible; z-index: 1` pair that sat here existed only to let the
+   translated brand paint OUTSIDE the rail and above the neighbouring header,
+   and went with it (see the windowed rule below).
+
+   3px is what fits the 32px brand mark inside the 38px band. That is the
+   no-native-controls case — fullscreen — since the windowed rule below reserves
+   the band outright. */
 .desktop-window-frame [data-component="app-rail"] {
   position: relative;
-  overflow: visible;
-  z-index: 1;
   padding-top: 3px !important;
   border-right: 0 !important;
 }
@@ -121,47 +134,59 @@ body {
   pointer-events: none;
 }
 
-/* Windowed macOS: place the turbine just after the native traffic lights while
-   preserving its original flex box, so the first destination still begins
-   below the title bar. The button is already position:relative, therefore its
-   z-index keeps it above the adjacent header's painted background. */
+/* Windowed macOS: the traffic lights occupy x 14–66 — the rail's own top corner
+   — so the rail's first item cannot share that band with them. Reserve the band
+   vertically and the turbine keeps its column, in line with every rail item
+   below it. The +10px is the rail's own design padding (`AppRail` railStyle),
+   restored underneath the reserved band; it also lands the mark's centre on the
+   Threads panel's "Threads" heading beside it.
+
+   The turbine used to be pushed sideways instead — `translateX(70px)` at
+   `z-index: 2`, which parked a RAIL button 30px OUTSIDE the rail, inside the
+   header's leading area. Every header then had to clear a rail button rather
+   than the window controls, which is how the inset below became
+   `clearance + 30px` and drove the Threads toggle and the goal title ~100px
+   into the main column. Move the mark DOWN, never ACROSS: the rail is a column,
+   and a rail item that leaves it makes the whole title bar's left edge
+   unusable. */
 .desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
-  [data-rail-brand] {
-  z-index: 2;
-  transform: translateX(var(--desktop-traffic-light-clearance));
+  [data-component="app-rail"] {
+  padding-top: calc(var(--desktop-titlebar-height) + 10px) !important;
 }
 
-/* Both app headers with a left-aligned title clear the windowed turbine by the
-   same inset. RunHeader used to be exempt here, and the exemption was written
-   down as "its product identity is centred, so it needs no equivalent padding".
-   PRD-02 then made the GOAL the title — a left-aligned `<h2>` plus a `leading`
-   slot where the centred `0xCopilot — {mode}` overlay had been — which turned
-   RunHeader into precisely the case this rule exists for, while the exemption
-   stayed. The turbine (z-index 2) then painted over the leading control and the
-   first characters of the goal, and the leading slot sat under the traffic
-   lights themselves.
+/* Both app headers with a left-aligned title begin to the RIGHT of the rail, so
+   what they must clear is only the part of the traffic-light cluster that
+   overhangs them — `clearance - rail width` (22px) — plus a gap so the leading
+   control is not flush against the green button. Measuring from the window's
+   left edge instead (`clearance + 30px`, as this rule did) double-counts the
+   rail and pushes the title a full rail-width-plus into the main column.
 
    Keep the two selectors on ONE declaration: they are the same requirement (a
    title starting at the main column's left edge), and splitting them is how the
-   pair drifted apart in the first place. `!important` because both headers set
-   `padding` inline. */
+   pair drifted apart before — RunHeader carried an exemption ("its product
+   identity is centred, so it needs no equivalent padding") written for the
+   centred `0xCopilot — {mode}` overlay that PRD-02 had already replaced with a
+   left-aligned goal plus a `leading` slot. `!important` because both headers
+   set `padding` inline. */
 .desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
   [data-component="topbar"],
 .desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
   [data-testid="run-header"] {
-  padding-left: calc(var(--desktop-traffic-light-clearance) + 30px) !important;
+  padding-left: calc(
+    var(--desktop-traffic-light-clearance) - var(--desktop-app-rail-width) + 8px
+  ) !important;
 }
 
 /* Settings is the one destination that suppresses the shell topbar (ChatShell
    `suppressTopbar`), so its nav column — not a topbar — is the surface sitting
-   under the native controls and the windowed turbine. Nothing padded it, so the
-   "Settings" title was drawn hard against the traffic lights AND underneath the
-   translated turbine, which carries z-index 2 and therefore paints over the
-   text. Reserve the title-bar band vertically here rather than horizontally as
-   the topbar does: the nav is only 216px wide, so a 100px left inset would
-   strand the rows it heads. `--space-sm` on top of the band clears the turbine's
-   box, which ends at 42px (10px rail padding + the 32px mark) — 4px past the
-   38px band. `!important` because the shared surface sets `padding` inline. */
+   under the native controls. Nothing padded it, so the "Settings" title was
+   drawn hard against the traffic lights. Reserve the title-bar band vertically
+   here rather than horizontally as the two headers do: a nav column indents its
+   whole stack of rows, so the inset that reads as a title clearing the controls
+   on a full-width bar reads as stranded rows on a 216px column. `--space-sm`
+   below the band is breathing room, not clearance — the turbine no longer
+   leaves the rail. `!important` because the shared surface sets `padding`
+   inline. */
 .desktop-window-frame[data-native-traffic-lights="true"][data-full-screen="false"]
   [data-settings-nav] {
   padding-top: calc(
