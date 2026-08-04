@@ -31,6 +31,10 @@ const detail = {
     media_type: "text/typescript",
     current_revision: 1,
     created_by: "user",
+    // The server sends this on every artifact the author gave a hue, and this
+    // fixture is the only thing standing between the guard and a silent total
+    // rejection — see the regression case below.
+    accent: "violet",
     created_at: "2026-07-24T00:00:00Z",
     updated_at: "2026-07-24T00:00:00Z",
   },
@@ -52,6 +56,49 @@ describe("artifact HTTP guards", () => {
       isArtifactListResponse({
         artifacts: [detail],
         next_cursor: "cursor_2",
+      }),
+    ).toBe(true);
+  });
+
+  // The defect: `accent` was added to `Artifact` and to its Python twin, but
+  // not to this guard's key list. `hasOnlyKeys` is closed, so EVERY artifact
+  // response failed, `useArtifactSurface` threw "Invalid artifact metadata",
+  // and the Studio canvas sat on "Loading artifact…" for every artifact of
+  // every kind. The fixture above now carries the field, so the whole suite
+  // runs against the real payload; these cases name the failure directly.
+  it("accepts the author's identity hue, whether chosen or absent", () => {
+    for (const accent of [
+      "jade",
+      "sky",
+      "indigo",
+      "ember",
+      "violet",
+      "plum",
+      "amber",
+      "none",
+    ]) {
+      expect(
+        isArtifactDetailResponse({
+          ...detail,
+          artifact: { ...detail.artifact, accent },
+        }),
+      ).toBe(true);
+    }
+    const { accent: _omitted, ...noAccent } = detail.artifact;
+    expect(isArtifactDetailResponse({ ...detail, artifact: noAccent })).toBe(
+      true,
+    );
+  });
+
+  it("does not blank an artifact over an accent name it has not seen", () => {
+    // A hue the client does not know is not a reason to refuse the artifact —
+    // the surface narrows an unrecognised name back to the kind-derived
+    // default. Rejecting here would reproduce the original outage the next
+    // time the server grows an accent.
+    expect(
+      isArtifactDetailResponse({
+        ...detail,
+        artifact: { ...detail.artifact, accent: "chartreuse" },
       }),
     ).toBe(true);
   });

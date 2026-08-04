@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { LoopbackHandle } from "../auth/loopback-server";
 
+import { CONNECT_SUPERSEDED } from "./channels";
 import {
   CONNECT_CANCELLED,
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
+  REDIRECT_TIMED_OUT,
 } from "./oauth-coordinator";
 
 // A provider token that must NEVER surface in main: the facade callback
@@ -371,5 +373,154 @@ describe("ConnectorOAuthCoordinator — an unreachable facade fails, it does not
     expect(error).toBeInstanceOf(ConnectorOAuthError);
     expect(error?.message).not.toContain(CONNECT_CANCELLED);
     expect(error?.message).toMatch(/could not reach/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Supersede vs cancel
+// ---------------------------------------------------------------------------
+//
+// Main holds ONE pending connect slot, so starting a second connect aborts the
+// first. Both aborts used to reject with the same `connect cancelled` string,
+// and only the renderer that pressed Cancel knew to stay quiet — so the
+// SUPERSEDED attempt fell through to the error branch and told the user a
+// connector they had just started had failed.
+//
+// The reason is the whole contract here: only an Error message survives the IPC
+// hop, so if the coordinator does not say WHY, nothing downstream can.
+
+describe("ConnectorOAuthCoordinator — supersede carries its own reason", () => {
+  it("rejects a superseded connect distinctly from a user cancel", async () => {
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: (reason?: "user" | "superseded") => void = () => undefined;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    cancel("superseded");
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_SUPERSEDED));
+  });
+
+  it("still says `cancelled` when the user is the one who stopped it", async () => {
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: (reason?: "user" | "superseded") => void = () => undefined;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // No argument: the Cancel button passes none, and the default must not
+    // silently become "superseded".
+    cancel();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_CANCELLED));
+  });
+
+  it("keeps the reason when the supersede lands BEFORE the browser opens", async () => {
+    // `start-oauth` is a real round-trip. A supersede inside that window takes
+    // the pre-browser throw path, which is a SECOND place the message is built
+    // — it reported a user cancel until the reason was threaded through it too.
+    const { loopback } = fakeLoopback();
+    const openExternal = vi.fn(async () => undefined);
+    let releaseStart: () => void = () => undefined;
+    const startHeld = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const inner = fakeFetch();
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/desktop/start-oauth")) await startHeld;
+      return inner(input, init);
+    }) as unknown as typeof fetch;
+    const coordinator = makeCoordinator(fetchImpl, loopback, openExternal);
+
+    let cancel: ((reason?: "user" | "superseded") => void) | null = null;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+
+    // The hook is handed out as soon as the port binds — before the held start
+    // POST resolves — which is exactly the window this test is about.
+    await vi.waitFor(() => expect(cancel).not.toBeNull());
+    cancel!("superseded");
+    releaseStart();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_SUPERSEDED));
+    // A consent screen for a flow that was already abandoned would let the user
+    // complete an authorization nothing is waiting for.
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+});
+
+// A timeout must describe the user's situation, not a socket.
+//
+// The loopback listener is shared with app login, so its own message is
+// internal by design — `loopback redirect timed out` — and it was reaching the
+// screen verbatim after five silent minutes. These pin the translation without
+// touching login's wording.
+
+describe("ConnectorOAuthCoordinator — redirect failure copy", () => {
+  it("translates the loopback timeout into something a person can act on", async () => {
+    const { loopback, controls } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    const pending = coordinator.connect("atlassian");
+    await vi.waitFor(() => expect(controls.armed).not.toBeNull());
+    controls.rejectCode(new Error("loopback redirect timed out"));
+
+    const error: unknown = await pending.then(
+      () => new Error("expected the connect to fail"),
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ConnectorOAuthError);
+    const message = (error as ConnectorOAuthError).message;
+    expect(message).toBe(REDIRECT_TIMED_OUT);
+    // The internal wording must not survive to the surface.
+    expect(message).not.toContain("loopback");
+  });
+
+  it("leaves the cancel contracts untouched — they are IPC vocabulary", async () => {
+    // These strings are what `ConnectorService` translates into outcomes, so
+    // rewording them here would quietly break that mapping.
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: ((reason?: "user" | "superseded") => void) | null = null;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await vi.waitFor(() => expect(cancel).not.toBeNull());
+    cancel!();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_CANCELLED));
   });
 });

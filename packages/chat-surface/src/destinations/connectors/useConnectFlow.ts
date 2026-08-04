@@ -68,6 +68,28 @@ export class ConnectOAuthClientRequiredError extends Error {
   }
 }
 
+/**
+ * Thrown by a host's `authorize` when a NEWER connect took over and this
+ * attempt was abandoned by the host, not by the user.
+ *
+ * A distinct type for the same reason as the class above: the flow has to
+ * branch. A superseded attempt is not a failure and has nothing to report — the
+ * user did not stop it and is already watching the connect that replaced it. It
+ * previously fell through to the generic error branch, which showed them the
+ * internal string `connect cancelled` as a failed connect for a connector they
+ * had just asked for, and — because the two attempts share one flow's state —
+ * tore the spinner off the connect that was still genuinely running.
+ */
+export class ConnectSupersededError extends Error {
+  readonly slug: ConnectorSlug | undefined;
+
+  constructor(slug?: ConnectorSlug) {
+    super("This connect was replaced by a newer one.");
+    this.name = "ConnectSupersededError";
+    this.slug = slug;
+  }
+}
+
 export interface UseConnectFlowOptions {
   /**
    * Open the authorization surface. Resolves once the host has handed control
@@ -184,6 +206,14 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
   // Set while the user's own Cancel is the reason the attempt will reject, so
   // the resulting rejection is not then shown to them as a failure.
   const cancelledRef = useRef(false);
+  // Which attempt owns this flow's state. Incremented per `attempt`, captured
+  // by the closure, and compared on rejection.
+  //
+  // Slug identity is NOT enough: connecting the same connector twice would make
+  // the abandoned attempt look current and let it clear the live attempt's
+  // spinner. A monotonic token is the only thing that distinguishes two
+  // attempts at the same connector.
+  const attemptSeqRef = useRef(0);
 
   const reset = useCallback((): void => {
     connectingSlugRef.current = null;
@@ -224,6 +254,7 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
       oauthClient?: McpOAuthClientConfigRequest,
       callbackMode?: ConnectCallbackMode,
     ): void => {
+      const myAttempt = ++attemptSeqRef.current;
       connectingSlugRef.current = slug;
       cancelledRef.current = false;
       setError(null);
@@ -235,6 +266,13 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
         ...(oauthClient !== undefined ? { oauthClient } : {}),
         ...(callbackMode !== undefined ? { callbackMode } : {}),
       }).catch((err: unknown) => {
+        // Only the CURRENT attempt owns this flow's state. When a newer attempt
+        // in this same flow superseded this one, the newer attempt's spinner is
+        // what these setters would clear — so this returns before touching
+        // anything. That clobbering is why a connect that was still genuinely
+        // running lost its pending state and inherited an error.
+        if (attemptSeqRef.current !== myAttempt) return;
+
         connectingSlugRef.current = null;
         setPending(false);
         setConnectingSlug(null);
@@ -246,9 +284,16 @@ export function useConnectFlow(options: UseConnectFlowOptions): ConnectFlow {
           setError(null);
           return;
         }
-        // The user's own Cancel is why this rejected; showing them an error for
-        // the thing they just asked for would be noise.
-        if (cancelledRef.current) {
+        // Two non-failures. The user's own Cancel is why this rejected, and
+        // showing them an error for the thing they just asked for would be
+        // noise. A supersede is the HOST's decision, reaching a flow that never
+        // asked for it — reporting that as a failed connect was the bug: the
+        // user started this connector and was told it broke.
+        //
+        // Superseded still clears the state above, because when the replacement
+        // lives in a DIFFERENT flow this one has no newer attempt to hand off
+        // to; leaving it pending would spin forever.
+        if (err instanceof ConnectSupersededError || cancelledRef.current) {
           setError(null);
           return;
         }

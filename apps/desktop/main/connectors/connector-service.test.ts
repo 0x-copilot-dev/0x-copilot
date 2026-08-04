@@ -95,11 +95,30 @@ function makeService(
   };
 }
 
+/**
+ * Unwrap a successful authorize. `authorize` returns an OUTCOME now — a cancel
+ * and a supersede are ordinary endings that RESOLVE — so a test asserting on
+ * connection metadata has to say which outcome it expects, and fail loudly if
+ * the connect ended some other way.
+ */
+function connected(
+  outcome: Awaited<ReturnType<ConnectorService["authorize"]>>,
+): {
+  server_id: string;
+  connector_slug: string | null;
+  auth_state: string | null;
+} {
+  if (outcome.outcome !== "connected") {
+    throw new Error(`expected a connected outcome, got "${outcome.outcome}"`);
+  }
+  return outcome.result;
+}
+
 describe("ConnectorService.authorize", () => {
   it("routes a profile-backed slug through the pre-registered-client flow", async () => {
     const { service, connect, connectMcpServer } = makeService(["gmail"]);
 
-    const result = await service.authorize({ slug: "gmail" });
+    const result = connected(await service.authorize({ slug: "gmail" }));
 
     expect(connect).toHaveBeenCalledWith(
       "gmail",
@@ -114,10 +133,9 @@ describe("ConnectorService.authorize", () => {
     // the exact case that rendered a Connect button which opened nothing.
     const { service, connect, connectMcpServer } = makeService(["gmail"]);
 
-    const result = await service.authorize({
-      slug: "linear",
-      serverId: "seed:linear",
-    });
+    const result = connected(
+      await service.authorize({ slug: "linear", serverId: "seed:linear" }),
+    );
 
     expect(connect).not.toHaveBeenCalled();
     expect(connectMcpServer).toHaveBeenCalledWith(
@@ -224,10 +242,12 @@ describe("ConnectorService.authorize", () => {
       installStatus: 404,
     });
 
-    const result = await service.authorize({
-      slug: "api_githubcopilot_com",
-      serverId: "custom:abc123",
-    });
+    const result = connected(
+      await service.authorize({
+        slug: "api_githubcopilot_com",
+        serverId: "custom:abc123",
+      }),
+    );
 
     expect(connectMcpServer).toHaveBeenCalledWith(
       "custom:abc123",
@@ -300,7 +320,9 @@ describe("ConnectorService.authorize", () => {
   it("authorizes a custom server that has no slug at all", async () => {
     const { service, connectMcpServer } = makeService(["gmail"]);
 
-    const result = await service.authorize({ serverId: "custom:abc123" });
+    const result = connected(
+      await service.authorize({ serverId: "custom:abc123" }),
+    );
 
     expect(connectMcpServer).toHaveBeenCalledWith(
       "custom:abc123",
@@ -315,7 +337,7 @@ describe("ConnectorService.authorize", () => {
     // is what makes the composer's install-then-connect path one call.
     const { service, connectMcpServer, installed } = makeService(["gmail"]);
 
-    const result = await service.authorize({ slug: "linear" });
+    const result = connected(await service.authorize({ slug: "linear" }));
 
     expect(installed()).toEqual(["linear"]);
     expect(connectMcpServer).toHaveBeenCalledWith(
@@ -398,17 +420,31 @@ describe("ConnectorService — cancelPendingAuthorize", () => {
    */
   function makePausableService(): {
     service: ConnectorService;
-    started: Array<() => void>;
+    started: Array<(reason?: "user" | "superseded") => void>;
   } {
     const { service } = makeService([], { existingServerIds: ["seed:linear"] });
-    const started: Array<() => void> = [];
+    const started: Array<(reason?: "user" | "superseded") => void> = [];
     Object.assign(service.coordinator, {
       connectMcpServer: (
         _id: string,
-        options: { onCancelAvailable?: (cancel: () => void) => void } = {},
+        options: {
+          onCancelAvailable?: (
+            cancel: (reason?: "user" | "superseded") => void,
+          ) => void;
+        } = {},
       ) =>
         new Promise<void>((_resolve, reject) => {
-          const abort = (): void => reject(new Error("connect cancelled"));
+          // The fake honours the REASON rather than hardcoding one message —
+          // otherwise it would pass whatever the service passed and these tests
+          // could not tell a supersede from a cancel at all.
+          const abort = (reason: "user" | "superseded" = "user"): void =>
+            reject(
+              new Error(
+                reason === "superseded"
+                  ? "connect superseded"
+                  : "connect cancelled",
+              ),
+            );
           options.onCancelAvailable?.(abort);
           started.push(abort);
         }),
@@ -434,7 +470,11 @@ describe("ConnectorService — cancelPendingAuthorize", () => {
 
     service.cancelPendingAuthorize();
 
-    await expect(pending).rejects.toThrow(/connect cancelled/);
+    // RESOLVES with an outcome — it does not reject. A cancel is an ending, not
+    // a fault, and `ipcMain.handle` prints a full stack trace for anything the
+    // handler throws: modelling this as an error wrote what looked like a crash
+    // into the terminal every time a user pressed Cancel.
+    await expect(pending).resolves.toEqual({ outcome: "cancelled" });
   });
 
   it("lets a second connect abort the first — newest wins", async () => {
@@ -446,22 +486,126 @@ describe("ConnectorService — cancelPendingAuthorize", () => {
       slug: "linear",
       serverId: "seed:linear",
     });
-    const firstRejects = expect(first).rejects.toThrow(/connect cancelled/);
+    // SUPERSEDED, not cancelled. The user did not stop this one — the app did,
+    // to give its slot to the next connect — and the renderer branches on the
+    // difference: a cancel stays quiet because the user already knows, while a
+    // supersede reported as a cancel told them a connector they had just
+    // started had failed.
+    const firstSettles = expect(first).resolves.toEqual({
+      outcome: "superseded",
+    });
     await vi.waitFor(() => expect(started).toHaveLength(1));
 
     const second = service.authorize({
       slug: "linear",
       serverId: "seed:linear",
     });
-    const secondRejects = expect(second).rejects.toThrow(/connect cancelled/);
+    const secondSettles = expect(second).resolves.toEqual({
+      outcome: "cancelled",
+    });
     await vi.waitFor(() => expect(started).toHaveLength(2));
 
     // The first is unreachable once a second browser flow owns the screen, so
     // it is aborted rather than left holding a loopback port for five minutes.
-    await firstRejects;
+    await firstSettles;
     // The second is still live; cancelling it now must reach IT, not the slot
-    // the first one left behind.
+    // the first one left behind — and the two endings stay distinguishable.
     service.cancelPendingAuthorize();
-    await secondRejects;
+    await secondSettles;
+  });
+});
+
+// A cancel is an OUTCOME, not an error.
+//
+// `ipcMain.handle` prints `Error occurred in handler for 'connector.authorize'`
+// with a full stack for anything its callback throws. Modelling the two most
+// ordinary endings — pressing Cancel, and starting a second connect — as
+// rejections therefore wrote what looked like a crash into the terminal every
+// single time. These pin the distinction that fixed it: expected endings
+// resolve, and only a genuine failure still rejects.
+
+describe("ConnectorService.authorize — endings vs failures", () => {
+  function pausable(): {
+    service: ConnectorService;
+    started: Array<(reason?: "user" | "superseded") => void>;
+  } {
+    const { service } = makeService([], { existingServerIds: ["seed:linear"] });
+    const started: Array<(reason?: "user" | "superseded") => void> = [];
+    Object.assign(service.coordinator, {
+      connectMcpServer: (
+        _id: string,
+        options: {
+          onCancelAvailable?: (
+            cancel: (reason?: "user" | "superseded") => void,
+          ) => void;
+        } = {},
+      ) =>
+        new Promise<void>((_resolve, reject) => {
+          const abort = (reason: "user" | "superseded" = "user"): void =>
+            reject(
+              new Error(
+                reason === "superseded"
+                  ? "connect superseded"
+                  : "connect cancelled",
+              ),
+            );
+          options.onCancelAvailable?.(abort);
+          started.push(abort);
+        }),
+    });
+    return { service, started };
+  }
+
+  it("resolves rather than throwing, so the IPC handler logs no stack", async () => {
+    const { service, started } = pausable();
+    const pending = service.authorize({
+      slug: "linear",
+      serverId: "seed:linear",
+    });
+    await vi.waitFor(() => expect(started).toHaveLength(1));
+
+    service.cancelPendingAuthorize();
+
+    // The assertion that matters is that this does not reject at all — the
+    // handler only prints a stack when its callback throws.
+    await expect(pending).resolves.toMatchObject({ outcome: "cancelled" });
+  });
+
+  it("still REJECTS a genuine failure — this is not a blanket swallow", async () => {
+    const { service } = makeService([], { existingServerIds: ["seed:linear"] });
+    Object.assign(service.coordinator, {
+      connectMcpServer: () =>
+        Promise.reject(new Error("the provider refused the request")),
+    });
+
+    await expect(
+      service.authorize({ slug: "linear", serverId: "seed:linear" }),
+    ).rejects.toThrow(/provider refused/);
+  });
+
+  it("does not launder a failure that merely MENTIONS a connector", async () => {
+    // The translation matches the cancel contract strings, so a failure whose
+    // text happens to contain neither must stay a failure.
+    const { service } = makeService([], { existingServerIds: ["seed:linear"] });
+    Object.assign(service.coordinator, {
+      connectMcpServer: () => Promise.reject(new Error("oauth state mismatch")),
+    });
+
+    await expect(
+      service.authorize({ slug: "linear", serverId: "seed:linear" }),
+    ).rejects.toThrow(/state mismatch/);
+  });
+
+  it("reports a connected connect as an outcome carrying its metadata", async () => {
+    const { service } = makeService(["gmail"]);
+
+    await expect(service.authorize({ slug: "gmail" })).resolves.toEqual({
+      outcome: "connected",
+      result: {
+        server_id: "desktop:gmail",
+        connector_slug: "gmail",
+        auth_state: "authenticated",
+      },
+    });
   });
 });

@@ -22,25 +22,27 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
 import {
+  ProjectFilingChip,
   createComposerModelPreference,
+  defaultSelectedModelId,
+  mergeCatalog,
   useKeyValueStore,
   useTransport,
   type AssistantComposerPlusMenuSlotArgs,
+  type PickerCatalogModel,
+  type ProjectFilingOption,
 } from "@0x-copilot/chat-surface";
 import type {
   McpServer,
   ModelCatalogModel,
+  ProjectId,
   Skill,
 } from "@0x-copilot/api-types";
 
-import {
-  defaultSelectedModelId,
-  mergeCatalog,
-  type CatalogModel,
-} from "./desktopModelCatalog";
 import { DesktopAnchoredPlusMenu } from "./DesktopAnchoredPlusMenu";
 
 interface SkillsResponse {
@@ -74,6 +76,31 @@ interface LocalModelsResponse {
   }[];
 }
 
+/**
+ * Where this chat is filed, as the composer needs it: the current value, the
+ * projects it can move to, and the write. Host-owned in every part — the list
+ * is a facade read and the write is a `PATCH` (or, before the conversation
+ * exists, a value held until create), neither of which a composer may perform.
+ *
+ * Omitted (or an empty `options`) ⇒ no filing zone at all, which is the correct
+ * degradation for a user with no projects: a picker with nothing to pick.
+ */
+export interface RunComposerFiling {
+  /** The chat's project, or `null` when unfiled / not yet chosen. */
+  readonly value: ProjectId | null;
+  readonly options: ReadonlyArray<ProjectFilingOption>;
+  /** Fires with the picked project, or `null` for "No project". */
+  readonly onChange: (next: ProjectId | null) => void;
+  /**
+   * Open the create sheet. Supplying it is what lets the zone render with NO
+   * projects: "New project…" is then a row that can act, so the chip is an
+   * empty picker with an exit rather than a dead control.
+   */
+  readonly onCreateProject?: () => void;
+  /** Read-only chrome (a write in flight). */
+  readonly disabled?: boolean;
+}
+
 export interface RunComposerBindings {
   // --- Skills (drive `/`-menu + skill pills) ---
   readonly skills: readonly Skill[];
@@ -90,7 +117,7 @@ export interface RunComposerBindings {
   readonly activeConnectorCount: number;
 
   // --- Model catalog (curated cloud + local + custom + workspace default) ---
-  readonly models: CatalogModel[];
+  readonly models: PickerCatalogModel[];
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel: (slug: string) => void;
@@ -112,6 +139,14 @@ export interface RunComposerBindings {
   readonly renderPlusMenu: (
     args: AssistantComposerPlusMenuSlotArgs,
   ) => ReactElement;
+
+  /**
+   * The composer's "filed under [project]" zone, already bound — hand it
+   * straight to `AssistantComposer.projectFilingSlot`. `undefined` whenever the
+   * caller passed no `filing` or the user has no projects, which is what makes
+   * the zone add no height rather than an empty row.
+   */
+  readonly projectFilingSlot: ReactNode;
 }
 
 /**
@@ -132,11 +167,17 @@ export interface RunComposerBindings {
  * the local memory: a chat opened on a second machine, or after the client store
  * was cleared, still opens on the model its transcript was actually produced
  * with instead of a generic default.
+ *
+ * `filing` is the project-filing binding. It lands here, next to `renderPlusMenu`,
+ * because the filing menu is the SAME anchored popover as the `+` menu — same
+ * slot shape, same portal, same outside-click — and this hook is where that one
+ * renderer lives. Both composers then take the finished zone as one node.
  */
 export function useRunComposerBindings(
   catalogRefreshKey = 0,
   conversationId: string | null = null,
   conversationModel: string | null = null,
+  filing?: RunComposerFiling,
 ): RunComposerBindings {
   const transport = useTransport();
   const keyValueStore = useKeyValueStore();
@@ -165,7 +206,9 @@ export function useRunComposerBindings(
   const [localModelSizes, setLocalModelSizes] = useState<
     Readonly<Record<string, number>>
   >({});
-  const [customModels, setCustomModels] = useState<readonly CatalogModel[]>([]);
+  const [customModels, setCustomModels] = useState<
+    readonly PickerCatalogModel[]
+  >([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [workspaceDefault, setWorkspaceDefault] = useState<{
     readonly provider: string;
@@ -274,7 +317,7 @@ export function useRunComposerBindings(
         );
         setLocalModelNames(rows.map((m) => m.name));
         // Same response, second projection: the name → bytes join the model
-        // popover needs. Kept off `CatalogModel` on purpose — sizes come from a
+        // popover needs. Kept off `PickerCatalogModel` on purpose — sizes come from a
         // different endpoint than the catalog, and `ModelCatalogModel` is a wire
         // contract.
         setLocalModelSizes(
@@ -328,11 +371,12 @@ export function useRunComposerBindings(
     };
   }, [transport]);
 
-  const models = useMemo<CatalogModel[]>(() => {
+  const models = useMemo<PickerCatalogModel[]>(() => {
     const base = mergeCatalog({ cloudModels, localModelNames });
     const merged = [...base, ...customModels];
-    // The persisted workspace default may live outside the catalog (e.g. the
-    // Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is visible
+    // The persisted workspace default may live outside the catalog (e.g. a pick
+    // from the Add-key wizard's offline fallback list, which is written straight
+    // to the workspace default). Surface it as a synthetic entry so it is visible
     // and selectable; it's configured when the catalog reports its provider as
     // usable (any configured cloud model of that provider).
     if (workspaceDefault !== null) {
@@ -515,10 +559,54 @@ export function useRunComposerBindings(
     [],
   );
 
+  // The filing menu is the SAME anchored popover as the `+` menu — but it opens
+  // DOWNWARD. Its anchor is below the composer frame, so the `+` menu's upward
+  // placement drew the panel straight over the composer's own control row.
+  // Passing `renderPlusMenu` through unchanged is what caused that; the two
+  // popups share an implementation, not a direction.
+  const renderFilingMenu = useCallback(
+    ({
+      open,
+      anchorRef,
+      onDismiss,
+      children,
+    }: AssistantComposerPlusMenuSlotArgs): ReactElement => (
+      <DesktopAnchoredPlusMenu
+        open={open}
+        anchorRef={anchorRef}
+        onDismiss={onDismiss}
+        placement="down"
+      >
+        {children}
+      </DesktopAnchoredPlusMenu>
+    ),
+    [],
+  );
+
   const activeConnectorCount = useMemo(
     () => servers.filter((s) => s.enabled).length,
     [servers],
   );
+
+  // Rendered whenever there is something to pick OR a way to make one. The
+  // earlier `options.length === 0` gate hid the zone outright on a fresh
+  // install — the exact moment a user has no projects and most needs the way in.
+  const projectFilingSlot = useMemo<ReactNode>(() => {
+    if (filing === undefined) return undefined;
+    if (filing.options.length === 0 && filing.onCreateProject === undefined) {
+      return undefined;
+    }
+    return (
+      <ProjectFilingChip
+        value={filing.value}
+        options={filing.options}
+        onChange={filing.onChange}
+        onCreateProject={filing.onCreateProject}
+        disabled={filing.disabled}
+        renderMenu={renderFilingMenu}
+      />
+    );
+  }, [filing, renderFilingMenu]);
 
   return {
     skills,
@@ -537,5 +625,6 @@ export function useRunComposerBindings(
     refresh,
     localModelSizes,
     renderPlusMenu,
+    projectFilingSlot,
   };
 }

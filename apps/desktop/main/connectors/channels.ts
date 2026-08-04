@@ -46,6 +46,33 @@ export const CONNECTOR_CHANNELS = {
 } as const;
 
 /**
+ * The message a SUPERSEDED connect rejects with — a newer connect took the one
+ * pending slot in main (see `ConnectorService.runCancellable`).
+ *
+ * It lives here, beside the channel names, for exactly the reason they do: only
+ * an Error MESSAGE survives the IPC hop, so the string IS the contract and both
+ * sides must read it from one source. The renderer half needs it because the
+ * shared flow has to BRANCH — a superseded attempt is not a failure, and
+ * reporting it as one told the user a connector they had just started was
+ * broken, quoting an internal string at them.
+ *
+ * `packages/chat-surface` cannot import from `apps/*`, so the desktop binder is
+ * where this string becomes the typed `ConnectSupersededError` the flow knows.
+ */
+export const CONNECT_SUPERSEDED = "connect superseded";
+
+/**
+ * The message a USER-cancelled connect rejects with.
+ *
+ * Sits beside `CONNECT_SUPERSEDED` because it is the same kind of thing and the
+ * renderer needs it for the same reason: main resolves an outcome now, and the
+ * binder turns `{outcome: "cancelled"}` back into the rejection the shared flow
+ * expects. Declaring it in the coordinator would have forced the renderer to
+ * import main-process code to name it.
+ */
+export const CONNECT_CANCELLED = "connect cancelled";
+
+/**
  * What `connector.authorize` resolves with — the payload half of the same
  * contract, and it lives HERE for the same reason the channel names do: main,
  * preload, and the renderer must agree on it from one source, and this is the
@@ -67,6 +94,30 @@ export interface ConnectorAuthorizationResult {
   readonly connector_slug: string | null;
   readonly auth_state: string | null;
 }
+
+/**
+ * How a connect ended. `connected` carries the metadata above; the other two
+ * carry nothing because there is nothing to carry.
+ *
+ * This exists because a cancel is an OUTCOME, not an error. Modelling it as a
+ * rejection had a cost beyond taste: `ipcMain.handle` prints
+ * `Error occurred in handler for 'connector.authorize'` with a full stack for
+ * anything the handler throws, so pressing Cancel — or simply starting a second
+ * connect — wrote what looks like a crash into the terminal, every time, for
+ * the two most ordinary things a user can do. The renderer then had to
+ * reconstruct intent from an Error message, which is the weakest channel
+ * available and the reason a supersede was once reported as a failed connector.
+ *
+ * Genuine failures still reject. The distinction is the point: an exception now
+ * means something actually went wrong.
+ */
+export type ConnectorAuthorizationOutcome =
+  | {
+      readonly outcome: "connected";
+      readonly result: ConnectorAuthorizationResult;
+    }
+  | { readonly outcome: "cancelled" }
+  | { readonly outcome: "superseded" };
 
 export type ConnectorChannelName =
   (typeof CONNECTOR_CHANNELS)[keyof typeof CONNECTOR_CHANNELS];

@@ -105,8 +105,20 @@ export type ProjectEditorTabId =
   | "connectors"
   | "members";
 
+/**
+ * Which job this sheet is doing. The editor was written for `"edit"` and the
+ * create flow reused it verbatim, so making a project showed a sheet headed
+ * "Edit project" whose primary action said "Save" — of a thing that did not
+ * exist yet. The two differ only in words, so this is a label switch and not a
+ * second component.
+ */
+export type ProjectEditorMode = "create" | "edit";
+
 export interface ProjectEditorProps {
   readonly value: ProjectEditorValue;
+
+  /** Defaults to `"edit"` — the original behaviour, so no caller changes. */
+  readonly mode?: ProjectEditorMode;
 
   /** Owner's connected connector kinds — the only things selectable in
    *  the allowlist picker (§5.3). Empty array is allowed: it renders the
@@ -596,6 +608,7 @@ function ConnectorsTab({
 export function ProjectEditor(props: ProjectEditorProps): ReactElement {
   const {
     value,
+    mode = "edit",
     availableConnectors,
     canEdit = true,
     activeTab: controlledTab,
@@ -701,6 +714,13 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
     return modeSummary(allowlistMode, allowlist?.length ?? 0);
   }, [allowlist, allowlistMode]);
 
+  // Members renders ONLY when the host supplies the slot — the package's
+  // standard "omitted ⇒ the control is not rendered" rule, applied to a tab.
+  // Neither host passes it, so every user on both surfaces was being offered a
+  // Members tab whose only content was an internal "not wired" notice; on a
+  // `single_user_desktop` profile it also advertised a team surface that the
+  // rail and the settings nav both gate off. A host that genuinely has members
+  // passes the slot and gets the tab back.
   const tabOptions: ReadonlyArray<FilterTabOption<ProjectEditorTabId>> = [
     { slug: "metadata", label: "Name & description" },
     { slug: "appearance", label: "Icon & color" },
@@ -709,7 +729,9 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
       label: "Connectors",
       count: allowlist?.length,
     },
-    { slug: "members", label: "Members" },
+    ...(renderMembersTab !== undefined
+      ? ([{ slug: "members", label: "Members" }] as const)
+      : []),
   ];
 
   // ── Render ─────────────────────────────────────────────────────────
@@ -787,7 +809,7 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
             fontWeight: 600,
           }}
         >
-          Edit project
+          {mode === "create" ? "New project" : "Edit project"}
         </h3>
         <StatusPill
           status={connectorSummary.tone}
@@ -890,9 +912,15 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
             disabled={!dirty || submitting}
             style={submitStyle}
             data-testid="project-editor-save"
-            aria-label="Save project"
+            aria-label={mode === "create" ? "Create project" : "Save project"}
           >
-            {submitting ? "Saving…" : "Save"}
+            {mode === "create"
+              ? submitting
+                ? "Creating…"
+                : "Create"
+              : submitting
+                ? "Saving…"
+                : "Save"}
           </button>
         ) : null}
       </div>

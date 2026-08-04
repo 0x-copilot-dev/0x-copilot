@@ -448,6 +448,9 @@ function chatRow(over: Partial<ChatArchiveRow> = {}): ChatArchiveRow {
     model: "gpt-4o",
     updated_at: "2026-05-17T11:55:00.000Z",
     pinned: false,
+    // These rows ARE this project's chats, so the filed project is `PROJECT`,
+    // not `null` — the section never receives unfiled rows in practice.
+    project_id: PROJECT.id,
     ...over,
   };
 }

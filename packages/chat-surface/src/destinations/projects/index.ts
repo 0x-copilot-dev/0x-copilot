@@ -77,6 +77,7 @@ export {
 
 export {
   ProjectEditor,
+  type ProjectEditorMode,
   type ProjectEditorProps,
   type ProjectEditorTabId,
   type ProjectEditorValue,

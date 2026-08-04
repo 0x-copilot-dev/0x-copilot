@@ -70,6 +70,7 @@ import {
   type ConversationConnectorScopes,
   type ConversationId,
   type ModelSelectionRequest,
+  type ProjectId,
   type RunAttachmentRequest,
   type RunId,
   type RunReceiptV2,
@@ -235,6 +236,7 @@ import {
   THREAD_SWITCHER_DOCK_FLOOR,
   ThreadSwitcherToggle,
   threadSwitcherDockWidth,
+  type ThreadScopeOption,
 } from "../../shell/ThreadSwitcher";
 import { useContainerWidth } from "../../shell/useContainerWidth";
 import { ThreadSwitcherHost } from "./ThreadSwitcherHost";
@@ -1060,6 +1062,20 @@ export interface RunDestinationProps {
    */
   readonly onNewConversation?: () => void;
   /**
+   * PRD-01 D-1.4 — the project the Threads panel is scoped to; `null` (the
+   * default) = All threads.
+   *
+   * These three are HOST-OWNED state, forwarded verbatim to
+   * `ThreadSwitcherHost`. The cockpit does not fetch the project list and does
+   * not decide the scope: the same value qualifies where a new run files, so
+   * the only place filing and filtering can be kept in step is the host that
+   * owns both. Omitting `scopeOptions` gives exactly today's panel — a picker
+   * whose one entry is the state you are already in is not a choice.
+   */
+  readonly scope?: ProjectId | null;
+  readonly scopeOptions?: ReadonlyArray<ThreadScopeOption>;
+  readonly onScopeChange?: (next: ProjectId | null) => void;
+  /**
    * Explicit target run. Wins over auto-resolution and is streamed even before
    * it appears in the run list — the seam PR-3.11 uses to bind the empty→live
    * transition to a freshly-created run without a shell remount (FR-3.25).
@@ -1268,6 +1284,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     onOpenConversation,
     onNewConversation,
+    scope: threadScope = null,
+    scopeOptions: threadScopeOptions,
+    onScopeChange: onThreadScopeChange,
     runId: explicitRunId = null,
     enabled = true,
     agentName,
@@ -4464,6 +4483,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             }
             onOpenConversation={handleOpenConversation}
             onNewRun={onNewConversation}
+            // Host-owned scope, forwarded untouched. The host mounted below
+            // (overlay) gets the SAME three values — one scope, two
+            // presentations, never a per-variant copy of the state.
+            scope={threadScope}
+            scopeOptions={threadScopeOptions}
+            onScopeChange={onThreadScopeChange}
           />
         ) : null}
         <div style={cockpitMainColumnStyle}>
@@ -4583,6 +4608,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               }
               onOpenConversation={handleOpenConversation}
               onNewRun={onNewConversation}
+              scope={threadScope}
+              scopeOptions={threadScopeOptions}
+              onScopeChange={onThreadScopeChange}
               onRequestClose={closeThreadSwitcher}
             />
           </>

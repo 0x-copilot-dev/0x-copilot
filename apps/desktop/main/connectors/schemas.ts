@@ -89,6 +89,30 @@ export const ConnectorAuthorizationResultSchema = z
   })
   .strict();
 
+/**
+ * What crosses the IPC hop for `connector.authorize` — an OUTCOME, not a value
+ * plus an exception channel.
+ *
+ * A cancel and a supersede are ordinary endings, so they resolve. Only a real
+ * failure rejects. That is what stops `ipcMain.handle` printing
+ * `Error occurred in handler for 'connector.authorize'` with a stack trace
+ * every time a user presses Cancel or starts a second connect — output that
+ * read as a crash for the two most ordinary things a user can do.
+ */
+export const ConnectorAuthorizationOutcomeSchema = z.discriminatedUnion(
+  "outcome",
+  [
+    z
+      .object({
+        outcome: z.literal("connected"),
+        result: ConnectorAuthorizationResultSchema,
+      })
+      .strict(),
+    z.object({ outcome: z.literal("cancelled") }).strict(),
+    z.object({ outcome: z.literal("superseded") }).strict(),
+  ],
+);
+
 const CapabilitySummarySchema = z
   .object({
     id: z.string(),

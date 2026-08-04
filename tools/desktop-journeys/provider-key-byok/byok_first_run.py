@@ -26,7 +26,7 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from _lib import DriverSession, load_env_key  # noqa: E402
+from _lib import DriverSession, load_env_key, load_env_value  # noqa: E402
 
 # Facade normalizes some provider slugs on the catalog (e.g. google → gemini).
 # argv provider → (catalog provider slug, substring the model pill should contain).
@@ -36,9 +36,12 @@ PROVIDER_SPEC = {
     "openrouter": ("openrouter", ""),
 }
 
-DEFAULT_MODEL_ID = (
-    "gpt-5.4-mini"  # the deployment default the catalog always leads with
-)
+# The deployment default the catalog always leads with. DERIVED, not hardcoded:
+# the catalog serves `RUNTIME_DEFAULT_MODEL` verbatim, so reading the same
+# setting keeps this assertion true across vendor releases. The literal fallback
+# mirrors the runtime's own compiled-in default (agent_runtime/settings.py) and
+# is the value used when no .env is present — e.g. in a branch worktree.
+DEFAULT_MODEL_ID = load_env_value("RUNTIME_DEFAULT_MODEL", "gpt-5.6-luna")
 
 
 def _assistant_message_count(s: DriverSession) -> int:
@@ -118,9 +121,12 @@ def main() -> int:
                 f"(expected substring {pill_substr!r})"
             )
             if provider == "anthropic":
-                # The FTUE preselect walks provider priority among CONFIGURED models and
-                # must NOT fall back to the keyless deployment default gpt-5.4-mini.
-                assert "gpt-5.4" not in pill.lower(), (
+                # The FTUE preselect walks provider priority among CONFIGURED
+                # models and must NOT fall back to the keyless deployment
+                # default, which is an OpenAI model. Matching on "gpt" rather
+                # than a version keeps this true across releases (the pill shows
+                # a display name — "GPT-5.6 Luna" — not the model id).
+                assert "gpt" not in pill.lower(), (
                     f"anthropic-only key must preselect a Claude model, got {pill!r}"
                 )
             print(f"PASS: composer model pill reflects {provider} ({pill!r})")

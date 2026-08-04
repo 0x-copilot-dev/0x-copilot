@@ -70,9 +70,13 @@ export interface ProviderCatalogEntry {
   readonly isCustom?: boolean;
 }
 
-// Model lists are catalog defaults (DESIGN-SPEC §4 "per-provider MODELS"),
-// not load-bearing — the picked default is a client-side view concern until
-// the summary contract carries a model field (PRD §5.5 drift).
+// Per-provider fallback model lists (DESIGN-SPEC §4 "per-provider MODELS"),
+// used ONLY when the live `/v1/models` probe can't reach the provider or no
+// server-backed `validate` is wired (the first-run port omits it). They are
+// load-bearing in that case: `AddProviderKeyModal` preselects `models[0]`, and
+// that pick is persisted twice — as the key's `default_model` column and as the
+// workspace default runs resolve. So ORDER MATTERS — lead each list with the
+// model a fresh key should open on, not the flagship.
 export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   {
     id: "anthropic",
@@ -80,7 +84,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "sk-ant-…",
     keyPrefix: "sk-ant-",
     contractBacked: true,
-    models: ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4"],
+    models: ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"],
   },
   {
     id: "openai",
@@ -88,7 +92,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "sk-…",
     keyPrefix: "sk-",
     contractBacked: true,
-    models: ["gpt-4o", "gpt-4o-mini", "o3"],
+    models: ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6"],
   },
   {
     id: "openrouter",
@@ -96,10 +100,13 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "sk-or-v1-…",
     keyPrefix: "sk-or-",
     contractBacked: true,
+    // A gateway, so the list offers one strong model per major vendor rather
+    // than a size ladder. It mirrors the native picks above (Sonnet, Luna) plus
+    // an open-weights option.
     models: [
-      "anthropic/claude-opus-4",
-      "openai/gpt-4o",
-      "meta-llama/llama-3.1-70b-instruct",
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5.6-luna",
+      "meta-llama/llama-4-maverick",
     ],
   },
   {
@@ -108,7 +115,14 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "AIza…",
     keyPrefix: "AIza",
     contractBacked: true,
-    models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+    // Flash is Gemini's everyday rung, so it leads. The `gemini-pro` line is
+    // preview-only at present — `gemini-3.1-pro-preview` is its newest
+    // non-deprecated general model, and is what the backend ladder resolves.
+    models: [
+      "gemini-3.6-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-pro-preview",
+    ],
   },
   {
     id: "groq",

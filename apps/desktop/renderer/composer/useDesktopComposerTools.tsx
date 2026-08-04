@@ -17,12 +17,17 @@
 import { useMemo } from "react";
 
 import {
+  ConnectSupersededError,
   useConnectorTools,
   type ComposerConnectorsPort,
   type ConnectorToolsHostPort,
 } from "@0x-copilot/chat-surface";
 
-import { CONNECTOR_CHANNELS } from "../../main/connectors/channels";
+import {
+  CONNECTOR_CHANNELS,
+  CONNECT_CANCELLED,
+  type ConnectorAuthorizationOutcome,
+} from "../../main/connectors/channels";
 
 export interface UseDesktopComposerToolsOptions {
   readonly connectorsPort?: ComposerConnectorsPort;
@@ -79,10 +84,20 @@ export function useDesktopComposerTools(
         const win = window as unknown as { bridge?: Window["bridge"] };
         if (win.bridge === undefined || connectorsPort === undefined) return;
         const server = await connectorsPort.installFromCatalog(entry.slug);
-        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
-          slug: entry.slug,
-          serverId: server.server_id,
-        });
+        const outcome = (await win.bridge.ipc.invoke(
+          CONNECTOR_CHANNELS.authorize,
+          { slug: entry.slug, serverId: server.server_id },
+        )) as ConnectorAuthorizationOutcome;
+        // Main resolves the ordinary endings; only a real failure rejects and
+        // propagates from the invoke above. The shared hook still ends an
+        // attempt by rejecting, so translate here — the same mapping the
+        // connectors binder does, for the same reason.
+        if (outcome.outcome === "superseded") {
+          throw new ConnectSupersededError(entry.slug);
+        }
+        if (outcome.outcome === "cancelled") {
+          throw new Error(CONNECT_CANCELLED);
+        }
         return { serverId: server.server_id };
       },
       // Reaches MAIN, which closes the armed loopback so the `authorize` above

@@ -40,7 +40,9 @@ const CONNECTORS: ReadonlyArray<ProjectEditorConnectorOption> = [
 ];
 
 describe("ProjectEditor", () => {
-  it("renders all four tab options and starts on metadata by default", () => {
+  it("renders the always-on tabs and starts on metadata by default", () => {
+    // "members" is no longer among them — it renders only when the host passes
+    // `renderMembersTab` (see the omission test below).
     render(
       <ProjectEditor
         value={makeValue()}
@@ -52,7 +54,7 @@ describe("ProjectEditor", () => {
       "data-active-tab",
       "metadata",
     );
-    for (const slug of ["metadata", "appearance", "connectors", "members"]) {
+    for (const slug of ["metadata", "appearance", "connectors"]) {
       expect(screen.getByTestId(`filter-tab-${slug}`)).toBeInTheDocument();
     }
     expect(
@@ -304,7 +306,11 @@ describe("ProjectEditor", () => {
     expect(renderMembersTab).toHaveBeenCalled();
   });
 
-  it("renders a fallback EmptyState on the Members tab when no slot is supplied", () => {
+  it("omits the Members tab entirely when no slot is supplied", () => {
+    // Was: the tab rendered a "Members tab not wired" EmptyState. Neither host
+    // passes the slot, so EVERY user on both surfaces was offered a Members tab
+    // whose only content was that internal notice — and on a solo desktop it
+    // advertised a team surface the rail and settings nav both gate off.
     render(
       <ProjectEditor
         value={makeValue()}
@@ -312,8 +318,35 @@ describe("ProjectEditor", () => {
         onSave={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByTestId("filter-tab-members"));
-    expect(screen.getByText("Members tab not wired")).toBeInTheDocument();
+    expect(screen.queryByTestId("filter-tab-members")).not.toBeInTheDocument();
+    expect(screen.queryByText("Members tab not wired")).not.toBeInTheDocument();
+  });
+
+  it("titles the sheet and its primary action for the job it is doing", () => {
+    const { rerender } = render(
+      <ProjectEditor
+        value={makeValue()}
+        availableConnectors={CONNECTORS}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Edit project")).toBeInTheDocument();
+    expect(screen.getByTestId("project-editor-save")).toHaveTextContent("Save");
+
+    // Create reuses this editor verbatim, so without `mode` it offered to
+    // "Save" an "Edit project" for a project that did not exist yet.
+    rerender(
+      <ProjectEditor
+        mode="create"
+        value={makeValue()}
+        availableConnectors={CONNECTORS}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("New project")).toBeInTheDocument();
+    expect(screen.getByTestId("project-editor-save")).toHaveTextContent(
+      "Create",
+    );
   });
 
   it("renders the optional onDelete button with the supplied label", () => {

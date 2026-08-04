@@ -19,6 +19,7 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import {
+  modelSelectionForId,
   useConnectorTools,
   type ComposerConnectorsPort,
   type ConnectorToolsHostPort,
@@ -30,10 +31,7 @@ import type { RequestIdentity } from "../../api/config";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import { toReadableRunAttachments } from "../onboarding/firstRunAttachments";
-import {
-  modelSelectionForId,
-  useOnboardingComposerModels,
-} from "../onboarding/useOnboardingComposerModels";
+import { useOnboardingComposerModels } from "../onboarding/useOnboardingComposerModels";
 
 /** No-op for the composer's Settings deep-links the run cockpit surfaces elsewhere. */
 function noop(): void {

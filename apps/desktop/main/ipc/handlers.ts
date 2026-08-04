@@ -25,11 +25,11 @@ import type { RendererGrant } from "../capabilities/types";
 import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
 import {
   CONNECTOR_CHANNELS,
-  type ConnectorAuthorizationResult,
+  type ConnectorAuthorizationOutcome,
 } from "../connectors/channels";
 import {
   AuthorizeParamsSchema,
-  ConnectorAuthorizationResultSchema,
+  ConnectorAuthorizationOutcomeSchema,
   ConnectorCatalogResponseSchema,
   ListCatalogParamsSchema,
 } from "../connectors/schemas";
@@ -106,10 +106,11 @@ export interface ConnectorHandlers {
     readonly productScope?: DesktopRequestedProductScope;
     readonly oauthClient?: McpOAuthClientConfigRequest;
     readonly callbackMode?: "loopback" | "deep_link";
-  }): Promise<ConnectorAuthorizationResult>;
+  }): Promise<ConnectorAuthorizationOutcome>;
   /**
-   * Abort the connect awaiting a redirect, causing its `authorize` to reject.
-   * Idempotent and a no-op when nothing is pending.
+   * Abort the connect awaiting a redirect. Its `authorize` then RESOLVES with
+   * `{outcome: "cancelled"}` rather than rejecting — a cancel is an ending, not
+   * a fault. Idempotent and a no-op when nothing is pending.
    */
   cancelPendingAuthorize(): void;
 }
@@ -507,9 +508,15 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
           AuthorizeParamsSchema,
           raw,
         );
-        const result = await connectors.authorize(params);
+        // Resolves for a cancel or a supersede rather than throwing. Those are
+        // ordinary endings, and `ipcMain.handle` prints a full stack trace for
+        // ANYTHING this callback throws — so modelling them as errors wrote
+        // what looked like a crash into the terminal every time a user pressed
+        // Cancel or started a second connect. A rejection here now means
+        // something actually went wrong.
+        const outcome = await connectors.authorize(params);
         // Only the SAFE connection metadata may cross to the renderer.
-        return ConnectorAuthorizationResultSchema.parse(result);
+        return ConnectorAuthorizationOutcomeSchema.parse(outcome);
       },
     );
 

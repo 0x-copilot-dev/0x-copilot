@@ -11,6 +11,7 @@
 // imported directly by relative path (like `adapterAllowlist.ts`) so the same
 // on-disk file drives the runtime guards + id codec below.
 import contract from "../../service-contracts/src/copilot_service_contracts/work_ledger.json";
+import { wireKeys } from "./wireKeys";
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -881,6 +882,15 @@ const _SOURCE_OPEN_SOURCE_ID =
   /^source:v2:[0-9]{1,12}:(connector|artifact|workspace|browser|sandbox|subagent|external_receipt)$/;
 const _SOURCE_OPEN_ARTIFACT_ID =
   /^(?!file:)[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/i;
+const _SOURCE_OPEN_RESULT_KEYS = wireKeys<SourceOpenResultV2>({
+  v: true,
+  source_id: true,
+  kind: true,
+  disposition: true,
+  artifact_id: true,
+  artifact_revision: true,
+  artifact_kind: true,
+});
 
 /** Strict client-boundary guard: an opener response with extra fields is
  * rejected rather than accidentally rendering a newly leaked raw reference. */
@@ -892,15 +902,7 @@ export function isSourceOpenResultV2(
   }
   const result = value as Record<string, unknown>;
   if (
-    !_hasOnlyKeys(result, [
-      "v",
-      "source_id",
-      "kind",
-      "disposition",
-      "artifact_id",
-      "artifact_revision",
-      "artifact_kind",
-    ]) ||
+    !_hasOnlyKeys(result, _SOURCE_OPEN_RESULT_KEYS) ||
     result.v !== 2 ||
     typeof result.source_id !== "string" ||
     !_SOURCE_OPEN_SOURCE_ID.test(result.source_id) ||
@@ -3210,12 +3212,30 @@ const _PENDING_WORK_V2_STATUSES = new Set<PendingWorkStatusV2>([
 const _PENDING_WORK_V2_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const _PENDING_WORK_V2_SUBJECT_ID =
   /^(?!file:)[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/i;
+const _PENDING_WORK_ITEM_V2_KEYS = wireKeys<PendingWorkItemV2>({
+  run_id: true,
+  subject_kind: true,
+  subject_id: true,
+  status: true,
+  opened_sequence_no: true,
+  latest_sequence_no: true,
+});
+const _PENDING_WORK_V2_RUN_WARNING_KEYS = wireKeys<PendingWorkV2RunWarning>({
+  run_id: true,
+  status: true,
+});
+const _PENDING_WORK_V2_RESPONSE_KEYS = wireKeys<PendingWorkV2Response>({
+  v: true,
+  items: true,
+  warnings: true,
+  next_cursor: true,
+  has_more: true,
+});
 
 function _hasOnlyKeys(
   value: Record<string, unknown>,
-  keys: readonly string[],
+  allowed: ReadonlySet<string>,
 ): boolean {
-  const allowed = new Set(keys);
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
@@ -3224,14 +3244,7 @@ function _isPendingWorkItemV2(value: unknown): value is PendingWorkItemV2 {
     return false;
   const item = value as Record<string, unknown>;
   return (
-    _hasOnlyKeys(item, [
-      "run_id",
-      "subject_kind",
-      "subject_id",
-      "status",
-      "opened_sequence_no",
-      "latest_sequence_no",
-    ]) &&
+    _hasOnlyKeys(item, _PENDING_WORK_ITEM_V2_KEYS) &&
     typeof item.run_id === "string" &&
     _PENDING_WORK_V2_RUN_ID.test(item.run_id) &&
     typeof item.subject_id === "string" &&
@@ -3252,7 +3265,7 @@ function _isPendingWorkV2RunWarning(
     return false;
   const warning = value as Record<string, unknown>;
   return (
-    _hasOnlyKeys(warning, ["run_id", "status"]) &&
+    _hasOnlyKeys(warning, _PENDING_WORK_V2_RUN_WARNING_KEYS) &&
     typeof warning.run_id === "string" &&
     _PENDING_WORK_V2_RUN_ID.test(warning.run_id) &&
     warning.status === "omitted"
@@ -3267,13 +3280,7 @@ export function isPendingWorkV2Response(
     return false;
   const response = value as Record<string, unknown>;
   return (
-    _hasOnlyKeys(response, [
-      "v",
-      "items",
-      "warnings",
-      "next_cursor",
-      "has_more",
-    ]) &&
+    _hasOnlyKeys(response, _PENDING_WORK_V2_RESPONSE_KEYS) &&
     response.v === 2 &&
     Array.isArray(response.items) &&
     response.items.every(_isPendingWorkItemV2) &&

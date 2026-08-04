@@ -132,6 +132,30 @@ export interface AssistantComposerProps {
    */
   bypassTrigger?: ReactNode;
   /**
+   * Where this chat BELONGS — the project-filing zone (`<ProjectFilingChip>`),
+   * rendered directly BELOW the composer frame.
+   *
+   * BELOW is the whole point, and it is why this is a second zone rather than a
+   * tenth control in the action row. What the agent can REACH sits ABOVE the
+   * frame (the folder bar: many folders, granted per chat); where the work
+   * BELONGS sits BELOW it (one project, or none). Capability points up, filing
+   * points down. Merging the two into one row was considered and rejected — it
+   * reads as one list of "things attached to this message", which filing is not:
+   * a grant is a per-chat capability, a project is a fact about the chat that
+   * outlives every message in it.
+   *
+   * A SLOT, not data props, for the same reason as {@link bypassTrigger}: the
+   * project list and the `project_id` write are host-owned (facade reads), and a
+   * substrate-agnostic core must not learn to fetch them. Unlike the bypass
+   * trigger it is NOT gated on `workspaceGrantPort` — filing is not a
+   * filesystem capability, so it must render on web, where there is no grant
+   * port and therefore never a folder bar.
+   *
+   * Omitted (or null) → the zone is absent and adds no height, which is the
+   * correct degradation for a host that has no projects surface.
+   */
+  readonly projectFilingSlot?: ReactNode;
+  /**
    * Host slot for the `+` plus-menu popover (portal + outside-click). See
    * {@link AssistantComposerPlusMenuSlotArgs}.
    */
@@ -283,6 +307,7 @@ export const AssistantComposer = forwardRef<
     filePicker,
     workspaceGrantPort,
     hasSentFirstMessage = true,
+    projectFilingSlot,
     renderPlusMenu,
     skillInstructionPrompt,
     mcpServerInstructionPrompt,
@@ -389,6 +414,13 @@ export const AssistantComposer = forwardRef<
   // the chat must not have started yet.
   const folderBarVisible = folderControlsVisible && !hasSentFirstMessage;
 
+  // Absent means ABSENT, for `undefined` (the host never wired filing) and for
+  // `null` alike (the host wired it but has nothing to file into yet) — a host
+  // that computes `projects.length > 0 ? <chip/> : null` is the natural binder
+  // shape, and it must not leave an empty row under the composer.
+  const filingZoneVisible =
+    projectFilingSlot !== undefined && projectFilingSlot !== null;
+
   const openFilePicker = useCallback(
     async (accept: string): Promise<void> => {
       const selections = await filePicker.pick({
@@ -446,12 +478,14 @@ export const AssistantComposer = forwardRef<
     [onOpenSkillsPanel, showSlashCue],
   );
 
-  // The folder line sits ABOVE the composer frame, not inside it (PRD-FS-10
-  // §4.1) — it is context for what follows, in the place Claude Code and Codex
-  // put the working folder. When a bar IS shown the pair is wrapped in
-  // `.aui-composer-stack` (see the return), so the page's gap lands outside
-  // the pair rather than between them; when it is not, this element is
-  // returned bare and every mount that never shows a bar is untouched.
+  // The frame has up to two satellites, and which side each takes is the design
+  // (see `projectFilingSlot`): the folder line sits ABOVE it, not inside it
+  // (PRD-FS-10 §4.1) — context for what follows, in the place Claude Code and
+  // Codex put the working folder — and the filing zone sits BELOW it. When
+  // EITHER is shown the group is wrapped in `.aui-composer-stack` (see the
+  // return), so the page's gap lands outside the group rather than between its
+  // parts; with neither, this element is returned bare and every mount that has
+  // no satellite is untouched.
   const composer = (
     <Composer
       ref={setComposerRef}
@@ -739,28 +773,37 @@ export const AssistantComposer = forwardRef<
     />
   );
 
-  if (!folderBarVisible) {
+  // The stack is the wrapper for the frame AND its satellites, so it is needed
+  // as soon as EITHER exists — gating it on the bar alone (which is what this
+  // was) would have dropped the filing zone on web, where there is no
+  // `WorkspaceGrantPort` and therefore never a bar.
+  if (!folderBarVisible && !filingZoneVisible) {
     return composer;
   }
 
   return (
-    // ONE element, not a fragment. The bar and the composer are a single unit —
-    // the bar describes what THIS composer can reach — but as sibling fragment
-    // children they became two independent flex children of whatever laid the
-    // composer out, so the PAGE's gap landed between them. In the FTUE that is
+    // ONE element, not a fragment. The frame and its satellites are a single
+    // unit — the bar describes what THIS composer can reach, the filing zone
+    // where its output belongs — but as sibling fragment children they became
+    // independent flex children of whatever laid the composer out, so the
+    // PAGE's gap landed between them. In the FTUE that is
     // `.fr-compose { gap: var(--space-lg) }`, which pushed the bar ~16px clear
     // of the frame and made it read as unrelated page furniture. Wrapping makes
-    // the pair take the page gap ONCE, from outside, and lets the bar sit tight
-    // to the frame it belongs to.
+    // the group take the page gap ONCE, from outside, and lets each satellite
+    // sit tight to the frame it belongs to (`.aui-composer-stack`'s own 6px gap
+    // is the whole distance for both joins).
     <div className="aui-composer-stack">
-      <WorkspaceFolderBar
-        grants={barGrants}
-        error={folderGrants.error}
-        busy={folderGrants.busy}
-        onAttach={attachFolder}
-        onRevoke={revokeFolder}
-      />
+      {folderBarVisible ? (
+        <WorkspaceFolderBar
+          grants={barGrants}
+          error={folderGrants.error}
+          busy={folderGrants.busy}
+          onAttach={attachFolder}
+          onRevoke={revokeFolder}
+        />
+      ) : null}
       {composer}
+      {filingZoneVisible ? projectFilingSlot : null}
     </div>
   );
 });

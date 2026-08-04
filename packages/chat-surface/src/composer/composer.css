@@ -306,28 +306,34 @@
  * Geometry mirrors the composer shell it sits on (`.aui-composer`: same
  * `max-width`, same auto margins) so the folder name lines up with the `+`
  * below it instead of floating over the rail's full width. */
-/* The bar + the composer frame as ONE layout unit. Without this they are two
-   flex children of the host's own column and inherit ITS gap — 16px in the
-   FTUE — so the bar floats clear of the frame it describes. The pair takes the
-   page gap once, from outside; the distance to the frame is set here. */
+/* The frame + its satellites as ONE layout unit — the bar above it, the project
+   filing zone below it. Without this they are separate flex children of the
+   host's own column and inherit ITS gap — 16px in the FTUE — so each floats
+   clear of the frame it describes. The group takes the page gap once, from
+   outside; the distance to the frame is set here. */
 .aui-composer-stack {
   display: flex;
   flex-direction: column;
-  /* 6px, and it is the WHOLE bar-to-frame distance — see the margin reset
-     below. Two sources fed this join before (this gap PLUS `.aui-composer`'s
-     own `margin-top: var(--space-sm)`), which is why setting it to 2 measured
-     10 and setting it to 6 measured 14. */
+  /* 6px, and it is the WHOLE distance on BOTH joins (bar→frame and
+     frame→filing) — see the margin reset below. Two sources fed the top join
+     before (this gap PLUS `.aui-composer`'s own `margin-top: var(--space-sm)`),
+     which is why setting it to 2 measured 10 and setting it to 6 measured 14.
+     Nothing to reset underneath: the frame's margin-bottom is already 0. */
   gap: 6px;
   min-width: 0;
   width: 100%;
 }
 
 /* The frame's top margin separates it from whatever sits above — in the FTUE
-   the starter chips. Inside the stack the BAR is what sits above, and the
-   stack's gap already spaces them, so the margin would be a second helping.
-   Scoped to the stack, which exists only when the bar is rendered (see the
-   `folderBarVisible` early return), so a composer with no bar keeps its 8px. */
-.aui-composer-stack > .aui-composer {
+   the starter chips. When the BAR is what sits above, the stack's gap already
+   spaces them and the margin would be a second helping.
+
+   Scoped to that ADJACENCY, not to the stack: the stack now also wraps a
+   bar-less composer that has only the filing zone below it (web has no
+   `WorkspaceGrantPort`, so it never gets a bar — see `filingZoneVisible` in
+   AssistantComposer.tsx), and there the frame is still the top of the group and
+   its 8px is still the distance to the page above. */
+.aui-composer-stack > .aui-folder-bar + .aui-composer {
   margin-top: 0;
 }
 
@@ -441,6 +447,104 @@
   white-space: nowrap;
 }
 
+/* Project filing zone (ProjectFilingChip.tsx) — where the chat BELONGS, BELOW
+ * the frame. The folder bar's mirror image, and the asymmetry is the design:
+ * capability (many folders, what the agent can REACH) points up, filing (one
+ * project, or none) points down.
+ *
+ * PLACEMENT ONLY. The chip owns its own internals inline — the label/pill row,
+ * the popover anchor — because those travel with the component. What it cannot
+ * know is where the composer frame's edges are, so the geometry is set here and
+ * mirrors `.aui-composer` (same `max-width`, same auto margins) plus the folder
+ * bar's 2px inset, which gives the two satellites ONE shared left edge instead
+ * of a stagger a reader would notice down the column.
+ *
+ * No margin: the stack's `gap` is the single source for both joins (the bar
+ * taught us that two sources make a 6 measure 14). No `:empty` guard either —
+ * an absent slot renders no element at all, so it adds neither height nor gap
+ * (`filingZoneVisible` in AssistantComposer.tsx).
+ *
+ * Stranded on web today, like every rule in this file: `composer.css` is
+ * imported by the desktop host only, and web forks composer rules into its own
+ * styles.css. Unlike the folder bar there is no capability gate making that
+ * harmless here — filing is not a filesystem capability and DOES render on web
+ * — so the web fork needs these rules, or web must import this file. */
+.aui-composer-filing {
+  margin: 0 auto;
+  max-width: var(--chat-content-width);
+  min-width: 0;
+  padding: 0 2px;
+  width: 100%;
+}
+
+/* The filing menu's own row density.
+ *
+ * The first cut reused `.ui-pop-row` — the recipe the `+` menu needs, built for
+ * "MCP Servers ▸" rows: a 24px leading glyph, a sub-line slot, and a full radio
+ * control, at 36px a row. Correct there, and about twice the furniture a
+ * two-item pick-list has any use for; the radios in particular read as a form
+ * you submit rather than a menu you pick from.
+ *
+ * So the FRAME stays shared (`.ui-pop` keeps every popover's background, border,
+ * radius and shadow in one place) and only the rows get tighter. That split is
+ * deliberate: density is this menu's business, chrome is not.
+ */
+.aui-filing-menu {
+  width: 212px;
+  padding: 4px;
+}
+
+.aui-filing-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  display: flex;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.aui-filing-row:hover,
+.aui-filing-row:focus-visible {
+  background: var(--color-surface);
+}
+
+/* The name. `min-width: 0` so a long project name ellipsises instead of forcing
+ * the menu wider than the 212px the design fixes it at. */
+.aui-filing-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Selection is a bare check, not a radio: one of these is always true, and the
+ * menu closes on pick, so the control never needs to show an unselected slot. */
+.aui-filing-row__check {
+  color: var(--color-accent);
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 12px;
+}
+
+.aui-filing-row--new {
+  color: var(--color-text-subtle);
+}
+
+.aui-filing-sep {
+  background: var(--color-border);
+  height: 1px;
+  margin: 4px 6px;
+}
+
 /* Design `.cmp-row{display:flex;align-items:center;gap:5px;padding:6px 8px 8px}`.
  * The inset lives here because the shell is padding-free (see `.aui-composer`).
  * No `justify-content` — the right cluster's own `margin-left:auto` does the
@@ -480,13 +584,50 @@
   min-width: 0;
 }
 
+/* OUT OF FLOW, exactly like `.aui-composer-slash-cue` below and for the same
+ * reason: a transient notice must not resize the control strip it annotates.
+ *
+ * In flow this was a flex item in the right cluster with `white-space: nowrap`,
+ * no `min-width: 0` and no `overflow` — so its automatic minimum size was the
+ * FULL sentence (~300px for "Voice transcription is unavailable right now."),
+ * and shrink could not go below that floor. That width joined the cluster's
+ * min-content size, and since the row is `flex-wrap: wrap` (the narrow-rail
+ * safety valve above), the moment it no longer fit beside [+ · Tools · mode]
+ * the ENTIRE right cluster — model pill, mic, send — dropped onto a second
+ * line and the composer grew a row. The mic failing made the composer taller.
+ *
+ * Ellipsizing in place (the `.aui-composer-focus-meta` pattern) was the other
+ * option and is worse: at rail width it truncates the one sentence whose whole
+ * job is explaining the failure, down to "Voice transcript…".
+ *
+ * Anchored against `.aui-composer-action-wrapper` (the nearest positioned
+ * ancestor — `__right` is deliberately NOT positioned) and pinned right so it
+ * sits directly over the mic it describes. It floats over the textarea's lower
+ * edge, so it carries the slash cue's surface + shadow to stay legible over
+ * typed text. `max-width` + ellipsis keep a long message inside the composer.
+ *
+ * Note this element stays INSIDE `.aui-composer-action-wrapper__right` in the
+ * DOM (it belongs with the mic for reading order); being absolutely positioned
+ * is what takes it out of that flex container's sizing. */
 .aui-composer-dictation-status {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  bottom: calc(100% + 0.25rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
+  max-width: calc(100% - 1rem);
+  overflow: hidden;
+  padding: 0.25rem 0.5rem;
+  position: absolute;
+  right: 0.5rem;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .aui-composer-dictation-status[data-state="error"] {
+  border-color: var(--color-danger-line);
   color: var(--color-danger);
 }
 

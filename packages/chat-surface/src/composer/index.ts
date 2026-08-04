@@ -129,3 +129,16 @@ export {
   type ComposerModelPreferenceOptions,
 } from "./modelPreference";
 // === end Model-pill memory ===
+// === Model-catalog helpers — building the pill's list + its default ===
+// The PURE half of both hosts' composer binders: fold the fetched
+// `/v1/agent/models` catalog together with installed local models, rank the
+// default (per-provider tier ladder, never an off-ladder specialty row), and
+// resolve a picked id to the run-create wire selection. Fetching stays
+// host-owned; nothing here touches a substrate global.
+export {
+  mergeCatalog,
+  defaultSelectedModelId,
+  modelSelectionForId,
+  type PickerCatalogModel,
+} from "./modelCatalog";
+// === end Model-catalog helpers ===

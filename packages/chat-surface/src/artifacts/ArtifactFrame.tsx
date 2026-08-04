@@ -11,10 +11,24 @@ export function ArtifactFrame(props: {
   readonly downloadPort?: ArtifactDownloadPort;
   readonly children?: ReactNode;
 }): ReactElement {
-  if (
-    props.status === "loading" ||
-    (props.artifact === null && props.status !== "deleted")
-  )
+  // The placeholder is for a fetch still in flight, and NOTHING else. It used
+  // to double as the fallback for `artifact === null`, which meant a fetch that
+  // failed outright — `status: "error"`, artifact nulled — rendered as a
+  // spinner, and `artifact-error` below was unreachable. A wire-contract drift
+  // that stopped every artifact from loading therefore read as "slow" rather
+  // than "broken", and took a live A/B to tell apart.
+  //
+  // `error` is deliberately NOT the second check: `useArtifactSurface` also
+  // reports it with the artifact intact, for a host that has the metadata but
+  // cannot stream content. That state owns a frame plus its notice, so the
+  // error card is keyed on having nothing to show, not on the status alone.
+  if (props.status === "deleted")
+    return (
+      <section className="ui-card" data-testid="artifact-deleted" role="status">
+        This artifact was deleted or is no longer available.
+      </section>
+    );
+  if (props.status === "loading")
     return (
       <section
         className="ui-card"
@@ -22,12 +36,6 @@ export function ArtifactFrame(props: {
         aria-busy="true"
       >
         Loading artifact…
-      </section>
-    );
-  if (props.status === "deleted")
-    return (
-      <section className="ui-card" data-testid="artifact-deleted" role="status">
-        This artifact was deleted or is no longer available.
       </section>
     );
   if (props.artifact === null)

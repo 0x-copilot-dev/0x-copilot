@@ -4,8 +4,16 @@
 // `api/agentApi.listModels` — never a hardcoded list (SPEC / FirstRunSurface's
 // `models` contract). Each catalog row carries a server-computed `configured`
 // flag (true only when the user has that provider's BYOK key), so unusable
-// models are shown disabled rather than hidden. This intentionally differs
-// from the Run cockpit's composer, which still uses a static curated list.
+// models are shown disabled rather than hidden.
+//
+// The PURE half — folding the fetched catalog into the picker shape, ranking
+// which row the pill opens on, and resolving a pick to the run-create wire
+// selection — is `@0x-copilot/chat-surface`'s `composer/modelCatalog`, shared
+// with the desktop host. This file owns only the impure half: the fetch, the
+// local-engine injection, and the React state. It used to carry its own copy of
+// `defaultSelectedModelId` that was just "first configured row in catalog
+// order", which is how an Anthropic-only user opened the FTUE on Claude Fable 5
+// — the dearest model Anthropic sells.
 //
 // Local-engine honesty (mirrors the desktop `useOnboardingComposerModels`):
 // when the user picked the on-device model (a download was started →
@@ -16,11 +24,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { QWEN3_4B_PRESET } from "@0x-copilot/chat-surface";
-import type {
-  ModelCatalogModel,
-  ModelSelectionRequest,
-} from "@0x-copilot/api-types";
+import {
+  QWEN3_4B_PRESET,
+  defaultSelectedModelId,
+  mergeCatalog,
+  type PickerCatalogModel,
+} from "@0x-copilot/chat-surface";
 
 import { listModels } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
@@ -29,12 +38,8 @@ import type { RequestIdentity } from "../../api/config";
  *  churning as the resolved Ollama tag lands mid-download. */
 export const LOCAL_ENGINE_MODEL_ID = "first-run-local";
 
-export type OnboardingCatalogModel = ModelCatalogModel & {
-  disabled?: boolean;
-};
-
 export interface OnboardingComposerModels {
-  readonly models: OnboardingCatalogModel[];
+  readonly models: PickerCatalogModel[];
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
 }
@@ -51,7 +56,10 @@ export function useOnboardingComposerModels(
   args: UseOnboardingComposerModelsArgs,
 ): OnboardingComposerModels {
   const { identity, localModelPct, modelName } = args;
-  const [catalog, setCatalog] = useState<OnboardingCatalogModel[]>([]);
+  const [catalog, setCatalog] = useState<PickerCatalogModel[]>([]);
+  // The deployment's declared default — an explicit choice, so it outranks the
+  // tier heuristic within the winning provider (see `defaultSelectedModelId`).
+  const [defaultModelId, setDefaultModelId] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>("");
 
   useEffect(() => {
@@ -60,13 +68,13 @@ export function useOnboardingComposerModels(
       .then((res) => {
         if (cancelled) return;
         // The catalog's per-item `configured` reflects the user's BYOK keys;
-        // surface unusable rows disabled rather than hidden (honest picker).
+        // `mergeCatalog` surfaces unusable rows disabled rather than hidden
+        // (honest picker). No local models on the web host — the on-device
+        // engine is injected below when a pull is in flight.
         setCatalog(
-          res.models.map((model) => ({
-            ...model,
-            disabled: model.configured === false,
-          })),
+          mergeCatalog({ cloudModels: res.models, localModelNames: [] }),
         );
+        setDefaultModelId(res.default_model_id ?? "");
       })
       .catch(() => {
         // Catalog probe failed → empty list; the run-start error path is the
@@ -80,13 +88,13 @@ export function useOnboardingComposerModels(
 
   const isLocalEngine = localModelPct !== null;
 
-  const models = useMemo<OnboardingCatalogModel[]>(() => {
+  const models = useMemo<PickerCatalogModel[]>(() => {
     if (!isLocalEngine) {
       return catalog;
     }
     // Local engine — surface the on-device model as the honest, selectable lead
     // even before `/v1/agent/models` reflects the fresh pull.
-    const localEntry: OnboardingCatalogModel = {
+    const localEntry: PickerCatalogModel = {
       id: LOCAL_ENGINE_MODEL_ID,
       provider: "ollama",
       model_name: modelName ?? QWEN3_4B_PRESET.name,
@@ -102,51 +110,22 @@ export function useOnboardingComposerModels(
   }, [catalog, isLocalEngine, modelName]);
 
   // Keep a valid selection: preserve the user's pick when still present, else
-  // fall back to the first usable model (the on-device entry leads on the local
-  // path).
+  // fall back to the shared provider-aware default — the backend
+  // `default_model_id` when usable, else the winning provider's preferred rung
+  // (never an off-ladder specialty row, never a keyless one). The on-device
+  // entry leads on the local path and is the only usable row on the first pass,
+  // so it wins that fallback outright.
   useEffect(() => {
     setSelectedModel((current) =>
       current !== "" && models.some((m) => m.id === current)
         ? current
-        : defaultSelectedModelId(models),
+        : defaultSelectedModelId(models, { defaultModelId }),
     );
-  }, [models]);
+  }, [models, defaultModelId]);
 
   const onModelChange = useCallback((id: string): void => {
     setSelectedModel(id);
   }, []);
 
   return { models, selectedModel, onModelChange };
-}
-
-/** First selectable (configured, enabled, non-disabled) model, else the first
- *  entry. */
-export function defaultSelectedModelId(
-  models: readonly OnboardingCatalogModel[],
-): string {
-  const usable = models.find(
-    (m) => m.configured && m.disabled !== true && m.enabled !== false,
-  );
-  return (usable ?? models[0])?.id ?? "";
-}
-
-/** Wire `model` selection for a run-create body, resolved from the picked id.
- *  Mirrors the desktop `modelSelectionForId`. */
-export function modelSelectionForId(
-  models: readonly OnboardingCatalogModel[],
-  id: string,
-): ModelSelectionRequest | null {
-  if (id === "") {
-    return null;
-  }
-  const model = models.find((m) => m.id === id);
-  if (!model) {
-    // Unknown id — send the bare model name so the runtime can still resolve it.
-    return { model_name: id };
-  }
-  return {
-    provider: model.provider,
-    model_name: model.model_name,
-    reasoning: model.reasoning ?? null,
-  };
 }

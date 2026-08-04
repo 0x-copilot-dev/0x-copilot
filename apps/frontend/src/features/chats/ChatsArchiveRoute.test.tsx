@@ -63,6 +63,9 @@ function makeRow(overrides: Partial<ChatArchiveRow> = {}): ChatArchiveRow {
     model: "gpt-4o",
     updated_at: "2026-07-18T11:00:00Z",
     pinned: false,
+    // The archive is the UNSCOPED chat list, so an unfiled row is the honest
+    // default; a filed one is spelled out by the overrides where it matters.
+    project_id: null,
     ...overrides,
   };
 }
