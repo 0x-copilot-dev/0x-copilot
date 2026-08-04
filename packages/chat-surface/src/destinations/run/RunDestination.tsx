@@ -2503,6 +2503,22 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return byId;
   }, [conversationCanvas]);
 
+  // The artifact record's own title, keyed by artifact id. Hoisted to component
+  // scope for exactly the reason `accentByArtifactId` above was: buried inside
+  // the `v2CanvasTabs` memo it could only reach the Studio tab strip, so every
+  // OTHER consumer fell back to the lifecycle fold's synthesized `<kind>
+  // artifact` label. That is why Focus mode shows "document artifact" where the
+  // tab strip shows "forecast-notes.md" — same artifact, two names, driven by
+  // which side of a memo boundary the consumer happened to sit on.
+  const artifactTitleById = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const subject of conversationCanvas.subjects) {
+      if (subject.kind === "artifact" && subject.title)
+        byId.set(subject.subjectId, subject.title);
+    }
+    return byId;
+  }, [conversationCanvas]);
+
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
     const legacyUris = new Set<string>();
@@ -2526,14 +2542,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       hue?: SurfaceHue;
     }> = [];
     const seen = new Set<string>();
-    // The artifact record's own title, keyed by artifact id. One authoritative
-    // source of display identity for both the current run's tabs and prior
-    // turns', so a tab and its panel header cannot disagree.
-    const canvasTitleById = new Map<string, string>();
-    for (const subject of conversationCanvas.subjects) {
-      if (subject.kind !== "artifact") continue;
-      if (subject.title) canvasTitleById.set(subject.subjectId, subject.title);
-    }
     const add = (
       uri: string,
       title: string,
@@ -2565,7 +2573,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             // tab strip. Prior-turn subjects below already use this same
             // authoritative title; this makes the current run agree with them
             // instead of keeping a second, lossier derivation.
-            `${canvasTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
+            `${artifactTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
             subject.lastSeq,
             subject.key,
             false,
