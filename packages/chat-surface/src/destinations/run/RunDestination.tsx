@@ -145,6 +145,7 @@ import { ReceiptV2LaunchCard, ReceiptV2Surface } from "../../surfaces/receipt";
 import type { FilesystemBypassSelection } from "../../composer/filesystemBypass";
 import { PostureChip } from "./PostureChip";
 import { TcWriteGateCard } from "../../thread-canvas/TcWriteGateCard";
+import { isIrreversible } from "../../thread-canvas/TcChat";
 import type { TcChatApproval } from "../../thread-canvas/TcChat";
 import { PendingCounterChip } from "./PendingCounterChip";
 
@@ -3939,9 +3940,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // holding the real `ledgerId` this decision will be recorded under — so
   // Review goes there rather than mounting a second, thinner copy inline that
   // would have to omit or invent the audit anchor.
-  const handleReviewWriteGate = useCallback((): void => {
-    setMode("studio");
-  }, [setMode]);
+  // The gate's audit anchor, for the transcript row's expanded body.
+  //
+  // A LOOKUP, not a derivation. `gateId === approvalId` by construction — the
+  // backend mints the gate id from the interrupt's `approval_id` — so the real
+  // `ledgerId` is one map read away. Deriving it instead from the approval's
+  // own `sequenceNo` would compile and be WRONG: the ledger id anchors on the
+  // `gate.opened` event, which is appended after the interrupt envelope and at
+  // a non-fixed offset, so the two sequence numbers differ and the printed
+  // anchor would point at a different ledger row than the compliance record.
+  //
+  // `ledger.gates` rather than `openGates`: the map retains resolved gates with
+  // their id stamped at `gate.opened` and never rewritten, so a receipt keeps
+  // showing the anchor the decision was actually recorded under.
+  const ledgerIdByApprovalId = useCallback(
+    (approvalId: string): string | undefined =>
+      ledger.gates.get(approvalId)?.ledgerId,
+    [ledger],
+  );
+
+  // NO host handler for "Review" any more, deliberately.
+  //
+  // It briefly switched to Studio, because the canvas was the only surface
+  // that rendered a parked write's payload. The row expands in place now, so
+  // keeping that would drag the reader out of Focus on every expand — the
+  // exact trip this change exists to remove. The row's toggle is local and
+  // needs nothing from the host, which is also why it can no longer become the
+  // dead control it was when its only behaviour lived behind a callback.
 
   const focusCards =
     surfacesV2 && displayedCanvasLifecycle !== null ? (
@@ -4234,17 +4259,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           : {})}
         onWorkspaceGrantDeny={workspaceGrants.deny}
         onWorkspaceGrantCancel={workspaceGrants.cancel}
-        // The write-gate row's "Review →" had NO producer, so it was a dead
-        // button — and for an IRREVERSIBLE write it is the primary action, with
-        // Approve deliberately withheld until the payload has been seen. Those
-        // gates could therefore only be declined: the safety design that refuses
-        // a blind approval had quietly become a refusal to allow any approval.
-        //
-        // Review means "show me the payload", and the surface that renders it
-        // (`TcWriteGateCard`, in the Studio gate region) already exists and is
-        // already wired to the real ledger id. So this switches modes rather
-        // than inventing a second detail surface.
-        onReviewWriteGate={handleReviewWriteGate}
+        ledgerIdByApprovalId={ledgerIdByApprovalId}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}
@@ -4410,7 +4425,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
                 connector={gate.connector}
                 params={writeGateApproval(gate.gateId)?.params ?? []}
                 ledgerId={gate.ledgerId}
-                irreversible={false}
+                // Was hardcoded false, so a DESTRUCTIVE gate printed "You can
+                // undo this from the connector if it's wrong." on the canvas
+                // while the chat row for that same gate withheld Approve and
+                // said "Review →". Two surfaces, one gate, contradicting each
+                // other about whether it can be undone. Same predicate now.
+                irreversible={
+                  writeGateApproval(gate.gateId) !== undefined &&
+                  isIrreversible(writeGateApproval(gate.gateId)!)
+                }
                 onApprove={() => handleApprove(gate.gateId)}
                 onDecline={() => handleReject(gate.gateId)}
               />
