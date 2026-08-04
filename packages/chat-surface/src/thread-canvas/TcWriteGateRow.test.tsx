@@ -123,3 +123,126 @@ describe("TcWriteGateRow — Review must actually do something", () => {
     expect(onReview).toHaveBeenCalledTimes(1);
   });
 });
+
+// Expanding in place. The safety rule this must preserve is an ORDERING rule,
+// not a location rule: an approve control for an irreversible write must not be
+// reachable in ONE click from the collapsed row. Approving after the payload
+// has rendered is the thing the old design was protecting; refusing it there
+// too is what turned Review into a dead end.
+describe("TcWriteGateRow — expand in place", () => {
+  const PARAMS = [
+    { label: "repo", value: "Parth-test" },
+    { label: "title", value: "Flaky MCP reconnect" },
+  ];
+
+  function row(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Delete the staging index"
+        connector="elastic"
+        irreversible
+        params={PARAMS}
+        ledgerId="r7f3·142"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        onReview={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("shows no payload until it is expanded", () => {
+    row();
+    expect(screen.queryByTestId("tc-write-gate-body")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-params")).toBeNull();
+  });
+
+  it("reveals the params, the reversibility line and the audit anchor", () => {
+    row();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-params").textContent,
+    ).toContain("Parth-test");
+    expect(
+      screen.getByTestId("tc-write-gate-body-reversibility").textContent,
+    ).toBe("This cannot be undone from here.");
+    expect(screen.getByTestId("tc-write-gate-body-ledger-id").textContent).toBe(
+      "r7f3·142",
+    );
+  });
+
+  it("omits the audit anchor rather than guessing when there is no ledger row", () => {
+    row({ ledgerId: undefined });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-ledger-id")).toBeNull();
+  });
+
+  // The ordering rule, both halves.
+  it("offers no approve control at all while collapsed", () => {
+    row();
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-approve")).toBeNull();
+  });
+
+  it("offers approve in the body once the payload is on screen", () => {
+    const onApprove = vi.fn();
+    row({ onApprove });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-body-approve"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    // Still never one click from the collapsed row.
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+  });
+
+  // A gate can open before its approval projection lands, so an empty frame is
+  // reachable — and approving over one IS the blind approval the rule forbids.
+  it("withholds approve when expanding reveals an empty payload", () => {
+    row({ params: [] });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-body-approve")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+  });
+
+  it("keeps decline one click in every state", () => {
+    const onDecline = vi.fn();
+    row({ onDecline });
+    fireEvent.click(screen.getByTestId("tc-write-gate-decline"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-decline"));
+    expect(onDecline).toHaveBeenCalledTimes(2);
+  });
+
+  it("toggles without needing a host — the dead-control shape cannot return", () => {
+    render(
+      <TcWriteGateRow
+        title="Delete the staging index"
+        connector="elastic"
+        irreversible
+        params={PARAMS}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        onReview={() => {
+          throw new Error("host threw");
+        }}
+      />,
+    );
+    // Even a host that explodes must not stop the row from opening. Written
+    // against a THROWING host rather than a missing one because the original
+    // regression was a callback that silently did nothing — a row whose
+    // behaviour is contingent on the host is the shape to keep out, in any of
+    // its forms.
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+  });
+
+  it("lets a reversible write be inspected without giving up its one-click approve", () => {
+    const onApprove = vi.fn();
+    row({ irreversible: false, onApprove });
+    expect(screen.getByTestId("tc-write-gate-approve")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-params")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("tc-write-gate-approve"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+});

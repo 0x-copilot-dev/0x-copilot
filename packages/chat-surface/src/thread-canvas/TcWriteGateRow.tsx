@@ -20,7 +20,10 @@
 //
 // Kit-only styling; framework-agnostic (no window/document/fetch).
 
-import type { CSSProperties, ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement } from "react";
+
+import type { ActivityParam } from "../approvals/types";
+import { TcWriteGatePayload } from "./TcWriteGatePayload";
 
 export interface TcWriteGateRowProps {
   /** Verb-first line: "Create an issue in Parth-test". */
@@ -40,7 +43,21 @@ export interface TcWriteGateRowProps {
   readonly onReview: () => void;
   /** Disables both actions while a decision is in flight. */
   readonly busy?: boolean;
+  /**
+   * The call's arguments — the evidence the decision is made ON. Rendered only
+   * once expanded. Defaulted so existing call sites are unchanged.
+   */
+  readonly params?: readonly ActivityParam[];
+  /**
+   * `r<short>·<seq>`, joined host-side from the ledger gate. Optional because
+   * it is NOT derivable here — it anchors on the `gate.opened` event, a
+   * different event from the approval this row was projected from — and a
+   * non-gate approval has no ledger row at all. Absent ⇒ the line is omitted.
+   */
+  readonly ledgerId?: string | undefined;
 }
+
+const EMPTY_PARAMS: readonly ActivityParam[] = [];
 
 export function TcWriteGateRow({
   title,
@@ -50,70 +67,154 @@ export function TcWriteGateRow({
   onDecline,
   onReview,
   busy = false,
+  params = EMPTY_PARAMS,
+  ledgerId,
 }: TcWriteGateRowProps): ReactElement {
+  // Local, for the same reason `TcInlineArtifactCard` keeps its own: nothing
+  // outside this row acts on whether it is open, and lifting it would re-render
+  // the whole transcript on every expand.
+  const [open, setOpen] = useState(false);
+  // The payload is the ONLY thing that licenses approving an irreversible
+  // write, so "expanded" is not enough on its own — an empty params frame is a
+  // real state (a gate can open before its approval projection lands), and
+  // approving over an empty body is precisely the blind approval the design
+  // forbids. In that case the row keeps sending the reviewer to the canvas.
+  const payloadSeen = open && params.length > 0;
+  const bodyApprove = irreversible && payloadSeen;
+
+  const toggle = (): void => {
+    const willOpen = !open;
+    setOpen(willOpen);
+    // Fired as a NOTIFICATION, never as the mechanism. The dead-control
+    // regression happened because this row's only behaviour lived behind a host
+    // callback with no producer, so the row must now work whether or not anyone
+    // is listening — including a listener that throws. Same reasoning as the
+    // transport's `#safeNotifyRetry`: an observer must not break the flow it is
+    // observing. Deliberately outside the state updater, because raising from
+    // inside one aborts the update and would put the failure right back in
+    // charge of whether the row opens.
+    if (!willOpen) return;
+    try {
+      onReview();
+    } catch {
+      // observer errors must not stop the row from opening
+    }
+  };
+
   return (
-    <div
-      className="ui-card"
-      data-testid="tc-write-gate-row"
-      data-risk={irreversible ? "high" : "normal"}
-      style={rowStyle}
+    <article
+      className="tc-write-gate"
+      data-testid="tc-write-gate"
+      data-open={open ? "true" : "false"}
     >
-      <span
-        aria-hidden="true"
-        data-testid="tc-write-gate-dot"
-        style={dotStyle(irreversible)}
-      />
-      <span
-        className="ui-body"
-        data-testid="tc-write-gate-title"
-        style={titleStyle}
+      <div
+        className="ui-card"
+        data-testid="tc-write-gate-row"
+        data-risk={irreversible ? "high" : "normal"}
+        style={rowStyle}
       >
-        {title}
-      </span>
-      {connector !== null && connector.length > 0 ? (
         <span
-          className="ui-mono-caps"
-          data-testid="tc-write-gate-connector"
-          style={connectorStyle}
+          aria-hidden="true"
+          data-testid="tc-write-gate-dot"
+          style={dotStyle(irreversible)}
+        />
+        <span
+          className="ui-body"
+          data-testid="tc-write-gate-title"
+          style={titleStyle}
         >
-          {connector}
+          {title}
         </span>
+        {connector !== null && connector.length > 0 ? (
+          <span
+            className="ui-mono-caps"
+            data-testid="tc-write-gate-connector"
+            style={connectorStyle}
+          >
+            {connector}
+          </span>
+        ) : null}
+        <span style={actionsStyle}>
+          {/* The rule is about ORDER, not location: an approve control for an
+            irreversible write must not be reachable in one click from the
+            collapsed row. So there is still no `tc-write-gate-approve` here —
+            approving one of these happens in the body, below the payload that
+            justifies it. A reversible write keeps its one-click Approve, which
+            is the entire point of a compact row. */}
+          {irreversible ? (
+            <button
+              type="button"
+              className="ui-button ui-button--sm ui-button--primary"
+              data-testid="tc-write-gate-review"
+              aria-expanded={open}
+              disabled={busy}
+              onClick={toggle}
+            >
+              {open ? "Hide" : "Review →"}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="ui-button ui-button--sm"
+                data-testid="tc-write-gate-review"
+                aria-expanded={open}
+                disabled={busy}
+                onClick={toggle}
+              >
+                {open ? "Hide" : "Review"}
+              </button>
+              <button
+                type="button"
+                className="ui-button ui-button--sm ui-button--primary"
+                data-testid="tc-write-gate-approve"
+                disabled={busy}
+                onClick={onApprove}
+              >
+                Approve
+              </button>
+            </>
+          )}
+          {/* Decline stays one click in every state. Declining is safe by
+            definition, and making someone expand to say no is what leaves a
+            write parked forever. */}
+          <button
+            type="button"
+            className="ui-button ui-button--sm"
+            data-testid="tc-write-gate-decline"
+            disabled={busy}
+            onClick={onDecline}
+          >
+            Decline
+          </button>
+        </span>
+      </div>
+      {open ? (
+        <div className="tc-write-gate__body" data-testid="tc-write-gate-body">
+          <TcWriteGatePayload
+            params={params}
+            irreversible={irreversible}
+            ledgerId={ledgerId}
+            testIdPrefix="tc-write-gate-body"
+          />
+          {bodyApprove ? (
+            // A DISTINCT testid from the row's, deliberately: the assertion that
+            // an irreversible write exposes no `tc-write-gate-approve` keeps its
+            // original meaning — no one-click approval — rather than silently
+            // becoming true of a button that is now two clicks away.
+            <button
+              type="button"
+              className="ui-button ui-button--sm ui-button--primary"
+              data-testid="tc-write-gate-body-approve"
+              disabled={busy}
+              onClick={onApprove}
+            >
+              Approve
+            </button>
+          ) : null}
+        </div>
       ) : null}
-      <span style={actionsStyle}>
-        {irreversible ? (
-          // No approve button at all. A destructive write is not something to
-          // click past in a feed — the canvas is where it can be read.
-          <button
-            type="button"
-            className="ui-button ui-button--sm ui-button--primary"
-            data-testid="tc-write-gate-review"
-            disabled={busy}
-            onClick={onReview}
-          >
-            Review →
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="ui-button ui-button--sm ui-button--primary"
-            data-testid="tc-write-gate-approve"
-            disabled={busy}
-            onClick={onApprove}
-          >
-            Approve
-          </button>
-        )}
-        <button
-          type="button"
-          className="ui-button ui-button--sm"
-          data-testid="tc-write-gate-decline"
-          disabled={busy}
-          onClick={onDecline}
-        >
-          Decline
-        </button>
-      </span>
-    </div>
+    </article>
   );
 }
 

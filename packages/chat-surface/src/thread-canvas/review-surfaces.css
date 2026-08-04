@@ -751,3 +751,41 @@
 .tc-inline-artifact__body .ui-artifact-content {
   overflow: auto;
 }
+
+/* ── parked write, expandable in place ────────────────────────────────────
+ *
+ * The row itself keeps its inline geometry (see the 42px-rhythm note in
+ * TcWriteGateRow.tsx — it is measured against the tool cards it sits between,
+ * and moving it here without that rationale is how it gets re-broken). These
+ * rules own only the container and the body the row expands into.
+ *
+ * No height cap, unlike `.tc-inline-artifact__body`: a gate body is a short
+ * <dl> of tool arguments, not a document. If a param value ever grows long
+ * enough to need one, cap it here AND give it its own `overflow: auto` — the
+ * artifact block above records why capping alone clips silently.
+ */
+
+.tc-write-gate {
+  display: grid;
+  max-width: 100%;
+}
+
+.tc-write-gate__body {
+  display: grid;
+  gap: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-md);
+  /* Pulled up under the row so the two read as one object rather than a row
+     with a card loose beneath it. The row's own radius is --radius-lg. */
+  margin-top: calc(var(--radius-lg) * -1);
+  padding-top: calc(var(--space-md) + var(--radius-lg));
+}
+
+.tc-write-gate[data-open="true"]
+  .tc-write-gate__body
+  [data-testid$="-approve"] {
+  justify-self: start;
+}
