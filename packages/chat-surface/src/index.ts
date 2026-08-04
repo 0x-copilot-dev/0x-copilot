@@ -459,6 +459,23 @@ export {
 } from "./composer";
 // === end Phase 1 (PR-1.2) ===
 
+// === Model-catalog helpers — the pill's list + which row it opens on ===
+// The PURE half of both hosts' composer binders, hoisted out of
+// `apps/desktop/renderer/composer/desktopModelCatalog.ts` (and out of the web
+// FTUE's divergent copy, which ranked nothing and opened an Anthropic-only user
+// on the dearest model in the catalog). `defaultSelectedModelId` ranks by the
+// backend's `tier` with a per-provider preferred rung; `mergeCatalog` folds the
+// fetched cloud catalog together with installed local models;
+// `modelSelectionForId` resolves a picked id to the run-create wire shape. The
+// fetch itself stays host-owned — nothing here touches a substrate global.
+export {
+  mergeCatalog,
+  defaultSelectedModelId,
+  modelSelectionForId,
+  type PickerCatalogModel,
+} from "./composer";
+// === end Model-catalog helpers ===
+
 // === Phase 1 (PR-1.3) AssistantComposer shell ===
 // The advanced-composer shell hoisted behind ports/slots. The host binds the
 // runtime attachment bridge, the `FilePickerPort` (real-`File` web picker), the

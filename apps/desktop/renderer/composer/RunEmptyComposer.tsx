@@ -20,13 +20,12 @@ import { useCallback, useMemo, type ReactElement } from "react";
 import {
   ComposerConnectorsButton,
   FIRST_RUN_SUGGESTIONS,
+  modelSelectionForId,
   OnboardingComposer,
   type ComposerConnectorsPort,
   type ProviderKeysPort,
   type RunEmptyComposerCtx,
 } from "@0x-copilot/chat-surface";
-
-import { modelSelectionForId } from "./desktopModelCatalog";
 import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { useDesktopComposerBypass } from "./useDesktopComposerBypass";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";

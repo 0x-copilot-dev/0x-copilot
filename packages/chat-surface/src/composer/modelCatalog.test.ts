@@ -3,13 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   defaultSelectedModelId,
   mergeCatalog,
-  type CatalogModel,
-} from "./desktopModelCatalog";
+  modelSelectionForId,
+  type PickerCatalogModel,
+} from "./modelCatalog";
 
 // A catalog shaped like the real `/v1/agent/models` after a user adds ONE BYOK
 // key (here: OpenAI). Only the OpenAI rows are `configured`; every other
 // provider is a keyless row the picker shows disabled.
-function catalogWithOpenAiKey(): CatalogModel[] {
+function catalogWithOpenAiKey(): PickerCatalogModel[] {
   return mergeCatalog({
     cloudModels: [
       {
@@ -97,6 +98,23 @@ describe("defaultSelectedModelId — provider-aware auto-select", () => {
     expect(picked).not.toBe("claude-haiku-4-5");
     expect(models.find((m) => m.id === picked)?.configured).toBe(true);
   });
+
+  it("skips models the workspace curated out via enabled:false", () => {
+    // `ModelPill` offers only `enabled !== false` rows, so auto-picking a
+    // curated-out model would select a row the picker does not otherwise list.
+    const row = (id: string, enabled?: boolean): PickerCatalogModel => ({
+      id,
+      provider: "openai",
+      model_name: id,
+      name: id,
+      configured: true,
+      supports_streaming: true,
+      enabled,
+    });
+    expect(defaultSelectedModelId([row("a", false), row("b", true)])).toBe("b");
+    // Absent `enabled` is legacy-curated-IN, not off.
+    expect(defaultSelectedModelId([row("a", false), row("b")])).toBe("b");
+  });
 });
 
 // The standby (no-active-run) composer calls `defaultSelectedModelId` with NO
@@ -106,7 +124,7 @@ describe("defaultSelectedModelId — provider-aware auto-select", () => {
 // Mini" preselected because the fallback returned `models[0]` (the keyless
 // default) instead of the one model they could actually run.
 describe("defaultSelectedModelId — provider priority among configured", () => {
-  const openaiDefault = (configured: boolean): CatalogModel => ({
+  const openaiDefault = (configured: boolean): PickerCatalogModel => ({
     id: "gpt-5.4-mini",
     provider: "openai",
     model_name: "gpt-5.4-mini",
@@ -115,7 +133,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     supports_streaming: true,
     disabled: !configured,
   });
-  const claude = (configured: boolean): CatalogModel => ({
+  const claude = (configured: boolean): PickerCatalogModel => ({
     id: "claude-sonnet-4-5",
     provider: "anthropic",
     model_name: "claude-sonnet-4-5",
@@ -124,7 +142,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     supports_streaming: true,
     disabled: !configured,
   });
-  const openrouter = (configured: boolean): CatalogModel => ({
+  const openrouter = (configured: boolean): PickerCatalogModel => ({
     id: "openrouter/auto",
     provider: "openrouter",
     model_name: "openrouter/auto",
@@ -133,7 +151,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     supports_streaming: true,
     disabled: !configured,
   });
-  const gemini = (configured: boolean): CatalogModel => ({
+  const gemini = (configured: boolean): PickerCatalogModel => ({
     id: "gemini-2.5-pro",
     provider: "google",
     model_name: "gemini-2.5-pro",
@@ -214,7 +232,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     // ladder (`tier: null`), so it must never be the auto-pick while a real rung
     // is usable. The mid rung (Sonnet) is the default; Fable stays one click
     // away in the pill.
-    const anthropic: CatalogModel[] = [
+    const anthropic: PickerCatalogModel[] = [
       {
         id: "claude-fable-5",
         provider: "anthropic",
@@ -274,7 +292,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   // the backend derives from models.dev (`gpt-luna`/`gpt-terra`/`gpt-sol` and
   // `claude-haiku`/`claude-sonnet`/`claude-opus`), so one global tier order
   // cannot satisfy both.
-  const openai56 = (): CatalogModel[] => [
+  const openai56 = (): PickerCatalogModel[] => [
     {
       id: "gpt-5.6-luna",
       provider: "openai",
@@ -307,7 +325,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     },
   ];
 
-  const anthropicLadder = (): CatalogModel[] => [
+  const anthropicLadder = (): PickerCatalogModel[] => [
     {
       id: "claude-haiku-4-5",
       provider: "anthropic",
@@ -379,7 +397,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   });
 
   it("falls to the small rung when the provider ships no mid one", () => {
-    const models: CatalogModel[] = [
+    const models: PickerCatalogModel[] = [
       {
         id: "specialty",
         provider: "anthropic",
@@ -414,7 +432,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   });
 
   it("auto-picks an off-ladder row only when nothing on the ladder is usable", () => {
-    const models: CatalogModel[] = [
+    const models: PickerCatalogModel[] = [
       {
         id: "claude-opus-5",
         provider: "anthropic",
@@ -439,7 +457,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   });
 
   it("breaks a same-rung tie on output cost, and keeps catalog order when unpriced", () => {
-    const rung = (id: string, cost?: number): CatalogModel => ({
+    const rung = (id: string, cost?: number): PickerCatalogModel => ({
       id,
       provider: "openai",
       model_name: id,
@@ -465,7 +483,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   it("still lets the backend default_model_id win inside the winning provider", () => {
     // The deployment's declared default is an explicit choice; tier ranking is
     // only the tiebreak for when there is none.
-    const models: CatalogModel[] = [
+    const models: PickerCatalogModel[] = [
       {
         id: "gpt-mid",
         provider: "openai",
@@ -491,7 +509,7 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
   });
 
   it("prefers defaultModelId within the winning priority provider", () => {
-    const models: CatalogModel[] = [
+    const models: PickerCatalogModel[] = [
       openaiDefault(true),
       {
         id: "gpt-5",
@@ -507,5 +525,35 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     expect(defaultSelectedModelId(models, { defaultModelId: "gpt-5" })).toBe(
       "gpt-5",
     );
+  });
+});
+
+describe("modelSelectionForId", () => {
+  const models: PickerCatalogModel[] = [
+    {
+      id: "claude",
+      provider: "anthropic",
+      model_name: "claude-sonnet-4-6",
+      name: "Claude",
+      configured: true,
+    },
+  ];
+
+  it("returns null for the empty selection (runtime default)", () => {
+    expect(modelSelectionForId(models, "")).toBeNull();
+  });
+
+  it("sends the bare model_name for an unknown id", () => {
+    expect(modelSelectionForId(models, "unknown-slug")).toEqual({
+      model_name: "unknown-slug",
+    });
+  });
+
+  it("resolves a known id to provider + model_name + reasoning", () => {
+    expect(modelSelectionForId(models, "claude")).toEqual({
+      provider: "anthropic",
+      model_name: "claude-sonnet-4-6",
+      reasoning: null,
+    });
   });
 });

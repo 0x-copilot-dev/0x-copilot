@@ -26,9 +26,12 @@ import {
 
 import {
   createComposerModelPreference,
+  defaultSelectedModelId,
+  mergeCatalog,
   useKeyValueStore,
   useTransport,
   type AssistantComposerPlusMenuSlotArgs,
+  type PickerCatalogModel,
 } from "@0x-copilot/chat-surface";
 import type {
   McpServer,
@@ -36,11 +39,6 @@ import type {
   Skill,
 } from "@0x-copilot/api-types";
 
-import {
-  defaultSelectedModelId,
-  mergeCatalog,
-  type CatalogModel,
-} from "./desktopModelCatalog";
 import { DesktopAnchoredPlusMenu } from "./DesktopAnchoredPlusMenu";
 
 interface SkillsResponse {
@@ -90,7 +88,7 @@ export interface RunComposerBindings {
   readonly activeConnectorCount: number;
 
   // --- Model catalog (curated cloud + local + custom + workspace default) ---
-  readonly models: CatalogModel[];
+  readonly models: PickerCatalogModel[];
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel: (slug: string) => void;
@@ -165,7 +163,9 @@ export function useRunComposerBindings(
   const [localModelSizes, setLocalModelSizes] = useState<
     Readonly<Record<string, number>>
   >({});
-  const [customModels, setCustomModels] = useState<readonly CatalogModel[]>([]);
+  const [customModels, setCustomModels] = useState<
+    readonly PickerCatalogModel[]
+  >([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [workspaceDefault, setWorkspaceDefault] = useState<{
     readonly provider: string;
@@ -274,7 +274,7 @@ export function useRunComposerBindings(
         );
         setLocalModelNames(rows.map((m) => m.name));
         // Same response, second projection: the name → bytes join the model
-        // popover needs. Kept off `CatalogModel` on purpose — sizes come from a
+        // popover needs. Kept off `PickerCatalogModel` on purpose — sizes come from a
         // different endpoint than the catalog, and `ModelCatalogModel` is a wire
         // contract.
         setLocalModelSizes(
@@ -328,7 +328,7 @@ export function useRunComposerBindings(
     };
   }, [transport]);
 
-  const models = useMemo<CatalogModel[]>(() => {
+  const models = useMemo<PickerCatalogModel[]>(() => {
     const base = mergeCatalog({ cloudModels, localModelNames });
     const merged = [...base, ...customModels];
     // The persisted workspace default may live outside the catalog (e.g. a pick

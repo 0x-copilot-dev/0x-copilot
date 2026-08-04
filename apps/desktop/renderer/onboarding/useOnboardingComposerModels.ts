@@ -1,8 +1,8 @@
 // Model catalog for the FTUE onboarding composer's model pill.
 //
 // A focused subset of the Run cockpit's catalog wiring (RunComposer.tsx): the
-// same curated-cloud + BYOK-gating + local-model helpers from
-// `desktopModelCatalog.ts`, but without skills / MCP servers / workspace
+// same curated-cloud + BYOK-gating + local-model helpers from chat-surface's
+// `composer/modelCatalog.ts`, but without skills / MCP servers / workspace
 // defaults (the FTUE composer keeps Tools minimal — P4). Two probes drive it:
 // `/v1/settings/provider-keys` (which curated cloud rows are selectable) and
 // `/v1/local-models` (installed Ollama tags).
@@ -18,16 +18,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   QWEN3_4B_PRESET,
   createComposerModelPreference,
+  defaultSelectedModelId,
+  mergeCatalog,
   useKeyValueStore,
+  type PickerCatalogModel,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
-
-import {
-  defaultSelectedModelId,
-  mergeCatalog,
-  type CatalogModel,
-} from "../composer/desktopModelCatalog";
 
 /** Stable id for the injected on-device engine row — keeps the selection from
  *  churning as the resolved Ollama tag lands mid-download. */
@@ -42,7 +39,7 @@ interface LocalModelsResponseLite {
 }
 
 export interface OnboardingComposerModels {
-  readonly models: CatalogModel[];
+  readonly models: PickerCatalogModel[];
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
   /**
@@ -144,14 +141,14 @@ export function useOnboardingComposerModels(
 
   const isLocalEngine = local.localModelPct !== null;
 
-  const models = useMemo<CatalogModel[]>(() => {
+  const models = useMemo<PickerCatalogModel[]>(() => {
     const base = mergeCatalog({ cloudModels, localModelNames });
     if (!isLocalEngine) {
       return base;
     }
     // Local engine — surface the on-device model as the honest, selectable lead
     // even before `/v1/local-models` reflects the fresh pull.
-    const localEntry: CatalogModel = {
+    const localEntry: PickerCatalogModel = {
       id: LOCAL_ENGINE_MODEL_ID,
       provider: "ollama",
       model_name: local.modelName ?? QWEN3_4B_PRESET.name,
