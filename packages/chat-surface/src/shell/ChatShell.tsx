@@ -293,10 +293,20 @@ function ShellGrid({
   // The old form always emitted four tracks (with a `0` right column when
   // closed), which is why an unfed destination still lost 224px to a panel
   // reading "Nothing here yet."
+  //
+  // The main track is `minmax(0, 1fr)`, NOT a bare `1fr`. A `1fr` track carries
+  // an automatic minimum of `min-content`, so the main column refuses to shrink
+  // past whatever its widest unbreakable child needs and pushes the surplus out
+  // of the shell instead. On desktop that surplus is not even scrollable —
+  // `.desktop-window-frame` is `overflow: hidden` by design (the document must
+  // never scroll), so an overflowing row is silently CLIPPED: narrow the window
+  // and the topbar's right-hand ⌘K trigger simply disappears off the edge with
+  // no way to reach it. `minmax(0, …)` lets the track shrink and hands the
+  // decision back to the children, which ellipsize.
   const gridTemplateColumns = [
     `${APP_RAIL_WIDTH}px`,
     ...(showContextPanel ? [`${CONTEXT_PANEL_WIDTH}px`] : []),
-    "1fr",
+    "minmax(0, 1fr)",
     ...(showRightRail ? [rightOpen ? `${RIGHT_RAIL_WIDTH}px` : "0"] : []),
   ].join(" ");
 
@@ -316,7 +326,16 @@ function ShellGrid({
     // The topbar row is reserved unless the destination suppresses it (run
     // cockpit + Settings own their own header). Chats keeps the row (PRD-09 D5).
     gridTemplateRows: suppressTopbar ? "100%" : `${TOPBAR_HEIGHT}px 1fr`,
+    // This column is a grid in its own right, and declaring only ROWS leaves it
+    // an implicit `auto` column — which carries the same min-content floor the
+    // outer track just gave up. Both declarations are load-bearing and neither
+    // is sufficient alone: `minWidth` frees the column's own BOX, this frees the
+    // TRACK its children are laid out in. With only the former the box shrinks
+    // to the window while the topbar inside stays at min-content and overflows,
+    // which is precisely the shape of the original bug.
+    gridTemplateColumns: "minmax(0, 1fr)",
     minHeight: 0,
+    minWidth: 0,
     backgroundColor: "var(--color-bg)",
   };
   const mainBodyStyle: CSSProperties = {
