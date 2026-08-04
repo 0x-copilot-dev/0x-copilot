@@ -71,6 +71,20 @@ describe("artifact HTTP guards", () => {
     ).toBe(false);
   });
 
+  it("accepts an artifact carrying accent (a10c83a9 regression)", () => {
+    // `accent` was added to `Artifact` without being added to the guard's key
+    // list, so every artifact fetch failed the closed-key check and the Studio
+    // canvas rendered nothing. The fixture above predates the field, which is
+    // why the suite stayed green through the outage — assert the field
+    // explicitly rather than relying on a fixture to grow.
+    expect(
+      isArtifactDetailResponse({
+        ...detail,
+        artifact: { ...detail.artifact, accent: "jade" },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects mismatched revisions", () => {
     expect(
       isArtifactDetailResponse({

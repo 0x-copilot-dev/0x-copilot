@@ -12,6 +12,7 @@ import {
   type ArtifactKind,
   type ArtifactRevision,
 } from "./ledger";
+import { wireKeys } from "./wireKeys";
 
 export interface ArtifactCreateMultipartFields {
   readonly kind: ArtifactKind;
@@ -104,28 +105,26 @@ function hasArtifactId(value: unknown): value is string {
   }
 }
 
+const ARTIFACT_KEYS = wireKeys<Artifact>({
+  artifact_id: true,
+  org_id: true,
+  user_id: true,
+  conversation_id: true,
+  run_id: true,
+  kind: true,
+  title: true,
+  media_type: true,
+  current_revision: true,
+  created_by: true,
+  accent: true,
+  created_at: true,
+  updated_at: true,
+  deleted_at: true,
+});
+
 function isArtifact(value: unknown): value is Artifact {
   if (!isRecord(value) || !hasArtifactId(value.artifact_id)) return false;
-  if (
-    !hasOnlyKeys(
-      value,
-      new Set([
-        "artifact_id",
-        "org_id",
-        "user_id",
-        "conversation_id",
-        "run_id",
-        "kind",
-        "title",
-        "media_type",
-        "current_revision",
-        "created_by",
-        "created_at",
-        "updated_at",
-        "deleted_at",
-      ]),
-    )
-  ) {
+  if (!hasOnlyKeys(value, ARTIFACT_KEYS)) {
     return false;
   }
   return (
@@ -138,11 +137,29 @@ function isArtifact(value: unknown): value is Artifact {
     isNonEmptyString(value.media_type) &&
     isPositiveInteger(value.current_revision) &&
     ARTIFACT_AUTHORS.has(value.created_by as ArtifactAuthor) &&
+    // Shape only, deliberately not pinned to the `SurfaceAccent` union: an
+    // unknown hue name degrades to the `kind`-derived default, whereas a closed
+    // value set here would reject the whole artifact the first time the server
+    // ships a new hue — the same failure this guard's key set just stopped
+    // having.
+    isOptionalString(value.accent) &&
     isNonEmptyString(value.created_at) &&
     isNonEmptyString(value.updated_at) &&
     isOptionalString(value.deleted_at)
   );
 }
+
+const ARTIFACT_REVISION_KEYS = wireKeys<ArtifactRevision>({
+  artifact_id: true,
+  revision: true,
+  parent_revision: true,
+  content_ref: true,
+  content_digest: true,
+  byte_size: true,
+  author: true,
+  source_ref: true,
+  created_at: true,
+});
 
 function isArtifactRevision(value: unknown): value is ArtifactRevision {
   if (
@@ -153,22 +170,7 @@ function isArtifactRevision(value: unknown): value is ArtifactRevision {
   ) {
     return false;
   }
-  if (
-    !hasOnlyKeys(
-      value,
-      new Set([
-        "artifact_id",
-        "revision",
-        "parent_revision",
-        "content_ref",
-        "content_digest",
-        "byte_size",
-        "author",
-        "source_ref",
-        "created_at",
-      ]),
-    )
-  ) {
+  if (!hasOnlyKeys(value, ARTIFACT_REVISION_KEYS)) {
     return false;
   }
   try {
@@ -196,31 +198,35 @@ function isArtifactRevision(value: unknown): value is ArtifactRevision {
   );
 }
 
+const ARTIFACT_REVISION_RESPONSE_KEYS = wireKeys<ArtifactRevisionResponse>({
+  revision: true,
+  range_supported: true,
+});
+
 export function isArtifactRevisionResponse(
   value: unknown,
 ): value is ArtifactRevisionResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, new Set(["revision", "range_supported"])) &&
+    hasOnlyKeys(value, ARTIFACT_REVISION_RESPONSE_KEYS) &&
     isArtifactRevision(value.revision) &&
     typeof value.range_supported === "boolean"
   );
 }
+
+const ARTIFACT_DETAIL_RESPONSE_KEYS = wireKeys<ArtifactDetailResponse>({
+  artifact: true,
+  current_revision: true,
+  suggested_filename: true,
+  range_supported: true,
+});
 
 export function isArtifactDetailResponse(
   value: unknown,
 ): value is ArtifactDetailResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(
-      value,
-      new Set([
-        "artifact",
-        "current_revision",
-        "suggested_filename",
-        "range_supported",
-      ]),
-    ) &&
+    hasOnlyKeys(value, ARTIFACT_DETAIL_RESPONSE_KEYS) &&
     isArtifact(value.artifact) &&
     isArtifactRevision(value.current_revision) &&
     value.current_revision.artifact_id === value.artifact.artifact_id &&
@@ -230,21 +236,20 @@ export function isArtifactDetailResponse(
   );
 }
 
+const ARTIFACT_MUTATION_RESPONSE_KEYS = wireKeys<ArtifactMutationResponse>({
+  artifact: true,
+  current_revision: true,
+  suggested_filename: true,
+  range_supported: true,
+  replayed: true,
+});
+
 export function isArtifactMutationResponse(
   value: unknown,
 ): value is ArtifactMutationResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(
-      value,
-      new Set([
-        "artifact",
-        "current_revision",
-        "suggested_filename",
-        "range_supported",
-        "replayed",
-      ]),
-    ) &&
+    hasOnlyKeys(value, ARTIFACT_MUTATION_RESPONSE_KEYS) &&
     isArtifact(value.artifact) &&
     isArtifactRevision(value.current_revision) &&
     value.current_revision.artifact_id === value.artifact.artifact_id &&
@@ -255,12 +260,17 @@ export function isArtifactMutationResponse(
   );
 }
 
+const ARTIFACT_LIST_RESPONSE_KEYS = wireKeys<ArtifactListResponse>({
+  artifacts: true,
+  next_cursor: true,
+});
+
 export function isArtifactListResponse(
   value: unknown,
 ): value is ArtifactListResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, new Set(["artifacts", "next_cursor"])) &&
+    hasOnlyKeys(value, ARTIFACT_LIST_RESPONSE_KEYS) &&
     Array.isArray(value.artifacts) &&
     value.artifacts.every(isArtifactDetailResponse) &&
     isOptionalString(value.next_cursor)
