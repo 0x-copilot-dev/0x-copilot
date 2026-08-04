@@ -95,6 +95,13 @@ export function ArtifactSurface(props: {
   readonly hue?: SurfaceHue;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
+  /**
+   * Scopes the DOM ids this surface's editor owns. Studio mounts exactly one
+   * artifact at a time and can leave this unset; the inline transcript card can
+   * have two expanded at once, where a shared id silently breaks `htmlFor`
+   * (the second label focuses the first field). Forwarded, not used here.
+   */
+  readonly idPrefix?: string;
 }): ReactElement {
   const parsed = parseArtifactSurfaceUri(props.uri);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
@@ -482,6 +489,9 @@ export function ArtifactSurface(props: {
           revision={data.state.revision}
           disabled={!isArtifactTransport(props.transport)}
           onSave={save}
+          {...(props.idPrefix === undefined
+            ? {}
+            : { idPrefix: props.idPrefix })}
         />
       ) : null}
       <ArtifactRevisionReview

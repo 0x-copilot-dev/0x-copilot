@@ -179,7 +179,10 @@ import {
   ArtifactSurface,
   artifactUri,
   parseArtifactSurfaceUri,
+  projectArtifactTabs,
 } from "../../artifacts";
+import { buildInlineArtifacts } from "./inlineArtifacts";
+import type { InlineArtifactEntry } from "../../thread-canvas/TcInlineArtifactCard";
 import type { ArtifactDownloadPort } from "../../ports/ArtifactDownloadPort";
 import type {
   WorkspaceApprovalSnapshot,
@@ -254,6 +257,8 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+/** Stable identity so the flag-off / scrubbed path never churns the transcript. */
+const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
 const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
@@ -2522,6 +2527,22 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return byId;
   }, [conversationCanvas]);
 
+  // The artifact record's own title, keyed by artifact id. Hoisted to component
+  // scope for exactly the reason `accentByArtifactId` above was: buried inside
+  // the `v2CanvasTabs` memo it could only reach the Studio tab strip, so every
+  // OTHER consumer fell back to the lifecycle fold's synthesized `<kind>
+  // artifact` label. That is why Focus mode shows "document artifact" where the
+  // tab strip shows "forecast-notes.md" — same artifact, two names, driven by
+  // which side of a memo boundary the consumer happened to sit on.
+  const artifactTitleById = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const subject of conversationCanvas.subjects) {
+      if (subject.kind === "artifact" && subject.title)
+        byId.set(subject.subjectId, subject.title);
+    }
+    return byId;
+  }, [conversationCanvas]);
+
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
     const legacyUris = new Set<string>();
@@ -2545,14 +2566,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       hue?: SurfaceHue;
     }> = [];
     const seen = new Set<string>();
-    // The artifact record's own title, keyed by artifact id. One authoritative
-    // source of display identity for both the current run's tabs and prior
-    // turns', so a tab and its panel header cannot disagree.
-    const canvasTitleById = new Map<string, string>();
-    for (const subject of conversationCanvas.subjects) {
-      if (subject.kind !== "artifact") continue;
-      if (subject.title) canvasTitleById.set(subject.subjectId, subject.title);
-    }
     const add = (
       uri: string,
       title: string,
@@ -2584,7 +2597,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             // tab strip. Prior-turn subjects below already use this same
             // authoritative title; this makes the current run agree with them
             // instead of keeping a second, lossier derivation.
-            `${canvasTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
+            `${artifactTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
             subject.lastSeq,
             subject.key,
             false,
@@ -3899,6 +3912,37 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [v2CanvasTabs, setMode],
   );
+  // PRD-04 follow-up: artifacts leave the pinned Focus band and render INLINE,
+  // where they were published. Built from the same artifact fold the tab strip
+  // reads, merged with the record's authoritative title and accent — one merge,
+  // so a tab and its inline card cannot disagree about the same artifact.
+  //
+  // Scrubbed ⇒ empty. Time-travel means "show me the run as it was at seq N",
+  // and an artifact published after that moment had not happened yet.
+  const inlineArtifacts = useMemo(() => {
+    if (!surfacesV2 || isScrubbed) return EMPTY_INLINE_ARTIFACTS;
+    return buildInlineArtifacts(
+      projectArtifactTabs(session.events),
+      artifactTitleById,
+      accentByArtifactId,
+    );
+  }, [
+    surfacesV2,
+    isScrubbed,
+    session.events,
+    artifactTitleById,
+    accentByArtifactId,
+  ]);
+
+  // "Review →" on a parked write. The payload lives on the Studio canvas
+  // (`run-v2-gate-region` → `TcWriteGateCard`), which is the only surface
+  // holding the real `ledgerId` this decision will be recorded under — so
+  // Review goes there rather than mounting a second, thinner copy inline that
+  // would have to omit or invent the audit anchor.
+  const handleReviewWriteGate = useCallback((): void => {
+    setMode("studio");
+  }, [setMode]);
+
   const focusCards =
     surfacesV2 && displayedCanvasLifecycle !== null ? (
       <CanvasFocusCards
@@ -4116,6 +4160,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={conversationToolCalls.toolCalls}
+        // Artifacts, at the point they were published. Reading one is no longer
+        // a mode switch: the card expands in place into the same
+        // `ArtifactSurface` Studio mounts, and "Open in Studio" stays as a
+        // choice rather than the only way to look.
+        inlineArtifacts={inlineArtifacts}
+        artifactTransport={transport}
+        {...(artifactDownloadPort === undefined
+          ? {}
+          : { artifactDownloadPort })}
+        onOpenArtifactInStudio={handleOpenLifecycleSubject}
         // The gap between send and the first token, which rendered as an empty
         // column. True only while the bound run is genuinely live AND has
         // produced nothing visible — a run parked on an approval is NOT
@@ -4180,6 +4234,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           : {})}
         onWorkspaceGrantDeny={workspaceGrants.deny}
         onWorkspaceGrantCancel={workspaceGrants.cancel}
+        // The write-gate row's "Review →" had NO producer, so it was a dead
+        // button — and for an IRREVERSIBLE write it is the primary action, with
+        // Approve deliberately withheld until the payload has been seen. Those
+        // gates could therefore only be declined: the safety design that refuses
+        // a blind approval had quietly become a refusal to allow any approval.
+        //
+        // Review means "show me the payload", and the surface that renders it
+        // (`TcWriteGateCard`, in the Studio gate region) already exists and is
+        // already wired to the real ledger id. So this switches modes rather
+        // than inventing a second detail surface.
+        onReviewWriteGate={handleReviewWriteGate}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}
@@ -4281,6 +4346,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // B3 Focus is a compact projection of the same lifecycle—not a hidden
       // full Studio canvas. Undefined on the v1 path preserves legacy Focus.
       focusCards={focusCards}
+      hasInlineSubjects={inlineArtifacts.length > 0}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
       // which renders the Approve/Reject/Suggest controls around the diff.

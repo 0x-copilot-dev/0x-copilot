@@ -18,6 +18,22 @@ export interface ArtifactSurfaceTab {
   readonly revision: number;
   readonly uri: string;
   readonly title: string;
+  /**
+   * The artifact's name WITHOUT the ` · r{n}` suffix `title` bakes in. A tab
+   * strip wants the revision in the label; a row that already prints `r{n}` in
+   * its own meta column does not, and would otherwise say it twice.
+   */
+  readonly name: string;
+  /**
+   * `sequence_no` of the artifact's `artifact.created` event — where in the run
+   * it first appeared, and therefore where it belongs in the transcript.
+   *
+   * Deliberately NOT `lastSeq`, which every revision bumps. Anchoring on
+   * `lastSeq` would make an artifact revised late in a run jump from its publish
+   * point down to the bottom of the thread, which is the same class of bug
+   * `mergeStream` documents for wall-clock anchoring.
+   */
+  readonly createdSeq: number;
   readonly lastSeq: number;
 }
 
@@ -70,6 +86,13 @@ export function projectArtifactTabs(
       revision,
       uri: artifactUri(kind, id, revision),
       title: `${name} · r${revision}`,
+      name,
+      // Set once by the first event seen for this artifact — normally
+      // `artifact.created` — and carried across every later revision, so a
+      // revision never moves the artifact in the transcript. When `created`
+      // fell outside the event window the first revision seeds it instead,
+      // which is the same reachable case the `kind` fallback above handles.
+      createdSeq: prior?.createdSeq ?? sequence,
       lastSeq: sequence,
     });
   }

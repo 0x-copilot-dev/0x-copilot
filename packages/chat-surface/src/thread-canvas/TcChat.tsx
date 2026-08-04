@@ -74,6 +74,11 @@ import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 import { TcWriteGateRow } from "./TcWriteGateRow";
+import {
+  TcInlineArtifactCard,
+  type InlineArtifactEntry,
+} from "./TcInlineArtifactCard";
+import type { ArtifactDownloadPort } from "../ports/ArtifactDownloadPort";
 
 export type TcChatMode = "studio" | "focus";
 
@@ -523,6 +528,8 @@ export interface TcChatProps {
   readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
   /** Abandon the ask while the OS dialog is up (state-only; see the hook). */
   readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
+  /** Open a parked write's payload on its detail surface ("Review →"). */
+  readonly onReviewWriteGate?: (approvalId: string) => void;
   /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
@@ -554,9 +561,22 @@ export interface TcChatProps {
    * alone cannot tell "still thinking" from "finished with no output".
    */
   readonly awaitingFirstOutput?: boolean;
+  /**
+   * Artifacts to interleave into the transcript where they were published.
+   * Host-owned (the cockpit holds the projection); omitted ⇒ the transcript is
+   * byte-identical to before this existed.
+   */
+  readonly inlineArtifacts?: readonly InlineArtifactEntry[];
+  /** Transport an EXPANDED artifact fetches through. Collapsed cards do not. */
+  readonly artifactTransport?: Transport;
+  readonly artifactDownloadPort?: ArtifactDownloadPort;
+  /** Hands the reader the full Studio workspace for one artifact. */
+  readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
+/** Stable identity, so an unwired host never re-runs the merge on every render. */
+const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
 const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
   string,
   readonly SubagentActivityRecord[]
@@ -613,12 +633,17 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrant,
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
+    onReviewWriteGate,
     renderComposer,
     terminalBeat,
     runFailed = false,
     compact = false,
     activeRunId = null,
     awaitingFirstOutput = false,
+    inlineArtifacts,
+    artifactTransport,
+    artifactDownloadPort,
+    onOpenArtifactInStudio,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -754,6 +779,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrant,
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
+    onReviewWriteGate,
   };
 
   const transcript = (
@@ -779,6 +805,14 @@ export function TcChat(props: TcChatProps): ReactElement {
         compact={compact}
         activeRunId={activeRunId}
         awaitingFirstOutput={awaitingFirstOutput}
+        {...(inlineArtifacts === undefined ? {} : { inlineArtifacts })}
+        {...(artifactTransport === undefined ? {} : { artifactTransport })}
+        {...(artifactDownloadPort === undefined
+          ? {}
+          : { artifactDownloadPort })}
+        {...(onOpenArtifactInStudio === undefined
+          ? {}
+          : { onOpenArtifactInStudio })}
       />
     </div>
   );
@@ -1274,6 +1308,20 @@ interface MessageListBodyProps {
    * with no output".
    */
   readonly awaitingFirstOutput?: boolean;
+  /**
+   * Artifacts interleaved into the transcript at the point they were PUBLISHED,
+   * on the same rule approvals follow. Focus mode used to answer "an artifact
+   * exists" with a pinned card above the transcript whose only move was to
+   * leave the mode entirely; inline, reading one is no longer a mode switch.
+   *
+   * Empty (the default) ⇒ `mergeStream` receives `[]` and the transcript is
+   * byte-identical, which is what keeps this prop safe to land unmounted.
+   */
+  readonly inlineArtifacts?: readonly InlineArtifactEntry[];
+  /** Transport for an EXPANDED artifact; collapsed cards never fetch. */
+  readonly artifactTransport?: Transport;
+  readonly artifactDownloadPort?: ArtifactDownloadPort;
+  readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1294,6 +1342,10 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     compact = false,
     activeRunId,
     awaitingFirstOutput = false,
+    inlineArtifacts = EMPTY_INLINE_ARTIFACTS,
+    artifactTransport,
+    artifactDownloadPort,
+    onOpenArtifactInStudio,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1311,11 +1363,16 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       </div>
     ) : null;
 
+  // Artifacts count here for the same reason approvals do: this guard used to
+  // early-return past the live cards, and inline that hid a parked run's only
+  // way out. An answer that is entirely an artifact — "here is the CSV" with no
+  // prose — would otherwise render "No messages yet." over a real result.
   const nothingToShow =
     messages.length === 0 &&
     fleets.length === 0 &&
     toolCalls.length === 0 &&
     approvals.length === 0 &&
+    inlineArtifacts.length === 0 &&
     terminalBeat === undefined;
   if (notice !== null && nothingToShow) {
     return notice;
@@ -1336,6 +1393,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     toolCalls,
     approvals,
     activeRunId ?? null,
+    inlineArtifacts,
   );
 
   const renderItem = (item: StreamItem): ReactNode => {
@@ -1362,6 +1420,30 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           data-approval-pending={item.approval.resolved ? "false" : "true"}
         >
           {renderApprovalItem(item.approval, mode, approvalHandlers)}
+        </li>
+      );
+    }
+    if (item.kind === "artifact") {
+      // The transport is what makes an expanded card able to fetch. Without it
+      // the card could only ever render its collapsed row, so we render nothing
+      // rather than a row whose Expand button silently does nothing.
+      if (artifactTransport === undefined) return null;
+      return (
+        <li
+          key={`artifact-item-${item.artifact.artifactId}`}
+          style={approvalItemStyle}
+          data-testid={`tc-chat-artifact-item-${item.artifact.artifactId}`}
+        >
+          <TcInlineArtifactCard
+            artifact={item.artifact}
+            transport={artifactTransport}
+            {...(artifactDownloadPort === undefined
+              ? {}
+              : { downloadPort: artifactDownloadPort })}
+            {...(onOpenArtifactInStudio === undefined
+              ? {}
+              : { onOpenInStudio: onOpenArtifactInStudio })}
+          />
         </li>
       );
     }
@@ -1605,7 +1687,8 @@ type StreamItem =
     }
   | { readonly kind: "fleet"; readonly fleet: FleetProjection }
   | { readonly kind: "tool"; readonly toolCall: ToolCallEntry }
-  | { readonly kind: "approval"; readonly approval: TcChatApproval };
+  | { readonly kind: "approval"; readonly approval: TcChatApproval }
+  | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry };
 
 /** An item anchored to a `sequence_no`, for the interleave pass. */
 interface AnchoredItem {
@@ -1661,6 +1744,7 @@ function mergeStream(
   toolCalls: readonly ToolCallEntry[],
   approvals: readonly TcChatApproval[],
   activeRunId: string | null,
+  artifacts: readonly InlineArtifactEntry[] = [],
 ): readonly StreamItem[] {
   const runId = activeRunId ?? inferActiveRunId(messages);
   const anchored: AnchoredItem[] = [];
@@ -1701,6 +1785,21 @@ function mergeStream(
     anchored.push({
       seq: cardSeq(approval.sequenceNo),
       item: { kind: "approval", approval },
+    });
+  }
+  // Artifacts last, so a card sharing a seq with an approval keeps the
+  // approval first — the decision is the thing the reader must act on, and the
+  // artifact it produced reads as its consequence. Same stable-sort convention
+  // as fleet-before-tool above.
+  //
+  // Anchored on `createdSeq`, NOT `lastSeq`: an artifact revised later in the
+  // run must stay where it was published. Anchoring on the revision would drag
+  // it to the bottom of the thread, which is the same failure mode the
+  // wall-clock note above describes for whole turns.
+  for (const artifact of artifacts) {
+    anchored.push({
+      seq: cardSeq(artifact.createdSeq),
+      item: { kind: "artifact", artifact },
     });
   }
 

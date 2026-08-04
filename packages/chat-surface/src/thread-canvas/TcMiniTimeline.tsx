@@ -42,6 +42,18 @@ export interface TcMiniTimelineProps {
    * this to "switch back to Studio mode".
    */
   readonly onExpand?: () => void;
+  /**
+   * Resume auto-following the newest surface. Present only while the user has
+   * pinned an OLDER surface on a live run — the same condition the tab strip's
+   * chip uses, because it is the same fact.
+   *
+   * It lives here as well as on the strip because Focus mode suppresses the
+   * strip once artifacts render inline, and follow-live would otherwise have no
+   * Focus affordance at all. This bar is unconditional in Focus and already
+   * owns the other "get me back to the live edge" control (`↩ Now`), which
+   * makes it the honest neighbour rather than a second home.
+   */
+  readonly onFollowLive?: () => void;
 }
 
 const LANE_COLORS = new Map<string, string>([
@@ -57,7 +69,8 @@ function colorForLane(lane: string): string {
 }
 
 export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
-  const { beads, scrubbedTo, onScrub, onSnapToNow, onExpand } = props;
+  const { beads, scrubbedTo, onScrub, onSnapToNow, onExpand, onFollowLive } =
+    props;
   const isLive = scrubbedTo === null;
   const isEmpty = beads.length === 0;
 
@@ -140,6 +153,21 @@ export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
         )}
       </div>
       <div style={controlsRowStyle}>
+        {/* Follow-live sits BEFORE the Live/Now pill: both return you to the
+            live edge, but this one un-pins a surface while the pill un-scrubs
+            time, and they are never offered at once (a pin is only reported
+            off-scrub). Rendered only when the host passes the callback, which
+            it does under exactly the tab-strip chip's condition. */}
+        {onFollowLive ? (
+          <button
+            type="button"
+            data-testid="tc-mini-timeline-follow-live"
+            onClick={onFollowLive}
+            style={followLiveStyle}
+          >
+            Follow live
+          </button>
+        ) : null}
         {/* The pill is permanent. It was withheld while the timeline was empty
             (an empty strip is trivially "Live", so the control was a no-op) —
             but that made the whole right edge of the bar blink out every time a
@@ -248,6 +276,23 @@ const pillStyle = (live: boolean): CSSProperties => ({
   cursor: "pointer",
   fontFamily: "inherit",
 });
+
+/**
+ * Accent-toned, unlike the neutral `↩ Now` / `↑` controls beside it. Those are
+ * always available; this one appears only because auto-follow is paused, so it
+ * is reporting a state as well as offering an action.
+ */
+const followLiveStyle: CSSProperties = {
+  background: "color-mix(in srgb, var(--color-accent) 10%, transparent)",
+  color: "var(--color-accent)",
+  border: "1px solid var(--color-accent-line, var(--color-accent))",
+  borderRadius: 999,
+  padding: "2px 9px",
+  fontSize: "var(--font-size-2xs)",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  whiteSpace: "nowrap",
+};
 
 const expandStyle: CSSProperties = {
   background: "transparent",

@@ -625,3 +625,129 @@
     width: 100%;
   }
 }
+
+/* ── inline artifact card (Focus transcript) ──────────────────────────────
+ *
+ * An artifact rendered where it was produced. Collapsed it is one quiet row;
+ * expanded it mounts the real `ArtifactSurface`, so the renderer and the editor
+ * are Studio's, not a second copy.
+ *
+ * The height cap below is load-bearing and NOT cosmetic. `.ui-artifact-surface`
+ * is `flex-column; min-height:0; overflow:hidden` with no height of its own, and
+ * the only `overflow:auto` in the chain is `.ui-dataset-table-wrap`, which needs
+ * a definite ancestor height to scroll. So capping the body WITHOUT also
+ * promoting `.ui-artifact-content` to a scroller makes the root's
+ * `overflow:hidden` clip the content silently — a table that just ends. And
+ * uncapped, `DocumentArtifactRenderer` markdown-renders the whole text with no
+ * window, up to the 5 MiB preview limit, straight into the thread.
+ */
+
+.tc-inline-artifact {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.tc-inline-artifact__row {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  min-height: 40px;
+  padding: 0 var(--space-sm) 0 var(--space-md);
+}
+
+.tc-inline-artifact__dot {
+  background: var(--surface-src);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--surface-src) 18%, transparent);
+  flex: none;
+  height: 6px;
+  width: 6px;
+}
+
+.tc-inline-artifact[data-surface-hue="none"] .tc-inline-artifact__dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-subtle);
+}
+
+/* Mono, because this names a FILE — an identifier, not prose. Same reasoning as
+ * `.tc-tab__title`, and the same rung of the mono micro-ladder. */
+.tc-inline-artifact__name {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-inline-artifact__meta {
+  color: var(--color-text-subtle);
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+}
+
+.tc-inline-artifact__spacer {
+  flex: 1 1 auto;
+  min-width: var(--space-sm);
+}
+
+.tc-inline-artifact__toggle,
+.tc-inline-artifact__action {
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  height: 24px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.tc-inline-artifact__toggle:hover,
+.tc-inline-artifact__action:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.tc-inline-artifact__toggle:focus-visible,
+.tc-inline-artifact__action:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.tc-inline-artifact__actions {
+  align-items: center;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+}
+
+.tc-inline-artifact__actions:empty {
+  display: none;
+}
+
+.tc-inline-artifact__body {
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tc-inline-artifact__body > .ui-artifact-surface {
+  max-height: 260px;
+}
+
+.tc-inline-artifact__body .ui-artifact-content {
+  overflow: auto;
+}

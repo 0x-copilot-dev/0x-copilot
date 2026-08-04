@@ -10,7 +10,18 @@ export function CanvasFocusCards(props: {
   readonly projection: CanvasLifecycleProjection;
   readonly onOpenSubject: (subjectKey: string) => void;
 }): ReactElement | null {
-  const cards = props.projection.tabs;
+  // Artifacts are NOT here any more — they render inline in the transcript,
+  // where they were published, expandable in place. A pinned band above the
+  // conversation could only ever say that an artifact existed and send the
+  // reader to Studio to find out what was in it, and it named them by kind
+  // ("document artifact") rather than by the filename the user chose.
+  //
+  // The other three subject kinds stay: a surface, a proposed change and a run
+  // receipt are all things Studio genuinely owns, so pointing at Studio is the
+  // honest affordance for them rather than a detour.
+  const cards = props.projection.tabs.filter(
+    (subject) => subject.kind !== "artifact",
+  );
   const hasGate = props.projection.pendingSubjectKeys.some((key) =>
     key.startsWith("gate:"),
   );
