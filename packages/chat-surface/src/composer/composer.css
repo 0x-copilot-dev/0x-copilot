@@ -477,6 +477,74 @@
   width: 100%;
 }
 
+/* The filing menu's own row density.
+ *
+ * The first cut reused `.ui-pop-row` — the recipe the `+` menu needs, built for
+ * "MCP Servers ▸" rows: a 24px leading glyph, a sub-line slot, and a full radio
+ * control, at 36px a row. Correct there, and about twice the furniture a
+ * two-item pick-list has any use for; the radios in particular read as a form
+ * you submit rather than a menu you pick from.
+ *
+ * So the FRAME stays shared (`.ui-pop` keeps every popover's background, border,
+ * radius and shadow in one place) and only the rows get tighter. That split is
+ * deliberate: density is this menu's business, chrome is not.
+ */
+.aui-filing-menu {
+  width: 212px;
+  padding: 4px;
+}
+
+.aui-filing-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  display: flex;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.aui-filing-row:hover,
+.aui-filing-row:focus-visible {
+  background: var(--color-surface);
+}
+
+/* The name. `min-width: 0` so a long project name ellipsises instead of forcing
+ * the menu wider than the 212px the design fixes it at. */
+.aui-filing-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Selection is a bare check, not a radio: one of these is always true, and the
+ * menu closes on pick, so the control never needs to show an unselected slot. */
+.aui-filing-row__check {
+  color: var(--color-accent);
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 12px;
+}
+
+.aui-filing-row--new {
+  color: var(--color-text-subtle);
+}
+
+.aui-filing-sep {
+  background: var(--color-border);
+  height: 1px;
+  margin: 4px 6px;
+}
+
 /* Design `.cmp-row{display:flex;align-items:center;gap:5px;padding:6px 8px 8px}`.
  * The inset lives here because the shell is padding-free (see `.aui-composer`).
  * No `justify-content` — the right cluster's own `margin-left:auto` does the

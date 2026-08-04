@@ -29,6 +29,7 @@ import json
 import os as _os
 import sys as _sys
 import time
+from pathlib import Path
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from _lib import DriverSession, load_env_key  # noqa: E402
@@ -100,7 +101,23 @@ def _conversations(s: DriverSession) -> list[dict]:
     return list(payload.get("conversations") or [])
 
 
+def _clear_previous_screenshots() -> None:
+    """Drop the last run's PNGs before this one writes any.
+
+    `_lib` reuses `runs/<name>/` and numbers shots from 1 each time, so a run
+    with fewer steps leaves higher-numbered files from a previous run sitting
+    beside the current ones. Reading `05-chip-menu-open.png` after a run that
+    only got to 04 shows you the OLD build and looks entirely convincing — the
+    same trap the README documents for stale staged runtimes, one directory
+    down. Clearing makes every file in here belong to the run you just did.
+    """
+    shots = Path(__file__).resolve().parent.parent / "runs" / "projects-filing"
+    for png in shots.glob("screenshots/*.png"):
+        png.unlink()
+
+
 def main() -> int:
+    _clear_previous_screenshots()
     key = load_env_key("anthropic")  # value never printed
     print(f"[projects-filing] anthropic key_len={len(key)} (value withheld)")
 

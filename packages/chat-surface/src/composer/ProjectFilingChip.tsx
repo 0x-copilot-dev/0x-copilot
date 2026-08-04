@@ -8,6 +8,16 @@
 // were a full-width bar and a segmented control; both made a set-once decision
 // look like a per-turn one.
 //
+// The MENU is option B of a second round: a compact 212px list, 28px rows, a
+// 14px monogram and a bare check. The first cut reused `.ui-pop-row` — right
+// for the `+` menu it was built for, and roughly twice the furniture a two-item
+// pick-list needs; its per-row radios in particular read as a form you submit.
+// Rejected alongside it: inline chips with no popover at all (deletes the
+// positioning bug class, but reflows the page and dies past ~6 projects), a
+// typeahead (scales, but contends with the composer for the caret), and a
+// tile-less hue-dot list (quietest, but a project would read as a dot here and
+// a lettered tile on its own card).
+//
 // Three rules this file exists to keep:
 //
 //   1. NEVER render `icon_emoji`. The server defaults it to 📁 for every
@@ -134,19 +144,12 @@ function triggerTileStyle(colorHue: ProjectColorHue): CSSProperties {
 }
 
 /**
- * The menu row's tile. Geometry comes from the shared `.ui-pop-row__lg` recipe
- * (24px, radius, centring) — only the ramp colours are set here, for the same
- * reason as above.
+ * The menu row's tile — the same 14px geometry as the trigger's, because a row
+ * is 28px tall and the shared `.ui-pop-row__lg` is a 24px glyph sized for the
+ * `+` menu's much taller rows. Colour still comes from the one `projectHueRamp`.
  */
 function rowTileStyle(colorHue: ProjectColorHue): CSSProperties {
-  const ramp = projectHueRamp(colorHue);
-  return {
-    backgroundColor: ramp.background,
-    border: ramp.border,
-    color: ramp.color,
-    fontSize: 11,
-    fontWeight: "var(--font-weight-semibold)",
-  };
+  return triggerTileStyle(colorHue);
 }
 
 const rootStyle: CSSProperties = {
@@ -226,30 +229,18 @@ export function ProjectFilingChip(props: ProjectFilingChipProps): ReactElement {
         type="button"
         role="menuitemradio"
         aria-checked={active}
-        className="ui-pop-row"
+        className="aui-filing-row"
         data-testid="composer-project-filing-option"
         data-project-id={option.id}
         data-on={active || undefined}
         onClick={() => pick(option.id)}
       >
-        <span
-          className="ui-pop-row__lg"
-          style={rowTileStyle(option.colorHue)}
-          aria-hidden="true"
-        >
+        <span style={rowTileStyle(option.colorHue)} aria-hidden="true">
           {monogram(option.name)}
         </span>
-        <span className="ui-pop-row__m">
-          <span className="ui-pop-row__nm">
-            <span className="ui-pop-row__txt">{option.name}</span>
-          </span>
-        </span>
-        <span
-          className="ui-pop-row__rad"
-          data-on={active || undefined}
-          aria-hidden="true"
-        >
-          {active ? <Icon name="check" size={9} strokeWidth={3} /> : null}
+        <span className="aui-filing-row__name">{option.name}</span>
+        <span className="aui-filing-row__check" aria-hidden="true">
+          {active ? <Icon name="check" size={11} strokeWidth={2.5} /> : null}
         </span>
       </button>
     );
@@ -259,62 +250,53 @@ export function ProjectFilingChip(props: ProjectFilingChipProps): ReactElement {
     <div
       role="menu"
       aria-label="File this chat under a project"
-      className="ui-pop"
+      // `.ui-pop` for the CHROME (one popover background/border/shadow), plus
+      // this menu's own row density — see the `.aui-filing-*` block in
+      // composer.css for why the `+` menu's recipe is wrong here.
+      className="ui-pop aui-filing-menu"
       data-testid="composer-project-filing-menu"
       // Escape is bound HERE as well as on the root: with a portalling host the
       // menu is not a DOM descendant of the root, so a root-only handler would
       // never see a keystroke made while focus is inside the menu.
       onKeyDown={handleEscape}
     >
-      <div className="ui-pop__list">
-        {options.map(renderOption)}
+      {options.map(renderOption)}
 
-        <div className="ui-pop__div" aria-hidden="true" />
+      <div className="aui-filing-sep" aria-hidden="true" />
 
-        {/* "No project" is a real filing choice, not a reset affordance on the
-            trigger — unfiling a chat is as deliberate as filing it. */}
-        <button
-          type="button"
-          role="menuitemradio"
-          aria-checked={value === null}
-          className="ui-pop-row"
-          data-testid="composer-project-filing-none"
-          data-on={value === null || undefined}
-          onClick={() => pick(null)}
-        >
-          <span className="ui-pop-row__m">
-            <span className="ui-pop-row__nm">
-              <span className="ui-pop-row__txt">No project</span>
-            </span>
-          </span>
-          <span
-            className="ui-pop-row__rad"
-            data-on={value === null || undefined}
-            aria-hidden="true"
-          >
-            {value === null ? (
-              <Icon name="check" size={9} strokeWidth={3} />
-            ) : null}
-          </span>
-        </button>
-      </div>
+      {/* "No project" is a real filing choice, not a reset affordance on the
+          trigger — unfiling a chat is as deliberate as filing it. It sits below
+          the separator with "New project…" because both are about the LIST
+          rather than a member of it. */}
+      <button
+        type="button"
+        role="menuitemradio"
+        aria-checked={value === null}
+        className="aui-filing-row"
+        data-testid="composer-project-filing-none"
+        data-on={value === null || undefined}
+        onClick={() => pick(null)}
+      >
+        <span className="aui-filing-row__name">No project</span>
+        <span className="aui-filing-row__check" aria-hidden="true">
+          {value === null ? (
+            <Icon name="check" size={11} strokeWidth={2.5} />
+          ) : null}
+        </span>
+      </button>
 
       {onCreateProject !== undefined ? (
         <button
           type="button"
           role="menuitem"
-          className="ui-pop-row ui-pop-row--pin"
+          className="aui-filing-row aui-filing-row--new"
           data-testid="composer-project-filing-new"
           onClick={() => {
             dismiss();
             onCreateProject();
           }}
         >
-          <span className="ui-pop-row__m">
-            <span className="ui-pop-row__nm">
-              <span className="ui-pop-row__txt">New project…</span>
-            </span>
-          </span>
+          <span className="aui-filing-row__name">New project…</span>
         </button>
       ) : null}
     </div>
