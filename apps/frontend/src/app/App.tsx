@@ -969,7 +969,6 @@ export function CopilotApp({
         // conversation" path rather than a second one for the switcher.
         onOpenConversation={openConversation}
         onNewConversation={openNewRun}
-        identityName={profile?.data?.display_name ?? null}
         identity={identity}
         oauthStatus={oauthStatus}
         completedMcpAuthAction={completedMcpAuthAction}

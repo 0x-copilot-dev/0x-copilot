@@ -218,28 +218,17 @@ describe("ThreadSwitcher", () => {
     expect(screen.queryByTestId("thread-switcher-empty")).toBeNull();
   });
 
-  it("renders the identity foot only when a name is supplied", () => {
-    const { unmount } = render(
-      <ThreadSwitcher
-        variant="docked"
-        controller={source()}
-        activeConversationId={null}
-        onOpenConversation={vi.fn()}
-        identityName="Sarah Chen"
-      />,
-    );
-    expect(
-      screen.getByTestId("thread-switcher-identity").textContent,
-    ).toContain("Sarah Chen");
-    unmount();
-
+  it("renders no account row — the rail avatar is the only account affordance", () => {
+    // The regression this guards: the panel used to carry its own avatar +
+    // display name in a foot, which rendered at the same time as `AppRail`'s
+    // `data-rail-me` button — two identical circles with the same initial, on
+    // the same baseline, only one of them clickable.
     render(
       <ThreadSwitcher
         variant="docked"
         controller={source()}
         activeConversationId={null}
         onOpenConversation={vi.fn()}
-        identityName="   "
       />,
     );
     expect(screen.queryByTestId("thread-switcher-identity")).toBeNull();

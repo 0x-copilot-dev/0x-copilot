@@ -1054,12 +1054,6 @@ export interface RunDestinationProps {
    */
   readonly onNewConversation?: () => void;
   /**
-   * PRD-09 D-9.5 — signed-in display name for the switcher's foot. The 48px app
-   * rail can only show an initial; the docked panel has room for the name.
-   * `null` → no foot row.
-   */
-  readonly identityName?: string | null;
-  /**
    * Explicit target run. Wins over auto-resolution and is streamed even before
    * it appears in the run list — the seam PR-3.11 uses to bind the empty→live
    * transition to a freshly-created run without a shell remount (FR-3.25).
@@ -1268,7 +1262,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     onOpenConversation,
     onNewConversation,
-    identityName = null,
     runId: explicitRunId = null,
     enabled = true,
     agentName,
@@ -4394,7 +4387,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             }
             onOpenConversation={handleOpenConversation}
             onNewRun={onNewConversation}
-            identityName={identityName}
           />
         ) : null}
         <div style={cockpitMainColumnStyle}>
@@ -4520,7 +4512,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               onOpenConversation={handleOpenConversation}
               onNewRun={onNewConversation}
               onRequestClose={closeThreadSwitcher}
-              identityName={identityName}
             />
           </>
         ) : null}

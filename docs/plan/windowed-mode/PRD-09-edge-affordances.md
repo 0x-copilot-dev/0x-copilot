@@ -113,10 +113,20 @@ composer with the user's original message so they can adjust before re-sending.
 This composes with PRD-04's step-level retry — same verb, same mechanism
 (composer prefill), different scope.
 
-**D-9.5 — The account affordance follows PRD-01.** When the Threads panel is
-docked, the account renders in its footer with the full name, as both references
-do. The 48px rail keeps the initial-only glyph as the collapsed/overlay form.
-`accountLabel` is already computed for exactly this.
+**D-9.5 — ~~The account affordance follows PRD-01.~~ SUPERSEDED — the rail owns
+the account, and it is the only account element.** The original decision read the
+rail glyph as the _collapsed_ form of an affordance the docked panel would spell
+out. That does not hold as built: the rail has no knowledge of whether the
+cockpit's panel is docked, so both rendered simultaneously — two identical 26px
+circles with the same initial, ~60px apart on the same baseline, of which only
+the rail one is a button. The panel foot is removed. The rail keeps it because it
+is the design's own `.rail-me`, it is the interactive one (opens Settings, with
+the full name as its `title`/`aria-label`), and it survives every destination and
+every width — whereas the panel closes, and below `THREAD_SWITCHER_DOCK_FLOOR`
+becomes a modal overlay. Restoring the footer would require plumbing panel-dock
+state from the cockpit up into the shell rail to hide one of them, and would
+reflow the 48px rail's foot on every panel toggle — for a product whose default
+profile is `single_user_desktop` and has exactly one account to name.
 
 **D-9.6 — Copy failures must surface.** `ClipboardPort.copyText` rejects on web
 without a secure context; the port's own docstring says _"Destinations surface
@@ -140,9 +150,8 @@ Created manual-156ea66f.txt containing MANUAL in the artifact library.
 - Type register matches `activityCardMetaStyle` (quiet, small) — actions are
   secondary to the answer and must not compete with it (this is PRD-03's whole
   premise).
-- **Account footer** (docked panel only): 26px avatar + display name, single
-  line, ellipsised. No plan/tier string — we do not have a trustworthy source for
-  one, and inventing it is worse than omitting it.
+- **Account** — the rail's 26px `data-rail-me` button, and nothing else. The
+  Threads panel has no account footer (D-9.5, superseded).
 
 **Accessibility.** Real `<button>`s in a `role="group"` labelled
 `Message actions`. Hover-revealed rows on earlier messages must also appear on
