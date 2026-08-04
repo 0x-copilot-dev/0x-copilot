@@ -108,9 +108,19 @@ class ModelSizeTierResolver:
     #: VERSION of an existing line (Opus 6, GPT-5.7) is picked up automatically
     #: on the next catalog refresh, and only a brand-new product LINE needs a
     #: change here.
+    #: OpenAI's 5.6 line renamed every rung — ``gpt-luna`` / ``gpt-terra`` /
+    #: ``gpt-sol`` supersede ``gpt-nano`` / ``gpt-mini`` / ``gpt``. Both spellings
+    #: are listed per rung rather than swapped, which is the case this structure
+    #: exists for: the newest release across a rung's families wins, so the ladder
+    #: follows the rename automatically and still resolves for a provider whose
+    #: catalog only carries the older line.
     DEFAULT_MAIN_LINE: Final[Mapping[str, tuple[tuple[str, ...], ...]]] = {
         "anthropic": (("claude-haiku",), ("claude-sonnet",), ("claude-opus",)),
-        "openai": (("gpt-nano",), ("gpt-mini",), ("gpt", "gpt-sol")),
+        "openai": (
+            ("gpt-nano", "gpt-luna"),
+            ("gpt-mini", "gpt-terra"),
+            ("gpt", "gpt-sol"),
+        ),
         "gemini": (("gemini-flash-lite",), ("gemini-flash",), ("gemini-pro",)),
     }
     #: Gateways resell other vendors' lines rather than shipping their own, so

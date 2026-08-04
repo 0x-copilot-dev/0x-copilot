@@ -269,6 +269,115 @@ describe("defaultSelectedModelId — provider priority among configured", () => 
     ).toBe("claude-sonnet-5");
   });
 
+  // The preferred rung is per-provider, because the vendors disagree about
+  // which one is "the everyday model". These two lineups are the real ladders
+  // the backend derives from models.dev (`gpt-luna`/`gpt-terra`/`gpt-sol` and
+  // `claude-haiku`/`claude-sonnet`/`claude-opus`), so one global tier order
+  // cannot satisfy both.
+  const openai56 = (): CatalogModel[] => [
+    {
+      id: "gpt-5.6-luna",
+      provider: "openai",
+      model_name: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      configured: true,
+      supports_streaming: true,
+      tier: "small",
+      output_cost_per_mtok: 1.2,
+    },
+    {
+      id: "gpt-5.6-terra",
+      provider: "openai",
+      model_name: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      configured: true,
+      supports_streaming: true,
+      tier: "medium",
+      output_cost_per_mtok: 12,
+    },
+    {
+      id: "gpt-5.6",
+      provider: "openai",
+      model_name: "gpt-5.6",
+      name: "GPT-5.6",
+      configured: true,
+      supports_streaming: true,
+      tier: "big",
+      output_cost_per_mtok: 30,
+    },
+  ];
+
+  const anthropicLadder = (): CatalogModel[] => [
+    {
+      id: "claude-haiku-4-5",
+      provider: "anthropic",
+      model_name: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      configured: true,
+      supports_streaming: true,
+      tier: "small",
+      output_cost_per_mtok: 5,
+    },
+    {
+      id: "claude-sonnet-5",
+      provider: "anthropic",
+      model_name: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      configured: true,
+      supports_streaming: true,
+      tier: "medium",
+      output_cost_per_mtok: 10,
+    },
+    {
+      id: "claude-opus-5",
+      provider: "anthropic",
+      model_name: "claude-opus-5",
+      name: "Claude Opus 5",
+      configured: true,
+      supports_streaming: true,
+      tier: "big",
+      output_cost_per_mtok: 25,
+    },
+  ];
+
+  it("opens a fresh OpenAI key on Luna, not the mid rung", () => {
+    // OpenAI's 5.6 line is luna/terra/sol; Luna is the everyday model and the
+    // deployment default (RUNTIME_DEFAULT_MODEL), at ~1/10th Terra's output
+    // cost. The generic mid-rung-first order would pick Terra here.
+    const models = openai56();
+    expect(defaultSelectedModelId(models, { preferProvider: "openai" })).toBe(
+      "gpt-5.6-luna",
+    );
+    expect(defaultSelectedModelId(models)).toBe("gpt-5.6-luna");
+  });
+
+  it("keeps Anthropic on the mid rung while OpenAI prefers the small one", () => {
+    // The whole reason the order is per-provider: same shaped ladders, and the
+    // correct default sits on a different rung in each.
+    expect(
+      defaultSelectedModelId(anthropicLadder(), {
+        preferProvider: "anthropic",
+      }),
+    ).toBe("claude-sonnet-5");
+    expect(
+      defaultSelectedModelId(openai56(), { preferProvider: "openai" }),
+    ).toBe("gpt-5.6-luna");
+  });
+
+  it("ranks each row against its own provider's order on a mixed list", () => {
+    // The last fallback ranks a mixed-provider list. Each row must be scored by
+    // ITS provider's preferred rung, so an Anthropic row is not judged by
+    // OpenAI's small-first order (which would hand the pick to Haiku).
+    const mixed = [...anthropicLadder(), ...openai56()];
+    // OpenAI wins on PROVIDER_PRIORITY, and within OpenAI the small rung wins.
+    expect(defaultSelectedModelId(mixed)).toBe("gpt-5.6-luna");
+    // With OpenAI unusable, Anthropic still resolves to its OWN preferred rung.
+    const anthropicOnly = mixed.map((m) =>
+      m.provider === "openai" ? { ...m, configured: false } : m,
+    );
+    expect(defaultSelectedModelId(anthropicOnly)).toBe("claude-sonnet-5");
+  });
+
   it("falls to the small rung when the provider ships no mid one", () => {
     const models: CatalogModel[] = [
       {
