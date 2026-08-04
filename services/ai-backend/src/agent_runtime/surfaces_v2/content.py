@@ -12,6 +12,7 @@ unhydrated for the client to show its honest raw/loading state.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
@@ -28,6 +29,8 @@ class _Key:
     CALL_ID = "call_id"
     OUTPUT = "output"
     PAYLOAD_REF = "payload_ref"
+    # Read from BOTH ``surface.created`` (the ladder's resolved spec) and
+    # ``surface_spec_generated`` (the model's later refinement of it).
     SPEC = "spec"
     SURFACE_ID = "surface_id"
     # ``surface_spec_generated`` predates v2 ledger events and publishes the
@@ -58,12 +61,82 @@ class _StateKey:
     TOOL = "tool"
 
 
+class _McpContentDecoder:
+    """Recover the renderer's payload from the MODEL-facing persisted output.
+
+    A surface binds its spec to the *structured* half of an MCP result — the
+    projector inferred ``items_path: "incidents"`` from ``{"incidents": [...]}``.
+    What the run persists on ``tool_result`` is the half the MODEL read, and for
+    an MCP tool that is a content-block envelope whose text happens to be the
+    same JSON, encoded twice:
+
+        {"content": "[{\\"id\\": \\"lc_…\\", \\"text\\": \\"{\\\\\\"incidents\\\\\\": …}\\"}]"}
+
+    Binding a spec against that shape resolves nothing, so a live surface
+    rendered its columns over zero rows. The two halves are the same data in two
+    registers; this turns the persisted one back into the register the spec was
+    written against.
+
+    Total by construction. Anything it does not recognise is returned unchanged,
+    because the honest failure here is "render the payload as persisted", never
+    an exception on a read that already succeeded.
+    """
+
+    _CONTENT = "content"
+    _TEXT = "text"
+    #: Nesting is bounded — one envelope, one block, one JSON body. A payload
+    #: that needs more than this is not the shape described above.
+    _MAX_BLOCKS = 32
+
+    @classmethod
+    def decode(cls, output: object) -> object:
+        """Return the structured payload behind an MCP content envelope."""
+
+        if not isinstance(output, Mapping) or set(output) != {cls._CONTENT}:
+            return output
+        blocks = cls._as_blocks(output[cls._CONTENT])
+        if blocks is None:
+            return output
+        for block in blocks[: cls._MAX_BLOCKS]:
+            if not isinstance(block, Mapping):
+                continue
+            decoded = cls._json(block.get(cls._TEXT))
+            if isinstance(decoded, Mapping):
+                return decoded
+        return output
+
+    @classmethod
+    def _as_blocks(cls, value: object) -> list[object] | None:
+        """The block list, whether it was persisted as a list or as JSON text."""
+
+        if isinstance(value, list):
+            return list(value)
+        parsed = cls._json(value)
+        return list(parsed) if isinstance(parsed, list) else None
+
+    @staticmethod
+    def _json(value: object) -> object | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return None
+
+
 class SurfaceContentProjection:
     """Resolve declared surface references into ``{data, spec?, source?}`` state.
 
     ``source`` is the read's own ``surface.created`` provenance re-spelled in the
     renderer's vocabulary — never inferred from the payload, and never invented
     for a subject the caller did not declare.
+
+    ``spec`` has two sources, both declared on the ledger by the runtime and
+    both keyed on the same surface identity: the resolved spec carried by
+    ``surface.created`` (the builtin / store / inferred rungs, which resolve
+    backend-side with no latency), and the later ``surface_spec_generated``
+    refinement. Sourcing it from generation alone is what left a matched
+    curated spec stranded backend-side.
 
     ``surface_payload_refs`` is normally supplied from ``SurfaceStoreState`` so
     the HTTP endpoint explicitly declares which subjects it is authorized to
@@ -110,10 +183,25 @@ class SurfaceContentProjection:
                 surface_id = SurfaceContentProjection._text(
                     payload.get(_Key.SURFACE_ID)
                 )
-                source = SurfaceContentProjection._state_source(payload)
-                if surface_id in refs and source is not None:
-                    source_by_surface[surface_id] = source
+                if surface_id is not None and surface_id in refs:
+                    source = SurfaceContentProjection._state_source(payload)
+                    if source is not None:
+                        source_by_surface[surface_id] = source
+                    # The ladder's builtin / store / inferred rungs all resolve
+                    # backend-side and ride the record that declares the
+                    # surface. Reading only the generated branch below is what
+                    # made a matched curated spec vanish between the projector
+                    # and the screen, while ``view.derived`` recorded the
+                    # surface as shaped.
+                    spec = payload.get(_Key.SPEC)
+                    if isinstance(spec, Mapping):
+                        spec_by_surface[surface_id] = dict(spec)
             elif event_type == _EventType.SURFACE_SPEC_GENERATED:
+                # The model's refinement of an already-delivered spec. Later in
+                # the stream than the ``surface.created`` that declared the
+                # subject, so last-writer-wins is the ladder's own order: the
+                # upgrade replaces the rung it improved on, and never the
+                # reverse.
                 surface_id = SurfaceContentProjection._text(
                     payload.get(_Key.SURFACE_URI)
                 ) or SurfaceContentProjection._text(payload.get(_Key.SURFACE_ID))
@@ -126,7 +214,9 @@ class SurfaceContentProjection:
             call_id = SurfaceContentProjection._call_id_from_ref(payload_ref)
             state: dict[str, object] = {}
             if call_id is not None and call_id in output_by_call:
-                state[_StateKey.DATA] = output_by_call[call_id]
+                state[_StateKey.DATA] = _McpContentDecoder.decode(
+                    output_by_call[call_id]
+                )
             spec = spec_by_surface.get(surface_id)
             if spec is not None:
                 state[_StateKey.SPEC] = dict(spec)

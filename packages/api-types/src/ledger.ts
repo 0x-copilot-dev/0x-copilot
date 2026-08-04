@@ -394,6 +394,22 @@ export interface SurfaceCreatedPayload {
   source: LedgerOpRef;
   title: string;
   payload_ref: string;
+  /**
+   * The spec the acquisition ladder resolved synchronously for this surface —
+   * the builtin, stored, or structurally-inferred rung. Absent when the ladder
+   * produced none, and absent on replay of runs recorded before this field
+   * existed, so treat it as optional rather than as "the surface is unshaped".
+   *
+   * The later model refinement does NOT arrive here; it rides its own
+   * `surface_spec_generated` event and supersedes this value by surface id.
+   *
+   * Typed as `unknown` on purpose. `SurfaceSpec` is a presentation contract
+   * owned by `@0x-copilot/surface-renderers`, and the ledger types must not
+   * take a dependency on it to state that a spec was carried. Consumers narrow
+   * it at the point of render, which is where a malformed spec should degrade
+   * to the generic view.
+   */
+  spec?: unknown;
 }
 
 export interface ViewDerivedPayload {

@@ -3,7 +3,14 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { Icon } from "@0x-copilot/chat-surface";
 
 import { SURFACE_PALETTE as PALETTE } from "./palette";
-import { formatValue, isSafeHttpUrl, numericValue, resolvePath } from "./path";
+import {
+  formatValue,
+  isNumericFormat,
+  isSafeHttpUrl,
+  numericValue,
+  resolvePath,
+} from "./path";
+import type { SurfaceFieldFormat } from "./specTypes";
 
 // Shared, pure presentational primitives for the ArchetypeRenderer pack
 // (PRD-03). These reuse the visual grammar of the tier-1 renderers
@@ -282,6 +289,109 @@ export function SurfaceHeader(props: SurfaceHeaderProps): ReactElement {
   );
 }
 
+/* ==========================================================================
+ * THE BADGE REGISTER — `format: "badge"` as a chip
+ * ==========================================================================
+ *
+ * WHY THIS EXISTS. `format` is a purely VISUAL hint, and until now the renderers
+ * spent nothing on this one: `formatValue`'s `badge` case returns the string
+ * unchanged, and both archetypes had exactly two value registers — plain and
+ * numeric. So a spec that correctly typed a status as a badge painted the same
+ * undifferentiated grey as the title beside it. That is not a cosmetic gap: the
+ * curated Linear / GitHub / Asana specs type `state.name` and `status` as
+ * badges, and rung-0 inference independently types every low-cardinality token
+ * the same way (`capabilities/surfaces/infer.py`), so the hint the backend works
+ * hardest to get right was the one the client discarded.
+ *
+ * A chip is what makes a status legible AS a status — a closed vocabulary you
+ * scan down a column, rather than prose you read.
+ */
+
+/**
+ * The chip. It is the SAME chip as {@link badgeStyle} — the design's `.sfb`,
+ * i.e. the design system's `.ui-badge`: mono at the top micro rung inside a
+ * full-radius hairline with no fill — spread rather than re-declared, so the
+ * header's chip and a value's chip can never drift apart. The token sheet names
+ * this exact role on the size rung it takes (`--font-size-mono-10-5`, "status
+ * chip"), which is the reason no new rung is invented here.
+ *
+ * ONE token differs, deliberately, and it is the colour. The header badge is
+ * metadata ABOUT the card ("7 cards") and sits on `--mut`; this chip IS the
+ * value. `--mut` is already what {@link fieldLabelStyle} carries, so painting
+ * both on it would collapse the label/value hierarchy the row spends a rung on —
+ * and would make the chip QUIETER than the plain text it replaces, which is the
+ * opposite of the point. `--color-text-strong` is the rung between: still under
+ * the 13px sans value beside it, still clearly above the label.
+ */
+const valueBadgeStyle: CSSProperties = {
+  ...badgeStyle,
+  color: PALETTE.textMid,
+};
+
+/**
+ * Longest formatted value still painted as a chip.
+ *
+ * A chip is `white-space: nowrap` by design — it hugs one token — so a long
+ * value inside one does not wrap, it widens the row that holds it. The cap is a
+ * PRESENTATION decision and never a truncation: a value past it renders in the
+ * ordinary value register, in full. That distinction is the whole reason the cap
+ * is safe. The hint is untrusted — a spec arrives over the wire and
+ * `specFromState` gates on two fields — so `badge` can legitimately land on a
+ * paragraph; declining the chip is honest, whereas clipping the text to fit one
+ * would delete payload that the plain register would have shown.
+ *
+ * 48 is twice what rung-0 inference will ever type as a badge (24 characters,
+ * ≤2 words — `infer.py::_Limits`), which leaves room for a hand-authored spec's
+ * longer state label without leaving room for prose.
+ */
+export const BADGE_MAX_CHARS = 48;
+
+/**
+ * Whether a formatted value may be painted as a chip.
+ *
+ * Blank is excluded for the same reason an over-long value is: an empty pill
+ * asserts that there is a value here and then shows none, where the plain
+ * register's blank cell simply says the field was absent — and an absent field
+ * is the common case on real connector payloads, not the edge case.
+ */
+export function paintsAsChip(
+  format: SurfaceFieldFormat | undefined,
+  text: string,
+): boolean {
+  return (
+    format === "badge" && text.trim() !== "" && text.length <= BADGE_MAX_CHARS
+  );
+}
+
+/**
+ * The chip itself, inert by construction: a `span`, never an anchor and never a
+ * button.
+ *
+ * A badge is a presentational treatment of a value the TOOL returned, so making
+ * it activatable would hand tool output a control on our surface. This package
+ * carries exactly one sanctioned interactive element — `link.url_path`,
+ * host-sanitised in {@link SurfaceLinkRow} — and the badge is deliberately not a
+ * second one.
+ *
+ * `data-surface-format` is what lets one selector find every chip across
+ * archetypes without knowing each archetype's own test-id grammar; the `testId`
+ * stays per-site so a specific cell is still addressable.
+ */
+export function SurfaceValueBadge(props: {
+  readonly value: string;
+  readonly testId: string;
+}): ReactElement {
+  return (
+    <span
+      style={valueBadgeStyle}
+      data-surface-format="badge"
+      data-testid={props.testId}
+    >
+      {props.value}
+    </span>
+  );
+}
+
 const rowStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "150px 1fr",
@@ -319,19 +429,40 @@ export interface FieldRowProps {
   readonly fieldKey: string;
   readonly label: string;
   readonly value: string;
+  /**
+   * The spec's visual hint, which is what CHOOSES the value register: `badge`
+   * becomes a chip, `number` / `currency` the tabular-figure one. The value
+   * itself arrives already formatted — the caller owns `formatValue` because it
+   * owns the raw payload — so this is only ever consulted for presentation.
+   */
+  readonly format?: SurfaceFieldFormat;
+  /**
+   * Explicit override of the numeric register, for a caller that knows a value
+   * is a magnitude without a spec saying so. Defaults to the format's own
+   * answer, which is what every spec-driven caller wants.
+   */
   readonly numeric?: boolean;
 }
 
 export function FieldRow(props: FieldRowProps): ReactElement {
-  const { fieldKey, label, value, numeric } = props;
+  const { fieldKey, label, value, format } = props;
+  const numeric = props.numeric ?? isNumericFormat(format);
   return (
     <div style={rowStyle} data-testid={`field-${fieldKey}`}>
       <span style={fieldLabelStyle}>{label}</span>
+      {/* The chip is nested INSIDE the value slot rather than replacing it: the
+          slot is the grid item (a chip put there directly would blockify and
+          stretch the whole column instead of hugging its token), and keeping it
+          also keeps `field-*-value` meaning the same thing in both registers. */}
       <span
         style={numeric ? numericValueStyle : fieldValueStyle}
         data-testid={`field-${fieldKey}-value`}
       >
-        {value || " "}
+        {paintsAsChip(format, value) ? (
+          <SurfaceValueBadge value={value} testId={`field-${fieldKey}-badge`} />
+        ) : (
+          value || " "
+        )}
       </span>
     </div>
   );
@@ -651,7 +782,7 @@ function summarise(value: unknown): string {
   return formatValue(value);
 }
 
-// ---- The no-spec view (PRD-02) -------------------------------------------
+// ---- The no-spec view (PRD-02; its copy retired by generative-ui-floor §3.8)
 
 /**
  * Longest tool identifier the note paints.
@@ -704,8 +835,9 @@ function displayToolName(value: unknown): string | undefined {
  * (`{server, tool}`), never an invented key: `source.tool` is where a spec-less
  * envelope names its tool, and `spec.source.tool` covers the real case where a
  * spec DID ride along but failed `specFromState`'s minimal-shape gate — we
- * could not use it, so "no spec matched" is still true, but it still tells us
- * which tool this was.
+ * could not shape the payload with it, but it still records which tool this
+ * was, and provenance is the one thing {@link NoSpecView} still states out
+ * loud.
  *
  * `source` is optional on `SurfaceState` and always will be: every surface
  * emitted before the field existed carries none, so absent stays a first-class
@@ -810,19 +942,59 @@ const readOnlyReasonStyle: CSSProperties = {
 };
 
 /**
- * The tier-3 generic view: the honest note, the payload as the tool sent it,
+ * The tier-3 generic view: a provenance line, the payload as the tool sent it,
  * and the read-only footer.
+ *
+ * WHAT WAS DELETED HERE, AND WHY IT WAS DELETED RATHER THAN REWORDED. This band
+ * used to open by announcing that the tool's output had matched no spec, naming
+ * the tool inside that sentence. It is gone under the generative-UI floor PRD
+ * (§3.8 / AC17) — and it is not quoted anywhere in this package, comments
+ * included, because AC17 is enforced as a `grep -ri` gate over `packages/` that
+ * a well-meaning recital of the old string would red. The objection to it was
+ * never tone. It named an internal mechanism the reader has no stake in — a user
+ * should never see the word "spec" — it framed a complete, finished view as a
+ * failure, and by the end it was routinely FALSE: a curated spec was matched
+ * backend-side and then dropped on the way to the screen, so the copy
+ * apologised for a match we had actually made. It also closed with a promise
+ * ("a spec will be generated and cached on the next call") about machinery the
+ * user cannot see and, on every path that still reaches here, will not happen.
+ * Our own host mount had already written down what the band did to a reader:
+ * `TcSurfaceMount` refuses to delegate its empty state to this tier because the
+ * card "reads to a user like an error".
+ *
+ * WHY THE COMPONENT SURVIVED THE COPY. Rung 0 — deterministic inference — now
+ * answers for every mapping-shaped tool output with no model and no failure
+ * mode, so "the runtime produced a mapping payload and no spec" is no longer a
+ * state the runtime can reach. Three other paths still reach it, and each is a
+ * legitimate finished view rather than a fault:
+ *
+ *  1. REPLAY of a run recorded before the floor landed. Those events carry no
+ *     spec and never will, and the transcript still has to render.
+ *  2. A spec DROPPED at the transport allow-list. `surface.created` is rebuilt
+ *     field by field and its spec re-validated before it is persisted; one that
+ *     fails is discarded by design, because a wrong shaping is worse than none.
+ *  3. A NON-MAPPING payload — a bare scalar or array. Inference declines it
+ *     because there is no record and no table in it to find.
+ *
+ * So the rule this view now follows: **if we cannot shape the data, render the
+ * data.** Legibly, as a finished thing. The tool name stays, as PROVENANCE —
+ * which call produced what is on screen — never as an excuse for it. Nothing
+ * here is a status, an alert or a loading state (design rule 04: "Unknown
+ * degrades. Nothing in this pane ever renders as an error."); the note says
+ * where this came from and what it is, and the footer says what cannot happen
+ * here at all.
+ *
+ * The export name and the `surface-no-spec-*` test ids are deliberately
+ * UNCHANGED. They are developer-facing, they still describe precisely when this
+ * branch runs — every archetype selects it with `spec ? … : …` — and they are
+ * read from outside this package by `tools/design-parity`'s anchor set. What
+ * was false was the claim made to a user, and that is the thing that went.
  *
  * This is the degradation target for EVERY archetype — `TableRenderer`,
  * `RecordRenderer`, `BoardRenderer`, `DocRenderer` and `MessageRenderer` all
  * land here when `specFromState` returns `undefined` — so it is total over
  * `unknown`: `data` goes to {@link GenericFieldList}, which summarises rather
  * than recurses, and `tool` is gated by {@link displayToolName}.
- *
- * It is a REAL VIEW, not an error and not a loading state (design rule 04:
- * "Unknown degrades. Nothing in this pane ever renders as an error."). The note
- * says what happened and what happens next; the footer says what cannot happen
- * here at all.
  */
 export function NoSpecView(props: {
   readonly data: unknown;
@@ -836,12 +1008,19 @@ export function NoSpecView(props: {
       <div style={noteStyle} data-testid="surface-no-spec-note">
         <Icon name="eye" size={13} style={noteIconStyle} />
         <span>
-          No spec matched{" "}
+          {/* A caption, not a sentence about a failure: it states what the band
+              below IS and where it came from, in the past tense, as a finished
+              act. The two clauses after the dash are the only honest limits
+              this view has, and they are kept because dropping them would make
+              the promise this line makes ("the payload as the tool sent it")
+              false for a nested payload — `genericMetaStyle` is built around
+              that promise holding. */}
+          The payload as{" "}
           {tool === undefined ? (
             // Never "undefined" on screen, and never an empty gap where a name
-            // should be: with no name to give, the sentence names the THING
+            // should be: with no name to give, the caption names the THING
             // instead and stays true.
-            "this tool result"
+            "the tool"
           ) : (
             // Inert text in a code register — never an anchor. `url_path` on a
             // spec is the one sanctioned link on a surface, and this tier has
@@ -849,10 +1028,8 @@ export function NoSpecView(props: {
             <code style={noteCodeStyle} data-testid="surface-no-spec-tool">
               {tool}
             </code>
-          )}
-          , so this is the payload as the tool sent it — top-level fields only,
-          nested objects summarised. A spec will be generated and cached on the
-          next call.
+          )}{" "}
+          sent it — top-level fields only, nested objects summarised.
         </span>
       </div>
       <GenericFieldList data={props.data} />

@@ -37,6 +37,10 @@ from agent_runtime.prompts.observation import (
 # top-level import here triggers a circular load during ``agent_runtime`` init.
 # ``_display_title_for`` resolves the helper at call time when both modules are
 # fully initialised.
+from agent_runtime.capabilities.surfaces.spec_models import (
+    SurfaceSpecError,
+    validate_surface_spec,
+)
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
@@ -1317,8 +1321,18 @@ class RuntimeEventPresentationProjector:
         """Project ``surface.created`` through a strict allow-list (PRD-A3 D5).
 
         Keeps ``v`` / ``surface_id`` / ``kind`` / ``source{connector,op}`` /
-        ``title`` / ``payload_ref``. ``source`` is re-built from its own nested
-        allow-list so untrusted extra keys cannot ride through.
+        ``title`` / ``payload_ref`` / optional ``spec``. ``source`` is re-built
+        from its own nested allow-list so untrusted extra keys cannot ride
+        through.
+
+        ``spec`` is the acquisition ladder's synchronously-resolved spec (the
+        builtin / store / inferred rungs). It is **re-validated** here rather
+        than passed through as a dict, for the same reason the consent card's
+        ``presentation`` block is: this value reaches the client and decides
+        what the user is shown, so a malformed or hostile spec must not survive
+        merely because it arrived on a trusted event type. A spec that fails
+        validation is dropped, not repaired — the client then renders the
+        inference floor, which is a correct surface rather than a wrong one.
         """
 
         safe_payload: JsonObject = {}
@@ -1335,7 +1349,28 @@ class RuntimeEventPresentationProjector:
         source = cls._op_ref(payload.get(_LedgerKeys.Field.SOURCE))
         if source is not None:
             safe_payload[_LedgerKeys.Field.SOURCE] = source
+        spec = cls._surface_spec(payload.get(_LedgerKeys.Field.SPEC))
+        if spec is not None:
+            safe_payload[_LedgerKeys.Field.SPEC] = spec
         return safe_payload
+
+    @classmethod
+    def _surface_spec(cls, value: object) -> JsonObject | None:
+        """Validate a ledger-carried SurfaceSpec, or ``None`` if it is not one.
+
+        Total by construction: the surface path is best-effort presentation, so
+        a spec that does not validate costs the client its shaping and nothing
+        else. Round-tripping through the canonical validator (rather than
+        hand-checking keys) keeps this in step with the schema automatically.
+        """
+
+        if not isinstance(value, dict):
+            return None
+        try:
+            spec = validate_surface_spec(value)
+        except SurfaceSpecError:
+            return None
+        return spec.model_dump(mode="json", exclude_none=True)
 
     @classmethod
     def _view_derived_payload(cls, payload: JsonObject) -> JsonObject:

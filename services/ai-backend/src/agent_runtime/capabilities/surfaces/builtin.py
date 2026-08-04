@@ -10,16 +10,32 @@ test suite rather than degrading a live run.
 This is the first rung of the spec-acquisition ladder (plan D4):
 ``builtin → store → generate-async``. Only the builtin rung lives here; the
 store port + generator arrive in PRD-07/08.
+
+The floor PRD §3.4 gives the same twelve files a **second** job. Exact
+``(server, tool)`` lookup is brittle in a way the audit measured: Linear's real
+create tool is ``save_issue`` and not the catalogued ``create_issue``,
+``list_my_issues`` misses ``list_issues``, and a server the user added by URL is
+named after its host and misses every entry. So each curated spec is also read
+as a **shape template** — the set of paths it binds — and
+:func:`match_by_shape` reuses one for a payload that supplies those paths under
+any name. See :class:`ShapeTemplate` for why that is thresholded hard.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
+from agent_runtime.capabilities.surfaces.shape_hash import (
+    SHAPE_MATCH_MIN_COVERAGE,
+    SHAPE_MATCH_MIN_TEMPLATE_PATHS,
+    ShapeSkeleton,
+)
 from agent_runtime.capabilities.surfaces.spec_models import (
+    SurfaceArchetype,
     SurfaceSpec,
     SurfaceSpecError,
     validate_surface_spec,
@@ -27,6 +43,12 @@ from agent_runtime.capabilities.surfaces.spec_models import (
 
 _SPECS_DIR_NAME = "builtin_specs"
 _SPEC_SUFFIX = ".json"
+
+# Archetypes whose column/group paths are relative to a row inside ``items_path``
+# rather than to the payload root. Everything else binds absolute paths.
+_COLLECTION_ARCHETYPES: frozenset[SurfaceArchetype] = frozenset(
+    {SurfaceArchetype.TABLE, SurfaceArchetype.BOARD}
+)
 
 
 class BuiltinSpecError(RuntimeError):
@@ -128,6 +150,118 @@ def load_builtin_specs(
     return registry
 
 
+@dataclass(frozen=True)
+class ShapeTemplate:
+    """A curated spec read as a set of structural requirements (floor PRD §3.4).
+
+    ``paths`` is every payload path the spec binds, expanded into the payload's
+    absolute path space: a table's column paths are row-relative, so
+    ``items_path="issues"`` + ``path="state.name"`` becomes
+    ``issues[].state.name`` — the notation :class:`ShapeSkeleton` speaks.
+
+    ``anchor`` is the collection marker (``issues[]``) for a table or board, and
+    it is a **precondition rather than evidence**: if the payload has no list
+    there, the spec draws an empty table no matter how many column paths
+    coincidentally line up elsewhere. Scoring it would let a payload buy back
+    the very miss that makes the template unusable, so it is checked separately
+    and kept out of the denominator.
+
+    ``link.url_path`` is deliberately excluded. It is decoration — a missing
+    link costs one button, not the render — and its base differs by archetype
+    (row-relative for ``github.list_issues``, absolute for ``github.get_issue``),
+    so admitting it would put a guess inside the evidence.
+    """
+
+    spec: SurfaceSpec
+    anchor: str | None
+    paths: frozenset[str]
+
+    @classmethod
+    def from_spec(cls, spec: SurfaceSpec) -> "ShapeTemplate":
+        """Derive the template a curated spec implies."""
+
+        collection = (
+            spec.archetype in _COLLECTION_ARCHETYPES and spec.items_path is not None
+        )
+        marker = (
+            f"{spec.items_path}{ShapeSkeleton.COLLECTION_MARKER}"
+            if collection
+            else None
+        )
+        row_prefix = f"{marker}{ShapeSkeleton.SEPARATOR}" if marker else ""
+        paths = {spec.title_path}
+        if spec.subtitle_path:
+            paths.add(spec.subtitle_path)
+        for field in spec.fields or ():
+            paths.add(field.path)
+        for column in spec.columns or ():
+            paths.add(f"{row_prefix}{column.path}")
+        if spec.group_by_path:
+            paths.add(f"{row_prefix}{spec.group_by_path}")
+        return cls(spec=spec, anchor=marker, paths=frozenset(paths))
+
+    @property
+    def is_usable(self) -> bool:
+        """Whether this template binds enough paths to be evidence of anything."""
+
+        return len(self.paths) >= SHAPE_MATCH_MIN_TEMPLATE_PATHS
+
+    def score(self, skeleton: ShapeSkeleton) -> float:
+        """Coverage of this template's paths by ``skeleton``; 0.0 if the anchor misses."""
+
+        if self.anchor is not None and not skeleton.has(self.anchor):
+            return 0.0
+        return skeleton.coverage_of(self.paths)
+
+
+class ShapeTemplateIndex:
+    """Nearest-neighbour lookup over the curated specs, keyed by shape.
+
+    Built once at import from the same registry exact lookup reads, so the two
+    rungs can never disagree about what "curated" means. Matching is total and
+    deterministic: no payload can raise, and ties resolve by a fixed order
+    rather than by whatever order the spec directory happened to iterate in.
+    """
+
+    def __init__(self, specs: tuple[SurfaceSpec, ...]) -> None:
+        self._templates: tuple[ShapeTemplate, ...] = tuple(
+            template
+            for template in (ShapeTemplate.from_spec(spec) for spec in specs)
+            if template.is_usable
+        )
+
+    @property
+    def templates(self) -> tuple[ShapeTemplate, ...]:
+        """The usable templates, for tests and introspection."""
+
+        return self._templates
+
+    def match(self, output: object) -> SurfaceSpec | None:
+        """Return the best curated spec for ``output``'s shape, or ``None``.
+
+        ``None`` whenever nothing clears :data:`SHAPE_MATCH_MIN_COVERAGE` — the
+        caller then falls through to rung 0, which is the *correct* outcome for
+        an unrecognised payload, not a degraded one.
+        """
+
+        skeleton = ShapeSkeleton.of(output)
+        ranked = [
+            (
+                # Descending on score, then on how much evidence the template
+                # asked for (a six-path template clearing the bar says more than
+                # a three-path one); ascending on name purely for determinism.
+                (-score, -len(template.paths), template.spec.source.server),
+                template.spec,
+            )
+            for template in self._templates
+            if (score := template.score(skeleton)) >= SHAPE_MATCH_MIN_COVERAGE
+        ]
+        if not ranked:
+            return None
+        ranked.sort(key=lambda entry: entry[0])
+        return ranked[0][1]
+
+
 def _default_specs_dir() -> Traversable:
     return files(__package__).joinpath(_SPECS_DIR_NAME)
 
@@ -136,11 +270,27 @@ def _default_specs_dir() -> Traversable:
 # failure (the package fails to import), never a silent runtime degradation.
 _REGISTRY: dict[tuple[str, str], SurfaceSpec] = load_builtin_specs(_default_specs_dir())
 
+# The same twelve specs, indexed by shape rather than by name.
+_TEMPLATES = ShapeTemplateIndex(tuple(_REGISTRY.values()))
+
 
 def lookup(server: str, tool: str) -> SurfaceSpec | None:
     """Return the builtin spec for ``(server, tool)``, or ``None`` if uncurated."""
 
     return _REGISTRY.get(_spec_key(server, tool))
+
+
+def match_by_shape(output: object) -> SurfaceSpec | None:
+    """Return the curated spec whose bound paths ``output`` supplies, or ``None``.
+
+    The shape-matched rung. A hit is **not** an exact registry hit and must not
+    be reported as one — the projector stamps
+    :data:`~agent_runtime.capabilities.surfaces.spec_models.SurfaceSpecRung.SHAPE_MATCH`
+    so the ledger records that a human curated the *spec* but never vouched for
+    this connector.
+    """
+
+    return _TEMPLATES.match(output)
 
 
 def all_specs() -> tuple[SurfaceSpec, ...]:
@@ -151,10 +301,13 @@ def all_specs() -> tuple[SurfaceSpec, ...]:
 
 __all__ = [
     "BuiltinSpecError",
+    "ShapeTemplate",
+    "ShapeTemplateIndex",
     "all_specs",
     "display_name",
     "load_builtin_specs",
     "lookup",
+    "match_by_shape",
     "server_slug",
     "tool_slug",
 ]

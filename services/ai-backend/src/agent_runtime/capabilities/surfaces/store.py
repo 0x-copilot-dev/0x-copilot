@@ -177,6 +177,32 @@ class SurfaceSpecReadPort(Protocol):
 
 
 @runtime_checkable
+class SurfaceSpecShapeReadPort(Protocol):
+    """Shape-keyed read: the learned cache of the floor PRD §3.6 (AC14).
+
+    A **capability**, not a widening of :class:`SurfaceSpecReadPort`. The
+    projector probes for it with ``isinstance`` and skips the rung when the
+    injected store predates it, so every existing read-only fake keeps
+    satisfying the frozen PRD-02 seam untouched. That is also why
+    :class:`SurfaceSpecStorePort` does not inherit it — a generation store fake
+    without this method must keep type-checking as a generation store.
+
+    Why shape and not ``(server, tool)``: a spec is a function of the payload's
+    *structure*, so once one has been generated for a shape, the next tool that
+    emits that shape — different name, different connector, same install — can
+    render it immediately and for free. Keying the learned cache by name would
+    re-pay the model for every alias of a shape already solved.
+
+    **Failures are not widened, only specs.** ``has_failure`` stays on the full
+    :class:`SpecKey`; see :meth:`InMemorySurfaceSpecStore.has_failure` (AC15).
+    """
+
+    def get_by_shape(self, *, output_shape_hash: str) -> SurfaceSpec | None:
+        """Return a spec previously stored for this payload shape, or ``None``."""
+        ...
+
+
+@runtime_checkable
 class SurfaceSpecStorePort(SurfaceSpecReadPort, Protocol):
     """The generation-facing store: full-key read/write + failure recording."""
 
@@ -209,6 +235,7 @@ class InMemorySurfaceSpecStore:
 
     def __init__(self) -> None:
         self._by_tool: dict[tuple[str, str], SurfaceSpec] = {}
+        self._by_shape: dict[str, SurfaceSpec] = {}
         self._by_key: dict[SpecKey, StoredSpec] = {}
         self._failures: dict[SpecKey, RecordedFailure] = {}
 
@@ -245,11 +272,26 @@ class InMemorySurfaceSpecStore:
             raise TypeError("put(key, stored) requires (SpecKey, StoredSpec)")
         self._by_key[key] = stored
         self._by_tool[key.tool_index_key] = stored.spec
+        if key.output_shape_hash:
+            self._by_shape[key.output_shape_hash] = stored.spec
 
     def get(self, *, server: str, tool: str) -> SurfaceSpec | None:
         """Return the cached spec for ``(server, tool)`` or ``None`` (PRD-02)."""
 
         return self._by_tool.get(self._tool_index_key(server, tool))
+
+    def get_by_shape(self, *, output_shape_hash: str) -> SurfaceSpec | None:
+        """Return the spec learned for this payload shape, or ``None`` (AC14).
+
+        Only ``put(key, stored)`` populates this index — the PRD-02
+        ``put_spec(spec)`` form carries no shape hash, and inventing one from a
+        spec would key the cache on the spec instead of on the payload it was
+        written for.
+        """
+
+        if not output_shape_hash:
+            return None
+        return self._by_shape.get(output_shape_hash)
 
     # -- PRD-07 generation store ---------------------------------------------
 
@@ -266,7 +308,17 @@ class InMemorySurfaceSpecStore:
         )
 
     def has_failure(self, key: SpecKey) -> bool:
-        """Return ``True`` when a prior failure is recorded for ``key``."""
+        """Return ``True`` when a prior failure is recorded for ``key`` (AC15).
+
+        Deliberately the **full** key while spec reads widened to the shape
+        alone. A recorded failure is durable and suppresses every retry, so the
+        blast radius of widening it is not a slower render but a permanent one:
+        one connector's malformed payload would mute generation for every other
+        payload that happens to share a shape, and nothing would ever retry to
+        discover otherwise. Reads may generalise because a wrong hit costs one
+        mediocre render; failures may not, because a wrong hit costs the
+        feature.
+        """
 
         return key in self._failures
 
@@ -283,6 +335,11 @@ class FileSurfaceSpecStore:
         specs/<key-digest>.json        # a StoredSpec (truth)
         failures/<key-digest>.json     # a RecordedFailure
         by_tool/<server>.<tool>.json   # {"digest": ...} pointer for the projector read
+        by_shape/<shape-hash>.json     # {"digest": ...} pointer for the learned cache
+
+    Both pointer directories point *into* ``specs/``: one spec file, two ways to
+    find it, so a shape-keyed hit and a name-keyed hit can never serve two
+    different versions of the same record.
 
     Every write is temp-write → ``fsync`` → ``os.replace`` (atomic rename),
     mirroring the file-native object store — a crash leaves either the old file
@@ -294,6 +351,7 @@ class FileSurfaceSpecStore:
     _SPECS_DIR: ClassVar[str] = "specs"
     _FAILURES_DIR: ClassVar[str] = "failures"
     _BY_TOOL_DIR: ClassVar[str] = "by_tool"
+    _BY_SHAPE_DIR: ClassVar[str] = "by_shape"
     _SUFFIX: ClassVar[str] = ".json"
     _TMP_SUFFIX: ClassVar[str] = ".tmp"
     _DIR_MODE: ClassVar[int] = 0o700
@@ -342,6 +400,22 @@ class FileSurfaceSpecStore:
         stored = self._read_stored(self._spec_path(digest))
         return stored.spec if stored is not None else None
 
+    def get_by_shape(self, *, output_shape_hash: str) -> SurfaceSpec | None:
+        """Return the spec learned for this payload shape, or ``None`` (AC14).
+
+        The learned cache survives a restart, which is what makes "the second
+        encounter is free" true across sessions rather than only inside one
+        process.
+        """
+
+        if not output_shape_hash:
+            return None
+        digest = self._read_pointer(self._by_shape_path(output_shape_hash))
+        if digest is None:
+            return None
+        stored = self._read_stored(self._spec_path(digest))
+        return stored.spec if stored is not None else None
+
     # -- PRD-07 generation store ---------------------------------------------
 
     def get_stored(self, key: SpecKey) -> StoredSpec | None:
@@ -356,13 +430,19 @@ class FileSurfaceSpecStore:
             self._spec_path(key.digest()),
             stored.model_dump_json(),
         )
-        self._atomic_write(
-            self._by_tool_path(key.server, key.tool),
-            json.dumps({self._DIGEST_KEY: key.digest()}),
-        )
+        pointer = json.dumps({self._DIGEST_KEY: key.digest()})
+        self._atomic_write(self._by_tool_path(key.server, key.tool), pointer)
+        if key.output_shape_hash:
+            self._atomic_write(self._by_shape_path(key.output_shape_hash), pointer)
 
     def record_failure(self, key: SpecKey, reason: str, raw_output: str) -> None:
-        """Record a generation failure under ``key`` (never served)."""
+        """Record a generation failure under ``key`` (never served).
+
+        Written under the full-key digest — which includes the shape hash — so a
+        failure for one shape is invisible to :meth:`has_failure` for any other
+        (AC15). No ``by_shape``-style pointer exists for failures on purpose:
+        see :meth:`InMemorySurfaceSpecStore.has_failure`.
+        """
 
         failure = RecordedFailure.from_failure(
             key=key, reason=reason, raw_output=raw_output
@@ -387,6 +467,13 @@ class FileSurfaceSpecStore:
         # Hash the slug pair so an exotic tool name can never escape the dir.
         safe = hashlib.sha256(name.encode("utf-8")).hexdigest()
         return self._root / self._BY_TOOL_DIR / f"{safe}{self._SUFFIX}"
+
+    def _by_shape_path(self, output_shape_hash: str) -> Path:
+        # Hashed like the tool pointer even though the shape hash is already
+        # hex: the value reaches here from a caller-supplied key, and one
+        # unvalidated string is all a path traversal needs.
+        safe = hashlib.sha256(output_shape_hash.encode("utf-8")).hexdigest()
+        return self._root / self._BY_SHAPE_DIR / f"{safe}{self._SUFFIX}"
 
     # -- io -------------------------------------------------------------------
 
@@ -442,5 +529,6 @@ __all__ = [
     "SpecKey",
     "StoredSpec",
     "SurfaceSpecReadPort",
+    "SurfaceSpecShapeReadPort",
     "SurfaceSpecStorePort",
 ]

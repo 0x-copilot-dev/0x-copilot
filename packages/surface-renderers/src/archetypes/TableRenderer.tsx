@@ -10,8 +10,10 @@ import {
   fieldGridStyle,
   NoSpecView,
   pageStyle,
+  paintsAsChip,
   SurfaceHeader,
   SurfaceLinkRow,
+  SurfaceValueBadge,
   toolNameFromState,
 } from "../_shared/primitives";
 import {
@@ -54,14 +56,30 @@ export function TableRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Table surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
+        {spec
+          ? renderWithSpec(spec, data, toolNameFromState(state))
+          : renderFallback(state, data)}
       </section>
     </article>
   );
 }
 
-function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
-  const title = formatValue(resolvePath(data, spec.title_path));
+function renderWithSpec(
+  spec: SurfaceSpec,
+  data: unknown,
+  toolName: string | undefined,
+): ReactElement {
+  // A table's title lives OUTSIDE its rows — `{"team": {...}, "issues": [...]}`
+  // yields `team.name`. Plenty of list payloads carry no such headline at all,
+  // and because `title_path` is schema-REQUIRED the inference floor has to emit
+  // some path even when none resolves. Falling through to the header's
+  // "Untitled" in that case reads as a broken surface rather than an untitled
+  // one, so the tool that produced the rows is the honest label — and it is the
+  // fallback the floor's own spec (PRD §3.3 step 4) always intended.
+  // `?? ""` keeps `SurfaceHeader`'s own "Untitled" as the last resort, for the
+  // one case where even the tool has no name to give.
+  const title =
+    formatValue(resolvePath(data, spec.title_path)) || (toolName ?? "");
   const columns: readonly SurfaceColumn[] = spec.columns ?? [];
   const rawItems = spec.items_path
     ? resolvePath(data, spec.items_path)
@@ -142,6 +160,14 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                     const share = sharesByColumn.get(colIndex)?.[rowIndex];
                     const bar =
                       typeof share === "number" && share > 0 ? share : null;
+                    // The cell's absolute column index — what every test id in
+                    // this row is keyed on, so a windowed table still names the
+                    // column the user is looking at rather than its offset.
+                    const column0 = columnWindow.startColumn + colIndex;
+                    const text = formatValue(
+                      resolvePath(row, column.path),
+                      column.format,
+                    );
                     return (
                       <td
                         key={`${column.path}:${colIndex}`}
@@ -149,7 +175,7 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                           bar === null ? undefined : "sf-cell--numeric"
                         }
                         style={tdStyle(column)}
-                        data-testid={`table-cell-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                        data-testid={`table-cell-${rowIndex}-${column0}`}
                       >
                         {bar === null ? null : (
                           // Painted BEHIND the value, never over it, and hidden
@@ -160,7 +186,7 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                           <span
                             aria-hidden="true"
                             className="sf-value-bar"
-                            data-testid={`table-value-bar-${rowIndex}-${columnWindow.startColumn + colIndex}`}
+                            data-testid={`table-value-bar-${rowIndex}-${column0}`}
                             style={{ left: `${(1 - bar) * 100}%` }}
                           />
                         )}
@@ -169,9 +195,19 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
                             bar === null ? undefined : "sf-value-bar__value"
                           }
                         >
-                          {formatValue(
-                            resolvePath(row, column.path),
-                            column.format,
+                          {/* A `badge` column is a closed vocabulary the user
+                              scans DOWN rather than reads — the chip is what
+                              makes it scannable. Nested inside the value span
+                              rather than replacing it so the bar's stacking
+                              context is untouched; the two never co-occur
+                              anyway, because only a numeric column is measured. */}
+                          {paintsAsChip(column.format, text) ? (
+                            <SurfaceValueBadge
+                              value={text}
+                              testId={`table-badge-${rowIndex}-${column0}`}
+                            />
+                          ) : (
+                            text
                           )}
                         </span>
                       </td>

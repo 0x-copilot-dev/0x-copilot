@@ -144,6 +144,64 @@ describe("tableAdapter defensive rendering", () => {
   });
 });
 
+// `format: "badge"` in a TABLE. A status column is a closed vocabulary the user
+// scans down rather than reads, and until the chip existed it painted as the
+// same grey text as the issue title beside it — for the curated GitHub/Linear
+// specs and for every rung-0 inferred column alike.
+describe("TableRenderer badge cells", () => {
+  it("paints a chip in the badge column and plain text elsewhere", () => {
+    render(tableAdapter.renderCurrent(GITHUB_TABLE_STATE));
+    // Column 2 is `{ label: "State", path: "state", format: "badge" }`.
+    const chip = screen.getByTestId("table-badge-0-2");
+    expect(chip).toHaveTextContent("open");
+    expect(screen.getByTestId("table-cell-0-2")).toContainElement(chip);
+    expect(chip).toHaveAttribute("data-surface-format", "badge");
+    // Column 1 is the issue title — prose, no chip.
+    expect(screen.queryByTestId("table-badge-0-1")).toBeNull();
+  });
+
+  it("chips every row of the column, not just the first", () => {
+    const { container } = render(
+      tableAdapter.renderCurrent(GITHUB_TABLE_STATE),
+    );
+    expect(screen.getByTestId("table-badge-1-2")).toBeInTheDocument();
+    // One chip per row, and nowhere else on the surface — the same selector the
+    // record archetype answers to.
+    expect(
+      container.querySelectorAll('[data-surface-format="badge"]'),
+    ).toHaveLength(2);
+  });
+
+  // A cell renders payload a connector sent us. A chip that could be activated
+  // would be tool output holding a control on our surface.
+  it("keeps the chip inert — never an anchor, never a button", () => {
+    const spec: SurfaceSpec = {
+      spec_version: 1,
+      archetype: "table",
+      source: { server: "s", tool: "t" },
+      title_path: "name",
+      items_path: "rows",
+      columns: [{ label: "State", path: "state", format: "badge" }],
+    };
+    const { container } = render(
+      tableAdapter.renderCurrent({
+        spec,
+        data: { name: "X", rows: [{ state: "https://evil.example.com/pwn" }] },
+      }),
+    );
+    expect(screen.getByTestId("table-badge-0-0").tagName).toBe("SPAN");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+
+  // The chip and the magnitude bar are the two value registers a cell can take,
+  // and they answer different formats — so a numeric column never grows a chip.
+  it("leaves numeric columns to the bar register", () => {
+    render(tableAdapter.renderCurrent(GITHUB_TABLE_STATE));
+    expect(screen.queryByTestId("table-badge-0-0")).toBeNull();
+  });
+});
+
 describe("TableRenderer value bars", () => {
   const spec: SurfaceSpec = {
     spec_version: 1,

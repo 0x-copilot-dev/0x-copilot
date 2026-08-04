@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import unquote, urlsplit
 
 from pydantic import (
@@ -574,6 +574,28 @@ class SurfaceCreatedPayload(LedgerPayload):
     source: LedgerOpRef
     title: str
     payload_ref: str
+    # The spec the acquisition ladder resolved for this surface, when it
+    # resolved one synchronously (the builtin / store / inferred rungs).
+    #
+    # It rides the record that DECLARES the surface rather than being re-derived
+    # at read time, and that is the whole point: a ledger is a durable
+    # compliance record, so the spec a run was shaped on must be the spec the
+    # run recorded. Re-resolving `builtin.lookup(connector, op)` during a later
+    # hydration would silently return whatever the packaged library says
+    # *today*, so a curated spec edited after the fact would make the stored
+    # ``view.derived`` (``basis: registry``) disagree with what the client
+    # renders — the exact defect this field exists to close.
+    #
+    # Typed as a plain mapping, not ``SurfaceSpec``: ``surfaces_v2`` is the
+    # ledger vocabulary and must not take a dependency on the v1 presentation
+    # models. The value is schema-validated at both ends — by the projector that
+    # produced it, and again by the transport allow-list before it reaches a
+    # client — so this layer only has to carry it faithfully.
+    #
+    # Optional because the async ``surface_spec_generated`` refinement still
+    # arrives on its own event, and because a surface may legitimately have no
+    # spec on replay of a pre-PRD run.
+    spec: dict[str, Any] | None = None
 
 
 class ViewDerivedPayload(LedgerPayload):

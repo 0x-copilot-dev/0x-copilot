@@ -136,8 +136,11 @@ for (const adapter of ARCHETYPE_ADAPTERS) {
         } as never),
       );
       expect(screen.queryByTestId("surface-no-spec-tool")).toBeNull();
+      // With no name to give, the caption names the THING instead. It never
+      // says a spec was looked for — that copy is deleted (generative-UI floor
+      // §3.8 / AC17), and the view's job is now the data, not the excuse.
       expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-        "No spec matched this tool result",
+        "The payload as the tool sent it",
       );
     });
   });

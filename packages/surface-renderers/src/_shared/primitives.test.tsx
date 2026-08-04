@@ -7,6 +7,8 @@ import { render, screen } from "@testing-library/react";
 // correct and unreachable, because no wire carried what it read.
 import { ARCHETYPE_ADAPTERS } from "../archetypes";
 import {
+  BADGE_MAX_CHARS,
+  FieldRow,
   GenericFieldList,
   NoSpecView,
   SurfaceHeader,
@@ -18,15 +20,25 @@ import {
 // PRD-02 — the no-spec view. The unit-level half of the contract; the
 // per-archetype half (that every fallback routes here, and stays total over
 // `unknown`) lives in `archetypes/noSpecTotality.test.tsx`.
+//
+// The copy this file used to pin — a sentence announcing that the tool's output
+// had matched no spec — is deleted by the generative-UI floor PRD (§3.8 / AC17).
+// It is not recited here either: AC17 is a `grep -ri` gate over `packages/`, and
+// a test quoting the old string would red it as surely as the string itself.
+// The component is NOT deleted: replay of a pre-floor run, a spec dropped at the
+// transport allow-list, and a non-mapping payload all still land here, and all
+// three are finished views rather than faults. So the assertions below moved
+// from "does it apologise correctly" to "does it render the data and name its
+// provenance" — the rule the PRD replaced the copy with.
 
 describe("NoSpecView note", () => {
-  it("names the unmatched tool in a code register", () => {
+  it("names the tool in a code register — as provenance, not as an excuse", () => {
     render(<NoSpecView data={{ id: 1 }} tool="pagerduty.incident.read" />);
     const tool = screen.getByTestId("surface-no-spec-tool");
     expect(tool.tagName).toBe("CODE");
     expect(tool).toHaveTextContent("pagerduty.incident.read");
     expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-      "No spec matched pagerduty.incident.read, so this is the payload as the tool sent it",
+      "The payload as pagerduty.incident.read sent it",
     );
   });
 
@@ -37,11 +49,21 @@ describe("NoSpecView note", () => {
     expect(note).toHaveTextContent("nested objects summarised");
   });
 
-  it("says a spec will be generated and cached — the view is not waiting on one", () => {
-    render(<NoSpecView data={{ id: 1 }} />);
-    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-      "A spec will be generated and cached on the next call.",
-    );
+  // AC17, asserted at the one place the string could come back. A reworded
+  // apology is the failure mode this guards, not just the exact old sentence:
+  // anything telling a reader that a spec was looked for and not found is the
+  // same lie in a different register.
+  it("never tells the user anything about a spec", () => {
+    for (const tool of ["pagerduty.incident.read", undefined]) {
+      const view = render(<NoSpecView data={{ id: 1 }} tool={tool} />);
+      const text = screen.getByTestId("surface-no-spec-note").textContent ?? "";
+      expect(text).not.toMatch(/spec/i);
+      expect(text).not.toMatch(/no match|not match|unmatched|could not/i);
+      // Nor a promise about machinery the reader cannot see, and which — on
+      // every path that still reaches this view — will not happen.
+      expect(text).not.toMatch(/will be generated|next call|cached/i);
+      view.unmount();
+    }
   });
 
   it("reads as a deliberate view, never as an error or a loading state", () => {
@@ -108,7 +130,7 @@ describe("NoSpecView tool name (untrusted)", () => {
     render(<NoSpecView data={{ id: 1 }} tool={tool} />);
     const note = screen.getByTestId("surface-no-spec-note");
     expect(note).toHaveTextContent(
-      "No spec matched this tool result, so this is the payload as the tool sent it",
+      "The payload as the tool sent it — top-level fields only, nested objects summarised.",
     );
     // Never the JS spelling of "we had nothing" on screen.
     expect(note.textContent ?? "").not.toMatch(
@@ -250,6 +272,152 @@ describe("SurfaceLinkRow register", () => {
     expect(inert.style.fontSize).toBe("var(--font-size-mono-10-5, 10.5px)");
     expect(inert.style.color).toBe("var(--color-text-muted)");
     expect(inert.style.color).not.toBe("var(--color-accent)");
+  });
+});
+
+// The BADGE register. Before this existed, `format: "badge"` reached the client
+// correctly and died there: `formatValue` returns the string unchanged and the
+// row had exactly two registers, plain and numeric, so the one hint the backend
+// works hardest to get right (every curated spec types `state`/`status` as a
+// badge, and rung-0 inference independently types low-cardinality tokens the
+// same way) painted as undifferentiated grey text.
+describe("FieldRow badge register", () => {
+  it("paints a badge-formatted value as a chip inside the value slot", () => {
+    render(
+      <FieldRow
+        fieldKey="status"
+        label="Status"
+        value="acknowledged"
+        format="badge"
+      />,
+    );
+    const chip = screen.getByTestId("field-status-badge");
+    expect(chip).toHaveTextContent("acknowledged");
+    // Inside the slot, not instead of it: the slot is the grid item, and a chip
+    // put there directly would blockify and stretch the column.
+    expect(screen.getByTestId("field-status-value")).toContainElement(chip);
+    // One selector finds every chip on a surface, whatever archetype drew it.
+    expect(chip).toHaveAttribute("data-surface-format", "badge");
+  });
+
+  it("leaves a value with no format as plain text", () => {
+    render(<FieldRow fieldKey="title" label="Title" value="Elevated 5xx" />);
+    expect(screen.getByTestId("field-title-value")).toHaveTextContent(
+      "Elevated 5xx",
+    );
+    expect(screen.queryByTestId("field-title-badge")).toBeNull();
+    expect(
+      screen.getByTestId("field-title").querySelector("[data-surface-format]"),
+    ).toBeNull();
+  });
+
+  // A badge is a presentational treatment of a value the TOOL returned. Making
+  // it activatable would hand tool output a control on our surface, and this
+  // package sanctions exactly one interactive element (`link.url_path`).
+  it("keeps the chip inert — never an anchor, never a button", () => {
+    const { container } = render(
+      <FieldRow
+        fieldKey="status"
+        label="Status"
+        value="https://evil.example.com/pwn"
+        format="badge"
+      />,
+    );
+    const chip = screen.getByTestId("field-status-badge");
+    expect(chip.tagName).toBe("SPAN");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  // The chip is the design's `.sfb` / `.ui-badge` spread wholesale, so the
+  // header's chip and a value's chip cannot drift. Asserted as the declarations
+  // that ship rather than through `toHaveStyle`, because jsdom resolves an
+  // unknown custom property to nothing.
+  it("takes the design's chip register rather than inventing one", () => {
+    render(
+      <FieldRow fieldKey="state" label="State" value="open" format="badge" />,
+    );
+    const chip = screen.getByTestId("field-state-badge");
+    expect(chip.style.fontFamily).toContain("--font-mono");
+    expect(chip.style.fontSize).toBe("var(--font-size-mono-10-5, 10.5px)");
+    expect(chip.style.borderRadius).toBe("var(--radius-full, 999px)");
+    expect(chip.style.padding).toBe(
+      "var(--space-2xs, 2px) var(--space-sm, 8px)",
+    );
+    expect(chip.style.background).toBe("transparent");
+    expect(chip.style.border).toBe("1px solid var(--color-border-strong)");
+  });
+
+  // The ONE deliberate divergence from the header badge, pinned so it stays a
+  // decision: a header badge is metadata about the card and sits on `--mut`,
+  // which is exactly the colour the field LABEL carries. This chip is the value,
+  // so it takes the rung between — quieter than the plain value beside it, still
+  // louder than the label it answers.
+  it("sits a rung louder than the header badge, and above the label", () => {
+    render(
+      <FieldRow fieldKey="state" label="State" value="open" format="badge" />,
+    );
+    const chip = screen.getByTestId("field-state-badge");
+    expect(chip.style.color).toBe("var(--color-text-strong)");
+    expect(chip.style.color).not.toBe("var(--color-text-muted)");
+  });
+
+  // Declining the chip is a PRESENTATION decision and never a truncation: a
+  // chip does not wrap, so a long value inside one widens the row instead. The
+  // value still renders, in full, in the ordinary register — which is the whole
+  // reason the cap is safe to have.
+  it("declines the chip for a value too long to hug, and shows it in full", () => {
+    const long = "x".repeat(BADGE_MAX_CHARS + 1);
+    render(
+      <FieldRow fieldKey="note" label="Note" value={long} format="badge" />,
+    );
+    expect(screen.queryByTestId("field-note-badge")).toBeNull();
+    expect(screen.getByTestId("field-note-value")).toHaveTextContent(long);
+  });
+
+  it("paints the chip right up to the cap", () => {
+    const atCap = "x".repeat(BADGE_MAX_CHARS);
+    render(
+      <FieldRow fieldKey="note" label="Note" value={atCap} format="badge" />,
+    );
+    expect(screen.getByTestId("field-note-badge")).toHaveTextContent(atCap);
+  });
+
+  // An empty pill asserts that there is a value here and then shows none. The
+  // blank cell the plain register paints says the field was absent, which is
+  // what actually happened — and is the common case on real connector payloads.
+  it.each([
+    ["empty", ""],
+    ["whitespace", "   "],
+  ])("declines the chip for a %s value", (_label, value) => {
+    render(
+      <FieldRow fieldKey="state" label="State" value={value} format="badge" />,
+    );
+    expect(screen.queryByTestId("field-state-badge")).toBeNull();
+  });
+
+  // A badge is a token, never a magnitude: the tabular-figure register means
+  // "read this digit-column against its neighbours", which is a claim about a
+  // status vocabulary that is simply false.
+  it("never lets a badge reach the numeric register", () => {
+    render(<FieldRow fieldKey="code" label="Code" value="P1" format="badge" />);
+    expect(screen.getByTestId("field-code-value")).not.toHaveStyle({
+      fontVariantNumeric: "tabular-nums",
+    });
+  });
+
+  // The register the row already had, now chosen by the same prop — so a caller
+  // passing `format` gets tabular figures without also computing them.
+  it("still routes a numeric format to the tabular-figure register", () => {
+    render(
+      <FieldRow fieldKey="amt" label="Amount" value="1,200" format="number" />,
+    );
+    expect(screen.getByTestId("field-amt-value")).toHaveStyle({
+      fontVariantNumeric: "tabular-nums",
+    });
+    expect(screen.queryByTestId("field-amt-badge")).toBeNull();
   });
 });
 
@@ -428,84 +596,219 @@ describe("toolNameFromState", () => {
   });
 });
 
-// PRD-02 requirement 1, end to end.
+// The wire, end to end — and the fixture the rest of this file is pinned to.
 //
-// `RUNTIME_SPECLESS_STATE` is not a hand-written state. It is the byte-for-byte
+// `RUNTIME_INFERRED_STATE` is not a hand-written state. It is the byte-for-byte
 // `HydratedSurfaceSnapshot.state` the ai-backend serves from
-// `GET /v1/agent/runs/{run_id}/surfaces` for a tool with no matching spec — the
+// `GET /v1/agent/runs/{run_id}/surfaces` for the PagerDuty payload below — the
 // value `useSurfacesV2.stateFor` hands the host mount, which is the only surface
 // input the client treats as renderer payload.
 //
-// The Python half is pinned to the identical literal in
+// WHAT CHANGED, AND WHY THE OLD COMMENT PREDICTED IT. This constant used to be
+// `{data, source}` with no `spec`, under a note that said: if the server stops
+// emitting what we pinned, "that test fails and this one keeps passing on a
+// fixture that no longer describes anything real". That is exactly what
+// happened. The generative-UI floor added rung 0 — deterministic inference — so
+// a mapping-shaped payload no longer arrives spec-less: the projector resolves a
+// real SurfaceSpec synchronously, with no model and no failure mode, and it
+// survives re-validation at the transport allow-list. The Python twin was
+// inverted to assert the spec ARRIVES; this fixture is inverted with it rather
+// than left describing a wire the server stopped producing.
+//
+// The Python half is pinned to the identical values in
 // `services/ai-backend/tests/unit/runtime_api/test_run_surfaces_endpoint.py`
-// (`TestSpecLessSurfaceWire.SPEC_LESS_STATE`), where the real projector +
-// ledger emitter + endpoint produce it rather than a fixture asserting itself.
-// The two must be edited together: if the server stops emitting `source`, that
-// test fails and this one keeps passing on a fixture that no longer describes
-// anything real — which is exactly how the original lookup came to read a key
-// nothing wrote.
-const RUNTIME_SPECLESS_STATE = {
+// (`TestSpecLessSurfaceWire` — `OUTPUT`, `SOURCE_REF`, `INFERRED_TITLE_PATH`,
+// `INFERRED_FIELD_LABELS`), where the real projector + ledger emitter + endpoint
+// produce it rather than a fixture asserting itself. Note what that class does
+// NOT do: it stops short of the render, so the spec arriving on the wire is all
+// it can prove. Whether a user then sees a shaped card is only knowable here.
+//
+// EDIT BOTH TOGETHER. The invariant is no longer "the server still emits
+// `source`". It is now: **a mapping-shaped tool output reaches the renderer
+// carrying a spec, and the renderer draws it shaped.** If the floor regresses —
+// inference declines the payload, the allow-list drops the spec, or the fold
+// stops carrying it — the Python test reds, and this one must red with it
+// instead of quietly re-certifying the fallback as the normal case.
+const RUNTIME_INFERRED_STATE = {
   data: {
     incident_number: "4127",
     title: "Elevated 5xx on checkout",
     status: "acknowledged",
     service: { id: "svc-9", name: "checkout-api" },
   },
+  spec: {
+    spec_version: 1,
+    archetype: "record",
+    source: { server: "pagerduty", tool: "pagerduty.incident.read" },
+    // `title` heads the card, so the floor promotes it out of the field list
+    // rather than repeating it as a row.
+    title_path: "title",
+    // Ranked by the floor, in this order. `status` is a short token from a small
+    // vocabulary ⇒ badge; `incident_number` is an IDENTIFIER, which the floor
+    // deliberately types `text` so "4127" is never reformatted as a magnitude;
+    // `service` is a mapping carrying a name, so the bind is the nested path
+    // rather than the object.
+    fields: [
+      { label: "Status", path: "status", format: "badge" },
+      { label: "Incident Number", path: "incident_number", format: "text" },
+      { label: "Service", path: "service.name", format: "badge" },
+    ],
+  },
   source: { server: "pagerduty", tool: "pagerduty.incident.read" },
 };
 
-describe("the spec-less state the runtime actually writes", () => {
-  it("names the unmatched tool in the note the user reads", () => {
-    // `renderCurrent` is the entry point the host mount calls; `record` is the
-    // archetype the projector infers for this payload.
-    const record = ARCHETYPE_ADAPTERS.find(
-      (adapter) => adapter.scheme === "record",
-    );
-    expect(record).toBeDefined();
-    render(record!.renderCurrent(RUNTIME_SPECLESS_STATE as never));
+/** `renderCurrent` is the entry point the host mount calls, and `record` is the
+ * archetype the projector chose for this payload — its surface uri is
+ * `record://pagerduty/pagerduty.incident.read/svc-9`. */
+function renderRecord(state: unknown): void {
+  const record = ARCHETYPE_ADAPTERS.find(
+    (adapter) => adapter.scheme === "record",
+  );
+  expect(record).toBeDefined();
+  render(record!.renderCurrent(state as never));
+}
 
-    // No spec on this wire ⇒ the generic view, and it says which tool.
+describe("the state the runtime actually writes for a mapping payload", () => {
+  it("renders shaped, off the spec the server inferred", () => {
+    renderRecord(RUNTIME_INFERRED_STATE);
+
+    expect(screen.getByTestId("record-renderer")).toHaveAttribute(
+      "data-spec",
+      "present",
+    );
+    // The headline resolves through `title_path` rather than through a key we
+    // liked the look of. "Untitled" is what a mis-bound path paints instead.
+    expect(screen.getByTestId("surface-title")).toHaveTextContent(
+      "Elevated 5xx on checkout",
+    );
+    // …and `title` is therefore NOT also a row. Excluding the path it promoted
+    // is the difference between a record and a key dump with a heading.
+    expect(screen.queryByTestId("field-title")).toBeNull();
+  });
+
+  it("draws the three inferred fields, bound to the paths the server chose", () => {
+    renderRecord(RUNTIME_INFERRED_STATE);
+
+    const expected: readonly (readonly [string, string, string])[] = [
+      ["field-status", "Status", "acknowledged"],
+      ["field-incident_number", "Incident Number", "4127"],
+      // The nested bind is the part a flat key-dump gets wrong: the floor said
+      // `service.name`, so the cell reads the service's NAME. Before the floor
+      // this same payload put `{ 2 fields }` on screen.
+      ["field-service.name", "Service", "checkout-api"],
+    ];
+    for (const [testId, label, value] of expected) {
+      expect(screen.getByTestId(testId).firstElementChild).toHaveTextContent(
+        label,
+      );
+      expect(screen.getByTestId(`${testId}-value`)).toHaveTextContent(value);
+    }
+    // Exactly those three: no fourth row invented, none silently dropped.
+    // A row is named here by what it is NOT, because everything a row paints is
+    // keyed on the same `field-<path>` stem: the value slot (`-value`) and the
+    // chip inside it (`-badge`) are the row's own descendants, not rows.
+    const rows = screen
+      .getByTestId("record-renderer")
+      .querySelectorAll(
+        '[data-testid^="field-"]:not([data-testid$="-value"]):not([data-testid$="-badge"])',
+      );
+    expect(rows).toHaveLength(expected.length);
+  });
+
+  // `format: "badge"` is a purely VISUAL hint, and the two things it must do are
+  // separable. It must CHANGE the register — the floor typing `status` as a
+  // badge is wasted if the client paints it as the same grey text as everything
+  // else — and it must change NOTHING about the value: no reroute through
+  // `formatValue`'s number or datetime branches, which would reformat a token
+  // into something the tool never said, and no landing in the tabular-figure
+  // register, which means "read this digit-column against its neighbours".
+  it("paints the badge-formatted values as chips, verbatim and out of the numeric register", () => {
+    renderRecord(RUNTIME_INFERRED_STATE);
+
+    for (const key of ["status", "service.name"]) {
+      const cell = screen.getByTestId(`field-${key}-value`);
+      expect(cell).not.toHaveStyle({ fontVariantNumeric: "tabular-nums" });
+      const chip = screen.getByTestId(`field-${key}-badge`);
+      expect(cell).toContainElement(chip);
+      expect(chip.tagName).toBe("SPAN");
+    }
+    expect(screen.getByTestId("field-status-badge")).toHaveTextContent(
+      "acknowledged",
+    );
+    // The counter-example the server typed `text` on purpose: an incident
+    // number is an identifier, not a magnitude, so "4127" renders as itself —
+    // and as plain text, because `text` is not `badge`.
+    expect(screen.getByTestId("field-incident_number-value")).toHaveTextContent(
+      "4127",
+    );
+    expect(screen.queryByTestId("field-incident_number-badge")).toBeNull();
+  });
+
+  it("shows the user no fallback chrome at all", () => {
+    renderRecord(RUNTIME_INFERRED_STATE);
+
+    // The point of the floor: for this payload the fallback is not reached, so
+    // there is no note to read and nothing to apologise for.
+    expect(screen.queryByTestId("surface-no-spec-note")).toBeNull();
+    expect(screen.queryByTestId("surface-generic-fields")).toBeNull();
+    expect(screen.getByTestId("record-renderer").textContent ?? "").not.toMatch(
+      /spec/i,
+    );
+  });
+});
+
+// The fallback is still reachable and still tested — just no longer as the
+// normal case. Its per-archetype coverage (that every renderer degrades here,
+// over every hostile payload) lives in `archetypes/noSpecTotality.test.tsx`;
+// what is asserted here is the one thing that test cannot see, which is that
+// the SAME payload renders the same facts with the spec removed from the wire.
+describe("a surface replayed from a run recorded before the floor", () => {
+  it("renders the data, names the tool, and apologises for nothing", () => {
+    // Runs recorded before rung 0 landed carry no spec, and never will. Their
+    // replay renders here forever, which is why the component outlived its copy.
+    const { spec: _spec, ...preFloor } = RUNTIME_INFERRED_STATE;
+    renderRecord(preFloor);
+
     expect(screen.getByTestId("record-renderer")).toHaveAttribute(
       "data-spec",
       "absent",
     );
-    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-      "No spec matched pagerduty.incident.read, so this is the payload as the tool sent it",
+    // The DATA is the deliverable — that is the rule the deleted copy was
+    // replaced BY, not merely the consolation prize for losing the spec.
+    expect(screen.getByTestId("field-incident_number-value")).toHaveTextContent(
+      "4127",
     );
-    // The failing state this closes: the note falling back to the nameless
-    // sentence because nothing on the wire carried a tool.
-    expect(screen.getByTestId("surface-no-spec-note")).not.toHaveTextContent(
-      "this tool result",
+    expect(screen.getByTestId("field-title-value")).toHaveTextContent(
+      "Elevated 5xx on checkout",
     );
-    // Still inert — provenance arriving over the wire does not make it a link.
+    // Nested objects are summarised rather than expanded, which is exactly what
+    // the caption above them promises — and the whole of what it promises.
+    expect(screen.getByTestId("field-service-value")).toHaveTextContent(
+      "{ 2 fields }",
+    );
+    // Provenance, in the code register, and still inert: arriving over the wire
+    // does not make a tool name a link.
+    expect(screen.getByTestId("surface-no-spec-tool")).toHaveTextContent(
+      "pagerduty.incident.read",
+    );
     expect(screen.getByTestId("record-renderer").querySelector("a")).toBeNull();
+    // AC17, on the one path that still reaches this view.
+    const text = screen.getByTestId("record-renderer").textContent ?? "";
+    expect(text).not.toMatch(/spec/i);
+    expect(text).not.toMatch(/error|failed|unable|sorry|loading|preparing/i);
   });
 
-  it("names the tool through every archetype that degrades here", () => {
-    // The generic view is the degradation target for all of them, so a wire
-    // that only worked for `record` would be a per-archetype fix.
-    for (const adapter of ARCHETYPE_ADAPTERS) {
-      const view = render(
-        adapter.renderCurrent(RUNTIME_SPECLESS_STATE as never),
-      );
-      expect(screen.getByTestId("surface-no-spec-tool")).toHaveTextContent(
-        "pagerduty.incident.read",
-      );
-      view.unmount();
-    }
-  });
+  it("still renders for a surface emitted before `source` existed", () => {
+    // Older still: every state persisted before PRD-02's provenance field
+    // carries none. Absent means "unknown tool", not an error — the caption
+    // names the thing instead of the name it does not have.
+    const { spec: _spec, source: _source, ...oldest } = RUNTIME_INFERRED_STATE;
+    renderRecord(oldest);
 
-  it("still renders the honest note for a surface emitted before `source` existed", () => {
-    // Every state persisted before this field carries none, and every replay of
-    // those runs still has to render. Absent means "unknown tool", not an error.
-    const { source: _source, ...beforeThisField } = RUNTIME_SPECLESS_STATE;
-    const record = ARCHETYPE_ADAPTERS[0];
-    render(record.renderCurrent(beforeThisField as never));
-
-    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-      "No spec matched this tool result, so this is the payload as the tool sent it",
-    );
     expect(screen.queryByTestId("surface-no-spec-tool")).toBeNull();
+    expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
+      "The payload as the tool sent it — top-level fields only, nested objects summarised.",
+    );
     expect(screen.getByTestId("field-incident_number-value")).toHaveTextContent(
       "4127",
     );

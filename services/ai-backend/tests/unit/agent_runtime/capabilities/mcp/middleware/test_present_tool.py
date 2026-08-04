@@ -12,6 +12,14 @@ bound and maps values; the gateway calls the presenter; a run streams and
 persists. The behaviour is a *path*, and no test walked it. So these assert the
 join specifically — a per-tool call reaches the presenter — rather than
 re-proving either end.
+
+The same shape of gap sat one layer down and lasted longer: the stage ran, but
+``_output_of`` read only the *artifact* half of the MCP tuple, which
+``langchain-mcp-adapters`` fills in solely from a server's
+``structuredContent``. Every text-only connector therefore succeeded, logged
+"no presentable output", and rendered nothing. The tests below drive that half
+absent — including through the adapters' own converter, so the assumption about
+the library is pinned rather than restated.
 """
 
 from __future__ import annotations
@@ -20,9 +28,12 @@ from typing import Any
 
 import pytest
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.tools import _convert_call_tool_result
+from mcp.types import CallToolResult, TextContent
 
 from agent_runtime.capabilities.mcp.middleware.present_tool import (
     McpPresentMiddleware,
+    PresentValues,
 )
 from agent_runtime.capabilities.policy.contracts import (
     Action,
@@ -86,12 +97,35 @@ class PresentFixture:
         action: Action = Action.READ,
         presenter: RecordingPresenter | None = None,
         tool: BaseTool | None = None,
+        # ``None`` keeps the stub's own default; pass a tuple to drive one shape.
+        result: Any = None,
     ) -> tuple[BaseTool, RecordingPresenter]:
         recorder = presenter or RecordingPresenter()
+        stub = tool or (StubTool() if result is None else StubTool(result=result))
         wrapped = McpPresentMiddleware(presenter=recorder).wrap(
-            tool or StubTool(), PresentFixture.descriptor(action)
+            stub, PresentFixture.descriptor(action)
         )
         return wrapped, recorder
+
+    @staticmethod
+    def text_only_server_result(text: str) -> tuple[Any, Any]:
+        """The exact tuple the adapters build for a server that answers in text.
+
+        Hand-writing ``(content, None)`` would only prove we agree with
+        ourselves. Driving a real ``CallToolResult`` through the library's own
+        converter pins the behaviour the fallback exists for: the artifact half
+        is populated from ``structuredContent`` alone, so a text-only server
+        leaves it ``None``. A library change to that rule breaks here rather
+        than silently emptying the canvas again.
+        """
+
+        return _convert_call_tool_result(
+            CallToolResult(
+                content=[TextContent(type="text", text=text)],
+                structuredContent=None,
+                isError=False,
+            )
+        )
 
 
 class TestTheStageIsPartOfTheFixedPipeline:
@@ -177,6 +211,108 @@ class TestAnExecutedReadReachesTheLedger:
         wrapped, _ = PresentFixture.wrap()
 
         assert await wrapped.ainvoke({"tool_call_id": "call-1"}) == "issues"
+
+
+class TestATextOnlyServerStillReachesTheCanvas:
+    """A missing artifact is not a missing answer.
+
+    ``langchain-mcp-adapters`` builds the artifact half from a server's
+    ``structuredContent`` alone, so every server that answers in plain text
+    leaves it ``None``. Reading only that half dropped those calls before the
+    presenter — successful, answered, and invisible. The content half is the
+    fallback.
+    """
+
+    async def test_a_result_without_an_artifact_is_still_presented(self) -> None:
+        wrapped, presenter = PresentFixture.wrap(result=("ISS-1 Fix login", None))
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert len(presenter.outcomes) == 1
+
+    async def test_a_text_content_half_is_wrapped_like_any_other_scalar(self) -> None:
+        wrapped, presenter = PresentFixture.wrap(result=("ISS-1 Fix login", None))
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert presenter.outcomes[0].output == {
+            PresentValues.OUTPUT_KEY: "ISS-1 Fix login"
+        }
+
+    async def test_a_list_of_content_blocks_is_projected_whole(self) -> None:
+        """The adapters' real content half is a list, not a string."""
+
+        blocks = [{"type": "text", "text": "ISS-1"}, {"type": "text", "text": "ISS-2"}]
+        wrapped, presenter = PresentFixture.wrap(result=(blocks, None))
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert presenter.outcomes[0].output == {PresentValues.OUTPUT_KEY: blocks}
+
+    async def test_a_mapping_content_half_is_projected_unwrapped(self) -> None:
+        """Same rule the artifact half gets: a mapping is already the output."""
+
+        wrapped, presenter = PresentFixture.wrap(result=({"issues": [1, 2]}, None))
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert presenter.outcomes[0].output == {"issues": [1, 2]}
+
+    async def test_the_artifact_still_wins_when_the_server_sent_one(self) -> None:
+        """A fallback, not a replacement — structured data remains the better half."""
+
+        wrapped, presenter = PresentFixture.wrap(
+            result=("ISS-1 Fix login", {"issues": [1, 2]})
+        )
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert presenter.outcomes[0].output == {"issues": [1, 2]}
+
+
+class TestARealAdaptersResultWithNoStructuredContent:
+    """The same claim, driven through the library that makes it true.
+
+    The four defects this fix belongs to were all green under tests that agreed
+    with the code's assumptions. So this one builds an actual ``CallToolResult``
+    with ``structuredContent = None`` and converts it with the adapters' own
+    converter, rather than asserting over a tuple we wrote ourselves.
+    """
+
+    async def test_it_reaches_the_presenter(self) -> None:
+        wrapped, presenter = PresentFixture.wrap(
+            result=PresentFixture.text_only_server_result("ISS-1 Fix login")
+        )
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert len(presenter.outcomes) == 1
+
+    async def test_the_projected_output_carries_the_server_text(self) -> None:
+        wrapped, presenter = PresentFixture.wrap(
+            result=PresentFixture.text_only_server_result("ISS-1 Fix login")
+        )
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        blocks = presenter.outcomes[0].output[PresentValues.OUTPUT_KEY]
+        assert [block["text"] for block in blocks] == ["ISS-1 Fix login"]
+
+
+class TestOnlyAGenuinelyEmptyResultIsDropped:
+    """``None`` means "there was nothing", never "there was nothing structured"."""
+
+    async def test_a_result_with_both_halves_absent_is_not_presented(self) -> None:
+        wrapped, presenter = PresentFixture.wrap(result=(None, None))
+
+        await wrapped.ainvoke({"tool_call_id": "call-1"})
+
+        assert presenter.outcomes == []
+
+    async def test_an_empty_result_still_does_not_fail_the_call(self) -> None:
+        wrapped, _ = PresentFixture.wrap(result=(None, None))
+
+        assert await wrapped.ainvoke({"tool_call_id": "call-1"}) is None
 
 
 class TestAWriteIsNotPresentedHere:

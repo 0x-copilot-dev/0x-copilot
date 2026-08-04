@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "description": "Archetypes that have a shipped renderer. NOT the SurfaceSpec contract vocabulary: surface_spec.schema.json $defs.archetype lists all ten and stays frozen so a spec replayed from an older run still validates, and an archetype nobody draws degrades to the generic view rather than erroring. This file is the smaller runtime fact -- what packages/surface-renderers can actually draw -- and it is what licenses the spec generator, so the model is never invited to emit a shape that collapses. Pinned on the TS side to ARCHETYPE_ADAPTERS by packages/surface-renderers/src/archetypes/licensedArchetypes.test.ts, and on the Python side to the contract vocabulary by services/ai-backend/tests/unit/agent_runtime/surfaces/test_implemented_archetypes.py. Deleting a renderer means deleting its entry here; nothing else changes.",
+  "implemented": ["record", "table", "message", "doc", "board"]
+}

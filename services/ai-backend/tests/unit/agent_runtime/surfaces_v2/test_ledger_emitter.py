@@ -2,13 +2,14 @@
 
 Drives the emitter through a recording :data:`EmitFn` (no runtime, no network):
 a tool result emits the four events in order; a spec envelope yields a
-shaped/registry view + spec-resolved title; a spec-less envelope yields a
-generic/schema view + fallback title; a non-mapping (absent) surface yields
-classified + read only; ``payload_ref`` is always ``call:<call_id>``;
-``class`` / ``basis`` carry the real PRD-C1 classification (catalog read here,
-fail-closed write/default for an unknown op, never spoofable via output); a
-raising ``EmitFn`` is swallowed; ``active()`` is ``None`` when unbound;
-``on_spec_generated`` emits the generated view.
+shaped/registry view + spec-resolved title **and the spec itself on
+``surface.created``**; a spec-less envelope yields a generic/schema view +
+fallback title; a non-mapping (absent) surface yields classified + read only;
+``payload_ref`` is always ``call:<call_id>``; ``class`` / ``basis`` carry the
+real PRD-C1 classification (catalog read here, fail-closed write/default for an
+unknown op, never spoofable via output); ``spec_rung`` decides the
+``view.derived`` pair; a raising ``EmitFn`` is swallowed; ``active()`` is
+``None`` when unbound; ``on_spec_generated`` emits the generated view.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
-from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+import pytest
+
+from agent_runtime.surfaces_v2.emitter import SpecRung, WorkLedgerEmitter
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
 
@@ -71,6 +74,7 @@ class RecordingEmitMixin:
         tool: str = "Get_Issue",
         call_id: str = "call_01",
         output: object = None,
+        spec_rung: str | None = None,
     ) -> None:
         asyncio.run(
             emitter.on_tool_result(
@@ -81,6 +85,7 @@ class RecordingEmitMixin:
                 surface=surface,
                 surface_uri=surface_uri,
                 latency_ms=latency_ms,
+                spec_rung=spec_rung,
             )
         )
 
@@ -160,7 +165,18 @@ class TestOnToolResult(RecordingEmitMixin):
         emitter, recorded = self._make_emitter()
         env = self._spec_envelope()
 
-        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+        # The rung is stated, because that is what a curated hit means and it is
+        # the only thing that now earns ``basis: registry``. This call used to
+        # omit it and pass anyway, on a fallback that assumed any delivered spec
+        # came from the registry — so it asserted the right answer for the wrong
+        # reason, and would not have noticed the presenter failing to thread the
+        # rung through at all.
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=SpecRung.BUILTIN,
+        )
 
         created = recorded[2]["payload"]
         assert created["surface_id"] == "record://linear/get_issue/issue-1"
@@ -332,6 +348,140 @@ class TestOnToolResult(RecordingEmitMixin):
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
 
 
+class TestSpecDelivery(RecordingEmitMixin):
+    """The resolved spec must ride ``surface.created`` (PRD floor §3.2b).
+
+    The defect this pins was silent by construction: the ladder matched a
+    curated spec, ``view.derived`` recorded the surface as ``shaped`` /
+    ``registry``, and the spec was then dropped on the floor because no event
+    carried it. The ledger described a screen nobody was looking at.
+    """
+
+    def test_created_carries_the_resolved_spec(self) -> None:
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        created = recorded[2]["payload"]
+        assert created["spec"] == {
+            "archetype": "record",
+            "title_path": "issue.title",
+        }
+
+    def test_specless_envelope_omits_the_key_entirely(self) -> None:
+        # Absent, not ``None``: a null spec would read as "we looked and there
+        # is nothing", which is a different claim from "this record does not
+        # speak to the question".
+        emitter, recorded = self._make_emitter()
+        env = self._specless_envelope()
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        assert "spec" not in recorded[2]["payload"]
+
+    def test_a_non_mapping_spec_is_not_delivered(self) -> None:
+        # Total over an untrusted envelope, like every other field here.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+        env["state"]["spec"] = "record"
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+
+        assert "spec" not in recorded[2]["payload"]
+        assert recorded[3]["payload"]["tier"] == "generic"
+
+    def test_the_emitted_spec_is_a_copy_not_the_caller_s_mapping(self) -> None:
+        # An event payload is a durable record of what was sent. Sharing the
+        # caller's mapping would let a later mutation rewrite history.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+        env["state"]["spec"]["title_path"] = "rewritten.after.the.fact"
+
+        assert recorded[2]["payload"]["spec"]["title_path"] == "issue.title"
+
+
+class TestViewDerivationRung(RecordingEmitMixin):
+    """``spec_rung`` decides ``view.derived``'s ``(tier, basis)`` pair.
+
+    No new ledger value: an inferred spec is ``shaped`` derived from structure,
+    which is what the existing ``schema`` basis already means.
+    """
+
+    @pytest.mark.parametrize(
+        ("rung", "expected"),
+        [
+            (SpecRung.BUILTIN, ("shaped", "registry")),
+            (SpecRung.STORE, ("shaped", "registry")),
+            (SpecRung.SHAPE_MATCH, ("shaped", "schema")),
+            (SpecRung.INFERRED, ("shaped", "schema")),
+            (SpecRung.GENERATED, ("shaped", "generated")),
+        ],
+        ids=["builtin", "store", "shape_match", "inferred", "generated"],
+    )
+    def test_each_rung_maps_to_its_pinned_pair(
+        self, rung: str, expected: tuple[str, str]
+    ) -> None:
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"], spec_rung=rung)
+
+        derived = recorded[3]["payload"]
+        assert (derived["tier"], derived["basis"]) == expected
+
+    @pytest.mark.parametrize(
+        "rung",
+        [None, "", "rung-4", 7],
+        ids=["none", "blank", "unknown", "not-a-string"],
+    )
+    def test_an_unstated_rung_understates_rather_than_overstates(
+        self, rung: object
+    ) -> None:
+        # This asserted ``registry`` until the inference floor shipped, on the
+        # reasoning that builtin and store were the only rungs able to produce a
+        # spec. That stopped being true, and an unwired caller then stamped
+        # ``basis: registry`` on specs derived from the payload's own structure —
+        # the failure the old comment here had explicitly predicted.
+        #
+        # Both readings are wrong when the producer says nothing; they are not
+        # equally wrong. ``view.derived`` is a durable compliance record, so
+        # understating provenance is recoverable, while claiming a curated
+        # registry entry asserts human authorship that never happened. It fails
+        # toward the least-claiming basis.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=rung,  # type: ignore[arg-type]
+        )
+
+        derived = recorded[3]["payload"]
+        assert (derived["tier"], derived["basis"]) == ("shaped", "schema")
+
+    def test_a_rung_cannot_claim_a_spec_the_envelope_does_not_carry(self) -> None:
+        # ``view.derived`` describes what was DELIVERED. A caller naming a rung
+        # over an empty state would put "shaped" on the ledger above a surface
+        # the client renders raw — the precise falsehood this PRD removes.
+        emitter, recorded = self._make_emitter()
+        env = self._specless_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=SpecRung.INFERRED,
+        )
+
+        derived = recorded[3]["payload"]
+        assert (derived["tier"], derived["basis"]) == ("generic", "schema")
+
+
 class TestOnSpecGenerated(RecordingEmitMixin):
     def test_emits_generated_view(self) -> None:
         emitter, recorded = self._make_emitter()
@@ -387,3 +537,60 @@ class TestBinding(RecordingEmitMixin):
         finally:
             WorkLedgerEmitter.unbind(token)
         assert WorkLedgerEmitter.active() is None
+
+
+class TestShapeMatchProvenance(RecordingEmitMixin):
+    """AC9: a shape match must not be recorded as a curated-registry hit.
+
+    Both readings are defensible — the spec IS a curated registry entry, but
+    the connector it was reused for was never curated — which is exactly why
+    the choice is pinned by a test rather than left to whoever edits the map
+    next.
+    """
+
+    def test_a_shape_match_does_not_claim_the_registry_basis(self) -> None:
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=SpecRung.SHAPE_MATCH,
+        )
+
+        derived = recorded[3]["payload"]
+        assert derived["basis"] != "registry"
+        assert derived["basis"] == "schema"
+
+    def test_it_mints_no_new_ledger_value(self) -> None:
+        # The (tier, basis) vocabulary is pinned cross-language; a new rung is
+        # a new *reason*, never a new wire value.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=SpecRung.SHAPE_MATCH,
+        )
+
+        derived = recorded[3]["payload"]
+        assert derived["tier"] in {"raw", "generic", "shaped"}
+        assert derived["basis"] in {"schema", "registry", "generated", "default"}
+
+    def test_it_still_reads_as_shaped(self) -> None:
+        # Understating the *basis* must not understate the tier: a shape match
+        # ships a real spec, so the surface genuinely is shaped.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            spec_rung=SpecRung.SHAPE_MATCH,
+        )
+
+        assert recorded[3]["payload"]["tier"] == "shaped"

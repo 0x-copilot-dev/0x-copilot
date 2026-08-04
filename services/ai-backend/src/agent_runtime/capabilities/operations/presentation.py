@@ -59,6 +59,12 @@ class SurfaceLedgerOperationOutcomePresenter:
                 else None
             ),
             surface_uri=envelope.surface_uri if envelope is not None else None,
+            # Which rung answered is knowable only here: the projector climbed
+            # the ladder, and the emitter must state the basis on
+            # ``view.derived``. Leaving it unstated makes the emitter fall back
+            # to ``registry``, which is a false compliance record for a spec
+            # that was actually inferred from the payload's structure.
+            spec_rung=envelope.spec_rung if envelope is not None else None,
             latency_ms=outcome.latency_ms,
         )
 

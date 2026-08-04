@@ -74,6 +74,7 @@ export {
 // === Wave 1 (PRD-03) archetype renderers ===
 export {
   ARCHETYPE_ADAPTERS,
+  IMPLEMENTED_ARCHETYPES,
   registerArchetypeAdapters,
   RecordRenderer,
   RecordDiffRenderer,

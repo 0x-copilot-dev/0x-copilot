@@ -10,7 +10,8 @@ import pytest
 
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.surfaces_v2.content import SurfaceContentProjection
-from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from agent_runtime.surfaces_v2.emitter import SpecRung, WorkLedgerEmitter
+from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
 
 @dataclass
@@ -19,13 +20,20 @@ class _Event:
     payload: dict[str, object] = field(default_factory=dict)
 
 
-def _surface(surface_id: str, call_id: str, source: object = None) -> _Event:
+def _surface(
+    surface_id: str,
+    call_id: str,
+    source: object = None,
+    spec: object = None,
+) -> _Event:
     payload: dict[str, object] = {
         "surface_id": surface_id,
         "payload_ref": f"call:{call_id}",
     }
     if source is not None:
         payload["source"] = source
+    if spec is not None:
+        payload["spec"] = spec
     return _Event(event_type="surface.created", payload=payload)
 
 
@@ -86,6 +94,67 @@ class TestSurfaceContentProjection:
             ]
         )
         assert content == {"s1": {"data": {"id": 1}, "spec": {"archetype": "record"}}}
+
+    def test_the_spec_declared_on_the_surface_record_is_hydrated(self) -> None:
+        # The builtin / store / inferred rungs resolve backend-side and ride
+        # the record that declares the surface. Sourcing the spec from
+        # generation alone left every one of them stranded.
+        content = SurfaceContentProjection.fold(
+            [
+                _surface("s1", "call-1", spec={"archetype": "table"}),
+                _tool_result("call-1", {"rows": []}),
+            ]
+        )
+        assert content == {"s1": {"data": {"rows": []}, "spec": {"archetype": "table"}}}
+
+    def test_generated_refinement_replaces_the_declared_spec(self) -> None:
+        # The model refines; it never authors from a blank page. It also
+        # arrives later in the stream, so last-writer-wins is the ladder's own
+        # order rather than a tiebreak.
+        content = SurfaceContentProjection.fold(
+            [
+                _surface("s1", "call-1", spec={"archetype": "table"}),
+                _tool_result("call-1", {"rows": []}),
+                _Event(
+                    event_type="surface_spec_generated",
+                    payload={
+                        "surface_uri": "s1",
+                        "spec": {"archetype": "table", "title_path": "team.name"},
+                    },
+                ),
+            ]
+        )
+        assert content["s1"]["spec"] == {
+            "archetype": "table",
+            "title_path": "team.name",
+        }
+
+    def test_a_declared_spec_is_not_hydrated_for_an_undeclared_subject(self) -> None:
+        # Same authorization posture the generated branch already has: the
+        # caller names the subjects it may hydrate, and a spec does not widen
+        # that set.
+        content = SurfaceContentProjection.fold(
+            [
+                _surface("s1", "call-1", spec={"archetype": "record"}),
+                _surface("s2", "call-2", spec={"archetype": "table"}),
+                _tool_result("call-1", 1),
+                _tool_result("call-2", 2),
+            ],
+            surface_payload_refs={"s2": "call:call-2"},
+        )
+        assert content == {"s2": {"data": 2, "spec": {"archetype": "table"}}}
+
+    @pytest.mark.parametrize(
+        "spec", ["table", 7, ["archetype"]], ids=["string", "number", "list"]
+    )
+    def test_a_malformed_declared_spec_is_ignored(self, spec: object) -> None:
+        content = SurfaceContentProjection.fold(
+            [
+                _surface("s1", "call-1", spec=spec),
+                _tool_result("call-1", {"id": 1}),
+            ]
+        )
+        assert content == {"s1": {"data": {"id": 1}}}
 
     def test_legacy_presentation_envelope_is_ignored(self) -> None:
         content = SurfaceContentProjection.fold(
@@ -307,3 +376,109 @@ class TestServedToolName(ServedNameMixin):
         # now because there is one producer — the emitter restates the
         # envelope's ``state.source`` rather than computing a second answer.
         assert self._served_state()["source"] == self._v1_source()
+
+
+class CuratedSpecMixin:
+    """Drives projector → emitter → fold over a REAL curated builtin spec.
+
+    Over the real objects, and over ``linear.list_issues`` specifically, because
+    the defect was invisible to every hand-built payload: each layer did its own
+    job correctly and the spec still never crossed the wire. Only running the
+    whole chain and inspecting what the renderer is handed can tell the
+    difference between "matched" and "delivered".
+    """
+
+    SERVER = "seed:linear"
+    TOOL = "list_issues"
+    CALL_ID = "call-curated"
+    OUTPUT: Mapping[str, object] = {
+        "team": {"name": "Engineering"},
+        "issues": [
+            {
+                "identifier": "ENG-1421",
+                "title": "Fix login redirect loop",
+                "state": {"name": "In Progress"},
+                "assignee": {"displayName": "Sarah Chen"},
+                "updatedAt": "2026-07-20T10:00:00Z",
+            }
+        ],
+    }
+
+    def _drive(self) -> tuple[Mapping[str, object], list[_Event]]:
+        """Return the served ``state`` plus the ledger events that produced it."""
+
+        envelope = SurfaceProjector().resolve(
+            self.SERVER, self.TOOL, dict(self.OUTPUT), call_id=self.CALL_ID
+        )
+        assert envelope is not None
+        # Guards the fixture, not the code: if the curated spec ever stopped
+        # matching, every assertion below would pass vacuously instead.
+        assert envelope.state.spec is not None
+
+        recorded: list[_Event] = []
+
+        async def _emit(
+            event_type: str, payload: Mapping[str, object], _summary: object
+        ) -> None:
+            recorded.append(_Event(event_type=event_type, payload=dict(payload)))
+
+        asyncio.run(
+            WorkLedgerEmitter(emit=_emit).on_tool_result(
+                server_name=self.SERVER,
+                tool_name=self.TOOL,
+                call_id=self.CALL_ID,
+                output=dict(self.OUTPUT),
+                surface=envelope.model_dump(mode="json", exclude_none=True),
+                surface_uri=envelope.surface_uri,
+                latency_ms=7,
+                spec_rung=SpecRung.BUILTIN,
+            )
+        )
+        content = SurfaceContentProjection.fold(
+            [_tool_result(self.CALL_ID, dict(self.OUTPUT)), *recorded],
+            surface_payload_refs={envelope.surface_uri: f"call:{self.CALL_ID}"},
+        )
+        return content[envelope.surface_uri], recorded
+
+    @staticmethod
+    def _payload_of(
+        recorded: list[_Event], event_type: LedgerEventType
+    ) -> dict[str, object]:
+        return next(
+            event.payload for event in recorded if event.event_type == event_type.value
+        )
+
+
+class TestCuratedSpecReachesTheRenderer(CuratedSpecMixin):
+    """A matched builtin spec must arrive at the fold, not just at the ledger."""
+
+    def test_the_curated_table_is_served_with_its_columns(self) -> None:
+        state, _ = self._drive()
+
+        spec = state["spec"]
+        assert spec["archetype"] == "table"
+        assert spec["items_path"] == "issues"
+        assert [column["label"] for column in spec["columns"]] == [
+            "ID",
+            "Title",
+            "State",
+            "Assignee",
+            "Updated",
+        ]
+
+    def test_the_data_arrives_with_the_spec(self) -> None:
+        # A spec without its payload renders an empty table — the same blank
+        # screen by another route.
+        state, _ = self._drive()
+
+        assert state["data"] == self.OUTPUT
+
+    def test_the_ledger_basis_describes_what_was_served(self) -> None:
+        # The falsehood this PRD removes: ``basis: registry`` recorded over a
+        # surface the client rendered spec-less. The two are asserted together
+        # on purpose — either one alone is what we already had.
+        state, recorded = self._drive()
+
+        derived = self._payload_of(recorded, LedgerEventType.VIEW_DERIVED)
+        assert (derived["tier"], derived["basis"]) == ("shaped", "registry")
+        assert "spec" in state

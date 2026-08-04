@@ -4,15 +4,25 @@
     "description": "List files and folders in a local workspace directory.",
     "input_schema": {
       "type": "object",
-      "properties": { "path": { "type": "string" } }
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
     },
     "output_shape": {
       "type": "object",
-      "properties": { "entries": { "type": "array" } }
+      "properties": {
+        "entries": {
+          "type": "array"
+        }
+      }
     }
   },
   "sample_output": {
-    "directory": { "path": "/workspace/research" },
+    "directory": {
+      "path": "/workspace/research"
+    },
     "entries": [
       {
         "name": "interviews.md",
@@ -28,15 +38,59 @@
       }
     ]
   },
+  "base_spec": {
+    "spec_version": 1,
+    "archetype": "table",
+    "source": {
+      "server": "seed:filesystem",
+      "tool": "list_directory"
+    },
+    "title_path": "title",
+    "columns": [
+      {
+        "label": "Name",
+        "path": "name",
+        "format": "text"
+      },
+      {
+        "label": "Modified At",
+        "path": "modified_at",
+        "format": "datetime"
+      },
+      {
+        "label": "Kind",
+        "path": "kind",
+        "format": "badge"
+      },
+      {
+        "label": "Size Bytes",
+        "path": "size_bytes",
+        "format": "number",
+        "align": "end"
+      }
+    ],
+    "items_path": "entries"
+  },
   "spec": {
     "spec_version": 1,
     "archetype": "table",
-    "source": { "server": "seed:filesystem", "tool": "list_directory" },
+    "source": {
+      "server": "seed:filesystem",
+      "tool": "list_directory"
+    },
     "title_path": "directory.path",
     "items_path": "entries",
     "columns": [
-      { "label": "Name", "path": "name", "align": "start" },
-      { "label": "Kind", "path": "kind", "format": "badge" },
+      {
+        "label": "Name",
+        "path": "name",
+        "align": "start"
+      },
+      {
+        "label": "Kind",
+        "path": "kind",
+        "format": "badge"
+      },
       {
         "label": "Size",
         "path": "size_bytes",
