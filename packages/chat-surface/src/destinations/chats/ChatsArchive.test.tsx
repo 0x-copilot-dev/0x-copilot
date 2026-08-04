@@ -34,6 +34,10 @@ function makeRow(
     model: overrides.model ?? "gpt-4o",
     updated_at: overrides.updated_at ?? "2026-07-18T11:00:00Z",
     pinned: overrides.pinned ?? false,
+    // Required, not optional: `null` is the real "filed nowhere" value, and a
+    // row that merely OMITS the field would let a projection bug ship as an
+    // unfiled chat rather than a type error.
+    project_id: overrides.project_id ?? null,
   };
 }
 
@@ -406,10 +410,12 @@ describe("ChatsArchive — overflow + pagination", () => {
   function renderWithActions(props: Partial<ChatsArchiveProps> = {}): {
     onTogglePin: ReturnType<typeof vi.fn>;
     onToggleArchive: ReturnType<typeof vi.fn>;
+    onMoveToProject: ReturnType<typeof vi.fn>;
     onLoadMore: ReturnType<typeof vi.fn>;
   } {
     const onTogglePin = vi.fn();
     const onToggleArchive = vi.fn();
+    const onMoveToProject = vi.fn();
     const onLoadMore = vi.fn();
     render(
       <ChatsArchive
@@ -418,12 +424,13 @@ describe("ChatsArchive — overflow + pagination", () => {
         onNewChat={vi.fn()}
         onTogglePin={props.onTogglePin ?? onTogglePin}
         onToggleArchive={props.onToggleArchive ?? onToggleArchive}
+        onMoveToProject={props.onMoveToProject ?? onMoveToProject}
         onLoadMore={props.onLoadMore ?? onLoadMore}
         hasMore={props.hasMore}
         now={NOW}
       />,
     );
-    return { onTogglePin, onToggleArchive, onLoadMore };
+    return { onTogglePin, onToggleArchive, onMoveToProject, onLoadMore };
   }
 
   it("opens the ⋯ menu and pins via onTogglePin without reopening the row", () => {
@@ -452,6 +459,100 @@ describe("ChatsArchive — overflow + pagination", () => {
     fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
     fireEvent.click(screen.getByTestId("chat-archive-row-archive"));
     expect(onToggleArchive).toHaveBeenCalledWith("c2", true);
+  });
+
+  it("emits the move-to-project intent with the id, without reopening the row", () => {
+    const onReopen = vi.fn();
+    const onMoveToProject = vi.fn();
+    render(
+      <ChatsArchive
+        archive={okArchive({ recent: [makeRow({ id: "c3" })] })}
+        onReopen={onReopen}
+        onNewChat={vi.fn()}
+        onMoveToProject={onMoveToProject}
+        now={NOW}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    const item = screen.getByTestId("chat-archive-row-move-to-project");
+    // The intent carries ONLY the conversation — the destination project is the
+    // host picker's answer, not this component's.
+    expect(item).toHaveAttribute("role", "menuitem");
+    expect(item).toHaveTextContent("Move to project…");
+    fireEvent.click(item);
+    expect(onMoveToProject).toHaveBeenCalledWith("c3");
+    expect(onReopen).not.toHaveBeenCalled();
+  });
+
+  it("closes the ⋯ menu after emitting the move-to-project intent", () => {
+    const { onMoveToProject } = renderWithActions({
+      archive: okArchive({ recent: [makeRow({ id: "c4" })] }),
+    });
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    fireEvent.click(screen.getByTestId("chat-archive-row-move-to-project"));
+    expect(onMoveToProject).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("chat-archive-row-overflow-menu")).toBeNull();
+  });
+
+  it("omits the move-to-project item when the host supplies no handler", () => {
+    render(
+      <ChatsArchive
+        archive={okArchive({ recent: [makeRow({ id: "c5" })] })}
+        onReopen={vi.fn()}
+        onNewChat={vi.fn()}
+        onTogglePin={vi.fn()}
+        now={NOW}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    expect(screen.getByTestId("chat-archive-row-pin")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-archive-row-move-to-project")).toBeNull();
+  });
+
+  it("renders the ⋯ for a move-only host (no pin/archive handlers)", () => {
+    render(
+      <ChatsArchive
+        archive={okArchive({ recent: [makeRow({ id: "c6" })] })}
+        onReopen={vi.fn()}
+        onNewChat={vi.fn()}
+        onMoveToProject={vi.fn()}
+        now={NOW}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    expect(
+      screen.getByTestId("chat-archive-row-move-to-project"),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-archive-row-pin")).toBeNull();
+    expect(screen.queryByTestId("chat-archive-row-archive")).toBeNull();
+  });
+
+  it("still offers move-to-project on an archived row, where Pin is hidden", () => {
+    const { onMoveToProject } = renderWithActions({
+      archive: okArchive({
+        archived: [makeRow({ id: "a2", status: "archived" })],
+      }),
+    });
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    // Pin is suppressed on an archived row (it would bucket to Archived anyway);
+    // filing survives archiving, so this one stays.
+    expect(screen.queryByTestId("chat-archive-row-pin")).toBeNull();
+    fireEvent.click(screen.getByTestId("chat-archive-row-move-to-project"));
+    expect(onMoveToProject).toHaveBeenCalledWith("a2");
+  });
+
+  it("orders the ⋯ items Pin → Move to project → Archive", () => {
+    renderWithActions({
+      archive: okArchive({ recent: [makeRow({ id: "c7" })] }),
+    });
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    const menu = screen.getByTestId("chat-archive-row-overflow-menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((el) => el.getAttribute("data-testid"))).toEqual([
+      "chat-archive-row-pin",
+      "chat-archive-row-move-to-project",
+      "chat-archive-row-archive",
+    ]);
   });
 
   it("renders a ghost 'Load more' foot under Archived when hasMore.archived is true", () => {

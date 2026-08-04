@@ -22,6 +22,7 @@ import type {
   ChatArchiveStatus,
   Conversation,
   ConversationId,
+  ProjectId,
 } from "@0x-copilot/api-types";
 
 /**
@@ -65,5 +66,10 @@ export function toChatArchiveRow(conversation: Conversation): ChatArchiveRow {
     model: conversation.model ?? "",
     updated_at: conversation.updated_at,
     pinned: conversation.pinned === true,
+    // The wire has carried `project_id` since PRD-07; this projection dropped
+    // it, which is the whole reason no list could tag a chat with its project —
+    // the data was always one field away. Branded on the way out for the same
+    // reason `id` is: the server serves it as a plain string.
+    project_id: (conversation.project_id ?? null) as ProjectId | null,
   };
 }

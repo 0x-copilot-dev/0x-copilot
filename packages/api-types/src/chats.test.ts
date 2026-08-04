@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import type { ConversationId } from "./brands";
+import type { ConversationId, ProjectId } from "./brands";
 import {
   CHAT_ARCHIVE_STATUSES,
   type ChatArchiveRow,
@@ -39,6 +39,7 @@ describe("ChatArchiveRow — shape", () => {
     model: "gpt-4o",
     updated_at: "2026-07-18T12:00:00Z",
     pinned: true,
+    project_id: "proj_001" as ProjectId,
   };
 
   it("carries exactly the archive-row fields", () => {
@@ -47,6 +48,7 @@ describe("ChatArchiveRow — shape", () => {
       "model",
       "pinned",
       "preview",
+      "project_id",
       "status",
       "title",
       "updated_at",
@@ -60,6 +62,15 @@ describe("ChatArchiveRow — shape", () => {
 
   it("carries a boolean pinned flag the shell can bucket on", () => {
     expect(typeof row.pinned).toBe("boolean");
+  });
+
+  it("carries the filed project as a nullable field, never an absent one", () => {
+    // `null` is the Unfiled case and must be spelled out on the row: a row
+    // built without the key at all does not typecheck, so a list can always
+    // ask "which project?" and get an answer.
+    expect(row.project_id).toBe("proj_001");
+    const unfiled: ChatArchiveRow = { ...row, project_id: null };
+    expect(unfiled.project_id).toBeNull();
   });
 });
 

@@ -126,6 +126,17 @@ export interface ChatsArchiveProps {
   readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
 
   /**
+   * File a conversation under a project from its row's ⋯ overflow. When omitted
+   * the control is not rendered.
+   *
+   * This emits the INTENT only — it does not carry a destination project. The
+   * host owns the picker because the choice needs the project LIST, and this
+   * component is pure-presentation with no way to fetch one; a submenu here
+   * would have to be fed a second list prop that only exists to be re-rendered.
+   */
+  readonly onMoveToProject?: (id: ConversationId) => void;
+
+  /**
    * Fetch the next keyset page for a bucket (PRD-09 D3). When provided together
    * with `hasMore[bucket]`, a ghost "Load more" foot renders under Recent and
    * Archived.
@@ -188,6 +199,7 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
     onRetry,
     onTogglePin,
     onToggleArchive,
+    onMoveToProject,
     onLoadMore,
     hasMore,
     now,
@@ -294,6 +306,7 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
               onNewChat={key === "pinned" ? onNewChat : undefined}
               onTogglePin={onTogglePin}
               onToggleArchive={onToggleArchive}
+              onMoveToProject={onMoveToProject}
               // "Load more" only makes sense under Recent + Archived (Pinned is
               // curated, small, and hosts the New-chat CTA).
               onLoadMore={
@@ -375,6 +388,7 @@ interface ChatsSectionProps {
   readonly onNewChat?: () => void;
   readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
   readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+  readonly onMoveToProject?: (id: ConversationId) => void;
   /** When set, renders a ghost "Load more" foot fetching the next keyset page. */
   readonly onLoadMore?: () => void;
   readonly now: number;
@@ -393,6 +407,7 @@ function ChatsSection({
   onNewChat,
   onTogglePin,
   onToggleArchive,
+  onMoveToProject,
   onLoadMore,
   now,
 }: ChatsSectionProps): ReactElement {
@@ -436,6 +451,7 @@ function ChatsSection({
               onReopen={onReopen}
               onTogglePin={onTogglePin}
               onToggleArchive={onToggleArchive}
+              onMoveToProject={onMoveToProject}
               now={now}
             />
           )}
@@ -481,6 +497,7 @@ interface ChatArchiveRowViewProps {
   readonly onReopen: (id: ConversationId) => void;
   readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
   readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+  readonly onMoveToProject?: (id: ConversationId) => void;
   readonly now: number;
 }
 
@@ -532,6 +549,7 @@ function ChatArchiveRowView({
   onReopen,
   onTogglePin,
   onToggleArchive,
+  onMoveToProject,
   now,
 }: ChatArchiveRowViewProps): ReactElement {
   const isLive = row.status === "running";
@@ -567,12 +585,15 @@ function ChatArchiveRowView({
 
   const isArchived = row.status === "archived";
   const overflow =
-    onTogglePin !== undefined || onToggleArchive !== undefined ? (
+    onTogglePin !== undefined ||
+    onToggleArchive !== undefined ||
+    onMoveToProject !== undefined ? (
       <RowOverflowMenu
         row={row}
         isArchived={isArchived}
         onTogglePin={onTogglePin}
         onToggleArchive={onToggleArchive}
+        onMoveToProject={onMoveToProject}
       />
     ) : undefined;
 
@@ -595,7 +616,7 @@ function ChatArchiveRowView({
 }
 
 // ===========================================================================
-// RowOverflowMenu — the ⋯ → Pin / Unpin / Archive / Unarchive control (D2)
+// RowOverflowMenu — ⋯ → Pin / Unpin · Move to project · Archive / Unarchive
 // ===========================================================================
 //
 // A deliberate live-only addition (the design ships no ⋯): the row is the right
@@ -603,6 +624,12 @@ function ChatArchiveRowView({
 // of the twenty you're looking at) and Chats is the only surface with an Archived
 // section, so unarchive must live where its result is visible. Always mounted,
 // keyboard reachable; `Row`'s overflow slot isolates it from row activation.
+//
+// Filing joins them for the same reason — "which project is this one in" is a
+// question you ask while looking at the list — but it stops at the INTENT: this
+// menu names no project. The picker is the host's (see `onMoveToProject`), which
+// is also why the item keeps its ellipsis while Pin and Archive do not: those two
+// commit on click, this one opens something.
 
 const overflowTriggerStyle: CSSProperties = {
   display: "inline-flex",
@@ -654,11 +681,13 @@ function RowOverflowMenu({
   isArchived,
   onTogglePin,
   onToggleArchive,
+  onMoveToProject,
 }: {
   readonly row: ChatArchiveRow;
   readonly isArchived: boolean;
   readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
   readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+  readonly onMoveToProject?: (id: ConversationId) => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
@@ -694,6 +723,25 @@ function RowOverflowMenu({
               }}
             >
               {row.pinned ? "Unpin" : "Pin to top"}
+            </button>
+          ) : null}
+          {/* Offered on an ARCHIVED row too, unlike Pin. Pin is hidden there
+              because `bucketFor` sends an archived row to Archived whatever its
+              pinned flag says, so pinning one would visibly do nothing. Filing
+              has no such contradiction — an archived chat still belongs to a
+              project, and tidying history is exactly when you file it. */}
+          {onMoveToProject !== undefined ? (
+            <button
+              type="button"
+              role="menuitem"
+              style={overflowItemStyle}
+              data-testid="chat-archive-row-move-to-project"
+              onClick={() => {
+                onMoveToProject(row.id);
+                close();
+              }}
+            >
+              Move to project…
             </button>
           ) : null}
           {onToggleArchive !== undefined ? (

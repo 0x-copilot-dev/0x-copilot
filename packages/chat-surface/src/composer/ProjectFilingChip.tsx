@@ -1,0 +1,392 @@
+// <ProjectFilingChip> — "filed under [▾ (A) Acme renewal]", the control that
+// says which project a chat belongs to, mounted BELOW the composer frame.
+//
+// Approved design (Option A — deliberately the quiet one): a mono micro-label
+// and ONE pill. Filing is a fact about the chat, not an action the user takes
+// per message, so it reads at the chrome tier the composer's other metadata
+// uses (`.ui-cpill`) rather than competing with Send. The two rejected options
+// were a full-width bar and a segmented control; both made a set-once decision
+// look like a per-turn one.
+//
+// Three rules this file exists to keep:
+//
+//   1. NEVER render `icon_emoji`. The server defaults it to 📁 for every
+//      project (`0043_projects.sql:39`), which on desktop produced a wall of
+//      identical folders. The glyph is the name's MONOGRAM on the project's
+//      hue — the same rule, and the same `projectHueRamp`, that
+//      `destinations/_shared/ProjectIconTile` established, so there is still
+//      exactly one place a per-project colour is computed.
+//   2. The popover is HOST-OWNED when the host wants it. This package cannot
+//      portal (no `document`), so the component owns open state + the anchor
+//      and hands both to an optional `renderMenu` slot — byte-for-byte the
+//      seam `AssistantComposer` already uses for its `+` menu
+//      (`AssistantComposerPlusMenuSlotArgs`). One popover pattern in the
+//      composer, not two.
+//   3. Outside-click is the HOST's, via `onDismiss` — deliberately NOT an
+//      `onBlur` on the wrapper. A blur handler comparing `relatedTarget`
+//      against the wrapper's DOM subtree closes the menu the instant a
+//      portalling host renders it (a portal is outside that subtree), so the
+//      convenience would break precisely the substrate the slot exists for.
+//      The inline fallback therefore closes on selection or Escape only.
+//
+// Presentational: props + callbacks, no fetching, no router. The host binds
+// `options` from its projects list and turns `onChange` into the chat's
+// `project_id` write.
+
+import type { ProjectColorHue, ProjectId } from "@0x-copilot/api-types";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+} from "react";
+
+import { Icon } from "../icons/Icon";
+// Direct file import rather than the `_shared` barrel: this is a cross-module
+// reach (composer → destinations) and the narrow import keeps it honest about
+// what it actually needs — the ONE per-project hue ramp.
+import { projectHueRamp } from "../destinations/_shared/ProjectIconTile";
+
+/** One project the chat can be filed under. */
+export interface ProjectFilingOption {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly colorHue: ProjectColorHue;
+}
+
+/**
+ * Render-prop arguments for the host-owned menu popover, mirroring
+ * {@link AssistantComposerPlusMenuSlotArgs}. The chip owns the open state, the
+ * anchor element and the dismissal action; the host owns `createPortal` +
+ * outside-click, both of which need `document`.
+ *
+ * - `open` — whether the menu should be shown.
+ * - `anchorRef` — the chip root to position against.
+ * - `onDismiss` — close the menu (the host's outside-click handler calls this).
+ * - `children` — the already-rendered menu body.
+ */
+export interface ProjectFilingMenuSlotArgs {
+  readonly open: boolean;
+  readonly anchorRef: RefObject<HTMLDivElement | null>;
+  readonly onDismiss: () => void;
+  readonly children: ReactNode;
+}
+
+export interface ProjectFilingChipProps {
+  /** The chat's current project, or `null` when it is filed nowhere. */
+  readonly value: ProjectId | null;
+  /** Every project the chat can be filed under. Host-supplied. */
+  readonly options: ReadonlyArray<ProjectFilingOption>;
+  /** Fires with the picked project, or `null` for "No project". */
+  readonly onChange: (next: ProjectId | null) => void;
+  /**
+   * Optional escape hatch to project creation. Omitted → the "New project…"
+   * row is ABSENT, not disabled: a host with nowhere to create a project must
+   * not offer a row that does nothing.
+   */
+  readonly onCreateProject?: () => void;
+  /** Read-only chrome (shared-chat recipient view, in-flight write). */
+  readonly disabled?: boolean;
+  /** Host slot for the menu popover (portal + outside-click). */
+  readonly renderMenu?: (args: ProjectFilingMenuSlotArgs) => ReactNode;
+}
+
+/**
+ * The monogram glyph rule, kept byte-identical to `ProjectIconTile` (first
+ * letter, upper-cased, `?` for an empty name) so the tile in this pill and the
+ * tile on a project card can never disagree about a project's identity.
+ */
+function monogram(name: string): string {
+  return (name.trim()[0] ?? "?").toUpperCase();
+}
+
+/**
+ * The trigger's tile. `ProjectIconTile` cannot be reused verbatim here: its
+ * `size` prop is typed as the literal `32` (32 is the design's only `.proj-ic`
+ * size) and the pill is 26px tall, so a 32px tile would blow the pill's box
+ * open. Only the GEOMETRY is restated — the colour still comes from the one
+ * `projectHueRamp`, so no `hsl(...)` literal escapes that file.
+ */
+function triggerTileStyle(colorHue: ProjectColorHue): CSSProperties {
+  const ramp = projectHueRamp(colorHue);
+  return {
+    width: 16,
+    height: 16,
+    // `--radius-sm` (6px), not a hand-written 4px: the design has no 4px rung,
+    // and referencing an undefined token behind a fallback is how this layer
+    // has twice shipped a value nothing could change.
+    borderRadius: "var(--radius-sm)",
+    display: "grid",
+    placeItems: "center",
+    flex: "none",
+    boxSizing: "border-box",
+    fontFamily: "var(--font-sans)",
+    fontSize: 9,
+    fontWeight: "var(--font-weight-semibold)",
+    backgroundColor: ramp.background,
+    border: ramp.border,
+    color: ramp.color,
+  };
+}
+
+/**
+ * The menu row's tile. Geometry comes from the shared `.ui-pop-row__lg` recipe
+ * (24px, radius, centring) — only the ramp colours are set here, for the same
+ * reason as above.
+ */
+function rowTileStyle(colorHue: ProjectColorHue): CSSProperties {
+  const ramp = projectHueRamp(colorHue);
+  return {
+    backgroundColor: ramp.background,
+    border: ramp.border,
+    color: ramp.color,
+    fontSize: 11,
+    fontWeight: "var(--font-weight-semibold)",
+  };
+}
+
+const rootStyle: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+};
+
+const labelStyle: CSSProperties = {
+  // The recipe's ONE documented per-role override is colour; this role is the
+  // quietest thing on the composer, so it takes the subtle rung.
+  color: "var(--color-text-subtle)",
+  flex: "none",
+};
+
+// Inline fallback frame. Hosts that portal ignore this entirely; web and tests
+// get a real menu with no host wiring at all. `bottom: 100%` opens UPWARD — the
+// chip is the last row of the composer, so a downward menu would land off the
+// bottom of the viewport.
+const inlineMenuStyle: CSSProperties = {
+  position: "absolute",
+  bottom: "calc(100% + 6px)",
+  left: 0,
+  minWidth: 220,
+  maxWidth: 300,
+  zIndex: 71,
+};
+
+export function ProjectFilingChip(props: ProjectFilingChipProps): ReactElement {
+  const {
+    value,
+    options,
+    onChange,
+    onCreateProject,
+    disabled = false,
+    renderMenu,
+  } = props;
+
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const selected = options.find((option) => option.id === value) ?? null;
+
+  // Dismissal always returns focus to the pill. Without it, closing from a menu
+  // item drops focus to <body> and the next Tab restarts at the top of the
+  // document — the classic menu-close focus loss.
+  const dismiss = useCallback((): void => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
+  const pick = useCallback(
+    (next: ProjectId | null): void => {
+      onChange(next);
+      dismiss();
+    },
+    [dismiss, onChange],
+  );
+
+  const handleEscape = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    },
+    [dismiss],
+  );
+
+  const renderOption = (option: ProjectFilingOption): ReactElement => {
+    const active = option.id === value;
+    return (
+      <button
+        key={option.id}
+        type="button"
+        role="menuitemradio"
+        aria-checked={active}
+        className="ui-pop-row"
+        data-testid="composer-project-filing-option"
+        data-project-id={option.id}
+        data-on={active || undefined}
+        onClick={() => pick(option.id)}
+      >
+        <span
+          className="ui-pop-row__lg"
+          style={rowTileStyle(option.colorHue)}
+          aria-hidden="true"
+        >
+          {monogram(option.name)}
+        </span>
+        <span className="ui-pop-row__m">
+          <span className="ui-pop-row__nm">
+            <span className="ui-pop-row__txt">{option.name}</span>
+          </span>
+        </span>
+        <span
+          className="ui-pop-row__rad"
+          data-on={active || undefined}
+          aria-hidden="true"
+        >
+          {active ? <Icon name="check" size={9} strokeWidth={3} /> : null}
+        </span>
+      </button>
+    );
+  };
+
+  const menuBody = (
+    <div
+      role="menu"
+      aria-label="File this chat under a project"
+      className="ui-pop"
+      data-testid="composer-project-filing-menu"
+      // Escape is bound HERE as well as on the root: with a portalling host the
+      // menu is not a DOM descendant of the root, so a root-only handler would
+      // never see a keystroke made while focus is inside the menu.
+      onKeyDown={handleEscape}
+    >
+      <div className="ui-pop__list">
+        {options.map(renderOption)}
+
+        <div className="ui-pop__div" aria-hidden="true" />
+
+        {/* "No project" is a real filing choice, not a reset affordance on the
+            trigger — unfiling a chat is as deliberate as filing it. */}
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={value === null}
+          className="ui-pop-row"
+          data-testid="composer-project-filing-none"
+          data-on={value === null || undefined}
+          onClick={() => pick(null)}
+        >
+          <span className="ui-pop-row__m">
+            <span className="ui-pop-row__nm">
+              <span className="ui-pop-row__txt">No project</span>
+            </span>
+          </span>
+          <span
+            className="ui-pop-row__rad"
+            data-on={value === null || undefined}
+            aria-hidden="true"
+          >
+            {value === null ? (
+              <Icon name="check" size={9} strokeWidth={3} />
+            ) : null}
+          </span>
+        </button>
+      </div>
+
+      {onCreateProject !== undefined ? (
+        <button
+          type="button"
+          role="menuitem"
+          className="ui-pop-row ui-pop-row--pin"
+          data-testid="composer-project-filing-new"
+          onClick={() => {
+            dismiss();
+            onCreateProject();
+          }}
+        >
+          <span className="ui-pop-row__m">
+            <span className="ui-pop-row__nm">
+              <span className="ui-pop-row__txt">New project…</span>
+            </span>
+          </span>
+        </button>
+      ) : null}
+    </div>
+  );
+
+  // With a host slot the slot is called UNCONDITIONALLY and receives `open` —
+  // the host may want to keep a portal mounted across open/close. Without one,
+  // the inline frame mounts only while open.
+  const menuSlot: ReactNode =
+    renderMenu !== undefined ? (
+      renderMenu({
+        open,
+        anchorRef: rootRef,
+        onDismiss: dismiss,
+        children: menuBody,
+      })
+    ) : open ? (
+      <div style={inlineMenuStyle}>{menuBody}</div>
+    ) : null;
+
+  return (
+    <div
+      ref={rootRef}
+      style={rootStyle}
+      className="aui-composer-filing"
+      data-testid="composer-project-filing"
+      data-open={open || undefined}
+      onKeyDown={handleEscape}
+    >
+      <span
+        className="ui-mono-caps ui-mono-caps--9"
+        style={labelStyle}
+        aria-hidden="true"
+      >
+        filed under
+      </span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="ui-cpill aui-composer-filing__pill"
+        data-testid="composer-project-filing-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={
+          selected === null
+            ? "Filed under: no project"
+            : `Filed under: ${selected.name}`
+        }
+        disabled={disabled}
+        data-open={open || undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {/* No tile in the unfiled state: an empty or placeholder tile would
+            read as a project whose name we failed to load. */}
+        {selected !== null ? (
+          <span style={triggerTileStyle(selected.colorHue)} aria-hidden="true">
+            {monogram(selected.name)}
+          </span>
+        ) : null}
+        <span
+          className="ui-cpill__lb"
+          style={
+            selected === null
+              ? { color: "var(--color-text-subtle)" }
+              : undefined
+          }
+        >
+          {selected?.name ?? "No project"}
+        </span>
+        <Icon name="chevronDown" size={11} />
+      </button>
+      {menuSlot}
+    </div>
+  );
+}

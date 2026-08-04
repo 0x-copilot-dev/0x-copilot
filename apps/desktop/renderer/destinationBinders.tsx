@@ -104,7 +104,21 @@ import {
 // substrate ports. Same-app imports, allowed.
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
+import type { RunComposerFiling } from "./composer/useRunComposerBindings";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
+// Project filing — the host half of "which project is this chat in": the ONE
+// project-list fetch (`loadProjects`, which used to live in this file), the ONE
+// write, and the process-wide thread scope. See that module's header for why
+// the scope cannot be component state here.
+import {
+  ProjectFilingSheet,
+  createFiledConversation,
+  fileConversationUnderProject,
+  loadProjects,
+  readConversationProject,
+  useProjectFilingOptions,
+  useThreadScope,
+} from "./projects/useProjectFiling";
 import { isSurfacesV2Enabled } from "./featureFlags";
 import { runMarkdownComponents } from "./runMarkdownComponents";
 import {
@@ -200,23 +214,80 @@ export function ChatsBinder({
   onNewChat,
   onOpenConversation,
 }: DestinationBinderCallbacks): ReactElement {
+  const transport = useTransport();
+  const notify = useNotify();
   const { archive, hasMore, onLoadMore, onTogglePin, onToggleArchive, retry } =
     useChatsArchive();
+  // The same list the composer's chip files with (one fetch path, one shape).
+  const { options } = useProjectFilingOptions();
+  // The row whose ⋯ asked to be moved. The surface emits the INTENT only — it
+  // names no project, because picking one needs the list above — so the picker
+  // is the host's, and this is the only state it needs.
+  const [movingId, setMovingId] = useState<ConversationId | null>(null);
+
+  // Every loaded row, flattened, so the sheet can seed the chip with where the
+  // chat is filed TODAY. Reads the archive the surface is already rendering —
+  // no per-row GET, and no way for the sheet to disagree with the list.
+  const rows = useMemo<ReadonlyArray<ChatArchiveRow>>(() => {
+    if (archive === null || archive.status !== "ok") return [];
+    const data = archive.data;
+    if (data === undefined) return [];
+    return [...data.pinned, ...data.recent, ...data.archived];
+  }, [archive]);
+  const movingRow = rows.find((row) => row.id === movingId) ?? null;
+
+  const handleMove = useCallback(
+    (id: ConversationId, next: ProjectId | null): void => {
+      setMovingId(null);
+      void (async () => {
+        try {
+          await fileConversationUnderProject(transport, id, next);
+          // Refetch rather than patch the row locally: `project_id` is not the
+          // only thing the server moved (`updated_at` did too, which reorders
+          // the list), and the archive controller owns that ordering.
+          retry();
+        } catch (error: unknown) {
+          // Nothing optimistic was written, so the list is still truthful — the
+          // toast is the whole correction needed.
+          notify({
+            tone: "error",
+            title: "Couldn’t move that chat",
+            body: messageFromError(error),
+          });
+        }
+      })();
+    },
+    [notify, retry, transport],
+  );
+
   return (
-    <ChatsArchive
-      archive={archive}
-      // Reopen threads the row's REAL conversation id into the cockpit (the
-      // Chats surface hands it to `onReopen`), so the cockpit resolves that
-      // conversation's transcript + latest run instead of dropping to the
-      // empty "NO ACTIVE RUN" state. New chat lands on the cockpit front door.
-      onReopen={(id) => onOpenConversation?.(id)}
-      onNewChat={() => onNewChat?.()}
-      onRetry={retry}
-      onTogglePin={onTogglePin}
-      onToggleArchive={onToggleArchive}
-      onLoadMore={onLoadMore}
-      hasMore={hasMore}
-    />
+    <>
+      <ChatsArchive
+        archive={archive}
+        // Reopen threads the row's REAL conversation id into the cockpit (the
+        // Chats surface hands it to `onReopen`), so the cockpit resolves that
+        // conversation's transcript + latest run instead of dropping to the
+        // empty "NO ACTIVE RUN" state. New chat lands on the cockpit front door.
+        onReopen={(id) => onOpenConversation?.(id)}
+        onNewChat={() => onNewChat?.()}
+        onRetry={retry}
+        onTogglePin={onTogglePin}
+        onToggleArchive={onToggleArchive}
+        // Withheld when there is nowhere to move a chat TO: the row's ⋯ then
+        // omits the item entirely rather than offering a dead end.
+        onMoveToProject={options.length > 0 ? setMovingId : undefined}
+        onLoadMore={onLoadMore}
+        hasMore={hasMore}
+      />
+      {movingId !== null ? (
+        <ProjectFilingSheet
+          value={movingRow?.project_id ?? null}
+          options={options}
+          onPick={(next) => handleMove(movingId, next)}
+          onCancel={() => setMovingId(null)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -706,25 +777,11 @@ export function SkillsBinder({
 
 // ===========================================================================
 // Projects — GET /v1/projects → project cards.
-// Mirrors apps/frontend ProjectsRoute's list fetch. Creation / mutation /
-// detail flows aren't wired on desktop yet, so the grid renders read-only.
+// Mirrors apps/frontend ProjectsRoute's list fetch. `loadProjects` now lives in
+// `./projects/useProjectFiling` — the composer's filing chip and the Threads
+// scope picker need the same list, and a second fetch here is how two lists of
+// the same thing start disagreeing.
 // ===========================================================================
-
-interface ProjectListResponse {
-  readonly items?: ReadonlyArray<ProjectSummary>;
-  readonly next_cursor?: string | null;
-}
-
-async function loadProjects(
-  transport: Transport,
-): Promise<SectionResult<ReadonlyArray<ProjectSummary>>> {
-  const response = await transport.request<ProjectListResponse>({
-    method: "GET",
-    path: "/v1/projects",
-    query: { limit: 50 },
-  });
-  return { status: "ok", data: response?.items ?? [] };
-}
 
 // A blank editor value for the CREATE sheet (D4/D9). The design ships no create
 // control, but a desktop product needs a way to make its first project (the
@@ -1237,6 +1294,107 @@ export function RunBinder({
   const boundConversationId: ConversationId =
     conversationId ?? ("new" as ConversationId);
 
+  // === Project filing + thread scope =====================================
+  //
+  // One list feeds both controls (the composer's "filed under" chip and the
+  // Threads panel's scope picker), and the scope lives in a module-level store
+  // rather than here on purpose: pressing "New run" REMOUNTS this binder (the
+  // outlet keys it by conversation id), so component state would be gone
+  // exactly when the new chat needs it.
+  const { options: projectOptions, scopeOptions } = useProjectFilingOptions();
+  const [threadScope, changeThreadScope] = useThreadScope();
+
+  // Where THIS chat is filed. An existing conversation reads it from the server
+  // (below); a brand-new one has nothing to read, so it starts on the active
+  // scope — that inheritance is the whole reason the scope sits under "New run".
+  const [filedProjectId, setFiledProjectId] = useState<ProjectId | null>(() =>
+    conversationId === null ? threadScope : null,
+  );
+  const [filingBusy, setFilingBusy] = useState(false);
+  // Whether the user has answered the filing question for THIS chat. Two things
+  // must not overwrite an answer they gave: the scope-inheritance effect, and a
+  // conversation read that resolves after they picked.
+  const filingTouchedRef = useRef(false);
+
+  // A new chat follows the scope until the user says otherwise — including a
+  // scope changed while sitting on the empty composer, which the "New run in
+  // Acme renewal" label would otherwise be lying about.
+  useEffect(() => {
+    if (conversationId !== null || filingTouchedRef.current) return;
+    setFiledProjectId(threadScope);
+  }, [conversationId, threadScope]);
+
+  // The chip must open on the truth. Nothing else on this screen knows it — the
+  // cockpit resolves runs, messages and events, never the conversation row —
+  // so a filed chat would show "No project" and the next click would silently
+  // unfile it.
+  //
+  // Skipped entirely when there are no projects: no chip renders, nothing reads
+  // the value, and a user who has never made a project keeps the exact
+  // chat-open request set they had before filing existed. The project list is
+  // module-cached, so on a chat switch this is non-empty on the first render.
+  const hasProjects = projectOptions.length > 0;
+  useEffect(() => {
+    if (conversationId === null || !hasProjects) return;
+    let cancelled = false;
+    void readConversationProject(transport, conversationId).then(
+      (projectId) => {
+        if (!cancelled && !filingTouchedRef.current) {
+          setFiledProjectId(projectId);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, hasProjects]);
+
+  const handleFilingChange = useCallback(
+    (next: ProjectId | null): void => {
+      filingTouchedRef.current = true;
+      const previous = filedProjectId;
+      setFiledProjectId(next);
+      // No conversation yet → nothing to PATCH. The pick is HELD and sent as
+      // `project_id` on the create the first send performs (see handleStartRun);
+      // dropping it here is what "filing silently fails on a fresh chat" was.
+      if (conversationId === null) return;
+      setFilingBusy(true);
+      // Nothing to refresh on success, deliberately. The one list that could go
+      // stale — the Threads panel scoped to a project this chat just joined or
+      // left — is driven by `useChatsArchive` INSIDE the cockpit, and its live
+      // tail is a store poll on `updated_at`, which this PATCH moves. The row
+      // arrives (or is detached) on its own; a host-side refetch would need a
+      // seam into someone else's controller to do what the tail already does.
+      void (async () => {
+        try {
+          await fileConversationUnderProject(transport, conversationId, next);
+        } catch (error: unknown) {
+          // Put the pill back: a chip still showing a project the server never
+          // accepted is the "0 chats" bug seen from the other side.
+          setFiledProjectId(previous);
+          notify({
+            tone: "error",
+            title: "Couldn’t file this chat",
+            body: messageFromError(error),
+          });
+        } finally {
+          setFilingBusy(false);
+        }
+      })();
+    },
+    [conversationId, filedProjectId, notify, transport],
+  );
+
+  const filing = useMemo<RunComposerFiling>(
+    () => ({
+      value: filedProjectId,
+      options: projectOptions,
+      onChange: handleFilingChange,
+      disabled: filingBusy,
+    }),
+    [filedProjectId, projectOptions, handleFilingChange, filingBusy],
+  );
+
   const handleStartRun = useCallback(
     async (request: RunStartRequest): Promise<string | null> => {
       // Existing conversation → the historical path: POST a run against it.
@@ -1260,6 +1418,32 @@ export function RunBinder({
       if (newChatIdempotencyKeyRef.current === null) {
         newChatIdempotencyKeyRef.current = mintNewChatIdempotencyKey();
       }
+      // …unless the chat is FILED. A pending project is the one thing the
+      // one-call path cannot carry — neither the run body nor the server's
+      // ensure-conversation helper has a `project_id` — so a filed new chat
+      // creates its conversation first, with the project on the create, and
+      // then runs against it. Same idempotency key, so the double-tap guarantee
+      // survives: two concurrent first sends still resolve to ONE conversation.
+      if (filedProjectId !== null) {
+        const createdId = await createFiledConversation(transport, {
+          projectId: filedProjectId,
+          idempotencyKey: newChatIdempotencyKeyRef.current,
+        });
+        if (createdId !== null) {
+          const filedRun = await transport.request<{
+            readonly run_id: string;
+          }>({
+            method: "POST",
+            path: "/v1/agent/runs",
+            body: buildRunCreateBody(createdId, request),
+          });
+          onConversationCreated?.(createdId);
+          return filedRun.run_id ?? null;
+        }
+        // A create that returned no id: fall through to the ensure path rather
+        // than post a run at nothing. The chat lands unfiled, which is visible
+        // and fixable, where a run with no conversation is neither.
+      }
       const body = buildRunCreateBody(boundConversationId, request);
       delete body.conversation_id;
       body.conversation_idempotency_key = newChatIdempotencyKeyRef.current;
@@ -1277,7 +1461,13 @@ export function RunBinder({
       }
       return run.run_id ?? null;
     },
-    [transport, conversationId, boundConversationId, onConversationCreated],
+    [
+      transport,
+      conversationId,
+      boundConversationId,
+      onConversationCreated,
+      filedProjectId,
+    ],
   );
 
   // Empty-state composer (FR-3.25): the design's "What should we run first?"
@@ -1298,6 +1488,10 @@ export function RunBinder({
         // rather than filed under the synthetic "new" id every new chat shares.
         conversationId={conversationId}
         conversationModel={ctx.conversationModel}
+        // The filing zone matters MOST here: this is the composer a chat
+        // started inside a project is begun from, and the pick made here is
+        // what the create carries.
+        filing={filing}
       />
     ),
     [
@@ -1308,6 +1502,7 @@ export function RunBinder({
       providerKeysPort,
       providerKeysRevision,
       conversationId,
+      filing,
     ],
   );
 
@@ -1348,6 +1543,9 @@ export function RunBinder({
         // sends through the cockpit's dispatch, which owns the run target.
         conversationId={conversationId}
         conversationModel={ctx.conversationModel}
+        // Same binding as the empty composer's — one filing state per chat, so
+        // the pill reads the same before and after the first message.
+        filing={filing}
       />
     ),
     [
@@ -1359,6 +1557,7 @@ export function RunBinder({
       providerKeysPort,
       providerKeysRevision,
       conversationId,
+      filing,
     ],
   );
 
@@ -1369,6 +1568,12 @@ export function RunBinder({
       // the shared `useChatsArchive` controller inside the package.
       onOpenConversation={onOpenConversation}
       onNewConversation={onNewChat}
+      // D-1.4 — the scope under "New run". It filters the panel's list AND
+      // qualifies where the next chat is filed; both halves read the same
+      // host-owned value, which is why the store outlives this binder's remount.
+      scope={threadScope}
+      scopeOptions={scopeOptions}
+      onScopeChange={changeThreadScope}
       onStartRun={handleStartRun}
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}

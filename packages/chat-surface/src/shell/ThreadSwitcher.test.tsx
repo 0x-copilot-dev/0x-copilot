@@ -1,4 +1,9 @@
-import type { ChatArchiveRow, ConversationId } from "@0x-copilot/api-types";
+import type {
+  ChatArchiveRow,
+  ConversationId,
+  ProjectColorHue,
+  ProjectId,
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +18,7 @@ import {
   ThreadSwitcherToggle,
   threadSwitcherDockWidth,
   type ThreadListSource,
+  type ThreadScopeOption,
 } from "./ThreadSwitcher";
 
 function row(id: string, title: string, over: Partial<ChatArchiveRow> = {}) {
@@ -24,9 +30,27 @@ function row(id: string, title: string, over: Partial<ChatArchiveRow> = {}) {
     model: "",
     updated_at: "2026-08-01T10:00:00Z",
     pinned: false,
+    // REQUIRED on `ChatArchiveRow` — a row is a projection, not a wire payload,
+    // so "unfiled" has to be stated rather than left absent.
+    project_id: null,
     ...over,
   } as ChatArchiveRow;
 }
+
+const ACME = "p-acme" as ProjectId;
+const ATLAS = "p-atlas" as ProjectId;
+
+const SCOPES: ReadonlyArray<ThreadScopeOption> = [
+  {
+    id: ACME,
+    name: "Acme renewal",
+    colorHue: 210 as ProjectColorHue,
+    count: 4,
+  },
+  // No `count` — the bucketed archive does not return per-project totals, so a
+  // host that cannot count must be able to omit the number.
+  { id: ATLAS, name: "Atlas launch", colorHue: 140 as ProjectColorHue },
+];
 
 function source(over: Partial<ThreadListSource> = {}): ThreadListSource {
   return {
@@ -287,6 +311,182 @@ describe("ThreadSwitcher", () => {
     // Two lists of the same three buckets is one drift away from the switcher
     // and the archive disagreeing about order for identical data.
     expect([...THREAD_SECTION_ORDER]).toEqual([...CHATS_SECTION_ORDER]);
+  });
+});
+
+describe("ThreadSwitcher — project scope (D-1.4)", () => {
+  function renderScoped(
+    over: {
+      scope?: ProjectId | null;
+      scopeOptions?: ReadonlyArray<ThreadScopeOption>;
+      onScopeChange?: (next: ProjectId | null) => void;
+      onNewRun?: () => void;
+      onRequestClose?: () => void;
+      variant?: "docked" | "overlay";
+    } = {},
+  ) {
+    const {
+      variant = "docked",
+      scope = null,
+      scopeOptions = SCOPES,
+      ...rest
+    } = over;
+    return render(
+      <ThreadSwitcher
+        variant={variant}
+        controller={source()}
+        activeConversationId={null}
+        onOpenConversation={vi.fn()}
+        onNewRun={vi.fn()}
+        scope={scope}
+        scopeOptions={scopeOptions}
+        {...rest}
+      />,
+    );
+  }
+
+  it("puts + New run BEFORE the scope control in DOM order", () => {
+    // Owner decision, not an accident of layout: New run is the ACTION and the
+    // scope is its qualifier, so the two must read top-to-bottom as one
+    // sentence. Asserted structurally so a later tidy-up cannot transpose them.
+    renderScoped();
+    const newRun = screen.getByTestId("thread-switcher-new");
+    const scopeControl = screen.getByTestId("thread-switcher-scope");
+    expect(
+      newRun.compareDocumentPosition(scopeControl) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+    // …and both sit above the bucket list.
+    expect(
+      scopeControl.compareDocumentPosition(
+        screen.getByTestId("thread-switcher-body"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders no scope control at all when the host has no projects", () => {
+    // A host with nothing to scope to must get EXACTLY today's panel — not a
+    // picker whose only entry is the state it is already in.
+    const { unmount } = render(
+      <ThreadSwitcher
+        variant="docked"
+        controller={source()}
+        activeConversationId={null}
+        onOpenConversation={vi.fn()}
+        onNewRun={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("thread-switcher-scope")).toBeNull();
+    expect(screen.getByTestId("thread-switcher-new")).toBeTruthy();
+    unmount();
+
+    renderScoped({ scopeOptions: [] });
+    expect(screen.queryByTestId("thread-switcher-scope")).toBeNull();
+  });
+
+  it("reads All threads when unscoped and the project when scoped", () => {
+    const { unmount } = renderScoped();
+    const trigger = screen.getByTestId("thread-switcher-scope-trigger");
+    expect(trigger.textContent).toContain("All threads");
+    expect(trigger.getAttribute("aria-label")).toBe("Scope: all threads");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    unmount();
+
+    renderScoped({ scope: ACME });
+    const scoped = screen.getByTestId("thread-switcher-scope-trigger");
+    expect(scoped.textContent).toContain("Acme renewal");
+    // Monogram on the hue, NEVER `icon_emoji` — the server defaults that field
+    // to 📁 for every project, which renders a wall of identical folders.
+    expect(scoped.textContent).toContain("A");
+    expect(scoped.getAttribute("aria-label")).toBe("Scope: Acme renewal");
+  });
+
+  it("lists All threads first, then a separator, then each project", () => {
+    renderScoped({ scope: ACME });
+    fireEvent.click(screen.getByTestId("thread-switcher-scope-trigger"));
+
+    const all = screen.getByTestId("thread-switcher-scope-all");
+    const options = screen.getAllByTestId("thread-switcher-scope-option");
+    expect(options.map((o) => o.getAttribute("data-project-id"))).toEqual([
+      ACME,
+      ATLAS,
+    ]);
+    expect(
+      all.compareDocumentPosition(options[0]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+
+    // Single-select semantics, matching the composer's filing chip.
+    expect(options[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(options[1]!.getAttribute("aria-checked")).toBe("false");
+    expect(all.getAttribute("aria-checked")).toBe("false");
+
+    // Counts are optional: Acme supplies one, Atlas does not.
+    expect(options[0]!.textContent).toContain("4");
+    expect(options[1]!.textContent).toBe("AAtlas launch");
+  });
+
+  it("reports the picked project to the host", () => {
+    const onScopeChange = vi.fn();
+    renderScoped({ onScopeChange });
+    fireEvent.click(screen.getByTestId("thread-switcher-scope-trigger"));
+    fireEvent.click(screen.getAllByTestId("thread-switcher-scope-option")[1]!);
+    expect(onScopeChange).toHaveBeenCalledWith(ATLAS);
+    // Picking closes the menu — the answer is on the trigger now.
+    expect(screen.queryByTestId("thread-switcher-scope-menu")).toBeNull();
+  });
+
+  it("reports null when All threads is picked", () => {
+    const onScopeChange = vi.fn();
+    renderScoped({ scope: ACME, onScopeChange });
+    fireEvent.click(screen.getByTestId("thread-switcher-scope-trigger"));
+    fireEvent.click(screen.getByTestId("thread-switcher-scope-all"));
+    expect(onScopeChange).toHaveBeenCalledWith(null);
+  });
+
+  it("names the active scope on the New run button", () => {
+    // The only place a user learns that a new run inherits the scope.
+    const { unmount } = renderScoped({ scope: ACME });
+    expect(screen.getByTestId("thread-switcher-new").textContent).toContain(
+      "New runin Acme renewal",
+    );
+    expect(screen.getByTestId("thread-switcher-new-scope")).toBeTruthy();
+    unmount();
+
+    renderScoped();
+    expect(screen.queryByTestId("thread-switcher-new-scope")).toBeNull();
+    expect(screen.getByTestId("thread-switcher-new").textContent).toBe(
+      "New run",
+    );
+  });
+
+  it("closes the MENU on Escape, not the overlay panel", () => {
+    // The trap: the menu lives inside the panel, and the panel's own
+    // `handleKeyDown` closes the overlay on Escape. A menu-Escape that bubbled
+    // would take the whole panel down with the menu still open.
+    const onRequestClose = vi.fn();
+    renderScoped({ variant: "overlay", onRequestClose });
+
+    const trigger = screen.getByTestId("thread-switcher-scope-trigger");
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByTestId("thread-switcher-scope-menu"), {
+      key: "Escape",
+    });
+    expect(screen.queryByTestId("thread-switcher-scope-menu")).toBeNull();
+    expect(onRequestClose).not.toHaveBeenCalled();
+
+    // Opening does NOT move focus into the menu, so the very next Escape a real
+    // user presses is dispatched on the TRIGGER — which is outside the menu's
+    // subtree. That keystroke must close the menu too, not the panel.
+    fireEvent.click(trigger);
+    fireEvent.keyDown(trigger, { key: "Escape" });
+    expect(screen.queryByTestId("thread-switcher-scope-menu")).toBeNull();
+    expect(onRequestClose).not.toHaveBeenCalled();
+
+    // …and with the menu closed, FR-1.9 is untouched: Escape still closes the
+    // overlay.
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
   });
 });
 

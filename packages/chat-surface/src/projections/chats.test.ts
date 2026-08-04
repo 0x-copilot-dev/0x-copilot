@@ -47,6 +47,16 @@ describe("toChatArchiveRow", () => {
     expect(row.pinned).toBe(false);
   });
 
+  it("carries the project the conversation is filed under", () => {
+    expect(
+      toChatArchiveRow(conversation({ project_id: "proj-7" })).project_id,
+    ).toBe("proj-7");
+  });
+
+  it("projects a null project for an unfiled conversation", () => {
+    expect(toChatArchiveRow(conversation()).project_id).toBeNull();
+  });
+
   it("falls back to 'New chat' for a blank title", () => {
     expect(toChatArchiveRow(conversation({ title: "   " })).title).toBe(
       "New chat",
