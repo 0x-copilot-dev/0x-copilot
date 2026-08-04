@@ -40,9 +40,48 @@ class _ErrorMessage:
 
     Add codes here as new failure modes show up in payload["error_code"].
     Keys are matched case-insensitively. ``DEFAULT`` is the catch-all.
+
+    These are a FALLBACK, not the primary copy. When the producer put a
+    ``safe_message`` on the payload it says something this table never can —
+    which connector, which capability — and the renderers prefer it. The table
+    covers the codes whose producers say nothing beyond the code itself.
+
+    The ``RuntimeErrorCode`` block below exists because every member of that
+    enum used to land on ``DEFAULT``. A run that died building its agent and a
+    run that died on a bad request were both "Step failed", which is also the
+    wrong noun: a run-level failure never reached a step.
     """
 
     TIMEOUT = ("Step timed out", "This step took too long and was stopped.")
+    # --- RuntimeErrorCode members (run-level failures) ------------------------
+    CAPABILITY_LOAD_ERROR = (
+        "Couldn't load your tools",
+        "0xCopilot could not read the tools available for this run.",
+    )
+    CAPABILITY_NOT_FOUND = (
+        "Tool unavailable",
+        "0xCopilot looked for a tool this run needs and did not find it.",
+    )
+    CONFIGURATION_ERROR = (
+        "Configuration problem",
+        "Something in this workspace's setup is not valid.",
+    )
+    DEPENDENCY_ERROR = (
+        "A required service is unavailable",
+        "0xCopilot could not reach something it depends on.",
+    )
+    RUNTIME_FACTORY_ERROR = (
+        "Couldn't start the run",
+        "0xCopilot could not assemble what this run needs to begin.",
+    )
+    VALIDATION_ERROR = (
+        "Invalid request",
+        "This run was rejected before it started.",
+    )
+    CONTEXT_BUDGET_EXCEEDED = (
+        "Conversation too long",
+        "This conversation no longer fits in the model's context.",
+    )
     PERMISSION_DENIED = (
         "Not allowed",
         "0xCopilot isn't allowed to do this.",
@@ -285,9 +324,31 @@ class DeterministicTemplates:
         action ONLY when repeating the operation could change the outcome.
         Without them a client can do no better than a generic string and an
         unconditional button.
+
+        The summary prefers the producer's OWN sentence over this module's
+        static table, matching what the tool-event path
+        (``PresentationGenerator._minimal_envelope``) already does. That
+        precedence is the whole point of ``safe_message``: it is the typed
+        error's public sentence, written where the failure actually happened
+        and therefore able to name the thing that broke. Discarding it in
+        favour of a code lookup is how a run that died with
+        "MCP server cards could not be loaded." reached the user as
+        "0xCopilot couldn't complete this step." — a sentence that identifies
+        nothing, for a failure the runtime had already described exactly.
+
+        A code with no table entry is no longer the same problem it was: the
+        static copy is now a fallback for producers that supply no message,
+        not the ceiling on what a card can say.
         """
         code = cls._first_text(payload, ("error_code", "code"))
-        title, summary = _ErrorMessage.for_code(code)
+        title, fallback_summary = _ErrorMessage.for_code(code)
+        # `safe_message` is contract-bound to be public-safe (see the service's
+        # engineering rules: typed domain errors carry safe public messages and
+        # never leak internal detail), so it is displayable as-is.
+        summary = (
+            cls._first_text(payload, ("error_message", "safe_message"))
+            or fallback_summary
+        )
         return cls._envelope(
             title=title,
             summary=summary,

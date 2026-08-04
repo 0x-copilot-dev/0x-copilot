@@ -170,6 +170,104 @@ class TestDeterministicTemplates:
         )
 
 
+class TestFailureCardSaysWhatBroke:
+    """A failure card must not be vaguer than the error that produced it.
+
+    The defect this pins, from a packaged desktop build: a run died while
+    building its agent and the card read
+
+        "Step failed" / "0xCopilot couldn't complete this step."
+
+    while the event payload underneath it carried, verbatim,
+
+        code:         capability_load_error
+        safe_message: "MCP server cards could not be loaded."
+
+    Nothing was missing. ``_failure_envelope`` looked up the code in a static
+    table, missed, fell to ``DEFAULT``, and dropped the producer's sentence on
+    the floor. The sibling path for TOOL failures
+    (``PresentationGenerator._minimal_envelope``) had preferred the payload's
+    own message all along, so the product shipped two failure renderers of
+    different fidelity — and the vaguer one handled the more severe class.
+    """
+
+    _MCP_LOAD_FAILURE = {
+        "status": "run_failed",
+        "reason": "execution_error",
+        "error_class": "AgentRuntimeError",
+        "code": "capability_load_error",
+        "safe_message": "MCP server cards could not be loaded.",
+        "retryable": True,
+    }
+
+    def _render(self, payload: dict[str, object]) -> RuntimeEventPresentation:
+        return _validate(
+            DeterministicTemplates.render(
+                event_type=RuntimeApiEventType.RUN_FAILED,
+                payload=payload,
+                timeline_fields={},
+                group_key=None,
+            )
+        )
+
+    def test_producers_safe_message_becomes_the_summary(self) -> None:
+        """The exact payload from the outage, rendered."""
+        card = self._render(dict(self._MCP_LOAD_FAILURE))
+
+        assert card.summary == "MCP server cards could not be loaded."
+        assert card.code == "capability_load_error"
+
+    def test_the_generic_default_no_longer_wins_over_a_real_message(self) -> None:
+        card = self._render(dict(self._MCP_LOAD_FAILURE))
+
+        assert "couldn't complete this step" not in (card.summary or "")
+
+    def test_runtime_error_codes_get_their_own_title(self) -> None:
+        """Every ``RuntimeErrorCode`` used to render as "Step failed"."""
+        card = self._render(dict(self._MCP_LOAD_FAILURE))
+
+        assert card.title == "Couldn't load your tools"
+
+    def test_error_message_outranks_safe_message(self) -> None:
+        """Same precedence the tool path uses, so the two cannot drift."""
+        card = self._render(
+            {**self._MCP_LOAD_FAILURE, "error_message": "The Linear server refused."}
+        )
+
+        assert card.summary == "The Linear server refused."
+
+    def test_static_copy_still_covers_a_producer_that_says_nothing(self) -> None:
+        """The table is a fallback now, not dead code."""
+        card = self._render({"error_code": "permission_denied"})
+
+        assert card.title == "Not allowed"
+        assert card.summary == "0xCopilot isn't allowed to do this."
+
+    def test_an_unknown_code_with_a_message_still_shows_the_message(self) -> None:
+        """A code the table has never seen is no longer a mute card."""
+        card = self._render(
+            {"error_code": "MYSTERY_BUG", "safe_message": "The widget fell off."}
+        )
+
+        assert card.title == "Step failed"
+        assert card.summary == "The widget fell off."
+
+    def test_a_blank_message_falls_back_rather_than_rendering_empty(self) -> None:
+        card = self._render(
+            {"error_code": "capability_load_error", "safe_message": "  "}
+        )
+
+        assert (
+            card.summary == "0xCopilot could not read the tools available for this run."
+        )
+
+    def test_retryability_still_comes_from_the_producer(self) -> None:
+        """Copy and remedy are separate decisions; this changes only copy."""
+        card = self._render({**self._MCP_LOAD_FAILURE, "retryable": False})
+
+        assert card.retryable is False
+
+
 class TestToolTemplateRenderer:
     def test_renders_start_template_for_tool_call_started(self) -> None:
         template = ToolDisplayTemplate(

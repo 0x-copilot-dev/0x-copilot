@@ -68,7 +68,7 @@ trafilatura==2.0.0
 
 # -- crypto / filesystem ------------------------------------------------------
 # Ed25519 verification for run-control releases and workspace attestation.
-cryptography==49.0.0
+cryptography==50.0.0
 # `from wcmatch import glob` in capabilities/desktop/agent_scratch.py.
 wcmatch==11.0
 
