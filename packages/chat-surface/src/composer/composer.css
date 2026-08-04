@@ -480,13 +480,50 @@
   min-width: 0;
 }
 
+/* OUT OF FLOW, exactly like `.aui-composer-slash-cue` below and for the same
+ * reason: a transient notice must not resize the control strip it annotates.
+ *
+ * In flow this was a flex item in the right cluster with `white-space: nowrap`,
+ * no `min-width: 0` and no `overflow` — so its automatic minimum size was the
+ * FULL sentence (~300px for "Voice transcription is unavailable right now."),
+ * and shrink could not go below that floor. That width joined the cluster's
+ * min-content size, and since the row is `flex-wrap: wrap` (the narrow-rail
+ * safety valve above), the moment it no longer fit beside [+ · Tools · mode]
+ * the ENTIRE right cluster — model pill, mic, send — dropped onto a second
+ * line and the composer grew a row. The mic failing made the composer taller.
+ *
+ * Ellipsizing in place (the `.aui-composer-focus-meta` pattern) was the other
+ * option and is worse: at rail width it truncates the one sentence whose whole
+ * job is explaining the failure, down to "Voice transcript…".
+ *
+ * Anchored against `.aui-composer-action-wrapper` (the nearest positioned
+ * ancestor — `__right` is deliberately NOT positioned) and pinned right so it
+ * sits directly over the mic it describes. It floats over the textarea's lower
+ * edge, so it carries the slash cue's surface + shadow to stay legible over
+ * typed text. `max-width` + ellipsis keep a long message inside the composer.
+ *
+ * Note this element stays INSIDE `.aui-composer-action-wrapper__right` in the
+ * DOM (it belongs with the mic for reading order); being absolutely positioned
+ * is what takes it out of that flex container's sizing. */
 .aui-composer-dictation-status {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  bottom: calc(100% + 0.25rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
+  max-width: calc(100% - 1rem);
+  overflow: hidden;
+  padding: 0.25rem 0.5rem;
+  position: absolute;
+  right: 0.5rem;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .aui-composer-dictation-status[data-state="error"] {
+  border-color: var(--color-danger-line);
   color: var(--color-danger);
 }
 
