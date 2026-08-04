@@ -5,7 +5,17 @@ export function ArtifactEditor(props: {
   readonly revision: number;
   readonly disabled: boolean;
   readonly onSave: (text: string) => Promise<"saved" | "conflict" | "error">;
+  /**
+   * Scopes this editor's DOM id. The id was hardcoded, which was harmless while
+   * exactly one artifact could be open at a time — the Studio canvas shows one.
+   * Inline in a transcript, two artifacts can be expanded at once, and duplicate
+   * ids break `htmlFor` association (a click on the second label focuses the
+   * FIRST textarea) and make `getByLabelText` ambiguous in tests. Defaults to
+   * the historical id so the Studio path is byte-identical.
+   */
+  readonly idPrefix?: string;
 }): ReactElement {
+  const fieldId = `${props.idPrefix ?? "artifact"}-editor-text`;
   const [text, setText] = useState(props.initialText);
   const [status, setStatus] = useState<
     "idle" | "saving" | "conflict" | "error"
@@ -22,11 +32,11 @@ export function ArtifactEditor(props: {
   };
   return (
     <section className="ui-card" data-testid="artifact-editor">
-      <label className="ui-section-label" htmlFor="artifact-editor-text">
+      <label className="ui-section-label" htmlFor={fieldId}>
         Edit revision {props.revision}
       </label>
       <textarea
-        id="artifact-editor-text"
+        id={fieldId}
         className="ui-input ui-mono"
         value={text}
         disabled={props.disabled || status === "saving"}

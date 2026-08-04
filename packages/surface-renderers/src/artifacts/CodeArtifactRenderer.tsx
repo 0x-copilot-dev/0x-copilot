@@ -61,12 +61,12 @@ function CodeSourceViewer(props: {
       <div className="ui-toolbar" aria-label="Source viewer controls">
         <label
           className="ui-caption"
-          htmlFor={`artifact-search-${artifact.revision}`}
+          htmlFor={`artifact-search-${artifact.artifactId}-${artifact.revision}`}
         >
           Search source
         </label>
         <input
-          id={`artifact-search-${artifact.revision}`}
+          id={`artifact-search-${artifact.artifactId}-${artifact.revision}`}
           className="ui-input"
           type="search"
           value={query}
