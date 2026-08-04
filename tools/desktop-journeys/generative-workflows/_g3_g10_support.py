@@ -15,8 +15,18 @@ Two harness capabilities are deliberately explicit:
   passes block before Electron launch.
 * ``GENUI_LOCAL_FIXTURE_BRIDGE=stdio-v1`` attests that the public facade accepts
   the fixture-only stdio registration shape used below and keeps that process
-  scoped to the fresh Desktop profile.  The current public registry is
-  URL-only, so G5--G9 block before Electron launch.
+  scoped to the fresh Desktop profile.  G5--G9 block before Electron launch.
+
+  Half of this flag's original justification is now stale and the correction
+  matters, because it says where the remaining work is.  "The current public
+  registry is URL-only" was true when written and is not any more: the contract
+  carries ``McpStdioRequest`` and a stdio server is addressed by ``stdio``
+  alone.  Registration WORKS -- verified by posting the corrected body through
+  the app and reading the response back (``url: null``, the launch config
+  persisted, a ``name`` assigned).  What is still missing is EXECUTION: with the
+  fixture registered and scoped to the conversation, its tools never enter the
+  model's catalog, so the agent reaches for the built-ins instead.  The flag
+  stays gated on that.
 
 Setting either flag cannot manufacture a pass: the subsequent authenticated
 facade, event-ledger, DOM, and fixture-target assertions still fail hard.
@@ -1177,28 +1187,51 @@ def register_local_fixture(session: DriverSession) -> FixtureRegistration:
         / "bin"
         / "python3.13"
     )
+    # This body drifted out of contract and now 422s. Four fields were wrong,
+    # and every one of them is silent until something actually posts it:
+    #
+    #   url                     a stdio server is addressed by `stdio` ALONE
+    #                           (`McpServerRecord._transport_matches_address`:
+    #                           "a stdio server has no URL"), and the value sent
+    #                           was `fixture://…`, which the URL validator
+    #                           rejects outright — it admits only http/https.
+    #   stdio.working_directory the field is `cwd` (`McpStdioRequest`).
+    #   stdio.lifetime          not a field. `McpStdioRequest` is exactly
+    #                           command / args / env / cwd.
+    #   fixture_policy          not a field, and not anywhere in any service.
+    #
+    # That last one is worth being plain about rather than quietly deleting:
+    # `fixture_policy` was never a server-enforced control. `network:
+    # "disabled"` / `credentials: "rejected"` / `allowed_target_roots` read like
+    # a sandbox the backend applied, and no backend ever saw them — the request
+    # model forbids extras, so the whole call failed rather than the policy
+    # being ignored. The fixture's safety comes from the fixture SERVER, which
+    # is fixture-only by construction and reaches nothing external. Removing
+    # these lines takes away a guarantee that was never in force.
     body = {
-        "url": f"{FIXTURE_NAMESPACE}/mcp",
         "display_name": "Generative Workflows Local Fixture",
         "transport": "stdio",
         "auth_mode": "none",
         "stdio": {
             "command": str(runtime_python),
             "args": [str(FIXTURE_SERVER)],
-            "working_directory": str(HERE),
-            "lifetime": "desktop-profile",
-        },
-        "fixture_policy": {
-            "allowed_target_roots": [FIXTURE_NAMESPACE, FIXTURE_WORKSPACE_ROOT],
-            "network": "disabled",
-            "credentials": "rejected",
+            "cwd": str(HERE),
         },
     }
     created = transport_json(session, "POST", "/v1/mcp/servers", body=body)
     assert isinstance(created, dict), "fixture registration returned a non-object"
     assert created.get("transport") == "stdio"
     assert created.get("auth_state") in {"authenticated", "auth_skipped"}
-    assert str(created.get("url", "")).startswith("fixture://")
+    # A stdio server has no URL by contract, so the old
+    # `startswith("fixture://")` assertion could only ever have passed against a
+    # response shape the server no longer returns.
+    assert created.get("url") is None, (
+        f"a stdio server must have no url; got {created.get('url')!r}"
+    )
+    stdio = created.get("stdio")
+    assert isinstance(stdio, dict) and stdio.get("command") == str(runtime_python), (
+        f"facade did not persist the stdio launch config: {created}"
+    )
     server_id = created.get("server_id")
     name = created.get("name")
     assert isinstance(server_id, str) and server_id
