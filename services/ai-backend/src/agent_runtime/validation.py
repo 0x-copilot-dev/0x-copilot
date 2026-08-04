@@ -18,7 +18,28 @@ if TYPE_CHECKING:
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_SCOPE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_.-]*(?::[a-z0-9][a-z0-9_.-]*)*$")
+# RFC 6749 §3.3 `scope-token`: printable ASCII except space (the delimiter),
+# double quote and backslash.
+#
+# A permission scope is a PROVIDER-OWNED opaque identifier, not one of ours.
+# This used to be a slug grammar (`^[a-z0-9][a-z0-9_.-]*(?::…)*$`) modelled on
+# our internal `docs:read` form, which cannot represent an OAuth scope URI —
+# and Google publishes exactly that
+# (`https://www.googleapis.com/auth/gmail.readonly`), as `desktop_profiles.yaml`
+# declares for Gmail and Drive. The backend copies those scopes verbatim onto
+# the MCP server card, so validating them against a slug grammar rejected the
+# card, which took down agent construction for EVERY run — see
+# `DynamicMcpRegistry._collect_entries`. The runtime is not the scope authority
+# (`BackendMcpProvider._runtime_visible_card` clears required_scopes precisely
+# so it never double-enforces them); its only legitimate interest is that a
+# scope is a well-formed, space-free token it can compare by equality.
+#
+# Case is still folded below, which is safe ONLY because both sides of every
+# comparison (`card.required_scopes` and `context.permission_scopes`) come
+# through here. Should a scope ever be sent back to a provider verbatim, that
+# folding has to go with it — a case-sensitive provider (Microsoft Graph's
+# `Mail.Read`) would not match.
+_SCOPE_PATTERN = re.compile(r"^[\x21\x23-\x5B\x5D-\x7E]+$")
 _SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
