@@ -114,3 +114,55 @@ the **measured** panel. The first attempt at that fix compared against a 320px
 constant while the real panel is ~135px, so it flipped every time and the
 journey caught it a second time — `.ui-pop__list` clamps itself to 264px and
 scrolls, so the fits-check now measures the portal instead of guessing.
+
+---
+
+## Journey 2 — `scope_and_refile.py`
+
+Where `file_a_chat.py` proves one chat can enter one project, this one covers
+what only exists once there is more than one of each — and it is the journey
+that actually exercises the **backend** rather than the binder.
+
+```bash
+python3 tools/desktop-journeys/projects-filing/scope_and_refile.py
+```
+
+| #   | What it proves                                                             |
+| --- | -------------------------------------------------------------------------- |
+| A   | `GET /v1/agent/conversations?filter[project_id]=…` really narrows the rows |
+| B   | The Threads panel scoped to a project lists its chats and not the others'  |
+| C   | "New run" under a scope creates its conversation already filed there       |
+| D   | Re-filing an existing chat (the PATCH path) persists                       |
+| E   | Unfiling writes an explicit `null` rather than being a no-op               |
+
+**A is the one that matters most, and it is easy to get wrong.** The facade
+accepts the app-standard `filter[project_id]` alias and rewrites it to
+ai-backend's plain `project_id`. If that translation broke, the endpoint would
+quietly return _everything_ — and every UI assertion below it would still pass,
+because the panel would be rendering correct output from wrong data. So the
+journey asserts set equality against the ids it seeded, not "some rows came
+back", and separately asserts that an **unfiled** chat appears in neither
+project's list.
+
+Seeds go through the app's own authenticated transport — a real facade call, not
+a fixture. Only the setup is fast-pathed; every assertion reads the server back.
+
+### Two harness facts this journey had to learn
+
+- **`icon_emoji` and `color_hue` are required** on `POST /v1/projects`. Omitting
+  them is a 422, not a defaulted row. The app's create sheet always sends both,
+  which is why the UI path never meets this.
+- **Wait for the composer, not for `latest_run_status`.** Clicking a menu row
+  while a run streams fails with "element was detached from the DOM" — the
+  composer re-renders on every delta. The obvious fix (poll the run status) does
+  not work: see the observation below.
+
+### Observation — not fixed here, not asserted
+
+`latest_run_status` on the conversation list still read `running` after the
+composer had gone idle and the answer had fully streamed; an earlier attempt to
+wait for a terminal value timed out at 120s against a null. The Chats list
+projects its status chip from that same field (`chatArchiveStatus`), so a stale
+value there would render a finished chat as still working. It is unrelated to
+filing, so the journey **prints** it rather than asserting it. Worth its own
+look.
