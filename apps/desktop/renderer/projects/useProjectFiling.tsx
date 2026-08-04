@@ -27,10 +27,15 @@
 //     subscribe, no provider, because producer and consumer are the same
 //     unmount-remount cycle rather than two subtrees).
 //
-// Deliberately NOT here: project creation. The create sheet belongs to the
-// Projects destination, and the cockpit has no navigation seam to reach it, so
-// the chip's optional "New project…" row is omitted rather than wired to
-// something that would do nothing.
+// Creation lives here too (`useProjectCreate`), which reverses an earlier call.
+// The argument for leaving it out was that the create sheet belongs to the
+// Projects destination and the cockpit has no navigation seam to reach it. True,
+// and it produced a worse outcome than the duplication it avoided: with no
+// projects yet there was nothing to file into, so the chip was hidden entirely
+// and a first-run user never met filing at all — the one moment the affordance
+// most needed to exist. The sheet is a portal, not a route, so no navigation
+// seam is required; both binders mount the SAME flow rather than owning one
+// each.
 
 import {
   useCallback,
@@ -42,9 +47,13 @@ import {
 } from "react";
 
 import {
+  ProjectEditor,
   ProjectFilingChip,
   useTransport,
+  type ProjectColorHue,
+  type ProjectEditorSavePayload,
   type ProjectFilingOption,
+  type ProjectIconEmoji,
   type ProjectSummary,
   type ThreadScopeOption,
 } from "@0x-copilot/chat-surface";
@@ -443,4 +452,104 @@ export function ProjectFilingSheet({
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Creation — one flow, mounted by whichever binder needs it.
+// ---------------------------------------------------------------------------
+
+/**
+ * A blank editor value for the CREATE sheet. `id` is a throwaway placeholder:
+ * the server mints the real one on `POST /v1/projects`, and the editor only
+ * reads `id` for its own keying.
+ */
+function blankProjectEditorValue(): {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly description: string;
+  readonly iconEmoji: ProjectIconEmoji;
+  readonly colorHue: ProjectColorHue;
+  readonly defaultConnectorAllowlist: null;
+} {
+  return {
+    id: "" as unknown as ProjectId,
+    name: "",
+    description: "",
+    iconEmoji: "📁" as unknown as ProjectIconEmoji,
+    colorHue: 210 as unknown as ProjectColorHue,
+    defaultConnectorAllowlist: null,
+  };
+}
+
+export interface ProjectCreateFlow {
+  /** Open the create sheet. Wire to the chip's "New project…" row. */
+  readonly openCreate: () => void;
+  /** Mount this next to your surface. `null` while closed. */
+  readonly sheet: ReactElement | null;
+}
+
+export interface UseProjectCreateOptions {
+  /**
+   * The new project's id, as soon as the server mints it. The composer uses
+   * this to file the chat into the project it just created — without it,
+   * "New project…" would create one and leave the chat unfiled, which is never
+   * what the click meant.
+   */
+  readonly onCreated?: (id: ProjectId) => void;
+  /** Refresh the caller's option list so the new project appears at once. */
+  readonly reload?: () => void;
+}
+
+export function useProjectCreate(
+  options: UseProjectCreateOptions = {},
+): ProjectCreateFlow {
+  const { onCreated, reload } = options;
+  const transport = useTransport();
+  const [open, setOpen] = useState(false);
+
+  const openCreate = useCallback((): void => setOpen(true), []);
+
+  const save = useCallback(
+    async (payload: ProjectEditorSavePayload): Promise<void> => {
+      const created = await transport.request<{ readonly id?: string }>({
+        method: "POST",
+        path: "/v1/projects",
+        body: {
+          name: payload.name,
+          description: payload.description,
+          icon_emoji: payload.iconEmoji,
+          color_hue: payload.colorHue,
+        },
+      });
+      setOpen(false);
+      reload?.();
+      const id = created?.id;
+      if (typeof id === "string" && id.length > 0) {
+        onCreated?.(id as ProjectId);
+      }
+    },
+    [transport, reload, onCreated],
+  );
+
+  const sheet = open ? (
+    <div
+      data-testid="desktop-project-create-sheet"
+      style={sheetScrimStyle}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) setOpen(false);
+      }}
+    >
+      <div style={{ width: "min(560px, 100%)" }}>
+        <ProjectEditor
+          mode="create"
+          value={blankProjectEditorValue()}
+          availableConnectors={[]}
+          onSave={save}
+          onCancel={() => setOpen(false)}
+        />
+      </div>
+    </div>
+  ) : null;
+
+  return { openCreate, sheet };
 }

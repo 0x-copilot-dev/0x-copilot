@@ -93,6 +93,12 @@ export interface RunComposerFiling {
   readonly options: ReadonlyArray<ProjectFilingOption>;
   /** Fires with the picked project, or `null` for "No project". */
   readonly onChange: (next: ProjectId | null) => void;
+  /**
+   * Open the create sheet. Supplying it is what lets the zone render with NO
+   * projects: "New project…" is then a row that can act, so the chip is an
+   * empty picker with an exit rather than a dead control.
+   */
+  readonly onCreateProject?: () => void;
   /** Read-only chrome (a write in flight). */
   readonly disabled?: boolean;
 }
@@ -582,13 +588,20 @@ export function useRunComposerBindings(
     [servers],
   );
 
+  // Rendered whenever there is something to pick OR a way to make one. The
+  // earlier `options.length === 0` gate hid the zone outright on a fresh
+  // install — the exact moment a user has no projects and most needs the way in.
   const projectFilingSlot = useMemo<ReactNode>(() => {
-    if (filing === undefined || filing.options.length === 0) return undefined;
+    if (filing === undefined) return undefined;
+    if (filing.options.length === 0 && filing.onCreateProject === undefined) {
+      return undefined;
+    }
     return (
       <ProjectFilingChip
         value={filing.value}
         options={filing.options}
         onChange={filing.onChange}
+        onCreateProject={filing.onCreateProject}
         disabled={filing.disabled}
         renderMenu={renderFilingMenu}
       />

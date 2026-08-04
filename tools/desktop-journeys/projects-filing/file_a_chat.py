@@ -127,22 +127,70 @@ def main() -> int:
             "workspace rail never appeared after leaving first-run"
         )
 
-        # 3. Create a project through the real UI ----------------------------
-        s.open_destination("Projects")
-        assert s.wait_for("[data-testid=projects-destination]"), (
-            "Projects destination never rendered"
+        # 3. Run cockpit with ZERO projects ----------------------------------
+        # The zone must render even with nothing to pick, because "New project…"
+        # is a row that can act. Hiding it here was the original defect: a fresh
+        # install never showed filing at all, at exactly the moment the user has
+        # no projects and most needs the way in.
+        s.open_destination("Run")
+        assert s.wait_for("[data-testid=composer-project-filing]", 30), (
+            "filing chip absent on Run with zero projects — the empty-state "
+            "gate regressed, so a fresh install never meets filing"
         )
-        assert s.wait_for("[data-testid=projects-create]"), (
-            "no create control on Projects — cannot make the first project"
+        assert _chip_is_below_composer(s), (
+            "filing chip is not below the composer frame — the above/below "
+            "split (folders up, project down) has been broken"
         )
-        s.click("[data-testid=projects-create]")
-        assert s.wait_for("[data-testid=project-editor]"), "editor sheet never opened"
+        assert "No project" in (_chip_label(s) or ""), (
+            f"a fresh chat should read 'No project', got {_chip_label(s)!r}"
+        )
+        s.shot("chip-unfiled-zero-projects")
+
+        # 4. Create the first project FROM the chip ---------------------------
+        s.click("[data-testid=composer-project-filing-trigger]")
+        assert s.wait_for("[data-testid=composer-project-filing-menu]")
+        assert s.present("[data-testid=composer-project-filing-new]"), (
+            "'New project…' missing — with no projects the menu has no exit"
+        )
+        s.click("[data-testid=composer-project-filing-new]")
+        assert s.wait_for("[data-testid=desktop-project-create-sheet]", 20), (
+            "the chip's 'New project…' opened nothing"
+        )
+        # Create words, not edit words: the sheet reused the edit editor and
+        # said "Edit project" / "Save" for a project that did not exist yet.
+        # `present()` is querySelector-backed, so no Playwright `:has-text()`.
+        editor_text = (
+            s.evaluate(
+                '(document.querySelector("[data-testid=project-editor]")'
+                '||{}).innerText||""'
+            )
+            or ""
+        )
+        assert "New project" in editor_text, (
+            f"create sheet is not titled 'New project': {editor_text[:120]!r}"
+        )
+        assert "Edit project" not in editor_text, (
+            "create sheet still says 'Edit project'"
+        )
+        save_label = (
+            s.evaluate(
+                '(document.querySelector("[data-testid=project-editor-save]")'
+                '||{}).innerText||""'
+            )
+            or ""
+        )
+        assert "Create" in save_label, (
+            f"create sheet's primary action reads {save_label!r}, not 'Create'"
+        )
         s.fill("[data-testid=project-editor-name-input]", PROJECT_NAME)
         time.sleep(0.3)
-        s.shot("project-editor")
-        # "Save", not "Create" — the create sheet reuses the edit editor
-        # verbatim, so it is even titled "Edit project". Noted in JOURNEYS.md.
-        s.click('[data-testid=project-editor] button:has-text("Save")')
+        # Members is a team surface; a solo desktop must not be offered a tab
+        # whose only content was an internal "not wired" notice.
+        assert not s.present("[data-testid=filter-tab-members]"), (
+            "Members tab rendered under single_user_desktop"
+        )
+        s.shot("create-sheet-from-chip")
+        s.click("[data-testid=project-editor-save]")
 
         deadline = time.time() + 30
         project_ids: list[str] = []
@@ -154,23 +202,20 @@ def main() -> int:
         assert project_ids, "POST /v1/projects never produced a project"
         project_id = project_ids[0]
         print(f"[projects-filing] created project {project_id}")
-        s.shot("projects-grid-before")
 
-        # 3. Back to Run — the chip must now exist, BELOW the composer -------
-        s.open_destination("Run")
-        assert s.wait_for("[data-testid=composer-project-filing]", 30), (
-            "filing chip absent on Run even though a project exists"
+        # Creating from the chip must FILE the chat into it — the click meant
+        # "put this chat somewhere new", so stopping at creation is a no-op.
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            if PROJECT_NAME in (_chip_label(s) or ""):
+                break
+            time.sleep(0.5)
+        assert PROJECT_NAME in (_chip_label(s) or ""), (
+            "created a project from the chip but the chat was left unfiled; "
+            f"chip reads {_chip_label(s)!r}"
         )
-        assert _chip_is_below_composer(s), (
-            "filing chip is not below the composer frame — the above/below "
-            "split (folders up, project down) has been broken"
-        )
-        assert "No project" in (_chip_label(s) or ""), (
-            f"a fresh chat should read 'No project', got {_chip_label(s)!r}"
-        )
-        s.shot("chip-unfiled")
 
-        # 4. File the chat, BEFORE the first message -------------------------
+        # 5. Re-open the menu to check placement + selection ------------------
         s.click("[data-testid=composer-project-filing-trigger]")
         assert s.wait_for("[data-testid=composer-project-filing-menu]"), (
             "filing menu never opened"
@@ -186,6 +231,8 @@ def main() -> int:
             "the filing menu overlaps the composer frame — anchored-popover "
             "placement regressed to opening upward"
         )
+        # Re-pick it explicitly, so the ordinary option path is exercised too
+        # and not only the create-then-file shortcut.
         s.click(
             f'[data-testid=composer-project-filing-option][data-project-id="{project_id}"]'
         )
@@ -195,7 +242,7 @@ def main() -> int:
         )
         s.shot("chip-filed")
 
-        # 5. Send the first message — this is where the CREATE path runs -----
+        # 6. Send the first message — this is where the CREATE path runs -----
         before = {c["conversation_id"] for c in _conversations(s)}
         s.fill("[data-testid=composer-textarea]", "Say only: filed.")
         time.sleep(0.3)

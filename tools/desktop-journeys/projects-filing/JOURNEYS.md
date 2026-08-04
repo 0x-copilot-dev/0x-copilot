@@ -69,23 +69,36 @@ APP_DIR="$PWD/apps/desktop" \
 Needs `ANTHROPIC_API_KEY` in `services/ai-backend/.env` (never printed). In a
 worktree, symlink the main checkout's `.env` — it is gitignored.
 
-## Findings
+## Findings — all four fixed, each now asserted here
 
-Recorded here rather than silently fixed, because each is a product decision
-someone should make deliberately.
+The journey found these on its first green run; they are now regressions this
+script catches rather than notes someone has to remember.
 
-1. **The filing chip is hidden until a project exists.** The desktop binder
-   passes no `onCreateProject`, so with zero projects a chip would be a control
-   that cannot act — hiding it is defensible. The consequence is that a
-   first-time user never encounters filing at all, and there is no path from the
-   composer to creating a project. The design's menu had "New project…" for
-   exactly this. **Open.**
-2. **The create sheet is titled "Edit project"** and its primary button says
-   "Save". It reuses the edit editor verbatim. Wrong words for a create.
-3. **A "Members" tab renders on `single_user_desktop`.** Team surfaces are meant
-   to be gated off in the solo profile; the project editor's tab strip does not
-   honour that gate.
-4. **"1 chats · 0 files"** — the count is not pluralised.
+1. **The filing chip was hidden until a project existed.** The binder gated the
+   zone on `options.length > 0`, so a fresh install never showed filing at all —
+   at exactly the moment a user has no projects and most needs the way in. The
+   chip now renders whenever there is something to pick **or** a way to create
+   one, and `useProjectCreate` gives "New project…" something to do. Creating
+   from the chip also **files the chat into the new project**: the click meant
+   "put this chat somewhere new", so stopping at creation would be a no-op.
+2. **The create sheet said "Edit project" / "Save"** for a project that did not
+   exist yet. `ProjectEditor` takes `mode` (defaulting to `"edit"`, so no other
+   caller changes) and says "New project" / "Create".
+3. **A "Members" tab rendered for everyone.** Neither host passes
+   `renderMembersTab`, so every user on both surfaces got a tab whose only
+   content was an internal "not wired" notice — and on `single_user_desktop` it
+   advertised a team surface the rail and settings nav both gate off. The tab now
+   follows the package's standard "omitted ⇒ not rendered" rule.
+4. **"1 chats"** is now "1 chat".
+
+### Still open
+
+**The FTUE composer has no filing zone.** `first-run-composer` is a different
+binder (`FirstRunGate`), and it deliberately strips controls — thinking depth is
+hidden there too. So the very first message a user sends cannot be filed. That is
+arguably right (the FTUE's job is to reach a first run, and a picker with no
+projects is noise), but it is a decision, not an accident. The journey prints the
+state rather than asserting it, so a change either way is visible.
 
 ## Fixed by this journey
 

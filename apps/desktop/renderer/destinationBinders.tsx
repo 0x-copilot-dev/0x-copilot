@@ -116,6 +116,7 @@ import {
   fileConversationUnderProject,
   loadProjects,
   readConversationProject,
+  useProjectCreate,
   useProjectFilingOptions,
   useThreadScope,
 } from "./projects/useProjectFiling";
@@ -1301,7 +1302,11 @@ export function RunBinder({
   // rather than here on purpose: pressing "New run" REMOUNTS this binder (the
   // outlet keys it by conversation id), so component state would be gone
   // exactly when the new chat needs it.
-  const { options: projectOptions, scopeOptions } = useProjectFilingOptions();
+  const {
+    options: projectOptions,
+    scopeOptions,
+    reload: reloadProjectOptions,
+  } = useProjectFilingOptions();
   const [threadScope, changeThreadScope] = useThreadScope();
 
   // Where THIS chat is filed. An existing conversation reads it from the server
@@ -1385,14 +1390,29 @@ export function RunBinder({
     [conversationId, filedProjectId, notify, transport],
   );
 
+  // "New project…" from the chip. Creating one FILES the chat into it — the
+  // click means "put this chat somewhere new", so stopping at creation would
+  // leave the chat exactly where it was and read as a no-op.
+  const { openCreate, sheet: createSheet } = useProjectCreate({
+    onCreated: handleFilingChange,
+    reload: reloadProjectOptions,
+  });
+
   const filing = useMemo<RunComposerFiling>(
     () => ({
       value: filedProjectId,
       options: projectOptions,
       onChange: handleFilingChange,
+      onCreateProject: openCreate,
       disabled: filingBusy,
     }),
-    [filedProjectId, projectOptions, handleFilingChange, filingBusy],
+    [
+      filedProjectId,
+      projectOptions,
+      handleFilingChange,
+      openCreate,
+      filingBusy,
+    ],
   );
 
   const handleStartRun = useCallback(
@@ -1562,54 +1582,61 @@ export function RunBinder({
   );
 
   return (
-    <RunDestination
-      conversationId={boundConversationId}
-      // PRD-01 — Threads switcher wiring. Navigation only; the list itself is
-      // the shared `useChatsArchive` controller inside the package.
-      onOpenConversation={onOpenConversation}
-      onNewConversation={onNewChat}
-      // D-1.4 — the scope under "New run". It filters the panel's list AND
-      // qualifies where the next chat is filed; both halves read the same
-      // host-owned value, which is why the store outlives this binder's remount.
-      scope={threadScope}
-      scopeOptions={scopeOptions}
-      onScopeChange={changeThreadScope}
-      onStartRun={handleStartRun}
-      modelReady={modelReady}
-      onOpenModelSettings={onOpenModelSettings}
-      renderComposer={renderComposer}
-      renderEmptyComposer={renderEmptyComposer}
-      // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
-      // OFF), paired with the runtime SURFACES_V2 flag. The integration mount
-      // pass lights up the full canvas (gate cards, staged draft/table with
-      // approve/apply, receipt) + the Approvals/Agents rail cards + "N waiting"
-      // chip; every canvas mutation rides the cockpit's own Transport port
-      // inside RunDestination (the resolveApproval / handleRegenerateView
-      // pattern), so no per-binder callback duplication.
-      //
-      surfacesV2={isSurfacesV2Enabled()}
-      // The connector consent card's Connect / Deny. The renderer stays denied
-      // `window.open`: `connect` is main-brokered (loopback bind + system
-      // browser + code exchange), and unlike web's full-page redirect it
-      // RESOLVES here, so the connected state is reported directly rather than
-      // recovered from a callback route.
-      mcpAuthPort={mcpAuthPort}
-      // Real host folders, granted not assumed — see the binding above.
-      workspaceGrantPort={workspaceGrantPort}
-      connectedConnectorServerId={connectedConnectorServerId}
-      failedConnector={failedConnector}
-      // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
-      // renderer has the DOM); the package stays substrate-agnostic.
-      onCopyText={copyTextToClipboard}
-      onSaveFile={saveTextToFile}
-      artifactDownloadPort={{ saveArtifact: saveArtifactStream }}
-      workspaceStageHost={workspaceStageHost}
-      // Citation chips. Without this prop `MarkdownText` has no `components.a`,
-      // so Streamdown renders the raw `[[N]]` token AND fires its own
-      // "Open external link?" popover on the internal `#cite-ord:N` href. The
-      // web host has always passed its equivalent; desktop never did.
-      markdownComponents={runMarkdownComponents}
-    />
+    <>
+      {/* The create sheet the chip's "New project…" opens. A sibling of the
+          cockpit rather than a child of the composer: it is a scrim over the
+          whole surface, and nesting it inside the composer's own subtree would
+          put a modal inside an `overflow: hidden` card. */}
+      {createSheet}
+      <RunDestination
+        conversationId={boundConversationId}
+        // PRD-01 — Threads switcher wiring. Navigation only; the list itself is
+        // the shared `useChatsArchive` controller inside the package.
+        onOpenConversation={onOpenConversation}
+        onNewConversation={onNewChat}
+        // D-1.4 — the scope under "New run". It filters the panel's list AND
+        // qualifies where the next chat is filed; both halves read the same
+        // host-owned value, which is why the store outlives this binder's remount.
+        scope={threadScope}
+        scopeOptions={scopeOptions}
+        onScopeChange={changeThreadScope}
+        onStartRun={handleStartRun}
+        modelReady={modelReady}
+        onOpenModelSettings={onOpenModelSettings}
+        renderComposer={renderComposer}
+        renderEmptyComposer={renderEmptyComposer}
+        // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
+        // OFF), paired with the runtime SURFACES_V2 flag. The integration mount
+        // pass lights up the full canvas (gate cards, staged draft/table with
+        // approve/apply, receipt) + the Approvals/Agents rail cards + "N waiting"
+        // chip; every canvas mutation rides the cockpit's own Transport port
+        // inside RunDestination (the resolveApproval / handleRegenerateView
+        // pattern), so no per-binder callback duplication.
+        //
+        surfacesV2={isSurfacesV2Enabled()}
+        // The connector consent card's Connect / Deny. The renderer stays denied
+        // `window.open`: `connect` is main-brokered (loopback bind + system
+        // browser + code exchange), and unlike web's full-page redirect it
+        // RESOLVES here, so the connected state is reported directly rather than
+        // recovered from a callback route.
+        mcpAuthPort={mcpAuthPort}
+        // Real host folders, granted not assumed — see the binding above.
+        workspaceGrantPort={workspaceGrantPort}
+        connectedConnectorServerId={connectedConnectorServerId}
+        failedConnector={failedConnector}
+        // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
+        // renderer has the DOM); the package stays substrate-agnostic.
+        onCopyText={copyTextToClipboard}
+        onSaveFile={saveTextToFile}
+        artifactDownloadPort={{ saveArtifact: saveArtifactStream }}
+        workspaceStageHost={workspaceStageHost}
+        // Citation chips. Without this prop `MarkdownText` has no `components.a`,
+        // so Streamdown renders the raw `[[N]]` token AND fires its own
+        // "Open external link?" popover on the internal `#cite-ord:N` href. The
+        // web host has always passed its equivalent; desktop never did.
+        markdownComponents={runMarkdownComponents}
+      />
+    </>
   );
 }
 

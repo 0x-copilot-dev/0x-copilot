@@ -468,8 +468,8 @@ function ProjectCard({
             }}
           >
             {project.counts.chats !== null
-              ? `${project.counts.chats} chats · ${project.counts.files} files`
-              : `${project.counts.files} files`}
+              ? `${countLabel(project.counts.chats, "chat")} · ${countLabel(project.counts.files, "file")}`
+              : countLabel(project.counts.files, "file")}
           </span>
         </div>
       </button>
@@ -641,6 +641,12 @@ const STATUS_LABEL: Readonly<Record<ProjectStatus, string>> = {
 
 function statusTone(status: ProjectStatus): StatusTone {
   return STATUS_TONE[status];
+}
+
+/** `1 chat` / `2 chats`. Every noun on this row is regular, so a trailing "s"
+ *  is the whole rule — no pluralisation library for two words. */
+function countLabel(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function statusLabel(status: ProjectStatus): string {

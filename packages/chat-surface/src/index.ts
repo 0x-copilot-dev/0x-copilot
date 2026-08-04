@@ -649,6 +649,13 @@ export {
   type ProjectFilterChipOption,
   type ProjectFilterChipProps,
   type ProjectIconEmoji,
+  // The note above says host prop types stay unexported because "hosts pass
+  // object literals / inferred callbacks". That stopped being true: desktop's
+  // `useProjectCreate` holds the save handler in a `useCallback`, which infers
+  // nothing, and `mode` distinguishes the create sheet from the edit one. Both
+  // are named here rather than restated structurally in the host.
+  type ProjectEditorMode,
+  type ProjectEditorSavePayload,
   type ProjectRole,
   type ProjectStatus,
   type ProjectSummary,
