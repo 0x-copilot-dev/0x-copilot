@@ -7,6 +7,7 @@ import {
   CONNECT_CANCELLED,
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
+  REDIRECT_TIMED_OUT,
 } from "./oauth-coordinator";
 
 // A provider token that must NEVER surface in main: the facade callback
@@ -467,5 +468,59 @@ describe("ConnectorOAuthCoordinator — supersede carries its own reason", () =>
     // A consent screen for a flow that was already abandoned would let the user
     // complete an authorization nothing is waiting for.
     expect(openExternal).not.toHaveBeenCalled();
+  });
+});
+
+// A timeout must describe the user's situation, not a socket.
+//
+// The loopback listener is shared with app login, so its own message is
+// internal by design — `loopback redirect timed out` — and it was reaching the
+// screen verbatim after five silent minutes. These pin the translation without
+// touching login's wording.
+
+describe("ConnectorOAuthCoordinator — redirect failure copy", () => {
+  it("translates the loopback timeout into something a person can act on", async () => {
+    const { loopback, controls } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    const pending = coordinator.connect("atlassian");
+    await vi.waitFor(() => expect(controls.armed).not.toBeNull());
+    controls.rejectCode(new Error("loopback redirect timed out"));
+
+    const error: unknown = await pending.then(
+      () => new Error("expected the connect to fail"),
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ConnectorOAuthError);
+    const message = (error as ConnectorOAuthError).message;
+    expect(message).toBe(REDIRECT_TIMED_OUT);
+    // The internal wording must not survive to the surface.
+    expect(message).not.toContain("loopback");
+  });
+
+  it("leaves the cancel contracts untouched — they are IPC vocabulary", async () => {
+    // These strings are what `ConnectorService` translates into outcomes, so
+    // rewording them here would quietly break that mapping.
+    const { loopback } = fakeLoopback();
+    const coordinator = makeCoordinator(
+      fakeFetch(),
+      loopback,
+      vi.fn(async () => undefined),
+    );
+
+    let cancel: ((reason?: "user" | "superseded") => void) | null = null;
+    const pending = coordinator.connect("atlassian", {
+      onCancelAvailable: (fn) => {
+        cancel = fn;
+      },
+    });
+    await vi.waitFor(() => expect(cancel).not.toBeNull());
+    cancel!();
+
+    await expect(pending).rejects.toThrow(new RegExp(CONNECT_CANCELLED));
   });
 });
