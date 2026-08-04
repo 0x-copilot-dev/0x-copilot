@@ -528,6 +528,8 @@ export interface TcChatProps {
   readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
   /** Abandon the ask while the OS dialog is up (state-only; see the hook). */
   readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
+  /** Open a parked write's payload on its detail surface ("Review →"). */
+  readonly onReviewWriteGate?: (approvalId: string) => void;
   /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
@@ -631,6 +633,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrant,
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
+    onReviewWriteGate,
     renderComposer,
     terminalBeat,
     runFailed = false,
@@ -776,6 +779,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrant,
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
+    onReviewWriteGate,
   };
 
   const transcript = (

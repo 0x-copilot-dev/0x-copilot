@@ -3934,6 +3934,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     accentByArtifactId,
   ]);
 
+  // "Review →" on a parked write. The payload lives on the Studio canvas
+  // (`run-v2-gate-region` → `TcWriteGateCard`), which is the only surface
+  // holding the real `ledgerId` this decision will be recorded under — so
+  // Review goes there rather than mounting a second, thinner copy inline that
+  // would have to omit or invent the audit anchor.
+  const handleReviewWriteGate = useCallback((): void => {
+    setMode("studio");
+  }, [setMode]);
+
   const focusCards =
     surfacesV2 && displayedCanvasLifecycle !== null ? (
       <CanvasFocusCards
@@ -4225,6 +4234,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           : {})}
         onWorkspaceGrantDeny={workspaceGrants.deny}
         onWorkspaceGrantCancel={workspaceGrants.cancel}
+        // The write-gate row's "Review →" had NO producer, so it was a dead
+        // button — and for an IRREVERSIBLE write it is the primary action, with
+        // Approve deliberately withheld until the payload has been seen. Those
+        // gates could therefore only be declined: the safety design that refuses
+        // a blind approval had quietly become a refusal to allow any approval.
+        //
+        // Review means "show me the payload", and the surface that renders it
+        // (`TcWriteGateCard`, in the Studio gate region) already exists and is
+        // already wired to the real ledger id. So this switches modes rather
+        // than inventing a second detail surface.
+        onReviewWriteGate={handleReviewWriteGate}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}

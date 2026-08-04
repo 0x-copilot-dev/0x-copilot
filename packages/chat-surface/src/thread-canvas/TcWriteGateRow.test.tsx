@@ -7,7 +7,7 @@
 // paragraph nobody reads while a run is streaming.
 
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { TcWriteGateRow } from "./TcWriteGateRow";
 
@@ -98,5 +98,28 @@ describe("TcWriteGateRow — untrusted text", () => {
     expect(
       screen.getByTestId("tc-write-gate-decline").hasAttribute("disabled"),
     ).toBe(true);
+  });
+});
+
+// The dead-control regression. `onReviewWriteGate` had no producer, so this
+// button did nothing — and for an IRREVERSIBLE write it is the PRIMARY action,
+// with Approve deliberately withheld until the payload has been seen. The
+// safety design that refuses a blind approval had become a refusal to allow any
+// approval: those gates could only be declined.
+describe("TcWriteGateRow — Review must actually do something", () => {
+  it("calls onReview for an irreversible write, where it is the only way forward", () => {
+    const onReview = vi.fn();
+    render(
+      <TcWriteGateRow
+        title="Delete the staging index"
+        connector="elastic"
+        irreversible
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        onReview={onReview}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /review/i }));
+    expect(onReview).toHaveBeenCalledTimes(1);
   });
 });
