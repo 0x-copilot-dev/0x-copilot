@@ -61,6 +61,105 @@ def _result(outcome: str, reason: str | None = None) -> None:
     print(json.dumps(payload, sort_keys=True), flush=True)
 
 
+def _canvas_state(session: DriverSession) -> str:
+    """Which terminal state the artifact canvas is in, or `loading`.
+
+    `ArtifactFrame` renders exactly one of these testids, so this is the whole
+    state machine and not a heuristic.
+    """
+
+    return (
+        session.evaluate(
+            "(() => {"
+            "for (const id of ['artifact-frame','artifact-error','artifact-deleted','artifact-loading'])"
+            "  if (document.querySelector('[data-testid='+id+']')) return id;"
+            "return 'absent';"
+            "})()"
+        )
+        or "absent"
+    )
+
+
+def _wait_for_canvas_settled(session: DriverSession, timeout_s: int = 60) -> str:
+    """Poll until the canvas leaves `artifact-loading`, and report where it went.
+
+    A screenshot taken before this settles records "Loading artifact…" and looks
+    exactly like a broken content fetch. That misread cost a round trip here, so
+    the wait is explicit and its outcome is asserted rather than assumed.
+    """
+
+    deadline = time.time() + timeout_s
+    state = _canvas_state(session)
+    while time.time() < deadline and state in {"artifact-loading", "absent"}:
+        time.sleep(0.5)
+        state = _canvas_state(session)
+    return state
+
+
+def _probe_canvas(session: DriverSession) -> dict:
+    """Ask the app itself which half of the artifact fetch is stuck.
+
+    `useArtifactSurface` sets `status` to ready/error/deleted on EVERY settled
+    branch, so a canvas parked on `artifact-loading` means a promise never
+    settled at all. There are only two awaits that can do that: the metadata
+    GET, and the artifact-content IPC stream. This drives both, each behind a
+    timeout, so the report names which one hangs instead of describing the
+    symptom again.
+    """
+
+    js = """(async () => {
+      const out = {};
+      const tab = document.querySelector('[data-testid=tc-tabs] [role=tab][data-active="true"]');
+      const uri = tab ? tab.getAttribute('data-uri') : null;
+      out.activeUri = uri;
+      const m = /^artifact-([a-z]+):\\/\\/([^@]+)@([0-9]+)$/.exec(uri || '');
+      if (!m) { out.parse = 'FAILED'; return JSON.stringify(out); }
+      out.kind = m[1]; out.artifactId = m[2]; out.revision = Number(m[3]);
+
+      const withTimeout = (p, ms, label) => Promise.race([
+        p.then((v) => ({ ok: true, value: v })).catch((e) => ({ ok: false, error: String(e && e.message || e) })),
+        new Promise((res) => setTimeout(() => res({ ok: false, error: 'TIMEOUT after ' + ms + 'ms', hung: true, label }), ms)),
+      ]);
+
+      const meta = await withTimeout(
+        window.bridge.ipc.invoke('transport.request', {
+          method: 'GET', path: '/v1/agent/artifacts/' + encodeURIComponent(m[2]),
+        }), 8000, 'metadata');
+      out.metadata = meta.hung ? 'HUNG' : (meta.ok ? 'ok' : 'error: ' + meta.error);
+      if (meta.ok && meta.value && meta.value.value) {
+        const a = meta.value.value.artifact || {};
+        const r = meta.value.value.current_revision || {};
+        out.metaKind = a.kind; out.metaMediaType = a.media_type;
+        out.metaCurrentRevision = r.revision; out.metaByteSize = r.byte_size;
+      }
+
+      const opened = await withTimeout(
+        window.bridge.ipc.invoke('transport.artifact-content.open', {
+          artifactId: m[2], revision: Number(m[3]),
+        }), 8000, 'content-open');
+      out.contentOpen = opened.hung ? 'HUNG' : (opened.ok ? 'ok' : 'error: ' + opened.error);
+      // The handle is `artifact-stream-N` off a counter the main process bumps
+      // on EVERY open. Since this probe's own open is the last one, N reports
+      // how many streams the app itself opened first — which separates the two
+      // ways a canvas can sit on its spinner: a component that never fetched
+      // (N stays ~0) from an effect re-running in a loop (N large).
+      if (opened.ok && opened.value) out.streamHandle = opened.value.handle;
+      if (opened.ok && opened.value && opened.value.handle) {
+        const read = await withTimeout(
+          window.bridge.ipc.invoke('transport.artifact-content.read', {
+            handle: opened.value.handle,
+          }), 8000, 'content-read');
+        out.contentRead = read.hung ? 'HUNG' : (read.ok ? ('ok done=' + read.value.done) : 'error: ' + read.error);
+      }
+      return JSON.stringify(out);
+    })()"""
+    raw = session.evaluate(js)
+    try:
+        return json.loads(raw) if isinstance(raw, str) else {"probe": "no result"}
+    except Exception:  # noqa: BLE001 — diagnostic only
+        return {"probe": f"unparseable: {str(raw)[:200]}"}
+
+
 def _read_strip(session: DriverSession) -> dict:
     """One page evaluation. Every field is read from the live DOM, not a fixture."""
 
@@ -184,6 +283,14 @@ def main() -> int:
                 while time.time() < deadline and len(before.get("tabs") or []) < 2:
                     time.sleep(1)
                     before = _read_strip(session)
+
+                # Let the artifact CONTENT resolve before the screenshot. The
+                # tab strip is projected from the ledger fold and lands almost
+                # immediately; the artifact body is a separate fetch behind it.
+                # Shooting between the two records "Loading artifact…" — which
+                # is indistinguishable from a broken content fetch in a still
+                # image, and was read as exactly that here.
+                canvas_before = _wait_for_canvas_settled(session)
                 session.shot("01-terminal-run-newest-tab")
 
                 tabs = before.get("tabs") or []
@@ -200,11 +307,33 @@ def main() -> int:
                 )
                 time.sleep(1.5)
                 after = _read_strip(session)
+                canvas_after = _wait_for_canvas_settled(session)
                 session.shot("02-older-tab-clicked-no-banner")
+
+                # 10. Switching tabs must actually SHOW the other artifact. The
+                #     strip assertions below would all hold over a canvas stuck
+                #     on its spinner, so the journey has to say which it saw.
+                for label, state in (
+                    ("newest tab", canvas_before),
+                    ("after switching to the older tab", canvas_after),
+                ):
+                    if state != "artifact-frame":
+                        probe = _probe_canvas(session)
+                        raise AssertionError(
+                            f"{label}: the canvas settled on {state!r} instead "
+                            f"of rendering the artifact; probe="
+                            f"{json.dumps(probe, sort_keys=True)}"
+                        )
 
                 print(
                     json.dumps(
-                        {"before": before, "after": after, "runStatus": run_status},
+                        {
+                            "before": before,
+                            "after": after,
+                            "runStatus": run_status,
+                            "canvasBefore": canvas_before,
+                            "canvasAfter": canvas_after,
+                        },
                         sort_keys=True,
                     ),
                     flush=True,
