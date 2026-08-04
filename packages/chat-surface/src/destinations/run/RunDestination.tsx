@@ -2892,21 +2892,36 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `activeUri` derivation (scrub wins → pin wins → a pending diff pulls focus →
   // else follow the newest surface). A pin only holds while its surface is still
   // on the strip, so run/conversation switches self-heal.
+  // Can the run still land work anywhere? Gates BOTH the live pulse and the
+  // whole follow-live affordance below, so a terminal run cannot advertise a
+  // tail that no longer exists. Declared here because `heldPin` reads it.
+  const runIsActive = isRunActive(session.runStatus);
   const effectivePin =
     pinnedUri !== null &&
     visibleSurfaceTabs.some((tab) => tab.uri === pinnedUri)
       ? pinnedUri
       : null;
   // The pin as CHROME (the tab's pin glyph + the follow-live chip), which is a
-  // narrower thing than the pin as ACTIVATION (`activeUri`, below).
+  // strictly narrower thing than the pin as ACTIVATION (`activeUri`, below).
   //
-  // Clicking the newest tab still pins — that is what stops a later surface
-  // from stealing the canvas, and `activeUri` must keep honouring it. But it
-  // pauses nothing the user can perceive, so reporting it was pure noise: the
-  // tab silently lost its close button (`TcTabs` hides `×` on `pinned`) with no
-  // visible cause. Chrome is therefore gated on the pin being somewhere OTHER
-  // than the surface we would auto-follow to anyway.
-  const heldPin = effectivePin === newestUri ? null : effectivePin;
+  // ONE derivation feeds BOTH pieces of chrome, deliberately. They are two views
+  // of a single fact — "auto-follow is paused, here is the way back" — and the
+  // glyph IS the release control, so a state where the glyph renders without a
+  // live `onFollowLive` is a dead button. Splitting the gate is how that
+  // happens; keeping it here makes it unrepresentable.
+  //
+  // Three things must all hold:
+  //   · the run can still produce (terminal ⇒ nothing to follow, so a "pin"
+  //     describes nothing and must not take the tab's close button away);
+  //   · we are not scrubbed (time-travel owns the canvas and has its own banner);
+  //   · the pin is somewhere OTHER than the surface we would auto-follow to
+  //     anyway — clicking the newest tab still pins for activation (that is what
+  //     stops a later surface stealing the canvas) but pauses nothing the user
+  //     can perceive, and reporting it silently swallowed that tab's `×`.
+  const heldPin =
+    runIsActive && !isScrubbed && newestUri !== "" && effectivePin !== newestUri
+      ? effectivePin
+      : null;
   const followDiffUri =
     !surfacesV2 && !isScrubbed && openSurfaceDiffs.length > 0
       ? openSurfaceDiffs[0].uri
@@ -2922,10 +2937,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       : (effectivePin ??
         (surfacesV2 ? lifecyclePreferredUri : (followDiffUri ?? newestUri)));
 
-  // `live` marks the surface new work is landing in, but only while the run can
-  // still land any — on a finished run every tab is equally static, and a pulse
-  // there would advertise a tail that no longer exists.
-  const runIsActive = isRunActive(session.runStatus);
   const surfaceTabs = useMemo<readonly TcTab[]>(
     () =>
       visibleSurfaceTabs.map((tab) => ({
@@ -4011,14 +4022,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // PRD-04: the "follow live" affordance — now a chip inside the tab strip
   // rather than a banner above the canvas (see `TcTabsProps.onFollowLive`).
   //
-  // The added `runIsActive` term is the fix for the state this shipped in: the
-  // condition never consulted run status, so on a FINISHED run — where there is
-  // no live tail at all — browsing between two completed artifacts raised a
-  // full-bleed banner claiming "the run has moved on" and offering to follow a
-  // stream that had ended. `isRunActive` treats an unknown status as active, so
-  // this only ever suppresses on a positively terminal one.
-  const showFollowLive =
-    !isScrubbed && heldPin !== null && newestUri !== "" && runIsActive;
+  // Every term lives in `heldPin`, which the tab's pin glyph reads too, so the
+  // chip and the glyph cannot disagree. The run-status term is the fix for the
+  // state this shipped in: the condition never consulted run status, so on a
+  // FINISHED run — no live tail at all — browsing between two completed
+  // artifacts raised a full-bleed banner claiming "the run has moved on" and
+  // offered to follow a stream that had ended.
+  const showFollowLive = heldPin !== null;
 
   // desktop-run-identity §D3 — inject the ONE dispatch into the in-chat composer's
   // ctx. TcChat keeps calling renderComposer with {disabled, placeholder}; this

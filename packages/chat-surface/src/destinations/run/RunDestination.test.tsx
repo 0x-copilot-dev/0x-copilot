@@ -1941,6 +1941,43 @@ describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
     expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
     // No pulse either: a terminal run cannot land work anywhere.
     expect(surfaceTab("record://b").getAttribute("data-live")).toBe("false");
+    // …and NO pin chrome. The glyph is the release control, so rendering it
+    // here — where the chip is correctly suppressed — would leave a button
+    // wired to an undefined `onFollowLive`, i.e. a dead control that has also
+    // taken the tab's only close button away.
+    expect(surfaceTab("record://a").getAttribute("data-pinned")).toBe("false");
+    expect(screen.queryByTestId("tc-tabs-unpin-record://a")).toBeNull();
+    expect(screen.getByTestId("tc-tabs-close-record://a")).toBeTruthy();
+  });
+
+  // The invariant behind the one-derivation rule: the pin glyph and the chip are
+  // two views of a single fact, so neither may ever render without the other.
+  it("never renders a pin glyph without its follow-live chip", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    const glyphAndChipAgree = (): boolean => {
+      const glyphs = screen
+        .getByTestId("tc-tabs")
+        .querySelectorAll('[data-pinned="true"]').length;
+      const chips =
+        screen.queryByTestId("tc-tabs-follow-live") === null ? 0 : 1;
+      return glyphs > 0 === chips > 0;
+    };
+
+    expect(glyphAndChipAgree()).toBe(true); // live, unpinned
+    act(() => {
+      fireEvent.click(surfaceTab("record://a"));
+    });
+    expect(glyphAndChipAgree()).toBe(true); // live, pinned to the older tab
+    act(() => {
+      transport.emit(event({ event_type: "run_completed" }));
+    });
+    expect(glyphAndChipAgree()).toBe(true); // terminal, pin released
   });
 
   // Clicking the surface we would auto-follow to anyway pauses nothing the user
