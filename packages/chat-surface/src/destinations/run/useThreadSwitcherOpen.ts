@@ -32,17 +32,23 @@ export function threadSwitcherOpenKey(widthClass: ShellWidthClass): string {
 }
 
 /**
- * Default open state when nothing is persisted.
+ * Default open state when nothing is persisted: CLOSED at every width.
  *
- * `wide` opens: at 1120px+ there is room for a 224px column and both reference
- * products show their thread list by default at that size. `regular` starts
- * closed so a 900px window keeps its full transcript until asked. `compact` is
- * an overlay and never opens itself.
+ * `wide` used to open itself, on the reasoning that 1120px+ has room for a
+ * 224px column. Room is not the same as want: the cockpit's job on arrival is
+ * the run you are in, and a thread list you did not ask for is 224px of
+ * navigation in front of the surface plus the chat rail — most visibly on the
+ * first run, where the list holds nothing worth switching to.
+ *
+ * The panel stays one toggle away (`ThreadSwitcherToggle`), and the moment
+ * someone opens it the choice is persisted per width class, so this default
+ * only ever describes a cockpit nobody has expressed a preference about.
+ * `compact` is an overlay and never opens itself (FR-1.5).
  */
 export function defaultThreadSwitcherOpen(
-  widthClass: ShellWidthClass,
+  _widthClass: ShellWidthClass,
 ): boolean {
-  return widthClass === "wide";
+  return false;
 }
 
 export interface UseThreadSwitcherOpenResult {

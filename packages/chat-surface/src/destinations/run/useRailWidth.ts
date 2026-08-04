@@ -16,37 +16,60 @@ import { clampRailWidth } from "../../thread-canvas";
 export const RAIL_WIDTH_KEY = "chats.rail_width";
 
 /**
- * New Run-cockpit sessions begin with the design's balanced Studio split rather
- * than the narrow standalone-canvas default. Existing persisted preferences are
- * never rewritten: a person who deliberately chose a compact rail keeps it.
+ * Share of the canvas the chat rail takes when nobody has dragged it.
+ *
+ * A FRACTION, not a pixel count. The default used to be a flat 584px, which is
+ * a different split at every window size — 41% of a 1440px cockpit, 49% of a
+ * 1200px one — so the generative surface got squeezed hardest exactly on the
+ * screens with least room. Expressed as a share, the surface keeps ~68% and the
+ * chat ~32% whatever the window does.
+ *
+ * Still only a DEFAULT: the drag handle writes px to the store (a share would
+ * make a deliberate width drift as the window resizes), and a stored value
+ * always wins.
  */
-export const COCKPIT_DEFAULT_RAIL_WIDTH = 584;
+export const COCKPIT_RAIL_WIDTH_FRACTION = 0.32;
+
+/**
+ * The unpersisted rail width for a canvas this wide, clamped to the allowed
+ * range — so a very narrow cockpit still gets a usable composer and a very wide
+ * one does not hand half the screen to chat.
+ */
+export function cockpitDefaultRailWidth(canvasWidthPx: number): number {
+  return clampRailWidth(canvasWidthPx * COCKPIT_RAIL_WIDTH_FRACTION);
+}
 
 export interface UseRailWidthResult {
-  /** Current rail width in px (always within the clamp range). */
-  readonly width: number;
+  /**
+   * The user's persisted width in px, or `null` when they have never dragged
+   * the handle. `null` is not "no width" — it is "no preference", and the
+   * consumer resolves it against the live canvas width via
+   * {@link cockpitDefaultRailWidth}. The hook cannot do that itself: it runs
+   * before the cockpit's ResizeObserver has measured anything.
+   */
+  readonly width: number | null;
   /** Set + persist the rail width (clamped to the allowed range). */
   readonly setWidth: (width: number) => void;
 }
 
 /**
- * Read the persisted rail width, defaulting + clamping. A missing or
- * unparseable value resolves to the default, so an older/newer client degrades
- * safely instead of throwing.
+ * Read the persisted rail width. A missing or unparseable value resolves to
+ * `null` (no preference), so an older/newer client degrades to the
+ * canvas-relative default instead of throwing.
  */
 export function readRailWidth(store: {
   get(key: string): string | null;
-}): number {
+}): number | null {
   const raw = store.get(RAIL_WIDTH_KEY);
   const parsed = raw === null ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed)
-    ? clampRailWidth(parsed)
-    : COCKPIT_DEFAULT_RAIL_WIDTH;
+  return Number.isFinite(parsed) ? clampRailWidth(parsed) : null;
 }
 
 export function useRailWidth(): UseRailWidthResult {
   const store = useKeyValueStore();
-  const [width, setWidthState] = useState<number>(() => readRailWidth(store));
+  const [width, setWidthState] = useState<number | null>(() =>
+    readRailWidth(store),
+  );
 
   const setWidth = useCallback(
     (next: number): void => {

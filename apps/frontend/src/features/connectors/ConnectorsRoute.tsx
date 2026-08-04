@@ -437,7 +437,7 @@ export function ConnectorsRoute({
         )}
         <ConnectorsDestination
           items={items}
-          onConnect={flow.openConnect}
+          onManageMcp={openMcpConfig}
           catalog={catalog}
           onConnectEntry={(slug) => flow.connectEntry(slug)}
           connectingSlug={flow.connectingSlug}

@@ -404,10 +404,17 @@ function CatalogStep({
 }): ReactElement {
   const customRow =
     onAddCustom !== undefined ? (
-      <li>
-        {/* PRD-11 D7 — the escape hatch is PINNED, not dashed (the design's
-            .mrow--dash is dead CSS after the cascade; only the sticky
-            treatment survives). Full-bleed against Modal's 15px body pad. */}
+      // PRD-11 D7 — the escape hatch is PINNED, not dashed (the design's
+      // .mrow--dash is dead CSS after the cascade; only the sticky treatment
+      // survives). Full-bleed against Modal's 15px body pad.
+      //
+      // The sticky lives on the <li>, NOT on the button inside it. A sticky box
+      // is constrained by its CONTAINING BLOCK, and the <li> is exactly as tall
+      // as the button — so the button had nowhere to shift to and this row just
+      // sat last in the list, below the fold of a catalog with a dozen-plus
+      // entries. On the <li> the containing block is the whole <ul>, which is
+      // what lets it float above the scrolling rows.
+      <li style={customPickRowItemStyle}>
         <button
           type="button"
           style={customPickRowStyle}
@@ -806,15 +813,29 @@ const pickRowStyle: CSSProperties = {
   transition: "background-color var(--duration-fast) var(--ease-standard)",
 };
 
-// The escape hatch: an ordinary .mrow that is `position: sticky; bottom: -15px;
-// margin: 10px -15px 7px; width: calc(100% + 30px)` — full-bleed against the
-// Modal body's 15px pad (settings/Modal.tsx bodyStyle). Not dashed.
-const customPickRowStyle: CSSProperties = {
-  ...pickRowStyle,
+// The escape hatch, ported from the design's `.mrow--pin` (copilot.css:514):
+// `position: sticky; bottom: -15px; margin: 10px -15px -15px` — full-bleed
+// against the Modal body's 15px pad (settings/Modal.tsx bodyStyle), reading as
+// a BAR rather than a card: no radius, no box border, one top hairline
+// (`--line` == --color-border), on `--ink2` == --color-bg-elevated.
+//
+// Positioning is on the <li> so the containing block is the list; the button
+// keeps the chrome. See `customRow` for why that split matters.
+const customPickRowItemStyle: CSSProperties = {
   position: "sticky",
   bottom: -15,
-  margin: "10px -15px 7px",
-  width: "calc(100% + 30px)",
+  margin: "0 -15px -15px",
+  borderTop: "1px solid var(--color-border)",
+  // Opaque: the rows above scroll UNDER this bar.
+  backgroundColor: "var(--color-bg-elevated)",
+};
+
+const customPickRowStyle: CSSProperties = {
+  ...pickRowStyle,
+  padding: "12px 15px",
+  borderRadius: 0,
+  border: 0,
+  backgroundColor: "transparent",
 };
 
 // 28×28 neutral tile (design `.mrow__logo`, radius 7 ≈ --radius-md). Passed to

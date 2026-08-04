@@ -204,6 +204,19 @@ const bodyStyle: CSSProperties = {
   fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
   lineHeight: "var(--line-height-base)",
+  // The body is the scroll container, and it has to say so twice.
+  //
+  // The card is `maxHeight: calc(100vh - 32px)` + `overflow: hidden`, so a body
+  // taller than the viewport was CLIPPED, not scrolled: content past the fold
+  // could not be reached by any means, and the footer went with it. That is how
+  // Connect-a-tool's "Manage MCP" row — pinned last, after ~14 catalog entries —
+  // became invisible on a laptop screen.
+  //
+  // `minHeight: 0` is the half that is easy to drop: a flex item's default
+  // `min-height: auto` refuses to shrink below its content, so the body would
+  // still overflow the card and `overflow-y` would have nothing to scroll.
+  minHeight: 0,
+  overflowY: "auto",
 };
 
 const footStyle: CSSProperties = {
