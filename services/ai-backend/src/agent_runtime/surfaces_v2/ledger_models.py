@@ -437,15 +437,40 @@ class LedgerWriter(StrEnum):
 
     RUNTIME_V2_1 = "runtime.v2.1"
 
+    @classmethod
+    def resolve_current(cls, contract: Mapping[str, Any]) -> "LedgerWriter":
+        """The writer generation this build signs new rows with.
+
+        The contract's ``writers.current`` wins when it is present, so promoting
+        a generation in the JSON makes every append follow, and a ``current``
+        naming a writer this enum has never heard of fails loudly rather than
+        stamping rows no reader can interpret.
+
+        A contract with **no** ``writers`` block falls back to this enum's
+        newest member instead of raising. That asymmetry is deliberate and was
+        paid for: reading the key directly took down the whole service. The
+        packaged app installs ``copilot_service_contracts`` into a per-service
+        ``site-packages``, and the staging step skips that install on a stamp
+        match — so a contract change ships stale while the code that reads it
+        ships current. A ``KeyError`` at module scope turned that ordinary skew
+        into "ai-backend crashed 5 times within 300s — giving up", over a field
+        that at present has no reader at all.
+
+        The enum is code: it cannot skew from the build that reads it. The JSON
+        is a cross-language mirror that can. So an ABSENT block means "an older
+        mirror", which is recoverable, while a PRESENT-and-unrecognised value
+        means "this build cannot speak the contract", which is not.
+        """
+
+        writers = contract.get("writers")
+        if not isinstance(writers, Mapping) or "current" not in writers:
+            return cls.RUNTIME_V2_1
+        return cls(str(writers["current"]))
+
 
 _WORK_LEDGER_CONTRACT = load_work_ledger_contract()
-# The writer this build signs new rows with. Read from the contract's own
-# ``writers.current`` rather than re-spelled here, so the JSON key is
-# load-bearing: promote a generation there and every append follows, and a
-# ``current`` that names a writer this enum has never heard of fails at import
-# instead of stamping rows nobody can read.
-CURRENT_LEDGER_WRITER: LedgerWriter = LedgerWriter(
-    str(dict(_WORK_LEDGER_CONTRACT["writers"])["current"])
+CURRENT_LEDGER_WRITER: LedgerWriter = LedgerWriter.resolve_current(
+    _WORK_LEDGER_CONTRACT
 )
 _CROSS_LANGUAGE_MAX_SAFE_INTEGER = int(
     dict(_WORK_LEDGER_CONTRACT["digests"])["max_safe_integer"]

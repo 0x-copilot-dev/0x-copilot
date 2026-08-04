@@ -123,13 +123,25 @@ class FloorJourney:
     # -- pipeline trace ---------------------------------------------------
 
     def _run_id(self) -> str:
-        return (
-            self.session.evaluate(
-                "(()=>{const el=document.querySelector('[data-run-id]');"
-                "return el?el.getAttribute('data-run-id'):'';})()"
-            )
-            or ""
-        )
+        """The run under test, from the API rather than the DOM.
+
+        The run cockpit carries no ``data-run-id`` — that attribute exists only
+        on the Activity and Routines rows — so scraping it silently yielded ``""``
+        and disarmed both ledger hops. The journey drives exactly one run, so the
+        newest run for this profile is unambiguous and comes from the same
+        authenticated transport the app itself uses.
+        """
+
+        try:
+            runs = self.session.transport("GET", "/v1/agent/runs?limit=1")
+        except Exception as exc:  # noqa: BLE001 — trace only
+            print(f"[trace] run lookup failed: {exc}")
+            return ""
+        rows = (runs or {}).get("runs") or (runs or {}).get("items") or []
+        if not rows:
+            return ""
+        row = rows[0]
+        return str(row.get("id") or row.get("run_id") or "")
 
     def _hop_ledger(self, run_id: str) -> dict:
         """Hop 1 — what the emitter actually WROTE, read off disk.
@@ -205,9 +217,14 @@ class FloorJourney:
     def _hop_client(self) -> dict:
         """Hop 3 — what the canvas KEYS its tabs by, straight from the DOM."""
 
+        # `.tc-tab[data-uri]` (TcTabs.tsx:88), NOT `[data-testid^=tc-tab]` — that
+        # prefix also matches the `tc-tabs-unpin-*` close buttons, and the
+        # textContent fallback then yielded the tab LABEL ("incidents ·
+        # list_incidents") instead of the URI. Comparing labels to surface ids
+        # made the codec check vacuous: a label can never contain "%3A".
         raw = self.session.evaluate(
-            "(()=>{const t=[...document.querySelectorAll('[data-testid^=tc-tab]')]"
-            ".map(e=>e.getAttribute('data-uri')||e.getAttribute('data-tab-uri')||e.textContent.trim());"
+            "(()=>{const t=[...document.querySelectorAll('.tc-tab[data-uri]')]"
+            ".map(e=>e.getAttribute('data-uri'));"
             "const slot=document.querySelector('[data-canvas-slot-testid=tc-surface-slot]');"
             "return JSON.stringify({tabs:t, activeUri: slot?slot.getAttribute('data-active-uri'):null});})()"
         )

@@ -31,6 +31,7 @@ import pytest
 from copilot_service_contracts.work_ledger import (
     load_ledger_golden_events,
     load_ledger_golden_journeys,
+    load_work_ledger_contract,
 )
 
 from agent_runtime.api.events import RuntimeEventProducer
@@ -42,6 +43,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.surfaces_v2.ledger_models import (
     CURRENT_LEDGER_WRITER,
     LedgerEventType,
+    LedgerWriter,
     UnknownLedgerWriterError,
 )
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -250,3 +252,45 @@ class TestTheStampSurvivesARealAppend:
             org_id=_ORG, run_id=_RUN, after_sequence=0
         )
         assert list(stored) == []
+
+
+class TestWriterResolutionSurvivesAStaleContract:
+    """`LedgerWriter.resolve_current` must not brick the service on skew.
+
+    Reading `contract["writers"]["current"]` directly is what shipped first, and
+    it took the packaged app down: `packages/service-contracts` installs into a
+    per-service `site-packages`, the staging step stamped only `.py` files, so a
+    changed `work_ledger.json` never re-triggered the install. The contract shipped
+    stale while the code reading it shipped current, and a `KeyError` at module
+    scope became "ai-backend crashed 5 times within 300s — giving up".
+
+    The staging stamp is fixed (`tools/desktop-runtime/stage.mjs`), but that only
+    removes one way to produce the skew. These pin the behaviour under it.
+    """
+
+    def test_a_contract_with_no_writers_block_falls_back(self) -> None:
+        assert LedgerWriter.resolve_current({}) is LedgerWriter.RUNTIME_V2_1
+
+    def test_a_writers_block_with_no_current_falls_back(self) -> None:
+        assert LedgerWriter.resolve_current({"writers": {}}) is (
+            LedgerWriter.RUNTIME_V2_1
+        )
+
+    def test_a_declared_current_wins(self) -> None:
+        contract = {"writers": {"current": "runtime.v2.1"}}
+        assert LedgerWriter.resolve_current(contract) is LedgerWriter.RUNTIME_V2_1
+
+    def test_an_unrecognised_current_still_fails_loudly(self) -> None:
+        """Absent means an older mirror; present-and-wrong means this build
+        cannot speak the contract. Only the second is unrecoverable."""
+
+        with pytest.raises(ValueError):
+            LedgerWriter.resolve_current({"writers": {"current": "runtime.v9.7"}})
+
+    def test_the_shipped_contract_declares_the_writer_it_resolves_to(self) -> None:
+        """The real JSON must carry the block — the fallback is a floor under
+        skew, not permission to stop declaring it."""
+
+        contract = load_work_ledger_contract()
+        assert "writers" in contract
+        assert LedgerWriter.resolve_current(contract) is CURRENT_LEDGER_WRITER
