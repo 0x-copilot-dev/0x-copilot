@@ -19,8 +19,11 @@
 // Canonical types reused from elsewhere (DO NOT re-declare):
 // * `ConversationId` — branded ID in ./brands.ts (a chat IS a conversation;
 //   `ItemRef` kind="chat" resolves to `ConversationId` in ./refs.ts).
+// * `ProjectId` — branded ID in ./brands.ts, the same one ./projects.ts keys
+//   its wire shapes on. Imported from the brand file, not from projects.ts:
+//   projects.ts is a consumer of the brand too, not its owner.
 
-import type { ConversationId } from "./brands";
+import type { ConversationId, ProjectId } from "./brands";
 
 // ---------------------------------------------------------------------------
 // Status taxonomy (DESIGN-SPEC §3 — Chats row status chip)
@@ -70,6 +73,17 @@ export interface ChatArchiveRow {
   /** ISO-8601 UTC; server-stamped. Client renders relative time. */
   readonly updated_at: string;
   readonly pinned: boolean;
+  /**
+   * The project this chat is filed under, or `null` when it is unfiled.
+   *
+   * REQUIRED, not optional, unlike the wire-level `Conversation.project_id`
+   * (which is optional purely for backwards compat with pre-migration
+   * payloads). A row is a projection, not a payload: an optional field here
+   * would let a host quietly omit it and render every chat as unfiled, which
+   * is precisely the failure mode `toChatArchiveRow` dropping this field
+   * already caused once.
+   */
+  readonly project_id: ProjectId | null;
 }
 
 // ---------------------------------------------------------------------------

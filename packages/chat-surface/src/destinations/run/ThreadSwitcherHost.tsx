@@ -17,13 +17,21 @@
 // It is also a genuine layering seam: `shell/ThreadSwitcher` is pure
 // presentation over a structural `ThreadListSource`, so `shell/` never imports
 // from `destinations/`.
+//
+// D-1.4 (projects scope) rides the same two properties. The scope reaches the
+// CONTROLLER, not the panel: `useChatsArchive` narrows the page-1 fetch, every
+// keyset page and the live tail together, whereas a filter applied to the
+// rendered list could only drop rows the server had already spent the page
+// budget on. And because the hook call did not move, changing scope re-fetches
+// but does NOT re-subscribe per open — NFR-1.1 survives the new axis.
 
-import type { ConversationId } from "@0x-copilot/api-types";
+import type { ConversationId, ProjectId } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 
 import {
   ThreadSwitcher,
   type ThreadListSource,
+  type ThreadScopeOption,
   type ThreadSwitcherVariant,
 } from "../../shell/ThreadSwitcher";
 import { useChatsArchive } from "../chats/useChatsArchive";
@@ -40,6 +48,17 @@ export interface ThreadSwitcherHostProps {
   readonly activeConversationId: ConversationId | null;
   readonly onOpenConversation: (id: ConversationId) => void;
   readonly onNewRun?: () => void;
+  /**
+   * Project the list is narrowed to; `null` (the default) = All threads.
+   *
+   * Host-owned, like the two below: the cockpit neither fetches the project
+   * list nor decides the scope. The same value also qualifies "New run", so the
+   * host is the only place that can keep filing and filtering in step.
+   */
+  readonly scope?: ProjectId | null;
+  /** Projects the list can be scoped to. Empty/absent → no scope control. */
+  readonly scopeOptions?: ReadonlyArray<ThreadScopeOption>;
+  readonly onScopeChange?: (next: ProjectId | null) => void;
   readonly onRequestClose?: () => void;
   readonly id?: string;
 }
@@ -51,11 +70,19 @@ export function ThreadSwitcherHost({
   activeConversationId,
   onOpenConversation,
   onNewRun,
+  scope = null,
+  scopeOptions,
+  onScopeChange,
   onRequestClose,
   id,
 }: ThreadSwitcherHostProps): ReactElement | null {
   // Mounted for this component's whole life — including while `open` is false.
-  const controller = useChatsArchive();
+  //
+  // The options literal is deliberately NOT memoised: `useChatsArchive`
+  // normalises `projectId` to a primitive before it reaches any dependency
+  // array, so what drives a refetch is the scope's VALUE, not this object's
+  // identity. A `useMemo` here would suggest the opposite guarantee.
+  const controller = useChatsArchive({ projectId: scope });
 
   if (!open) {
     return null;
@@ -71,6 +98,9 @@ export function ThreadSwitcherHost({
       activeConversationId={activeConversationId}
       onOpenConversation={onOpenConversation}
       onNewRun={onNewRun}
+      scope={scope}
+      scopeOptions={scopeOptions}
+      onScopeChange={onScopeChange}
       onRequestClose={onRequestClose}
     />
   );

@@ -174,6 +174,9 @@ function chatArchiveRow(
     model: "gpt-4o",
     updated_at: "2026-05-18T09:00:00Z",
     pinned: false,
+    // `listProjectChats` only ever resolves rows filed under the project it was
+    // asked for, so the default matches the `project_1` fixtures above.
+    project_id: "project_1" as ProjectId,
     ...overrides,
   };
 }

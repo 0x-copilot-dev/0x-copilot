@@ -26,7 +26,10 @@ import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
 } from "./composerPrompts";
-import { useRunComposerBindings } from "./useRunComposerBindings";
+import {
+  useRunComposerBindings,
+  type RunComposerFiling,
+} from "./useRunComposerBindings";
 import { bridgeWorkspaceGrantPort } from "../workspaceGrantPort";
 
 // Substrate-bound singletons — one hidden-input file picker and one
@@ -102,6 +105,11 @@ export interface RunComposerProps {
    * its transcript came from.
    */
   readonly conversationModel?: string | null;
+  /**
+   * Where this chat is FILED — the "filed under [project]" zone below the
+   * frame. Host-bound (list + write); omitted ⇒ the zone is absent.
+   */
+  readonly filing?: RunComposerFiling;
 }
 
 /**
@@ -137,6 +145,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     autoActivateConnectorId,
     conversationId = null,
     conversationModel = null,
+    filing,
   } = props;
 
   // The last run-create failure, surfaced inline above the composer. The
@@ -179,10 +188,12 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
+    projectFilingSlot,
   } = useRunComposerBindings(
     catalogRefreshKey,
     conversationId,
     conversationModel,
+    filing,
   );
 
   // Provider-key writes must re-drive the catalog. The model popover's inline
@@ -338,6 +349,11 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // PRD-FS-10 §4.1. Stated rather than left to the default so the reader
         // sees WHY the bar is missing mid-conversation.
         hasSentFirstMessage
+        // Filing renders mid-conversation where the folder bar does not, and
+        // that asymmetry is the design's: the bar is a pre-first-message
+        // capability question, filing is a fact about the chat that stays true
+        // (and re-answerable) for its whole life.
+        projectFilingSlot={projectFilingSlot}
         renderPlusMenu={renderPlusMenu}
         skillInstructionPrompt={skillInstructionPrompt}
         mcpServerInstructionPrompt={mcpServerInstructionPrompt}

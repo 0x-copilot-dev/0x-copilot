@@ -35,7 +35,10 @@ import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
 } from "./composerPrompts";
-import { useRunComposerBindings } from "./useRunComposerBindings";
+import {
+  useRunComposerBindings,
+  type RunComposerFiling,
+} from "./useRunComposerBindings";
 import { bridgeWorkspaceGrantPort } from "../workspaceGrantPort";
 import {
   AIRDROP_CLAIMS_CSV_ATTACHMENT_ID,
@@ -92,6 +95,13 @@ export interface RunEmptyComposerProps {
    * seeds honestly.
    */
   readonly conversationModel?: string | null;
+  /**
+   * Where the chat this composer starts will be FILED. This surface needs it
+   * MORE than the in-chat one, not less: a chat begun inside a project is the
+   * flow the design is built around, and there is no conversation to `PATCH`
+   * yet — the host holds the pick and sends it as `project_id` on create.
+   */
+  readonly filing?: RunComposerFiling;
 }
 
 export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
@@ -105,6 +115,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     onGetLocalModels,
     conversationId = null,
     conversationModel = null,
+    filing,
   } = props;
 
   const {
@@ -124,10 +135,12 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
+    projectFilingSlot,
   } = useRunComposerBindings(
     catalogRefreshKey,
     conversationId,
     conversationModel,
+    filing,
   );
 
   // Provider-key writes must re-drive the composer's model catalog. The inline
@@ -244,6 +257,9 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       // the bar renders. `bridgeWorkspaceGrantPort` memoizes per bridge, so the
       // in-chat RunComposer and this mount share ONE port, not two.
       workspaceGrantPort={bridgeWorkspaceGrantPort()}
+      // Forwarded through `OnboardingComposer`'s derived props, so the filing
+      // zone lands under the hero composer without that surface naming it.
+      projectFilingSlot={projectFilingSlot}
       renderPlusMenu={renderPlusMenu}
       skillInstructionPrompt={skillInstructionPrompt}
       mcpServerInstructionPrompt={mcpServerInstructionPrompt}

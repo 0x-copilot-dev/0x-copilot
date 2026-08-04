@@ -25,18 +25,44 @@
 // the keyset pagination, the pin/archive writes and the `conversation_changed`
 // live tail, and `toChatArchiveRow` is already the shared per-row projection.
 // This component is presentation over both. No second fetch path (FR-1.1).
+//
+// D-1.4 (projects scope): the scope control sits BELOW "+ New run", never above
+// it. New run is the ACTION; the scope is its qualifier — and because a new run
+// inherits the scope, the two must read top-to-bottom as one sentence ("start a
+// run" … "in Acme renewal"). Leading with the filter would turn the cockpit's
+// front door into a search box with a button attached. Owner decision, asserted
+// in DOM order by a test so a later tidy-up cannot quietly transpose them.
+//
+// The scope is a project or ALL — there is deliberately no "Unfiled" choice.
+// The archive's `project_id` filter has no "IS NULL" encoding (an absent filter
+// means "no filter"), and client-filtering one paginated page would silently
+// drop rows, which is exactly the bucketing bug PRD-09 D3 removed.
 
-import type { ChatArchiveRow, ConversationId } from "@0x-copilot/api-types";
+import type {
+  ChatArchiveRow,
+  ConversationId,
+  ProjectColorHue,
+  ProjectId,
+} from "@0x-copilot/api-types";
 import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
 
+// A narrow, deliberate reach across the layering note above: `projectHueRamp`
+// is a pure leaf (it imports nothing but React types and never imports back
+// into `shell/`, so no cycle appears), and it is the ONE place a per-project
+// colour is computed. That layering rule exists to keep the panel off the Chats
+// CONTROLLER — a stateful module a structural interface can stand in for. A
+// colour formula cannot be stood in for structurally, and restating it here is
+// precisely the four-ramps drift `ProjectIconTile` was written to end.
+import { projectHueRamp } from "../destinations/_shared/ProjectIconTile";
 import { Icon } from "../icons/Icon";
 import { formatRelativeTime } from "../util/time";
 
@@ -120,6 +146,20 @@ const SECTION_LABEL: Readonly<Record<ThreadSectionKey, string>> = {
 
 export type ThreadSwitcherVariant = "docked" | "overlay";
 
+/** One project the thread list can be scoped to (D-1.4). */
+export interface ThreadScopeOption {
+  readonly id: ProjectId;
+  readonly name: string;
+  /** Per-project hue. Drives the monogram tile — never `icon_emoji`. */
+  readonly colorHue: ProjectColorHue;
+  /**
+   * Threads filed here, when the host happens to know it. Optional because the
+   * bucketed archive endpoint does not return per-project totals; a host that
+   * cannot count must show no number rather than a wrong or zero one.
+   */
+  readonly count?: number;
+}
+
 export interface ThreadSwitcherProps {
   /** Presentation, resolved by the caller from its observed container width. */
   readonly variant: ThreadSwitcherVariant;
@@ -137,6 +177,16 @@ export interface ThreadSwitcherProps {
   readonly onOpenConversation: (id: ConversationId) => void;
   /** Start a new run. Wired to the same intent as ⌘N. */
   readonly onNewRun?: () => void;
+  /** The project the list is scoped to; `null` (the default) = All threads. */
+  readonly scope?: ProjectId | null;
+  /**
+   * Projects the list can be scoped to. The control renders ONLY when this is a
+   * non-empty array — a host with no projects must get exactly today's panel,
+   * not a picker whose only entry is the state it is already in.
+   */
+  readonly scopeOptions?: ReadonlyArray<ThreadScopeOption>;
+  /** Fires with the picked project, or `null` for All threads. */
+  readonly onScopeChange?: (next: ProjectId | null) => void;
   /** Close, from Esc / scrim / activation-at-compact (FR-1.8, FR-1.9). */
   readonly onRequestClose?: () => void;
   /** `id` for the toggle's `aria-controls`. */
@@ -150,6 +200,9 @@ export function ThreadSwitcher({
   activeConversationId,
   onOpenConversation,
   onNewRun,
+  scope = null,
+  scopeOptions,
+  onScopeChange,
   onRequestClose,
   id,
 }: ThreadSwitcherProps): ReactElement {
@@ -179,6 +232,12 @@ export function ThreadSwitcher({
     }
     rootRef.current?.focus();
   }, [isOverlay]);
+
+  // `null` whenever the host supplied no options, an empty list, or a scope id
+  // that matches nothing it sent — all three mean "we cannot name a project",
+  // and the panel then reads exactly as it did before scopes existed.
+  const activeScope: ThreadScopeOption | null =
+    scopeOptions?.find((option) => option.id === scope) ?? null;
 
   const handleActivate = useCallback(
     (rowId: ConversationId): void => {
@@ -213,6 +272,7 @@ export function ThreadSwitcher({
         <div style={titleStyle} data-testid="thread-switcher-title">
           Threads
         </div>
+        {/* D-1.4 — the action FIRST, its qualifier below. */}
         {onNewRun !== undefined ? (
           <button
             type="button"
@@ -222,10 +282,31 @@ export function ThreadSwitcher({
             style={newRunStyle}
           >
             {/* No `title` → the Icon is decorative and the button's own text
-                is the accessible name. */}
+                is the accessible name — which, when scoped, is the whole
+                sentence "New run in Acme renewal". */}
             <Icon name="plus" size={14} />
             <span>New run</span>
+            {/* The ONLY place a user learns that a new run inherits the scope.
+                Without it the control below reads as a filter on the list
+                alone, and the first run filed somewhere unexpected is a
+                surprise the panel had all the information to prevent. */}
+            {activeScope !== null ? (
+              <span
+                data-testid="thread-switcher-new-scope"
+                style={newRunScopeStyle}
+              >
+                in {activeScope.name}
+              </span>
+            ) : null}
           </button>
+        ) : null}
+
+        {scopeOptions !== undefined && scopeOptions.length > 0 ? (
+          <ScopePicker
+            scope={scope}
+            options={scopeOptions}
+            onScopeChange={onScopeChange}
+          />
         ) : null}
       </div>
 
@@ -247,6 +328,197 @@ export function ThreadSwitcher({
           second, non-interactive copy taught the wrong affordance and added no
           information — a solo desktop has exactly one account. */}
     </aside>
+  );
+}
+
+// ===========================================================================
+// Scope picker — All threads, or one project (D-1.4)
+// ===========================================================================
+
+/**
+ * The monogram rule, kept byte-identical to `ProjectIconTile` and the composer's
+ * `ProjectFilingChip` (first letter, upper-cased, `?` for an empty name) so one
+ * project cannot read as three different glyphs in the three places it appears.
+ * `icon_emoji` is NEVER rendered: the server defaults it to 📁 for every project
+ * (`0043_projects.sql:39`), which is a wall of identical folders.
+ */
+function scopeMonogram(name: string): string {
+  return (name.trim()[0] ?? "?").toUpperCase();
+}
+
+const ALL_THREADS_LABEL = "All threads";
+
+function ScopePicker({
+  scope,
+  options,
+  onScopeChange,
+}: {
+  readonly scope: ProjectId | null;
+  readonly options: ReadonlyArray<ThreadScopeOption>;
+  readonly onScopeChange?: (next: ProjectId | null) => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const active = options.find((option) => option.id === scope) ?? null;
+
+  // Closing always returns focus to the trigger. Without it, closing from a menu
+  // row drops focus to <body> and the next Tab restarts at the top of the
+  // document — and inside the OVERLAY variant that also means Esc no longer
+  // reaches the panel, because the panel's handler is scoped to its own subtree.
+  const dismiss = useCallback((): void => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
+  const pick = useCallback(
+    (next: ProjectId | null): void => {
+      onScopeChange?.(next);
+      dismiss();
+    },
+    [dismiss, onScopeChange],
+  );
+
+  // Escape is bound on the scope ROOT — which spans the trigger AND the menu —
+  // and consumes the key ONLY while the menu is open. Both halves are
+  // load-bearing:
+  //   * binding it on the menu alone would miss a keystroke made while focus is
+  //     still on the trigger (opening does not move focus), and that keystroke
+  //     bubbles to the panel's `handleKeyDown`, which closes the whole OVERLAY
+  //     and leaves the menu standing on a panel that is gone;
+  //   * not consuming it while CLOSED is what keeps FR-1.9 intact — Escape must
+  //     still reach the panel then.
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (event.key !== "Escape" || !open) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dismiss();
+    },
+    [dismiss, open],
+  );
+
+  const renderOption = (option: ThreadScopeOption): ReactElement => {
+    const on = option.id === scope;
+    return (
+      <button
+        key={option.id}
+        type="button"
+        role="menuitemradio"
+        aria-checked={on}
+        className="ui-pop-row"
+        data-testid="thread-switcher-scope-option"
+        data-project-id={option.id}
+        data-on={on || undefined}
+        onClick={() => pick(option.id)}
+      >
+        <span
+          className="ui-pop-row__lg"
+          style={scopeRowTileStyle(option.colorHue)}
+          aria-hidden="true"
+        >
+          {scopeMonogram(option.name)}
+        </span>
+        <span className="ui-pop-row__m">
+          <span className="ui-pop-row__nm">
+            <span className="ui-pop-row__txt">{option.name}</span>
+          </span>
+        </span>
+        {option.count !== undefined ? (
+          <span style={scopeCountStyle}>{option.count}</span>
+        ) : null}
+        <span
+          className="ui-pop-row__rad"
+          data-on={on || undefined}
+          aria-hidden="true"
+        >
+          {on ? <Icon name="check" size={9} strokeWidth={3} /> : null}
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <div
+      style={scopeRootStyle}
+      data-testid="thread-switcher-scope"
+      data-open={open || undefined}
+      onKeyDown={handleKeyDown}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="cs-thread-switcher__scope"
+        data-testid="thread-switcher-scope-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={
+          active === null ? "Scope: all threads" : `Scope: ${active.name}`
+        }
+        onClick={() => setOpen((current) => !current)}
+        style={scopeTriggerStyle}
+      >
+        {/* No tile in the All-threads state: a blank or placeholder tile reads
+            as a project whose name failed to load. */}
+        {active !== null ? (
+          <span style={scopeTileStyle(active.colorHue)} aria-hidden="true">
+            {scopeMonogram(active.name)}
+          </span>
+        ) : null}
+        <span style={scopeLabelStyle}>{active?.name ?? ALL_THREADS_LABEL}</span>
+        <Icon name="chevronDown" size={11} />
+      </button>
+
+      {/* Dismissal is by pick, by Escape, or by the trigger — deliberately no
+          outside-click. The design's `.ui-pop-scrim` is `position: fixed;
+          inset: 0`, so inside a docked panel it would cover the transcript and
+          eat the user's next click on it; and this package cannot install a
+          document listener instead. */}
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Scope threads to a project"
+          className="ui-pop"
+          data-testid="thread-switcher-scope-menu"
+          style={scopeMenuStyle}
+        >
+          <div className="ui-pop__list">
+            {/* All threads FIRST, then the rule, then the projects: the widest
+                scope is the one you return to, so it is where the cursor
+                starts, not a reset hidden under the list. */}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={scope === null}
+              className="ui-pop-row"
+              data-testid="thread-switcher-scope-all"
+              data-on={scope === null || undefined}
+              onClick={() => pick(null)}
+            >
+              <span className="ui-pop-row__m">
+                <span className="ui-pop-row__nm">
+                  <span className="ui-pop-row__txt">{ALL_THREADS_LABEL}</span>
+                </span>
+              </span>
+              <span
+                className="ui-pop-row__rad"
+                data-on={scope === null || undefined}
+                aria-hidden="true"
+              >
+                {scope === null ? (
+                  <Icon name="check" size={9} strokeWidth={3} />
+                ) : null}
+              </span>
+            </button>
+
+            <div className="ui-pop__div" aria-hidden="true" />
+
+            {options.map(renderOption)}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -528,6 +800,115 @@ const newRunStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+// The suffix on "New run" naming the scope it will file into. Mono + subtle so
+// it reads as metadata ON the action rather than as part of the verb, and it
+// truncates rather than pushing the button's own label out of a 200px panel.
+const newRunScopeStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-9-5)",
+  fontWeight: 400,
+  color: "var(--color-text-subtle)",
+};
+
+// `position: relative` is what anchors the menu. The head has no overflow clip,
+// so the popover lies OVER the bucket list rather than being scrolled with it.
+const scopeRootStyle: CSSProperties = {
+  position: "relative",
+};
+
+// Pairs with `newRunStyle` — same border, radius and type step — but full-width
+// and left-aligned on the muted rung, because this is a state readout you can
+// change, not a second call to action competing with New run.
+const scopeTriggerStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  width: "100%",
+  padding: "5px 8px",
+  background: "transparent",
+  color: "var(--color-text-muted)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 6,
+  fontFamily: "inherit",
+  fontSize: "var(--font-size-xs)",
+  fontWeight: 500,
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const scopeLabelStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+// Opens DOWNWARD and takes the trigger's exact width: the control is the last
+// row of the head with the whole bucket list beneath it, so a menu sized to its
+// own content would either overflow the 200px compact panel or float free of
+// the control it belongs to.
+const scopeMenuStyle: CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  left: 0,
+  right: 0,
+};
+
+/**
+ * The trigger's monogram tile. `ProjectIconTile` cannot be mounted verbatim: its
+ * `size` is typed as the literal `32` (the design's only `.proj-ic` size) and
+ * this row is ~26px tall, so a 32px tile would blow the trigger's box open. Only
+ * the GEOMETRY is restated — matching the composer's `ProjectFilingChip` trigger
+ * tile 1:1 — while the COLOUR still comes from the one `projectHueRamp`, so no
+ * `hsl(...)` literal escapes that file.
+ */
+function scopeTileStyle(colorHue: ProjectColorHue): CSSProperties {
+  const ramp = projectHueRamp(colorHue);
+  return {
+    width: 16,
+    height: 16,
+    // `--radius-sm` (6px), not a hand-written 4px: the design has no 4px rung.
+    borderRadius: "var(--radius-sm)",
+    display: "grid",
+    placeItems: "center",
+    flex: "none",
+    boxSizing: "border-box",
+    fontFamily: "var(--font-sans)",
+    fontSize: 9,
+    fontWeight: "var(--font-weight-semibold)",
+    backgroundColor: ramp.background,
+    border: ramp.border,
+    color: ramp.color,
+  };
+}
+
+/** The menu row's tile. Geometry is the shared `.ui-pop-row__lg` recipe (24px,
+ *  radius, centring); only the ramp colours are set here, same reason as above. */
+function scopeRowTileStyle(colorHue: ProjectColorHue): CSSProperties {
+  const ramp = projectHueRamp(colorHue);
+  return {
+    backgroundColor: ramp.background,
+    border: ramp.border,
+    color: ramp.color,
+    fontSize: 11,
+    fontWeight: "var(--font-weight-semibold)",
+  };
+}
+
+// The optional per-project count. Same mono/subtle rung the row timestamps use,
+// so a number in the menu reads as the same class of metadata as one in a row.
+const scopeCountStyle: CSSProperties = {
+  flex: "none",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-10)",
+  color: "var(--color-text-subtle)",
+};
+
 const bodyStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
@@ -668,9 +1049,16 @@ const THREAD_SWITCHER_CSS = `
   background: var(--color-warning);
 }
 [data-component="thread-switcher"] .cs-thread-switcher__new:hover,
+[data-component="thread-switcher"] .cs-thread-switcher__scope:hover,
 [data-component="thread-switcher"] .cs-thread-switcher__retry:hover,
 [data-component="thread-switcher"] .cs-thread-switcher__more:hover {
   background: var(--color-surface-muted);
+}
+/* Open is the same quiet fill as hover, never an accent ring — the composer's
+   \`.ui-cpill\` already settled that argument for every trigger in the product. */
+[data-component="thread-switcher"] .cs-thread-switcher__scope[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
 }
 [data-component="thread-switcher"] button:focus-visible {
   outline: 2px solid var(--color-accent);

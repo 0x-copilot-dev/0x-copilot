@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type {
   ChatsArchive,
   Conversation,
+  ProjectId,
   SectionResult,
 } from "@0x-copilot/api-types";
 import type {
@@ -17,7 +18,9 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { TransportProvider } from "../../providers/TransportProvider";
-import { useChatsArchive } from "./useChatsArchive";
+import { useChatsArchive, type ChatsArchiveOptions } from "./useChatsArchive";
+
+const PROJECT_FILTER_KEY = "filter[project_id]";
 
 function conv(
   partial: Partial<Conversation> & { conversation_id: string },
@@ -55,10 +58,19 @@ function makeTransport(config: FakeConfig): Recorder {
   const patchBodies: unknown[] = [];
   const sse: { onMessage?: (raw: string) => void } = {};
 
-  const listResponse = (bucket: string, cursor: unknown) => {
+  // Stand in for the server's project scoping: when the request carries
+  // `filter[project_id]`, only rows filed under it come back. Applied to the
+  // SAME dataset every bucket serves, so a scoped keyset page behaves like the
+  // real one instead of needing a second fixture shape.
+  const scoped = (rows: Conversation[], project: unknown): Conversation[] =>
+    typeof project === "string"
+      ? rows.filter((c) => c.project_id === project)
+      : rows;
+
+  const listResponse = (bucket: string, cursor: unknown, project: unknown) => {
     if (bucket === "pinned") {
       return {
-        conversations: config.pinned ?? [],
+        conversations: scoped(config.pinned ?? [], project),
         next_cursor: null,
         has_more: false,
       };
@@ -66,19 +78,19 @@ function makeTransport(config: FakeConfig): Recorder {
     if (bucket === "archived") {
       if (cursor !== undefined && config.archivedNext) {
         return {
-          conversations: config.archivedNext.conversations,
+          conversations: scoped(config.archivedNext.conversations, project),
           next_cursor: config.archivedNext.next_cursor,
           has_more: config.archivedNext.next_cursor !== null,
         };
       }
       return {
-        conversations: config.archived ?? [],
+        conversations: scoped(config.archived ?? [], project),
         next_cursor: config.archivedNext ? "arch-cursor-1" : null,
         has_more: config.archivedNext !== undefined,
       };
     }
     return {
-      conversations: config.recent ?? [],
+      conversations: scoped(config.recent ?? [], project),
       next_cursor: null,
       has_more: false,
     };
@@ -89,7 +101,11 @@ function makeTransport(config: FakeConfig): Recorder {
       calls.push(req);
       const path = req.path;
       if (path === "/v1/agent/conversations" && req.method === "GET") {
-        return listResponse(String(req.query?.bucket), req.query?.cursor);
+        return listResponse(
+          String(req.query?.bucket),
+          req.query?.cursor,
+          req.query?.[PROJECT_FILTER_KEY],
+        );
       }
       if (path.endsWith("/pin")) {
         if (config.rejectPin) throw new Error("pin failed");
@@ -122,13 +138,28 @@ function wrapper(transport: Transport) {
     createElement(TransportProvider, { transport, children });
 }
 
-async function renderChats(config: FakeConfig) {
+/**
+ * Render the controller and wait for the first load. `options` is threaded as a
+ * rerenderable prop (rather than closed over) so a test can change the project
+ * scope on a MOUNTED hook — the refetch-on-scope-change path only exists on a
+ * rerender, and a fresh `renderHook` would silently test a fresh mount instead.
+ */
+async function renderChats(config: FakeConfig, options?: ChatsArchiveOptions) {
   const rec = makeTransport(config);
-  const hook = renderHook(() => useChatsArchive(), {
-    wrapper: wrapper(rec.transport),
-  });
+  const hook = renderHook(
+    (props: { options?: ChatsArchiveOptions }) =>
+      useChatsArchive(props.options),
+    { wrapper: wrapper(rec.transport), initialProps: { options } },
+  );
   await waitFor(() => expect(hook.result.current.archive?.status).toBe("ok"));
   return { rec, hook };
+}
+
+/** Every `GET /v1/agent/conversations` the fake recorded, in order. */
+function listCalls(rec: Recorder): TypedRequest[] {
+  return rec.calls.filter(
+    (c) => c.path === "/v1/agent/conversations" && c.method === "GET",
+  );
 }
 
 /**
@@ -146,6 +177,26 @@ function archiveData(
     throw new Error("expected archive to be ok with loaded data");
   }
   return archive.data;
+}
+
+/** Every loaded row id across the three buckets — the "is it on screen" set. */
+function allRowIds(archive: ChatsArchive): string[] {
+  return [...archive.pinned, ...archive.recent, ...archive.archived].map(
+    (row) => row.id as string,
+  );
+}
+
+/** Push one `conversation_changed` frame through the fake's live tail. */
+function emit(rec: Recorder, conversation: Conversation): void {
+  act(() => {
+    rec.sse.onMessage?.(
+      JSON.stringify({
+        event_type: "conversation_changed",
+        cursor: "c1",
+        conversation,
+      }),
+    );
+  });
 }
 
 describe("useChatsArchive", () => {
@@ -267,5 +318,184 @@ describe("useChatsArchive", () => {
       ).toBe(true),
     );
     expect(rec.patchBodies).toEqual([{ archived: true }, { archived: false }]);
+  });
+
+  // === Project scope (PRD-07) ============================================
+
+  it("(f) a scoped controller sends filter[project_id] on page 1 and on every keyset page", async () => {
+    const { rec, hook } = await renderChats(
+      {
+        recent: [
+          conv({ conversation_id: "p1-a", project_id: "p1" }),
+          conv({ conversation_id: "p2-a", project_id: "p2" }),
+        ],
+        archived: [
+          conv({
+            conversation_id: "p1-old",
+            status: "archived",
+            project_id: "p1",
+          }),
+        ],
+        archivedNext: {
+          conversations: [
+            conv({
+              conversation_id: "p1-older",
+              status: "archived",
+              project_id: "p1",
+            }),
+          ],
+          next_cursor: null,
+        },
+      },
+      { projectId: "p1" as ProjectId },
+    );
+
+    const page1 = listCalls(rec);
+    expect(page1.length).toBe(3);
+    expect(page1.every((c) => c.query?.[PROJECT_FILTER_KEY] === "p1")).toBe(
+      true,
+    );
+    expect(allRowIds(archiveData(hook.result.current.archive)).sort()).toEqual([
+      "p1-a",
+      "p1-old",
+    ]);
+
+    // The scope has to ride the cursor too: a page-2 fetch that dropped it
+    // would paginate the unscoped list and splice foreign rows onto the end.
+    act(() => hook.result.current.onLoadMore("archived"));
+    await waitFor(() =>
+      expect(archiveData(hook.result.current.archive).archived.length).toBe(2),
+    );
+    const paged = listCalls(rec).filter(
+      (c) => c.query?.cursor === "arch-cursor-1",
+    );
+    expect(paged.length).toBe(1);
+    expect(paged[0]?.query?.[PROJECT_FILTER_KEY]).toBe("p1");
+  });
+
+  it("(g) an unscoped controller sends no project key at all and still merges filed chats", async () => {
+    const { rec, hook } = await renderChats({
+      recent: [conv({ conversation_id: "r1" })],
+    });
+    for (const call of listCalls(rec)) {
+      expect(Object.keys(call.query ?? {})).not.toContain(PROJECT_FILTER_KEY);
+      // Not merely the wrong spelling of the key — no project axis at all.
+      expect(
+        Object.keys(call.query ?? {}).some((k) => k.includes("project")),
+      ).toBe(false);
+    }
+
+    // Unscoped means "everything", not "unfiled": a chat that IS filed under a
+    // project must still merge off the tail.
+    emit(
+      rec,
+      conv({
+        conversation_id: "filed",
+        project_id: "p9",
+        updated_at: "2026-01-02T00:00:00Z",
+      }),
+    );
+    await waitFor(() =>
+      expect(allRowIds(archiveData(hook.result.current.archive))).toContain(
+        "filed",
+      ),
+    );
+  });
+
+  it("(h) changing the scope refetches from scratch and drops the previous scope's rows", async () => {
+    const { rec, hook } = await renderChats(
+      {
+        recent: [
+          conv({ conversation_id: "p1-a", project_id: "p1" }),
+          conv({ conversation_id: "p2-a", project_id: "p2" }),
+        ],
+      },
+      { projectId: "p1" as ProjectId },
+    );
+    expect(allRowIds(archiveData(hook.result.current.archive))).toEqual([
+      "p1-a",
+    ]);
+
+    hook.rerender({ options: { projectId: "p2" as ProjectId } });
+
+    await waitFor(() =>
+      expect(allRowIds(archiveData(hook.result.current.archive))).toEqual([
+        "p2-a",
+      ]),
+    );
+    // Three fresh page-1 fetches under the new scope — the list is re-read from
+    // the server, not re-filtered client-side out of the old page.
+    const p2Page1 = listCalls(rec).filter(
+      (c) =>
+        c.query?.[PROJECT_FILTER_KEY] === "p2" && c.query?.cursor === undefined,
+    );
+    expect(p2Page1.length).toBe(3);
+  });
+
+  it("(i) the scoped tail ignores an out-of-scope envelope and merges an in-scope one", async () => {
+    const { rec, hook } = await renderChats(
+      { recent: [conv({ conversation_id: "p1-a", project_id: "p1" })] },
+      { projectId: "p1" as ProjectId },
+    );
+    const beforeCalls = rec.calls.length;
+
+    emit(
+      rec,
+      conv({
+        conversation_id: "p2-new",
+        project_id: "p2",
+        updated_at: "2026-01-03T00:00:00Z",
+      }),
+    );
+    emit(
+      rec,
+      conv({
+        conversation_id: "p1-new",
+        project_id: "p1",
+        updated_at: "2026-01-02T00:00:00Z",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(allRowIds(archiveData(hook.result.current.archive))).toContain(
+        "p1-new",
+      ),
+    );
+    expect(allRowIds(archiveData(hook.result.current.archive))).not.toContain(
+      "p2-new",
+    );
+    // Scoping the tail is a projection decision — it costs no extra fetch.
+    expect(rec.calls.length).toBe(beforeCalls);
+  });
+
+  it("(j) a chat refiled out of the scope leaves the scoped list", async () => {
+    const { rec, hook } = await renderChats(
+      {
+        recent: [
+          conv({ conversation_id: "moves", project_id: "p1" }),
+          conv({ conversation_id: "stays", project_id: "p1" }),
+        ],
+      },
+      { projectId: "p1" as ProjectId },
+    );
+    expect(allRowIds(archiveData(hook.result.current.archive)).sort()).toEqual([
+      "moves",
+      "stays",
+    ]);
+
+    emit(
+      rec,
+      conv({
+        conversation_id: "moves",
+        project_id: "p2",
+        updated_at: "2026-01-04T00:00:00Z",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(allRowIds(archiveData(hook.result.current.archive))).toEqual([
+        "stays",
+      ]),
+    );
   });
 });

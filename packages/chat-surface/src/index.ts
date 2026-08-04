@@ -666,6 +666,13 @@ export {
   type ProjectFilterChipOption,
   type ProjectFilterChipProps,
   type ProjectIconEmoji,
+  // The note above says host prop types stay unexported because "hosts pass
+  // object literals / inferred callbacks". That stopped being true: desktop's
+  // `useProjectCreate` holds the save handler in a `useCallback`, which infers
+  // nothing, and `mode` distinguishes the create sheet from the edit one. Both
+  // are named here rather than restated structurally in the host.
+  type ProjectEditorMode,
+  type ProjectEditorSavePayload,
   type ProjectRole,
   type ProjectStatus,
   type ProjectSummary,
@@ -2276,3 +2283,36 @@ export {
   type UseThreadSwitcherOpenResult,
 } from "./destinations/run/useThreadSwitcherOpen";
 // === end Windowed mode ===
+
+// === Projects filing + thread scope (P0) ===
+// The two halves of "which project is this chat in": FILING (set it, from the
+// composer — `ProjectFilingChip`) and SCOPE (read it, from the thread list —
+// `ThreadSwitcher`'s `scope`/`scopeOptions`/`onScopeChange` and the matching
+// `ChatsArchiveOptions.projectId` on `useChatsArchive`).
+//
+// What stays HOST-OWNED, and why this package exports only shapes and intents:
+//   * the project LIST — a fetch, which no component here may perform, so both
+//     `ProjectFilingOption[]` and `ThreadScopeOption[]` arrive as props;
+//   * the filing WRITE — the `PATCH` behind `onChange`, likewise;
+//   * the menu POPOVER, when the host wants one — `renderMenu` hands back the
+//     open state + anchor because portalling and outside-click both need
+//     `document` (`ProjectFilingMenuSlotArgs`, mirroring the composer's `+` menu
+//     slot). Without the slot the chip renders its own inline menu.
+// `ChatsArchiveProps.onMoveToProject` (Phase 4 chats block) is the third intent
+// in the same family: the row's ⋯ emits a conversation id and nothing else — it
+// names no project, because choosing one needs the list above.
+//
+// `ProjectFilingChip` comes off its own module rather than `./composer`: the
+// composer barrel is a different owner's file, and the top barrel already takes
+// `ThreadSwitcher` straight from its module the same way. `ProjectId` and
+// `ProjectColorHue`, which both option types are built from, are already on this
+// boundary (Phase 0.5 branded IDs / the projects destination) — not re-exported.
+export {
+  ProjectFilingChip,
+  type ProjectFilingChipProps,
+  type ProjectFilingMenuSlotArgs,
+  type ProjectFilingOption,
+} from "./composer/ProjectFilingChip";
+export type { ThreadScopeOption } from "./shell/ThreadSwitcher";
+export type { ChatsArchiveOptions } from "./destinations/chats";
+// === end Projects filing + thread scope (P0) ===
