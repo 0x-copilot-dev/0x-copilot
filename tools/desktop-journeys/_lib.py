@@ -152,6 +152,28 @@ def load_env_key(provider: str) -> str:
     raise SystemExit(f"{var} not present in {DOTENV}")
 
 
+def load_env_value(var: str, default: str) -> str:
+    """Read a NON-SECRET setting from services/ai-backend/.env, else ``default``.
+
+    Unlike :func:`load_env_key` this never raises — a missing .env (the normal
+    case in a branch worktree) or an absent key yields ``default``. The process
+    environment wins, so a journey can be pointed at a differently-configured
+    stack without editing the file. Use this to derive an expected value from
+    the deployment's own configuration instead of hardcoding a literal that
+    goes stale on the next vendor release; never use it for key material.
+    """
+    override = os.environ.get(var, "").strip()
+    if override:
+        return override
+    if DOTENV.exists():
+        for line in DOTENV.read_text().splitlines():
+            if line.startswith(f"{var}="):
+                val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if val:
+                    return val
+    return default
+
+
 # ── driver session ───────────────────────────────────────────────────────────
 class DriverSession:
     """Spawns driver.mjs, waits for the app, exposes the /rpc control API.

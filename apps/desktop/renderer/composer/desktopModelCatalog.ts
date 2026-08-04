@@ -64,37 +64,59 @@ const PROVIDER_PRIORITY: readonly string[] = [
  * Which size rung an AUTO-selected model should land on, best first.
  *
  * `tier` is the backend's rung within a provider's general-purpose ladder
- * (`agent_runtime/api/model_tiers.py`): `medium` is the everyday model,
- * `small` the cheap one, `big` the flagship. A row with NO tier is off that
- * ladder — the specialty and max-reasoning lines (`claude-fable`, `gpt-pro`),
- * which are the DEAREST rows a provider publishes — so it ranks last and can
- * only be auto-selected when nothing else is usable.
+ * (`agent_runtime/api/model_tiers.py`): `small` the cheap one, `medium` the
+ * middle, `big` the flagship. A row with NO tier is off that ladder — the
+ * specialty and max-reasoning lines (`claude-fable`, `gpt-pro`), which are the
+ * DEAREST rows a provider publishes — so it ranks last and can only be
+ * auto-selected when nothing else is usable.
  *
  * The bug this fixes: the pick was `usableForProvider[0]`, i.e. catalog order,
  * which for an Anthropic-only user meant "Claude Fable 5" — the most expensive
  * model in the list — silently reselected on every fresh mount. A default
  * should cost the user the least surprise, not the most money; an explicit pick
  * (remembered per chat) is how anyone gets the flagship.
+ *
+ * WHY THIS IS PER-PROVIDER: "the everyday rung" is a fact about a vendor's
+ * lineup, not a universal one, and the two disagree today. Anthropic's everyday
+ * model is Sonnet (`medium`), one rung above Haiku. OpenAI's 5.6 line is
+ * luna/terra/sol, and the everyday model is Luna — the `small` rung, and ~10x
+ * cheaper than Terra on output. Encoding one global order forces one of the two
+ * to be wrong, so the order is looked up per provider with
+ * {@link DEFAULT_TIER_ORDER} covering everyone not named here.
  */
-const AUTO_SELECT_TIER_ORDER: readonly NonNullable<CatalogModel["tier"]>[] = [
-  "medium",
-  "small",
-  "big",
-];
+type Tier = NonNullable<CatalogModel["tier"]>;
+
+const DEFAULT_TIER_ORDER: readonly Tier[] = ["medium", "small", "big"];
+
+const TIER_ORDER_BY_PROVIDER: Readonly<Record<string, readonly Tier[]>> = {
+  // Luna is the 5.6 line's everyday model and the deployment default
+  // (`RUNTIME_DEFAULT_MODEL`), so a fresh OpenAI key opens on it, not on Terra.
+  openai: ["small", "medium", "big"],
+};
+
+function tierOrderFor(provider: string | null | undefined): readonly Tier[] {
+  return (
+    (provider !== null && provider !== undefined
+      ? TIER_ORDER_BY_PROVIDER[provider]
+      : undefined) ?? DEFAULT_TIER_ORDER
+  );
+}
 
 /** Rank of a model's tier for auto-selection; off-ladder rows sort last. */
-function tierRank(model: CatalogModel): number {
+function tierRank(model: CatalogModel, order: readonly Tier[]): number {
   const tier = model.tier ?? null;
-  const index = tier === null ? -1 : AUTO_SELECT_TIER_ORDER.indexOf(tier);
-  return index === -1 ? AUTO_SELECT_TIER_ORDER.length : index;
+  const index = tier === null ? -1 : order.indexOf(tier);
+  return index === -1 ? order.length : index;
 }
 
 /**
- * The best auto-pick from an already-filtered (usable) list: cheapest rung
- * first, then lower output cost, then catalog order. Cost is the tiebreak
- * WITHIN a rung, and an unpriced row (the offline LiteLLM fallback publishes no
- * costs) sorts after a priced one — so a catalog with no tier or cost data at
- * all degrades to the previous behaviour, first-usable-in-catalog-order.
+ * The best auto-pick from an already-filtered (usable) list: the preferred rung
+ * first, then lower output cost, then catalog order. Each row is ranked against
+ * ITS OWN provider's order, so this stays correct on the mixed-provider list the
+ * last fallback passes in. Cost is the tiebreak WITHIN a rung, and an unpriced
+ * row (the offline LiteLLM fallback publishes no costs) sorts after a priced one
+ * — so a catalog with no tier or cost data at all degrades to the previous
+ * behaviour, first-usable-in-catalog-order.
  */
 function bestAutoSelect(
   models: readonly CatalogModel[],
@@ -103,7 +125,7 @@ function bestAutoSelect(
   let bestRank = Number.POSITIVE_INFINITY;
   let bestCost = Number.POSITIVE_INFINITY;
   for (const model of models) {
-    const rank = tierRank(model);
+    const rank = tierRank(model, tierOrderFor(model.provider));
     const cost = model.output_cost_per_mtok ?? Number.POSITIVE_INFINITY;
     if (rank < bestRank || (rank === bestRank && cost < bestCost)) {
       best = model;
@@ -132,9 +154,9 @@ function bestAutoSelect(
  *      `models[0]` is exactly the bug this replaces; the run-start gate is the
  *      backstop for an empty selection.
  * "Usable" = configured AND not disabled. "Best" is {@link bestAutoSelect} —
- * the mid rung before the cheap one before the flagship, never an off-ladder
- * specialty row; this is a DEFAULT, so it must not open on the priciest model a
- * provider sells.
+ * the provider's preferred rung first (see {@link TIER_ORDER_BY_PROVIDER}),
+ * never an off-ladder specialty row; this is a DEFAULT, so it must not open on
+ * the priciest model a provider sells.
  */
 export function defaultSelectedModelId(
   models: readonly CatalogModel[],

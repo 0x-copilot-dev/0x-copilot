@@ -212,15 +212,17 @@ describe("<ProviderKeysPage>", () => {
 
     await waitFor(() => expect(port.save).toHaveBeenCalledTimes(1));
     // The step-3 pick rides the same PUT (PR-F.5 per-provider default_model).
+    // No `validate` on this port, so step 3 offers the PROVIDER_CATALOG
+    // fallback list and preselects its FIRST entry.
     expect(port.save).toHaveBeenCalledWith("openai", FAKE_KEY, {
-      defaultModel: "gpt-4o",
+      defaultModel: "gpt-5.6-luna",
       baseUrl: undefined,
       label: undefined,
     });
     // Row flips to connected with the chosen model chip; onToast fires.
     await screen.findByTestId("provider-row-openai");
     expect(screen.getByTestId("provider-model-chip-openai")).toHaveTextContent(
-      "gpt-4o",
+      "gpt-5.6-luna",
     );
     expect(onToast).toHaveBeenCalledWith("OpenAI key added.");
     expect(onProviderKeysChanged).toHaveBeenCalledTimes(1);
@@ -242,10 +244,10 @@ describe("<ProviderKeysPage>", () => {
     fireEvent.click(await screen.findByTestId("add-key-submit"));
 
     await waitFor(() =>
-      expect(saveDefaultModel).toHaveBeenCalledWith("openai", "gpt-4o"),
+      expect(saveDefaultModel).toHaveBeenCalledWith("openai", "gpt-5.6-luna"),
     );
     expect(onToast).toHaveBeenCalledWith(
-      "OpenAI key added · gpt-4o is your default model.",
+      "OpenAI key added · gpt-5.6-luna is your default model.",
     );
   });
 

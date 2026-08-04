@@ -331,8 +331,9 @@ export function useRunComposerBindings(
   const models = useMemo<CatalogModel[]>(() => {
     const base = mergeCatalog({ cloudModels, localModelNames });
     const merged = [...base, ...customModels];
-    // The persisted workspace default may live outside the catalog (e.g. the
-    // Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is visible
+    // The persisted workspace default may live outside the catalog (e.g. a pick
+    // from the Add-key wizard's offline fallback list, which is written straight
+    // to the workspace default). Surface it as a synthetic entry so it is visible
     // and selectable; it's configured when the catalog reports its provider as
     // usable (any configured cloud model of that provider).
     if (workspaceDefault !== null) {
