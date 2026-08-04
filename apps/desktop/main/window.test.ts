@@ -14,9 +14,11 @@ interface CapturedConstructor {
   };
 }
 
-const { captured } = vi.hoisted(() => {
+const { captured, workArea } = vi.hoisted(() => {
   return {
     captured: { latest: null as CapturedConstructor | null },
+    // Mutable so a test can shrink the "display" and assert the fit.
+    workArea: { size: { width: 1920, height: 1080 } },
   };
 });
 
@@ -53,7 +55,10 @@ vi.mock("electron", () => {
   const protocol = {
     registerSchemesAsPrivileged: vi.fn(),
   };
-  return { BrowserWindow, protocol };
+  const screen = {
+    getPrimaryDisplay: vi.fn(() => ({ workAreaSize: workArea.size })),
+  };
+  return { BrowserWindow, protocol, screen };
 });
 
 describe("createMainWindow", () => {
@@ -66,6 +71,8 @@ describe("createMainWindow", () => {
     const opts = captured.latest!.options as {
       width: number;
       height: number;
+      minWidth: number;
+      minHeight: number;
       show: boolean;
       titleBarStyle: string;
       trafficLightPosition: { x: number; y: number };
@@ -79,6 +86,11 @@ describe("createMainWindow", () => {
     };
     expect(opts.width).toBe(1200);
     expect(opts.height).toBe(800);
+    // A floor the user cannot drag past. `.desktop-window-frame` is
+    // `overflow: hidden`, so a window narrower than the shell's own compact
+    // breakpoint clips its chrome away instead of scrolling to it.
+    expect(opts.minWidth).toBe(720);
+    expect(opts.minHeight).toBe(520);
     expect(opts.show).toBe(false);
     expect(opts.titleBarStyle).toBe("hiddenInset");
     expect(opts.trafficLightPosition).toEqual({ x: 14, y: 12 });
@@ -91,6 +103,29 @@ describe("createMainWindow", () => {
     expect(captured.latest!.loadURL).toHaveBeenCalledWith(
       "app://app/index.html",
     );
+  });
+
+  it("fits the opening size to the display work area, never below the floor", async () => {
+    const { createMainWindow } = await import("./window");
+
+    // A work area narrower than the preferred 1200x800 — a scaled laptop panel.
+    // Opening at 1200 there puts the window's right edge (where the topbar
+    // keeps the ⌘K trigger) off-screen with no way to reach it.
+    workArea.size = { width: 1024, height: 640 };
+    createMainWindow({ preloadAbsPath: "/abs/preload/bridge.js" });
+    let opts = captured.latest!.options as { width: number; height: number };
+    expect(opts.width).toBe(1024);
+    expect(opts.height).toBe(640);
+
+    // Below the floor the floor wins: a window smaller than the shell's compact
+    // layout is not a layout we have, so overhang beats a broken shell.
+    workArea.size = { width: 500, height: 400 };
+    createMainWindow({ preloadAbsPath: "/abs/preload/bridge.js" });
+    opts = captured.latest!.options as { width: number; height: number };
+    expect(opts.width).toBe(720);
+    expect(opts.height).toBe(520);
+
+    workArea.size = { width: 1920, height: 1080 };
   });
 
   it("uses an alternate initial path when provided", async () => {
