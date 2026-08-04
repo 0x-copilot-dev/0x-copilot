@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { APP_RAIL_WIDTH } from "@0x-copilot/chat-surface";
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -77,10 +78,10 @@ describe("DesktopWindowFrame", () => {
 
   it("clears the native title-bar band above the topbar-less Settings nav", () => {
     // Every other destination gets a topbar, which is padded left to clear the
-    // traffic lights and the translated turbine. Settings suppresses the topbar,
-    // so its nav column takes the inset instead — vertically, because the column
-    // is too narrow for a 100px left inset. Without this the "Settings" title
-    // renders beneath both the window controls and the z-index:2 brand mark.
+    // traffic lights. Settings suppresses the topbar, so its nav column takes
+    // the inset instead — vertically, because a left inset on a 216px column
+    // indents every row it heads. Without this the "Settings" title renders
+    // beneath the window controls.
     const desktopCss = readFileSync(
       resolve(process.cwd(), "renderer/desktop.css"),
       "utf8",
@@ -109,5 +110,59 @@ describe("DesktopWindowFrame", () => {
     expect(desktopCss).toMatch(
       /\[data-component="topbar"\],\s*\.desktop-window-frame\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-testid="run-header"\]\s*\{\s*padding-left:/,
     );
+  });
+
+  it("subtracts the rail width from the headers' traffic-light inset", () => {
+    // Both headers start to the RIGHT of the rail, so an inset measured from the
+    // window's left edge double-counts it. It shipped as `clearance + 30px`,
+    // which put the Threads toggle at x=160 and the goal title at x=184 — a full
+    // rail-width-plus into the main column, floating over the Threads panel
+    // instead of sitting beside the window controls.
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    const inset = /\[data-testid="run-header"\]\s*\{([^}]*)\}/.exec(desktopCss);
+    expect(inset).not.toBeNull();
+    const declaration = inset?.[1] ?? "";
+    expect(declaration).toContain("- var(--desktop-app-rail-width)");
+    expect(declaration).not.toMatch(/--desktop-traffic-light-clearance\)\s*\+/);
+  });
+
+  it("keeps the windowed brand mark inside the rail column", () => {
+    // The mark used to be `translateX(70px)` out of the 48px rail and into the
+    // header's leading area at z-index 2. That is what forced every header to
+    // clear a RAIL button rather than the window controls. The band is reserved
+    // vertically instead, so the mark drops below the controls in its own
+    // column and the title bar's left edge stays free for the header.
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    // Comments stripped: the rule this guards against is described at length in
+    // the stylesheet's own prose, and a bare text match would fail on the
+    // explanation rather than on a reinstated declaration.
+    const declarations = desktopCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(declarations).not.toMatch(/\[data-rail-brand\]/);
+    expect(declarations).not.toMatch(/translateX/);
+    expect(desktopCss).toMatch(
+      /\[data-native-traffic-lights="true"\]\[data-full-screen="false"\]\s*\[data-component="app-rail"\]\s*\{[^}]*padding-top:[^}]*--desktop-titlebar-height[^}]*!important/,
+    );
+  });
+
+  it("keeps --desktop-app-rail-width equal to the shell's APP_RAIL_WIDTH", () => {
+    // The CSS cannot import the constant, so the coupling is asserted instead:
+    // if the rail is ever resized in chat-surface, this fails rather than
+    // silently re-introducing the offset it exists to cancel.
+    const desktopCss = readFileSync(
+      resolve(process.cwd(), "renderer/desktop.css"),
+      "utf8",
+    );
+
+    const declared = /--desktop-app-rail-width:\s*(\d+)px/.exec(desktopCss);
+    expect(declared).not.toBeNull();
+    expect(Number(declared?.[1])).toBe(APP_RAIL_WIDTH);
   });
 });
