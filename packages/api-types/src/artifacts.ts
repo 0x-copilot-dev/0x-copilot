@@ -94,6 +94,79 @@ function hasOnlyKeys(
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
+/**
+ * The wire keys of `T`, as a set the compiler forces to stay complete.
+ *
+ * `hasOnlyKeys` is a CLOSED check, so a field the server already serves but
+ * this file has not enumerated rejects the WHOLE response. That is not a
+ * theoretical risk — `accent` was added to `Artifact` (and to its Python twin)
+ * without being added to the key list here, and from then on every
+ * `GET /v1/agent/artifacts/{id}` failed the guard, so the Studio canvas never
+ * left its loading placeholder for any artifact of any kind.
+ *
+ * Typing the source as `Record<keyof T, true>` makes the omission a compile
+ * error instead: adding a field to one of these interfaces stops the build
+ * until its key is listed. Prefer this over a bare `new Set([...])` for every
+ * guard in this file — the set literal is exactly what drifted.
+ */
+function wireKeys<T>(keys: Record<keyof T, true>): ReadonlySet<string> {
+  return new Set(Object.keys(keys));
+}
+
+const ARTIFACT_KEYS = wireKeys<Artifact>({
+  artifact_id: true,
+  org_id: true,
+  user_id: true,
+  conversation_id: true,
+  run_id: true,
+  kind: true,
+  title: true,
+  media_type: true,
+  current_revision: true,
+  created_by: true,
+  accent: true,
+  created_at: true,
+  updated_at: true,
+  deleted_at: true,
+});
+
+const ARTIFACT_REVISION_KEYS = wireKeys<ArtifactRevision>({
+  artifact_id: true,
+  revision: true,
+  parent_revision: true,
+  content_ref: true,
+  content_digest: true,
+  byte_size: true,
+  author: true,
+  source_ref: true,
+  created_at: true,
+});
+
+const ARTIFACT_DETAIL_KEYS = wireKeys<ArtifactDetailResponse>({
+  artifact: true,
+  current_revision: true,
+  suggested_filename: true,
+  range_supported: true,
+});
+
+const ARTIFACT_MUTATION_KEYS = wireKeys<ArtifactMutationResponse>({
+  artifact: true,
+  current_revision: true,
+  suggested_filename: true,
+  range_supported: true,
+  replayed: true,
+});
+
+const ARTIFACT_REVISION_RESPONSE_KEYS = wireKeys<ArtifactRevisionResponse>({
+  revision: true,
+  range_supported: true,
+});
+
+const ARTIFACT_LIST_KEYS = wireKeys<ArtifactListResponse>({
+  artifacts: true,
+  next_cursor: true,
+});
+
 function hasArtifactId(value: unknown): value is string {
   if (typeof value !== "string") return false;
   try {
@@ -106,28 +179,7 @@ function hasArtifactId(value: unknown): value is string {
 
 function isArtifact(value: unknown): value is Artifact {
   if (!isRecord(value) || !hasArtifactId(value.artifact_id)) return false;
-  if (
-    !hasOnlyKeys(
-      value,
-      new Set([
-        "artifact_id",
-        "org_id",
-        "user_id",
-        "conversation_id",
-        "run_id",
-        "kind",
-        "title",
-        "media_type",
-        "current_revision",
-        "created_by",
-        "created_at",
-        "updated_at",
-        "deleted_at",
-      ]),
-    )
-  ) {
-    return false;
-  }
+  if (!hasOnlyKeys(value, ARTIFACT_KEYS)) return false;
   return (
     isNonEmptyString(value.org_id) &&
     isNonEmptyString(value.user_id) &&
@@ -138,6 +190,15 @@ function isArtifact(value: unknown): value is Artifact {
     isNonEmptyString(value.media_type) &&
     isPositiveInteger(value.current_revision) &&
     ARTIFACT_AUTHORS.has(value.created_by as ArtifactAuthor) &&
+    // Deliberately a shape check, not membership of the closed accent set: the
+    // hue is decorative, and the surface that paints it already narrows an
+    // unrecognised name back to the kind-derived default
+    // (`useConversationCanvas`, `resolveSurfaceHue`). Rejecting the artifact
+    // outright would let a new server-side accent blank the canvas again — the
+    // same failure this guard just caused, one level down. Absent stays
+    // meaningful: no choice was made. Every artifact route serves
+    // `response_model_exclude_none=True`, so absent is what the wire carries.
+    isOptionalString(value.accent) &&
     isNonEmptyString(value.created_at) &&
     isNonEmptyString(value.updated_at) &&
     isOptionalString(value.deleted_at)
@@ -153,24 +214,7 @@ function isArtifactRevision(value: unknown): value is ArtifactRevision {
   ) {
     return false;
   }
-  if (
-    !hasOnlyKeys(
-      value,
-      new Set([
-        "artifact_id",
-        "revision",
-        "parent_revision",
-        "content_ref",
-        "content_digest",
-        "byte_size",
-        "author",
-        "source_ref",
-        "created_at",
-      ]),
-    )
-  ) {
-    return false;
-  }
+  if (!hasOnlyKeys(value, ARTIFACT_REVISION_KEYS)) return false;
   try {
     const parsed = ArtifactContentRefCodec.parse(value.content_ref);
     if (
@@ -201,7 +245,7 @@ export function isArtifactRevisionResponse(
 ): value is ArtifactRevisionResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, new Set(["revision", "range_supported"])) &&
+    hasOnlyKeys(value, ARTIFACT_REVISION_RESPONSE_KEYS) &&
     isArtifactRevision(value.revision) &&
     typeof value.range_supported === "boolean"
   );
@@ -212,15 +256,7 @@ export function isArtifactDetailResponse(
 ): value is ArtifactDetailResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(
-      value,
-      new Set([
-        "artifact",
-        "current_revision",
-        "suggested_filename",
-        "range_supported",
-      ]),
-    ) &&
+    hasOnlyKeys(value, ARTIFACT_DETAIL_KEYS) &&
     isArtifact(value.artifact) &&
     isArtifactRevision(value.current_revision) &&
     value.current_revision.artifact_id === value.artifact.artifact_id &&
@@ -235,16 +271,7 @@ export function isArtifactMutationResponse(
 ): value is ArtifactMutationResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(
-      value,
-      new Set([
-        "artifact",
-        "current_revision",
-        "suggested_filename",
-        "range_supported",
-        "replayed",
-      ]),
-    ) &&
+    hasOnlyKeys(value, ARTIFACT_MUTATION_KEYS) &&
     isArtifact(value.artifact) &&
     isArtifactRevision(value.current_revision) &&
     value.current_revision.artifact_id === value.artifact.artifact_id &&
@@ -260,7 +287,7 @@ export function isArtifactListResponse(
 ): value is ArtifactListResponse {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, new Set(["artifacts", "next_cursor"])) &&
+    hasOnlyKeys(value, ARTIFACT_LIST_KEYS) &&
     Array.isArray(value.artifacts) &&
     value.artifacts.every(isArtifactDetailResponse) &&
     isOptionalString(value.next_cursor)

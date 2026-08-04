@@ -40,6 +40,12 @@ function transport(currentNumber = 3): ArtifactCapableTransport {
       media_type: "text/plain",
       current_revision: current.revision,
       created_by: "user",
+      // The server sends this on every artifact its author gave a hue. Omitting
+      // it here is what let the hook go green while production could not load a
+      // single artifact: the guard this hook runs on the response rejected the
+      // key, the hook threw "Invalid artifact metadata", and only a fixture
+      // that never carried the field could miss it.
+      accent: "violet",
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
     },
