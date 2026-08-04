@@ -25,7 +25,8 @@ import {
 
 import {
   CONNECTOR_CHANNELS,
-  CONNECT_SUPERSEDED,
+  CONNECT_CANCELLED,
+  type ConnectorAuthorizationOutcome,
 } from "../../main/connectors/channels";
 
 export interface UseDesktopComposerToolsOptions {
@@ -83,22 +84,19 @@ export function useDesktopComposerTools(
         const win = window as unknown as { bridge?: Window["bridge"] };
         if (win.bridge === undefined || connectorsPort === undefined) return;
         const server = await connectorsPort.installFromCatalog(entry.slug);
-        try {
-          await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
-            slug: entry.slug,
-            serverId: server.server_id,
-          });
-        } catch (error: unknown) {
-          // Same mapping the connectors binder does, and needed here for the
-          // same reason: main abandoned this attempt for a newer connect, which
-          // is not a failure and must not be reported as one. Only the message
-          // crosses IPC, so this is where it becomes a type the shared hook can
-          // branch on.
-          const raw = error instanceof Error ? error.message : String(error);
-          if (raw.includes(CONNECT_SUPERSEDED)) {
-            throw new ConnectSupersededError(entry.slug);
-          }
-          throw error;
+        const outcome = (await win.bridge.ipc.invoke(
+          CONNECTOR_CHANNELS.authorize,
+          { slug: entry.slug, serverId: server.server_id },
+        )) as ConnectorAuthorizationOutcome;
+        // Main resolves the ordinary endings; only a real failure rejects and
+        // propagates from the invoke above. The shared hook still ends an
+        // attempt by rejecting, so translate here — the same mapping the
+        // connectors binder does, for the same reason.
+        if (outcome.outcome === "superseded") {
+          throw new ConnectSupersededError(entry.slug);
+        }
+        if (outcome.outcome === "cancelled") {
+          throw new Error(CONNECT_CANCELLED);
         }
         return { serverId: server.server_id };
       },

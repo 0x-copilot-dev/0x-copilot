@@ -13,8 +13,13 @@ import type {
   McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
 
-import type { ConnectorAuthorizationResult } from "./channels";
+import type {
+  ConnectorAuthorizationOutcome,
+  ConnectorAuthorizationResult,
+} from "./channels";
+import { CONNECT_SUPERSEDED } from "./channels";
 import {
+  CONNECT_CANCELLED,
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
   type ConnectCancelReason,
@@ -23,10 +28,37 @@ import {
 
 export interface ConnectorServiceDeps extends ConnectorOAuthDeps {}
 
+/**
+ * Translates the two EXPECTED endings of a connect into outcomes.
+ *
+ * The message is the only thing that survives the IPC hop, so it is also the
+ * only thing available here — but the translation happens in MAIN, before the
+ * hop, which is the point. Downstream never parses a string again, and
+ * `ipcMain.handle` never sees a throw for an ordinary cancel.
+ *
+ * Anything else rethrows: a connector that genuinely failed must not be
+ * laundered into a tidy outcome.
+ */
+class ConnectorCancellation {
+  static async asOutcome(
+    run: () => Promise<ConnectorAuthorizationResult>,
+  ): Promise<ConnectorAuthorizationOutcome> {
+    try {
+      return { outcome: "connected", result: await run() };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes(CONNECT_SUPERSEDED))
+        return { outcome: "superseded" };
+      if (message.includes(CONNECT_CANCELLED)) return { outcome: "cancelled" };
+      throw error;
+    }
+  }
+}
+
 // `ConnectorAuthorizationResult` is declared in `./channels` — the one connector
 // module the renderer is allowed to import — so both sides of the IPC read the
 // same shape without pulling this file into the renderer bundle.
-export type { ConnectorAuthorizationResult };
+export type { ConnectorAuthorizationOutcome, ConnectorAuthorizationResult };
 
 export class ConnectorService {
   private readonly facadeBaseUrl: string;
@@ -122,6 +154,24 @@ export class ConnectorService {
      * PROFILE topology honours it; MCP OAuth registers its client dynamically
      * against whatever redirect it is given, so it has nothing to match.
      */
+    readonly callbackMode?: "loopback" | "deep_link";
+  }): Promise<ConnectorAuthorizationOutcome> {
+    return ConnectorCancellation.asOutcome(() => this.authorizeOrThrow(target));
+  }
+
+  /**
+   * The authorization itself, still expressed with exceptions internally.
+   *
+   * Aborting a promise race IS naturally a rejection, so the coordinator keeps
+   * throwing; only the OUTCOME boundary above translates the two expected
+   * endings. Splitting it this way means the topology-resolution logic below is
+   * untouched by the change, and a genuine failure still propagates.
+   */
+  private async authorizeOrThrow(target: {
+    readonly slug?: string;
+    readonly serverId?: string;
+    readonly productScope?: DesktopRequestedProductScope;
+    readonly oauthClient?: McpOAuthClientConfigRequest;
     readonly callbackMode?: "loopback" | "deep_link";
   }): Promise<ConnectorAuthorizationResult> {
     const { slug, serverId, productScope, oauthClient, callbackMode } = target;
