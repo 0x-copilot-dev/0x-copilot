@@ -1,0 +1,93 @@
+# Typecheck of the shared packages and BOTH host apps, as one unconditional job.
+#
+# The gap this closes: `packages/chat-surface` is the single-source-of-truth
+# surface that two host binders mount -- apps/frontend/src/features/*/Route.tsx
+# and apps/desktop/renderer/destinationBinders.tsx. When a destination's props
+# change, the package still typechecks clean; only the HOSTS break. Both host
+# typechecks already existed (ci-frontend, ci-desktop) and both were advisory,
+# so nothing stopped such a break from merging -- with no required check on the
+# list, `gh pr merge --auto` merges immediately whatever those jobs reported.
+#
+# Why a new workflow instead of requiring the two that already run tsc: a
+# required check must be unconditional (see the trigger note below), and neither
+# existing job is safe to require as written.
+#
+#   * ci-frontend's `build-and-audit` ends in `npm audit --audit-level=high`.
+#     Required, an advisory published upstream overnight becomes a repo-wide
+#     merge freeze on code nobody touched.
+#   * ci-desktop's `typecheck-and-test` runs the ~830-test main/renderer suite,
+#     whose native-workspace-commit-helper case is a DOCUMENTED flake -- see the
+#     comment above that job, which records it failing roughly one full-suite
+#     run in two locally on unmodified code. A known-flaky suite must not gate
+#     merges.
+#
+# So the cheap deterministic half -- does the tree still compile -- is lifted
+# here and required; those two keep their path filters and stay advisory. They
+# still build, test, audit and SBOM. This job runs tsc and nothing else.
+
+name: ci-host-typecheck
+
+# DELIBERATELY UNCONDITIONAL -- no `paths:` filter anywhere below.
+#
+# host-typecheck is a REQUIRED status check on dev. GitHub reports a required
+# check that never starts as *pending*, not as skipped, so a path-filtered
+# required check silently wedges every PR whose diff misses its paths
+# (mergeStateStatus BLOCKED, waiting on a job that will never begin). repo-gates
+# shipped with a filter once and blocked the very next PR. ci-repo and ci-gates
+# are unconditional for the same reason.
+#
+# Pinned by tools/test_apply_branch_protection.py::
+# test_every_required_check_comes_from_an_unconditional_workflow, which reads
+# the required contexts out of deploy/branch-protection.json and fails if the
+# workflow defining one filters `pull_request` by path.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+concurrency:
+  group: ci-host-typecheck-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host-typecheck:
+    name: host-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Plain `npm ci`, matching ci-frontend and ci-desktop. --ignore-scripts
+      # would skip electron's ~100 MB postinstall that a tsc-only job has no use
+      # for, but this gate blocks every merge, so a mystery install failure here
+      # is far more expensive than the download it would save.
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Each package is typechecked as its OWN project, not just transitively
+      # through the hosts. A host only pulls the files its imports reach, which
+      # excludes the packages' *.test.tsx -- that is how a port gaining a
+      # required method once left broken chat-surface test types no job compiled.
+      #
+      # The last two lines are the point of the job; the packages above them are
+      # ordered leaf-first so the first failure names the package that actually
+      # broke rather than the app that consumed it.
+      - name: Typecheck shared packages and both hosts
+        run: |
+          npm run typecheck --workspace @0x-copilot/api-types
+          npm run typecheck --workspace @0x-copilot/design-system
+          npm run typecheck --workspace @0x-copilot/chat-transport
+          npm run typecheck --workspace @0x-copilot/chat-surface
+          npm run typecheck --workspace @0x-copilot/surface-renderers
+          npm run typecheck --workspace @0x-copilot/frontend
+          npm run typecheck --workspace @0x-copilot/desktop
