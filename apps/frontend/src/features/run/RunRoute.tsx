@@ -94,8 +94,6 @@ export interface RunRouteProps {
   readonly onOpenConversation?: (conversationId: ConversationId) => void;
   /** PRD-01 — the switcher's "New run" action. Same intent as ⌘N. */
   readonly onNewConversation?: () => void;
-  /** PRD-01/PRD-09 — display name for the Threads panel foot. */
-  readonly identityName?: string | null;
   /** Signed-in identity — threaded to the empty composer's live model catalog. */
   readonly identity: RequestIdentity;
   /**
@@ -122,7 +120,6 @@ export function RunRoute({
   onOpenModelSettings,
   onOpenConversation,
   onNewConversation,
-  identityName = null,
   identity,
   completedMcpAuthAction = null,
 }: RunRouteProps): ReactElement {
@@ -407,7 +404,6 @@ export function RunRoute({
         // desktop show the same threads from the same fetch path.
         onOpenConversation={onOpenConversation}
         onNewConversation={onNewConversation}
-        identityName={identityName}
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}

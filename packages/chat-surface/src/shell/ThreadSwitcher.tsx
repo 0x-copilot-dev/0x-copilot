@@ -139,8 +139,6 @@ export interface ThreadSwitcherProps {
   readonly onNewRun?: () => void;
   /** Close, from Esc / scrim / activation-at-compact (FR-1.8, FR-1.9). */
   readonly onRequestClose?: () => void;
-  /** Signed-in display name for the foot (PRD-09 D-9.5). `null` → no foot. */
-  readonly identityName?: string | null;
   /** `id` for the toggle's `aria-controls`. */
   readonly id?: string;
 }
@@ -153,7 +151,6 @@ export function ThreadSwitcher({
   onOpenConversation,
   onNewRun,
   onRequestClose,
-  identityName = null,
   id,
 }: ThreadSwitcherProps): ReactElement {
   const isOverlay = variant === "overlay";
@@ -240,14 +237,15 @@ export function ThreadSwitcher({
         />
       </div>
 
-      {identityName !== null && identityName.trim() !== "" ? (
-        <div style={footStyle} data-testid="thread-switcher-identity">
-          <span aria-hidden="true" style={avatarStyle}>
-            {identityName.trim().charAt(0).toUpperCase()}
-          </span>
-          <span style={identityNameStyle}>{identityName}</span>
-        </div>
-      ) : null}
+      {/* No account foot. PRD-09 D-9.5 read the rail glyph as the COLLAPSED
+          form of an affordance the docked panel would spell out — but the rail
+          has no idea whether this panel is docked, so both rendered at once:
+          two identical 26px "L" circles ~60px apart on the same baseline, of
+          which only the rail one is a button. The rail owns the account (it is
+          the design's `.rail-me`, it survives every destination and every
+          width, and its `title`/`aria-label` already carry the full name). A
+          second, non-interactive copy taught the wrong affordance and added no
+          information — a solo desktop has exactly one account. */}
     </aside>
   );
 }
@@ -535,41 +533,6 @@ const bodyStyle: CSSProperties = {
   minHeight: 0,
   overflowY: "auto",
   padding: "8px 0",
-};
-
-const footStyle: CSSProperties = {
-  flex: "none",
-  borderTop: "1px solid var(--color-border)",
-  padding: "8px 14px",
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  color: "var(--color-text-muted)",
-  fontSize: "var(--font-size-2xs)",
-  minWidth: 0,
-};
-
-// Mirrors `AppRail`'s 26px avatar tile so the two identities read as one thing.
-const avatarStyle: CSSProperties = {
-  flex: "none",
-  width: 26,
-  height: 26,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "var(--color-surface-elevated)",
-  border: "1px solid var(--color-border-strong)",
-  borderRadius: "var(--radius-full)",
-  color: "var(--color-text-strong)",
-  fontSize: 11,
-  fontWeight: 600,
-};
-
-const identityNameStyle: CSSProperties = {
-  minWidth: 0,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
 };
 
 // The mono micro-label rung used by every other section head in the shell.

@@ -128,8 +128,6 @@ export interface DestinationOutletProps {
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface (Run composer's skills settings link). */
   readonly onOpenSkills?: () => void;
-  /** PRD-01/PRD-09 — signed-in display name for the Threads panel foot. */
-  readonly identityName?: string | null;
   /** Bumped after Settings saves/removes a provider key; refreshes Run models. */
   readonly providerKeysRevision?: number;
   /** C3's path-free desktop workspace approval bridge. */
@@ -149,7 +147,6 @@ export function DestinationOutlet({
   onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
-  identityName = null,
   providerKeysRevision = 0,
   workspaceStageHost,
 }: DestinationOutletProps): ReactElement {
@@ -175,7 +172,6 @@ export function DestinationOutlet({
         onOpenLocalModelSettings,
         onOpenConnectors,
         onOpenSkills,
-        identityName,
         providerKeysRevision,
         workspaceStageHost,
       })}
@@ -198,8 +194,6 @@ interface SurfaceContext {
   readonly onOpenLocalModelSettings?: () => void;
   readonly onOpenConnectors?: () => void;
   readonly onOpenSkills?: () => void;
-  /** PRD-01/PRD-09 — signed-in display name for the Threads panel foot. */
-  readonly identityName?: string | null;
   readonly providerKeysRevision: number;
   readonly workspaceStageHost?: WorkspaceStageHost;
 }
@@ -227,7 +221,6 @@ function renderSurface(
           // path on this host rather than a second one for the switcher.
           onOpenConversation={ctx.onOpenConversation}
           onNewChat={ctx.onNewChat}
-          identityName={ctx.identityName}
           onOpenModelSettings={ctx.onOpenModelSettings}
           onOpenLocalModelSettings={ctx.onOpenLocalModelSettings}
           onOpenConnectors={ctx.onOpenConnectors}
