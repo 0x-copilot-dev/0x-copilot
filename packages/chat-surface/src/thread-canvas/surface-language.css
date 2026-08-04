@@ -158,6 +158,132 @@
   outline-offset: -1px;
 }
 
+/* ── follow-live: pin marker · live pulse · chip ──────────────────────── */
+
+/* These three replace `RunFollowLiveBanner`, a full-bleed accent bar that sat
+ * ABOVE this strip. It restated the pinned tab's title in uppercase a few
+ * pixels above the tab already showing it, wore the same alert skin as the
+ * error banner, and reflowed the whole canvas by its own height whenever a pin
+ * was taken or released — on a plain tab click.
+ *
+ * The rule the geometry has to honour: the strip's height must not change when
+ * any of this appears. Everything here is bounded by the 26px tab / 38px strip.
+ *
+ * Accent means ONE thing across all three: the live tail. Off-live (the scrub
+ * banner) is amber. Those two states used to be indistinguishable. */
+
+/* The pin's release control. Sized and spaced exactly like `__close`, which it
+ * replaces rather than joins — a tab carrying dot + title + pin + × is four
+ * controls in 26px, and the row stops reading as a row of tabs. */
+.tc-tab__pin {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--color-accent);
+  cursor: pointer;
+  display: inline-flex;
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  margin-left: 2px;
+  opacity: 0.8;
+  padding: 0;
+  width: 16px;
+}
+
+.tc-tab__pin svg {
+  display: block;
+  height: 9px;
+  width: 9px;
+}
+
+.tc-tab__pin:hover {
+  background: var(--color-accent-soft);
+  opacity: 1;
+}
+
+.tc-tab__pin:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -1px;
+}
+
+/* Where new work is landing. Sits AFTER the title, well clear of the identity
+ * dot at the tab's head, so the two dots never read as one pair. */
+.tc-tab__live {
+  background: var(--color-accent);
+  border-radius: 50%;
+  flex: none;
+  height: 5px;
+  margin-left: 1px;
+  width: 5px;
+  animation: tc-tab-live-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes tc-tab-live-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Pushes the chip to the strip's trailing edge without a second flex container. */
+.tc-tabs__spacer {
+  flex: 1 1 auto;
+  min-width: 12px;
+}
+
+.tc-follow-chip {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  border: 1px solid var(--color-accent-line);
+  border-radius: var(--radius-full);
+  color: var(--color-accent);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  gap: 6px;
+  height: 22px;
+  letter-spacing: var(--tracking-caption);
+  padding: 0 9px 0 7px;
+  white-space: nowrap;
+}
+
+.tc-follow-chip:hover {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+}
+
+.tc-follow-chip:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.tc-follow-chip__dot {
+  background: currentcolor;
+  border-radius: 50%;
+  flex: none;
+  height: 5px;
+  width: 5px;
+  animation: tc-tab-live-pulse 1.8s ease-in-out infinite;
+}
+
+/* One reduced-motion escape for both pulses: hold them at full strength rather
+ * than removing the mark, so the "live" signal survives the preference. */
+@media (prefers-reduced-motion: reduce) {
+  .tc-tab__live,
+  .tc-follow-chip__dot {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* ── surface card kicker ──────────────────────────────────────────────── */
 
 /* The card repeats the tab's dot so a surface and its tab are visibly the same

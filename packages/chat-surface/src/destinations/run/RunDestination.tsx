@@ -238,6 +238,7 @@ import { ThreadSwitcherHost } from "./ThreadSwitcherHost";
 import { useThreadSwitcherOpen } from "./useThreadSwitcherOpen";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
+import { isRunActive } from "./runActivity";
 import { useRailWidth } from "./useRailWidth";
 import {
   useRunMode,
@@ -2897,6 +2898,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     visibleSurfaceTabs.some((tab) => tab.uri === pinnedUri)
       ? pinnedUri
       : null;
+  // The pin as CHROME (the tab's pin glyph + the follow-live chip), which is a
+  // narrower thing than the pin as ACTIVATION (`activeUri`, below).
+  //
+  // Clicking the newest tab still pins — that is what stops a later surface
+  // from stealing the canvas, and `activeUri` must keep honouring it. But it
+  // pauses nothing the user can perceive, so reporting it was pure noise: the
+  // tab silently lost its close button (`TcTabs` hides `×` on `pinned`) with no
+  // visible cause. Chrome is therefore gated on the pin being somewhere OTHER
+  // than the surface we would auto-follow to anyway.
+  const heldPin = effectivePin === newestUri ? null : effectivePin;
   const followDiffUri =
     !surfacesV2 && !isScrubbed && openSurfaceDiffs.length > 0
       ? openSurfaceDiffs[0].uri
@@ -2912,15 +2923,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       : (effectivePin ??
         (surfacesV2 ? lifecyclePreferredUri : (followDiffUri ?? newestUri)));
 
+  // `live` marks the surface new work is landing in, but only while the run can
+  // still land any — on a finished run every tab is equally static, and a pulse
+  // there would advertise a tail that no longer exists.
+  const runIsActive = isRunActive(session.runStatus);
   const surfaceTabs = useMemo<readonly TcTab[]>(
     () =>
       visibleSurfaceTabs.map((tab) => ({
         uri: tab.uri,
         title: tab.title ?? tab.uri,
-        pinned: tab.uri === effectivePin,
+        pinned: tab.uri === heldPin,
+        live: runIsActive && tab.uri === newestUri,
         ...(tab.hue === undefined ? {} : { hue: tab.hue }),
       })),
-    [visibleSurfaceTabs, effectivePin],
+    [visibleSurfaceTabs, heldPin, runIsActive, newestUri],
   );
 
   // PRD-B3: the active surface's folded view-lifecycle state (tier ladder +
@@ -3993,15 +4009,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     );
   }, [activeSurfaceDiff, editingDiffId, handleSubmitEdits, handleCancelEdits]);
 
-  // PRD-04: "follow live" affordance — shown only when pinned to a surface that
-  // is not the newest (reuses the scrub-banner copy pattern). Un-pins on click.
+  // PRD-04: the "follow live" affordance — now a chip inside the tab strip
+  // rather than a banner above the canvas (see `TcTabsProps.onFollowLive`).
+  //
+  // The added `runIsActive` term is the fix for the state this shipped in: the
+  // condition never consulted run status, so on a FINISHED run — where there is
+  // no live tail at all — browsing between two completed artifacts raised a
+  // full-bleed banner claiming "the run has moved on" and offering to follow a
+  // stream that had ended. `isRunActive` treats an unknown status as active, so
+  // this only ever suppresses on a positively terminal one.
   const showFollowLive =
-    !isScrubbed &&
-    effectivePin !== null &&
-    newestUri !== "" &&
-    effectivePin !== newestUri;
-  const pinnedTabTitle =
-    visibleSurfaceTabs.find((tab) => tab.uri === effectivePin)?.title ?? "";
+    !isScrubbed && heldPin !== null && newestUri !== "" && runIsActive;
 
   // desktop-run-identity §D3 — inject the ONE dispatch into the in-chat composer's
   // ctx. TcChat keeps calling renderComposer with {disabled, placeholder}; this
@@ -4203,6 +4221,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       activeUri={activeUri}
       onActivateTab={handleActivateTab}
       onCloseTab={handleCloseTab}
+      // Presence of the callback IS the chip's render condition, so the gate
+      // stays in one place instead of being restated inside the strip.
+      {...(showFollowLive ? { onFollowLive: handleFollowLive } : {})}
       transport={transport}
       // PRD-B1: only defined when `surfacesV2` — flag off ⇒ `undefined`,
       // so ThreadCanvas takes its unchanged v1 projection path (byte-
@@ -4423,15 +4444,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             />
           ) : null}
 
-          {/* PRD-04: "follow live" affordance — the user pinned an older surface tab
-            while the run moved on to a newer one. Reuses the scrub-banner pattern;
-            "Follow live →" un-pins and resumes auto-follow. */}
-          {showFollowLive ? (
-            <RunFollowLiveBanner
-              pinnedTitle={pinnedTabTitle}
-              onFollowLive={handleFollowLive}
-            />
-          ) : null}
+          {/* PRD-04's follow-live affordance is NOT here any more. It lives in
+            the tab strip (`TcTabs`' chip + per-tab pin glyph), threaded through
+            `onFollowLive` below — the state belongs where the state is, and a
+            banner here reflowed the whole canvas on a plain tab click. */}
 
           <div data-testid="run-cockpit-canvas-slot" style={canvasSlotStyle}>
             {/* PR-3.11 (FR-3.25): no active run → the empty/idle composer (never a
@@ -4722,43 +4738,16 @@ function RunViewingBanner(props: RunViewingBannerProps): ReactElement {
   );
 }
 
-// ============================================================
-// PRD-04 — "follow live" affordance (pinned-tab escape hatch)
-// ============================================================
+// PRD-04's `RunFollowLiveBanner` was DELETED here, not merely unmounted.
 //
-// When the user pins an older surface tab (a manual click) and the run moves on
-// to a newer surface, this `role="status"` strip offers the single way back to
-// auto-follow. It reuses the scrub-banner copy pattern (accent-soft fill,
-// "Follow live →") — distinct testids so it never collides with the scrub
-// banner (they are mutually exclusive: follow-live is gated to live/off-scrub).
-
-interface RunFollowLiveBannerProps {
-  readonly pinnedTitle: string;
-  readonly onFollowLive: () => void;
-}
-
-function RunFollowLiveBanner(props: RunFollowLiveBannerProps): ReactElement {
-  const { pinnedTitle, onFollowLive } = props;
-  return (
-    <div
-      role="status"
-      data-testid="run-follow-live-banner"
-      style={viewingBannerStyle}
-    >
-      <span data-testid="run-follow-live-label" style={viewingTextStyle}>
-        Pinned to {pinnedTitle || "a surface"} · the run has moved on
-      </span>
-      <button
-        type="button"
-        data-testid="run-follow-live"
-        onClick={onFollowLive}
-        style={returnToLiveButtonStyle}
-      >
-        Follow live →
-      </button>
-    </div>
-  );
-}
+// It re-used this banner's copy pattern wholesale, including the sentence "the
+// run has moved on" — true for time-travel above, false for a pin (you are
+// looking at the CURRENT version of a different surface). Two states wearing
+// one skin and one sentence is why neither could be read at a glance.
+//
+// Its replacement is the tab strip's `Follow live` chip + per-tab pin glyph.
+// Do not reintroduce a banner here: the affordance must not change the height
+// of anything above the canvas, or taking a pin reflows the surface being read.
 
 // ============================================================
 // Styles (design-system tokens only)
@@ -5009,6 +4998,16 @@ const retryButtonStyle: CSSProperties = {
 // PR-3.7 — "Viewing…" banner (sky accent; jade=live/success, ember=danger — no
 // lime). Accent-soft fill + accent bottom border mark the whole cockpit as
 // off-live without competing with the danger-toned error banner above.
+/**
+ * Time-travel is AMBER, not accent.
+ *
+ * Accent is now spoken for: it means the live tail (the strip's follow-live
+ * chip, the pin glyph, the live pulse). This banner means the opposite — the
+ * cockpit is off-live, the composer is disabled, the transcript is dimmed — so
+ * painting it in the same accent as the affordances that lead back to live made
+ * the two indistinguishable at a glance. `--color-warning` is the existing
+ * token for "this is a state, not a failure"; danger stays reserved for errors.
+ */
 const viewingBannerStyle: CSSProperties = {
   flexShrink: 0,
   display: "flex",
@@ -5016,8 +5015,8 @@ const viewingBannerStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: 12,
   padding: "8px 16px",
-  background: "var(--color-accent-soft, rgba(95,178,236,.12))",
-  borderBottom: "1px solid var(--color-accent, #5fb2ec)",
+  background: "var(--color-warning-bg, #322615)",
+  borderBottom: "1px solid var(--color-warning, #e8b45e)",
   color: "var(--color-text, #f4f5f6)",
   fontSize: "var(--font-size-xs, 12px)",
 };
@@ -5027,7 +5026,7 @@ const viewingTextStyle: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
-  color: "var(--color-accent, #5fb2ec)",
+  color: "var(--color-warning, #e8b45e)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -5036,8 +5035,8 @@ const viewingTextStyle: CSSProperties = {
 const returnToLiveButtonStyle: CSSProperties = {
   flexShrink: 0,
   background: "transparent",
-  color: "var(--color-accent, #5fb2ec)",
-  border: "1px solid var(--color-accent, #5fb2ec)",
+  color: "var(--color-warning, #e8b45e)",
+  border: "1px solid var(--color-warning, #e8b45e)",
   borderRadius: 6,
   padding: "3px 12px",
   fontSize: "var(--font-size-xs, 12px)",
