@@ -14,6 +14,7 @@ from copilot_service_contracts.headers import (
     USER_HEADER,
 )
 import httpx
+from pydantic import ValidationError
 
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
@@ -44,6 +45,7 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
+from agent_runtime.capabilities.mcp.registry import McpServerCardRejection
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,15 @@ class BackendMcpProvider:
     )
 
     async def list_server_cards(self) -> tuple[McpServerCard, ...]:
-        """Fetch compact server cards from the backend and strip required_scopes."""
+        """Fetch compact server cards from the backend and strip required_scopes.
+
+        A card the runtime cannot parse is skipped and logged, never raised.
+        This provider validates BEFORE the registry does, so without the skip
+        here the registry's own tolerance is unreachable: a malformed card
+        escapes as a provider-level failure, which is fatal by design (see
+        ``DynamicMcpRegistry._collect_entries``) and took every run down with
+        it.
+        """
         response = await self.http_client.get(
             f"{self.backend_url.rstrip('/')}/internal/v1/mcp/cards",
             params={
@@ -79,9 +89,13 @@ class BackendMcpProvider:
         )
         response.raise_for_status()
         payload = response.json()
-        return tuple(
-            self._runtime_visible_card(card) for card in payload.get("servers", ())
-        )
+        cards: list[McpServerCard] = []
+        for raw_card in payload.get("servers", ()):
+            try:
+                cards.append(self._runtime_visible_card(raw_card))
+            except ValidationError as exc:
+                McpServerCardRejection.report(raw_card, exc, type(self).__name__)
+        return tuple(cards)
 
     def create_client(self, card: McpServerCard) -> McpClient:
         """Instantiate a BackendMcpClient for the given server card.
