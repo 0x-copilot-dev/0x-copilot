@@ -1,8 +1,13 @@
 // Onboarding composer model catalog — live /v1/agent/models + local-engine
-// honesty + pure selection helpers.
+// honesty. The PURE selection helpers (`defaultSelectedModelId`,
+// `mergeCatalog`, `modelSelectionForId`) now live in `@0x-copilot/chat-surface`
+// and are pinned by `packages/chat-surface/src/composer/modelCatalog.test.ts`;
+// what this file owns is that the web FTUE actually BINDS them.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+
+import type { PickerCatalogModel } from "@0x-copilot/chat-surface";
 
 import type { RequestIdentity } from "../../api/config";
 
@@ -11,17 +16,12 @@ vi.mock("../../api/agentApi", () => ({ listModels: vi.fn() }));
 import { listModels } from "../../api/agentApi";
 import {
   LOCAL_ENGINE_MODEL_ID,
-  defaultSelectedModelId,
-  modelSelectionForId,
   useOnboardingComposerModels,
-  type OnboardingCatalogModel,
 } from "./useOnboardingComposerModels";
 
 const IDENTITY: RequestIdentity = { orgId: "org_1", userId: "user_1" };
 
-function model(
-  overrides: Partial<OnboardingCatalogModel>,
-): OnboardingCatalogModel {
+function model(overrides: Partial<PickerCatalogModel>): PickerCatalogModel {
   return {
     id: "m",
     provider: "openai",
@@ -31,66 +31,6 @@ function model(
     ...overrides,
   };
 }
-
-describe("defaultSelectedModelId", () => {
-  it("prefers the first configured, enabled, non-disabled model", () => {
-    expect(
-      defaultSelectedModelId([
-        model({ id: "a", configured: false, disabled: true }),
-        model({ id: "b", configured: true }),
-      ]),
-    ).toBe("b");
-  });
-
-  it("falls back to the first entry when none are usable", () => {
-    expect(
-      defaultSelectedModelId([
-        model({ id: "a", configured: false, disabled: true }),
-      ]),
-    ).toBe("a");
-  });
-
-  it("is empty for an empty catalog", () => {
-    expect(defaultSelectedModelId([])).toBe("");
-  });
-
-  it("skips models the workspace disabled via enabled:false", () => {
-    expect(
-      defaultSelectedModelId([
-        model({ id: "a", configured: true, enabled: false }),
-        model({ id: "b", configured: true, enabled: true }),
-      ]),
-    ).toBe("b");
-  });
-});
-
-describe("modelSelectionForId", () => {
-  const models = [
-    model({
-      id: "claude",
-      provider: "anthropic",
-      model_name: "claude-sonnet-4-6",
-    }),
-  ];
-
-  it("returns null for the empty selection (runtime default)", () => {
-    expect(modelSelectionForId(models, "")).toBeNull();
-  });
-
-  it("sends the bare model_name for an unknown id", () => {
-    expect(modelSelectionForId(models, "unknown-slug")).toEqual({
-      model_name: "unknown-slug",
-    });
-  });
-
-  it("resolves a known id to provider + model_name + reasoning", () => {
-    expect(modelSelectionForId(models, "claude")).toEqual({
-      provider: "anthropic",
-      model_name: "claude-sonnet-4-6",
-      reasoning: null,
-    });
-  });
-});
 
 describe("useOnboardingComposerModels", () => {
   beforeEach(() => {
@@ -117,8 +57,101 @@ describe("useOnboardingComposerModels", () => {
     expect(listModels).toHaveBeenCalledWith(IDENTITY);
     expect(result.current.models[0].disabled).toBe(false);
     expect(result.current.models[1].disabled).toBe(true);
-    // Default selection = first usable (configured) model.
+    // Default selection = the usable (configured) model.
     expect(result.current.selectedModel).toBe("gpt");
+  });
+
+  it("opens on the provider's everyday rung, never the off-ladder priciest row", async () => {
+    // The bug this binding fixes. The FTUE used to auto-select the first
+    // configured row in CATALOG order, so an Anthropic-only user landed on
+    // "Claude Fable 5" — off the size ladder (`tier: null`) and the dearest
+    // model Anthropic sells — instead of the mid rung. Same ranking the desktop
+    // composer uses; the shared helper is what makes them agree.
+    vi.mocked(listModels).mockResolvedValue({
+      models: [
+        model({
+          id: "claude-fable-5",
+          provider: "anthropic",
+          name: "Claude Fable 5",
+          configured: true,
+          tier: null,
+          output_cost_per_mtok: 90,
+        }),
+        model({
+          id: "claude-haiku-4-5",
+          provider: "anthropic",
+          name: "Claude Haiku 4.5",
+          configured: true,
+          tier: "small",
+          output_cost_per_mtok: 5,
+        }),
+        model({
+          id: "claude-sonnet-5",
+          provider: "anthropic",
+          name: "Claude Sonnet 5",
+          configured: true,
+          tier: "medium",
+          output_cost_per_mtok: 15,
+        }),
+      ],
+    } as never);
+
+    const { result } = renderHook(() =>
+      useOnboardingComposerModels({
+        identity: IDENTITY,
+        localModelPct: null,
+        modelName: null,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(result.current.selectedModel).toBe("claude-sonnet-5"),
+    );
+  });
+
+  it("never auto-selects a keyless row, even when it leads the catalog", async () => {
+    // The backend catalog puts the deployment default (an OpenAI row) FIRST, so
+    // the old `usable ?? models[0]` fallback could preselect a model the user
+    // has no key for. Nothing usable → "" and the run-start gate is the backstop.
+    vi.mocked(listModels).mockResolvedValue({
+      models: [
+        model({ id: "gpt-5.4-mini", provider: "openai", configured: false }),
+        model({ id: "claude", provider: "anthropic", configured: false }),
+      ],
+    } as never);
+
+    const { result } = renderHook(() =>
+      useOnboardingComposerModels({
+        identity: IDENTITY,
+        localModelPct: null,
+        modelName: null,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
+    expect(result.current.selectedModel).toBe("");
+  });
+
+  it("honors the backend default_model_id when it is usable", async () => {
+    // The deployment's declared default is an explicit choice, so it outranks
+    // the tier heuristic inside the winning provider.
+    vi.mocked(listModels).mockResolvedValue({
+      default_model_id: "gpt-big",
+      models: [
+        model({ id: "gpt-mid", configured: true, tier: "medium" }),
+        model({ id: "gpt-big", configured: true, tier: "big" }),
+      ],
+    } as never);
+
+    const { result } = renderHook(() =>
+      useOnboardingComposerModels({
+        identity: IDENTITY,
+        localModelPct: null,
+        modelName: null,
+      }),
+    );
+
+    await waitFor(() => expect(result.current.selectedModel).toBe("gpt-big"));
   });
 
   it("injects the on-device engine as the selectable lead during a local pull", async () => {

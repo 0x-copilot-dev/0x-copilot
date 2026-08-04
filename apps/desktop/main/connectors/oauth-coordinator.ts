@@ -44,7 +44,7 @@ import {
 } from "../auth/loopback-server";
 // The superseded message is a renderer-visible IPC contract, so it is declared
 // in the dependency-free `channels` module both sides import — not here.
-import { CONNECT_SUPERSEDED } from "./channels";
+import { CONNECT_CANCELLED, CONNECT_SUPERSEDED } from "./channels";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -110,17 +110,52 @@ export class ConnectorOAuthError extends Error {
 }
 
 /**
- * Why a cancelled connect rejects. Only an Error MESSAGE survives the IPC hop,
- * so the string is the contract — but the renderer does not parse it: the side
- * that pressed Cancel already knows, and treats the rejection quietly (the same
- * shape `SignInGate` uses). This exists so a cancel reads as a cancel in logs
- * rather than as a mysterious redirect failure.
+ * Re-exported for the many call sites here that build a cancel rejection. The
+ * declaration lives in `./channels` because the renderer names it too, and that
+ * is the only connector module it may import.
  */
-export const CONNECT_CANCELLED = "connect cancelled";
+export { CONNECT_CANCELLED };
 
 /** The message a cancel of the given reason rejects with. */
 export function connectCancelMessage(reason: ConnectCancelReason): string {
   return reason === "superseded" ? CONNECT_SUPERSEDED : CONNECT_CANCELLED;
+}
+
+/** What the user is told when the browser round-trip never came back. */
+export const REDIRECT_TIMED_OUT =
+  "the browser sign-in was never completed, so nothing was connected";
+
+/** What the user is told when the listener closed before the redirect landed. */
+export const REDIRECT_INTERRUPTED =
+  "the sign-in was interrupted before the browser came back";
+
+/**
+ * Turns a delivery-side rejection into something a person can act on.
+ *
+ * The loopback listener is shared with app login, so its messages are internal
+ * by design — `loopback redirect timed out` describes a socket, not a user's
+ * situation, and it was being shown verbatim. Translating HERE rather than
+ * renaming the shared module keeps login's own wording untouched.
+ *
+ * The cancel contracts pass through unchanged: they are the IPC vocabulary the
+ * service translates into outcomes, and rewording them would break that.
+ *
+ * The 5-minute deadline itself is deliberately NOT changed here — how long to
+ * wait is a product decision, and this only fixes what the wait says.
+ */
+class RedirectFailure {
+  private static readonly _TIMED_OUT = "loopback redirect timed out";
+  private static readonly _CLOSED = "loopback server closed before redirect";
+
+  static describe(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === CONNECT_CANCELLED || message === CONNECT_SUPERSEDED) {
+      return message;
+    }
+    if (message.includes(RedirectFailure._TIMED_OUT)) return REDIRECT_TIMED_OUT;
+    if (message.includes(RedirectFailure._CLOSED)) return REDIRECT_INTERRUPTED;
+    return message;
+  }
 }
 
 /**
@@ -342,7 +377,7 @@ export class ConnectorOAuthCoordinator {
       } catch (err) {
         throw new ConnectorOAuthError(
           "redirect",
-          err instanceof Error ? err.message : String(err),
+          RedirectFailure.describe(err),
         );
       }
       if (delivered.state !== start.state) {
@@ -535,7 +570,7 @@ export class ConnectorOAuthCoordinator {
       } catch (err) {
         throw new ConnectorOAuthError(
           "redirect",
-          err instanceof Error ? err.message : String(err),
+          RedirectFailure.describe(err),
         );
       }
       if (delivered.state !== state) {

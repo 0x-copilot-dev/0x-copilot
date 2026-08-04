@@ -1,5 +1,4 @@
 import { Menu } from "@0x-copilot/design-system";
-import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import { useMemo, useRef, useState, type ReactElement } from "react";
 
 import { Icon } from "../icons/Icon";
@@ -17,8 +16,10 @@ import {
   type KeyFormConnected,
   type KeyFormFormatCheck,
 } from "../onboarding/KeyForm";
+import type { PickerCatalogModel } from "./modelCatalog";
 
-export type ModelPillModel = ModelCatalogModel & { disabled?: boolean };
+/** The pill renders exactly the list {@link mergeCatalog} builds. */
+export type ModelPillModel = PickerCatalogModel;
 
 // The BYOK provider rows offered by the inline add-key sub-view (contract §1).
 // Derived from the shared `PROVIDER_CATALOG` so the composer and Settings never

@@ -48,6 +48,7 @@ import {
   createDeveloperTokensPort,
   createLocalModelsPort,
   createModelsPort,
+  mergeCatalog,
   createProviderKeysPort,
   createSpendGuardrailPort,
   createToolUsePolicyPort,
@@ -93,7 +94,6 @@ import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
 import { publishWorkspaceDefaults } from "./workspaceDefaultsStore";
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
-import { mergeCatalog } from "./composer/desktopModelCatalog";
 
 interface SecureStorageStatus {
   readonly mode?: string;

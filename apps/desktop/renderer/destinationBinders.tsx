@@ -96,7 +96,8 @@ import type {
 // (loopback binding + system browser); the renderer only asks by slug.
 import {
   CONNECTOR_CHANNELS,
-  CONNECT_SUPERSEDED,
+  CONNECT_CANCELLED,
+  type ConnectorAuthorizationOutcome,
 } from "../main/connectors/channels";
 // Composer parity: the desktop Run cockpit's in-chat composer (steer an active
 // run) + empty-state composer (the design's "What should we run first?" surface
@@ -493,8 +494,14 @@ export function ConnectorsBinder({
       if (win.bridge === undefined) {
         throw new Error("Connect is unavailable in this environment.");
       }
+      // Only the INVOKE is guarded. The outcome branch below must sit outside
+      // this block: the errors it raises are the flow's own vocabulary, and
+      // routing them back through the failure mapper would relabel a supersede
+      // as a generic connect failure — reintroducing the very bug that made a
+      // superseded connector report itself broken.
+      let outcome: ConnectorAuthorizationOutcome;
       try {
-        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+        outcome = (await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
           ...(request.slug !== undefined ? { slug: request.slug } : {}),
           ...(request.serverId !== undefined
             ? { serverId: request.serverId }
@@ -505,17 +512,9 @@ export function ConnectorsBinder({
           ...(request.callbackMode !== undefined
             ? { callbackMode: request.callbackMode }
             : {}),
-        });
+        })) as ConnectorAuthorizationOutcome;
       } catch (error: unknown) {
         const raw = error instanceof Error ? error.message : String(error);
-        // A newer connect took this one's slot in main. Typed, because it is
-        // not a failure at all: the flow has to stay silent rather than tell
-        // the user a connector they just started is broken. Only the message
-        // survives the IPC hop, and `chat-surface` cannot import from `apps/*`,
-        // so this binder is where the string becomes a type.
-        if (raw.includes(CONNECT_SUPERSEDED)) {
-          throw new ConnectSupersededError(request.slug);
-        }
         // The one failure the user can resolve gets a typed error, so the flow
         // can open its client form instead of printing a sentence at them.
         if (
@@ -533,6 +532,17 @@ export function ConnectorsBinder({
                 ? "A workspace admin has to set this one up."
                 : messageFromError(error),
         );
+      }
+      // Main RESOLVES the two ordinary endings now rather than throwing. The
+      // shared flow still ends an attempt by rejecting — that is its contract,
+      // independent of the IPC hop — so the translation happens here.
+      if (outcome.outcome === "superseded") {
+        throw new ConnectSupersededError(request.slug);
+      }
+      if (outcome.outcome === "cancelled") {
+        // The flow's own `cancelledRef` identifies this as the user's doing;
+        // this only ends the attempt.
+        throw new Error(CONNECT_CANCELLED);
       }
       // The main-brokered connect resolves on completion → refetch so the row
       // lands, and signal the flow so the modal advances to the permission step.

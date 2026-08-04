@@ -61,6 +61,7 @@ import {
   firstRunAckLines,
   firstRunAckNote,
   firstRunAckStateForPhase,
+  modelSelectionForId,
   useFirstRunLaunch,
   useFirstRunLocalModel,
   type AcknowledgmentVariant,
@@ -87,10 +88,7 @@ import {
   renderOnboardingPlusMenu,
   skillInstructionPrompt,
 } from "./onboardingComposerAdapter";
-import {
-  modelSelectionForId,
-  useOnboardingComposerModels,
-} from "./useOnboardingComposerModels";
+import { useOnboardingComposerModels } from "./useOnboardingComposerModels";
 
 // The shared FTUE styles (top bar + gate cards + composer + ack). The desktop
 // imports these once at bootstrap; the web app imports them here so they load
