@@ -553,14 +553,35 @@ export function useRunComposerBindings(
     [],
   );
 
+  // The filing menu is the SAME anchored popover as the `+` menu — but it opens
+  // DOWNWARD. Its anchor is below the composer frame, so the `+` menu's upward
+  // placement drew the panel straight over the composer's own control row.
+  // Passing `renderPlusMenu` through unchanged is what caused that; the two
+  // popups share an implementation, not a direction.
+  const renderFilingMenu = useCallback(
+    ({
+      open,
+      anchorRef,
+      onDismiss,
+      children,
+    }: AssistantComposerPlusMenuSlotArgs): ReactElement => (
+      <DesktopAnchoredPlusMenu
+        open={open}
+        anchorRef={anchorRef}
+        onDismiss={onDismiss}
+        placement="down"
+      >
+        {children}
+      </DesktopAnchoredPlusMenu>
+    ),
+    [],
+  );
+
   const activeConnectorCount = useMemo(
     () => servers.filter((s) => s.enabled).length,
     [servers],
   );
 
-  // The filing zone. `renderPlusMenu` is passed as the chip's `renderMenu`
-  // unchanged — the two slot argument types are the same four fields, and one
-  // anchored-popover implementation for both composer popovers is the point.
   const projectFilingSlot = useMemo<ReactNode>(() => {
     if (filing === undefined || filing.options.length === 0) return undefined;
     return (
@@ -569,10 +590,10 @@ export function useRunComposerBindings(
         options={filing.options}
         onChange={filing.onChange}
         disabled={filing.disabled}
-        renderMenu={renderPlusMenu}
+        renderMenu={renderFilingMenu}
       />
     );
-  }, [filing, renderPlusMenu]);
+  }, [filing, renderFilingMenu]);
 
   return {
     skills,
