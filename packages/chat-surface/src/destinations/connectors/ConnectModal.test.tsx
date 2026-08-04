@@ -190,8 +190,23 @@ describe("<ConnectModal>", () => {
       const custom = screen.getByTestId("connect-catalog-custom");
       expect(custom).toHaveTextContent("Manage MCP");
       expect(custom).toHaveTextContent(/edit the JSON config/i);
-      // Pinned, not dashed (PRD-11 D7).
-      expect(custom.style.position).toBe("sticky");
+
+      // Pinned, not dashed (PRD-11 D7) — and pinned on the LIST ITEM.
+      //
+      // This assertion used to read `custom.style.position` (the button's own)
+      // and passed over a row that never moved: a sticky box is constrained by
+      // its containing block, and the <li> wrapping the button is exactly as
+      // tall as the button. Below a dozen catalog entries the escape hatch was
+      // simply off the bottom of the modal. Assert the owner, and assert that
+      // its containing block is the scrolling list.
+      expect(custom.style.position).toBe("");
+      const item = custom.closest("li");
+      expect(item?.style.position).toBe("sticky");
+      expect(item?.parentElement).toBe(
+        screen.getByTestId("connect-catalog-list"),
+      );
+      // Last child, so it pins BELOW the catalog rather than floating over it.
+      expect(item?.nextElementSibling).toBeNull();
     });
 
     it("clicking the pinned row opens Manage MCP", () => {

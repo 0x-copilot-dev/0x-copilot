@@ -801,7 +801,7 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
 // ---------------------------------------------------------------------------
 
 describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
-  it("opens the ConnectModal from the 'Connect a tool' CTA", async () => {
+  it("opens the MCP config editor from the 'Manage MCP' CTA", async () => {
     const recorder: Recorder = { calls: [] };
     const { getByTestId, queryByTestId } = render(
       <TransportProvider transport={connectorsTransport(recorder)}>
@@ -817,18 +817,23 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
 
     fireEvent.click(getByTestId("connectors-connect-cta"));
 
-    const modal = getByTestId("settings-modal");
-    expect(modal).toBeInTheDocument();
-    expect(modal.querySelector("h2")?.textContent).toBe("Connect a tool");
+    // Straight to the document — no catalog step in between. The catalog is
+    // still on the surface itself ("Add a connector" rows), so this CTA is
+    // free to be the one thing that surface could not otherwise do.
+    await waitFor(() => {
+      expect(getByTestId("manage-mcp-editor")).toBeInTheDocument();
+    });
+    expect(getByTestId("settings-modal").querySelector("h2")?.textContent).toBe(
+      "Manage MCP",
+    );
   });
 
-  // The pinned row now opens "Manage MCP" — the whole configuration as one
-  // editable document — instead of the single Server-URL form it used to.
-  // That form could express exactly one kind of server (remote, no
-  // credential, no headers) while the row opening it advertised "paste a JSON
-  // config — stdio or remote", so a user following the row's own description
-  // had nowhere to put a header or a command.
-  it("the pinned row opens the MCP config editor and loads the document", async () => {
+  // "Manage MCP" is the whole configuration as one editable document, which
+  // replaced the single Server-URL form: that form could express exactly one
+  // kind of server (remote, no credential, no headers) while the control
+  // opening it advertised "paste a JSON config — stdio or remote", so a user
+  // following its own description had nowhere to put a header or a command.
+  it("the CTA loads the config document from the server", async () => {
     const recorder: Recorder = { calls: [] };
     const { getByTestId } = render(
       <TransportProvider transport={connectorsTransport(recorder)}>
@@ -840,7 +845,6 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
       expect(getByTestId("connectors-connect-cta")).toBeInTheDocument();
     });
     fireEvent.click(getByTestId("connectors-connect-cta"));
-    fireEvent.click(getByTestId("connect-catalog-custom"));
 
     await waitFor(() => {
       expect(getByTestId("manage-mcp-editor")).toBeInTheDocument();
@@ -866,7 +870,6 @@ describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
       expect(getByTestId("connectors-connect-cta")).toBeInTheDocument();
     });
     fireEvent.click(getByTestId("connectors-connect-cta"));
-    fireEvent.click(getByTestId("connect-catalog-custom"));
     await waitFor(() => {
       expect(getByTestId("manage-mcp-editor")).toBeInTheDocument();
     });

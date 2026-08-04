@@ -601,7 +601,7 @@ export function ConnectorsBinder({
     <>
       <ConnectorsDestination
         items={result}
-        onConnect={flow.openConnect}
+        onManageMcp={openMcpConfig}
         catalog={catalog}
         onConnectEntry={(slug) => flow.connectEntry(slug)}
         onCancelConnect={flow.cancelConnect}

@@ -36,7 +36,7 @@
       "state": "default",
       "design": ".pg .cbtn--pri",
       "live": "[data-testid=\"connectors-connect-cta\"]",
-      "what": "'Connect a tool'. Design: cbtn cbtn--pri cbtn--sm — 11.5px/600, padding 4px 9px, radius 6px. PRD-11 D6: the CTA now uses the design-system `<Button variant='primary' size='sm'>` (.ui-button --primary --sm), whose base `border: 1px solid transparent` matches the design's `.cbtn--pri { border-color: transparent }` — the accent-on-accent border is gone as a consequence of the recipe, not a patch."
+      "what": "'Manage MCP' (was 'Connect a tool' — the CTA now opens the MCP config document directly). Design: cbtn cbtn--pri cbtn--sm — 11.5px/600, padding 4px 9px, radius 6px. PRD-11 D6: the CTA now uses the design-system `<Button variant='primary' size='sm'>` (.ui-button --primary --sm), whose base `border: 1px solid transparent` matches the design's `.cbtn--pri { border-color: transparent }` — the accent-on-accent border is gone as a consequence of the recipe, not a patch."
     },
     {
       "label": "default.rowlist",
