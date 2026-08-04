@@ -178,7 +178,10 @@ import {
   ArtifactSurface,
   artifactUri,
   parseArtifactSurfaceUri,
+  projectArtifactTabs,
 } from "../../artifacts";
+import { buildInlineArtifacts } from "./inlineArtifacts";
+import type { InlineArtifactEntry } from "../../thread-canvas/TcInlineArtifactCard";
 import type { ArtifactDownloadPort } from "../../ports/ArtifactDownloadPort";
 import type {
   WorkspaceApprovalSnapshot,
@@ -252,6 +255,8 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+/** Stable identity so the flag-off / scrubbed path never churns the transcript. */
+const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
 const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
@@ -3888,6 +3893,28 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [v2CanvasTabs, setMode],
   );
+  // PRD-04 follow-up: artifacts leave the pinned Focus band and render INLINE,
+  // where they were published. Built from the same artifact fold the tab strip
+  // reads, merged with the record's authoritative title and accent — one merge,
+  // so a tab and its inline card cannot disagree about the same artifact.
+  //
+  // Scrubbed ⇒ empty. Time-travel means "show me the run as it was at seq N",
+  // and an artifact published after that moment had not happened yet.
+  const inlineArtifacts = useMemo(() => {
+    if (!surfacesV2 || isScrubbed) return EMPTY_INLINE_ARTIFACTS;
+    return buildInlineArtifacts(
+      projectArtifactTabs(session.events),
+      artifactTitleById,
+      accentByArtifactId,
+    );
+  }, [
+    surfacesV2,
+    isScrubbed,
+    session.events,
+    artifactTitleById,
+    accentByArtifactId,
+  ]);
+
   const focusCards =
     surfacesV2 && displayedCanvasLifecycle !== null ? (
       <CanvasFocusCards
@@ -4105,6 +4132,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={conversationToolCalls.toolCalls}
+        // Artifacts, at the point they were published. Reading one is no longer
+        // a mode switch: the card expands in place into the same
+        // `ArtifactSurface` Studio mounts, and "Open in Studio" stays as a
+        // choice rather than the only way to look.
+        inlineArtifacts={inlineArtifacts}
+        artifactTransport={transport}
+        {...(artifactDownloadPort === undefined
+          ? {}
+          : { artifactDownloadPort })}
+        onOpenArtifactInStudio={handleOpenLifecycleSubject}
         // The gap between send and the first token, which rendered as an empty
         // column. True only while the bound run is genuinely live AND has
         // produced nothing visible — a run parked on an approval is NOT
@@ -4270,6 +4307,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // B3 Focus is a compact projection of the same lifecycle—not a hidden
       // full Studio canvas. Undefined on the v1 path preserves legacy Focus.
       focusCards={focusCards}
+      hasInlineSubjects={inlineArtifacts.length > 0}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
       // which renders the Approve/Reject/Suggest controls around the diff.

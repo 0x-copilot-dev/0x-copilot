@@ -228,6 +228,13 @@ export interface ThreadCanvasProps {
    */
   readonly focusCards?: ReactNode;
   /**
+   * Focus mode is already surfacing this run's subjects inside the transcript
+   * (the inline artifact cards), so the tab strip would be a second, duplicate
+   * affordance for the same things. Studio is unaffected — it has no transcript
+   * to inline into and the strip is its only navigation.
+   */
+  readonly hasInlineSubjects?: boolean;
+  /**
    * PR-3.6: gate the in-canvas Studio/Focus switcher. Defaults to `true`
    * (standalone / web usage). `RunDestination` passes `false` so `RunHeader`
    * is the single mode control (per the PR-3.5 seam note).
@@ -293,6 +300,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
+    hasInlineSubjects = false,
     rightRail,
     focusCards,
     showModeSwitcher = true,
@@ -474,9 +482,17 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // A tab track with no tab is not neutral: it reserves a visibly empty band
   // below the run header. Only mount both the strip *and* its grid row when
   // there is a real surface to navigate to.
+  // Focus suppresses the strip whenever ANYTHING already surfaces the run's
+  // subjects — the pinned cards, or (now that artifacts render in the thread)
+  // the inline cards. Gating on `focusCards` alone was correct only while that
+  // band was the sole other affordance: once artifacts moved inline, a run
+  // whose only subjects were artifacts left `focusCards` undefined, and the
+  // strip reappeared in Focus listing the very artifacts the transcript was
+  // already showing.
+  const focusHasInlineSubjects = focusCards !== undefined || hasInlineSubjects;
   const showTabs =
     tabs.length > 0 &&
-    (mode === "studio" || (mode === "focus" && focusCards === undefined));
+    (mode === "studio" || (mode === "focus" && !focusHasInlineSubjects));
 
   return (
     <div
@@ -658,6 +674,13 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
             onScrub={handleScrub}
             onSnapToNow={handleSnapToNow}
             onExpand={mode === "focus" ? handleExpandToStudio : undefined}
+            // Exactly one home at a time. The strip owns follow-live whenever
+            // it is on screen; this bar picks it up only when the strip is
+            // suppressed, which is the Focus-with-inline-cards case that would
+            // otherwise strand a pinned reader with no way back to the live
+            // edge. Never both — two buttons for one action is how a user
+            // learns to distrust both.
+            onFollowLive={showTabs ? undefined : onFollowLive}
           />
         </div>
       </SwimlaneScrubProvider>
