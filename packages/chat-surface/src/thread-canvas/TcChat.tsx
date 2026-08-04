@@ -531,6 +531,15 @@ export interface TcChatProps {
   /** Open a parked write's payload on its detail surface ("Review →"). */
   readonly onReviewWriteGate?: (approvalId: string) => void;
   /**
+   * The audit anchor for a gate-bearing approval, joined host-side from the
+   * ledger fold (`ledger.gates.get(approvalId)?.ledgerId`). A callback rather
+   * than a field on the approval: `ledgerId` is anchored on the `gate.opened`
+   * event, which is a DIFFERENT event from the `approval_requested` the
+   * approval projection folds, so the two folds must stay separate and the
+   * join belongs at the host. Returns undefined when there is no ledger row.
+   */
+  readonly ledgerIdByApprovalId?: (approvalId: string) => string | undefined;
+  /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
    * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
@@ -634,6 +643,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
     onReviewWriteGate,
+    ledgerIdByApprovalId,
     renderComposer,
     terminalBeat,
     runFailed = false,
@@ -780,6 +790,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     onWorkspaceGrantDeny,
     onWorkspaceGrantCancel,
     onReviewWriteGate,
+    ledgerIdByApprovalId,
   };
 
   const transcript = (
@@ -970,6 +981,15 @@ interface ApprovalHandlers {
    * ask; everything a reviewer needs to judge it lives on the Studio surface.
    */
   readonly onReviewWriteGate?: (approvalId: string) => void;
+  /**
+   * The audit anchor for a gate-bearing approval, joined host-side from the
+   * ledger fold (`ledger.gates.get(approvalId)?.ledgerId`). A callback rather
+   * than a field on the approval: `ledgerId` is anchored on the `gate.opened`
+   * event, which is a DIFFERENT event from the `approval_requested` the
+   * approval projection folds, so the two folds must stay separate and the
+   * join belongs at the host. Returns undefined when there is no ledger row.
+   */
+  readonly ledgerIdByApprovalId?: (approvalId: string) => string | undefined;
 }
 
 function renderStudioApprovalCard(
@@ -1195,6 +1215,13 @@ function renderWriteGateRow(
         title={approval.title}
         connector={approval.category?.vendor ?? null}
         irreversible={isIrreversible(approval)}
+        // The payload was already sitting here — the row simply never showed
+        // it, which is why reviewing a write meant leaving the transcript.
+        params={approval.params}
+        // Joined host-side from the ledger fold; `undefined` for an approval
+        // with no gate (a plain question, a workspace grant), where the honest
+        // answer is that there is no ledger row rather than a guessed id.
+        ledgerId={handlers.ledgerIdByApprovalId?.(approval.approvalId)}
         onApprove={() => handlers.onApprove?.(approval.approvalId)}
         onDecline={() => handlers.onReject?.(approval.approvalId)}
         onReview={() => handlers.onReviewWriteGate?.(approval.approvalId)}
@@ -1213,7 +1240,7 @@ function renderWriteGateRow(
  * so an unlabelled gate reads as reversible: it keeps the ordinary Approve
  * button rather than inventing a severity nobody asserted.
  */
-function isIrreversible(approval: TcChatApproval): boolean {
+export function isIrreversible(approval: TcChatApproval): boolean {
   return (approval.category?.access ?? "")
     .toLowerCase()
     .includes("destructive");

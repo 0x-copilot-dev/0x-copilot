@@ -28,6 +28,7 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import type { ActivityParam } from "../approvals/types";
+import { TcWriteGatePayload } from "./TcWriteGatePayload";
 
 export interface TcWriteGateCardProps {
   /** Verb-first line: "Create an issue in Parth-test". */
@@ -44,9 +45,6 @@ export interface TcWriteGateCardProps {
   readonly onDecline: () => void;
   readonly busy?: boolean;
 }
-
-const REVERSIBLE_COPY = "You can undo this from the connector if it's wrong.";
-const IRREVERSIBLE_COPY = "This cannot be undone from here.";
 
 export function TcWriteGateCard({
   title,
@@ -83,30 +81,14 @@ export function TcWriteGateCard({
         {title}
       </h3>
 
-      {params.length > 0 ? (
-        <dl data-testid="tc-write-gate-card-params" style={paramsStyle}>
-          {params.map((param) => (
-            <div key={param.label} style={paramRowStyle}>
-              <dt className="ui-mono-caps" style={flatStyle}>
-                {param.label}
-              </dt>
-              <dd className="ui-body" style={flatStyle}>
-                {param.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-
-      {/* Stated as a fact about the write, not as a warning about this choice —
-          a caution here would make the safe option look like the risky one. */}
-      <p
-        className="ui-caption"
-        data-testid="tc-write-gate-card-reversibility"
-        style={flatStyle}
-      >
-        {irreversible ? IRREVERSIBLE_COPY : REVERSIBLE_COPY}
-      </p>
+      {/* The same component the transcript row's expanded body renders, so the
+          two surfaces cannot disagree about what is being approved. */}
+      <TcWriteGatePayload
+        params={params}
+        irreversible={irreversible}
+        ledgerId={ledgerId}
+        testIdPrefix="tc-write-gate-card"
+      />
 
       <div style={actionsStyle}>
         <button
@@ -128,15 +110,6 @@ export function TcWriteGateCard({
           Decline
         </button>
       </div>
-
-      <div style={footerStyle}>
-        <span
-          className="ui-mono-caps"
-          data-testid="tc-write-gate-card-ledger-id"
-        >
-          {ledgerId}
-        </span>
-      </div>
     </div>
   );
 }
@@ -150,26 +123,8 @@ const rootStyle: CSSProperties = {
 
 const flatStyle: CSSProperties = { margin: 0 };
 
-const paramsStyle: CSSProperties = {
-  display: "grid",
-  gap: "var(--space-2xs, 4px)",
-  margin: 0,
-};
-
-const paramRowStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "minmax(0, 8rem) minmax(0, 1fr)",
-  gap: "var(--space-sm, 8px)",
-  alignItems: "baseline",
-};
-
 const actionsStyle: CSSProperties = {
   display: "flex",
   gap: "var(--space-sm, 8px)",
   alignItems: "center",
-};
-
-const footerStyle: CSSProperties = {
-  borderTop: "1px solid var(--color-border-subtle, #22252e)",
-  paddingTop: "6px",
 };
