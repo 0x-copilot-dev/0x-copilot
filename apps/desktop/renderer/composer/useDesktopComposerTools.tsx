@@ -17,12 +17,16 @@
 import { useMemo } from "react";
 
 import {
+  ConnectSupersededError,
   useConnectorTools,
   type ComposerConnectorsPort,
   type ConnectorToolsHostPort,
 } from "@0x-copilot/chat-surface";
 
-import { CONNECTOR_CHANNELS } from "../../main/connectors/channels";
+import {
+  CONNECTOR_CHANNELS,
+  CONNECT_SUPERSEDED,
+} from "../../main/connectors/channels";
 
 export interface UseDesktopComposerToolsOptions {
   readonly connectorsPort?: ComposerConnectorsPort;
@@ -79,10 +83,23 @@ export function useDesktopComposerTools(
         const win = window as unknown as { bridge?: Window["bridge"] };
         if (win.bridge === undefined || connectorsPort === undefined) return;
         const server = await connectorsPort.installFromCatalog(entry.slug);
-        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
-          slug: entry.slug,
-          serverId: server.server_id,
-        });
+        try {
+          await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+            slug: entry.slug,
+            serverId: server.server_id,
+          });
+        } catch (error: unknown) {
+          // Same mapping the connectors binder does, and needed here for the
+          // same reason: main abandoned this attempt for a newer connect, which
+          // is not a failure and must not be reported as one. Only the message
+          // crosses IPC, so this is where it becomes a type the shared hook can
+          // branch on.
+          const raw = error instanceof Error ? error.message : String(error);
+          if (raw.includes(CONNECT_SUPERSEDED)) {
+            throw new ConnectSupersededError(entry.slug);
+          }
+          throw error;
+        }
         return { serverId: server.server_id };
       },
       // Reaches MAIN, which closes the armed loopback so the `authorize` above

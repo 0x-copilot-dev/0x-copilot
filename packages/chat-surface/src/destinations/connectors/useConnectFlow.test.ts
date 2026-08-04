@@ -9,6 +9,7 @@ import type { ConnectorSlug } from "@0x-copilot/api-types";
 
 import {
   ConnectOAuthClientRequiredError,
+  ConnectSupersededError,
   useConnectFlow,
   type UseConnectFlowOptions,
 } from "./useConnectFlow";
@@ -241,5 +242,139 @@ describe("useConnectFlow — cancel", () => {
     const { view } = setup({ cancelAuthorize });
     act(() => view.result.current.cancelConnect?.());
     expect(cancelAuthorize).not.toHaveBeenCalled();
+  });
+});
+
+// A connect the HOST abandoned for a newer one is not a failure and is not the
+// user's doing. Main holds ONE pending slot (newest-connect-wins), so starting a
+// second connect rejects the first — and that rejection lands in a flow that
+// never asked for it.
+//
+// It used to be indistinguishable from a user Cancel, and only Cancel was
+// treated quietly, so the abandoned attempt fell through to the error branch and
+// the user was told a connector they had just started had failed — quoting the
+// internal string `connect cancelled` at them. Worse, both attempts share this
+// flow's state, so the abandoned one's teardown cleared the LIVE attempt's
+// spinner while its OAuth round-trip was still running.
+describe("useConnectFlow — superseded by a newer connect", () => {
+  const FIRST = "atlassian" as ConnectorSlug;
+  const SECOND = "gmail" as ConnectorSlug;
+
+  it("reports no error when the host abandoned the attempt", async () => {
+    const attempt = deferred<void>();
+    const authorize = vi.fn(() => attempt.promise);
+    const { view } = setup({ authorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      attempt.reject(new ConnectSupersededError(FIRST));
+      await Promise.resolve();
+    });
+
+    // The user started this connector; telling them it broke would be a lie.
+    expect(view.result.current.error).toBeNull();
+    // Nothing newer in THIS flow to hand off to, so it must stop spinning.
+    expect(view.result.current.pending).toBe(false);
+    expect(view.result.current.connectingSlug).toBeNull();
+  });
+
+  it("never shows the raw IPC string to the user", async () => {
+    const attempt = deferred<void>();
+    const authorize = vi.fn(() => attempt.promise);
+    const { view } = setup({ authorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      attempt.reject(new ConnectSupersededError(FIRST));
+      await Promise.resolve();
+    });
+
+    expect(view.result.current.error ?? "").not.toContain("connect cancelled");
+    expect(view.result.current.error ?? "").not.toContain("superseded");
+  });
+
+  it("does not tear down the NEWER attempt that replaced it", async () => {
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const authorize = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { view } = setup({ authorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      view.result.current.onSelectEntry(SECOND);
+      await Promise.resolve();
+    });
+
+    // The first attempt's rejection arrives AFTER the second took the flow.
+    await act(async () => {
+      first.reject(new ConnectSupersededError(FIRST));
+      await Promise.resolve();
+    });
+
+    // The live connect keeps its spinner and its identity — this is the
+    // clobbering that made a running connect look dead.
+    expect(view.result.current.pending).toBe(true);
+    expect(view.result.current.connectingSlug).toBe(SECOND);
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it("does not let a stale attempt clobber a RETRY of the same connector", async () => {
+    // Slug identity cannot separate these two, which is why the guard is a
+    // monotonic attempt token rather than a slug comparison.
+    const first = deferred<void>();
+    const second = deferred<void>();
+    const authorize = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { view } = setup({ authorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      first.reject(new ConnectSupersededError(FIRST));
+      await Promise.resolve();
+    });
+
+    expect(view.result.current.pending).toBe(true);
+    expect(view.result.current.connectingSlug).toBe(FIRST);
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it("still reports a GENUINE failure — the quiet path is not a blanket mute", async () => {
+    const attempt = deferred<void>();
+    const authorize = vi.fn(() => attempt.promise);
+    const { view } = setup({ authorize });
+
+    await act(async () => {
+      view.result.current.onSelectEntry(FIRST);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      attempt.reject(new Error("the provider refused"));
+      await Promise.resolve();
+    });
+
+    expect(view.result.current.error).toContain("the provider refused");
+    expect(view.result.current.pending).toBe(false);
   });
 });

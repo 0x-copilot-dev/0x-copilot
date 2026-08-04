@@ -17,6 +17,7 @@ import type { ConnectorAuthorizationResult } from "./channels";
 import {
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
+  type ConnectCancelReason,
   type ConnectorOAuthDeps,
 } from "./oauth-coordinator";
 
@@ -39,7 +40,9 @@ export class ConnectorService {
    * system-browser sign-ins, and for the same reason: a second connect makes
    * the first unreachable, so leaving it holding a port helps nobody.
    */
-  private cancelPendingConnect: (() => void) | null = null;
+  private cancelPendingConnect:
+    | ((reason?: ConnectCancelReason) => void)
+    | null = null;
   readonly coordinator: ConnectorOAuthCoordinator;
 
   constructor(deps: ConnectorServiceDeps) {
@@ -191,13 +194,22 @@ export class ConnectorService {
    * two connectors quickly.
    */
   private async runCancellable<T>(
-    run: (onCancelAvailable: (cancel: () => void) => void) => Promise<T>,
+    run: (
+      onCancelAvailable: (
+        cancel: (reason?: ConnectCancelReason) => void,
+      ) => void,
+    ) => Promise<T>,
   ): Promise<T> {
     // Newest wins: a second connect makes the first unreachable anyway, so it
     // is aborted rather than left holding a loopback port for five minutes.
-    this.cancelPendingConnect?.();
+    //
+    // It is aborted as `superseded`, NOT as a user cancel. The distinction is
+    // the whole point: the abandoned attempt's rejection travels back to a
+    // renderer that never asked for it, and calling it a cancel is what made
+    // the surface report a failure for a connector the user had just started.
+    this.cancelPendingConnect?.("superseded");
     this.cancelPendingConnect = null;
-    let mine: (() => void) | null = null;
+    let mine: ((reason?: ConnectCancelReason) => void) | null = null;
     try {
       return await run((cancel) => {
         mine = cancel;
@@ -224,7 +236,7 @@ export class ConnectorService {
    * cancelling for exactly that reason and lets the server's answer win.
    */
   cancelPendingAuthorize(): void {
-    this.cancelPendingConnect?.();
+    this.cancelPendingConnect?.("user");
     this.cancelPendingConnect = null;
   }
 

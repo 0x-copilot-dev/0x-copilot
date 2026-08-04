@@ -398,17 +398,31 @@ describe("ConnectorService — cancelPendingAuthorize", () => {
    */
   function makePausableService(): {
     service: ConnectorService;
-    started: Array<() => void>;
+    started: Array<(reason?: "user" | "superseded") => void>;
   } {
     const { service } = makeService([], { existingServerIds: ["seed:linear"] });
-    const started: Array<() => void> = [];
+    const started: Array<(reason?: "user" | "superseded") => void> = [];
     Object.assign(service.coordinator, {
       connectMcpServer: (
         _id: string,
-        options: { onCancelAvailable?: (cancel: () => void) => void } = {},
+        options: {
+          onCancelAvailable?: (
+            cancel: (reason?: "user" | "superseded") => void,
+          ) => void;
+        } = {},
       ) =>
         new Promise<void>((_resolve, reject) => {
-          const abort = (): void => reject(new Error("connect cancelled"));
+          // The fake honours the REASON rather than hardcoding one message —
+          // otherwise it would pass whatever the service passed and these tests
+          // could not tell a supersede from a cancel at all.
+          const abort = (reason: "user" | "superseded" = "user"): void =>
+            reject(
+              new Error(
+                reason === "superseded"
+                  ? "connect superseded"
+                  : "connect cancelled",
+              ),
+            );
           options.onCancelAvailable?.(abort);
           started.push(abort);
         }),
@@ -446,7 +460,12 @@ describe("ConnectorService — cancelPendingAuthorize", () => {
       slug: "linear",
       serverId: "seed:linear",
     });
-    const firstRejects = expect(first).rejects.toThrow(/connect cancelled/);
+    // SUPERSEDED, not cancelled. The user did not stop this one — the app did,
+    // to give its slot to the next connect — and the renderer branches on the
+    // difference: a cancel stays quiet because the user already knows, while a
+    // supersede reported as a cancel told them a connector they had just
+    // started had failed.
+    const firstRejects = expect(first).rejects.toThrow(/connect superseded/);
     await vi.waitFor(() => expect(started).toHaveLength(1));
 
     const second = service.authorize({

@@ -29,6 +29,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { ConnectSupersededError } from "../destinations/connectors/useConnectFlow";
 import { ComposerToolsTrigger } from "./ComposerToolsTrigger";
 import type { ConnectorToolsHostPort } from "./ports/ConnectorToolsHostPort";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
@@ -108,6 +109,10 @@ export function useConnectorTools(
   // the side that pressed Cancel already knows, so it stays quiet rather than
   // parsing an error message back out across the IPC hop.
   const cancelledRef = useRef(false);
+  // Which attempt owns `connectingSlug`. See the same ref in `useConnectFlow`:
+  // a monotonic token, because two attempts at the SAME connector are otherwise
+  // indistinguishable and the abandoned one clears the live one's spinner.
+  const attemptSeqRef = useRef(0);
 
   // A connector that just authorized must not stay paused from earlier in the
   // session. Derived during render rather than in an effect: an effect would
@@ -148,6 +153,7 @@ export function useConnectorTools(
         onAddCustom?.();
         return;
       }
+      const myAttempt = ++attemptSeqRef.current;
       cancelledRef.current = false;
       setConnectingSlug(entry.slug);
       void (async () => {
@@ -166,6 +172,17 @@ export function useConnectorTools(
           );
           setReloadToken((n) => n + 1);
         } catch (error: unknown) {
+          // A newer connect in this same popover owns `connectingSlug` now;
+          // this attempt reporting anything would describe the wrong connector.
+          if (attemptSeqRef.current !== myAttempt) return;
+          if (error instanceof ConnectSupersededError) {
+            // The HOST abandoned this attempt for a newer one — not a failure,
+            // and not something the user did. Re-read for the same reason a
+            // cancel does: a supersede cannot un-grant an authorization the
+            // provider may already have completed.
+            setReloadToken((n) => n + 1);
+            return;
+          }
           if (cancelledRef.current) {
             // The user's own Cancel caused this rejection, so it is not an
             // error to report. Re-read anyway: cancelling cannot un-grant an
@@ -179,7 +196,9 @@ export function useConnectorTools(
             error instanceof Error ? error.message : String(error),
           );
         } finally {
-          setConnectingSlug(null);
+          // Only the current attempt may clear the shared spinner; a superseded
+          // one would blank the newer connect's row.
+          if (attemptSeqRef.current === myAttempt) setConnectingSlug(null);
         }
       })();
     },

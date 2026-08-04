@@ -42,6 +42,9 @@ import {
   awaitLoopbackCode,
   type LoopbackHandle,
 } from "../auth/loopback-server";
+// The superseded message is a renderer-visible IPC contract, so it is declared
+// in the dependency-free `channels` module both sides import — not here.
+import { CONNECT_SUPERSEDED } from "./channels";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -72,9 +75,29 @@ export interface ConnectorConnectOptions {
    * second against a real provider, and a Cancel button that is inert for the
    * first second of a spinner is the kind of "nothing happens" this whole
    * change is about.
+   *
+   * The reason is what the renderer needs to tell apart "you stopped this"
+   * from "we stopped this for you"; see `ConnectCancelReason`.
    */
-  readonly onCancelAvailable?: (cancel: () => void) => void;
+  readonly onCancelAvailable?: (
+    cancel: (reason?: ConnectCancelReason) => void,
+  ) => void;
 }
+
+/**
+ * Why a pending connect was aborted.
+ *
+ * `user` is the Cancel button. `superseded` is newest-connect-wins: starting a
+ * second connect aborts the first, because one loopback slot exists and the
+ * first is unreachable the moment the second opens a browser.
+ *
+ * They were one value for a while, and collapsing them was a reporting bug, not
+ * a cosmetic one. The side that presses Cancel already knows and can stay quiet;
+ * the side that gets SUPERSEDED knows nothing — so it fell through to the error
+ * branch and told the user the connector they had just started had failed,
+ * quoting the internal string `connect cancelled` at them.
+ */
+export type ConnectCancelReason = "user" | "superseded";
 
 export class ConnectorOAuthError extends Error {
   readonly stage: "start" | "redirect" | "callback";
@@ -94,6 +117,11 @@ export class ConnectorOAuthError extends Error {
  * rather than as a mysterious redirect failure.
  */
 export const CONNECT_CANCELLED = "connect cancelled";
+
+/** The message a cancel of the given reason rejects with. */
+export function connectCancelMessage(reason: ConnectCancelReason): string {
+  return reason === "superseded" ? CONNECT_SUPERSEDED : CONNECT_CANCELLED;
+}
 
 /**
  * Why an unreachable facade must fail rather than spin.
@@ -255,11 +283,19 @@ export class ConnectorOAuthCoordinator {
     // Same cancel contract as `connectMcpServer`. Deep-link mode has no
     // loopback to close, so rejecting the delivery promise is the ONLY way to
     // abort it — which is why cancel rejects rather than just closing a port.
+    //
+    // The reason is remembered so the pre-browser check below rejects with the
+    // SAME message the delivery promise would have; otherwise a connect
+    // superseded in that window still reported itself as a user cancel.
     let cancelled = false;
+    let cancelReason: ConnectCancelReason = "user";
     let rejectDelivery: (error: Error) => void = () => {};
-    options.onCancelAvailable?.(() => {
+    options.onCancelAvailable?.((reason = "user") => {
       cancelled = true;
-      rejectDelivery(new ConnectorOAuthError("redirect", CONNECT_CANCELLED));
+      cancelReason = reason;
+      rejectDelivery(
+        new ConnectorOAuthError("redirect", connectCancelMessage(reason)),
+      );
       handle?.close();
     });
 
@@ -287,7 +323,10 @@ export class ConnectorOAuthCoordinator {
       // Never open a consent screen for a flow the user already cancelled —
       // approving in that tab would complete an authorization they stopped.
       if (cancelled) {
-        throw new ConnectorOAuthError("redirect", CONNECT_CANCELLED);
+        throw new ConnectorOAuthError(
+          "redirect",
+          connectCancelMessage(cancelReason),
+        );
       }
       await this.openExternal(start.authorization_url);
 
@@ -427,7 +466,11 @@ export class ConnectorOAuthCoordinator {
   // loopback a first-class callback rather than a workaround.
   async connectMcpServer(
     serverId: string,
-    options: { readonly onCancelAvailable?: (cancel: () => void) => void } = {},
+    options: {
+      readonly onCancelAvailable?: (
+        cancel: (reason?: ConnectCancelReason) => void,
+      ) => void;
+    } = {},
   ): Promise<void> {
     const bearer = await this.getBearer();
     if (bearer === null) {
@@ -446,10 +489,14 @@ export class ConnectorOAuthCoordinator {
     // that window still closes the loopback and still sets `cancelled`, which
     // is what stops the browser from being opened at all.
     let cancelled = false;
+    let cancelReason: ConnectCancelReason = "user";
     let rejectDelivery: (error: Error) => void = () => {};
-    options.onCancelAvailable?.(() => {
+    options.onCancelAvailable?.((reason = "user") => {
       cancelled = true;
-      rejectDelivery(new ConnectorOAuthError("redirect", CONNECT_CANCELLED));
+      cancelReason = reason;
+      rejectDelivery(
+        new ConnectorOAuthError("redirect", connectCancelMessage(reason)),
+      );
       handle.close();
     });
 
@@ -475,7 +522,10 @@ export class ConnectorOAuthCoordinator {
       // than doing nothing: the tab is live, so approving in it would complete
       // an authorization they explicitly stopped.
       if (cancelled) {
-        throw new ConnectorOAuthError("redirect", CONNECT_CANCELLED);
+        throw new ConnectorOAuthError(
+          "redirect",
+          connectCancelMessage(cancelReason),
+        );
       }
       await this.openExternal(start.auth_url);
 

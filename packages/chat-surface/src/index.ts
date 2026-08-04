@@ -742,6 +742,9 @@ export {
   // pre-registered OAuth client" — the one connect failure the user can fix,
   // which the flow turns into a form instead of an error string.
   ConnectOAuthClientRequiredError,
+  // "a newer connect replaced this one" — not a failure and not the user's
+  // doing, so the flow stays silent instead of reporting a broken connector.
+  ConnectSupersededError,
   RevealOnce,
   ConnectorDetailView,
   ScopeReviewTab,
