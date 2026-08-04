@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Protocol
 
 from pydantic import ValidationError
@@ -18,10 +19,63 @@ from agent_runtime.capabilities.mcp.cards import (
     McpServerHealth,
 )
 from agent_runtime.capabilities.mcp.client import McpClientFactory
-from agent_runtime.capabilities.mcp.constants import Messages
+from agent_runtime.capabilities.mcp.constants import Keys, Messages
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 
+_LOGGER = logging.getLogger(__name__)
+
 RawMcpServerCard = McpServerCard | Mapping[str, object]
+
+
+class McpServerCardRejection:
+    """Naming and reporting for a server card that failed validation.
+
+    Shared by every site that validates a card (the registry itself and each
+    provider that pre-validates), so a rejection reads the same wherever it
+    happens and no site has to reinvent how to name an unparseable card.
+
+    It exists because the card CANNOT be parsed, so nothing typed is available
+    to identify it — and a log line that cannot say which connector broke is
+    precisely why this class of failure took a full reproduction to diagnose.
+    """
+
+    _UNIDENTIFIED = "<unidentified card>"
+
+    @classmethod
+    def identify(cls, raw_card: object) -> str:
+        """Best-effort identity for an unvalidated card."""
+        if isinstance(raw_card, McpServerCard):
+            return raw_card.server_id or raw_card.name
+        if isinstance(raw_card, Mapping):
+            for key in (Keys.Field.SERVER_ID, Keys.Field.NAME):
+                value = raw_card.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+        return cls._UNIDENTIFIED
+
+    @classmethod
+    def describe(cls, exc: ValidationError) -> str:
+        """Render which fields rejected the card, without their values.
+
+        Deliberately omits pydantic's ``input``: a card carries connector
+        metadata, and a log line is not the place to widen what that exposes.
+        The field plus the reason is what makes this actionable.
+        """
+        return "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+
+    @classmethod
+    def report(cls, raw_card: object, exc: ValidationError, source: str) -> None:
+        """Log a skipped card at ERROR, naming the card, source and fields."""
+        _LOGGER.error(
+            "%s %s (from %s): %s",
+            Messages.Registry.INVALID_SERVER_CARD,
+            cls.identify(raw_card),
+            source,
+            cls.describe(exc),
+        )
 
 
 class McpServerProvider(McpClientFactory, Protocol):
@@ -130,7 +184,26 @@ class DynamicMcpRegistry:
         return entry
 
     async def _collect_entries(self) -> tuple[RegisteredMcpServer, ...]:
-        """Fetch and validate cards from every registered provider."""
+        """Fetch and validate cards from every registered provider.
+
+        A card that fails validation is SKIPPED, not fatal. Agent construction
+        lists MCP servers unconditionally (``acreate_agent_runtime`` gathers
+        five registries before the model is ever contacted), so raising here
+        meant one malformed row left the agent unbuildable for every run in
+        every conversation — including conversations that use no MCP tool at
+        all. A runtime that is happy to start with zero MCP servers can start
+        with one fewer; refusing to is a blast radius, not a safety property.
+
+        The skip is loud on purpose: it is logged at ERROR with the card's
+        identity and the validating field, and the connector is simply absent
+        from the model's tool set. Silence here would read as "you have no
+        Gmail connector" rather than "your Gmail connector is broken".
+
+        A provider that fails WHOLESALE still raises. That is a dependency
+        failure (the backend is unreachable), not one bad row, and quietly
+        dropping every connector mid-conversation would be its own silent
+        wrong answer.
+        """
         entries: list[RegisteredMcpServer] = []
         for provider in self.providers:
             try:
@@ -138,6 +211,16 @@ class DynamicMcpRegistry:
             except AgentRuntimeError:
                 raise
             except Exception as exc:
+                # `raise ... from exc` alone loses the cause: the worker logs
+                # `error_class` plus the OUTER traceback, so the reason a
+                # provider failed never reached the log and the failure was
+                # only diagnosable by re-issuing the call by hand.
+                _LOGGER.error(
+                    "MCP provider %s failed to list server cards: %s: %s",
+                    type(provider).__name__,
+                    type(exc).__name__,
+                    exc,
+                )
                 raise AgentRuntimeError(
                     RuntimeErrorCode.CAPABILITY_LOAD_ERROR,
                     Messages.Registry.CARDS_LOAD_FAILED,
@@ -152,10 +235,9 @@ class DynamicMcpRegistry:
                         else McpServerCard.model_validate(raw_card)
                     )
                 except ValidationError as exc:
-                    raise AgentRuntimeError(
-                        RuntimeErrorCode.CONFIGURATION_ERROR,
-                        Messages.Registry.INVALID_SERVER_CARD,
-                        retryable=False,
-                    ) from exc
+                    McpServerCardRejection.report(
+                        raw_card, exc, type(provider).__name__
+                    )
+                    continue
                 entries.append(RegisteredMcpServer(provider=provider, card=card))
         return tuple(entries)

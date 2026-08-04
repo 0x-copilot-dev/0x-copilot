@@ -206,7 +206,7 @@ function RouteFrame(): React.ReactElement {
       >
         <ConnectorsDestination
           items={ITEMS}
-          onConnect={noop}
+          onManageMcp={noop}
           onOpenConnector={noop}
           onOpenWebhooks={noop}
           onReconnect={noop}

@@ -601,7 +601,7 @@ export function ConnectorsBinder({
     <>
       <ConnectorsDestination
         items={result}
-        onConnect={flow.openConnect}
+        onManageMcp={openMcpConfig}
         catalog={catalog}
         onConnectEntry={(slug) => flow.connectEntry(slug)}
         onCancelConnect={flow.cancelConnect}
@@ -1058,7 +1058,6 @@ export function RunBinder({
   onConversationCreated,
   onOpenConversation,
   onNewChat,
-  identityName = null,
   onOpenModelSettings,
   onOpenLocalModelSettings,
   onOpenConnectors,
@@ -1077,8 +1076,6 @@ export function RunBinder({
   readonly onOpenConversation?: (id: ConversationId) => void;
   /** PRD-01 — the switcher's "New run" action; same intent as ⌘N. */
   readonly onNewChat?: () => void;
-  /** PRD-01/PRD-09 — display name for the Threads panel foot. */
-  readonly identityName?: string | null;
   /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
   readonly onOpenModelSettings?: () => void;
   /** Open Settings → Local models (model popover's "Get local models →"). */
@@ -1360,7 +1357,6 @@ export function RunBinder({
       // the shared `useChatsArchive` controller inside the package.
       onOpenConversation={onOpenConversation}
       onNewConversation={onNewChat}
-      identityName={identityName}
       onStartRun={handleStartRun}
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}

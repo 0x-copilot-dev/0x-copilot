@@ -45,41 +45,37 @@ function mount(widthClass: ShellWidthClass, store: KeyValueStore) {
 const openState = () => screen.getByTestId("open").textContent;
 
 describe("useThreadSwitcherOpen", () => {
-  it("defaults: wide open, regular closed, compact closed", () => {
+  it("defaults closed at every width class", () => {
     const store = memoryStore();
-    const a = mount("wide", store);
-    expect(openState()).toBe("open");
-    a.unmount();
-
-    const b = mount("regular", store);
-    expect(openState()).toBe("closed");
-    b.unmount();
-
-    mount("compact", store);
-    expect(openState()).toBe("closed");
+    // `wide` included: the cockpit opens on the run, not on a list of runs.
+    for (const widthClass of ["wide", "regular", "compact"] as const) {
+      const view = mount(widthClass, store);
+      expect(openState(), widthClass).toBe("closed");
+      view.unmount();
+    }
+    // A default is not a preference — nothing is written until someone toggles.
+    expect(store.keys("")).toEqual([]);
   });
 
   it("persists per width class, not globally (FR-1.4)", () => {
     const store = memoryStore();
 
-    // Close it at wide.
+    // Open it at wide.
     const a = mount("wide", store);
     act(() => toggleFn());
-    expect(openState()).toBe("closed");
+    expect(openState()).toBe("open");
     a.unmount();
 
     // regular is a SEPARATE decision — it keeps its own default.
     const b = mount("regular", store);
     expect(openState()).toBe("closed");
-    act(() => toggleFn());
-    expect(openState()).toBe("open");
     b.unmount();
 
-    // …and wide still remembers the close, not regular's open.
+    // …and wide still remembers the open, which regular never learned.
     mount("wide", store);
-    expect(openState()).toBe("closed");
-    expect(store.get(threadSwitcherOpenKey("wide"))).toBe("0");
-    expect(store.get(threadSwitcherOpenKey("regular"))).toBe("1");
+    expect(openState()).toBe("open");
+    expect(store.get(threadSwitcherOpenKey("wide"))).toBe("1");
+    expect(store.get(threadSwitcherOpenKey("regular"))).toBeNull();
   });
 
   it("never persists compact and always opens it closed (FR-1.5)", () => {

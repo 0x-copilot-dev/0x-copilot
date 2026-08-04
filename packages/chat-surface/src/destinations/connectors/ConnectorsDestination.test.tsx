@@ -126,13 +126,20 @@ describe("ConnectorsDestination — Tools row list", () => {
     expect(container.querySelector(".ui-app-icon--tile")).not.toBeNull();
   });
 
-  it("'Connect a tool' CTA fires onConnect", () => {
-    const onConnect = vi.fn();
-    render(<ConnectorsDestination items={makeItems()} onConnect={onConnect} />);
+  // The primary CTA opens the MCP config document DIRECTLY. It used to open
+  // the connect modal on its catalog step — a second copy of the "Add a
+  // connector" list already on this page — which left the JSON document, the
+  // only thing this surface could not otherwise do, buried at the bottom of
+  // that duplicate list.
+  it("'Manage MCP' CTA fires onManageMcp", () => {
+    const onManageMcp = vi.fn();
+    render(
+      <ConnectorsDestination items={makeItems()} onManageMcp={onManageMcp} />,
+    );
     const cta = screen.getByTestId("connectors-connect-cta");
-    expect(cta).toHaveTextContent("Connect a tool");
+    expect(cta).toHaveTextContent("Manage MCP");
     fireEvent.click(cta);
-    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onManageMcp).toHaveBeenCalledTimes(1);
   });
 
   it("renders the approval-policy note pointing at Settings → Model & behavior", () => {
@@ -272,18 +279,22 @@ describe("ConnectorsDestination — states", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the empty-connected EmptyState with a Connect CTA", () => {
-    const onConnect = vi.fn();
+  it("renders the empty-connected EmptyState with a Manage MCP CTA", () => {
+    const onManageMcp = vi.fn();
     render(
       <ConnectorsDestination
         items={{ status: "ok", data: { connectors: [], available: [] } }}
-        onConnect={onConnect}
+        onManageMcp={onManageMcp}
       />,
     );
-    // Both the header CTA and the EmptyState action read "Connect a tool";
-    // target the EmptyState action specifically.
-    fireEvent.click(screen.getByTestId("empty-state-action"));
-    expect(onConnect).toHaveBeenCalledTimes(1);
+    // Both the header CTA and the EmptyState action read "Manage MCP"; target
+    // the EmptyState action specifically. A user with nothing connected is not
+    // stranded by that: the catalog renders as its own "Add a connector"
+    // section below, independent of this empty state.
+    const action = screen.getByTestId("empty-state-action");
+    expect(action).toHaveTextContent("Manage MCP");
+    fireEvent.click(action);
+    expect(onManageMcp).toHaveBeenCalledTimes(1);
   });
 });
 

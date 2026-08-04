@@ -41,7 +41,6 @@ export interface ThreadSwitcherHostProps {
   readonly onOpenConversation: (id: ConversationId) => void;
   readonly onNewRun?: () => void;
   readonly onRequestClose?: () => void;
-  readonly identityName?: string | null;
   readonly id?: string;
 }
 
@@ -53,7 +52,6 @@ export function ThreadSwitcherHost({
   onOpenConversation,
   onNewRun,
   onRequestClose,
-  identityName = null,
   id,
 }: ThreadSwitcherHostProps): ReactElement | null {
   // Mounted for this component's whole life — including while `open` is false.
@@ -74,7 +72,6 @@ export function ThreadSwitcherHost({
       onOpenConversation={onOpenConversation}
       onNewRun={onNewRun}
       onRequestClose={onRequestClose}
-      identityName={identityName}
     />
   );
 }

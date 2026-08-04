@@ -478,14 +478,11 @@ describe("ConnectorsRoute connect flow", () => {
       expect(connectorsApiMocks.streamConnectorEvents).toHaveBeenCalledTimes(1);
     });
 
-    // Open the ConnectModal via the "Connect a tool" CTA.
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Connect a tool" })[0],
-    );
-    expect(screen.getByTestId("connect-catalog-list")).toBeInTheDocument();
-
-    // Pick the catalog entry → OAuth round-trip starts + spinner shows.
-    fireEvent.click(screen.getByTestId("connect-catalog-option"));
+    // Start from the catalog row on the surface itself. The header CTA now
+    // opens the MCP config document instead of a second copy of this list,
+    // so the row IS the connect path — `onConnectEntry` opens the modal
+    // pointed at the entry, skipping its catalog step.
+    fireEvent.click(screen.getByTestId("connector-available-connect-notion"));
     // Install-then-authorize on the MCP path — the destination has no
     // OAuth surface of its own.
     await waitFor(() => {
@@ -562,12 +559,9 @@ describe("ConnectorsRoute — Manage MCP", () => {
     vi.clearAllMocks();
   });
 
-  /** Open the connect modal and click through to the config editor. */
+  /** The primary CTA opens the config editor directly. */
   async function openEditor(): Promise<void> {
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Connect a tool" })[0],
-    );
-    fireEvent.click(screen.getByTestId("connect-catalog-custom"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Manage MCP" })[0]);
     await waitFor(() => {
       expect(screen.getByTestId("manage-mcp-editor")).toBeInTheDocument();
     });

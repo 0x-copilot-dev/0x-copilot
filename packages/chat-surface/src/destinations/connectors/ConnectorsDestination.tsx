@@ -160,8 +160,18 @@ export interface ConnectorsDestinationProps {
     readonly available: ReadonlyArray<unknown>;
   }> | null;
 
-  /** Primary CTA — opens the host's connect modal. */
-  readonly onConnect?: () => void;
+  /**
+   * Primary CTA — opens the host's MCP config editor (`ManageMcpModal`).
+   *
+   * It used to open the connect modal's CATALOG step, which was a second copy
+   * of the "Add a connector" list already rendered below on this very surface:
+   * one screen, two ways to browse the same catalog, and the JSON document —
+   * the only way to add a server the catalog does not know — reachable only by
+   * scrolling to the bottom of that duplicate list. The CTA now goes straight
+   * to the thing this surface could not otherwise do; picking a known connector
+   * stays where it already was, on the rows below.
+   */
+  readonly onManageMcp?: () => void;
 
   /**
    * The installable catalog, rendered as an "Add a connector" section beneath
@@ -252,7 +262,7 @@ export function ConnectorsDestination(
 ): ReactElement {
   const {
     items = null,
-    onConnect,
+    onManageMcp,
     catalog,
     onConnectEntry,
     onCancelConnect,
@@ -325,19 +335,22 @@ export function ConnectorsDestination(
   );
 
   const connectCta =
-    onConnect !== undefined ? (
+    onManageMcp !== undefined ? (
       <Button
         variant="primary"
         size="sm"
-        onClick={onConnect}
+        onClick={onManageMcp}
+        // Testid unchanged: it names the header's PRIMARY CTA slot, which is
+        // still what this is. Renaming it would churn both host suites and the
+        // design-parity anchor that measures this button's chrome.
         data-testid="connectors-connect-cta"
       >
-        Connect a tool
+        Manage MCP
       </Button>
     ) : null;
 
   const headerAction =
-    onConnect !== undefined || onOpenWebhooks !== undefined ? (
+    onManageMcp !== undefined || onOpenWebhooks !== undefined ? (
       <>
         {onOpenWebhooks !== undefined ? (
           <Button
@@ -387,7 +400,7 @@ export function ConnectorsDestination(
           {renderBody({
             items,
             onRetry,
-            onConnect,
+            onManageMcp,
             onOpenConnector,
             onReconnect,
             // No host handler → no Remove affordance at all, same as before.
@@ -449,7 +462,7 @@ export function ConnectorsDestination(
 interface BodyArgs {
   readonly items: ConnectorsDestinationProps["items"];
   readonly onRetry: ConnectorsDestinationProps["onRetry"];
-  readonly onConnect: ConnectorsDestinationProps["onConnect"];
+  readonly onManageMcp: ConnectorsDestinationProps["onManageMcp"];
   readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
   readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
   readonly onRequestRemove?: (connector: Connector) => void;
@@ -466,7 +479,7 @@ function renderBody(args: BodyArgs): ReactElement {
   const {
     items,
     onRetry,
-    onConnect,
+    onManageMcp,
     onOpenConnector,
     onReconnect,
     onRequestRemove,
@@ -501,10 +514,10 @@ function renderBody(args: BodyArgs): ReactElement {
     return (
       <EmptyState
         title="Connect your first tool"
-        body="Authorize Gmail, Slack, Notion, or any other app to let the agent read from and act through it."
+        body="Authorize Gmail, Slack, Notion, or any other app to let the agent read from and act through it — or write the MCP config yourself."
         action={
-          onConnect !== undefined
-            ? { label: "Connect a tool", onClick: onConnect }
+          onManageMcp !== undefined
+            ? { label: "Manage MCP", onClick: onManageMcp }
             : undefined
         }
       />

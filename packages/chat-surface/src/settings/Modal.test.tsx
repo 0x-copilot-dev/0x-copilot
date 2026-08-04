@@ -79,6 +79,27 @@ describe("<Modal>", () => {
     expect(screen.getByText("body")).toBeInTheDocument();
   });
 
+  it("scrolls the body instead of clipping it (the card is overflow:hidden)", () => {
+    render(
+      <Modal open onClose={() => undefined} title="T">
+        <p data-testid="body-child">body</p>
+      </Modal>,
+    );
+    const dialog = screen.getByTestId("settings-modal");
+    // The card caps at the viewport and hides its overflow, so anything the
+    // body cannot fit is UNREACHABLE unless the body itself scrolls — which is
+    // how Connect-a-tool's pinned "Manage MCP" row went missing behind a
+    // dozen-plus catalog entries, along with the footer actions.
+    expect(dialog.style.maxHeight).toBe("calc(100vh - 32px)");
+    expect(dialog.style.overflow).toBe("hidden");
+
+    const body = screen.getByTestId("body-child").parentElement;
+    expect(body?.style.overflowY).toBe("auto");
+    // `min-height: auto` on a flex item refuses to shrink below its content, so
+    // without this the body overflows the card and overflowY has nothing to do.
+    expect(body?.style.minHeight).toBe("0px");
+  });
+
   it("moves focus into the modal on open", () => {
     render(
       <Modal open onClose={() => undefined} title="T">
