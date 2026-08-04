@@ -311,11 +311,12 @@ describe("mount/tab identity — adapter resolution by scheme", () => {
     }
   });
 
-  it("does not resolve a legacy/explicit tab URI as a surface", () => {
-    // Artifact, effect-stage and legacy-replay tabs share the strip. They are
-    // distinguished by the AUTHORITY that owns them (the artifact registry, the
-    // `legacyUris` set, the hydration map), never by parsing the string — but
-    // they must not accidentally collide with an archetype adapter either.
+  it("does not resolve a non-surface tab URI as a surface", () => {
+    // Artifact and effect-stage tabs share the strip. They are distinguished by
+    // the AUTHORITY that owns them (the artifact registry, the hydration map),
+    // never by parsing the string — but they must not accidentally collide with
+    // an archetype adapter either. The third string is a pre-ledger `tool_result`
+    // envelope URI, which no longer reaches the strip at all.
     registerAdapter(stubAdapter("table"));
     for (const uri of [
       "artifact-dataset://art_1@2",

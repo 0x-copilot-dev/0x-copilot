@@ -549,6 +549,7 @@ export type {
   SectionResult,
   SkillId,
   SubagentId,
+  SurfaceId,
   TenantId,
   TodoExtractionId,
   TodoId,
@@ -1295,7 +1296,10 @@ export {
 //
 // No tab-URI codec is exported because none exists: a surface's mount/tab URI
 // IS its `surfaceId` (the projector already mints one), so a host that holds a
-// `LedgerSurface` holds its URI. See the identity note in `ledgerProjection.ts`.
+// `LedgerSurface` holds its URI. That is now enforced by the type — `surfaceId`
+// is the branded `SurfaceId` re-exported above, so a host cannot mint a second
+// identity for the same surface without failing the build. See the identity
+// note in `ledgerProjection.ts`.
 export {
   projectLedger,
   ledgerTabsAsSurfaceTabs,

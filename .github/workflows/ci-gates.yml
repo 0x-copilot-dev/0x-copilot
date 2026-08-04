@@ -76,6 +76,7 @@ jobs:
           PYTHONPATH=tools python -m pytest -q \
             tools/test_check_dark_capabilities.py \
             tools/test_check_orphan_destinations.py \
+            tools/test_check_route_reachability.py \
             tools/test_check_css_selector_shadowing.py \
             tools/test_check_service_boundaries.py \
             tools/test_check_audit_in_transaction.py \
@@ -91,6 +92,14 @@ jobs:
 
       - name: Orphan destinations
         run: python tools/check_orphan_destinations.py
+
+      # The HTTP-layer sibling of the gate above: a route registered in
+      # ai-backend that no app, no facade route and no backend caller names is
+      # unreachable from the product. 13 such routes already exist and are
+      # recorded with a reason each in tools/route_reachability_baseline.txt;
+      # this fails on the 14th, and on any baseline line that has gone stale.
+      - name: Route reachability
+        run: python tools/check_route_reachability.py
 
       - name: CSS selector shadowing
         run: python tools/check_css_selector_shadowing.py

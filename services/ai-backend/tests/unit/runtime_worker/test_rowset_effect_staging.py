@@ -22,7 +22,10 @@ from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.settings import RuntimeSettings
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.ledger_ids import OperationArgsRefCodec
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerEventType,
+)
 from agent_runtime.surfaces_v2.staging import StagedWriteError
 from runtime_adapters.artifact_references import InMemoryArtifactReferenceStore
 from runtime_adapters.in_memory.artifact_blob_store import InMemoryArtifactBlobStore
@@ -241,6 +244,8 @@ async def test_enforce_assembly_stages_real_a4_rowset_and_never_dispatches() -> 
     operation_id = requested.payload["operation_id"]
     assert classified.payload == {
         "v": 1,
+        # Appended through the real producer, whose funnel signs the row.
+        "w": CURRENT_LEDGER_WRITER.value,
         "operation_id": operation_id,
         "effect_class": "external_reversible",
         "basis": "descriptor",

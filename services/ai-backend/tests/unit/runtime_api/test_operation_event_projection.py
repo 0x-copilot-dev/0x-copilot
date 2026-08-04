@@ -8,6 +8,7 @@ from runtime_api.schemas.common import (
     RuntimeApiEventType,
     RuntimeEventRedactionState,
 )
+from agent_runtime.surfaces_v2.ledger_models import CURRENT_LEDGER_WRITER
 from runtime_api.schemas.events import RuntimeEventPresentationProjector as P
 
 
@@ -96,7 +97,14 @@ def test_operation_events_use_strict_reference_only_allowlists(
     payload: dict[str, object],
     expected: dict[str, object],
 ) -> None:
-    assert P.payload_for_event(event_type=event_type, payload=payload) == expected
+    # ``expected`` lists the reference-only keys the allow-list admits; the append
+    # funnel then signs the row, so the projection is that set plus the writer
+    # stamp. Spelled here rather than in each case so the allow-lists stay
+    # readable as allow-lists.
+    assert P.payload_for_event(event_type=event_type, payload=payload) == {
+        **expected,
+        "w": CURRENT_LEDGER_WRITER.value,
+    }
 
 
 @pytest.mark.parametrize(

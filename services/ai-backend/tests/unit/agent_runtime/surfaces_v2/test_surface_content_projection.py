@@ -70,8 +70,23 @@ def _tool_result(call_id: str, output: object) -> _Event:
     )
 
 
+def _generated(surface_id: str, spec: object) -> _Event:
+    """A ``surface_spec_generated`` record — the model's later refinement."""
+
+    return _Event(
+        event_type="surface_spec_generated",
+        payload={"surface_uri": surface_id, "spec": spec},
+    )
+
+
 class TestSurfaceContentProjection:
-    def test_resolves_only_the_declared_tool_result_reference(self) -> None:
+    def test_a_sibling_tool_result_is_never_joined_into_a_surface(self) -> None:
+        # The re-join this module used to perform — ``payload_ref`` →
+        # ``call_id`` → ``tool_result.output`` — is gone, and its absence is the
+        # assertion. The persisted tool result is a DIFFERENT representation of
+        # the read than the one a spec was inferred from, so binding a spec to
+        # it rendered a correctly-shaped table over zero rows. Nothing but the
+        # record that declares a surface can put a body on it now.
         content = SurfaceContentProjection.fold(
             [
                 _tool_result("other", {"ignored": True}),
@@ -79,27 +94,28 @@ class TestSurfaceContentProjection:
                 _tool_result("call-1", {"id": 7}),
             ]
         )
-        assert content == {"s1": {"data": {"id": 7}}}
+        assert content == {}
 
-    def test_explicit_snapshot_ref_limits_hydration_to_authorized_subjects(
+    def test_the_reference_authorizes_a_subject_without_being_dereferenced(
         self,
     ) -> None:
+        # ``payload_ref`` names which subjects this caller may see; it is not a
+        # pointer this module follows. A reference that targets nothing still
+        # authorizes, and a subject the caller did not name stays unread even
+        # though its state is sitting right there on the record.
         content = SurfaceContentProjection.fold(
             [
-                _surface("s1", "call-1"),
-                _surface("s2", "call-2"),
-                _tool_result("call-1", 1),
-                _tool_result("call-2", 2),
+                _carrying("s1", "call-1", data=1),
+                _carrying("s2", "call-2", data=2),
             ],
-            surface_payload_refs={"s2": "call:call-2"},
+            surface_payload_refs={"s2": "blob:nowhere"},
         )
         assert content == {"s2": {"data": 2}}
 
     def test_spec_merges_by_declared_surface_identity(self) -> None:
         content = SurfaceContentProjection.fold(
             [
-                _surface("s1", "call-1"),
-                _tool_result("call-1", {"id": 1}),
+                _carrying("s1", "call-1", data={"id": 1}),
                 _Event(
                     event_type="surface_spec_generated",
                     payload={"surface_id": "s1", "spec": {"archetype": "record"}},
@@ -111,12 +127,8 @@ class TestSurfaceContentProjection:
     def test_production_surface_uri_keys_generated_spec(self) -> None:
         content = SurfaceContentProjection.fold(
             [
-                _surface("s1", "call-1"),
-                _tool_result("call-1", {"id": 1}),
-                _Event(
-                    event_type="surface_spec_generated",
-                    payload={"surface_uri": "s1", "spec": {"archetype": "record"}},
-                ),
+                _carrying("s1", "call-1", data={"id": 1}),
+                _generated("s1", {"archetype": "record"}),
             ]
         )
         assert content == {"s1": {"data": {"id": 1}, "spec": {"archetype": "record"}}}
@@ -131,10 +143,11 @@ class TestSurfaceContentProjection:
         )
         assert content == {"s1": {"data": {"rows": []}, "spec": {"archetype": "table"}}}
 
-    def test_carried_data_wins_over_the_referenced_payload(self) -> None:
+    def test_the_referenced_payload_never_reaches_the_renderer(self) -> None:
         # The two are the same read in two representations, and the spec was
-        # written against the carried one. Preferring the reference would rebind
-        # ``items_path`` to an encoding it does not describe — the live defect.
+        # written against the carried one. Preferring — or falling back to —
+        # the reference rebinds ``items_path`` to an encoding it does not
+        # describe, which is the live defect that rendered zero rows.
         content = SurfaceContentProjection.fold(
             [
                 _carrying("s1", "call-1", data={"issues": [{"id": 1}]}),
@@ -265,11 +278,11 @@ class TestSurfaceContentProjection:
         assert content == {}
 
     def test_fold_is_deterministic_and_does_not_mutate_input(self) -> None:
-        events = [_surface("s1", "call-1"), _tool_result("call-1", {"id": 1})]
+        events = [_carrying("s1", "call-1", data={"id": 1})]
         first = SurfaceContentProjection.fold(events)
         second = SurfaceContentProjection.fold(events)
         assert first == second == {"s1": {"data": {"id": 1}}}
-        assert events[1].payload == {"call_id": "call-1", "output": {"id": 1}}
+        assert events[0].payload["state"] == {"data": {"id": 1}}
 
 
 class TestCarriedProvenance:
@@ -337,13 +350,18 @@ class TestCarriedProvenance:
         assert content == {}
 
 
-class TestSurfaceProvenance:
-    """``state.source`` on a HISTORIC record, which carries no state of its own.
+class TestDeclaredProvenance:
+    """``state.source`` on a record that carries no readable state of its own.
 
-    These drive the pre-carry shape deliberately: ``surface.created`` with the
-    ledger's ``{connector, op}`` and the payload in a sibling ``tool_result``.
-    That pairing is pinned by the frozen ``legacy_v2_replay_corpus.json``
-    vectors, so it is a contract with a TypeScript twin, not dead history.
+    Production puts the ``{server, tool}`` pair inside the carried state. A
+    record without one still names its origin in the ledger's own
+    ``{connector, op}`` spelling, and translating that is the only thing that
+    can name the tool on such a surface — the tier-3 note reads
+    ``state.source.tool``.
+
+    Note what makes these states content-bearing: a generated spec, never a
+    sibling ``tool_result``. The payload re-join that used to hydrate this shape
+    is gone, so provenance alone still resolves to nothing at all.
     """
 
     def test_declared_source_is_restated_in_renderer_vocabulary(self) -> None:
@@ -354,7 +372,7 @@ class TestSurfaceProvenance:
                     "call-1",
                     source={"connector": "pagerduty", "op": "pagerduty.incident.read"},
                 ),
-                _tool_result("call-1", {"id": 7}),
+                _generated("s1", {"archetype": "record"}),
             ]
         )
 
@@ -362,7 +380,7 @@ class TestSurfaceProvenance:
         # {server, tool}. The translation lives here, not in the client.
         assert content == {
             "s1": {
-                "data": {"id": 7},
+                "spec": {"archetype": "record"},
                 "source": {"server": "pagerduty", "tool": "pagerduty.incident.read"},
             }
         }
@@ -372,23 +390,27 @@ class TestSurfaceProvenance:
             [
                 _surface("s1", "call-1", source={"connector": "linear", "op": "read"}),
                 _surface("s2", "call-2", source={"connector": "github", "op": "read"}),
-                _tool_result("call-1", 1),
-                _tool_result("call-2", 2),
+                _generated("s1", {"archetype": "record"}),
+                _generated("s2", {"archetype": "table"}),
             ],
             surface_payload_refs={"s2": "call:call-2"},
         )
 
         assert content == {
-            "s2": {"data": 2, "source": {"server": "github", "tool": "read"}}
+            "s2": {
+                "spec": {"archetype": "table"},
+                "source": {"server": "github", "tool": "read"},
+            }
         }
 
     def test_a_payload_cannot_name_its_own_tool(self) -> None:
         # Provenance is read from the ledger record the runtime wrote, never
         # from the tool's own output — otherwise any webhook body with a
-        # ``source`` key could claim to be any tool.
+        # ``source`` key could claim to be any tool. The body now arrives
+        # carried rather than joined, and the rule is unchanged by that.
         forged = {"source": {"server": "stripe", "tool": "stripe.charge.create"}}
         content = SurfaceContentProjection.fold(
-            [_surface("s1", "call-1"), _tool_result("call-1", forged)]
+            [_carrying("s1", "call-1", data=forged)]
         )
 
         # The forged key stays where it belongs: inside ``data``, which the
@@ -421,10 +443,13 @@ class TestSurfaceProvenance:
         # half-resolved name would put a blank or a stray value in a register
         # that reads as "this is what the system knows".
         content = SurfaceContentProjection.fold(
-            [_surface("s1", "call-1", source=source), _tool_result("call-1", {"id": 1})]
+            [
+                _surface("s1", "call-1", source=source),
+                _generated("s1", {"archetype": "record"}),
+            ]
         )
 
-        assert content == {"s1": {"data": {"id": 1}}}
+        assert content == {"s1": {"spec": {"archetype": "record"}}}
 
     def test_source_alone_never_hydrates_an_empty_surface(self) -> None:
         # No resolved content ⇒ the surface stays unhydrated and the client

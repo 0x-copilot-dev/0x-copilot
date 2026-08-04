@@ -33,6 +33,10 @@ export { isArtifactRenderState } from "./artifactSurface";
 // every wave; this barrel only ever gains re-export lines, never a type body.
 export type {
   LedgerEventType,
+  // The two fields every ledger payload carries: `v` (which vocabulary) and the
+  // optional writer stamp `w` (who wrote the row).
+  LedgerWriter,
+  LedgerPayload,
   ArtifactRuntimeEventType,
   ArtifactRuntimeEventPayloadMap,
   GateAuthState,
@@ -215,14 +219,6 @@ export type {
   PendingWorkV2RunWarning,
   PendingWorkV2Response,
 } from "./ledger";
-export type {
-  LegacyV2ReplayMode,
-  LegacyV2QuarantineCode,
-  LegacyV2ReplayQuarantine,
-  LegacyV2SurfaceProjection,
-  LegacyV2ReplayProjection,
-  LegacyV2ReplayEvent,
-} from "./legacyV2Replay";
 export {
   LEDGER_EVENT_TYPES,
   ARTIFACT_EVENT_TYPES,
@@ -259,7 +255,9 @@ export {
   // E1 D4/D5 — strict safe source-open boundary guard.
   isSourceOpenResultV2,
 } from "./ledger";
-export { projectLegacyV2Replay } from "./legacyV2Replay";
+// The surface-identity boundary: the one validating step from a wire string to
+// the branded `SurfaceId` every downstream consumer holds (see ./surfaceId.ts).
+export { isSurfaceId, asSurfaceId } from "./surfaceId";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
 // cross-audit §2.1). Imported here so they are in scope for the approval
@@ -5983,6 +5981,7 @@ export type {
   RunId,
   SkillId,
   SubagentId,
+  SurfaceId,
   TenantId,
   TodoExtractionId,
   TodoId,

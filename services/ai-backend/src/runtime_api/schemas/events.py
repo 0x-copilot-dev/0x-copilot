@@ -16,6 +16,8 @@ from pydantic import (
     field_validator,
 )
 
+from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
+
 from agent_runtime.execution.contracts import (
     JsonObject,
     RuntimeContract,
@@ -44,7 +46,12 @@ from agent_runtime.capabilities.surfaces.spec_models import (
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
-from agent_runtime.surfaces_v2.ledger_models import WorkLedgerVocabulary
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerWriter,
+    UnknownLedgerWriterError,
+    WorkLedgerVocabulary,
+)
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -148,6 +155,30 @@ class _SurfaceStateFields:
     DATA = "data"
     SERVER = "server"
     TOOL = "tool"
+
+
+class _LedgerWriterStamp:
+    """The ledger row's writer stamp: its wire key and the set this build reads.
+
+    Declared here for the same reason :class:`_SurfaceStateFields` is —
+    ``surfaces_v2.constants.Keys.Field`` mirrors the A3-frozen SDR §5 field set,
+    and ``w`` is additive to it. The vocabulary itself is
+    :class:`~agent_runtime.surfaces_v2.ledger_models.LedgerWriter`; this only
+    names the key and freezes the membership test.
+
+    ``EVENT_TYPES`` scopes the whole rule to rows that speak the ledger
+    vocabulary. ``w`` is one letter, and a tool or model payload may legitimately
+    carry a ``w`` that means width.
+
+    ``CURRENT`` is what this build signs with. It is a single value rather than a
+    per-producer argument for the same reason ``LedgerWriter`` is a closed enum:
+    a caller free to name its own writer can claim to be any generation it likes.
+    """
+
+    KEY = "w"
+    CURRENT: str = CURRENT_LEDGER_WRITER.value
+    KNOWN: frozenset[str] = frozenset(writer.value for writer in LedgerWriter)
+    EVENT_TYPES: frozenset[str] = frozenset(LEDGER_EVENT_TYPES)
 
 
 class _OperationFields:
@@ -409,6 +440,108 @@ class RuntimeEventPresentationProjector:
 
     @classmethod
     def payload_for_event(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Return the client-visible payload for an API event type.
+
+        Two steps, in this order: project through the per-type allow-list, then
+        sign the row with the ledger writer stamp. The stamp is handled once,
+        here, rather than inside each of the ~30 projections below — an
+        allow-list that does not name a key deletes it silently, and that
+        failure mode has already cost this pipeline a release (see
+        :meth:`_surface_created_payload`). One seam cannot forget a branch.
+
+        **This is the append funnel, and only the append funnel.** All three
+        callers — ``RuntimeEventProducer``'s single and batch append entry
+        points, and ``_build_from_stream_event`` — build a row on its way *into*
+        the store. Replay reads envelopes back out and never re-projects, so
+        signing here signs new rows without rewriting history, which is what
+        lets absence of ``w`` keep meaning "written before the stamp existed".
+        """
+
+        return cls._sign_ledger_writer(
+            event_type=event_type,
+            payload=payload,
+            projected=cls._project_payload(event_type=event_type, payload=payload),
+        )
+
+    @classmethod
+    def _sign_ledger_writer(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        projected: JsonObject,
+    ) -> JsonObject:
+        """Sign a projected ledger payload with ``w``, or reject the record.
+
+        The writer stamp is this seam's property alone: it is popped off the
+        projection first, so no branch below can invent one, pass one through
+        unchecked, or leave the ``null`` a ``model_dump`` produces for a payload
+        model whose ``w`` was never set. ``null`` is a claim this ledger never
+        makes: on a stored row, absence says "nobody signed", while ``null``
+        would say "the writer is known to be nothing".
+
+        An unsigned row is signed with :data:`CURRENT_LEDGER_WRITER` rather than
+        left bare. Producer-side signing was tried and covered 6 of the 34 event
+        types, which makes "no ``w``" ambiguous between a historic row and a live
+        row from a producer that forgot — and a reader keyed on it classifies
+        live rows as historic, which is the defect the stamp was added to close.
+        A producer that signs itself is carried through unchanged; it is
+        re-validated here either way, so a producer cannot widen the vocabulary.
+
+        A stamp this build does not understand REJECTS the whole record, by
+        raising, rather than being dropped or blanked. Dropping it would hand the
+        client a payload written by an unknown writer formatted as though this
+        build had written it — the silent mis-render the stamp exists to prevent
+        — and blanking it persists a ``surface.created`` with no ``surface_id``,
+        a ghost row the client fold skips without a word. The append fails
+        instead, at the seam that would have written it.
+
+        Restricted to ledger event types on purpose. ``w`` is a one-letter key,
+        and an arbitrary tool or model payload is free to use it for something
+        else entirely; only rows that speak the ledger vocabulary are read as
+        speaking it.
+        """
+
+        if event_type.value not in _LedgerWriterStamp.EVENT_TYPES:
+            return projected
+        if projected is payload:
+            # The default branch of ``_project_payload`` returns its argument;
+            # this seam must never mutate a caller's dict.
+            projected = dict(payload)
+        projected.pop(_LedgerWriterStamp.KEY, None)
+        writer = payload.get(_LedgerWriterStamp.KEY)
+        if writer is None:
+            writer = _LedgerWriterStamp.CURRENT
+        elif writer not in _LedgerWriterStamp.KNOWN:
+            logging.getLogger(__name__).error(
+                "Refused a ledger append from an unknown writer event_type=%s",
+                event_type.value,
+            )
+            raise UnknownLedgerWriterError.for_writer(writer)
+        if projected:
+            # An empty projection is the allow-list's rejection sentinel, pinned
+            # by ``test_projector_rejects_uncontracted_payload_fields`` — an
+            # uncontracted field projects to exactly ``{}`` so it cannot ride the
+            # ledger. Signing it would both break that contract and risk making a
+            # contentless row look processable to a reader that skips ``{}``.
+            #
+            # KNOWN GAP, deliberately left: the caller appends that row anyway
+            # (``_artifact_ledger_payload`` / ``_effect_ledger_payload`` log and
+            # return ``{}`` across 13 event types), so an unsigned, contentless
+            # row can reach the store. It is inert — it carries no id for any
+            # reader to key on — but it is not covered by the sentence above
+            # about a bare row being historic. The fix belongs upstream, in
+            # refusing the append, not here in widening the stamp.
+            projected[_LedgerWriterStamp.KEY] = writer
+        return projected
+
+    @classmethod
+    def _project_payload(
         cls,
         *,
         event_type: RuntimeApiEventType,

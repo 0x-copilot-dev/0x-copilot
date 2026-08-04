@@ -36,6 +36,23 @@ export type RoutineId = string & { readonly __brand: "RoutineId" };
 export type ApprovalId = string & { readonly __brand: "ApprovalId" };
 
 /**
+ * The identity a surface producer mints, and the ONLY identity that surface
+ * ever has: the ledger's `surface.created.surface_id` IS the canvas tab URI IS
+ * the renderer mount key. There is no codec and no second identity space.
+ *
+ * Branded because the failure it prevents already happened. The canvas used to
+ * mint a SECOND id for the same surface — `<scheme>://legacy-v2/<percent-
+ * encoded surface_id>` — and then looked the surface up under that minted
+ * string in a map that was only ever keyed by the real one. Every lookup
+ * missed, and a fully-hydrated surface rendered as an empty card. With the
+ * brand, a minted `string` is not assignable where a `SurfaceId` is required,
+ * so the same mistake is a compile error rather than a review comment.
+ *
+ * Construct one only through `isSurfaceId` / `asSurfaceId` (./surfaceId.ts).
+ */
+export type SurfaceId = string & { readonly __brand: "SurfaceId" };
+
+/**
  * Free-form identifier for a `meeting_external` ItemRef branch. Calendar
  * events come from third-party connectors and don't have a tenant-local
  * entity row — the identifier is the upstream provider's event id (plus

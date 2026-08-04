@@ -165,11 +165,7 @@ import {
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { projectReceiptV2, type ReceiptV2Projection } from "./projectReceiptV2";
 import { projectSourcesV2 } from "../../projections/sourcesV2";
-import {
-  projectLegacyV2Replay,
-  type LegacyV2ReplayProjection,
-  type PendingAgentRow,
-} from "@0x-copilot/api-types";
+import type { PendingAgentRow } from "@0x-copilot/api-types";
 // PRD-B1: Generative Surfaces v2 content hydration (SurfaceStore endpoint via
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
 // `surfacesV2` is false (`enabled: false` ⇒ no request).
@@ -300,15 +296,6 @@ const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EMPTY_SUBAGENT_ARCHIVE: ReadonlyMap<string, SubagentEntry> = new Map();
 const EMPTY_FLEET_ARCHIVE: readonly FleetProjection[] = [];
 const EMPTY_TOOL_CALL_ARCHIVE: readonly ToolCallEntry[] = [];
-// E2 D3: historic rows are selected through a read-only compatibility reader.
-// Kept stable while the Studio canvas flag is off so the legacy cockpit remains
-// byte-identical and never inspects older surface envelopes on that path.
-const EMPTY_LEGACY_V2_REPLAY: LegacyV2ReplayProjection = {
-  reader_version: 1,
-  mode: "empty",
-  surfaces: [],
-  quarantined: [],
-};
 const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
 const RECEIPT_V2_URI_PREFIX = "receipt-v2://";
 const SOURCE_OPEN_UNAVAILABLE = "This source is no longer available.";
@@ -2303,35 +2290,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // unconditionally so the hydration hook can read `ledger.lastLedgerSeq`; the
   // strip only USES it when `surfacesV2` is on.
   const ledger = useMemo(() => projectLedger(session.events), [session.events]);
-  // E2 D3: select historic v2 presentation facts through the versioned,
-  // pure compatibility reader. This is intentionally not a conversion into
-  // `ledger` state: old run events remain append-only and every returned
-  // surface is read-only. The v2.1 lifecycle continues to own canonical tabs.
-  const legacyV2Replay = useMemo<LegacyV2ReplayProjection>(
-    () =>
-      surfacesV2
-        ? projectLegacyV2Replay(session.events)
-        : EMPTY_LEGACY_V2_REPLAY,
-    [surfacesV2, session.events],
-  );
-  const legacyV2SurfaceBySubject = useMemo(
-    () =>
-      new Map(
-        legacyV2Replay.surfaces
-          .filter((surface) => surface.origin === "ledger")
-          .map((surface) => [surface.subject_id, surface] as const),
-      ),
-    [legacyV2Replay],
-  );
-  const legacyV2StateByUri = useMemo(() => {
-    const states = new Map<string, Record<string, unknown>>();
-    for (const surface of legacyV2Replay.surfaces) {
-      if (surface.state !== null) states.set(surface.uri, { ...surface.state });
-    }
-    return states;
-  }, [legacyV2Replay]);
-  const legacyV2ReadOnlyStream =
-    legacyV2Replay.mode === "legacy_v2" || legacyV2Replay.mode === "mixed";
+  // There is deliberately NO second, "historic" projection of the same events
+  // beside this one. There was: a compatibility reader claimed every surface it
+  // saw as legacy — all five of its detection signals matched current data —
+  // minted a `legacy-v2://` tab URI for it, and then resolved that tab's content
+  // from a map only the reader itself ever filled. A live run's fully-hydrated
+  // table rendered as an empty card. The lane never once served a historic
+  // surface to a user, so it is gone rather than narrowed: one projection, one
+  // identity, one place a surface's content can come from.
   // B3 owns the one client presentation truth. It folds artifacts, ordinary
   // surfaces, universal effects, gates, and terminal receipts from the durable
   // production event stream — no shape inference or legacy surface envelope.
@@ -2544,7 +2510,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
-    const legacyUris = new Set<string>();
     if (displayedCanvasLifecycle === null) {
       return {
         tabs: [] as Array<{
@@ -2554,7 +2519,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           hue?: SurfaceHue;
         }>,
         uriBySubjectKey,
-        legacyUris,
         preferredUri: "",
       };
     }
@@ -2570,7 +2534,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       title: string,
       lastSeq: number,
       key: string,
-      legacy = false,
       // Omitted for every surface that has no author-chosen accent, which is
       // most of them: the tab derives a hue from its URI scheme, so identity
       // colour is the default rather than an opt-in.
@@ -2580,7 +2543,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       if (seen.has(uri)) return false;
       seen.add(uri);
       tabs.push({ uri, title, lastSeq, ...(hue === undefined ? {} : { hue }) });
-      if (legacy) legacyUris.add(uri);
       return true;
     };
     for (const subject of displayedCanvasLifecycle.tabs) {
@@ -2599,24 +2561,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             `${artifactTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
             subject.lastSeq,
             subject.key,
-            false,
             accentByArtifactId.get(subject.subjectId),
           );
         }
         continue;
       }
       if (subject.kind === "surface") {
-        const legacy = legacyV2SurfaceBySubject.get(subject.subjectId);
-        if (legacy !== undefined) {
-          add(
-            legacy.uri,
-            legacy.title ?? subject.title,
-            Math.max(subject.lastSeq, legacy.last_sequence_no),
-            subject.key,
-            true,
-          );
-          continue;
-        }
         const surface = ledger.surfaces.get(subject.subjectId);
         if (surface !== undefined) {
           // The tab URI IS the surface id — the projector already minted it as
@@ -2628,23 +2578,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       }
       if (subject.kind === "effect") {
         const stage = stageById.get(subject.subjectId);
-        // A legacy `write.staged` is historical evidence, not an active v2.1
-        // effect. Its companion historic surface is already mounted above via
-        // the compatibility renderer; do not create a second mutable stage
-        // tab (and do not invent one if the old stream had no surface).
-        if (stage !== undefined && legacyV2ReadOnlyStream) {
-          const legacy = legacyV2SurfaceBySubject.get(stage.surfaceId);
-          if (legacy !== undefined) {
-            add(
-              legacy.uri,
-              legacy.title ?? subject.title,
-              Math.max(subject.lastSeq, legacy.last_sequence_no),
-              subject.key,
-              true,
-            );
-          }
-          continue;
-        }
         const surface =
           stage === undefined
             ? undefined
@@ -2658,18 +2591,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           subject.key,
         );
       }
-    }
-    // Historic presentation envelopes predate `surface.created`, so they have
-    // no lifecycle subject. Append their exact old URI/state only when it does
-    // not collide with a canonical tab; canonical v2.1 owns collisions.
-    for (const surface of legacyV2Replay.surfaces) {
-      add(
-        surface.uri,
-        surface.title ?? surface.uri,
-        surface.last_sequence_no,
-        `legacy-v2:${surface.origin}:${surface.subject_id}`,
-        true,
-      );
     }
     // Subjects this conversation holds that the CURRENT run did not produce.
     // Appended after the run's own tabs (which win on `uri` via `add`), so the
@@ -2698,7 +2619,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Prior-run subjects sort behind everything this run emitted.
         -1,
         subject.subjectKey,
-        false,
         subject.accent ?? undefined,
       );
     }
@@ -2708,7 +2628,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         : uriBySubjectKey.get(displayedCanvasLifecycle.activeSubjectKey)) ??
       tabs[0]?.uri ??
       "";
-    return { tabs, uriBySubjectKey, legacyUris, preferredUri };
+    return { tabs, uriBySubjectKey, preferredUri };
   }, [
     accentByArtifactId,
     displayedCanvasLifecycle,
@@ -2720,9 +2640,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // beside it read "forecast.csv".
     conversationCanvas,
     ledger,
-    legacyV2Replay,
-    legacyV2ReadOnlyStream,
-    legacyV2SurfaceBySubject,
     stageById,
   ]);
 
@@ -2894,32 +2811,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // artifact / effect-stage / receipt tab, or content not yet fetched — never a
   // string that failed to parse. (The live empty card was NOT this decode; see
   // the identity note in `ledgerProjection.ts` and FINDINGS §4.7a/b.)
+  //
+  // It is ONE lookup, in ONE map, for every tab. It briefly was not: a second
+  // "is this historic?" branch sent every surface — modern ones included — to a
+  // map the compatibility reader owned, which held nothing, so the hydrated
+  // payload sitting in `hydration` was never consulted. One source of content
+  // is the property that made that bug impossible to reintroduce here.
   const resolveSurfaceState = useMemo(
-    () =>
-      surfacesV2
-        ? (uri: string) => {
-            const legacy = v2CanvasTabs.legacyUris.has(uri);
-            const resolved = legacy
-              ? legacyV2StateByUri.get(uri)
-              : hydration.stateFor(uri);
-            // TEMP DIAGNOSTIC — remove before merge.
-            try {
-              const g = globalThis as unknown as Record<string, unknown>;
-              const log = (g.__DIAG ??= []) as unknown[];
-              log.push({
-                at: "resolve",
-                uri,
-                legacy,
-                resolved: resolved !== undefined,
-                status: hydration.status,
-              });
-            } catch {
-              /* diagnostic only */
-            }
-            return resolved;
-          }
-        : undefined,
-    [surfacesV2, hydration, legacyV2StateByUri, v2CanvasTabs],
+    () => (surfacesV2 ? (uri: string) => hydration.stateFor(uri) : undefined),
+    [surfacesV2, hydration],
   );
   const visibleSurfaceTabs = useMemo(() => {
     const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));
@@ -3006,19 +2906,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Null off the v2 path or before a `view.derived` lands.
   //
   // `activeUri` is the surface id, so the fold answers directly: a tab the fold
-  // does not know (artifact, effect stage, receipt, legacy replay) simply misses.
+  // does not know (artifact, effect stage, receipt) simply misses. The fold IS
+  // the authority — there is no second set of tab strings to consult first.
   const activeViewState = useMemo(() => {
     if (!surfacesV2) return null;
-    if (v2CanvasTabs.legacyUris.has(activeUri)) return null;
     return ledger.surfaces.get(activeUri)?.viewState ?? null;
-  }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
+  }, [surfacesV2, activeUri, ledger]);
 
   // PRD-B4: the active surface's folded "Suggest a shape" state (idle by default).
   const activeShapeRequest = useMemo<LedgerShapeRequestState>(() => {
     if (!surfacesV2) return "idle";
-    if (v2CanvasTabs.legacyUris.has(activeUri)) return "idle";
     return ledger.surfaces.get(activeUri)?.shapeRequest ?? "idle";
-  }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
+  }, [surfacesV2, activeUri, ledger]);
 
   // ============================================================
   // Generative Surfaces v2 — integration mount pass
@@ -3780,11 +3679,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           />
         );
       }
-      // E2 D3 compatibility tabs intentionally fall through to the existing
-      // fixed renderer registry. They are historic read-only subjects, never
-      // current stages/effects, even if an old URI happens to resemble a v2
-      // surface URI.
-      if (v2CanvasTabs.legacyUris.has(uri)) return null;
       const effectStageId = effectStageIdForUri(uri);
       if (effectStageId !== null) {
         const subject = displayedCanvasLifecycle?.tabs.find(
@@ -4427,9 +4321,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           onOpen={handleOpenReceiptV2}
         />
       ) : null}
-      {mode === "studio" &&
-      !legacyV2ReadOnlyStream &&
-      ledger.openGates.length > 0 ? (
+      {mode === "studio" && ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
           {ledger.openGates.map((gate) =>
             // Both gate KINDS ride `gate.opened`, so this list carries write

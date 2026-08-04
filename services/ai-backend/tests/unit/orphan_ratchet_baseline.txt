@@ -1,4 +1,10 @@
 
+# This file is the MODULE-scale baseline only, and its format admits nothing
+# else: one dotted module path per line. The same "built but never reached"
+# defect at function scale — a ledger event type with readers and no producer,
+# which is how gate.resolved.v2 shipped with five readers and no writer — is
+# ratcheted by the same test file against READER_ONLY_EVENTS in
+# tests/unit/ledger_event_producers.py, where an entry must carry its reason.
 #
 #   python3 tools/ai-backend-smells/orphans.py services/ai-backend
 # Every line is a module in services/ai-backend/src that NOTHING in src imports:

@@ -59,7 +59,11 @@ from agent_runtime.capabilities.surfaces.builtin import (
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Titles, Values
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType, SurfaceKind
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerEventType,
+    SurfaceKind,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -244,6 +248,39 @@ class WorkLedgerEmitter:
 
     # -- emission -----------------------------------------------------------
 
+    async def _sign(
+        self,
+        event_type: str,
+        payload: dict[str, object],
+        summary: str | None,
+    ) -> None:
+        """Emit one row already carrying this writer's stamp.
+
+        Every ``emit`` in this class goes through here, so "which writer wrote
+        this row" has exactly one producer *inside the domain*, the same rule
+        ``source`` and ``spec_rung`` already follow. Mutating the caller's dict
+        is safe and deliberate: each payload is built literally a few lines
+        above the call and is never read again.
+
+        This is NOT what guarantees the ledger is signed — that is
+        ``RuntimeEventPresentationProjector.payload_for_event``, the append
+        funnel every row crosses, which signs anything arriving unstamped.
+        Producer-side stamping was the first attempt and it reached 6 of 34
+        event types; a stamp only some producers apply is worse than none,
+        because it makes absence mean "historic *or* forgotten". Signing here as
+        well is deliberate belt-and-braces: :data:`EmitFn` is a port, and a row
+        should be self-describing before it leaves the domain rather than
+        depending on which sink the run happened to bind.
+
+        The stamp is what makes a later reader able to ask a row's age instead
+        of inferring it. The fold this pipeline replaced had to guess from the
+        shape of the ids in the payload, and it answered "historic" for every
+        surface the live emitter produces.
+        """
+
+        payload[_AdditiveField.W] = _WRITER
+        await self.emit(event_type, payload, summary)
+
     async def on_tool_result(
         self,
         *,
@@ -343,7 +380,7 @@ class WorkLedgerEmitter:
                 if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
                     gen[Keys.Field.MS] = ms
                 derived[Keys.Field.GEN] = gen
-            await self.emit(
+            await self._sign(
                 LedgerEventType.VIEW_DERIVED.value, derived, Messages.VIEW_DERIVED
             )
         except Exception:  # noqa: BLE001 - best-effort upgrade notification
@@ -422,7 +459,7 @@ class WorkLedgerEmitter:
             Keys.Field.CLASS: action_class,
             Keys.Field.BASIS: basis,
         }
-        await self.emit(LedgerEventType.ACTION_CLASSIFIED.value, payload, None)
+        await self._sign(LedgerEventType.ACTION_CLASSIFIED.value, payload, None)
 
     async def _emit_read_executed(
         self,
@@ -442,7 +479,7 @@ class WorkLedgerEmitter:
         }
         if latency_ms is not None:
             payload[Keys.Field.LATENCY_MS] = latency_ms
-        await self.emit(
+        await self._sign(
             LedgerEventType.READ_EXECUTED.value, payload, Messages.READ_EXECUTED
         )
 
@@ -527,7 +564,7 @@ class WorkLedgerEmitter:
         carried = _CarriedState.build(state, connector=connector, op=op)
         if carried is not None:
             created[_AdditiveField.STATE] = carried
-        await self.emit(
+        await self._sign(
             LedgerEventType.SURFACE_CREATED.value, created, Messages.SURFACE_CREATED
         )
 
@@ -538,7 +575,7 @@ class WorkLedgerEmitter:
             Keys.Field.TIER: tier,
             Keys.Field.BASIS: basis,
         }
-        await self.emit(
+        await self._sign(
             LedgerEventType.VIEW_DERIVED.value, derived, Messages.VIEW_DERIVED
         )
 
@@ -623,9 +660,24 @@ class _AdditiveField:
     and is declared in the same pass on ``SurfaceCreatedPayload``, in
     ``work_ledger.json``, in the ``runtime_api`` payload allow-list, and in the
     ``packages/api-types`` mirror — one key, four declarations, no drift.
+
+    ``w`` is additive to EVERY event rather than one of them, and it obeys the
+    same four-declaration rule: it lives on ``LedgerPayload`` beside ``v``, it is
+    declared ``optional`` for all 34 events in ``work_ledger.json``, it is signed
+    and re-validated once in the ``runtime_api`` allow-list, and it is mirrored
+    as ``LedgerPayload.w`` in ``packages/api-types``. Same rule, same pass.
     """
 
     STATE = "state"
+    W = "w"
+
+
+# The writer every row this emitter appends is signed with. A constant, not a
+# parameter: a run cannot be written by two writers, and letting a caller pass
+# one would make the stamp claim whatever the caller felt like claiming. Read
+# from ``CURRENT_LEDGER_WRITER`` rather than naming a member, so the domain and
+# the append funnel cannot disagree about which generation this build is.
+_WRITER: str = CURRENT_LEDGER_WRITER.value
 
 
 class _StateKey:

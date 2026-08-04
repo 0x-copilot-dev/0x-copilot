@@ -9,63 +9,96 @@ reachability sweep of `surfaces_v2` is tracked separately below.
 
 ---
 
-## Part 1 — HTTP surface: 26 of 96 ai-backend routes have no caller
+## Part 1 — HTTP surface: 13 of 114 ai-backend routes have no caller
 
-**Method.** Every route in `services/ai-backend/src/runtime_api/http/` is registered through
-`router.add_api_route("<path>", handler, methods=[...])`, not a decorator — a detail that
-defeats the obvious grep and produced three wrong counts before this one. Routes were
-extracted by parsing `add_api_route` plus the file's `prefix=`, then matched as regexes
-(`{param}` → `[^/]+`) against two caller sets:
+> **This section was wrong on first writing and has been corrected.** The original claimed
+> "26 of 96 unreachable" and listed 17 rows, of which **10 carried paths the application never
+> serves**. The error was one line of the extraction: it resolved **one prefix per file** and
+> defaulted to `/v1/agent` when a file declared none. But `routes.py` alone builds five routers
+> with five different prefixes, and several modules register fully-qualified paths on a bare
+> `APIRouter`. That manufactured phantoms like `/v1/agent/audit/list` (really
+> `/internal/v1/audit/list`, and reached — the facade fans out to both backends at
+> `audit_routes.py:132`) and `/v1/agent/me` (really `/v1/usage/*`, reachable).
+>
+> Two specific retractions:
+>
+> - **`/v1/agent/conversations/{id}/fork` is called**, at
+>   `apps/frontend/src/api/agentApi.ts:230`, through a template literal. The original marked this
+>   ✅ spot-checked with "client calls only `/shares/{token}/fork`" — that spot-check read the
+>   minified `apps/frontend/dist` bundle, not the source, and drew the opposite conclusion from
+>   an adjacent function.
+> - **The "doubled prefix" was an extraction artefact, not a bug.**
+>   `desktop_workspace_attestation.py:19` builds `APIRouter(tags=[...])` with **no** prefix and
+>   registers `/v1/agent/desktop-workspace-attestation` inline. The live route table contains it
+>   once and contains zero doubled paths. The endpoint is also reachable — the facade names it at
+>   `desktop_attestation_routes.py:13`.
+>
+> The corrected figures below come from `tools/check_route_reachability.py`, which resolves the
+> real route table and is pinned by 47 tests plus a `test_no_route_carries_a_doubled_prefix`
+> assertion against the live tree.
+
+**Method.** Routes are registered through `router.add_api_route("<path>", handler, methods=[...])`,
+not decorators — a detail that defeats the obvious grep (a decorator scan finds 1 of 114). Each
+route's real prefix is resolved per _router_, not per file, then matched as a regex
+(`{param}` → `[^/]+`) against three caller sets:
 
 - every `/v1/...` path literal in `packages/**` and `apps/**` (TS/TSX, excluding
-  `node_modules` and `dist`), and
-- every `/v1/...` / `/internal/v1/...` path literal in `services/backend-facade/src`.
+  `node_modules` and `dist`),
+- every path literal in `services/backend-facade/src`, and
+- every path literal in `services/backend/src`.
 
-The facade matters because it is a **per-route proxy**, not a catch-all — verified by reading
+The facade matters because it is a **per-route proxy**, not a catch-all — verified in
 `settings_routes.py`, `connector_routes.py`, `todos_routes.py`, which each forward a named path.
-So a route absent from both sets is unreachable from the product.
+A route absent from all three is unreachable from the product.
 
-**Result: 96 routes, 26 unreachable (27%).**
+**Result: 114 routes scanned, 13 unreachable (11%).** All 13 are baselined with a written reason
+in `tools/route_reachability_baseline.txt`; the gate fails on a _new_ one and, because a wired
+route makes its baseline line stale, the file can only shrink.
 
-| File                               | Route                                                  | Spot-checked                                     |
-| ---------------------------------- | ------------------------------------------------------ | ------------------------------------------------ |
-| `todo_extractions.py`              | `/v1/agent/todo-extractions` (+ `/accept`, `/reject`)  | ✅ zero hits                                     |
-| `self_fork_routes.py`              | `/v1/agent/conversations/{id}/fork`                    | ✅ client calls only `/shares/{token}/fork`      |
-| `audit_list_routes.py`             | `/v1/agent/audit/list`                                 | ✅ zero hits                                     |
-| `routes.py`                        | `/v1/agent/audit/cursor`                               | ✅ zero hits                                     |
-| `routes.py`                        | `/v1/agent/me`, `/v1/agent/me/conversations`           | ✅ client calls only `/v1/agent/me/inbox/stream` |
-| `routes.py`                        | `/v1/agent/org`, `/org/purpose`, `/org/subagents`      | —                                                |
-| `routes.py`                        | `/v1/agent/runs/{run_id}/calls`                        | ✅ zero hits                                     |
-| `routes.py`                        | `/v1/agent/skills/system`                              | ✅ zero hits                                     |
-| `local_release_control.py`         | `/v1/agent/export`, `/install`, `/rollback`, `/verify` | —                                                |
-| `retention_routes.py`              | `/v1/retention/policies`, `/policies/{id}`             | —                                                |
-| `legacy_migration_routes.py`       | `/internal/v1/admin/e2/legacy-migrations/{id}`         | —                                                |
-| `legacy_migration_routes.py`       | `/internal/v1/admin/e2/legacy-stage-migrations/{id}`   | —                                                |
-| `llm_embed_routes.py`              | `/internal/v1/llm/embed`                               | —                                                |
-| `account_merge_routes.py`          | `/internal/v1/admin/account-merge`                     | —                                                |
-| `agent_usage.py`                   | `/v1/usage/org/agent/{agent_id}`                       | —                                                |
-| `evaluation_diagnostics.py`        | `/v1/agent/snapshot`                                   | —                                                |
-| `desktop_workspace_attestation.py` | `/v1/agent/v1/agent/desktop-workspace-attestation`     | ⚠️ see below                                     |
+The 13 fall into three groups, and only the third is debt worth burning down.
 
-### Two things this turned up that are separate bugs
+**Operator-only ingress (2)** — service-token gated and deliberately not proxied by the facade,
+per `app.py`'s own comment. Having no product caller is the design.
 
-1. **A doubled prefix.** `desktop_workspace_attestation.py` resolves to
-   `/v1/agent/v1/agent/desktop-workspace-attestation`. Either the file sets a prefix that is
-   already applied at registration, or the extraction mis-inferred it. Worth one look —
-   if real, that endpoint has never been callable at its intended path.
-2. **`/internal/v1/*` on ai-backend has no defined consumer.** `CLAUDE.md` documents the
-   opposite direction (backend's `/internal/v1/*` consumed by ai-backend). Four of the
-   unreachable routes are ai-backend internal routes; who is meant to call them is unstated.
+| Route                                                          |
+| -------------------------------------------------------------- |
+| `/internal/v1/admin/e2/legacy-migrations/{migration_id}`       |
+| `/internal/v1/admin/e2/legacy-stage-migrations/{migration_id}` |
+
+**Local-dev harness ingress (5)** — mounted only when `app.state.local_release_control_service`
+is set, which no shipped configuration does. No harness in `tools/` calls them either.
+
+| Route                                           |
+| ----------------------------------------------- |
+| `/internal/dev/evaluation/diagnostics/snapshot` |
+| `/internal/dev/evaluation/releases/verify`      |
+| `/internal/dev/evaluation/releases/install`     |
+| `/internal/dev/evaluation/releases/rollback`    |
+| `/internal/dev/evaluation/releases/export`      |
+
+**Genuinely unwired product surface (6)** — each built to a spec, each with unit tests, none
+forwarded by the facade, so no client could reach them even if one tried. Wire or delete.
+
+| Route                                         | What it was for                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `/v1/retention/policies`                      | retention policy admin (list + create); only its legal-holds siblings got wired          |
+| `/v1/retention/policies/{policy_id}`          | retention policy delete                                                                  |
+| `/v1/todo-extractions`                        | todo-extraction proposal list (P3-A2)                                                    |
+| `/v1/todo-extractions/{extraction_id}/accept` | todo-extraction accept                                                                   |
+| `/v1/todo-extractions/{extraction_id}/reject` | todo-extraction reject                                                                   |
+| `/v1/usage/org/agent/{agent_id}`              | per-agent usage rollup (P8-A4); the ai-backend half landed, the facade forward never did |
 
 ### Known limits of this method — read before acting
 
-- A client that assembles a path from variables (`` `${base}/fork` ``) is invisible to a
-  literal grep. Every route above marked ✅ was spot-checked against that; the unmarked ones
-  were not.
-- Reachable-from-the-facade ≠ reachable-from-a-user. A facade route with no TS caller is
-  still orphaned one layer up. Not measured here.
-- This measures the HTTP surface only. A route being live says nothing about how much of
-  the module behind it is live.
+- A client that assembles a path from variables (`` `${base}/fork` ``) is invisible to a literal
+  scan. This is exactly what the original write-up got wrong, and it is why the baseline format
+  requires each line to declare which of two reasons applies: genuinely unreachable, or reached
+  by an invisible caller.
+- Reachable-from-the-facade ≠ reachable-from-a-user. A facade route with no TS caller is still
+  orphaned one layer up. Not measured here.
+- This measures the HTTP surface only. A route being live says nothing about how much of the
+  module behind it is live — see Part 3, where four of the largest _live_ modules turn out to
+  execute only one half.
 
 ---
 

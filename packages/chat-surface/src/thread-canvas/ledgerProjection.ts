@@ -13,9 +13,10 @@
 // snapshot of the SAME golden events — pinned by `ledgerProjection.parity.test.ts`
 // against the shared A1/A3 JSON fixtures. Drift on either side fails CI.
 
-import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import type { RuntimeEventEnvelope, SurfaceId } from "@0x-copilot/api-types";
 import {
   formatLedgerId,
+  isSurfaceId,
   type DecisionKind,
   type DecisionRecordedPayload,
   type GateOpenedPayload,
@@ -102,7 +103,10 @@ export interface LedgerSurfaceView {
  *  the `/surfaces` endpoint via `useSurfacesV2`). B2 reads per-surface
  *  provenance off this; B3 extends it with view lifecycle. */
 export interface LedgerSurface {
-  readonly surfaceId: string;
+  /** The producer's id, branded: it IS this surface's tab URI and mount key.
+   *  Branded so re-deriving it (a wrapper scheme, a percent-encode) cannot
+   *  type-check — see `SurfaceId` in `@0x-copilot/api-types`. */
+  readonly surfaceId: SurfaceId;
   readonly kind: LedgerSurfaceKind;
   readonly title: string;
   readonly source: LedgerSurfaceSource;
@@ -339,12 +343,22 @@ export interface LedgerProjection {
 //     data was served from the content half). What removing the wrapper buys is
 //     that the client can no longer contribute a failure of that shape at all.
 //
+// A SECOND wrapper had been added since, and did exactly the same damage: the
+// canvas minted `<scheme>://legacy-v2/<percent-encoded surface_id>` for every
+// modern surface, flagged it historic, and then resolved its content from a map
+// that only historic surfaces ever populated. It is deleted, and so is the
+// whole client compatibility lane that produced it.
+//
+// The rule is now typed rather than written down: `surfaceId` is a branded
+// `SurfaceId` (`@0x-copilot/api-types`), obtainable only through `isSurfaceId`
+// at this fold's wire boundary. A third wrapper is a compile error.
+//
 // Scheme resolution therefore still works, unchanged: `SurfaceRegistry`
 // matches on the text before `://`, and that is now the archetype rather than a
 // re-derivation of it. Consumers that must ask "is this tab a surface at all?"
-// (a tab strip also holds artifact / receipt / effect-stage / legacy-replay
-// URIs) ask the AUTHORITY — `LedgerProjection.surfaces`, `projectProvenance`,
-// or the hydration map — never a parse of the string.
+// (a tab strip also holds artifact / receipt / effect-stage URIs) ask the
+// AUTHORITY — `LedgerProjection.surfaces`, `projectProvenance`, or the
+// hydration map — never a parse of the string.
 
 // ---------------------------------------------------------------------------
 // Fold
@@ -352,7 +366,7 @@ export interface LedgerProjection {
 
 /** Mutable per-surface accumulator, frozen into a `LedgerSurface` at the end. */
 interface SurfaceAccumulator {
-  surfaceId: string;
+  surfaceId: SurfaceId;
   kind: LedgerSurfaceKind;
   title: string;
   source: LedgerSurfaceSource;
@@ -1108,7 +1122,11 @@ function applySurfaceCreated(
 ): void {
   const p = payload as unknown as Partial<SurfaceCreatedPayload>;
   const surfaceId = p.surface_id;
-  if (typeof surfaceId !== "string" || surfaceId.length === 0) return;
+  // The one crossing from wire string to branded identity. Everything the
+  // canvas mounts under flows from here, so a wrapped id (an identity minted
+  // over another identity) is refused at the boundary rather than becoming a
+  // tab that can never resolve its own content.
+  if (!isSurfaceId(surfaceId)) return;
   const title = strOr(payload.title, "");
   const payloadRef = strOr(payload.payload_ref, "");
   const existing = surfaces.get(surfaceId);

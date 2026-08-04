@@ -152,14 +152,37 @@ class RunSurfacesEndpointMixin:
     async def _append_surface_content(
         producer: RuntimeEventProducer, run: RunRecord
     ) -> None:
-        """Append the persisted result and derived spec the projection consumes."""
+        """Append the carried body and the derived spec the projection consumes.
+
+        The body rides a re-emitted ``surface.created`` — a repeat read — the
+        way production delivers it. The ``tool_result`` alongside it is
+        deliberate noise: nothing joins it, and this fixture would silently
+        stop proving that if it were dropped.
+        """
         await producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.TOOL_RESULT,
             payload={
                 "call_id": "call_1",
-                "output": {"id": "ENG-1", "title": "Fix"},
+                "output": {"unjoined": True},
+            },
+        )
+        await producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.SURFACE_CREATED,
+            payload={
+                "v": 1,
+                "surface_id": "record://linear/get_issue/issue-1",
+                "kind": "record",
+                "source": {"connector": "linear", "op": "get_issue"},
+                "title": "ENG-1 Fix",
+                "payload_ref": "call:call_1",
+                "state": {
+                    "source": {"server": "linear", "tool": "get_issue"},
+                    "data": {"id": "ENG-1", "title": "Fix"},
+                },
             },
         )
         await producer.append_api_event(
@@ -290,13 +313,8 @@ class TestRunSurfacesEndpoint(RunSurfacesEndpointMixin):
                 "kind": "record",
                 "title": "Legacy",
                 "payload_ref": "call:call_1",
+                "state": {"data": {"id": "ENG-1"}},
             },
-        )
-        await producer.append_api_event(
-            run=run,
-            source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.TOOL_RESULT,
-            payload={"call_id": "call_1", "output": {"id": "ENG-1"}},
         )
 
         response = await cqs.list_run_surfaces(

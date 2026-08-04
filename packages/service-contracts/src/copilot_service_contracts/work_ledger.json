@@ -1,6 +1,7 @@
 {
   "schema_version": 2,
   "payload_version": 1,
+  "writers": { "current": "runtime.v2.1", "known": ["runtime.v2.1"] },
   "ledger_id": {
     "prefix": "r",
     "short_len": 3,
@@ -285,12 +286,12 @@
         "scopes",
         "auth_state"
       ],
-      "optional": ["display_title"],
+      "optional": ["display_title", "w"],
       "enum_fields": { "auth_state": "auth_state" }
     },
     "gate.resolved": {
       "required": ["v", "gate_id", "outcome"],
-      "optional": ["write_policy"],
+      "optional": ["write_policy", "w"],
       "enum_fields": {
         "outcome": "gate_outcome",
         "write_policy": "write_policy"
@@ -298,7 +299,7 @@
     },
     "action.classified": {
       "required": ["v", "call_id", "connector", "op", "class", "basis"],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": {
         "class": "action_class",
         "basis": "classification_basis"
@@ -313,44 +314,44 @@
         "latency_ms",
         "payload_ref"
       ],
-      "optional": []
+      "optional": ["w"]
     },
     "surface.created": {
       "required": ["v", "surface_id", "kind", "source", "title", "payload_ref"],
-      "optional": ["state"],
+      "optional": ["state", "w"],
       "enum_fields": { "kind": "surface_kind" }
     },
     "view.derived": {
       "required": ["v", "surface_id", "tier", "basis"],
-      "optional": ["spec_ref", "gen"],
+      "optional": ["spec_ref", "gen", "w"],
       "enum_fields": { "tier": "view_tier", "basis": "view_basis" }
     },
     "view.preference": {
       "required": ["v", "surface_id", "keep", "actor"],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "keep": "view_keep" }
     },
     "shape.requested": {
       "required": ["v", "surface_id", "actor"],
-      "optional": []
+      "optional": ["w"]
     },
     "shape.resolved": {
       "required": ["v", "surface_id", "outcome"],
-      "optional": ["reason"],
+      "optional": ["reason", "w"],
       "enum_fields": { "outcome": "shape_outcome" }
     },
     "write.staged": {
       "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"],
-      "optional": ["rows", "agent_holds", "rollout"]
+      "optional": ["rows", "agent_holds", "rollout", "w"]
     },
     "revision.added": {
       "required": ["v", "stage_id", "rev", "author", "diff_ref"],
-      "optional": ["proposal_ref", "authorship_spans", "rowset"],
+      "optional": ["proposal_ref", "authorship_spans", "rowset", "w"],
       "enum_fields": { "author": "revision_author" }
     },
     "decision.recorded": {
       "required": ["v", "stage_id", "decision", "scope", "actor"],
-      "optional": ["apply"],
+      "optional": ["apply", "w"],
       "enum_fields": {
         "decision": "decision_kind",
         "actor": "decision_actor"
@@ -363,18 +364,19 @@
         "connector_receipt_ref",
         "failure",
         "decided_by",
-        "row_results"
+        "row_results",
+        "w"
       ],
       "enum_fields": { "result": "apply_result" }
     },
     "usage.recorded": {
       "required": ["v", "purpose", "model", "tokens_in", "tokens_out"],
-      "optional": ["surface_id"],
+      "optional": ["surface_id", "w"],
       "enum_fields": { "purpose": "usage_purpose" }
     },
     "receipt.emitted": {
       "required": ["v", "surface_id", "fold_ref"],
-      "optional": []
+      "optional": ["w"]
     },
     "operation.requested": {
       "required": [
@@ -385,12 +387,12 @@
         "op",
         "args_digest"
       ],
-      "optional": ["parent_operation_id"],
+      "optional": ["parent_operation_id", "w"],
       "enum_fields": { "producer": "producer" }
     },
     "operation.classified": {
       "required": ["v", "operation_id", "effect_class", "basis", "confidence"],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": {
         "effect_class": "effect_class",
         "basis": "operation_classification_basis"
@@ -398,12 +400,12 @@
     },
     "operation.completed": {
       "required": ["v", "operation_id", "outcome"],
-      "optional": ["result_ref", "latency_ms"],
+      "optional": ["result_ref", "latency_ms", "w"],
       "enum_fields": { "outcome": "operation_outcome" }
     },
     "operation.failed": {
       "required": ["v", "operation_id", "failure_code", "retryable"],
-      "optional": []
+      "optional": ["w"]
     },
     "artifact.created": {
       "required": [
@@ -415,7 +417,7 @@
         "content_digest",
         "author"
       ],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "kind": "artifact_kind", "author": "artifact_author" }
     },
     "artifact.revised": {
@@ -428,17 +430,17 @@
         "content_digest",
         "author"
       ],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "author": "artifact_author" }
     },
     "artifact.promoted": {
       "required": ["v", "artifact_id", "source_ref", "kind", "revision"],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "kind": "artifact_kind" }
     },
     "artifact.presentation_decided": {
       "required": ["v", "artifact_id", "decision", "basis"],
-      "optional": ["surface_id"],
+      "optional": ["surface_id", "w"],
       "enum_fields": { "decision": "presentation_decision" }
     },
     "effect.staged": {
@@ -470,7 +472,8 @@
         "owner_ref",
         "author_actor",
         "author_ref",
-        "created_at"
+        "created_at",
+        "w"
       ],
       "enum_fields": {
         "executor": "effect_executor",
@@ -490,7 +493,7 @@
         "target_digest",
         "bound_at"
       ],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": {}
     },
     "effect.revised": {
@@ -514,7 +517,8 @@
         "safe_diff_ref",
         "author_actor",
         "author_ref",
-        "created_at"
+        "created_at",
+        "w"
       ],
       "enum_fields": {
         "author": "artifact_author",
@@ -532,7 +536,7 @@
         "proposal_digest",
         "target_digest"
       ],
-      "optional": ["actor_ref", "decided_at", "row_keys"],
+      "optional": ["actor_ref", "decided_at", "row_keys", "w"],
       "enum_fields": {
         "decision": "effect_decision",
         "actor": "effect_actor"
@@ -547,21 +551,21 @@
         "executor",
         "attempt"
       ],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "executor": "effect_executor" }
     },
     "effect.applied": {
       "required": ["v", "stage_id", "revision", "outcome"],
-      "optional": ["receipt_ref", "result_digest", "row_results"],
+      "optional": ["receipt_ref", "result_digest", "row_results", "w"],
       "enum_fields": { "outcome": "effect_outcome" }
     },
     "effect.indeterminate": {
       "required": ["v", "stage_id", "revision", "claim_id", "reason"],
-      "optional": []
+      "optional": ["w"]
     },
     "effect.reconciled": {
       "required": ["v", "stage_id", "revision", "claim_id", "outcome"],
-      "optional": ["receipt_ref"],
+      "optional": ["receipt_ref", "w"],
       "enum_fields": { "outcome": "effect_outcome" }
     },
     "gate.opened.v2": {
@@ -573,12 +577,12 @@
         "capability",
         "reason"
       ],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": { "gate_kind": "gate_kind" }
     },
     "gate.resolved.v2": {
       "required": ["v", "gate_id", "decision", "actor"],
-      "optional": [],
+      "optional": ["w"],
       "enum_fields": {
         "decision": "gate_decision",
         "actor": "effect_actor"
@@ -594,7 +598,7 @@
         "proposal_digest",
         "target_digest"
       ],
-      "optional": ["actor_ref", "decided_at"],
+      "optional": ["actor_ref", "decided_at", "w"],
       "enum_fields": {
         "actor": "effect_actor"
       }

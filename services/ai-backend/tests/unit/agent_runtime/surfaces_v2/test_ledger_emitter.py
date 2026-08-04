@@ -10,6 +10,16 @@ real PRD-C1 classification (catalog read here, fail-closed write/default for an
 unknown op, never spoofable via output); ``spec_rung`` decides the
 ``view.derived`` pair; a raising ``EmitFn`` is swallowed; ``active()`` is
 ``None`` when unbound; ``on_spec_generated`` emits the generated view.
+
+Two ledger-honesty concerns are pinned here as well, because both are about
+what a row *says about itself* rather than about any one producer:
+
+* the writer stamp ``w`` — written by this emitter, applied to anything that
+  arrives unsigned at the transport allow-list, and rejected at the wire when it
+  names a writer this build has never heard of (:class:`TestWriterStamp`);
+* the workspace gate pair — ``gate.resolved.v2`` had five readers and no
+  producer at all, so a gate that could open could never close
+  (:class:`TestWorkspaceGateVocabularyIsHonest`).
 """
 
 from __future__ import annotations
@@ -19,8 +29,28 @@ from collections.abc import Mapping
 
 import pytest
 
+from copilot_service_contracts.work_ledger import load_work_ledger_contract
+
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationGatewayMode,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
+from agent_runtime.capabilities.workspace.effects import WorkspaceGrantGate
 from agent_runtime.surfaces_v2.emitter import SpecRung, WorkLedgerEmitter
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.entities import OperationRequest
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    GateKind,
+    LedgerEventType,
+    LedgerWriter,
+    Producer,
+    UnknownLedgerWriterError,
+    WorkLedgerVocabulary,
+)
+from runtime_api.schemas import RuntimeApiEventType
+from runtime_api.schemas.events import RuntimeEventPresentationProjector
 
 
 class RecordingEmitMixin:
@@ -539,6 +569,7 @@ class TestOnSpecGenerated(RecordingEmitMixin):
         payload = recorded[0]["payload"]
         assert payload == {
             "v": 1,
+            "w": LedgerWriter.RUNTIME_V2_1.value,
             "surface_id": "record://linear/get_issue/issue-1",
             "tier": "shaped",
             "basis": "generated",
@@ -562,6 +593,263 @@ class TestOnSpecGenerated(RecordingEmitMixin):
                 payload={"surface_uri": "record://x/y/1", "generator_model": "m"}
             )
         )
+
+
+class TestWriterStamp(RecordingEmitMixin):
+    """Every row this emitter writes is signed, and the transport keeps it.
+
+    The absence of a writer stamp is the root cause of the defect this whole
+    pass exists to fix. With no record of WHO wrote a row, "is this record
+    historic?" can only be answered by guessing from the shape of the strings
+    inside the payload — which is what the deleted ``isLegacySurfaceCreated``
+    did, and it answered "historic" for every surface the live pipeline
+    produces.
+
+    Both ends are asserted here on purpose. The transport allow-list has
+    already silently deleted an emitted key once (``surface.created.state``,
+    which cost a release), and a stamp that the emitter writes and the wire
+    drops is worse than no stamp: it reads as present in every backend test.
+
+    What makes the stamp *complete* is not this emitter — it signs 4 of the 34
+    event types — but the append funnel, which signs anything reaching it
+    unsigned. Coverage of all 34 is pinned in
+    ``tests/unit/runtime_api/test_ledger_writer_stamp.py``; this class pins the
+    emitter's own half plus the transport rules the stamp obeys.
+    """
+
+    _LEDGER_EVENTS = (
+        RuntimeApiEventType.ACTION_CLASSIFIED,
+        RuntimeApiEventType.READ_EXECUTED,
+        RuntimeApiEventType.SURFACE_CREATED,
+        RuntimeApiEventType.VIEW_DERIVED,
+    )
+
+    def _emitted(self) -> list[dict[str, object]]:
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
+        return recorded
+
+    def test_every_emitted_row_is_signed(self) -> None:
+        recorded = self._emitted()
+
+        assert len(recorded) == 4
+        for row in recorded:
+            payload = row["payload"]
+            assert isinstance(payload, dict)
+            assert payload["w"] == LedgerWriter.RUNTIME_V2_1.value, row["event_type"]
+
+    def test_the_transport_allow_list_carries_the_stamp(self) -> None:
+        # The projection is a REBUILD, not a filter: a key it does not name is
+        # deleted with no error at any layer. Drive the real projector with the
+        # real emitted payloads rather than a hand-written stand-in.
+        recorded = self._emitted()
+        by_type = {row["event_type"]: row["payload"] for row in recorded}
+
+        for wire in self._LEDGER_EVENTS:
+            projected = RuntimeEventPresentationProjector.payload_for_event(
+                event_type=wire,
+                payload=dict(by_type[wire.value]),
+            )
+            assert projected["w"] == LedgerWriter.RUNTIME_V2_1.value, wire.value
+
+    def test_a_row_from_a_producer_that_does_not_sign_is_signed_anyway(
+        self,
+    ) -> None:
+        # The floor. This emitter signs its own four rows, but 28 of the 34
+        # ledger event types come from producers that do not — and a stamp only
+        # some producers apply is worse than none, because "no ``w``" then means
+        # "historic OR forgotten" and the first reader keyed on it classifies
+        # live rows as historic. The append funnel closes that.
+        unsigned = {
+            "v": 1,
+            "surface_id": "record://linear/get_issue/1",
+            "kind": "record",
+            "source": {"connector": "linear", "op": "get_issue"},
+            "title": "ENG-1",
+            "payload_ref": "call:c1",
+        }
+
+        projected = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.SURFACE_CREATED,
+            payload=dict(unsigned),
+        )
+
+        assert projected == {**unsigned, "w": CURRENT_LEDGER_WRITER.value}
+
+    def test_an_unknown_writer_fails_the_append_rather_than_ghosting_a_row(
+        self,
+    ) -> None:
+        # Three ways to handle a stamp this build cannot read, two of them
+        # silent: drop it (the client renders a foreign row as though we wrote
+        # it), blank the payload (a ``surface.created`` with no ``surface_id``,
+        # which the client fold skips without a word), or refuse. Refuse.
+        forged = {
+            "v": 1,
+            "w": "runtime.v9.7",
+            "surface_id": "record://linear/get_issue/1",
+            "kind": "record",
+            "source": {"connector": "linear", "op": "get_issue"},
+            "title": "ENG-1",
+            "payload_ref": "call:c1",
+        }
+
+        with pytest.raises(UnknownLedgerWriterError) as raised:
+            RuntimeEventPresentationProjector.payload_for_event(
+                event_type=RuntimeApiEventType.SURFACE_CREATED,
+                payload=dict(forged),
+            )
+
+        # The safe public message names the rejected stamp and nothing else.
+        assert str(raised.value) == "unknown ledger writer: 'runtime.v9.7'"
+
+    def test_a_non_ledger_event_may_spell_w_however_it_likes(self) -> None:
+        # ``w`` is one letter. A tool payload is free to mean width by it, and
+        # the ledger rule must not reach a row that never spoke the vocabulary.
+        payload = {"w": 640, "h": 480}
+
+        projected = RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload=dict(payload),
+        )
+
+        assert projected == payload
+
+    def test_the_projection_does_not_mutate_its_argument(self) -> None:
+        # ``_project_payload`` returns its argument for event types with no
+        # branch of their own; the stamp seam must copy before touching it.
+        payload = {"v": 1, "w": LedgerWriter.RUNTIME_V2_1.value, "gate_id": "g1"}
+        original = dict(payload)
+
+        RuntimeEventPresentationProjector.payload_for_event(
+            event_type=RuntimeApiEventType.GATE_RESOLVED_V2,
+            payload=payload,
+        )
+
+        assert payload == original
+
+    def test_the_writer_vocabulary_matches_the_contract(self) -> None:
+        # The JSON is the SSOT for the ledger vocabulary; ``LedgerWriter`` is
+        # its typed mirror, pinned here the way ``ENUM_TYPES`` is pinned in
+        # ``test_ledger_contract_parity``.
+        writers = load_work_ledger_contract()["writers"]
+        assert isinstance(writers, dict)
+
+        assert list(writers["known"]) == [member.value for member in LedgerWriter]
+        assert writers["current"] == LedgerWriter.RUNTIME_V2_1.value
+        assert writers["current"] in writers["known"]
+
+    def test_every_payload_model_accepts_the_stamp(self) -> None:
+        # The stamp lives on ``LedgerPayload``, so it is available on every row
+        # rather than on the four this emitter happens to write.
+        for model in WorkLedgerVocabulary.PAYLOAD_MODELS.values():
+            assert "w" in model.model_fields, model.__name__
+            assert model.model_fields["w"].default is None, model.__name__
+
+
+class TestWorkspaceGateVocabularyIsHonest:
+    """A gate that can open must be able to close.
+
+    ``gate.resolved.v2`` was declared in the vocabulary, mirrored on the wire,
+    and branched on by five read models — ``PendingWorkV2``, the receipt fold,
+    the receipt export, the pending-work query service and the canvas lifecycle
+    — while nothing in the tree had ever constructed one. Its twin
+    ``gate.opened.v2`` had a producer, so the ledger could record a workspace
+    gate opening and could never record it closing, and every reader had to
+    treat that gate as outstanding forever.
+
+    The lane is dark (``WORKSPACE_EFFECT_MODE`` defaults off). These tests make
+    the vocabulary honest; they do not turn the lane on.
+    """
+
+    OPERATION_ID = "op_11111111-1111-4111-8111-111111111111"
+
+    @staticmethod
+    def _request(operation_id: str) -> OperationRequest:
+        return OperationRequest(
+            operation_id=operation_id,
+            run_id="run-1",
+            producer=Producer.MODEL,
+            capability="workspace",
+            op="write",
+            canonical_args_ref=f"operation://{operation_id}/args",
+            args_digest="0" * 64,
+            requested_at="2026-01-01T00:00:00+00:00",
+        )
+
+    class _RecordingEmitter:
+        """Records ``(event_type, payload)`` for the gateway presentation seam."""
+
+        def __init__(self) -> None:
+            self.events: list[tuple[LedgerEventType, dict[str, object]]] = []
+
+        async def emit(
+            self,
+            event_type: LedgerEventType,
+            payload: Mapping[str, object],
+            summary: str | None = None,
+        ) -> None:
+            del summary
+            self.events.append((event_type, dict(payload)))
+
+    def _blocked(self) -> list[tuple[LedgerEventType, dict[str, object]]]:
+        emitter = self._RecordingEmitter()
+        token = OperationContext.bind_for_run(
+            identity=VerifiedOperationIdentity(
+                org_id="org-1",
+                user_id="user-1",
+                conversation_id="conv-1",
+                run_id="run-1",
+            ),
+            policy_snapshot=ToolUsePolicySnapshot.from_response(user={}),
+            ledger_emitter=emitter,
+            artifact_service=None,
+            mode=OperationGatewayMode.ENFORCE,
+        )
+        try:
+            resolution = asyncio.run(
+                WorkspaceGrantGate._blocked(
+                    request=self._request(self.OPERATION_ID),
+                    kind=GateKind.GRANT,
+                    reason="workspace_grant_missing_or_revoked",
+                    summary="Workspace access is required; no host change was made.",
+                )
+            )
+        finally:
+            OperationContext.unbind(token)  # type: ignore[arg-type]
+
+        # The denial is the decision; the events are only evidence of it.
+        assert resolution.allowed is False
+        return emitter.events
+
+    def test_a_denied_gate_records_both_halves_in_order(self) -> None:
+        events = self._blocked()
+
+        assert [event_type for event_type, _ in events] == [
+            LedgerEventType.GATE_OPENED_V2,
+            LedgerEventType.GATE_RESOLVED_V2,
+        ]
+        gate_ids = {payload["gate_id"] for _, payload in events}
+        assert gate_ids == {f"workspace:{self.OPERATION_ID}"}
+
+    def test_the_resolution_is_a_policy_denial_not_a_user_one(self) -> None:
+        # Nobody was asked: the grant was absent, revoked or too narrow and the
+        # runtime decided on the spot. Recording ``user`` would claim a person
+        # made this call.
+        _, resolved = self._blocked()[1]
+
+        assert resolved["decision"] == "denied"
+        assert resolved["actor"] == "policy"
+
+    def test_both_halves_validate_against_the_ledger_vocabulary(self) -> None:
+        # The emitted payloads are the contract's, not a shape invented at the
+        # call site — the failure mode a hand-built dict hides until replay.
+        for event_type, payload in self._blocked():
+            WorkLedgerVocabulary.validate_payload(event_type.value, payload)
+
+    def test_both_halves_are_signed(self) -> None:
+        for _, payload in self._blocked():
+            assert payload["w"] == LedgerWriter.RUNTIME_V2_1.value
 
 
 class TestBinding(RecordingEmitMixin):

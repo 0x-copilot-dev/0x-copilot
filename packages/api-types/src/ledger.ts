@@ -273,6 +273,33 @@ export type EffectStageStatus =
 export type GateKind = "authentication" | "grant" | "capability" | "policy";
 export type GateDecision = "granted" | "denied" | "cancelled";
 
+/**
+ * Which writer produced a ledger row — the row's provenance stamp (`w`).
+ *
+ * NOT one of the contract's `enums`, deliberately: those describe *what a row
+ * says*, this describes *who said it*, and it lives under the contract's own
+ * `writers` key. Mirrors `LedgerWriter` in
+ * `services/ai-backend/src/agent_runtime/surfaces_v2/ledger_models.py`.
+ */
+export type LedgerWriter = "runtime.v2.1";
+
+/**
+ * The two fields every ledger payload carries.
+ *
+ * `v` says which vocabulary the row speaks; `w` says who wrote it. `w` is
+ * optional because an append-only log keeps rows written before the stamp
+ * existed — absence means "written before any writer signed", never "written by
+ * nobody", and a row this build appends is always signed (the backend's append
+ * funnel stamps it). Do not narrow `w` to required: that would make every
+ * historic row unparseable.
+ *
+ * Mirrors the pydantic `LedgerPayload` base of the same name.
+ */
+export interface LedgerPayload {
+  v: 1;
+  w?: LedgerWriter;
+}
+
 // ---------------------------------------------------------------------------
 // Shared value objects
 // ---------------------------------------------------------------------------
@@ -352,8 +379,7 @@ export type DecisionScope =
 // Payload interfaces (one per event type; fields per SDR §5)
 // ---------------------------------------------------------------------------
 
-export interface GateOpenedPayload {
-  v: 1;
+export interface GateOpenedPayload extends LedgerPayload {
   gate_id: string;
   connector: string;
   purpose: string;
@@ -361,16 +387,14 @@ export interface GateOpenedPayload {
   auth_state: GateAuthState;
 }
 
-export interface GateResolvedPayload {
-  v: 1;
+export interface GateResolvedPayload extends LedgerPayload {
   gate_id: string;
   outcome: GateOutcome;
   write_policy?: WritePolicy;
 }
 
 /** `class` is the SDR-verbatim wire key (a legal TS property name). */
-export interface ActionClassifiedPayload {
-  v: 1;
+export interface ActionClassifiedPayload extends LedgerPayload {
   call_id: string;
   connector: string;
   op: string;
@@ -378,8 +402,7 @@ export interface ActionClassifiedPayload {
   basis: ClassificationBasis;
 }
 
-export interface ReadExecutedPayload {
-  v: 1;
+export interface ReadExecutedPayload extends LedgerPayload {
   call_id: string;
   connector: string;
   op: string;
@@ -416,8 +439,7 @@ export interface SurfaceCreatedState {
   data?: unknown;
 }
 
-export interface SurfaceCreatedPayload {
-  v: 1;
+export interface SurfaceCreatedPayload extends LedgerPayload {
   surface_id: string;
   kind: SurfaceKind;
   /**
@@ -436,8 +458,7 @@ export interface SurfaceCreatedPayload {
   state?: SurfaceCreatedState;
 }
 
-export interface ViewDerivedPayload {
-  v: 1;
+export interface ViewDerivedPayload extends LedgerPayload {
   surface_id: string;
   tier: ViewTier;
   basis: ViewBasis;
@@ -445,16 +466,14 @@ export interface ViewDerivedPayload {
   gen?: ViewGen;
 }
 
-export interface ViewPreferencePayload {
-  v: 1;
+export interface ViewPreferencePayload extends LedgerPayload {
   surface_id: string;
   keep: ViewKeep;
   // SDR §5 pins `actor` to the constant `"user"` here (not `DecisionActor`).
   actor: "user";
 }
 
-export interface ShapeRequestedPayload {
-  v: 1;
+export interface ShapeRequestedPayload extends LedgerPayload {
   surface_id: string;
   // SDR §5 pins `actor` to the constant `"user"` here.
   actor: "user";
@@ -463,15 +482,13 @@ export interface ShapeRequestedPayload {
 /** Outcome of a user-invited shaping attempt (PRD-B4, additive to SDR §5).
  *  `reason` is the safe lint/validation summary on a `no_fit` (never raw model
  *  output); absent on a `shaped` outcome. */
-export interface ShapeResolvedPayload {
-  v: 1;
+export interface ShapeResolvedPayload extends LedgerPayload {
   surface_id: string;
   outcome: ShapeOutcome;
   reason?: string;
 }
 
-export interface WriteStagedPayload {
-  v: 1;
+export interface WriteStagedPayload extends LedgerPayload {
   stage_id: string;
   surface_id: string;
   target: LedgerOpRef;
@@ -491,8 +508,7 @@ export interface AuthorshipSpan {
   author: RevisionAuthor;
 }
 
-export interface RevisionAddedPayload {
-  v: 1;
+export interface RevisionAddedPayload extends LedgerPayload {
   stage_id: string;
   rev: number;
   author: RevisionAuthor;
@@ -506,8 +522,7 @@ export interface RevisionAddedPayload {
   rowset?: { rows: readonly StagedRow[] };
 }
 
-export interface DecisionRecordedPayload {
-  v: 1;
+export interface DecisionRecordedPayload extends LedgerPayload {
   stage_id: string;
   decision: DecisionKind;
   scope: DecisionScope;
@@ -535,8 +550,7 @@ export interface WriteAppliedDecidedBy {
   decision_seq: number;
 }
 
-export interface WriteAppliedPayload {
-  v: 1;
+export interface WriteAppliedPayload extends LedgerPayload {
   stage_id: string;
   rev: number;
   result: ApplyResult;
@@ -550,8 +564,7 @@ export interface WriteAppliedPayload {
   row_results?: readonly WriteAppliedRowResult[];
 }
 
-export interface UsageRecordedPayload {
-  v: 1;
+export interface UsageRecordedPayload extends LedgerPayload {
   purpose: UsagePurpose;
   model: string;
   tokens_in: number;
@@ -559,14 +572,12 @@ export interface UsageRecordedPayload {
   surface_id?: string;
 }
 
-export interface ReceiptEmittedPayload {
-  v: 1;
+export interface ReceiptEmittedPayload extends LedgerPayload {
   surface_id: string;
   fold_ref: string;
 }
 
-export interface OperationRequestedPayload {
-  v: 1;
+export interface OperationRequestedPayload extends LedgerPayload {
   operation_id: string;
   producer: Producer;
   capability: string;
@@ -575,31 +586,27 @@ export interface OperationRequestedPayload {
   parent_operation_id?: string;
 }
 
-export interface OperationClassifiedPayload {
-  v: 1;
+export interface OperationClassifiedPayload extends LedgerPayload {
   operation_id: string;
   effect_class: EffectClass;
   basis: OperationClassificationBasis;
   confidence: number;
 }
 
-export interface OperationCompletedPayload {
-  v: 1;
+export interface OperationCompletedPayload extends LedgerPayload {
   operation_id: string;
   outcome: OperationOutcome;
   result_ref?: string;
   latency_ms?: number;
 }
 
-export interface OperationFailedPayload {
-  v: 1;
+export interface OperationFailedPayload extends LedgerPayload {
   operation_id: string;
   failure_code: string;
   retryable: boolean;
 }
 
-export interface ArtifactCreatedPayload {
-  v: 1;
+export interface ArtifactCreatedPayload extends LedgerPayload {
   artifact_id: string;
   kind: ArtifactKind;
   revision: number;
@@ -608,8 +615,7 @@ export interface ArtifactCreatedPayload {
   author: ArtifactAuthor;
 }
 
-export interface ArtifactRevisedPayload {
-  v: 1;
+export interface ArtifactRevisedPayload extends LedgerPayload {
   artifact_id: string;
   revision: number;
   parent_revision: number;
@@ -618,24 +624,21 @@ export interface ArtifactRevisedPayload {
   author: ArtifactAuthor;
 }
 
-export interface ArtifactPromotedPayload {
-  v: 1;
+export interface ArtifactPromotedPayload extends LedgerPayload {
   artifact_id: string;
   source_ref: string;
   kind: ArtifactKind;
   revision: number;
 }
 
-export interface ArtifactPresentationDecidedPayload {
-  v: 1;
+export interface ArtifactPresentationDecidedPayload extends LedgerPayload {
   artifact_id: string;
   decision: PresentationDecision;
   basis: string;
   surface_id?: string;
 }
 
-export interface EffectStagedPayload {
-  v: 1;
+export interface EffectStagedPayload extends LedgerPayload {
   stage_id: string;
   operation_id: string;
   executor: EffectExecutorKind;
@@ -664,8 +667,7 @@ export interface EffectStagedPayload {
   created_at?: string;
 }
 
-export interface EffectProjectionBoundPayload {
-  v: 1;
+export interface EffectProjectionBoundPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   projection_ref: string;
@@ -674,8 +676,7 @@ export interface EffectProjectionBoundPayload {
   bound_at: string;
 }
 
-export interface EffectRevisedPayload {
-  v: 1;
+export interface EffectRevisedPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   proposal_ref: string;
@@ -696,8 +697,7 @@ export interface EffectRevisedPayload {
   created_at?: string;
 }
 
-export interface EffectDecisionRecordedPayload {
-  v: 1;
+export interface EffectDecisionRecordedPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   decision: EffectDecisionKind;
@@ -714,8 +714,7 @@ export interface EffectRowDecision {
   decision: "approve" | "hold";
 }
 
-export interface EffectRowDecisionsRecordedPayload {
-  v: 1;
+export interface EffectRowDecisionsRecordedPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   decisions: readonly EffectRowDecision[];
@@ -726,8 +725,7 @@ export interface EffectRowDecisionsRecordedPayload {
   decided_at?: string;
 }
 
-export interface EffectClaimedPayload {
-  v: 1;
+export interface EffectClaimedPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   claim_id: string;
@@ -735,8 +733,7 @@ export interface EffectClaimedPayload {
   attempt: number;
 }
 
-export interface EffectAppliedPayload {
-  v: 1;
+export interface EffectAppliedPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   outcome: EffectOutcome;
@@ -745,16 +742,14 @@ export interface EffectAppliedPayload {
   row_results?: readonly WriteAppliedRowResult[];
 }
 
-export interface EffectIndeterminatePayload {
-  v: 1;
+export interface EffectIndeterminatePayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   claim_id: string;
   reason: string;
 }
 
-export interface EffectReconciledPayload {
-  v: 1;
+export interface EffectReconciledPayload extends LedgerPayload {
   stage_id: string;
   revision: number;
   claim_id: string;
@@ -762,8 +757,7 @@ export interface EffectReconciledPayload {
   receipt_ref?: string;
 }
 
-export interface GateOpenedV2Payload {
-  v: 1;
+export interface GateOpenedV2Payload extends LedgerPayload {
   gate_id: string;
   operation_id: string;
   gate_kind: GateKind;
@@ -771,8 +765,7 @@ export interface GateOpenedV2Payload {
   reason: string;
 }
 
-export interface GateResolvedV2Payload {
-  v: 1;
+export interface GateResolvedV2Payload extends LedgerPayload {
   gate_id: string;
   decision: GateDecision;
   actor: EffectActor;

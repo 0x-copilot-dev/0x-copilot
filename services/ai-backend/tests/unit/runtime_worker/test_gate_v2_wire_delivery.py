@@ -23,7 +23,10 @@ import pytest
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ledger_seal import LedgerSealViolation
 from agent_runtime.execution.contracts import StreamEventSource
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerEventType,
+)
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_api.schemas.events import RuntimeEventPresentationProjector
@@ -109,10 +112,15 @@ class TestGateV2ReachesTheWire(GateEmissionMixin):
                 event_type=wire,
                 payload=payload,
             )
-            assert set(projected).issubset(set(payload)), (
-                f"{event_type.value} presentation added fields: "
-                f"{set(projected) - set(payload)}"
+            # The append funnel signs every ledger row, so the writer stamp is
+            # the ONE field presentation may add — a constant this build owns,
+            # never anything derived from the payload. Everything else must
+            # still be a subset of what came in.
+            added = set(projected) - set(payload)
+            assert added <= {"w"}, (
+                f"{event_type.value} presentation added fields: {added - {'w'}}"
             )
+            assert projected["w"] == CURRENT_LEDGER_WRITER.value
 
     async def test_a_gate_is_causal_and_cannot_follow_the_seal(self) -> None:
         """Gates describe in-run activity, so the seal must reject a late one.

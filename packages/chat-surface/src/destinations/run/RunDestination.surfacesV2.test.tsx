@@ -393,79 +393,35 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     });
   });
 
-  it("flag ON: a historic envelope replays through read-only renderer state", async () => {
+  it("flag ON: a staged write mounts its draft surface and stages nothing on its own", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
     await screen.findByTestId("thread-canvas");
-    // The compatibility reader is selective: only an explicit historic surface
-    // envelope becomes fixed-renderer state, preserving its old URI/state
-    // rather than upgrading it into a v2 stage or writable surface. The
-    // production default is Studio, so the tab strip remains available.
+    // `write.staged` is a LIVE event (`surfaces_v2/staging.py` emits it), and
+    // its surface is an ordinary ledger surface, so the D1 draft surface is
+    // what belongs on the canvas.
+    //
+    // This test used to assert the opposite — that the draft surface was
+    // SUPPRESSED — because a client compatibility reader classified the whole
+    // stream as historic the moment it saw `write.staged` (or a `connector:`
+    // subject, or a `call:` payload ref…). Every one of those signals matches
+    // current data, so the reader silently disabled a shipped feature on every
+    // real run. It is deleted; the assertion follows the code.
+    const subject = "message://gmail/create_draft/launch-1";
     stream(transport, [
-      {
-        event_id: "v1-1",
-        run_id: "run-1",
-        conversation_id: "conv-1",
-        sequence_no: 1,
-        event_type: "tool_result",
-        activity_kind: "tool",
-        payload: {
-          surface: {
-            surface_uri: "sheet-row://legacy/x",
-            archetype: "table",
-            state: { data: {} },
-          },
-        },
-        created_at: new Date().toISOString(),
-      },
+      created(subject, "message", "Launch draft"),
+      v2Event("write.staged", {
+        v: 1,
+        stage_id: "stage-launch-1",
+        surface_id: subject,
+        target: { connector: "gmail", op: "send" },
+        proposal_ref: "draft://launch-1/v1",
+      }),
     ]);
-    await waitFor(() => {
-      expect(screen.getByTestId("surface-placeholder")).toHaveTextContent(
-        "sheet-row",
-      );
-    });
-    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.method === "POST" && request.path.includes("/stages/"),
-      ),
-    ).toBe(false);
-  });
-
-  it("flag ON: a historic staged write never becomes an actionable effect", async () => {
-    seq = 0;
-    const transport = new FakeTransport();
-    renderRun(transport, makeStore(), true);
-    await screen.findByTestId("thread-canvas");
-    const subject = "connector:gmail:draft:legacy-1";
-    stream(transport, [
-      created(subject, "message", "Historic launch draft"),
-      {
-        event_id: "legacy-stage-1",
-        run_id: "run-1",
-        conversation_id: "conv-1",
-        sequence_no: 2,
-        event_type: "write.staged",
-        activity_kind: "tool",
-        payload: {
-          v: 1,
-          stage_id: "legacy-stage-1",
-          surface_id: subject,
-          target: { connector: "gmail", op: "send" },
-          proposal_ref: "draft://legacy-1/v1",
-        },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    await waitFor(() => {
-      expect(screen.getByTestId("tc-surface-mount").dataset.tier).not.toBe(
-        "empty",
-      );
-    });
-    expect(screen.queryByTestId("effect-stage-card")).toBeNull();
-    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    await screen.findByTestId("tc-staged-draft");
+    // Rendering a proposal is not making one: the cockpit posts a decision only
+    // when the user presses one of this surface's buttons.
     expect(
       transport.requests.some(
         (request) =>
@@ -937,41 +893,40 @@ describe("RunDestination — v2 mount identity (one id, no round-trip)", () => {
     );
   });
 
-  it("still opens a legacy replay tab, which is not a ledger surface at all", async () => {
+  it("keeps ONE identity per surface — an old envelope mints no second tab", async () => {
     seq = 0;
-    registerAdapter(recordingTableAdapter([]));
+    const seen: unknown[] = [];
+    registerAdapter(recordingTableAdapter(seen));
     const transport = new FakeTransport();
     hydrating(transport, PROJECTOR_ID);
     renderRun(transport, makeStore(), true);
     await screen.findByTestId("thread-canvas");
-    // A historic presentation envelope keeps its OWN uri and its OWN state.
-    // It is distinguished by the `legacyUris` set the tab builder owns — never
-    // by parsing the URI — so it must resolve neither the ledger's hydration
-    // map nor an archetype adapter.
+    // The stream carries a modern surface AND a pre-ledger `tool_result`
+    // presentation envelope. A client compatibility reader used to read the
+    // pair as proof the whole run was historic — and then mint
+    // `<scheme>://legacy-v2/<percent-encoded surface_id>` for the MODERN
+    // surface too, and resolve that tab's content from a map only the reader
+    // ever filled. Live trace: `stored keys: ["table://incidents/…"]` beside
+    // `resolve uri: "table://legacy-v2/table%3A%2F%2F…" resolved: false` — a
+    // fully hydrated table rendering as an empty card.
+    //
+    // The lane is deleted. The old envelope contributes no tab at all, and the
+    // ledger's surface is mounted under the one id its producer minted.
     stream(transport, [
-      {
-        event_id: "v1-legacy",
-        run_id: "run-1",
-        conversation_id: "conv-1",
-        sequence_no: 1,
-        event_type: "tool_result",
-        activity_kind: "tool",
-        payload: {
-          surface: {
-            surface_uri: "sheet-row://legacy/x",
-            archetype: "table",
-            state: { data: {} },
-          },
+      created(PROJECTOR_ID, "table", "Open incidents"),
+      derived(PROJECTOR_ID, "shaped", "schema"),
+      v2Event("tool_result", {
+        surface: {
+          surface_uri: "sheet-row://legacy/x",
+          archetype: "table",
+          state: { data: {} },
         },
-        created_at: new Date().toISOString(),
-      },
+      }),
     ]);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("surface-placeholder")).toHaveTextContent(
-        "sheet-row",
-      );
-    });
-    expect(screen.queryByTestId("table-adapter")).toBeNull();
+    const rendered = await screen.findByTestId("table-adapter");
+    expect(rendered).toHaveTextContent("INC-4127");
+    const tabs = within(screen.getByTestId("tc-tabs")).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.dataset.uri)).toEqual([PROJECTOR_ID]);
   });
 });

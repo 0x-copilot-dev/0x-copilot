@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.surfaces_v2.ledger_models import CURRENT_LEDGER_WRITER
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
@@ -391,6 +392,10 @@ class TestWriteApprovalGateResolved(WriteGateApprovalMixin):
         assert len(resolved) == 1
         assert resolved[0].payload == {  # type: ignore[union-attr]
             "v": 1,
+            # The append funnel signs the row; ``w`` says which writer generation
+            # produced it, and is the one field on a ledger payload that is about
+            # the row rather than about the gate.
+            "w": CURRENT_LEDGER_WRITER.value,
             "gate_id": self.WRITE_APPROVAL,
             "outcome": "connected",
         }

@@ -6,6 +6,7 @@ import asyncio
 import fnmatch
 import hashlib
 import importlib
+import logging
 import posixpath
 import sys
 from collections.abc import AsyncIterator, Sequence
@@ -68,10 +69,14 @@ from agent_runtime.execution.filesystem_bypass import (
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.entities import OperationRequest
+from agent_runtime.surfaces_v2.ledger_ids import OperationArgsRefCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectDecisionKind,
+    GateDecision,
+    GateKind,
     LedgerEventType,
+    Producer,
 )
 from runtime_adapters.in_memory.artifact_blob_store import InMemoryArtifactBlobStore
 from runtime_adapters.in_memory.workspace_overlay_store import (
@@ -1028,6 +1033,160 @@ async def test_gate_denial_survives_a_failing_ledger_emitter() -> None:
     ]
     # And the emitter's internal detail never reaches the caller.
     assert "telemetry-secret-must-not-escape" not in result.error
+
+
+def _gate_request(
+    operation_id: str = "op_00000000-0000-4000-8000-0000000000ff",
+) -> OperationRequest:
+    """A minimal request for the gate seam — only its ids are read."""
+
+    return OperationRequest(
+        operation_id=operation_id,
+        run_id=RUN_ID,
+        producer=Producer.MODEL,
+        capability="workspace",
+        op="write",
+        canonical_args_ref=OperationArgsRefCodec.format(operation_id),
+        args_digest="0" * 64,
+        requested_at="2026-08-04T00:00:00+00:00",
+    )
+
+
+def _gate_events(harness: Harness) -> list[tuple[LedgerEventType, dict[str, object]]]:
+    return [
+        (event[0], event[1])
+        for event in harness.emitter.events
+        if event[0]
+        in {LedgerEventType.GATE_OPENED_V2, LedgerEventType.GATE_RESOLVED_V2}
+    ]
+
+
+async def test_gate_denial_records_the_open_and_close_pair() -> None:
+    """A denial that opens a gate closes it in the same breath.
+
+    The decision is final the moment ``resolve`` returns — no route, coordinator
+    or UI can reopen it — so a lone ``gate.opened.v2`` is a gate five read models
+    (``PendingWorkV2``, ``CanvasLifecycle``, the run receipt, the v2 receipt
+    export, the effect-ledger projection) must treat as outstanding forever.
+    """
+
+    harness = _harness(grant=_grant(status="revoked"), expose_grant=True)
+    token = harness.bind()
+    try:
+        await harness.backend.awrite(
+            f"/workspace/{MOUNT}/blocked.txt", "must not stage"
+        )
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    events = _gate_events(harness)
+    assert [event[0] for event in events] == [
+        LedgerEventType.GATE_OPENED_V2,
+        LedgerEventType.GATE_RESOLVED_V2,
+    ]
+    opened, resolved = events[0][1], events[1][1]
+    assert resolved["gate_id"] == opened["gate_id"]
+    assert resolved["decision"] == GateDecision.DENIED.value
+    assert resolved["actor"] == EffectActor.POLICY.value
+
+
+async def test_a_sink_that_drops_the_opening_still_records_the_close() -> None:
+    """A half lost at the sink does not take the other half with it.
+
+    The sink is fail-soft one layer up (``FailSoftOperationEventEmitter``
+    contains the delegate raise), so what this pins end to end is the shape the
+    readers depend on: the close is written from its own statement, never from
+    inside the opening's error handling, and an orphan close is a no-op because
+    both folds resolve a gate by *removing* it.
+    """
+
+    harness = _harness(grant=_grant(status="revoked"), expose_grant=True)
+    harness.emitter.fail_on_event_type = LedgerEventType.GATE_OPENED_V2
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(
+            f"/workspace/{MOUNT}/blocked.txt", "must not stage"
+        )
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert "no host change was made" in result.error
+    events = _gate_events(harness)
+    assert [event[0] for event in events] == [LedgerEventType.GATE_RESOLVED_V2]
+    assert events[0][1]["decision"] == GateDecision.DENIED.value
+
+
+async def test_a_sink_that_drops_the_close_never_reopens_the_decision() -> None:
+    """The worse direction: opened, then the close is lost.
+
+    Nothing retries it — the operation completed BLOCKED and unretryable, and no
+    route, coordinator or UI can reopen the gate — so every reader is left with
+    outstanding work that can never be closed. The denial itself must still be a
+    denial, and the emitter's internal detail must not ride out on it.
+    """
+
+    harness = _harness(grant=_grant(mode="read_only"), expose_grant=True)
+    harness.emitter.fail_on_event_type = LedgerEventType.GATE_RESOLVED_V2
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(
+            f"/workspace/{MOUNT}/blocked.txt", "must not stage"
+        )
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert "no host change was made" in result.error
+    assert harness.base.mutation_calls == []
+    assert harness.proposals.calls == []
+    events = _gate_events(harness)
+    assert [event[0] for event in events] == [LedgerEventType.GATE_OPENED_V2]
+    assert events[0][1]["reason"] == "workspace_grant_read_only"
+    assert "telemetry-secret-must-not-escape" not in result.error
+
+
+async def test_an_unreachable_ledger_seam_loses_each_gate_half_independently(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both halves are attempted, and each names itself when it is lost.
+
+    This is the case one shared ``try`` got wrong. With the presentation seam
+    unavailable — ``_GatewayPresentationContext.require()`` raises
+    ``OperationContextUnboundError`` — a single handler caught the *opening* and
+    the close was never attempted at all, so the stated "a lost opening does not
+    stop the close from being written" invariant was prose only.
+
+    Two warnings, naming ``gate.opened.v2`` then ``gate.resolved.v2``, are the
+    evidence that each half now runs and fails on its own. The decision is
+    returned unchanged either way: describing a denial can never alter it.
+    """
+
+    request = _gate_request()
+    with caplog.at_level(
+        logging.WARNING, logger="agent_runtime.capabilities.workspace.effects"
+    ):
+        resolution = await WorkspaceGrantGate._blocked(
+            request=request,
+            kind=GateKind.GRANT,
+            reason="workspace_grant_missing_or_revoked",
+            summary="Workspace access is required; no host change was made.",
+        )
+
+    assert resolution.allowed is False
+    assert resolution.gate_kind is GateKind.GRANT
+    lost = [
+        record
+        for record in caplog.records
+        if record.msg == "workspace.gate_emit_failed"
+    ]
+    assert [record.metadata["event_type"] for record in lost] == [  # type: ignore[attr-defined]
+        LedgerEventType.GATE_OPENED_V2.value,
+        LedgerEventType.GATE_RESOLVED_V2.value,
+    ]
+    assert {record.metadata["gate_id"] for record in lost} == {  # type: ignore[attr-defined]
+        f"workspace:{request.operation_id}"
+    }
 
 
 async def test_no_delete_grant_cannot_stage_delete_or_move() -> None:

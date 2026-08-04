@@ -394,7 +394,59 @@ class GateDecision(StrEnum):
     CANCELLED = "cancelled"
 
 
+class LedgerWriter(StrEnum):
+    """Which writer produced a ledger row — the row's provenance stamp (``w``).
+
+    NOT one of the ``enums`` in the SSOT JSON, deliberately. Those describe
+    *what a row says*; this describes *who said it*, and it is declared under
+    the contract's own ``writers`` key instead. The two are validated the same
+    way and drift the same way, but conflating them would put a transport
+    concern into the payload vocabulary the renderers switch on.
+
+    Absence is meaningful and is the reason the field is nullable: a row with no
+    ``w`` **and any content** was written before any writer signed its work.
+    That is the entire point of the stamp. Without it, "is this record historic?"
+    can only be guessed from the *shape* of the strings inside the payload —
+    which is precisely what ``isLegacySurfaceCreated`` did, and it answered
+    "historic" for every surface the current pipeline produces.
+
+    The "and any content" qualifier is not hedging: a payload the allow-list
+    rejected projects to exactly ``{}`` and is deliberately left unsigned
+    (``_sign_ledger_writer``), because ``{}`` is that allow-list's rejection
+    sentinel. Such a row can still reach the store, since its caller appends
+    regardless — but it carries no id for any reader to key on, so it is inert
+    rather than mis-attributed. Refusing that append is the open fix, and it
+    belongs to the callers, not to the stamp.
+
+    That claim only holds because the stamp is applied at the **append funnel**,
+    not by each producer:
+    :meth:`runtime_api.schemas.events.RuntimeEventPresentationProjector.payload_for_event`
+    signs every ledger row on its way to the store with
+    :data:`CURRENT_LEDGER_WRITER`. Producer-side stamping came first and reached
+    6 of the 34 event types — two producers still sign their own rows, and the
+    funnel carries those stamps through — which on its own would have made "no
+    ``w``" mean "historic *or* written by one of the 28 producers that forgot".
+    A reader keyed on that mis-classifies live rows, which is the same defect
+    ``isLegacySurfaceCreated`` had. One seam cannot forget a branch.
+
+    Adding a member is how a writer generation is retired: old rows keep the
+    member they were written with, the transport keeps understanding them, and
+    a stamp from a writer this build has never heard of is REJECTED
+    (:class:`UnknownLedgerWriterError`) rather than rendered on a guess.
+    """
+
+    RUNTIME_V2_1 = "runtime.v2.1"
+
+
 _WORK_LEDGER_CONTRACT = load_work_ledger_contract()
+# The writer this build signs new rows with. Read from the contract's own
+# ``writers.current`` rather than re-spelled here, so the JSON key is
+# load-bearing: promote a generation there and every append follows, and a
+# ``current`` that names a writer this enum has never heard of fails at import
+# instead of stamping rows nobody can read.
+CURRENT_LEDGER_WRITER: LedgerWriter = LedgerWriter(
+    str(dict(_WORK_LEDGER_CONTRACT["writers"])["current"])
+)
 _CROSS_LANGUAGE_MAX_SAFE_INTEGER = int(
     dict(_WORK_LEDGER_CONTRACT["digests"])["max_safe_integer"]
 )
@@ -510,14 +562,29 @@ class DecisionScope(RuntimeContract):
 
 
 class LedgerPayload(RuntimeContract):
-    """Base for all v2 ledger payloads: versioned from day one (SDR §5).
+    """Base for all v2 ledger payloads: versioned and signed (SDR §5).
 
     ``v`` is required with no default on purpose — a defaulted field is dropped
     from ``model_json_schema()["required"]``, which would break the parity pin
     against the SSOT JSON (``v`` is first in every event's ``required`` array).
+
+    ``w`` is its sibling and its opposite: the writer stamp, optional with a
+    default precisely SO it stays out of ``required``, because an append-only
+    log must keep validating every row written before the field existed. ``v``
+    says which vocabulary a row speaks; ``w`` says who wrote it. A durable log
+    read years later needs both — Kafka carries a schema id, protobuf carries
+    field numbers, event sourcing carries a ``schema_version`` — and this ledger
+    carried neither until a fold had to guess a row's age from the shape of the
+    ids inside it and guessed wrong for every live surface.
+
+    ``None`` on a payload MODEL means "this producer did not sign"; it is not
+    what lands in the ledger, because the append funnel signs the row on the way
+    past (see :class:`LedgerWriter`). ``None`` on a row read back OUT of the
+    store means the row predates the stamp — never "written by nobody".
     """
 
     v: Literal[1]
+    w: LedgerWriter | None = None
 
 
 class GateOpenedPayload(LedgerPayload):
@@ -1206,6 +1273,25 @@ class LedgerContractError(ValueError):
     """
 
 
+class UnknownLedgerWriterError(LedgerContractError):
+    """Raised when a row carries a writer stamp this build cannot read.
+
+    The sibling of "unknown event type": one says the row speaks a vocabulary
+    this build does not know, the other says it was signed by a producer this
+    build does not know. Both are fail-closed for the same reason — the only
+    alternatives are to drop the stamp (handing the client a foreign row
+    formatted as though this build wrote it, the exact silent mis-render the
+    stamp exists to prevent) or to persist the row with an empty payload, which
+    is a ghost record the client fold skips without a word.
+    """
+
+    @classmethod
+    def for_writer(cls, writer: object) -> "UnknownLedgerWriterError":
+        """Return the error for one unreadable stamp, with its safe message."""
+
+        return cls(_Messages.unknown_writer(writer))
+
+
 class _Messages:
     """Safe, actionable messages surfaced through the typed errors above."""
 
@@ -1222,6 +1308,10 @@ class _Messages:
     @staticmethod
     def unknown_event_type(event_type: object) -> str:
         return f"unknown ledger event type: {event_type!r}"
+
+    @staticmethod
+    def unknown_writer(writer: object) -> str:
+        return f"unknown ledger writer: {writer!r}"
 
 
 class WorkLedgerVocabulary:
@@ -1366,6 +1456,7 @@ __all__ = [
     "ArtifactPresentationPreference",
     "ArtifactPromotedPayload",
     "ArtifactRevisedPayload",
+    "CURRENT_LEDGER_WRITER",
     "ClaimIdText",
     "ClassificationBasis",
     "DecisionActor",
@@ -1401,6 +1492,7 @@ __all__ = [
     "LedgerEventType",
     "LedgerOpRef",
     "LedgerPayload",
+    "LedgerWriter",
     "OperationClassificationBasis",
     "OperationClassifiedPayload",
     "OperationCompletedPayload",
@@ -1429,6 +1521,7 @@ __all__ = [
     "SurfaceCreatedPayload",
     "SurfaceKind",
     "SurfaceSubjectType",
+    "UnknownLedgerWriterError",
     "UsagePurpose",
     "UsageRecordedPayload",
     "ViewBasis",
