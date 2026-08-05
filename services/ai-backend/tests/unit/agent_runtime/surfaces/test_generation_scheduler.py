@@ -20,6 +20,7 @@ from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.capabilities.surfaces.shape_hash import output_shape_hash
 from agent_runtime.capabilities.surfaces.spec_models import (
     SurfaceSpec,
+    SurfaceSpecRung,
     validate_surface_spec,
 )
 from agent_runtime.capabilities.surfaces.store import InMemorySurfaceSpecStore, SpecKey
@@ -154,13 +155,23 @@ class TestSchedulerCapAndDedup:
 
 
 class TestProjectorSeam:
-    def test_no_scheduler_never_schedules(self) -> None:
-        # Byte-compatible: resolve works, nothing is scheduled.
+    def test_no_scheduler_still_resolves_via_the_inference_floor(self) -> None:
+        # No scheduler ⇒ nothing is scheduled, and resolve still works.
+        #
+        # This used to assert ``state.spec is None`` — the pre-rung-0 contract,
+        # where a ladder miss shipped ``state.data`` only and the async
+        # generator was the sole supplier of a spec. Rung 0 (the deterministic
+        # inference floor) makes that unreachable: a miss now yields an
+        # INFERRED spec synchronously, which is the whole point — a surface no
+        # longer depends on a model being reachable. The assertion is kept
+        # strict rather than relaxed to `is not None`, because "some spec
+        # arrived" would also pass if a builtin had wrongly matched.
         envelope = SurfaceProjector().resolve(
             "customsvc", "do_thing", {"widget": {"id": "w-1"}}
         )
         assert envelope is not None
-        assert envelope.state.spec is None
+        assert envelope.spec_rung is SurfaceSpecRung.INFERRED
+        assert envelope.state.spec is not None
 
     def test_schedules_on_miss_only(self) -> None:
         calls: list[tuple[str, str]] = []

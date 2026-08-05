@@ -170,3 +170,160 @@ class TestSpecKey:
         )
         assert base.digest() == same.digest()
         assert base.digest() != other.digest()
+
+
+class LearnedCacheMixin:
+    """Store wiring shared by the shape-keyed learned-cache tests (PRD §3.6)."""
+
+    SHAPE_A = "shape-aaaa"
+    SHAPE_B = "shape-bbbb"
+
+    @staticmethod
+    def stored_under(store: object, key: SpecKey, spec: SurfaceSpec) -> None:
+        store.put(
+            key, StoredSpec.from_generation(key=key, spec=spec, generator_model="")
+        )
+
+    @classmethod
+    def other_tool_key(cls, *, shape: str) -> SpecKey:
+        """A key for an entirely different connector and tool, same shape."""
+
+        return SpecKey.build(
+            server="othersvc",
+            tool="fetch_release",
+            output_shape_hash=shape,
+            skill_version=1,
+        )
+
+
+class TestInMemoryLearnedCache(LearnedCacheMixin):
+    def test_ac14_a_spec_is_readable_by_shape_alone(self) -> None:
+        store = InMemorySurfaceSpecStore()
+        spec = _record_spec()
+        self.stored_under(store, _key(shape=self.SHAPE_A), spec)
+
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_A) == spec
+
+    def test_ac14_the_name_keyed_read_still_wins_when_it_can_answer(self) -> None:
+        # Widening the lookup must not cost the ability to prefer an exact
+        # (server, tool) entry — the shape index is a fallback, not a takeover.
+        store = InMemorySurfaceSpecStore()
+        exact = _record_spec()
+        self.stored_under(store, _key(shape=self.SHAPE_A), exact)
+        self.stored_under(
+            store,
+            self.other_tool_key(shape=self.SHAPE_A),
+            _record_spec(server="seed:othersvc", tool="fetch_release"),
+        )
+
+        assert store.get(server="customsvc", tool="get_thing") == exact
+
+    def test_an_unknown_shape_misses(self) -> None:
+        store = InMemorySurfaceSpecStore()
+        self.stored_under(store, _key(shape=self.SHAPE_A), _record_spec())
+
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_B) is None
+
+    def test_an_empty_shape_hash_is_never_a_hit(self) -> None:
+        store = InMemorySurfaceSpecStore()
+        self.stored_under(store, _key(shape=""), _record_spec())
+
+        assert store.get_by_shape(output_shape_hash="") is None
+
+    def test_the_prd_02_put_spec_form_does_not_populate_the_shape_index(self) -> None:
+        # It carries no shape hash, and inventing one from a spec would key the
+        # cache on the spec instead of on the payload it was written for.
+        store = InMemorySurfaceSpecStore()
+        store.put(_record_spec())
+
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_A) is None
+
+    def test_ac15_a_failure_for_one_shape_does_not_suppress_another(self) -> None:
+        # AC15: reads widened to the shape alone; failures did NOT. A recorded
+        # failure is durable and suppresses every retry, so widening it would
+        # turn one connector's malformed payload into a permanent global mute.
+        store = InMemorySurfaceSpecStore()
+        store.record_failure(_key(shape=self.SHAPE_A), "bad json", "{")
+
+        assert store.has_failure(_key(shape=self.SHAPE_A)) is True
+        assert store.has_failure(_key(shape=self.SHAPE_B)) is False
+
+    def test_ac15_a_failure_never_leaks_into_the_shape_read(self) -> None:
+        store = InMemorySurfaceSpecStore()
+        store.record_failure(_key(shape=self.SHAPE_A), "bad json", "{")
+
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_A) is None
+
+    def test_ac15_one_connectors_failure_does_not_mute_another(self) -> None:
+        store = InMemorySurfaceSpecStore()
+        store.record_failure(_key(shape=self.SHAPE_A), "bad json", "{")
+
+        assert store.has_failure(self.other_tool_key(shape=self.SHAPE_A)) is False
+
+
+class TestFileLearnedCache(LearnedCacheMixin):
+    def test_ac14_the_learned_cache_survives_a_restart(self, tmp_path: Path) -> None:
+        spec = _record_spec()
+        self.stored_under(
+            FileSurfaceSpecStore(tmp_path), _key(shape=self.SHAPE_A), spec
+        )
+
+        # A brand-new store object over the same root: the process restarted.
+        assert (
+            FileSurfaceSpecStore(tmp_path).get_by_shape(output_shape_hash=self.SHAPE_A)
+            == spec
+        )
+
+    def test_both_pointers_resolve_to_one_spec_file(self, tmp_path: Path) -> None:
+        store = FileSurfaceSpecStore(tmp_path)
+        spec = _record_spec()
+        self.stored_under(store, _key(shape=self.SHAPE_A), spec)
+
+        assert store.get(server="customsvc", tool="get_thing") == spec
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_A) == spec
+
+    def test_an_unknown_shape_misses(self, tmp_path: Path) -> None:
+        store = FileSurfaceSpecStore(tmp_path)
+        self.stored_under(store, _key(shape=self.SHAPE_A), _record_spec())
+
+        assert store.get_by_shape(output_shape_hash=self.SHAPE_B) is None
+
+    def test_an_empty_shape_hash_is_never_a_hit(self, tmp_path: Path) -> None:
+        assert FileSurfaceSpecStore(tmp_path).get_by_shape(output_shape_hash="") is None
+
+    def test_a_traversal_shaped_shape_hash_cannot_escape_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        store = FileSurfaceSpecStore(tmp_path)
+        store.put(
+            SpecKey.build(
+                server="customsvc",
+                tool="get_thing",
+                output_shape_hash="../../etc/passwd",
+                skill_version=1,
+            ),
+            StoredSpec.from_generation(
+                key=_key(), spec=_record_spec(), generator_model=""
+            ),
+        )
+
+        written = [path for path in tmp_path.rglob("*.json")]
+        assert written
+        assert all(tmp_path in path.parents for path in written)
+
+    def test_ac15_a_failure_for_one_shape_does_not_suppress_another(
+        self, tmp_path: Path
+    ) -> None:
+        store = FileSurfaceSpecStore(tmp_path)
+        store.record_failure(_key(shape=self.SHAPE_A), "bad json", "{")
+
+        assert store.has_failure(_key(shape=self.SHAPE_A)) is True
+        assert store.has_failure(_key(shape=self.SHAPE_B)) is False
+
+    def test_ac15_no_shape_keyed_failure_pointer_exists(self, tmp_path: Path) -> None:
+        # The structural guarantee behind AC15: there is no by-shape index for
+        # failures to be found through.
+        store = FileSurfaceSpecStore(tmp_path)
+        store.record_failure(_key(shape=self.SHAPE_A), "bad json", "{")
+
+        assert not (tmp_path / "by_shape").exists()

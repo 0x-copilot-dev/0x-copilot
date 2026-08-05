@@ -28,6 +28,10 @@ class Keys:
         SOURCE = "source"
         TITLE = "title"
         TIER = "tier"
+        # The ladder's synchronously-resolved spec, carried on ``surface.created``.
+        # Distinct from ``SPEC_REF`` on ``view.derived``, which names a stored
+        # spec rather than carrying one.
+        SPEC = "spec"
         SPEC_REF = "spec_ref"
         GEN = "gen"
         MODEL = "model"

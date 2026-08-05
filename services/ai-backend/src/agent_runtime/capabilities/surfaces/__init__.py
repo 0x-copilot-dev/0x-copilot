@@ -14,6 +14,12 @@ survives as the **envelope-computation ladder** consumed by the Generative
 Surfaces v2 Work Ledger emitter (``surfaces_v2.emitter``), but the standalone
 ``RUNTIME_SURFACE_EMISSION`` gate and its ``config`` module were deleted — v2's
 ``SURFACES_V2`` flag is now the only switch.
+
+PRD-09b's gated commit executor is likewise gone (see :mod:`.commit`): the wired
+staged-write lane owns every job it did. Its three surviving contracts are NOT
+re-exported here — a package ``__init__`` that re-exports everything makes the
+whole package one blind spot for the orphan ratchet, so this list stays limited
+to names some other module actually imports through it.
 """
 
 __operation_boundary__ = "presentation"
@@ -21,25 +27,6 @@ __operation_boundary__ = "presentation"
 from agent_runtime.capabilities.surfaces.backend_store import (
     BackendHttpSurfaceSpecStore,
     build_surface_spec_store,
-)
-from agent_runtime.capabilities.surfaces.commit import (
-    CommitAuditSink,
-    CommitEventSink,
-    CommitKind,
-    CommitLedgerEntry,
-    CommitLedgerPort,
-    CommitOutcome,
-    CommitProposal,
-    CommitRequest,
-    CommitStatus,
-    ConnectorCommitResult,
-    InMemoryCommitLedger,
-    PersistenceCommitAuditSink,
-    RemoteState,
-    SurfaceCommitConnector,
-    SurfaceCommitExecutor,
-    SurfaceEditMerger,
-    SurfaceEdits,
 )
 from agent_runtime.capabilities.surfaces.generator import (
     GenFailure,
@@ -71,34 +58,17 @@ from agent_runtime.capabilities.surfaces.store import (
 
 __all__ = [
     "BackendHttpSurfaceSpecStore",
-    "CommitAuditSink",
-    "CommitEventSink",
-    "CommitKind",
-    "CommitLedgerEntry",
-    "CommitLedgerPort",
-    "CommitOutcome",
-    "CommitProposal",
-    "CommitRequest",
-    "CommitStatus",
-    "ConnectorCommitResult",
     "FileSurfaceSpecStore",
     "GenFailure",
     "GenToolDescriptor",
-    "InMemoryCommitLedger",
     "InMemorySurfaceSpecStore",
     "InvitedShapeAttempt",
-    "PersistenceCommitAuditSink",
-    "RemoteState",
     "ShapeRequestError",
     "ShapeRequestOutcome",
     "ShapeRequestRunner",
     "SpecAuthoringSkill",
     "SpecKey",
     "StoredSpec",
-    "SurfaceCommitConnector",
-    "SurfaceCommitExecutor",
-    "SurfaceEditMerger",
-    "SurfaceEdits",
     "SurfaceGenerationScheduler",
     "SurfaceGenerationSchedulerPort",
     "SurfaceProjector",

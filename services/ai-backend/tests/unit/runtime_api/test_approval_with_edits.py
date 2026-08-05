@@ -1,9 +1,14 @@
-"""PRD-09b — ``approve_with_edits`` decision handling + the propose→decision→commit audit chain.
+"""PRD-09b — ``approve_with_edits`` decision handling + the propose→decision audit chain.
 
 Covers the server-side edit merge at the API edge (the coordinator records the
 edits and enqueues an APPROVE_WITH_EDITS resume command carrying them), the
-fail-closed 404/422 gates, and the ordered audit records across the full
-edit-and-commit journey. Uses FAKE connectors — nothing real is sent.
+fail-closed 404/422 gates, and the ordered audit records across the journey.
+Nothing real is ever sent: no connector is constructed here at all.
+
+The chain used to have a third step asserting ``SurfaceCommitExecutor`` audited
+the commit. That executor was deleted — it was never constructed outside this
+file and ``tests/unit/runtime_worker/test_stage_commit_handler.py`` covers the
+wired lane that emits the same ``surface.commit.*`` audit actions for real.
 """
 
 from __future__ import annotations
@@ -14,17 +19,7 @@ from pydantic import ValidationError
 from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.draft_service import DraftService
 from agent_runtime.api.events import RuntimeEventProducer
-from agent_runtime.capabilities.surfaces.commit import (
-    CommitKind,
-    CommitProposal,
-    CommitStatus,
-    ConnectorCommitResult,
-    InMemoryCommitLedger,
-    PersistenceCommitAuditSink,
-    RemoteState,
-    SurfaceCommitExecutor,
-    SurfaceEdits,
-)
+from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
@@ -308,21 +303,7 @@ class TestApproveWithEditsFailClosed:
         assert store.approval_commands == []
 
 
-class _FakeCommitConnector:
-    """Records the committed request; performs no real side effect."""
-
-    def __init__(self) -> None:
-        self.execute_calls: list[object] = []
-
-    async def read_remote_state(self, request: object) -> RemoteState | None:
-        return None
-
-    async def execute(self, request: object) -> ConnectorCommitResult:
-        self.execute_calls.append(request)
-        return ConnectorCommitResult(status="sent", external_ref="ext-1")
-
-
-class TestProposeDecisionCommitAuditChain:
+class TestProposeDecisionAuditChain:
     async def test_ordered_audit_records(self) -> None:
         store = InMemoryRuntimeApiStore()
         draft_store = InMemoryDraftStore()
@@ -374,35 +355,12 @@ class TestProposeDecisionCommitAuditChain:
             ),
         )
 
-        # 3. COMMIT — the gated executor commits through a FAKE connector and
-        #    audits via the same persistence audit path.
-        connector = _FakeCommitConnector()
-        executor = SurfaceCommitExecutor(
-            connector=connector,
-            ledger=InMemoryCommitLedger(),
-            audit=PersistenceCommitAuditSink(store),
-        )
-        outcome = await executor.commit(
-            proposal=CommitProposal(
-                approval_id=approval_id,
-                org_id=_ORG,
-                run_id=_RUN,
-                conversation_id=_CONV,
-                user_id=_USER,
-                kind=CommitKind.DRAFT_SEND,
-                target_connector="gmail",
-                tool_name="gmail.send",
-                base_body="Original body.",
-                target_metadata={"to": "vip@acme.test"},
-            ),
-            edits=SurfaceEdits(body="Reviewer-edited body."),
-        )
-        assert outcome.status is CommitStatus.COMMITTED
-        assert connector.execute_calls[0].body == "Reviewer-edited body."
-
-        # The three lifecycle records appear in order for this run.
+        # Both lifecycle records appear, in order, for this run. The third step
+        # — the commit itself — is audited by the wired worker lane instead;
+        # ``tests/unit/runtime_worker/test_stage_commit_handler.py`` asserts its
+        # ``surface.commit.{committed,aborted_precondition_drift,failed}``
+        # records against the handler production actually runs.
         actions = [event_type for event_type, _ in store.audit_log]
         propose_idx = actions.index("draft.send.proposed")
         decision_idx = actions.index("approval.accept")
-        commit_idx = actions.index(SurfaceCommitExecutor.AUDIT_COMMITTED)
-        assert propose_idx < decision_idx < commit_idx
+        assert propose_idx < decision_idx

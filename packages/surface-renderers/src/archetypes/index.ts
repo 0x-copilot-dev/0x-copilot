@@ -53,6 +53,23 @@ export const ARCHETYPE_ADAPTERS: readonly SaaSRendererAdapter[] = [
 ];
 
 /**
+ * The archetype schemes this package can actually draw, derived from
+ * `ARCHETYPE_ADAPTERS` so it cannot drift from the adapters themselves.
+ *
+ * This is the client half of the generator handshake. The SurfaceSpec contract
+ * licenses ten archetypes; five have no renderer here and collapse to the
+ * tier-3 generic view. `implemented_archetypes.json` in
+ * `packages/service-contracts` publishes this same set to the Python side,
+ * where it — and not the ten-value contract enum — licenses the spec
+ * generator. `licensedArchetypes.test.ts` pins the two together, so adding or
+ * deleting an adapter fails until that shared file agrees, and updating that
+ * file is the only edit needed to relicense the generator.
+ */
+export const IMPLEMENTED_ARCHETYPES: readonly string[] = ARCHETYPE_ADAPTERS.map(
+  (adapter) => adapter.scheme,
+);
+
+/**
  * Register the five archetype adapters (`record | table | message | doc |
  * board`). Idempotent: the SurfaceRegistry replaces a same-version entry in
  * place, so calling this twice leaves exactly one adapter per scheme (PRD-03

@@ -473,6 +473,17 @@ function pipDependencyStamp(svc) {
   for (const pkg of SHARED_PACKAGES) {
     parts.push(fs.readFileSync(path.join(pkg, "pyproject.toml"), "utf8"));
     // Include the shared packages' source so edits re-trigger the install.
+    //
+    // EVERY file, not just `.py`. `packages/service-contracts` ships JSON data
+    // contracts alongside its modules — `work_ledger.json` is the ledger
+    // vocabulary that both languages read — and hashing only `.py` made those
+    // invisible here. The install then stamp-matched and was skipped, so a
+    // contract change shipped STALE into each service's `site-packages` while
+    // the code reading it shipped current. That is not a theoretical skew: it
+    // put `KeyError: 'writers'` at module scope in `ledger_models.py` and the
+    // packaged app died with "ai-backend crashed 5 times within 300s". Unit
+    // tests cannot see it — they import from the source tree, where the JSON is
+    // always current; only a packaged run reads the installed copy.
     const srcRoot = path.join(pkg, "src");
     const files = [];
     const walk = (dir) => {
@@ -480,7 +491,7 @@ function pipDependencyStamp(svc) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           if (entry.name !== "__pycache__") walk(full);
-        } else if (entry.name.endsWith(".py")) {
+        } else if (!entry.name.endsWith(".pyc")) {
           files.push(full);
         }
       }

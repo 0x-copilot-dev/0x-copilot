@@ -13,7 +13,15 @@ E3 default-on posture, no env flag needed), then asserts:
   the v1 pipeline.
 
 This is the cutover proof the retirement rests on: surface data reaches the
-client via ledger events + ``payload_ref`` resolution, never ``payload.surface``.
+client from ledger events alone, never from ``payload.surface``.
+
+It is also the only place in this suite where events reach the fold the way they
+reach a user — appended through ``append_api_event``, so through the transport
+allow-list that persists and publishes them. That matters more than it sounds:
+an allow-list which does not name a key DELETES it, silently, at every layer.
+Calling the emitter and the fold directly is precisely the shape that stayed
+green for a release while the wire between them was dropping the payload on the
+floor, so tests about what a client receives belong here rather than there.
 """
 
 from __future__ import annotations
@@ -142,7 +150,14 @@ class _WorkerToolResult:
         self.payload = payload
 
 
-class TestV1FreeLedger(DynamicMcpLoadingMixin):
+class LedgerDrivenReadMixin(DynamicMcpLoadingMixin):
+    """Drives one real MCP read through the real per-tool pipeline.
+
+    Shared by both concrete classes below because the point of this file is that
+    only the composed pipeline can see these defects — a stand-in for any part
+    of it recreates the blind spot.
+    """
+
     async def _call_tool(
         self,
         runtime_context: AgentRuntimeContext,
@@ -275,6 +290,60 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         )
         return operation_token, service_token
 
+    async def _stored_events(self, *, tool: str = "get_issue"):
+        """Run one real MCP read and return the events it persisted.
+
+        The events come back off the STORE, so they have been through
+        ``append_api_event`` and its transport allow-list — the layer that
+        silently deleted the spec for a release.
+        """
+
+        store = InMemoryRuntimeApiStore()
+        settings = _default_on_settings()
+        run_id = await _TestHelpers.create_queued_run(store, settings)
+        run = await store.get_run(org_id="org_123", run_id=run_id)
+        assert run is not None
+        handler = RuntimeRunHandler(
+            persistence=store, event_store=store, settings=settings
+        )
+        emitter = handler._build_work_ledger_emitter(run)
+        assert emitter is not None
+
+        bound_tool = await self._call_tool(
+            _runtime_context_for_run(run_id),
+            server="linear",
+            tool=tool,
+            output=_LINEAR_ISSUE_OUTPUT,
+        )
+        token = WorkLedgerEmitter.bind_for_run(emitter)
+        operation_token, service_token = self._bind_canonical_gateway(
+            handler=handler, store=store, run=run
+        )
+        try:
+            await bound_tool.ainvoke(
+                {"query": "ENG-1421", "tool_call_id": "call_linear_get_issue"}
+            )
+        finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
+            WorkLedgerEmitter.unbind(token)
+
+        return list(
+            await store.list_events_after(
+                org_id="org_123", run_id=run_id, after_sequence=0
+            )
+        )
+
+    @staticmethod
+    def _created(events) -> Mapping[str, object]:
+        return next(
+            event.payload
+            for event in events
+            if event.event_type is RuntimeApiEventType.SURFACE_CREATED
+        )
+
+
+class TestV1FreeLedger(LedgerDrivenReadMixin):
     async def test_executed_read_leaves_no_v1_surface_but_full_v2_canvas(
         self,
     ) -> None:
@@ -523,3 +592,80 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         }
         seen = {e.event_type.value for e in events if e.event_type.value in read_values}
         assert seen == read_values
+
+
+class TestSurfaceArrivesWithItsData(LedgerDrivenReadMixin):
+    """A surface must reach the fold WITH the payload it was shaped against.
+
+    The floor PRD's whole thesis, pinned end to end. The projector already built
+    one coherent ``SurfaceEnvelope``; the pipeline used to take it apart and ship
+    the pieces on separate events, so four independent hops had to work for one
+    object to arrive — and each of them broke in production while ~9,000 unit
+    tests passed:
+
+    1. the transport allow-list silently stripped the spec;
+    2. ``payload_ref`` is always ``call:unattributed`` on the live agent path,
+       so the id-based join to the payload could never resolve;
+    3. the persisted ``tool_result.output`` is the model-facing content half
+       while the spec was inferred from the artifact half — one read, two
+       representations, and ``items_path`` matching neither;
+    4. the client's own id round-trip lost the surface on the way back.
+
+    Every one of those is invisible to a test that calls the emitter and the
+    fold directly, because each lives in the wire BETWEEN them. So this drives
+    the real tool through the real pipeline and reads what the store actually
+    holds.
+    """
+
+    async def test_the_transport_delivers_the_state_it_was_given(self) -> None:
+        # Break 1, directly. The allow-list is the layer that deleted the spec,
+        # and it deletes by OMISSION — no error, no warning, nothing to grep for.
+        # These assertions read the persisted payload, so they fail if a future
+        # widening of the emitter forgets to land here in the same pass.
+        events = await self._stored_events()
+
+        state = self._created(events)["state"]
+        assert state["source"] == {"server": "linear", "tool": "get_issue"}
+        assert state["data"] == _LINEAR_ISSUE_OUTPUT
+
+    async def test_the_surface_reaches_the_fold_with_its_data(self) -> None:
+        # Breaks 2 and 3 together. No ``tool_result`` is fabricated here and
+        # none exists on this path, so there is nothing to join against: if the
+        # data arrives, it arrived carried. The version of this test that stood
+        # up a stand-in ``tool_result`` proved the join worked on inputs
+        # production never produces.
+        events = await self._stored_events()
+        created = self._created(events)
+
+        content = SurfaceContentProjection.fold(
+            events,
+            surface_payload_refs={created["surface_id"]: created["payload_ref"]},
+        )
+
+        assert content[created["surface_id"]]["data"] == _LINEAR_ISSUE_OUTPUT
+
+    async def test_the_data_is_the_register_the_spec_was_resolved_against(
+        self,
+    ) -> None:
+        # Break 3 specifically. The delivered payload must be the STRUCTURED
+        # artifact half — the one a spec's ``items_path`` is written against —
+        # not the model-facing content envelope the run persists, whose keys are
+        # ``['content']`` and whose body is JSON encoded twice. A spec bound to
+        # that shape resolves nothing and renders its columns over zero rows.
+        events = await self._stored_events()
+        created = self._created(events)
+
+        data = self._created(events)["state"]["data"]
+        assert isinstance(data, Mapping)
+        assert set(data) == set(_LINEAR_ISSUE_OUTPUT)
+        assert "content" not in data
+        # And the identity register is untouched by carrying the body.
+        assert created["surface_id"] == "record://linear/get_issue/issue-uuid-1"
+
+    async def test_payload_ref_survives_as_provenance(self) -> None:
+        # The reference stops being the only way to reach the payload; it does
+        # not stop existing. The receipt and audit folds read it, and a historic
+        # run that carries no state still resolves its body through it.
+        events = await self._stored_events()
+
+        assert self._created(events)["payload_ref"].startswith("call:")

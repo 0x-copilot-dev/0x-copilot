@@ -1,0 +1,75 @@
+# Pre-existing unreachable ai-backend routes — the burn-down list for
+# tools/check_route_reachability.py.
+#
+# Every line is a route registered by services/ai-backend that no known
+# consumer names: not the apps (packages/**, apps/** TS/TSX), not the facade
+# (services/backend-facade/src), not the core backend
+# (services/backend/src). These predate the gate; they are DEBT, not approval.
+#
+# There is deliberately no `--update-baseline` writer, for the reason
+# css_shadowing_baseline.txt has none: the only sanctioned way to add a line is
+# to write the reason by hand, where a reviewer reads it in the diff. Wiring a
+# route to a caller makes its line here stale, and a stale line FAILS the gate —
+# so this file can only ever shrink.
+#
+# Format: <route path> :: <why it is here>
+#
+# A line is legitimate for exactly two reasons: (a) the route is genuinely
+# unreachable and is being kept deliberately, or (b) it IS reached, by a caller
+# that assembles the path out of variables and so is invisible to a literal
+# scan. Say which.
+#
+# NOTE ON PATHS. These are the paths the routes actually resolve to, which for
+# nine of them is NOT what docs/audit/generative-ui/ORPHAN-AUDIT.md records.
+# That audit resolved one prefix per *file*; routes.py alone builds five routers
+# with five different prefixes, so e.g. todo-extractions was written up as
+# `/v1/agent/todo-extractions` when it mounts at `/v1/todo-extractions`. The
+# paths below are verified against the running app's route table.
+
+# ---------------------------------------------------------------------------
+# Operator-only migration ingress. app.py registers these with the comment
+# "requires a service token plus matching trusted tenant identity and is
+# intentionally absent from the product-facing facade route table" — so having
+# no product caller is the design, not a defect. They are driven by hand during
+# an E2 migration. Kept baselined rather than waived because "an operator will
+# curl it" is exactly the claim that should stay visible.
+# ---------------------------------------------------------------------------
+/internal/v1/admin/e2/legacy-migrations/{migration_id} :: operator-invoked E2 migration; service-token gated and deliberately not proxied by the facade
+/internal/v1/admin/e2/legacy-stage-migrations/{migration_id} :: operator-invoked E2 stage migration; same deliberate absence from the facade
+
+# ---------------------------------------------------------------------------
+# Local development harness ingress ("authenticated loopback"). Mounted only
+# when app.state.local_release_control_service is set, which no shipped
+# configuration does. No harness in tools/ calls them either — the only
+# references anywhere are ai-backend's own unit tests.
+# ---------------------------------------------------------------------------
+/internal/dev/evaluation/diagnostics/snapshot :: loopback-only F1 diagnostics for local evaluation; no harness or client calls it
+/internal/dev/evaluation/releases/verify :: loopback-only release control for the local eval harness; no caller outside ai-backend's unit tests
+/internal/dev/evaluation/releases/install :: loopback-only release control for the local eval harness; no caller outside ai-backend's unit tests
+/internal/dev/evaluation/releases/rollback :: loopback-only release control for the local eval harness; no caller outside ai-backend's unit tests
+/internal/dev/evaluation/releases/export :: loopback-only release control for the local eval harness; no caller outside ai-backend's unit tests
+
+# ---------------------------------------------------------------------------
+# Genuinely unwired product surface. Each of these was built to a spec, has
+# unit tests, and has no consumer at any layer — the facade does not forward
+# them, so no client could reach them even if one tried. These are the real
+# burn-down: wire them or delete them.
+# ---------------------------------------------------------------------------
+# Retention policy admin. docs/roadmap/25-c8-retention-sweeper.md specifies the
+# admin API; only its legal-holds siblings were ever wired through the facade.
+/v1/retention/policies :: retention policy admin (list + create); no facade forward and no admin UI
+/v1/retention/policies/{policy_id} :: retention policy delete; no facade forward and no admin UI
+
+# Todo-extraction proposals (P3-A2). The module docstring describes list /
+# accept / reject; nothing consumes any of the three.
+/v1/todo-extractions :: todo-extraction proposal list (P3-A2); no facade forward and no client
+/v1/todo-extractions/{extraction_id}/accept :: todo-extraction accept (P3-A2); no facade forward and no client
+/v1/todo-extractions/{extraction_id}/reject :: todo-extraction reject (P3-A2); no facade forward and no client
+
+# Per-agent usage rollup (P8-A4). docs/atlas-new-design/destinations/agents-prd.md
+# §490 specifies "facade forwards to ai-backend's /v1/usage/org/agent/<id>" —
+# the ai-backend half landed, the facade half never did. Note the path is known
+# to the shared authorization contract
+# (packages/service-contracts/.../e1_authorization.py) which special-cases it;
+# that is a policy rule naming the path, not a caller.
+/v1/usage/org/agent/{agent_id} :: per-agent usage rollup (P8-A4); the specified facade forward was never built

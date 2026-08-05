@@ -71,8 +71,10 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectExecutorKind,
     EffectPolicy,
     EffectProposalKind,
+    GateDecision,
     GateKind,
     LedgerEventType,
+    CURRENT_LEDGER_WRITER,
     OperationOutcome,
 )
 from agent_runtime.capabilities.tools.permissions import (
@@ -216,8 +218,9 @@ class WorkspaceGrantGate:
             None,
         )
 
-    @staticmethod
+    @classmethod
     async def _blocked(
+        cls,
         *,
         request: OperationRequest,
         kind: GateKind,
@@ -226,8 +229,8 @@ class WorkspaceGrantGate:
     ) -> GateResolution:
         """Deny the operation and record why, in that order of authority.
 
-        The returned :class:`GateResolution` is the decision; the ledger event is
-        evidence describing it. Emission is therefore best-effort — the same
+        The returned :class:`GateResolution` is the decision; the ledger events
+        are evidence describing it. Emission is therefore best-effort — the same
         shape ``WorkLedgerEmitter.on_tool_result`` already uses — because a
         failure to *describe* a denial must never be able to change it.
 
@@ -236,38 +239,122 @@ class WorkspaceGrantGate:
         ``RuntimeApiEventType``), so an unguarded ``await`` here propagated out of
         the gate and failed the very operation it was denying. Losing evidence
         degrades observability; losing the denial would be a security defect.
+
+        **The pair, not the opening.** This gate is decided in one breath: the
+        caller receives ``allowed=False`` immediately, ``OperationGateway``
+        completes the operation ``BLOCKED`` with ``retryable=False``, and no
+        route, coordinator or UI can reopen it. A lone ``gate.opened.v2``
+        therefore describes a gate that every reader must treat as still open
+        forever — ``PendingWorkV2`` lists it as outstanding work,
+        ``CanvasLifecycle`` keeps it in ``open_gates``, and the run receipt
+        exports it unresolved. Five read models were written against
+        ``gate.resolved.v2`` and nothing in the tree had ever produced one, so
+        the vocabulary could record a workspace gate opening and never record it
+        closing.
+
+        The resolve is emitted second, and **each half carries its own guard**.
+        One ``try`` around both put the stated invariant one raise away from
+        being false: a failure while describing the *opening* skipped the close
+        outright, which is the very "a gate can open and never close" defect this
+        producer was added to remove, reachable again through a partial failure.
+        Independent guards make the close unconditional, and each guard names the
+        half it lost so the loss can be read back to an emission rather than
+        diagnosed months later from stuck work in five read models.
+
+        What these guards actually catch is the seam, not the sink: the emitter
+        handed over by the presentation context is already wrapped in
+        ``FailSoftOperationEventEmitter``, which contains a delegate failure and
+        logs it at debug, so a broken ledger never raises here in the first
+        place. What can still fail is reaching that emitter at all — an unbound
+        presentation context raises ``OperationContextUnboundError`` — plus any
+        future sink that stops being fail-soft. Both halves must survive that
+        independently; a lost close is silent enough already.
+
+        Ordering still matters, and orphaning is safe in only one direction:
+        both folds resolve a gate by *removing* it (``gates.pop`` in
+        ``PendingWorkV2``, ``open_gates.discard`` in ``CanvasLifecycle``), so an
+        orphan close is a no-op rather than an invented gate, while an orphan
+        opening is outstanding work forever. That is why the close is attempted
+        unconditionally and never merely "if the opening succeeded".
+
+        ``actor`` is ``policy`` and never ``user``: nobody was asked. The grant
+        was absent, revoked, or too narrow, and the runtime decided against it on
+        the spot — the same understating-provenance rule ``_ViewDerivation``
+        follows.
         """
 
-        try:
-            await _GatewayPresentationContext.require().ledger_emitter.emit(
-                LedgerEventType.GATE_OPENED_V2,
-                {
-                    "v": 1,
-                    "gate_id": f"workspace:{request.operation_id}",
-                    "operation_id": request.operation_id,
-                    "gate_kind": kind.value,
-                    "capability": "workspace",
-                    "reason": reason,
-                },
-                summary,
-            )
-        except Exception:  # noqa: BLE001 — evidence must never alter the decision
-            _LOGGER.warning(
-                "workspace.gate_emit_failed",
-                extra={
-                    "metadata": {
-                        "gate_id": f"workspace:{request.operation_id}",
-                        "operation_id": request.operation_id,
-                        "gate_kind": kind.value,
-                    }
-                },
-                exc_info=True,
-            )
+        gate_id = f"workspace:{request.operation_id}"
+        await cls._emit_evidence(
+            event_type=LedgerEventType.GATE_OPENED_V2,
+            payload={
+                "v": 1,
+                "w": CURRENT_LEDGER_WRITER.value,
+                "gate_id": gate_id,
+                "operation_id": request.operation_id,
+                "gate_kind": kind.value,
+                "capability": "workspace",
+                "reason": reason,
+            },
+            summary=summary,
+            gate_id=gate_id,
+            operation_id=request.operation_id,
+            kind=kind,
+        )
+        await cls._emit_evidence(
+            event_type=LedgerEventType.GATE_RESOLVED_V2,
+            payload={
+                "v": 1,
+                "w": CURRENT_LEDGER_WRITER.value,
+                "gate_id": gate_id,
+                "decision": GateDecision.DENIED.value,
+                "actor": EffectActor.POLICY.value,
+            },
+            summary=summary,
+            gate_id=gate_id,
+            operation_id=request.operation_id,
+            kind=kind,
+        )
         return GateResolution(
             allowed=False,
             gate_kind=kind,
             safe_summary=summary,
         )
+
+    @staticmethod
+    async def _emit_evidence(
+        *,
+        event_type: LedgerEventType,
+        payload: dict[str, object],
+        summary: str,
+        gate_id: str,
+        operation_id: str,
+        kind: GateKind,
+    ) -> None:
+        """Append one half of the gate pair; never let its failure escape.
+
+        The whole point of the per-half guard is that a failure is contained
+        *here* rather than around the pair: the caller carries on to the other
+        half, and the log names which one was lost (``event_type``) so a gate
+        left open in ``PendingWorkV2`` can be read back to the emission that
+        never landed.
+        """
+
+        try:
+            emitter = _GatewayPresentationContext.require().ledger_emitter
+            await emitter.emit(event_type, payload, summary)
+        except Exception:  # noqa: BLE001 — evidence must never alter the decision
+            _LOGGER.warning(
+                "workspace.gate_emit_failed",
+                extra={
+                    "metadata": {
+                        "gate_id": gate_id,
+                        "operation_id": operation_id,
+                        "gate_kind": kind.value,
+                        "event_type": event_type.value,
+                    }
+                },
+                exc_info=True,
+            )
 
 
 class WorkspaceOperationAdapter(OperationAdapter):

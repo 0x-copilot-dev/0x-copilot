@@ -62,7 +62,6 @@ import type { Transport } from "@0x-copilot/chat-transport";
 import type { SurfacePayload } from "./eventProjector";
 import { projectProvenance } from "./provenance";
 import { projectStatusLine } from "./statusLine";
-import { surfaceIdForTabUri } from "./ledgerProjection";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import { TcChat } from "./TcChat";
 import { TcMiniTimeline } from "./TcMiniTimeline";
@@ -434,11 +433,22 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // on, so the flag-off path pays nothing but the memo.
   const provenanceById = useMemo(() => projectProvenance(events), [events]);
   const statusLine = useMemo(() => projectStatusLine(events), [events]);
-  const activeProvenance = useMemo(() => {
-    if (!surfacesV2On) return null;
-    const id = surfaceIdForTabUri(activeUri);
-    return id !== null ? (provenanceById.get(id) ?? null) : null;
-  }, [surfacesV2On, activeUri, provenanceById]);
+  // `activeUri` IS the `surface_id` for a v2 tab (there is no codec — see the
+  // identity note in `ledgerProjection.ts`), so this is a direct lookup.
+  const activeProvenance = useMemo(
+    () => (surfacesV2On ? (provenanceById.get(activeUri) ?? null) : null),
+    [surfacesV2On, activeUri, provenanceById],
+  );
+  // Is the active tab a ledger surface at all? The strip also carries artifact,
+  // receipt, effect-stage and legacy-replay URIs, and the two v2-only controls
+  // below (tier toggle, "Suggest a shape") must not offer themselves over one.
+  //
+  // The test is membership in the provenance fold, which `surface.created`
+  // alone seeds — the same event, the same array, and the same key as the
+  // host's own `ledger.surfaces`. It replaces a test on the URI's SHAPE
+  // (`surfaceIdForTabUri(uri) !== null`), which asked a string whether it
+  // looked like a surface instead of asking the fold whether it was one.
+  const activeIsLedgerSurface = activeProvenance !== null;
 
   // Forward scrub cursor to TcChat (it shows the "Viewing <time>"
   // ghost banner when off-live).
@@ -568,9 +578,9 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
               {activeViewState != null &&
               onRegenerateView !== undefined &&
               onSetViewPreference !== undefined &&
-              surfaceIdForTabUri(activeUri) !== null ? (
+              activeIsLedgerSurface ? (
                 <ViewTierToggle
-                  surfaceId={surfaceIdForTabUri(activeUri) as string}
+                  surfaceId={activeUri}
                   viewState={activeViewState}
                   onRegenerateView={onRegenerateView}
                   onSetViewPreference={onSetViewPreference}
@@ -580,12 +590,12 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
                   shaped surface hides it (the automatic/invited upgrade already
                   landed). Rendered when the host supplies the callback. */}
               {onShapeRequest !== undefined &&
-              surfaceIdForTabUri(activeUri) !== null &&
+              activeIsLedgerSurface &&
               (activeViewState == null ||
                 activeViewState.effectiveTier === "raw" ||
                 activeViewState.effectiveTier === "generic") ? (
                 <SuggestShapeButton
-                  surfaceId={surfaceIdForTabUri(activeUri) as string}
+                  surfaceId={activeUri}
                   shapeRequest={activeShapeRequest}
                   onShapeRequest={onShapeRequest}
                 />

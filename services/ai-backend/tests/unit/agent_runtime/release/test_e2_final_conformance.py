@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
 import json
 from pathlib import Path
+
+import pytest
+
+from copilot_service_contracts.work_ledger import load_legacy_v2_replay_corpus
 
 from agent_runtime.effects.conformance import (
     canonical_effect_result_producer_present,
@@ -11,6 +17,7 @@ from agent_runtime.effects.conformance import (
     workspace_executor_constructor_violations,
 )
 from agent_runtime.observability.llm_seam_conformance import llm_seam_violations
+from agent_runtime.release import e2_final_conformance
 from agent_runtime.release.e2_final_conformance import (
     ConformanceStatus,
     E2FinalConformancePaths,
@@ -19,13 +26,92 @@ from agent_runtime.release.e2_final_conformance import (
 )
 
 
-def test_current_report_passes_the_d1_d7_mcp_dispatch_condition() -> None:
+def test_current_report_passes_every_condition() -> None:
+    """Presence is not a status.
+
+    Asserting the twelve conditions are *there* and pinning the status of only
+    one leaves the other eleven free to flip to FAIL with this suite green —
+    which is exactly what a release gate must never allow, least of all in the
+    round that rewrote condition 7.
+    """
+
     report = E2FinalConformanceRunner().run()
 
     assert [item.number for item in report.conditions] == list(range(1, 13))
     assert all(item.evidence for item in report.conditions)
+    assert {item.status for item in report.conditions} == {ConformanceStatus.PASS}
     assert report.ready is True
-    assert report.conditions[2].status is ConformanceStatus.PASS
+
+
+def _with_corpus(
+    monkeypatch: pytest.MonkeyPatch,
+    mutate: Callable[[dict], None],
+) -> None:
+    """Run the gate against a deliberately damaged copy of the frozen corpus."""
+
+    corpus = deepcopy(load_legacy_v2_replay_corpus())
+    mutate(corpus)
+    monkeypatch.setattr(
+        e2_final_conformance, "load_legacy_v2_replay_corpus", lambda: corpus
+    )
+
+
+def test_a_historic_surface_that_hydrates_differently_fails_the_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The condition's second fold is pinned, not merely folded twice.
+
+    Carrying state on ``surface.created`` removed the ``payload_ref → call_id →
+    tool_result.output`` re-join, and with it whatever a pre-carry record on a
+    user's disk used to hydrate to. Comparing ``SurfaceContentProjection.fold``
+    only to itself would call that a pass. The frozen ``content`` vector is what
+    makes a change in what an old surface shows fail here.
+    """
+
+    _with_corpus(
+        monkeypatch,
+        lambda corpus: corpus["cases"][0]["expected"].update(
+            {
+                "content": {
+                    "connector:linear:issue:ENG-142": {"data": {"invented": True}}
+                }
+            }
+        ),
+    )
+
+    condition = E2FinalConformanceRunner()._historic_replay()
+
+    assert condition.status is ConformanceStatus.FAIL
+    assert "hydrated content drifted" in condition.evidence[0]
+
+
+def test_a_case_with_no_frozen_content_pin_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unpinned case must not read as a covered one."""
+
+    _with_corpus(
+        monkeypatch, lambda corpus: corpus["cases"][0]["expected"].pop("content")
+    )
+
+    condition = E2FinalConformanceRunner()._historic_replay()
+
+    assert condition.status is ConformanceStatus.FAIL
+    assert "lacks content" in condition.evidence[0]
+
+
+def test_the_golden_export_content_pin_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The export hydrates to nothing today, and the vector has to say so."""
+
+    assert load_legacy_v2_replay_corpus()["golden_export_content"] == {}
+    _with_corpus(monkeypatch, lambda corpus: corpus.pop("golden_export_content"))
+
+    condition = E2FinalConformanceRunner()._historic_replay()
+
+    assert condition.status is ConformanceStatus.FAIL
+    assert "golden export lacks a frozen content pin" in condition.evidence[0]
 
 
 def test_report_json_is_complete_and_has_no_implicit_passes() -> None:

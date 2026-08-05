@@ -18,6 +18,9 @@ from typing import ClassVar, Literal
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator
 
+from copilot_service_contracts.implemented_archetypes import (
+    IMPLEMENTED_SURFACE_ARCHETYPES,
+)
 from copilot_service_contracts.surface_spec import load_surface_spec_schema
 
 from agent_runtime.execution.contracts import RuntimeContract
@@ -29,6 +32,9 @@ class SurfaceArchetype(StrEnum):
     A frontend may implement a subset; an unknown archetype falls back to the
     tier-3 generic renderer and is never an error. Order mirrors
     ``surface_spec.schema.json`` ``$defs.archetype``.
+
+    That subset is not guesswork: :meth:`implemented` names it. Validate against
+    the whole enum, but license generation with :meth:`implemented` only.
     """
 
     RECORD = "record"
@@ -41,6 +47,32 @@ class SurfaceArchetype(StrEnum):
     DASHBOARD = "dashboard"
     FILE = "file"
     FORM = "form"
+
+    @classmethod
+    def implemented(cls) -> tuple[SurfaceArchetype, ...]:
+        """The archetypes a shipped renderer can actually draw, in registry order.
+
+        Deliberately narrower than ``tuple(cls)``, and the two must not be
+        conflated. The enum is the *contract's* vocabulary: it stays frozen at
+        ten so a spec replayed from an older run still validates, and an
+        archetype the client has no renderer for degrades to the generic view
+        rather than erroring. What the client can draw is a different, smaller,
+        moving fact — owned by ``packages/surface-renderers`` and published
+        through ``copilot_service_contracts.implemented_archetypes`` so both
+        languages read one value rather than two hand-synced lists.
+
+        This is the set a spec GENERATOR must be licensed by. Licensing it by
+        the enum is the defect this exists to close: five of the ten have no
+        renderer, so a generated ``dashboard`` collapsed to a generic view and
+        the model was never told. Validation is the opposite case and stays on
+        the enum — accepting is not licensing.
+
+        Raises ``ValueError`` if the shared constant names something outside the
+        vocabulary. Two files disagreeing must fail loudly here rather than
+        license a value the schema itself would later reject.
+        """
+
+        return tuple(cls(name) for name in IMPLEMENTED_SURFACE_ARCHETYPES)
 
 
 class SurfaceFieldFormat(StrEnum):
@@ -59,6 +91,42 @@ class ColumnAlign(StrEnum):
 
     START = "start"
     END = "end"
+
+
+class SurfaceSpecRung(StrEnum):
+    """Which rung of the spec-acquisition ladder produced a surface's spec.
+
+    Not part of the SurfaceSpec contract — it describes how a spec was *found*,
+    not what it renders, which is why it hangs off :class:`SurfaceEnvelope` and
+    not off :class:`SurfaceSpec` or :class:`SurfaceState`. It exists because the
+    Work Ledger's ``view.derived`` event must state the basis a surface was
+    shaped on, and only the projector that climbed the ladder knows which rung
+    answered. Re-deriving it downstream would give one fact two producers, which
+    is a defect ``SurfaceState.source`` has already had to be fixed for.
+
+    Values are byte-identical to ``agent_runtime.surfaces_v2.emitter.SpecRung``,
+    the wire-side spelling of the same vocabulary, and a parity test pins the
+    two together. The direction of the duplication is deliberate: this module is
+    pure domain and must not import the ledger emitter.
+
+    A projector only ever answers ``builtin``, ``store``, ``shape_match`` or
+    ``inferred``. ``generated`` belongs to the vocabulary because the model rung
+    lands out of band, as a ``surface_spec_generated`` event, never through this
+    envelope.
+
+    ``shape_match`` exists so provenance cannot lie. A shape match reuses a spec
+    that IS curated, for a connector nobody curated — Linear's ``save_issue``
+    drawn by the spec written for ``create_issue``. Folding it into ``builtin``
+    would record human sign-off on a pairing no human ever saw; folding it into
+    ``inferred`` would understate a spec a person did write. It is its own rung
+    because it is its own fact.
+    """
+
+    BUILTIN = "builtin"
+    STORE = "store"
+    SHAPE_MATCH = "shape_match"
+    INFERRED = "inferred"
+    GENERATED = "generated"
 
 
 class _Limits:
@@ -250,12 +318,23 @@ class SurfaceEnvelope(RuntimeContract):
     """What rides inside event payloads under the ``surface`` key.
 
     ``surface_uri`` grammar: ``<archetype>://<server-slug>/<tool-or-resource>/<id>``.
+
+    ``spec_rung`` names which rung of the acquisition ladder produced
+    ``state.spec``. It is envelope-level rather than state-level because it is
+    *provenance of the resolution*, not something the renderer draws — the state
+    is the render contract mirrored in ``packages/surface-renderers`` and gains
+    nothing from it. Its consumer is the Work Ledger emitter, which maps it onto
+    the pinned ``view.derived`` ``(tier, basis)`` pair.
+
+    Optional **forever**: every envelope built before this field existed carries
+    none, and ``None`` means "the producer did not say", never an error.
     """
 
     surface_uri: str = Field(min_length=1)
     archetype: SurfaceArchetype
     state: SurfaceState
     diff: SurfaceDiff | None = None
+    spec_rung: SurfaceSpecRung | None = None
 
 
 class SurfaceSpecValidator:
@@ -339,6 +418,7 @@ __all__ = [
     "SurfaceSource",
     "SurfaceSpec",
     "SurfaceSpecError",
+    "SurfaceSpecRung",
     "SurfaceSpecValidator",
     "SurfaceState",
     "validate_surface_spec",

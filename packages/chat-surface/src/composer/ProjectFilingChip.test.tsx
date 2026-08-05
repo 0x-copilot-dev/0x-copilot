@@ -7,7 +7,10 @@
 //     reads as a project whose name failed to load,
 //   * "New project…" is ABSENT without `onCreateProject`, not disabled,
 //   * the menu renders inline when the host supplies no `renderMenu`, so web
-//     and tests get a working control with zero host wiring.
+//     and tests get a working control with zero host wiring,
+//   * ZERO projects is a different state from "unfiled": it draws a direct
+//     "New project" action, or nothing at all when there is no way to create
+//     one — never a picker over an empty set.
 
 import type { ProjectColorHue, ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -169,17 +172,58 @@ describe("ProjectFilingChip", () => {
     expect(screen.getByTestId("composer-project-filing-trigger")).toHaveFocus();
   });
 
-  it("renders an empty option list without offering a broken menu", () => {
-    render(<ProjectFilingChip value={null} options={[]} onChange={vi.fn()} />);
-    open();
+  it("offers the way to MAKE one when there are no projects", () => {
+    // Zero projects used to draw `FILED UNDER` + a `No project` pill — a status
+    // report about an absence, with the only live affordance ("New project…")
+    // one click deep at the bottom of an otherwise empty menu. The empty state
+    // is a direct action now, and there is no menu to open.
+    const onCreateProject = vi.fn();
+    render(
+      <ProjectFilingChip
+        value={null}
+        options={[]}
+        onChange={vi.fn()}
+        onCreateProject={onCreateProject}
+      />,
+    );
 
-    expect(
-      screen.queryAllByTestId("composer-project-filing-option"),
-    ).toHaveLength(0);
-    // "No project" still renders — it is the honest state of an unfiled chat.
-    expect(
-      screen.getByTestId("composer-project-filing-none"),
-    ).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-project-filing-trigger")).toBeNull();
+    expect(screen.queryByText(/filed under/i)).toBeNull();
+
+    const create = screen.getByTestId("composer-project-filing-create");
+    expect(create).toHaveTextContent("New project");
+    fireEvent.click(create);
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders NOTHING with no projects and no way to make one", () => {
+    // The original concern this replaces — never offer a menu over an empty set.
+    // With nothing to pick and nothing to create there is no control to draw at
+    // all, so the component holds that itself rather than trusting every host to.
+    const { container } = render(
+      <ProjectFilingChip value={null} options={[]} onChange={vi.fn()} />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("composer-project-filing")).toBeNull();
+  });
+
+  it("keeps the create affordance disabled with the rest of the control", () => {
+    const onCreateProject = vi.fn();
+    render(
+      <ProjectFilingChip
+        value={null}
+        options={[]}
+        onChange={vi.fn()}
+        onCreateProject={onCreateProject}
+        disabled
+      />,
+    );
+
+    const create = screen.getByTestId("composer-project-filing-create");
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(onCreateProject).not.toHaveBeenCalled();
   });
 
   it("disables the trigger without hiding what the chat is filed under", () => {

@@ -18,7 +18,10 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerEventType,
+)
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -88,6 +91,16 @@ def _payload() -> dict[str, object]:
     }
 
 
+def _signed_payload() -> dict[str, object]:
+    """``_payload`` as it lands in the store.
+
+    The append funnel signs every ledger row with the current writer, so the
+    stored body is the command's payload plus ``w``.
+    """
+
+    return {**_payload(), "w": CURRENT_LEDGER_WRITER.value}
+
+
 def _command(**changes: object) -> RuntimeArtifactEventCommand:
     values: dict[str, object] = {
         "command_id": EVENT_ID,
@@ -125,7 +138,7 @@ async def test_retry_after_append_publishes_exactly_one_event() -> None:
     assert events[0].event_id == EVENT_ID
     assert events[0].event_type is RuntimeApiEventType.ARTIFACT_CREATED
     assert events[0].created_at == CREATED_AT
-    assert events[0].payload == _payload()
+    assert events[0].payload == _signed_payload()
 
 
 async def test_scope_mismatch_fails_closed_without_append() -> None:
@@ -241,7 +254,7 @@ class TestCrossLaneRedeliveryIsIdempotent(CrossLanePublishMixin):
         events = await store.list_events_after(org_id=ORG, run_id=RUN, after_sequence=0)
         assert len(events) == 1
         assert events[0].event_id == EVENT_ID
-        assert events[0].payload == _payload()
+        assert events[0].payload == _signed_payload()
         # First lane to land the fact keeps authorship of the annotation: this
         # event *did* arrive inside the causal prefix, so claiming otherwise
         # would falsify the ledger.

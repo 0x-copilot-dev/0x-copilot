@@ -204,6 +204,13 @@ class ShapeRequestMixin:
                 "source": {"connector": connector, "op": op},
                 "title": "ENG-1 Fix",
                 "payload_ref": "call:call_1",
+                # The renderer state rides the record that declares the surface.
+                # A sibling ``tool_result`` is no longer joined into it: that
+                # bound a spec to a different representation of the same read.
+                "state": {
+                    "source": {"server": connector, "tool": op},
+                    "data": {"issue": {"id": "ENG-1", "title": "Fix"}},
+                },
             },
         )
         await producer.append_api_event(
@@ -211,15 +218,6 @@ class ShapeRequestMixin:
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.VIEW_DERIVED,
             payload={"v": 1, "surface_id": surface_id, "tier": tier, "basis": basis},
-        )
-        await producer.append_api_event(
-            run=run,
-            source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.TOOL_RESULT,
-            payload={
-                "call_id": "call_1",
-                "output": {"issue": {"id": "ENG-1", "title": "Fix"}},
-            },
         )
 
     @staticmethod

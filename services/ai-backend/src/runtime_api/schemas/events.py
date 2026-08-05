@@ -16,6 +16,8 @@ from pydantic import (
     field_validator,
 )
 
+from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
+
 from agent_runtime.execution.contracts import (
     JsonObject,
     RuntimeContract,
@@ -37,10 +39,19 @@ from agent_runtime.prompts.observation import (
 # top-level import here triggers a circular load during ``agent_runtime`` init.
 # ``_display_title_for`` resolves the helper at call time when both modules are
 # fully initialised.
+from agent_runtime.capabilities.surfaces.spec_models import (
+    SurfaceSpecError,
+    validate_surface_spec,
+)
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
-from agent_runtime.surfaces_v2.ledger_models import WorkLedgerVocabulary
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    LedgerWriter,
+    UnknownLedgerWriterError,
+    WorkLedgerVocabulary,
+)
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -125,6 +136,49 @@ class _Fields:
     USAGE_TOKENS_IN = "tokens_in"
     USAGE_TOKENS_OUT = "tokens_out"
     USAGE_SURFACE_ID = "surface_id"
+
+
+class _SurfaceStateFields:
+    """Keys of the ``SurfaceState`` block carried on ``surface.created``.
+
+    Declared here rather than on ``surfaces_v2.constants.Keys.Field``, which
+    mirrors the A3-frozen SDR §5 *ledger* vocabulary. These are the RENDERER
+    contract — the shape shared with ``packages/api-types`` (``SurfaceState``)
+    and ``packages/surface-renderers`` — and the two disagree on purpose:
+    provenance is ``{connector, op}`` on the ledger and ``{server, tool}`` to a
+    renderer. ``spec`` is reused from the ledger keys because both spell it the
+    same.
+    """
+
+    STATE = "state"
+    SOURCE = "source"
+    DATA = "data"
+    SERVER = "server"
+    TOOL = "tool"
+
+
+class _LedgerWriterStamp:
+    """The ledger row's writer stamp: its wire key and the set this build reads.
+
+    Declared here for the same reason :class:`_SurfaceStateFields` is —
+    ``surfaces_v2.constants.Keys.Field`` mirrors the A3-frozen SDR §5 field set,
+    and ``w`` is additive to it. The vocabulary itself is
+    :class:`~agent_runtime.surfaces_v2.ledger_models.LedgerWriter`; this only
+    names the key and freezes the membership test.
+
+    ``EVENT_TYPES`` scopes the whole rule to rows that speak the ledger
+    vocabulary. ``w`` is one letter, and a tool or model payload may legitimately
+    carry a ``w`` that means width.
+
+    ``CURRENT`` is what this build signs with. It is a single value rather than a
+    per-producer argument for the same reason ``LedgerWriter`` is a closed enum:
+    a caller free to name its own writer can claim to be any generation it likes.
+    """
+
+    KEY = "w"
+    CURRENT: str = CURRENT_LEDGER_WRITER.value
+    KNOWN: frozenset[str] = frozenset(writer.value for writer in LedgerWriter)
+    EVENT_TYPES: frozenset[str] = frozenset(LEDGER_EVENT_TYPES)
 
 
 class _OperationFields:
@@ -386,6 +440,108 @@ class RuntimeEventPresentationProjector:
 
     @classmethod
     def payload_for_event(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Return the client-visible payload for an API event type.
+
+        Two steps, in this order: project through the per-type allow-list, then
+        sign the row with the ledger writer stamp. The stamp is handled once,
+        here, rather than inside each of the ~30 projections below — an
+        allow-list that does not name a key deletes it silently, and that
+        failure mode has already cost this pipeline a release (see
+        :meth:`_surface_created_payload`). One seam cannot forget a branch.
+
+        **This is the append funnel, and only the append funnel.** All three
+        callers — ``RuntimeEventProducer``'s single and batch append entry
+        points, and ``_build_from_stream_event`` — build a row on its way *into*
+        the store. Replay reads envelopes back out and never re-projects, so
+        signing here signs new rows without rewriting history, which is what
+        lets absence of ``w`` keep meaning "written before the stamp existed".
+        """
+
+        return cls._sign_ledger_writer(
+            event_type=event_type,
+            payload=payload,
+            projected=cls._project_payload(event_type=event_type, payload=payload),
+        )
+
+    @classmethod
+    def _sign_ledger_writer(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        projected: JsonObject,
+    ) -> JsonObject:
+        """Sign a projected ledger payload with ``w``, or reject the record.
+
+        The writer stamp is this seam's property alone: it is popped off the
+        projection first, so no branch below can invent one, pass one through
+        unchecked, or leave the ``null`` a ``model_dump`` produces for a payload
+        model whose ``w`` was never set. ``null`` is a claim this ledger never
+        makes: on a stored row, absence says "nobody signed", while ``null``
+        would say "the writer is known to be nothing".
+
+        An unsigned row is signed with :data:`CURRENT_LEDGER_WRITER` rather than
+        left bare. Producer-side signing was tried and covered 6 of the 34 event
+        types, which makes "no ``w``" ambiguous between a historic row and a live
+        row from a producer that forgot — and a reader keyed on it classifies
+        live rows as historic, which is the defect the stamp was added to close.
+        A producer that signs itself is carried through unchanged; it is
+        re-validated here either way, so a producer cannot widen the vocabulary.
+
+        A stamp this build does not understand REJECTS the whole record, by
+        raising, rather than being dropped or blanked. Dropping it would hand the
+        client a payload written by an unknown writer formatted as though this
+        build had written it — the silent mis-render the stamp exists to prevent
+        — and blanking it persists a ``surface.created`` with no ``surface_id``,
+        a ghost row the client fold skips without a word. The append fails
+        instead, at the seam that would have written it.
+
+        Restricted to ledger event types on purpose. ``w`` is a one-letter key,
+        and an arbitrary tool or model payload is free to use it for something
+        else entirely; only rows that speak the ledger vocabulary are read as
+        speaking it.
+        """
+
+        if event_type.value not in _LedgerWriterStamp.EVENT_TYPES:
+            return projected
+        if projected is payload:
+            # The default branch of ``_project_payload`` returns its argument;
+            # this seam must never mutate a caller's dict.
+            projected = dict(payload)
+        projected.pop(_LedgerWriterStamp.KEY, None)
+        writer = payload.get(_LedgerWriterStamp.KEY)
+        if writer is None:
+            writer = _LedgerWriterStamp.CURRENT
+        elif writer not in _LedgerWriterStamp.KNOWN:
+            logging.getLogger(__name__).error(
+                "Refused a ledger append from an unknown writer event_type=%s",
+                event_type.value,
+            )
+            raise UnknownLedgerWriterError.for_writer(writer)
+        if projected:
+            # An empty projection is the allow-list's rejection sentinel, pinned
+            # by ``test_projector_rejects_uncontracted_payload_fields`` — an
+            # uncontracted field projects to exactly ``{}`` so it cannot ride the
+            # ledger. Signing it would both break that contract and risk making a
+            # contentless row look processable to a reader that skips ``{}``.
+            #
+            # KNOWN GAP, deliberately left: the caller appends that row anyway
+            # (``_artifact_ledger_payload`` / ``_effect_ledger_payload`` log and
+            # return ``{}`` across 13 event types), so an unsigned, contentless
+            # row can reach the store. It is inert — it carries no id for any
+            # reader to key on — but it is not covered by the sentence above
+            # about a bare row being historic. The fix belongs upstream, in
+            # refusing the append, not here in widening the stamp.
+            projected[_LedgerWriterStamp.KEY] = writer
+        return projected
+
+    @classmethod
+    def _project_payload(
         cls,
         *,
         event_type: RuntimeApiEventType,
@@ -1317,8 +1473,16 @@ class RuntimeEventPresentationProjector:
         """Project ``surface.created`` through a strict allow-list (PRD-A3 D5).
 
         Keeps ``v`` / ``surface_id`` / ``kind`` / ``source{connector,op}`` /
-        ``title`` / ``payload_ref``. ``source`` is re-built from its own nested
-        allow-list so untrusted extra keys cannot ride through.
+        ``title`` / ``payload_ref`` / optional ``state``. ``source`` is re-built
+        from its own nested allow-list so untrusted extra keys cannot ride
+        through, and ``state`` from :meth:`_surface_state`.
+
+        This method is why the generative-UI floor was inert in production for
+        a release: an allow-list that does not name a key **deletes it**, with
+        no error at any layer, so a spec resolved correctly backend-side simply
+        never arrived and the client rendered the spec-less view. That failure
+        mode is silent by construction, which is exactly why every widening of
+        the surface payload has to land here in the same pass.
         """
 
         safe_payload: JsonObject = {}
@@ -1335,7 +1499,81 @@ class RuntimeEventPresentationProjector:
         source = cls._op_ref(payload.get(_LedgerKeys.Field.SOURCE))
         if source is not None:
             safe_payload[_LedgerKeys.Field.SOURCE] = source
+        state = cls._surface_state(payload.get(_SurfaceStateFields.STATE))
+        if state is not None:
+            safe_payload[_SurfaceStateFields.STATE] = state
         return safe_payload
+
+    @classmethod
+    def _surface_state(cls, value: object) -> JsonObject | None:
+        """Re-validate the carried ``{spec?, source?, data}`` renderer state.
+
+        This value reaches the client and decides what a user is SHOWN, so it
+        is rebuilt member by member rather than passed through as a dict — the
+        same posture the consent card's ``presentation`` block takes. Arriving
+        on a trusted event type is not evidence that a payload is well formed:
+        ``data`` is connector output and ``spec`` may have been generated by a
+        model, and neither is trusted anywhere else in this file.
+
+        Each member degrades on its own. A malformed spec is dropped and the
+        client renders the deterministic inference floor — a correct surface
+        rather than a wrong one. A half-named source is dropped rather than
+        printing a blank where a tool name belongs. ``data`` is carried
+        verbatim: it is untrusted tool output that the renderers treat as
+        inert, and it is the same payload the run already publishes on
+        ``tool_result``, so re-shaping it here would put a second, disagreeing
+        representation of one read on the wire — the defect this field exists
+        to close.
+        """
+
+        if not isinstance(value, dict):
+            return None
+        state: JsonObject = {}
+        spec = cls._surface_spec(value.get(_LedgerKeys.Field.SPEC))
+        if spec is not None:
+            state[_LedgerKeys.Field.SPEC] = spec
+        source = cls._surface_state_source(value.get(_SurfaceStateFields.SOURCE))
+        if source is not None:
+            state[_SurfaceStateFields.SOURCE] = source
+        if _SurfaceStateFields.DATA in value:
+            state[_SurfaceStateFields.DATA] = value[_SurfaceStateFields.DATA]
+        return state or None
+
+    @classmethod
+    def _surface_state_source(cls, value: object) -> JsonObject | None:
+        """Rebuild the renderer's ``{server, tool}`` provenance, or ``None``.
+
+        Sibling of :meth:`_op_ref`, which rebuilds the ledger's
+        ``{connector, op}`` spelling of the same two facts. Both members must
+        resolve: a source naming only its server would put "unknown" in front of
+        the user in a register that reads as "this is what the system knows".
+        """
+
+        if not isinstance(value, dict):
+            return None
+        server = cls._text(value.get(_SurfaceStateFields.SERVER))
+        tool = cls._text(value.get(_SurfaceStateFields.TOOL))
+        if server is None or tool is None:
+            return None
+        return {_SurfaceStateFields.SERVER: server, _SurfaceStateFields.TOOL: tool}
+
+    @classmethod
+    def _surface_spec(cls, value: object) -> JsonObject | None:
+        """Validate a ledger-carried SurfaceSpec, or ``None`` if it is not one.
+
+        Total by construction: the surface path is best-effort presentation, so
+        a spec that does not validate costs the client its shaping and nothing
+        else. Round-tripping through the canonical validator (rather than
+        hand-checking keys) keeps this in step with the schema automatically.
+        """
+
+        if not isinstance(value, dict):
+            return None
+        try:
+            spec = validate_surface_spec(value)
+        except SurfaceSpecError:
+            return None
+        return spec.model_dump(mode="json", exclude_none=True)
 
     @classmethod
     def _view_derived_payload(cls, payload: JsonObject) -> JsonObject:

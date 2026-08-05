@@ -21,7 +21,10 @@ import pytest
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import AgentRuntimeContext, StreamEventSource
-from agent_runtime.surfaces_v2.ledger_models import GateAuthState
+from agent_runtime.surfaces_v2.ledger_models import (
+    CURRENT_LEDGER_WRITER,
+    GateAuthState,
+)
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.stream_events import StreamOrchestrator
@@ -357,6 +360,9 @@ class TestWriteGateOpensInsideTheCausalPrefix(GateInterruptMixin, SealedRunMixin
         gate_event = store.events_by_run[run.run_id][-1]
         assert gate_event.payload == {
             "v": 1,
+            # Appended through the real producer, so the row is signed; the
+            # recorder-based cases above never cross the append funnel.
+            "w": CURRENT_LEDGER_WRITER.value,
             "gate_id": self.WRITE_GATE_ID,
             "connector": "linear",
             "purpose": "approve write create_issue on linear",

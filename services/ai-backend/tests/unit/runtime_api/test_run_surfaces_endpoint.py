@@ -152,14 +152,37 @@ class RunSurfacesEndpointMixin:
     async def _append_surface_content(
         producer: RuntimeEventProducer, run: RunRecord
     ) -> None:
-        """Append the persisted result and derived spec the projection consumes."""
+        """Append the carried body and the derived spec the projection consumes.
+
+        The body rides a re-emitted ``surface.created`` — a repeat read — the
+        way production delivers it. The ``tool_result`` alongside it is
+        deliberate noise: nothing joins it, and this fixture would silently
+        stop proving that if it were dropped.
+        """
         await producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.TOOL_RESULT,
             payload={
                 "call_id": "call_1",
-                "output": {"id": "ENG-1", "title": "Fix"},
+                "output": {"unjoined": True},
+            },
+        )
+        await producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.SURFACE_CREATED,
+            payload={
+                "v": 1,
+                "surface_id": "record://linear/get_issue/issue-1",
+                "kind": "record",
+                "source": {"connector": "linear", "op": "get_issue"},
+                "title": "ENG-1 Fix",
+                "payload_ref": "call:call_1",
+                "state": {
+                    "source": {"server": "linear", "tool": "get_issue"},
+                    "data": {"id": "ENG-1", "title": "Fix"},
+                },
             },
         )
         await producer.append_api_event(
@@ -290,13 +313,8 @@ class TestRunSurfacesEndpoint(RunSurfacesEndpointMixin):
                 "kind": "record",
                 "title": "Legacy",
                 "payload_ref": "call:call_1",
+                "state": {"data": {"id": "ENG-1"}},
             },
-        )
-        await producer.append_api_event(
-            run=run,
-            source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.TOOL_RESULT,
-            payload={"call_id": "call_1", "output": {"id": "ENG-1"}},
         )
 
         response = await cqs.list_run_surfaces(
@@ -326,22 +344,31 @@ class TestRunSurfacesEndpoint(RunSurfacesEndpointMixin):
 
 
 class TestSpecLessSurfaceWire(RunSurfacesEndpointMixin):
-    """PRD-02 requirement 1, server half: a spec-less surface reaches the client
-    carrying the name of the tool no spec matched.
+    """The inference floor, end to end on the real wire.
+
+    This class used to assert the opposite: that an unmatched tool reached the
+    client *without* a spec, so the renderer could name the tool no spec matched.
+    The generative-UI floor PRD removes that state. A mapping-shaped read with no
+    builtin and no store now resolves a spec on rung 0 — deterministically, with
+    no model — so "spec-less" is unreachable here, and the assertions below are
+    inverted deliberately rather than relaxed. A non-mapping output still yields
+    no surface at all, which is a different case and not this one.
 
     Nothing here is hand-written ledger payloads. The real :class:`SurfaceProjector`
     resolves the tool output, the real :class:`WorkLedgerEmitter` writes the
     ledger through the real event producer (the same closure
     ``RunHandler._build_work_ledger_emitter`` binds), and the endpoint folds it
-    back. That matters because the renderer's tool lookup was correct and
-    unreachable for as long as no wire carried what it read — a test that
-    asserted the lookup, or that asserted against invented events, would have
-    passed the whole time.
+    back. That matters more now, not less: the spec is carried on
+    ``surface.created``, and that event is rebuilt from a strict allow-list in
+    ``RuntimeEventPresentationProjector`` before it is persisted. A test that
+    drove the emitter and the fold directly — and several do — stays green while
+    the allow-list silently strips the spec and the client renders nothing. Only
+    a test that goes through ``append_api_event`` can see that.
 
-    :data:`SPEC_LESS_STATE` is duplicated byte-for-byte in
-    ``packages/surface-renderers/src/_shared/primitives.test.tsx``
-    (``RUNTIME_SPECLESS_STATE``), where it is rendered and the tool name is read
-    off the screen. Change one, change both.
+    ``INFERRED_FIELD_LABELS`` is the observable contract of the inference: the
+    labels a reader sees. It is asserted rather than the whole spec so that
+    tuning a ranking weight does not red this test, while dropping the floor
+    entirely does.
     """
 
     SERVER = "pagerduty"
@@ -353,10 +380,19 @@ class TestSpecLessSurfaceWire(RunSurfacesEndpointMixin):
         "status": "acknowledged",
         "service": {"id": "svc-9", "name": "checkout-api"},
     }
-    SPEC_LESS_STATE: dict[str, object] = {
-        "data": OUTPUT,
-        "source": {"server": SERVER, "tool": TOOL},
-    }
+    SOURCE_REF: dict[str, object] = {"server": SERVER, "tool": TOOL}
+    # What rung 0 makes of the payload above.
+    #
+    # `title` is absent from this set on purpose: the floor promotes it to
+    # `title_path`, so it heads the card instead of being repeated as a row —
+    # which is why the set is asserted alongside INFERRED_TITLE_PATH rather
+    # than on its own.
+    #
+    # `status` is low-cardinality so it draws as a badge, and `service` is a
+    # mapping carrying `name`, so the floor binds the nested path rather than
+    # dumping the object into a cell.
+    INFERRED_FIELD_LABELS: set[str] = {"Status", "Incident Number", "Service"}
+    INFERRED_TITLE_PATH = "title"
 
     async def _emit_real_read(
         self, producer: RuntimeEventProducer, run: RunRecord
@@ -378,8 +414,10 @@ class TestSpecLessSurfaceWire(RunSurfacesEndpointMixin):
             self.SERVER, self.TOOL, self.OUTPUT, call_id=self.CALL_ID
         )
         assert envelope is not None
-        # No builtin and no store ⇒ the ladder misses ⇒ tier-3 generic view.
-        assert envelope.state.spec is None
+        # No builtin and no store ⇒ the ladder falls to rung 0, which always
+        # answers. This assertion is the floor's precondition: if it ever goes
+        # back to None, the two wire tests below are testing nothing.
+        assert envelope.state.spec is not None
         await WorkLedgerEmitter(emit=_emit).on_tool_result(
             server_name=self.SERVER,
             tool_name=self.TOOL,
@@ -397,9 +435,13 @@ class TestSpecLessSurfaceWire(RunSurfacesEndpointMixin):
             payload={"call_id": self.CALL_ID, "output": self.OUTPUT},
         )
 
-    async def test_served_state_names_the_unmatched_tool(
+    async def test_the_inferred_spec_survives_the_transport_allow_list(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
+        # The regression this class exists for. `surface.created` is rebuilt
+        # field-by-field by the presentation projector before it is persisted,
+        # so a spec the emitter writes does not imply a spec the client reads.
+        # Everything below the endpoint is the production path.
         _store, producer, cqs, run = await self._setup(runtime_context_admin)
         await self._emit_real_read(producer, run)
 
@@ -409,18 +451,57 @@ class TestSpecLessSurfaceWire(RunSurfacesEndpointMixin):
 
         assert len(response.surfaces) == 1
         surface = response.surfaces[0]
-        assert surface.view is not None
-        assert surface.view.tier == "generic"
-        assert surface.state == self.SPEC_LESS_STATE
+        assert surface.state is not None
+        # Data and provenance are unchanged by the floor.
+        assert surface.state["data"] == self.OUTPUT
+        assert surface.state["source"] == self.SOURCE_REF
+        # …and the spec now arrives, which is the whole change.
+        spec = surface.state.get("spec")
+        assert isinstance(spec, dict), "the inferred spec was stripped on the wire"
+        assert spec["archetype"] == "record"
+        assert spec["title_path"] == self.INFERRED_TITLE_PATH
+        assert {field["label"] for field in spec["fields"]} == (
+            self.INFERRED_FIELD_LABELS
+        )
+        # The nested bind is the part a flat key-dump would get wrong.
+        by_label = {field["label"]: field for field in spec["fields"]}
+        assert by_label["Service"]["path"] == "service.name"
+        assert by_label["Status"]["format"] == "badge"
 
-    async def test_the_v1_envelope_carries_the_same_provenance(self) -> None:
+    async def test_the_ledger_tier_agrees_with_what_renders(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        # The defect that started this work was a ledger recording
+        # `tier: shaped, basis: registry` over a screen showing raw JSON. A
+        # compliance record that disagrees with the render is worse than none,
+        # so the two are asserted together, on one wire, in one test.
+        _store, producer, cqs, run = await self._setup(runtime_context_admin)
+        await self._emit_real_read(producer, run)
+
+        response = await cqs.list_run_surfaces(
+            org_id=self.ORG, user_id=self.USER, run_id=run.run_id
+        )
+        surface = response.surfaces[0]
+
+        assert surface.view is not None
+        # An inferred spec IS a spec, so the tier is `shaped`; its basis is the
+        # payload's own structure. No new ledger vocabulary was minted for this.
+        assert surface.view.tier == "shaped"
+        assert surface.view.basis == "schema"
+        assert surface.state is not None and surface.state.get("spec") is not None
+
+    async def test_the_v1_envelope_carries_the_same_state(self) -> None:
         # The envelope path (legacy hosts fold ``payload.surface.state``) must
-        # agree with the hydrated path above, or the same surface would name its
-        # tool on one wire and not the other.
+        # agree with the hydrated path above, or the same surface would render
+        # shaped on one wire and unshaped on the other.
         envelope = SurfaceProjector().resolve(
             self.SERVER, self.TOOL, self.OUTPUT, call_id=self.CALL_ID
         )
         assert envelope is not None
         dumped = envelope.model_dump(mode="json", exclude_none=True)
 
-        assert dumped["state"] == self.SPEC_LESS_STATE
+        assert dumped["state"]["data"] == self.OUTPUT
+        assert dumped["state"]["source"] == self.SOURCE_REF
+        assert {
+            field["label"] for field in dumped["state"]["spec"]["fields"]
+        } == self.INFERRED_FIELD_LABELS

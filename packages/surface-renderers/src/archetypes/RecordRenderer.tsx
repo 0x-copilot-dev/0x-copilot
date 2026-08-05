@@ -14,7 +14,7 @@ import {
   SurfaceLinkRow,
   toolNameFromState,
 } from "../_shared/primitives";
-import { formatValue, isNumericFormat, resolvePath } from "../_shared/path";
+import { formatValue, resolvePath } from "../_shared/path";
 import {
   changesFromDiff,
   dataFromState,
@@ -45,14 +45,27 @@ export function RecordRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Record surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
+        {spec
+          ? renderWithSpec(spec, data, toolNameFromState(state))
+          : renderFallback(state, data)}
       </section>
     </article>
   );
 }
 
-function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
-  const title = formatValue(resolvePath(data, spec.title_path));
+function renderWithSpec(
+  spec: SurfaceSpec,
+  data: unknown,
+  toolName: string | undefined,
+): ReactElement {
+  // Same fallback the table makes, for the same reason: `title_path` is
+  // schema-required, so a payload with nothing title-shaped still carries a
+  // path, and an unresolvable one paints the header's "Untitled". Naming the
+  // tool is honest and matches PRD §3.3 step 4 ("else the tool's display name").
+  // `?? ""` keeps `SurfaceHeader`'s own "Untitled" as the last resort, for the
+  // one case where even the tool has no name to give.
+  const title =
+    formatValue(resolvePath(data, spec.title_path)) || (toolName ?? "");
   const subtitle = spec.subtitle_path
     ? formatValue(resolvePath(data, spec.subtitle_path))
     : undefined;
@@ -68,7 +81,11 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
               fieldKey={field.path}
               label={field.label}
               value={formatValue(resolvePath(data, field.path), field.format)}
-              numeric={isNumericFormat(field.format)}
+              // The hint decides the register — the chip for a `badge`, tabular
+              // figures for a magnitude. Passing it whole replaces the derived
+              // `numeric` this used to compute here, which is the same answer
+              // `FieldRow` now defaults to, from one place instead of two.
+              format={field.format}
             />
           ))}
         </div>

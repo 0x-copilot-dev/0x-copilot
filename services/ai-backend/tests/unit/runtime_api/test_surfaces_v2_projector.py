@@ -15,7 +15,12 @@ from runtime_api.schemas.common import (
     RuntimeApiEventType,
     RuntimeEventRedactionState,
 )
+from agent_runtime.surfaces_v2.ledger_models import CURRENT_LEDGER_WRITER
 from runtime_api.schemas.events import RuntimeEventPresentationProjector as P
+
+# The append funnel signs every ledger row it projects, so each allow-list result
+# below carries the writer stamp on top of the SDR §5 keys.
+_W = CURRENT_LEDGER_WRITER.value
 
 
 class TestActionClassifiedProjection:
@@ -35,6 +40,7 @@ class TestActionClassifiedProjection:
         )
         assert safe == {
             "v": 1,
+            "w": _W,
             "call_id": "c1",
             "connector": "linear",
             "op": "get_issue",
@@ -67,6 +73,7 @@ class TestReadExecutedProjection:
         )
         assert safe == {
             "v": 1,
+            "w": _W,
             "call_id": "c1",
             "connector": "linear",
             "op": "get_issue",
@@ -165,6 +172,7 @@ class TestReceiptEmittedProjection:
         )
         assert safe == {
             "v": 1,
+            "w": _W,
             "surface_id": "receipt://run_1",
             "fold_ref": "ledger://run_1@42",
         }

@@ -13,6 +13,15 @@
 #
 # Adding a gate: drop tools/check_<name>.py + tools/test_check_<name>.py, then add
 # both to the steps below. Nothing to wire into a paths filter -- there isn't one.
+#
+# THAT LAST SENTENCE IS THE JOB, AND IT WAS NOT BEING DONE. A generative-UI audit
+# (docs/audit/generative-ui/FINDINGS.md 4.6a) enumerated tools/check_*.py against
+# .github/workflows/ and found FIVE gates -- audit-in-transaction, F-series
+# contract authority map, LLM provider imports, migration manifest, reader
+# methods -- referenced by zero workflows, each with a companion test that also
+# never ran. Written, reviewed, merged, and then silent: our own dark-capability
+# pathology, applied to the gates that exist to catch it. All five are wired
+# below. A gate that runs nowhere is not a weaker gate, it is a comment.
 
 name: ci-gates
 
@@ -59,14 +68,22 @@ jobs:
         run: python -m pip install --upgrade pip pytest
 
       # Each gate is tested before it is trusted: a gate whose own tests fail is
-      # not evidence about the repository, it is a broken instrument.
+      # not evidence about the repository, it is a broken instrument. Every gate
+      # run below appears here first -- that is the ordering invariant, not a
+      # convention.
       - name: Test the gates
         run: |
           PYTHONPATH=tools python -m pytest -q \
             tools/test_check_dark_capabilities.py \
             tools/test_check_orphan_destinations.py \
+            tools/test_check_route_reachability.py \
             tools/test_check_css_selector_shadowing.py \
             tools/test_check_service_boundaries.py \
+            tools/test_check_audit_in_transaction.py \
+            tools/test_check_f_series_contract_authority_map.py \
+            tools/test_check_llm_provider_imports.py \
+            tools/test_check_migration_manifest.py \
+            tools/test_check_reader_methods.py \
             tools/test_apply_branch_protection.py \
             tools/test_cli_release.py
 
@@ -76,8 +93,46 @@ jobs:
       - name: Orphan destinations
         run: python tools/check_orphan_destinations.py
 
+      # The HTTP-layer sibling of the gate above: a route registered in
+      # ai-backend that no app, no facade route and no backend caller names is
+      # unreachable from the product. 13 such routes already exist and are
+      # recorded with a reason each in tools/route_reachability_baseline.txt;
+      # this fails on the 14th, and on any baseline line that has gone stale.
+      - name: Route reachability
+        run: python tools/check_route_reachability.py
+
       - name: CSS selector shadowing
         run: python tools/check_css_selector_shadowing.py
 
       - name: Service boundaries
         run: python tools/check_service_boundaries.py
+
+      - name: Audit writes stay in their transaction
+        run: python tools/check_audit_in_transaction.py
+
+      - name: F-series contract authority map
+        run: python tools/check_f_series_contract_authority_map.py
+
+      - name: LLM provider imports
+        run: python tools/check_llm_provider_imports.py
+
+      - name: Reader methods contain no write SQL
+        run: python tools/check_reader_methods.py
+
+      # Scoped to `backend` deliberately, and this is the ONLY gate here that is
+      # scoped at all. tools/check_migration_manifest.py hardcodes two service
+      # migration dirs; services/ai-backend/migrations does not exist, so its
+      # per-service check returns 2 ("missing migrations dir") and main folds
+      # that into a process exit of 1 -- an unscoped invocation is red on a clean
+      # tree even though it verified `backend` correctly on the way past. That is
+      # a defect in the gate's own configuration, not a finding about the
+      # repository, and a required check cannot be wired red. The manifest for
+      # the service that HAS migrations is fully enforced, which is strictly more
+      # than the zero enforcement this gate had yesterday.
+      #
+      # Fix and then delete `--service backend`: either create
+      # services/ai-backend/migrations with a MANIFEST.lock, or drop that path
+      # from SERVICE_MIGRATION_DIRS. Until one of those happens, widening this
+      # line wedges every PR.
+      - name: Migration manifests
+        run: python tools/check_migration_manifest.py --service backend

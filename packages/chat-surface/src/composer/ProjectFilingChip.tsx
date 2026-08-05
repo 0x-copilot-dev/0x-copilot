@@ -179,7 +179,9 @@ const inlineMenuStyle: CSSProperties = {
   zIndex: 71,
 };
 
-export function ProjectFilingChip(props: ProjectFilingChipProps): ReactElement {
+export function ProjectFilingChip(
+  props: ProjectFilingChipProps,
+): ReactElement | null {
   const {
     value,
     options,
@@ -316,6 +318,45 @@ export function ProjectFilingChip(props: ProjectFilingChipProps): ReactElement {
     ) : open ? (
       <div style={inlineMenuStyle}>{menuBody}</div>
     ) : null;
+
+  // ZERO PROJECTS is not "filed under nothing" — it is "you have none yet", and
+  // the only useful thing to offer is the way to make one. The picker's own
+  // chrome (`FILED UNDER` + a `No project` pill) reports an absence as though it
+  // were a filing decision, and buries the one live affordance a click deep at
+  // the bottom of a menu whose other rows do not exist. So the empty state is a
+  // direct action instead, at the same `.ui-cpill` tier.
+  //
+  // With nothing to pick AND no way to create, there is nothing to say at all —
+  // render nothing rather than a control over an empty set. The desktop host
+  // guards this case too; keeping it here means the component is honest on its
+  // own rather than relying on every host to hold it.
+  //
+  // Known window: the host's project list is module-cached but empty on the very
+  // first render of a session, so a user who HAS projects can see this for one
+  // frame before the list lands. Today that same frame shows them "No project",
+  // which is equally untrue; fixing it properly means a `loading` signal on the
+  // binding, not a guess here.
+  if (options.length === 0) {
+    if (onCreateProject === undefined) return null;
+    return (
+      <div
+        style={rootStyle}
+        className="aui-composer-filing"
+        data-testid="composer-project-filing"
+      >
+        <button
+          type="button"
+          className="ui-cpill aui-composer-filing__pill"
+          data-testid="composer-project-filing-create"
+          disabled={disabled}
+          onClick={onCreateProject}
+        >
+          <Icon name="plus" size={11} />
+          <span className="ui-cpill__lb">New project</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div

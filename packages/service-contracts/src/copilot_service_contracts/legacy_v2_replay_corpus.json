@@ -1,52 +1,7 @@
 {
   "schema_version": 1,
   "reader_version": 1,
-  "checked_in_sources": [
-    {
-      "id": "work_ledger_golden_events",
-      "path": "packages/service-contracts/src/copilot_service_contracts/work_ledger_golden_events.json",
-      "kind": "legacy_v2_run_events",
-      "replay": "direct"
-    },
-    {
-      "id": "surface_store_golden_state",
-      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces_v2/fixtures/surface_store_golden_state.json",
-      "kind": "derived_legacy_v2_snapshot",
-      "replay": "paired_with_work_ledger_golden_events"
-    },
-    {
-      "id": "github_list_issues_spec",
-      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/github_list_issues.spec.json",
-      "kind": "legacy_surface_spec",
-      "replay": "spec_only_late_merge"
-    },
-    {
-      "id": "gmail_message_spec",
-      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/gmail_message.spec.json",
-      "kind": "legacy_surface_spec",
-      "replay": "spec_only_late_merge"
-    },
-    {
-      "id": "linear_get_issue_spec",
-      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/linear_get_issue.spec.json",
-      "kind": "legacy_surface_spec",
-      "replay": "spec_only_late_merge"
-    },
-    {
-      "id": "surface_eval_baseline",
-      "path": "services/ai-backend/tests/evals/surfaces/baselines/baseline_replay.json",
-      "kind": "evaluation_metadata",
-      "replay": "quarantined_not_run_events",
-      "reason": "The file contains aggregate evaluator output, not append-only run events or a surface payload."
-    },
-    {
-      "id": "e2_shadow_comparison_vectors",
-      "path": "services/ai-backend/tests/unit/agent_runtime/fixtures/e2_shadow_comparison_parity_vectors.json",
-      "kind": "shadow_comparison_metadata",
-      "replay": "quarantined_not_run_events",
-      "reason": "The file compares precomputed legacy and canonical projections; it is not an append-only event stream and cannot safely hydrate a historic surface."
-    }
-  ],
+  "golden_export_content": {},
   "cases": [
     {
       "id": "connector_subject_declared_reference_hydration",
@@ -61,7 +16,9 @@
               "issue": {
                 "identifier": "ENG-142",
                 "title": "Fix stream reconnect",
-                "state": { "name": "In Progress" }
+                "state": {
+                  "name": "In Progress"
+                }
               }
             }
           }
@@ -74,7 +31,10 @@
             "v": 1,
             "surface_id": "connector:linear:issue:ENG-142",
             "kind": "record",
-            "source": { "connector": "linear", "op": "get_issue" },
+            "source": {
+              "connector": "linear",
+              "op": "get_issue"
+            },
             "title": "ENG-142",
             "payload_ref": "call:call-142"
           }
@@ -88,7 +48,10 @@
             "spec": {
               "spec_version": 1,
               "archetype": "record",
-              "source": { "server": "seed:linear", "tool": "get_issue" },
+              "source": {
+                "server": "seed:linear",
+                "tool": "get_issue"
+              },
               "title_path": "issue.title",
               "fields": []
             }
@@ -107,27 +70,29 @@
             "source_connector": "linear",
             "source_op": "get_issue",
             "payload_ref": "call:call-142",
-            "state": {
-              "spec": {
-                "spec_version": 1,
-                "archetype": "record",
-                "source": { "server": "seed:linear", "tool": "get_issue" },
-                "title_path": "issue.title",
-                "fields": []
-              },
-              "data": {
-                "issue": {
-                  "identifier": "ENG-142",
-                  "title": "Fix stream reconnect",
-                  "state": { "name": "In Progress" }
-                }
-              }
-            },
             "last_sequence_no": 3,
             "origin": "ledger",
             "read_only": true
           }
         ],
+        "content": {
+          "connector:linear:issue:ENG-142": {
+            "source": {
+              "server": "linear",
+              "tool": "get_issue"
+            },
+            "spec": {
+              "spec_version": 1,
+              "archetype": "record",
+              "source": {
+                "server": "seed:linear",
+                "tool": "get_issue"
+              },
+              "title_path": "issue.title",
+              "fields": []
+            }
+          }
+        },
         "quarantined": []
       }
     },
@@ -144,8 +109,15 @@
               "archetype": "table",
               "state": {
                 "data": {
-                  "repository": { "full_name": "acme/roadmap" },
-                  "issues": [{ "number": 42, "title": "Reconnect safely" }]
+                  "repository": {
+                    "full_name": "acme/roadmap"
+                  },
+                  "issues": [
+                    {
+                      "number": 42,
+                      "title": "Reconnect safely"
+                    }
+                  ]
                 }
               }
             }
@@ -161,7 +133,10 @@
             "spec": {
               "spec_version": 1,
               "archetype": "table",
-              "source": { "server": "seed:github", "tool": "list_issues" },
+              "source": {
+                "server": "seed:github",
+                "tool": "list_issues"
+              },
               "title_path": "repository.full_name",
               "items_path": "issues",
               "columns": []
@@ -181,25 +156,12 @@
             "source_connector": null,
             "source_op": null,
             "payload_ref": null,
-            "state": {
-              "data": {
-                "repository": { "full_name": "acme/roadmap" },
-                "issues": [{ "number": 42, "title": "Reconnect safely" }]
-              },
-              "spec": {
-                "spec_version": 1,
-                "archetype": "table",
-                "source": { "server": "seed:github", "tool": "list_issues" },
-                "title_path": "repository.full_name",
-                "items_path": "issues",
-                "columns": []
-              }
-            },
             "last_sequence_no": 2,
             "origin": "envelope",
             "read_only": true
           }
         ],
+        "content": {},
         "quarantined": []
       }
     },
@@ -239,12 +201,12 @@
             "source_connector": null,
             "source_op": null,
             "payload_ref": null,
-            "state": null,
             "last_sequence_no": 2,
             "origin": "ledger",
             "read_only": true
           }
         ],
+        "content": {},
         "quarantined": []
       }
     },
@@ -268,7 +230,10 @@
             "v": 1,
             "surface_id": "surface_current",
             "kind": "table",
-            "source": { "connector": "linear", "op": "list_issues" },
+            "source": {
+              "connector": "linear",
+              "op": "list_issues"
+            },
             "title": "Open issues",
             "payload_ref": "operation://op_00000000-0000-4000-8000-000000000002/result"
           }
@@ -278,6 +243,7 @@
         "reader_version": 1,
         "mode": "canonical_v21",
         "surfaces": [],
+        "content": {},
         "quarantined": []
       }
     },
@@ -288,7 +254,9 @@
           "event_id": "missing-subject",
           "event_type": "surface.created",
           "sequence_no": 1,
-          "payload": { "v": 1 }
+          "payload": {
+            "v": 1
+          }
         },
         {
           "event_id": "invalid-envelope-uri",
@@ -297,7 +265,11 @@
           "payload": {
             "surface": {
               "surface_uri": "not a uri",
-              "state": { "data": { "must_not_mount": true } }
+              "state": {
+                "data": {
+                  "must_not_mount": true
+                }
+              }
             }
           }
         },
@@ -307,7 +279,9 @@
           "sequence_no": 3,
           "payload": {
             "surface_id": "not-bound-to-a-surface",
-            "spec": { "archetype": "record" }
+            "spec": {
+              "archetype": "record"
+            }
           }
         },
         {
@@ -334,12 +308,12 @@
             "source_connector": null,
             "source_op": null,
             "payload_ref": "call:missing",
-            "state": null,
             "last_sequence_no": 4,
             "origin": "ledger",
             "read_only": true
           }
         ],
+        "content": {},
         "quarantined": [
           {
             "sequence_no": 1,

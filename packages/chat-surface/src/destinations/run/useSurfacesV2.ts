@@ -21,20 +21,27 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   RunSurfacesResponse,
+  SurfaceId,
   SurfaceSnapshot,
 } from "@0x-copilot/api-types";
+import { isSurfaceId } from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import type { SurfacePayload } from "../../thread-canvas/eventProjector";
 
 export interface UseSurfacesV2Result {
   /** Keyed by `surfaceId`; `undefined` = not yet hydrated (mount shows its
-   *  existing skeleton / tier-3 state). */
-  readonly stateFor: (surfaceId: string) => SurfacePayload | undefined;
+   *  existing skeleton / tier-3 state).
+   *
+   *  Takes a plain tab URI because the strip is heterogeneous — it also carries
+   *  artifact / effect-stage / receipt URIs, which are simply misses here. The
+   *  MAP, though, is keyed by the branded `SurfaceId`, so nothing can be stored
+   *  under an identity the producer did not mint. */
+  readonly stateFor: (uri: string) => SurfacePayload | undefined;
   readonly status: "idle" | "loading" | "ready" | "error";
 }
 
-const EMPTY = new Map<string, SurfacePayload>();
+const EMPTY = new Map<SurfaceId, SurfacePayload>();
 
 /**
  * Adapt one A3 `SurfaceSnapshot` into the `SurfacePayload` envelope shape the
@@ -59,7 +66,8 @@ export function useSurfacesV2(
   lastLedgerSeq: number,
   enabled: boolean,
 ): UseSurfacesV2Result {
-  const [byId, setById] = useState<ReadonlyMap<string, SurfacePayload>>(EMPTY);
+  const [byId, setById] =
+    useState<ReadonlyMap<SurfaceId, SurfacePayload>>(EMPTY);
   const [status, setStatus] = useState<UseSurfacesV2Result["status"]>("idle");
 
   // Hook-lifetime refs (survive effect re-runs, unlike a per-effect closure):
@@ -109,10 +117,14 @@ export function useSurfacesV2(
         .then((res) => {
           fetchedSeqRef.current = targetSeq;
           if (!mountedRef.current || runIdRef.current !== runId) return;
-          const next = new Map<string, SurfacePayload>();
+          const next = new Map<SurfaceId, SurfacePayload>();
           for (const snapshot of res.surfaces ?? []) {
             const payload = snapshotToPayload(snapshot);
-            if (payload !== undefined) next.set(snapshot.surface_id, payload);
+            // The wire boundary: the server's id becomes THE identity, or the
+            // snapshot is dropped. Storing it under anything else is what
+            // guaranteed the lookup below could never find it.
+            if (payload !== undefined && isSurfaceId(snapshot.surface_id))
+              next.set(snapshot.surface_id, payload);
           }
           setById(next);
           setStatus("ready");
@@ -144,8 +156,8 @@ export function useSurfacesV2(
     }
   }, [transport, runId, lastLedgerSeq, enabled]);
 
-  const stateFor = (surfaceId: string): SurfacePayload | undefined =>
-    byId.get(surfaceId);
+  const stateFor = (uri: string): SurfacePayload | undefined =>
+    isSurfaceId(uri) ? byId.get(uri) : undefined;
 
   return { stateFor, status };
 }

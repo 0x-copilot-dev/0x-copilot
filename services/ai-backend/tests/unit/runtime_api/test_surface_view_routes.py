@@ -168,14 +168,32 @@ class SurfaceViewMixin:
         run: RunRecord,
         *,
         surface_id: str = "record://linear/get_issue/issue-1",
+        connector: str = "linear",
+        op: str = "get_issue",
     ) -> None:
+        """Deliver the surface's body the way production delivers it: carried.
+
+        A repeat read re-emits ``surface.created`` with the renderer state on
+        it. There is no join from a sibling ``tool_result`` any more — that
+        rebound a spec to a different representation of the same read — so the
+        record that declares the surface is the only thing that can give it one.
+        """
+
         await producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
-            event_type=RuntimeApiEventType.TOOL_RESULT,
+            event_type=RuntimeApiEventType.SURFACE_CREATED,
             payload={
-                "call_id": "call_1",
-                "output": {"issue": {"id": "ENG-1", "title": "Fix"}},
+                "v": 1,
+                "surface_id": surface_id,
+                "kind": "record",
+                "source": {"connector": connector, "op": op},
+                "title": "ENG-1 Fix",
+                "payload_ref": "call:call_1",
+                "state": {
+                    "source": {"server": connector, "tool": op},
+                    "data": {"issue": {"id": "ENG-1", "title": "Fix"}},
+                },
             },
         )
 
@@ -236,7 +254,11 @@ class TestRegenerate(SurfaceViewMixin):
             basis="schema",
         )
         await self._append_content(
-            producer, run, surface_id="record://customsrv/custom_tool/x"
+            producer,
+            run,
+            surface_id="record://customsrv/custom_tool/x",
+            connector="customsrv",
+            op="custom_tool",
         )
 
         response = await coordinator.regenerate_view(

@@ -4,11 +4,19 @@
     "description": "Fetch a Confluence wiki page.",
     "input_schema": {
       "type": "object",
-      "properties": { "page_id": { "type": "string" } }
+      "properties": {
+        "page_id": {
+          "type": "string"
+        }
+      }
     },
     "output_shape": {
       "type": "object",
-      "properties": { "page": { "type": "object" } }
+      "properties": {
+        "page": {
+          "type": "object"
+        }
+      }
     }
   },
   "sample_output": {
@@ -16,22 +24,78 @@
       "id": "123",
       "title": "Runbook: Incident response",
       "space": "ENG",
-      "version": { "when": "2026-07-19T12:00:00Z", "by": "Priya Rao" },
+      "version": {
+        "when": "2026-07-19T12:00:00Z",
+        "by": "Priya Rao"
+      },
       "excerpt": "How to triage, escalate, and resolve a production incident...",
       "web_url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/123"
     }
   },
+  "base_spec": {
+    "spec_version": 1,
+    "archetype": "record",
+    "source": {
+      "server": "seed:confluence",
+      "tool": "get_page"
+    },
+    "title_path": "page.title",
+    "fields": [
+      {
+        "label": "ID",
+        "path": "page.id",
+        "format": "text"
+      },
+      {
+        "label": "Space",
+        "path": "page.space",
+        "format": "badge"
+      },
+      {
+        "label": "Version",
+        "path": "page.version.when",
+        "format": "datetime"
+      },
+      {
+        "label": "Excerpt",
+        "path": "page.excerpt",
+        "format": "text"
+      },
+      {
+        "label": "Web URL",
+        "path": "page.web_url",
+        "format": "text"
+      }
+    ]
+  },
   "spec": {
     "spec_version": 1,
     "archetype": "doc",
-    "source": { "server": "seed:confluence", "tool": "get_page" },
+    "source": {
+      "server": "seed:confluence",
+      "tool": "get_page"
+    },
     "title_path": "page.title",
     "subtitle_path": "page.space",
     "fields": [
-      { "label": "Summary", "path": "page.excerpt" },
-      { "label": "Updated by", "path": "page.version.by", "format": "user" },
-      { "label": "Updated", "path": "page.version.when", "format": "datetime" }
+      {
+        "label": "Summary",
+        "path": "page.excerpt"
+      },
+      {
+        "label": "Updated by",
+        "path": "page.version.by",
+        "format": "user"
+      },
+      {
+        "label": "Updated",
+        "path": "page.version.when",
+        "format": "datetime"
+      }
     ],
-    "link": { "label": "Open in Confluence", "url_path": "page.web_url" }
+    "link": {
+      "label": "Open in Confluence",
+      "url_path": "page.web_url"
+    }
   }
 }

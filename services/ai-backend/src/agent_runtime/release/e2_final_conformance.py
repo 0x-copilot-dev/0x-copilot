@@ -8,7 +8,7 @@ cannot be mistaken for a passed release requirement.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
@@ -47,11 +47,12 @@ from agent_runtime.rollout import (
     RolloutStartupReadiness,
     RolloutStartupValidator,
 )
-from agent_runtime.surfaces_v2.legacy_v2_replay import project_legacy_v2_replay
+from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceConformanceGate,
 )
 from agent_runtime.surfaces_v2.lifecycle_refs import LifecycleReferenceEnumerator
+from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 
 
 class ConformanceStatus(StrEnum):
@@ -141,7 +142,7 @@ class E2FinalConformanceRunner:
             self._canonical_effect_result_producer,
             self._metered_model_calls,
             self._reference_ownership,
-            self._legacy_replay,
+            self._historic_replay,
             self._no_temporary_exemption_or_unsafe_default,
             self._workspace_attestation,
             self._fixed_ui_schema,
@@ -251,56 +252,95 @@ class E2FinalConformanceRunner:
             "LifecycleReferenceConformanceGate + contract-reference enumeration",
         )
 
-    def _legacy_replay(self) -> ConformanceCondition:
+    def _historic_replay(self) -> ConformanceCondition:
+        """Every checked-in historic export still replays through the LIVE fold.
+
+        This condition used to drive a separate compatibility reader. That
+        reader decided "is this record historic?" from five string signals that
+        all match current data, so it claimed every live surface and served none
+        of them; deleting it leaves the canonical projector as the only
+        projector, which is what the endpoint already serves.
+
+        The frozen cross-language corpus keeps its job and gains a better one.
+        It is the checked-in record of what old runs actually contain, so it now
+        pins that ``SurfaceStoreProjection`` — the fold behind
+        ``GET /v1/agent/runs/{run_id}/surfaces`` — still recovers every historic
+        subject with the same identity, kind, title, provenance and payload
+        reference the vectors froze. A change that dropped an old surface fails
+        here instead of silently in a user's canvas.
+
+        The second fold is pinned too, and it is the one that changed. Surface
+        state is now *carried* on ``surface.created``; the old
+        ``payload_ref → call_id → tool_result.output`` re-join is gone, so a
+        pre-carry record on a desktop's disk hydrates to whatever it actually
+        carried and nothing more — for the golden export, to nothing at all.
+        That consequence is real and permanent, so each vector pins the exact
+        output of ``SurfaceContentProjection`` (``expected.content``, and
+        ``golden_export_content`` for the export) rather than merely folding
+        twice and comparing the fold to itself. Running it twice still proves
+        determinism; only a pinned value can prove *what* a user's old surface
+        now shows.
+
+        Envelope-origin vectors are deliberately not asserted for metadata: they
+        replay the retired v1 presentation envelope (``payload.surface``), which
+        no canonical producer writes. Demanding recovery of a subject nothing
+        emits is the reader-without-a-writer defect this release wave removes.
+        Their content pin still applies — an envelope case now hydrates to ``{}``
+        and the vector says so.
+        """
+
+        title = "all old fixtures/exports replay and verify"
         try:
-            raw = load_legacy_v2_replay_corpus()
-            cases = raw.get("cases")
+            corpus = load_legacy_v2_replay_corpus()
+            cases = corpus.get("cases")
             if not isinstance(cases, list) or not cases:
-                return _fail(
-                    7,
-                    "all old fixtures/exports replay and verify",
-                    "legacy replay corpus missing cases",
-                )
+                return _fail(7, title, "historic replay corpus missing cases")
+            recovered = 0
+            hydrated = 0
             for case in cases:
                 if not isinstance(case, dict):
-                    return _fail(
-                        7,
-                        "all old fixtures/exports replay and verify",
-                        "legacy replay corpus contains malformed case",
-                    )
+                    return _fail(7, title, "historic replay corpus malformed case")
                 events = case.get("events")
                 expected = case.get("expected")
                 if not isinstance(events, list) or not isinstance(expected, dict):
+                    return _fail(7, title, "historic replay case lacks events/expected")
+                case_id = str(case.get("id", "unknown"))
+                content = expected.get("content")
+                if not isinstance(content, Mapping):
                     return _fail(
-                        7,
-                        "all old fixtures/exports replay and verify",
-                        "legacy replay case lacks events/expected",
+                        7, title, f"{case_id}: frozen expectation lacks content"
                     )
-                if (
-                    project_legacy_v2_replay(deepcopy(events)).model_dump(mode="json")
-                    != expected
-                ):
-                    return _fail(
-                        7,
-                        "all old fixtures/exports replay and verify",
-                        f"legacy replay mismatch: {case.get('id', 'unknown')}",
-                    )
+                mismatch, subjects = _historic_replay_violations(
+                    case_id, events, expected, content
+                )
+                if mismatch is not None:
+                    return _fail(7, title, mismatch)
+                recovered += subjects
+                hydrated += len(content)
             golden = load_ledger_golden_events().get("events")
             if not isinstance(golden, list):
-                return _fail(
-                    7,
-                    "all old fixtures/exports replay and verify",
-                    "legacy golden event export missing",
-                )
-            project_legacy_v2_replay(deepcopy(golden))
-        except Exception as exc:
-            return _fail(
-                7, "all old fixtures/exports replay and verify", type(exc).__name__
+                return _fail(7, title, "historic golden event export missing")
+            golden_content = corpus.get("golden_export_content")
+            if not isinstance(golden_content, Mapping):
+                return _fail(7, title, "golden export lacks a frozen content pin")
+            mismatch, _ = _historic_replay_violations(
+                "golden_export", golden, None, golden_content
             )
+            if mismatch is not None:
+                return _fail(7, title, mismatch)
+            hydrated += len(golden_content)
+        except Exception as exc:
+            return _fail(7, title, type(exc).__name__)
         return _pass(
             7,
-            "all old fixtures/exports replay and verify",
-            f"{len(cases)} replay corpus case(s) + golden export",
+            title,
+            f"{len(cases)} historic corpus case(s) + golden export replay through "
+            f"SurfaceStoreProjection + SurfaceContentProjection",
+            f"{recovered} frozen historic subject(s) still recovered by the "
+            f"canonical fold",
+            f"{hydrated} frozen historic subject(s) hydrate to exactly the state "
+            f"the vectors pin; every other replayed subject is pinned to hydrate "
+            f"nothing",
         )
 
     def _no_temporary_exemption_or_unsafe_default(self) -> ConformanceCondition:
@@ -446,6 +486,102 @@ def _blocked(number: int, title: str, *evidence: str) -> ConformanceCondition:
     return ConformanceCondition(
         number, title, ConformanceStatus.BLOCKED, tuple(evidence)
     )
+
+
+@dataclass(frozen=True)
+class _HistoricEvent:
+    """Envelope-lite adapter so raw corpus JSON can drive the content fold.
+
+    ``SurfaceContentProjection`` reads persisted events structurally
+    (``event_type`` / ``sequence_no`` / ``payload``) rather than importing a
+    transport envelope; the corpus stores those same three fields as plain JSON.
+    """
+
+    event_type: str
+    sequence_no: int
+    payload: Mapping[str, object]
+
+    @classmethod
+    def of(cls, raw: object) -> "_HistoricEvent":
+        record: Mapping[str, object] = raw if isinstance(raw, Mapping) else {}
+        sequence_no = record.get("sequence_no")
+        payload = record.get("payload")
+        return cls(
+            event_type=str(record.get("event_type", "")),
+            sequence_no=sequence_no if isinstance(sequence_no, int) else 0,
+            payload=payload if isinstance(payload, Mapping) else {},
+        )
+
+
+#: Canonical snapshot attribute ← frozen corpus key. The corpus spells an absent
+#: value ``null``; the fold spells it ``""``, because a total fold never invents
+#: an optional. The comparison normalizes that one direction and nothing else.
+_HISTORIC_SUBJECT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("kind", "kind"),
+    ("title", "title"),
+    ("connector", "source_connector"),
+    ("op", "source_op"),
+    ("payload_ref", "payload_ref"),
+)
+
+
+def _historic_replay_violations(
+    case_id: str,
+    events: list[object],
+    expected: Mapping[str, object] | None,
+    expected_content: Mapping[str, object],
+) -> tuple[str | None, int]:
+    """Replay one historic export through both canonical folds.
+
+    Returns the first violation (or ``None``) plus the number of frozen subjects
+    the canonical fold recovered. Each replay runs over its own deep copy and
+    runs twice, because a fold that mutated its input or answered differently on
+    the second pass would break reconnect and restart — which is the property
+    "replay and verify" actually names.
+
+    ``expected_content`` is the separate, stronger claim: determinism says the
+    fold agrees with itself, this says it agrees with a value a human froze.
+    Every replay carries one, including the exports that hydrate to ``{}`` —
+    "this old surface now shows nothing" is the release consequence most worth
+    stating out loud, and an empty pin is the only way to state it.
+    """
+
+    metadata = SurfaceStoreProjection.fold_raw(case_id, deepcopy(events))
+    if metadata != SurfaceStoreProjection.fold_raw(case_id, deepcopy(events)):
+        return (f"{case_id}: surface fold is not deterministic", 0)
+    content_events = [_HistoricEvent.of(event) for event in deepcopy(events)]
+    content = SurfaceContentProjection.fold(content_events)
+    if content != SurfaceContentProjection.fold(content_events):
+        return (f"{case_id}: content fold is not deterministic", 0)
+    if content != dict(expected_content):
+        return (
+            f"{case_id}: hydrated content drifted from its frozen vector: "
+            f"{sorted(content)} vs {sorted(expected_content)}",
+            0,
+        )
+    if expected is None:
+        return (None, 0)
+    frozen = expected.get("surfaces")
+    if not isinstance(frozen, list):
+        return (f"{case_id}: frozen expectation lacks surfaces", 0)
+    snapshots = {snapshot.surface_id: snapshot for snapshot in metadata.surfaces}
+    recovered = 0
+    for subject in frozen:
+        if not isinstance(subject, Mapping) or subject.get("origin") != "ledger":
+            continue
+        subject_id = subject.get("subject_id")
+        snapshot = snapshots.get(subject_id) if isinstance(subject_id, str) else None
+        if snapshot is None:
+            return (f"{case_id}: historic subject lost: {subject_id!r}", recovered)
+        for attribute, key in _HISTORIC_SUBJECT_FIELDS:
+            if getattr(snapshot, attribute) != (subject.get(key) or ""):
+                return (
+                    f"{case_id}: {subject_id} {attribute} drifted from its "
+                    f"frozen vector",
+                    recovered,
+                )
+        recovered += 1
+    return (None, recovered)
 
 
 def _dark_capability_violations() -> tuple[str, ...]:

@@ -39,6 +39,7 @@ from pydantic import ConfigDict
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from agent_runtime.capabilities.mcp.middleware.compose import ToolSchemaIdentity
+from agent_runtime.capabilities.mcp.middleware.observe_tool import McpCallBindingScope
 from agent_runtime.capabilities.operations.contracts import (
     OperationPresentationOutcome,
 )
@@ -75,6 +76,11 @@ class PresentValues:
     REF_TEMPLATE: Final = "mcp/{connector}/{tool}/{call_id}"
     ANONYMOUS_CALL: Final = "unattributed"
     OUTPUT_KEY: Final = "result"
+
+
+#: Read from kwargs, never added and never removed — see ``McpPresentedTool._call_id``.
+#: Same spelling ``McpObservedTool`` / ``McpCitedTool`` use.
+_TOOL_CALL_ID: Final = "tool_call_id"
 
 
 class McpPresentedTool(DelegatingTool):
@@ -133,7 +139,7 @@ class McpPresentedTool(DelegatingTool):
                     _PresentLog.SKIPPED_NO_OUTPUT, self.connector, self.tool_name
                 )
                 return
-            call_id = str(kwargs.get("tool_call_id") or PresentValues.ANONYMOUS_CALL)
+            call_id = self._call_id(kwargs)
             presenter = self.presenter or SurfaceLedgerOperationOutcomePresenter()
             await presenter.present(
                 OperationPresentationOutcome(
@@ -158,18 +164,64 @@ class McpPresentedTool(DelegatingTool):
             )
 
     @staticmethod
+    def _call_id(kwargs: dict[str, Any]) -> str:
+        """This call's id, or :data:`PresentValues.ANONYMOUS_CALL`.
+
+        **On the live agent path this is ALWAYS anonymous, and that is a
+        structural fact rather than a bug to patch here.** Three independent
+        doors into the tool layer are shut, each verified:
+
+        * the kwarg arrives only for a tool whose ``args_schema`` declares
+          ``Annotated[str, InjectedToolCallId]``. An MCP tool's ``args_schema``
+          is the server's raw JSON-Schema **dict**, not a ``BaseModel``, so
+          there is nowhere to hang the annotation — and synthesising a model to
+          host it would replace every argument the connector declares (see
+          ``ToolSchemaIdentity``);
+        * the OBSERVE binding reads the same absent kwarg, so it carries no id
+          either;
+        * the ToolCall itself never reaches a wrapper. A live probe showed the
+          outermost wrapper receiving bare arguments (``keys=[]``) — the call
+          envelope is unwrapped upstream.
+
+        So the id is joined where it EXISTS instead: ``SurfaceContentProjection``
+        matches a surface to its ``tool_result`` by ``(connector, op)`` and event
+        order. The kwarg is still read first because a caller that does supply a
+        real id (every unit test, and any future injected path) should win over
+        the positional join.
+        """
+
+        value = kwargs.get(_TOOL_CALL_ID)
+        if isinstance(value, str) and value:
+            return value
+        binding = McpCallBindingScope.current()
+        if binding is not None and binding.tool_call_id:
+            return str(binding.tool_call_id)
+        return PresentValues.ANONYMOUS_CALL
+
+    @staticmethod
     def _output_of(result: object) -> dict[str, object] | None:
         """Normalise a ``content_and_artifact`` return into the presenter's dict.
 
-        MCP tools return ``(content, artifact)``; the artifact is the structured
-        half and the only one worth projecting. A tool that returned a bare
-        value still presents — wrapped — because a connector that answers with
-        a scalar is not a reason to drop it off the canvas.
+        MCP tools return ``(content, artifact)``. The artifact is the structured
+        half and is preferred — but it exists only when the *server* sent
+        ``structuredContent``: ``langchain-mcp-adapters`` builds
+        ``MCPToolArtifact`` from that field alone and otherwise leaves the half
+        ``None`` (``tools.py::_convert_call_tool_result``). Reading the artifact
+        and giving up when it was missing therefore dropped every text-only
+        connector off the canvas entirely — no surface, no ledger event, for a
+        call that had succeeded and had a perfectly good answer in ``content``.
+
+        So the content half is a fallback, not a second-class citizen. ``None``
+        is reserved for the genuinely empty result — both halves absent. A
+        non-mapping payload (a text blob, a list of content blocks, a scalar) is
+        wrapped, because the shape a connector answers in is not a reason to
+        drop it off the canvas either.
         """
 
         payload: object = result
         if isinstance(result, tuple) and len(result) == 2:
-            payload = result[1]
+            content, artifact = result
+            payload = content if artifact is None else artifact
         if payload is None:
             return None
         if isinstance(payload, dict):

@@ -75,6 +75,58 @@ describe("recordAdapter.renderCurrent (golden: linear_get_issue)", () => {
   });
 });
 
+// `format: "badge"` in a RECORD. The curated Linear spec types `state.name` as
+// a badge and so does rung-0 inference for any low-cardinality token; before the
+// chip existed both landed in the same grey value register as the priority label
+// beside them, so the typing the backend does was invisible on screen.
+describe("recordAdapter badge fields", () => {
+  it("paints the badge-formatted field as a chip inside its value slot", () => {
+    render(recordAdapter.renderCurrent(LINEAR_RECORD_STATE));
+    const chip = screen.getByTestId("field-issue.state.name-badge");
+    expect(chip).toHaveTextContent("In Progress");
+    expect(screen.getByTestId("field-issue.state.name-value")).toContainElement(
+      chip,
+    );
+    expect(chip).toHaveAttribute("data-surface-format", "badge");
+  });
+
+  it("leaves every other format in the plain value register", () => {
+    const { container } = render(
+      recordAdapter.renderCurrent(LINEAR_RECORD_STATE),
+    );
+    for (const path of [
+      "issue.assignee.displayName", // user
+      "issue.priorityLabel", // unformatted
+      "issue.updatedAt", // datetime
+    ]) {
+      expect(screen.queryByTestId(`field-${path}-badge`)).toBeNull();
+    }
+    // Exactly one chip on the card — the one field the spec typed.
+    expect(
+      container.querySelectorAll('[data-surface-format="badge"]'),
+    ).toHaveLength(1);
+  });
+
+  // A field renders payload a connector sent us; a chip that could be activated
+  // would be tool output holding a control on our surface.
+  it("keeps the chip inert — never an anchor, never a button", () => {
+    const state: SurfaceState = {
+      spec: {
+        spec_version: 1,
+        archetype: "record",
+        source: { server: "s", tool: "t" },
+        title_path: "title",
+        fields: [{ label: "State", path: "state", format: "badge" }],
+      },
+      data: { title: "T", state: "https://evil.example.com/pwn" },
+    };
+    const { container } = render(recordAdapter.renderCurrent(state));
+    expect(screen.getByTestId("field-state-badge").tagName).toBe("SPAN");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("button")).toBeNull();
+  });
+});
+
 // AC2 — spec-less fallback (PRD-02: the no-spec view).
 describe("recordAdapter.renderCurrent (spec-less fallback)", () => {
   const dataOnly: SurfaceState = { data: LINEAR_RECORD_DATA };
@@ -85,8 +137,10 @@ describe("recordAdapter.renderCurrent (spec-less fallback)", () => {
       "data-spec",
       "absent",
     );
+    // A caption stating provenance, not an apology for a spec — the copy that
+    // announced an unmatched spec is deleted (generative-UI floor §3.8 / AC17).
     expect(screen.getByTestId("surface-no-spec-note")).toHaveTextContent(
-      "No spec matched this tool result",
+      "The payload as the tool sent it",
     );
     expect(screen.getByTestId("surface-generic-fields")).toBeInTheDocument();
     expect(screen.getByTestId("surface-read-only-footer")).toBeInTheDocument();

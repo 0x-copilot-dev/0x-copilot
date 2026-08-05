@@ -42,6 +42,23 @@ class GoldenFixtureMixin:
 class TestGoldenFixtures(GoldenFixtureMixin):
     """AC4 — the 3 golden fixtures round-trip through the pydantic model."""
 
+    def test_every_checked_in_spec_fixture_is_registered(self) -> None:
+        """A fixture nobody registered is a fixture nothing covers.
+
+        This inventory pin used to live in ``legacy_v2_replay_corpus.json``'s
+        ``checked_in_sources`` block, asserted by the legacy-replay suite that
+        this release wave deleted along with its reader. The block described a
+        reader that no longer exists, so it was removed rather than left as
+        contract data nothing verifies — but the guard inside it was real and
+        belongs here, next to the parametrization it protects: adding a
+        ``*.spec.json`` beside these three without listing it in
+        ``_GOLDEN_FIXTURES`` would silently exercise nothing.
+        """
+
+        checked_in = {path.name for path in _FIXTURES_DIR.glob("*.spec.json")}
+
+        assert checked_in == {name for name, _ in _GOLDEN_FIXTURES}
+
     @pytest.mark.parametrize(("name", "archetype"), _GOLDEN_FIXTURES)
     def test_fixture_round_trips(self, name: str, archetype: SurfaceArchetype) -> None:
         raw = self.load_fixture(name)

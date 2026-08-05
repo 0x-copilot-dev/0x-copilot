@@ -16,6 +16,8 @@ import pytest
 from agent_runtime.capabilities.surfaces import builtin
 from agent_runtime.capabilities.surfaces.builtin import (
     BuiltinSpecError,
+    ShapeTemplate,
+    ShapeTemplateIndex,
     load_builtin_specs,
 )
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceSpec
@@ -142,3 +144,133 @@ class TestBuiltinLoaderValidation:
             load_builtin_specs(tmp_path)
 
         assert "duplicate" in str(excinfo.value).lower()
+
+
+class TestShapeTemplateDerivation:
+    """A curated spec read as the set of paths it binds (floor PRD §3.4)."""
+
+    def test_table_column_paths_expand_under_the_items_marker(self) -> None:
+        spec = builtin.lookup("linear", "list_issues")
+        assert spec is not None
+
+        template = ShapeTemplate.from_spec(spec)
+
+        assert template.anchor == "issues[]"
+        assert "issues[].state.name" in template.paths
+        assert "team.name" in template.paths  # title_path stays absolute
+
+    def test_record_field_paths_stay_absolute(self) -> None:
+        spec = builtin.lookup("github", "get_issue")
+        assert spec is not None
+
+        template = ShapeTemplate.from_spec(spec)
+
+        assert template.anchor is None
+        assert "issue.user.login" in template.paths
+
+    def test_the_items_anchor_is_a_precondition_not_evidence(self) -> None:
+        # Scoring the anchor would let a payload buy back the very miss that
+        # makes the template unusable.
+        spec = builtin.lookup("linear", "list_issues")
+        assert spec is not None
+
+        template = ShapeTemplate.from_spec(spec)
+
+        assert template.anchor not in template.paths
+
+    def test_link_url_paths_are_excluded_from_the_evidence(self) -> None:
+        # Decoration, and its base differs by archetype (row-relative for a
+        # table, absolute for a record) — admitting it would put a guess inside
+        # the evidence.
+        spec = builtin.lookup("github", "list_issues")
+        assert spec is not None
+        assert spec.link is not None
+
+        template = ShapeTemplate.from_spec(spec)
+
+        assert spec.link.url_path not in template.paths
+        assert f"issues[].{spec.link.url_path}" not in template.paths
+
+    def test_every_shipped_template_is_usable(self) -> None:
+        # A curated spec binding fewer than three paths would be silently
+        # dropped from the index; none should be.
+        assert len(ShapeTemplateIndex(builtin.all_specs()).templates) == len(
+            builtin.all_specs()
+        )
+
+
+class ShapeMatchFixtureMixin:
+    @staticmethod
+    def linear_list_payload() -> dict[str, object]:
+        return {
+            "team": {"name": "Core"},
+            "issues": [
+                {
+                    "identifier": "ENG-1",
+                    "title": "Fix login",
+                    "state": {"name": "In Progress"},
+                    "assignee": {"displayName": "Sarah Chen"},
+                    "updatedAt": "2026-08-01T10:00:00Z",
+                }
+            ],
+        }
+
+
+class TestMatchByShape(ShapeMatchFixtureMixin):
+    def test_ac8_a_list_issues_shaped_payload_finds_the_curated_table(self) -> None:
+        assert builtin.match_by_shape(self.linear_list_payload()) == builtin.lookup(
+            "linear", "list_issues"
+        )
+
+    def test_matching_reads_the_payload_not_any_name(self) -> None:
+        # No server or tool name is passed at all — that is the whole point.
+        payload = self.linear_list_payload()
+        del payload["team"]
+
+        assert builtin.match_by_shape(payload) == builtin.lookup(
+            "linear", "list_issues"
+        )
+
+    def test_ac10_a_superficially_similar_payload_does_not_match(self) -> None:
+        # THE NEGATIVE TEST, at the matcher. Same `team` header, same `issues`
+        # array of objects — every coarse heuristic says Linear. Structurally
+        # it is an audit log and not one column path resolves.
+        audit_log = {
+            "team": {"name": "Core"},
+            "issues": [
+                {"event_id": "ev-1", "action": "deleted", "actor": {"email": "a@b.c"}}
+            ],
+        }
+
+        assert builtin.match_by_shape(audit_log) is None
+
+    def test_an_unrelated_payload_matches_nothing(self) -> None:
+        assert builtin.match_by_shape({"deployment": {"id": "d-1", "ok": True}}) is None
+
+    def test_matching_is_total_over_junk(self) -> None:
+        for payload in ("a string", 7, None, [], {}):
+            assert builtin.match_by_shape(payload) is None
+
+    def test_matching_is_deterministic(self) -> None:
+        # Ties must resolve by a fixed order, never by whatever order the spec
+        # directory happened to iterate in.
+        payload = self.linear_list_payload()
+        results = [builtin.match_by_shape(payload) for _ in range(20)]
+
+        assert all(result == results[0] for result in results)
+
+    def test_a_degenerate_template_is_kept_out_of_the_index(self) -> None:
+        # Two shared paths out of two is a coverage of 1.0 over a coincidence.
+        degenerate = SurfaceSpec.model_validate(
+            {
+                "spec_version": 1,
+                "archetype": "record",
+                "source": {"server": "seed:tiny", "tool": "get_thing"},
+                "title_path": "name",
+            }
+        )
+
+        index = ShapeTemplateIndex((degenerate,))
+
+        assert index.templates == ()
+        assert index.match({"name": "anything at all"}) is None

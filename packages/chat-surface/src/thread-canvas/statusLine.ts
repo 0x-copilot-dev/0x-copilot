@@ -1,138 +1,69 @@
 // Status-strip selector (Generative Surfaces v2, PRD-B2 D6 / FR-F2).
 //
-// `projectStatusLine` is a PURE PEER of `projectProvenance` over the SAME
-// `session.events` array (one-projector invariant). It folds to a single line
-// mirroring the run's latest consequential ledger beat — the strip pinned at the
-// bottom of the v2 canvas. Deterministic + total: malformed payloads degrade,
-// never throw; unknown event types are ignored.
+// `projectStatusLine` answers ONE question over the run's events: is a surface
+// still being built? Nothing else. It is a pure peer of `projectProvenance` over
+// the same `session.events` array (one-projector invariant), deterministic and
+// total — malformed payloads degrade, never throw.
+//
+// It used to mirror "the run's latest consequential ledger beat" as
+// `event_type · connector.op · ledgerId`, which drew a settled surface as
+//
+//     view.derived · incidents.list_incidents · r252·010
+//
+// Three things were wrong with that, and they are why this file is now small.
+// The op was already in the provenance footer one line above. The ledger id was
+// already there too, one sequence earlier, and neither coordinate means anything
+// to a reader. And `view.derived` — the only claim the line added — is what the
+// Generic/Shaped toggle between them already says in English, better, because
+// you can act on it. A settled surface has nothing left for this strip to say,
+// so it now says nothing.
+//
+// What remains is the one state no other element covers: the gap between a
+// surface being declared and its view landing.
 
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
-import { formatLedgerId } from "@0x-copilot/api-types";
 
 export interface StatusStripLine {
-  /** `"gate"` is a reserved stub — unreachable until PRD-C2 emits `gate.opened`. */
-  readonly kind: "idle" | "op" | "assembling" | "gate";
-  readonly text: string; // e.g. "read.executed · linear.get_issue · r7f3·042"
-  readonly ledgerId: string | null;
+  readonly kind: "idle" | "assembling";
 }
 
-const IDLE: StatusStripLine = { kind: "idle", text: "", ledgerId: null };
+const IDLE: StatusStripLine = { kind: "idle" };
+const ASSEMBLING: StatusStripLine = { kind: "assembling" };
 
-const CONSEQUENTIAL = new Set<string>([
-  "read.executed",
-  "surface.created",
-  "view.derived",
-]);
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function strOr(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value : fallback;
-}
-
-function seqOf(event: RuntimeEventEnvelope): number {
-  const raw = event.sequence_no;
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
-}
-
-function safeLedgerId(runId: string, seq: number): string | null {
-  if (runId === "" || seq < 1) return null;
-  try {
-    return formatLedgerId(runId, seq);
-  } catch {
-    return `r${runId}·${seq}`;
-  }
+function surfaceIdOf(event: RuntimeEventEnvelope): string {
+  const payload = event.payload;
+  if (payload === null || typeof payload !== "object") return "";
+  const raw = (payload as Record<string, unknown>).surface_id;
+  return typeof raw === "string" ? raw : "";
 }
 
 /**
- * Fold to the strip line. The LATEST consequential event
- * (`read.executed`/`surface.created`/`view.derived`) sets `kind: "op"` with
- * `event-name · connector.op · ledgerId`; if that surface is still `pending`
- * (no `view.derived` yet) the line reads `kind: "assembling"`; no v2 events ⇒
- * `kind: "idle"`. `connector.op` sourcing: `read.executed` carries them
- * directly; `surface.created` via `source{connector,op}`; `view.derived` carries
- * NEITHER, so resolve by joining to that surface's `surface.created` (same array,
- * by `surface_id`) — if unresolved, the `· connector.op` segment is omitted,
- * never fabricated.
+ * `assembling` while any surface has been declared (`surface.created`) but has
+ * not yet reached a view (`view.derived`); `idle` otherwise — including the
+ * settled case, where the strip renders nothing at all.
+ *
+ * Order-independent by construction: this is set membership, not a fold over
+ * the latest event, so the events array needs no sort and a late-arriving
+ * `surface.created` cannot make a finished surface look unfinished.
  */
 export function projectStatusLine(
   events: readonly RuntimeEventEnvelope[],
 ): StatusStripLine {
-  const ordered = [...events].sort((a, b) => seqOf(a) - seqOf(b));
+  const created = new Set<string>();
+  const viewed = new Set<string>();
 
-  // First pass: index each surface's `connector.op` (from its `surface.created`)
-  // and note whether it has reached a `view.derived` (else it is assembling).
-  const sourceBySurface = new Map<string, { connector: string; op: string }>();
-  const viewedSurfaces = new Set<string>();
-  let runId = "";
-  for (const event of ordered) {
-    if (runId === "" && typeof event.run_id === "string") runId = event.run_id;
-    const payload = asRecord(event.payload);
-    if (payload === null) continue;
+  for (const event of events) {
+    const surfaceId = surfaceIdOf(event);
+    if (surfaceId === "") continue;
     if (event.event_type === "surface.created") {
-      const surfaceId = strOr(payload.surface_id, "");
-      if (surfaceId === "") continue;
-      const source = asRecord(payload.source);
-      sourceBySurface.set(surfaceId, {
-        connector: source !== null ? strOr(source.connector, "") : "",
-        op: source !== null ? strOr(source.op, "") : "",
-      });
+      created.add(surfaceId);
     } else if (event.event_type === "view.derived") {
-      const surfaceId = strOr(payload.surface_id, "");
-      if (surfaceId !== "") viewedSurfaces.add(surfaceId);
+      viewed.add(surfaceId);
     }
   }
 
-  // Second pass: the latest consequential event wins.
-  let latest: RuntimeEventEnvelope | null = null;
-  for (const event of ordered) {
-    if (CONSEQUENTIAL.has(event.event_type)) latest = event;
+  for (const surfaceId of created) {
+    if (!viewed.has(surfaceId)) return ASSEMBLING;
   }
-  if (latest === null) return IDLE;
-
-  const payload = asRecord(latest.payload) ?? {};
-  const seq = seqOf(latest);
-  const ledgerId = safeLedgerId(latest.run_id ?? runId, seq);
-
-  // Resolve connector.op for the latest event by type.
-  let connector = "";
-  let op = "";
-  if (latest.event_type === "read.executed") {
-    connector = strOr(payload.connector, "");
-    op = strOr(payload.op, "");
-  } else if (latest.event_type === "surface.created") {
-    const source = asRecord(payload.source);
-    connector = source !== null ? strOr(source.connector, "") : "";
-    op = source !== null ? strOr(source.op, "") : "";
-  } else {
-    // view.derived — join to its surface.created for connector.op.
-    const surfaceId = strOr(payload.surface_id, "");
-    const src = sourceBySurface.get(surfaceId);
-    if (src !== undefined) {
-      connector = src.connector;
-      op = src.op;
-    }
-  }
-
-  const opSegment =
-    connector !== "" && op !== "" ? ` · ${connector}.${op}` : "";
-  const idSegment = ledgerId !== null ? ` · ${ledgerId}` : "";
-  const text = `${latest.event_type}${opSegment}${idSegment}`;
-
-  // "assembling" when the newest surface still has no derived view. Use the
-  // latest surface.created that has not yet been viewed.
-  let assembling = false;
-  for (const [surfaceId] of sourceBySurface) {
-    if (!viewedSurfaces.has(surfaceId)) assembling = true;
-  }
-
-  return {
-    kind: assembling ? "assembling" : "op",
-    text,
-    ledgerId,
-  };
+  return IDLE;
 }

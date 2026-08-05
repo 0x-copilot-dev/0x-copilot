@@ -14,7 +14,7 @@ import {
   within,
 } from "@testing-library/react";
 import { type ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { ConversationId } from "@0x-copilot/api-types";
 import type {
@@ -29,6 +29,11 @@ import type {
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
+import {
+  clearRegistry,
+  registerAdapter,
+  type SaaSRendererAdapter,
+} from "../../surfaces";
 import { RunDestination } from "./RunDestination";
 
 const CONV = "conv-1" as ConversationId;
@@ -293,6 +298,18 @@ function created(
   });
 }
 
+/** The ledger's other half. A surface is `tier: "pending"` — and the frame shows
+ *  its skeleton instead of the adapter — until a `view.derived` names the tier
+ *  the projector settled on, exactly as the live run does
+ *  (`view.derived {tier: shaped, basis: schema}`, FINDINGS §4.7). */
+function derived(
+  surface_id: string,
+  tier: "raw" | "generic" | "shaped",
+  basis: string,
+): Record<string, unknown> {
+  return v2Event("view.derived", { v: 1, surface_id, tier, basis });
+}
+
 function stream(
   transport: FakeTransport,
   events: readonly Record<string, unknown>[],
@@ -376,79 +393,35 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     });
   });
 
-  it("flag ON: a historic envelope replays through read-only renderer state", async () => {
+  it("flag ON: a staged write mounts its draft surface and stages nothing on its own", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
     await screen.findByTestId("thread-canvas");
-    // The compatibility reader is selective: only an explicit historic surface
-    // envelope becomes fixed-renderer state, preserving its old URI/state
-    // rather than upgrading it into a v2 stage or writable surface. The
-    // production default is Studio, so the tab strip remains available.
+    // `write.staged` is a LIVE event (`surfaces_v2/staging.py` emits it), and
+    // its surface is an ordinary ledger surface, so the D1 draft surface is
+    // what belongs on the canvas.
+    //
+    // This test used to assert the opposite — that the draft surface was
+    // SUPPRESSED — because a client compatibility reader classified the whole
+    // stream as historic the moment it saw `write.staged` (or a `connector:`
+    // subject, or a `call:` payload ref…). Every one of those signals matches
+    // current data, so the reader silently disabled a shipped feature on every
+    // real run. It is deleted; the assertion follows the code.
+    const subject = "message://gmail/create_draft/launch-1";
     stream(transport, [
-      {
-        event_id: "v1-1",
-        run_id: "run-1",
-        conversation_id: "conv-1",
-        sequence_no: 1,
-        event_type: "tool_result",
-        activity_kind: "tool",
-        payload: {
-          surface: {
-            surface_uri: "sheet-row://legacy/x",
-            archetype: "table",
-            state: { data: {} },
-          },
-        },
-        created_at: new Date().toISOString(),
-      },
+      created(subject, "message", "Launch draft"),
+      v2Event("write.staged", {
+        v: 1,
+        stage_id: "stage-launch-1",
+        surface_id: subject,
+        target: { connector: "gmail", op: "send" },
+        proposal_ref: "draft://launch-1/v1",
+      }),
     ]);
-    await waitFor(() => {
-      expect(screen.getByTestId("surface-placeholder")).toHaveTextContent(
-        "sheet-row",
-      );
-    });
-    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
-    expect(
-      transport.requests.some(
-        (request) =>
-          request.method === "POST" && request.path.includes("/stages/"),
-      ),
-    ).toBe(false);
-  });
-
-  it("flag ON: a historic staged write never becomes an actionable effect", async () => {
-    seq = 0;
-    const transport = new FakeTransport();
-    renderRun(transport, makeStore(), true);
-    await screen.findByTestId("thread-canvas");
-    const subject = "connector:gmail:draft:legacy-1";
-    stream(transport, [
-      created(subject, "message", "Historic launch draft"),
-      {
-        event_id: "legacy-stage-1",
-        run_id: "run-1",
-        conversation_id: "conv-1",
-        sequence_no: 2,
-        event_type: "write.staged",
-        activity_kind: "tool",
-        payload: {
-          v: 1,
-          stage_id: "legacy-stage-1",
-          surface_id: subject,
-          target: { connector: "gmail", op: "send" },
-          proposal_ref: "draft://legacy-1/v1",
-        },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    await waitFor(() => {
-      expect(screen.getByTestId("tc-surface-mount").dataset.tier).not.toBe(
-        "empty",
-      );
-    });
-    expect(screen.queryByTestId("effect-stage-card")).toBeNull();
-    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    await screen.findByTestId("tc-staged-draft");
+    // Rendering a proposal is not making one: the cockpit posts a decision only
+    // when the user presses one of this surface's buttons.
     expect(
       transport.requests.some(
         (request) =>
@@ -798,5 +771,162 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     await screen.findByText("Connect Linear"); // the gate tab is on the canvas
     expect(screen.queryByRole("button", { name: /approve/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /reject/i })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mount/tab identity — the whole join, driven end to end
+// ---------------------------------------------------------------------------
+//
+// The tests above stream synthetic short ids (`s_issue`) and stop at the tab
+// strip — which is exactly why nothing here caught the delivery break the live
+// journey found (FINDINGS §4.7). This block drives the whole join instead:
+// `surface.created` → `view.derived` → tab URI → `GET /surfaces` → the
+// adapter's `renderCurrent`, on a REAL projector-minted id
+// (`SurfaceProjector._build_uri`).
+//
+// It asserts one thing the previous shape could not offer: that the SAME string
+// travels every hop. The tab URI used to be a second identity — the surface id
+// wrapped as `<scheme>://surfaces-v2/<id>`, whose outer scheme came from the
+// ledger's lossy `kind` — so a `doc://` surface mounted the RECORD adapter, and
+// every state lookup had to decode before it could join. A decode that missed
+// did not error; it handed the renderer `undefined`, indistinguishable from a
+// surface with no data. There is no wrapper now, and this test fails the moment
+// one comes back.
+
+/** The id shape the projector mints: `<archetype>://<connector>/<tool>/<id>`. */
+const PROJECTOR_ID = "table://incidents/list_incidents/1532a206699e";
+
+describe("RunDestination — v2 mount identity (one id, no round-trip)", () => {
+  afterEach(() => {
+    // The rest of this file runs against an EMPTY registry (its assertions are
+    // about the tier-3 / placeholder floor), so an adapter registered here must
+    // not outlive the test that needed it.
+    clearRegistry();
+  });
+
+  /** Records every state the mount hands the adapter, and renders it. */
+  function recordingTableAdapter(seen: unknown[]): SaaSRendererAdapter {
+    return {
+      scheme: "table",
+      matches: (uri: string) => uri.startsWith("table://"),
+      renderCurrent: (state: unknown) => {
+        seen.push(state);
+        return <div data-testid="table-adapter">{JSON.stringify(state)}</div>;
+      },
+      renderDiff: () => <div data-testid="table-adapter-diff" />,
+      metadata: { origin: "first-party", schemaVersion: 1 },
+    };
+  }
+
+  function hydrating(transport: FakeTransport, surfaceId: string): void {
+    transport.requestHandler = async (req) => {
+      if (req.path.endsWith("/surfaces")) {
+        return {
+          surfaces: [
+            {
+              surface_id: surfaceId,
+              state: {
+                spec: { archetype: "table" },
+                data: { incidents: [{ id: "INC-4127" }] },
+              },
+            },
+          ],
+        };
+      }
+      return req.path.includes("/messages")
+        ? { messages: [] }
+        : {
+            latest_run_id: "run-1",
+            latest_run_id_any_status: "run-1",
+            runs: [],
+          };
+    };
+  }
+
+  it("delivers hydrated content to the adapter the surface id's scheme names", async () => {
+    seq = 0;
+    const seen: unknown[] = [];
+    registerAdapter(recordingTableAdapter(seen));
+    const transport = new FakeTransport();
+    hydrating(transport, PROJECTOR_ID);
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [
+      created(PROJECTOR_ID, "table", "Open incidents"),
+      derived(PROJECTOR_ID, "shaped", "schema"),
+    ]);
+
+    // The `table://` scheme on the id itself resolved the table adapter — no
+    // scheme was re-derived from the ledger's lossier `kind`.
+    const rendered = await screen.findByTestId("table-adapter");
+    expect(screen.getByTestId("tc-surface-mount").dataset.tier).toBe("primary");
+    // …and the payload arrived. This is the assertion that was false in
+    // production while ~9,000 unit tests passed.
+    expect(rendered).toHaveTextContent("INC-4127");
+    expect(seen.at(-1)).toEqual({
+      spec: { archetype: "table" },
+      data: { incidents: [{ id: "INC-4127" }] },
+    });
+  });
+
+  it("shows the tab and the card one identity colour, from the one URI", async () => {
+    seq = 0;
+    registerAdapter(recordingTableAdapter([]));
+    const transport = new FakeTransport();
+    hydrating(transport, PROJECTOR_ID);
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [
+      created(PROJECTOR_ID, "table", "Open incidents"),
+      derived(PROJECTOR_ID, "shaped", "schema"),
+    ]);
+
+    // `surfaceHueForUri` reads the same string the strip mounts, so the dot on
+    // the tab and the hue scope on the card cannot drift. `table` ⇒ jade.
+    await screen.findByTestId("table-adapter");
+    const tab = within(screen.getByTestId("tc-tabs")).getByRole("tab");
+    expect(tab.dataset.uri).toBe(PROJECTOR_ID);
+    expect(tab.dataset.surfaceHue).toBe("jade");
+    expect(screen.getByTestId("tc-surface-mount").dataset.surfaceHue).toBe(
+      "jade",
+    );
+  });
+
+  it("keeps ONE identity per surface — an old envelope mints no second tab", async () => {
+    seq = 0;
+    const seen: unknown[] = [];
+    registerAdapter(recordingTableAdapter(seen));
+    const transport = new FakeTransport();
+    hydrating(transport, PROJECTOR_ID);
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    // The stream carries a modern surface AND a pre-ledger `tool_result`
+    // presentation envelope. A client compatibility reader used to read the
+    // pair as proof the whole run was historic — and then mint
+    // `<scheme>://legacy-v2/<percent-encoded surface_id>` for the MODERN
+    // surface too, and resolve that tab's content from a map only the reader
+    // ever filled. Live trace: `stored keys: ["table://incidents/…"]` beside
+    // `resolve uri: "table://legacy-v2/table%3A%2F%2F…" resolved: false` — a
+    // fully hydrated table rendering as an empty card.
+    //
+    // The lane is deleted. The old envelope contributes no tab at all, and the
+    // ledger's surface is mounted under the one id its producer minted.
+    stream(transport, [
+      created(PROJECTOR_ID, "table", "Open incidents"),
+      derived(PROJECTOR_ID, "shaped", "schema"),
+      v2Event("tool_result", {
+        surface: {
+          surface_uri: "sheet-row://legacy/x",
+          archetype: "table",
+          state: { data: {} },
+        },
+      }),
+    ]);
+
+    const rendered = await screen.findByTestId("table-adapter");
+    expect(rendered).toHaveTextContent("INC-4127");
+    const tabs = within(screen.getByTestId("tc-tabs")).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.dataset.uri)).toEqual([PROJECTOR_ID]);
   });
 });

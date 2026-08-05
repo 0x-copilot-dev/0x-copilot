@@ -4,11 +4,19 @@
     "description": "Fetch a single Linear issue by identifier.",
     "input_schema": {
       "type": "object",
-      "properties": { "id": { "type": "string" } }
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
     },
     "output_shape": {
       "type": "object",
-      "properties": { "issue": { "type": "object" } }
+      "properties": {
+        "issue": {
+          "type": "object"
+        }
+      }
     }
   },
   "sample_output": {
@@ -16,29 +24,91 @@
       "id": "b1c2-uuid",
       "identifier": "ENG-1421",
       "title": "Fix login redirect loop",
-      "state": { "name": "In Progress" },
-      "assignee": { "displayName": "Sarah Chen" },
+      "state": {
+        "name": "In Progress"
+      },
+      "assignee": {
+        "displayName": "Sarah Chen"
+      },
       "priorityLabel": "High",
       "updatedAt": "2026-07-20T10:00:00Z",
       "url": "https://linear.app/acme/issue/ENG-1421"
     }
   },
-  "spec": {
+  "base_spec": {
     "spec_version": 1,
     "archetype": "record",
-    "source": { "server": "seed:linear", "tool": "get_issue" },
+    "source": {
+      "server": "seed:linear",
+      "tool": "get_issue"
+    },
     "title_path": "issue.title",
-    "subtitle_path": "issue.identifier",
     "fields": [
-      { "label": "State", "path": "issue.state.name", "format": "badge" },
+      {
+        "label": "ID",
+        "path": "issue.id",
+        "format": "text"
+      },
+      {
+        "label": "Identifier",
+        "path": "issue.identifier",
+        "format": "text"
+      },
+      {
+        "label": "State",
+        "path": "issue.state.name",
+        "format": "badge"
+      },
       {
         "label": "Assignee",
         "path": "issue.assignee.displayName",
         "format": "user"
       },
-      { "label": "Priority", "path": "issue.priorityLabel" },
-      { "label": "Updated", "path": "issue.updatedAt", "format": "datetime" }
+      {
+        "label": "Updated At",
+        "path": "issue.updatedAt",
+        "format": "datetime"
+      },
+      {
+        "label": "Priority Label",
+        "path": "issue.priorityLabel",
+        "format": "text"
+      }
+    ]
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "record",
+    "source": {
+      "server": "seed:linear",
+      "tool": "get_issue"
+    },
+    "title_path": "issue.title",
+    "subtitle_path": "issue.identifier",
+    "fields": [
+      {
+        "label": "State",
+        "path": "issue.state.name",
+        "format": "badge"
+      },
+      {
+        "label": "Assignee",
+        "path": "issue.assignee.displayName",
+        "format": "user"
+      },
+      {
+        "label": "Priority",
+        "path": "issue.priorityLabel"
+      },
+      {
+        "label": "Updated",
+        "path": "issue.updatedAt",
+        "format": "datetime"
+      }
     ],
-    "link": { "label": "Open in Linear", "url_path": "issue.url" }
+    "link": {
+      "label": "Open in Linear",
+      "url_path": "issue.url"
+    }
   }
 }
