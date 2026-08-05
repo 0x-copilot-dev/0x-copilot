@@ -2053,6 +2053,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // server projection then reconciles it (a server-resolved approval always
   // wins). The two approval consumers — TcChat (the ask card) and the rail
   // (Approvals tab + count) — both read this ONE projection.
+  // Approvals already decided in this mount. See `resolveApproval` — this is a
+  // ref because it has to be readable synchronously, which state is not.
+  const decidedRef = useRef<Set<string>>(new Set());
   const [localDecisions, setLocalDecisions] =
     useState<ReadonlyMap<string, RunApprovalDecision>>(EMPTY_DECISIONS);
 
@@ -2083,13 +2086,34 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       decision: RunApprovalDecision,
       edits?: SurfaceEdits,
     ): void => {
+      // ONE DECISION PER APPROVAL, ENFORCED BEFORE THE POST.
+      //
+      // The guard used to live inside the state updater, which deduped the
+      // OVERLAY and nothing else: the request below fired unconditionally, so a
+      // double-click sent two `/decision` POSTs for the same approval — two
+      // dispatches of a write the user agreed to once. The optimistic overlay
+      // retires the card almost immediately, which is why this was survivable
+      // rather than obvious, but "almost" is doing real work in that sentence:
+      // both clicks of a fast double-click land in the same tick, and React
+      // state read from this closure is still the pre-click value for both.
+      //
+      // Hence a ref, not state. It is the only thing here that updates
+      // SYNCHRONOUSLY, so it is the only thing that can answer "has this
+      // approval already been decided" while the second click is still in the
+      // same tick as the first.
+      //
+      // Any prior decision blocks, not just an identical one. Changing your
+      // mind is not a thing an approval supports — by the time the first POST
+      // lands the run has already resumed or stopped — so a second, DIFFERENT
+      // decision is a bug to be dropped, not a correction to be forwarded.
+      if (decidedRef.current.has(approvalId)) {
+        return;
+      }
+      decidedRef.current.add(approvalId);
       // Optimistic overlay uses the terminal decision ("approved"/"rejected");
       // `approve_with_edits` resolves to `approved` server-side (api-types §PRD-09a),
       // so an edited approval clears the diff the same way a plain approve does.
       setLocalDecisions((prev) => {
-        if (prev.get(approvalId) === decision) {
-          return prev;
-        }
         const next = new Map(prev);
         next.set(approvalId, decision);
         return next;

@@ -1076,6 +1076,65 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     );
   });
 
+  // ONE WRITE PER YES.
+  //
+  // The dedupe used to live inside the `setLocalDecisions` updater, so it
+  // deduped the optimistic OVERLAY while the POST fired unconditionally — a
+  // double-click dispatched the write twice. Both clicks are issued inside a
+  // single `act` here on purpose: that is the case the old guard could not
+  // catch, because React state read from the handler's closure is still the
+  // pre-click value for both of them, and it is the case a real double-click
+  // produces. Clicking twice across two `act` blocks would pass either way,
+  // since the card has already retired by then — which is exactly why this went
+  // unnoticed.
+  it("sends exactly one decision for a double-clicked approve", async () => {
+    const transport = await renderWithApproval();
+    const posts = (): number =>
+      transport.requests.filter(
+        (r) =>
+          r.method === "POST" &&
+          r.path === "/v1/agent/approvals/appr-1/decision",
+      ).length;
+
+    const approve = screen.getByTestId(approvalApproveTid("appr-1"));
+    act(() => {
+      fireEvent.click(approve);
+      fireEvent.click(approve);
+    });
+
+    await waitFor(() => expect(posts()).toBe(1));
+    // …and it stays one after the card retires and the overlay settles.
+    await waitFor(() =>
+      expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
+    );
+    expect(posts()).toBe(1);
+  });
+
+  it("drops a second, DIFFERENT decision rather than forwarding it", async () => {
+    // Reject-after-approve is not a correction: by the time the first POST
+    // lands the run has resumed, so a second decision would ask the server to
+    // un-resume something already in flight. The guard blocks any prior
+    // decision, not only an identical one.
+    const transport = await renderWithApproval();
+    const approve = screen.getByTestId(approvalApproveTid("appr-1"));
+    const reject = screen.getByTestId(approvalRejectTid("appr-1"));
+    act(() => {
+      fireEvent.click(approve);
+      fireEvent.click(reject);
+    });
+
+    await waitFor(() => {
+      const bodies = transport.requests
+        .filter(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision",
+        )
+        .map((r) => r.body);
+      expect(bodies).toEqual([{ decision: "approved" }]);
+    });
+  });
+
   it("approving in chat retires the card, clears the count, and POSTs the decision", async () => {
     const transport = await renderWithApproval();
 

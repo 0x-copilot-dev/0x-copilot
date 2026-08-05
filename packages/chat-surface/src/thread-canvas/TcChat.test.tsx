@@ -1321,7 +1321,14 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
       ),
     );
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
-    expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
+    // Nowhere else either. Asserting the absence of the old strip's testid
+    // proved nothing once that strip was deleted — no product code emits the
+    // id, so the assertion passed over any markup at all, including a strip
+    // that came back under a different name. The invariant is structural, so
+    // it is checked structurally.
+    expect(
+      document.querySelectorAll("[data-testid^=tc-chat-approval]"),
+    ).toHaveLength(0);
   });
 });
 
@@ -2240,9 +2247,33 @@ describe("TcChat — inline approvals", () => {
 
     const card = await screen.findByTestId("tc-chat-approval-item-appr-1");
     expect(screen.getByTestId("tc-chat-messages").contains(card)).toBe(true);
-    // The two strips are gone, in BOTH modes.
-    expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
-    expect(screen.queryByTestId("tc-chat-conf-cards")).toBeNull();
+    // The two strips are gone — but NOT asserted by their old testids, which no
+    // product code emits any more: `queryByTestId("tc-chat-approvals")` is null
+    // against any markup whatsoever, so it would keep passing if a pinned strip
+    // returned under a new name, which is precisely the regression it was meant
+    // to guard. What the strips actually violated was structural — an approval
+    // node living outside the transcript — so that is what is checked.
+    const transcript = screen.getByTestId("tc-chat-messages");
+    // ONE sanctioned exception, named rather than pattern-excluded: the
+    // reachability line above the composer. It exists BECAUSE the card can now
+    // scroll away, which is the thing the pinned strip used to prevent, and it
+    // is a line of chrome rather than a decision surface — you cannot approve
+    // from it. Naming it is the point: anything else that appears outside the
+    // transcript fails here, including a strip returning under a new testid.
+    const WAITING_LINE = "tc-chat-approvals-waiting";
+    const approvalNodes = [
+      ...document.querySelectorAll("[data-testid^=tc-chat-approval]"),
+    ].filter((node) => node.getAttribute("data-testid") !== WAITING_LINE);
+    expect(approvalNodes.length).toBeGreaterThan(0);
+    for (const node of approvalNodes) {
+      expect({
+        testId: node.getAttribute("data-testid"),
+        inTranscript: transcript.contains(node),
+      }).toEqual({
+        testId: node.getAttribute("data-testid"),
+        inTranscript: true,
+      });
+    }
   });
 
   it("renders a pending approval even while the messages are still loading", async () => {

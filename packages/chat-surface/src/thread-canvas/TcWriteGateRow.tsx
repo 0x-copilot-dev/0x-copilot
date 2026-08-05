@@ -93,7 +93,18 @@ export interface TcWriteGateRowProps {
    * to open and no host listening. See `toggle` for why that matters.
    */
   readonly onReview?: () => void;
-  /** Disables both actions while a decision is in flight. */
+  /**
+   * Disables every control while a decision is in flight.
+   *
+   * NOT passed by the Run cockpit, and that is correct rather than an omission:
+   * it resolves optimistically, so the card is already retiring by the time a
+   * `busy` frame could render. The double-submit that flag would have guarded
+   * is prevented where it actually happens — `RunDestination.resolveApproval`
+   * drops any second decision for an approval before the POST — because a
+   * disabled button is a race the host can lose, and an idempotence check is
+   * not. This exists for a host that awaits the POST before re-rendering; the
+   * irreversible lane's canvas card is the one that does.
+   */
   readonly busy?: boolean;
   /**
    * The call's arguments — the evidence the decision is made ON. Rendered only
