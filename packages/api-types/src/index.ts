@@ -2770,6 +2770,18 @@ export interface ApprovalRequestedPayload {
   tool_name?: string;
   arguments?: Record<string, unknown>;
   risk_level?: "low" | "medium" | "high" | "critical" | string;
+  /**
+   * The PDP's own verdict on what the call does, mirroring
+   * `McpToolActionClass` server-side. This is the ONLY field that can say
+   * `destructive`; `read_only` collapses to a boolean and `risk_level` answers
+   * a different question (whether a write reaches the user's real files, which
+   * is why a filesystem write is `high` and a connector write a connector can
+   * undo is `medium`). A client deciding whether to withhold one-click approval
+   * needs both, and neither alone.
+   *
+   * Optional because it is emitted per-lane, not on every approval.
+   */
+  op_class?: "read" | "write" | "destructive" | string;
   read_only?: boolean;
   grant_options?: string[];
   message?: string;

@@ -1322,24 +1322,24 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
 //
 // `TcWriteGateRow.test.tsx` proves the rule against a literal `irreversible`
 // prop, which proves the COMPONENT and nothing about whether anything ever sets
-// it. The predicate in between is `isIrreversible`, reading
-// `category.access` for the substring "destructive" — so a rename of that
-// field, or a projection that stops emitting the label, silently returns false
-// for every approval and every component test stays green while the destructive
-// lane never renders. That is the "a fix can land on a dead branch" shape, and
-// these are the tests that would see it.
+// it. The predicate in between is `isIrreversible`, so a projection that stops
+// setting the flag silently returns false for every approval while every
+// component test stays green and the destructive lane never renders. That is
+// the "a fix can land on a dead branch" shape, and these are the tests that
+// would see it.
 //
-// Worth stating plainly: today NEITHER producer of `category.access` can emit
-// "destructive" — the approval projection writes READ/ACTION and the web tool
-// labels write READ/WRITE/ACTION — so in production this lane is unreachable
-// and these tests drive a label only a fixture can supply. They pin the WIRE
-// (predicate → card), which is the half that can rot silently; making the label
-// real needs a backend allow-list change.
+// This block used to drive `category.access: "DESTRUCTIVE"` — a label neither
+// producer of that field could emit, so it pinned the wire over a value only a
+// fixture could supply. The flag is now set by `buildIrreversible` from
+// `op_class` / `risk_level`, and `approvalProjection.test.ts` pins THOSE against
+// real payload shapes. Between the two files the chain is covered end to end:
+// wire → projection → predicate → card.
 describe("TcChat — a destructive ask reaches the card's destructive lane", () => {
   const destructive = (over: Partial<TcChatApproval> = {}) =>
     approval({
       title: "Delete the launch channel",
-      category: { vendor: "SLACK", access: "DESTRUCTIVE" },
+      category: { vendor: "SLACK", access: "WRITE" },
+      irreversible: true,
       ...over,
     });
 
