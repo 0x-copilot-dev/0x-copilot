@@ -2213,6 +2213,21 @@ class RuntimeEventPresentationProjector:
             "header",
             "question",
             "hint",
+            # The RISK AXIS. A parked write borrows this wire shape to reuse the
+            # resume plumbing, so dropping these two here is what made the
+            # client's whole irreversible lane unreachable: the card withholds
+            # one-click Approve for a destructive op, and no payload it could
+            # ever receive said "destructive". `op_class` is the PDP's own
+            # verdict (`McpToolActionClass`: read | write | destructive) and
+            # `risk_level` distinguishes a write that reaches the user's real
+            # files ("high") from one a connector can undo ("medium").
+            #
+            # Both are already public on the sibling `approval_requested` path,
+            # so this widens no contract — it stops one lane from being the
+            # exception. Neither is free text: both are producer-side enums, and
+            # `_text` keeps a hostile payload from smuggling anything larger.
+            "op_class",
+            "risk_level",
         ):
             value = cls._text(payload.get(key))
             if value is not None:

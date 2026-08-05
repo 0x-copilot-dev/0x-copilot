@@ -137,6 +137,17 @@ export interface TcChatApproval {
     readonly vendor: string;
     readonly access: string | null;
   } | null;
+  /**
+   * The call cannot be undone from inside the app ⇒ no one-click Approve, and
+   * the "can't be undone" chip. Decided by the approval projection, which is
+   * the one place that reads the wire; see `isIrreversible`.
+   *
+   * Optional so a host that projects approvals its own way is unaffected, and
+   * absent means REVERSIBLE — the same fail-open the old predicate had. That is
+   * the right default for a flag that only ever ADDS friction: defaulting true
+   * would put every ordinary approval behind an extra click on no evidence.
+   */
+  readonly irreversible?: boolean;
   /** Inset key/value frame. */
   readonly params: readonly ActivityParam[];
   /**
@@ -1271,29 +1282,25 @@ function renderAskCard(
 /**
  * Whether this ask cannot be undone from inside the app.
  *
- * The PDP knows — it sorts every tool onto a read / write / destructive axis —
- * but `op_class` is NOT on the `gate.opened` ledger row, so the canvas fold
- * fails closed to "write" for every gate and cannot answer this. The projected
- * approval's access label is the only signal that survives to the client today,
- * so an unlabelled ask reads as reversible: it keeps the ordinary Approve
- * button rather than inventing a severity nobody asserted.
+ * A pass-through now, and that is the fix. This used to substring-match
+ * `category.access` for "destructive" — an axis whose only producers emit
+ * `READ` / `WRITE` / nothing — so it was ALWAYS FALSE outside a hand-built
+ * fixture, and the card's destructive lane (no one-click Approve, the "can't be
+ * undone" chip) could not fire for any payload a user could actually provoke.
+ * Every test of that lane passed, on fixtures, over a dead branch.
  *
- * Which means, today, ALWAYS FALSE outside a hand-built fixture: the two
- * producers of `category.access` emit only `READ` / `WRITE` / nothing (the
- * approval projection's `buildCategory`, derived from the payload's `read_only`
- * boolean) and `READ` / `WRITE` / `ACTION` (the deprecated web tool labels).
- * Nothing can currently say "destructive", so the card's destructive lane — no
- * one-click Approve, the "can't be undone" chip — is unreachable from a real
- * payload. Do not read a green test suite as evidence that it works: fixing it
- * is a backend allow-list change (the gate's `op_class` is dropped at
- * `_ask_a_question_requested_payload`) plus a client read, not a card change.
- * Correcting the axis word from `ACTION` to `WRITE` did not move that lane one
- * way or the other — neither string has ever contained "destructive".
+ * It took two changes, neither of them in this card: the server stopped
+ * dropping `op_class` / `risk_level` at `_ask_a_question_requested_payload` (a
+ * parked write borrows that wire shape), and `buildIrreversible` in the
+ * approval projection now decides it where the wire is read. The reasoning
+ * about WHICH field means what lives there, with the payloads.
+ *
+ * Kept as a function rather than inlining `approval.irreversible` because
+ * `RunDestination` calls it for the gate lane too, and one predicate is what
+ * stops the two surfaces disagreeing about whether a write can be undone.
  */
 export function isIrreversible(approval: TcChatApproval): boolean {
-  return (approval.category?.access ?? "")
-    .toLowerCase()
-    .includes("destructive");
+  return approval.irreversible === true;
 }
 
 function renderQuestionCard(

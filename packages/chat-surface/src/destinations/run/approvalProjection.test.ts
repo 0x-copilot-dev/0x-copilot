@@ -12,6 +12,7 @@ import {
   overlayApprovalDecisions,
   projectApprovals,
   toApprovalsQueue,
+  type RunApproval,
   type RunApprovalDecision,
 } from "./approvalProjection";
 
@@ -581,5 +582,103 @@ describe("projectApprovals — the preview and the params frame", () => {
     expect(approval.params).toEqual([
       { label: "channel", value: "#launch-aurora" },
     ]);
+  });
+});
+
+// THE LANE THAT COULD NOT FIRE.
+//
+// `isIrreversible` used to substring-match `category.access` for "destructive",
+// and neither producer of that field can emit the word — so the card's
+// destructive lane (no one-click Approve, the "can't be undone" chip) was
+// unreachable for every payload a user could provoke, while the tests of it
+// passed on fixtures. These drive the shapes the SERVER actually emits.
+describe("projectApprovals — the irreversible axis (what the wire really says)", () => {
+  const ask = (payload: Record<string, unknown>): RunApproval =>
+    projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "appr-risk",
+          approval_kind: "mcp_tool",
+          display_name: "Delete 14 issues",
+          server_name: "linear",
+          ...payload,
+        },
+      }),
+    ]).approvals[0]!;
+
+  it("reads the PDP's own verdict — op_class is the only field that says destructive", () => {
+    expect(ask({ op_class: "destructive" }).irreversible).toBe(true);
+    expect(ask({ op_class: "write" }).irreversible).toBe(false);
+    expect(ask({ op_class: "read" }).irreversible).toBe(false);
+    // Producer-side enum, but a wire value is still a string: case must not be
+    // the difference between withholding one-click approval and granting it.
+    expect(ask({ op_class: "DESTRUCTIVE" }).irreversible).toBe(true);
+  });
+
+  it("treats a write that reaches the user's real files as irreversible", () => {
+    // `stream_events` emits high for a filesystem write and medium for a
+    // connector write, and the card's own copy is why that distinction matters:
+    // "you can undo this from the connector" is true of a Linear issue and a
+    // lie about a file this app has already written.
+    expect(ask({ read_only: false, risk_level: "high" }).irreversible).toBe(
+      true,
+    );
+    expect(ask({ read_only: false, risk_level: "medium" }).irreversible).toBe(
+      false,
+    );
+    expect(ask({ read_only: true, risk_level: "low" }).irreversible).toBe(
+      false,
+    );
+    // Above the levels this client knows about. Ignoring a severity you do not
+    // recognise is failing OPEN, on the one flag whose job is adding friction.
+    expect(ask({ risk_level: "critical" }).irreversible).toBe(true);
+  });
+
+  it("needs both fields — neither lane emits the other's signal", () => {
+    // The MCP gate carries op_class and no risk_level; the filesystem lane
+    // carries risk_level and no op_class. Reading either one alone silently
+    // under-protects the other lane, which is why `buildIrreversible` reads both.
+    expect(
+      ask({ op_class: "destructive", risk_level: undefined }).irreversible,
+    ).toBe(true);
+    expect(ask({ op_class: undefined, risk_level: "high" }).irreversible).toBe(
+      true,
+    );
+  });
+
+  it("fails OPEN when the axis is absent, and says so", () => {
+    // Deliberate: this flag only ever ADDS a click. Defaulting it true would
+    // park every ordinary approval behind an expand on no evidence — and the
+    // producer already fails closed to `write` when its classifier is missing,
+    // so the conservative choice has been made upstream where the facts are.
+    expect(ask({}).irreversible).toBe(false);
+    expect(ask({ op_class: null, risk_level: null }).irreversible).toBe(false);
+    expect(ask({ op_class: 7, risk_level: [] }).irreversible).toBe(false);
+  });
+
+  it("never downgrades on replay, so a redelivered frame cannot hand back Approve", () => {
+    // Same rule `presentation` follows. A resend that omits the axis must not
+    // turn a destructive ask back into a one-click approve mid-decision.
+    const first = envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "appr-risk",
+        approval_kind: "mcp_tool",
+        display_name: "Delete 14 issues",
+        op_class: "destructive",
+      },
+    });
+    const resend = envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "appr-risk",
+        approval_kind: "mcp_tool",
+        display_name: "Delete 14 issues",
+      },
+    });
+    expect(projectApprovals([first, resend]).approvals[0]?.irreversible).toBe(
+      true,
+    );
   });
 });

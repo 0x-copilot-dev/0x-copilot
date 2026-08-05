@@ -99,6 +99,18 @@ export interface RunApproval {
     readonly vendor: string;
     readonly access: string | null;
   } | null;
+  /**
+   * The call cannot be undone from inside the app, so the card withholds
+   * one-click approval and sends the reviewer to the payload first.
+   *
+   * Decided HERE rather than in the view because this is the one place that
+   * reads the wire, and the wire answers it with two fields that mean different
+   * things — see `buildIrreversible`. The view used to decide it by substring-
+   * matching the access axis for "destructive", a word that axis cannot
+   * produce, which left the entire safety lane unreachable in production while
+   * every test of it passed on fixtures.
+   */
+  readonly irreversible: boolean;
   /** Inset key/value frame projected from `payload.arguments` (primitives only). */
   readonly params: readonly ActivityParam[];
   /** Connector / target preview ("#launch-aurora"); null when absent. */
@@ -183,6 +195,7 @@ interface MutableApproval {
   catalogSlug: string | null;
   connectorSlug: string | null;
   category: { vendor: string; access: string | null } | null;
+  irreversible: boolean;
   params: ActivityParam[];
   target: string | null;
   presentation: ApprovalPresentation | null;
@@ -335,6 +348,10 @@ function reduceRequested(
     connectorSlug:
       stringField(payload.connector_slug) ?? existing?.connectorSlug ?? null,
     category: buildCategory(event),
+    // Sticky like `presentation`: a redelivered frame that omits the axis
+    // must never DOWNGRADE an approval we already know is irreversible, or a
+    // replay would hand back the one-click Approve the first frame withheld.
+    irreversible: buildIrreversible(event) || (existing?.irreversible ?? false),
     // Filtered against the preview so the draft is not printed twice — once as
     // the card's preview frame and again as an untruncated `<dd>` in the params
     // grid. See `buildParams`.
@@ -412,6 +429,7 @@ function freeze(m: MutableApproval): RunApproval {
     catalogSlug: m.catalogSlug,
     connectorSlug: m.connectorSlug,
     category: m.category,
+    irreversible: m.irreversible,
     params: m.params,
     target: m.target,
     presentation: m.presentation,
@@ -526,11 +544,9 @@ function resolveApprovalKind(event: RuntimeEventEnvelope): RunApprovalKind {
  * arrives. If that allow-list is ever widened, add the read here and prefer the
  * server's word — it is the only thing that could ever say `action`.
  *
- * Also NOT reachable from here: `destructive`. That axis lives on the gate's
- * `op_class`, which `_ask_a_question_requested_payload` drops, which is why
- * `TcChat.isIrreversible` — a substring match for "destructive" — is unreachable
- * in production. This function could not emit it before and cannot now; see the
- * note on `isIrreversible`.
+ * NOT decided here: whether the call is irreversible. That is a different
+ * question from the access axis — see `buildIrreversible` — and conflating the
+ * two is what left the card's safety lane unreachable.
  */
 function buildCategory(
   event: RuntimeEventEnvelope,
@@ -542,6 +558,40 @@ function buildCategory(
     return null;
   }
   return { vendor, access: accessAxis(payload.read_only) };
+}
+
+/**
+ * Can this be undone from inside the app?
+ *
+ * The wire answers with two fields that are not the same question, and the card
+ * needs both because neither lane emits both:
+ *
+ * - `op_class` is the PDP's verdict (`McpToolActionClass`: read | write |
+ *   destructive). It is the ONLY field that can ever say `destructive`, and it
+ *   rides the MCP gate.
+ * - `risk_level` says whether a write reaches the user's real files. A
+ *   filesystem write is `high` (nothing in this app can put the bytes back); a
+ *   connector write is `medium`, because the copy we show the user — "you can
+ *   undo this from the connector" — is true there and false for a file.
+ *
+ * So a connector DELETE is caught by `op_class`, a filesystem WRITE by
+ * `risk_level`, and reading either one alone silently under-protects the other
+ * lane. `critical` is included because the contract admits it and a client that
+ * ignores a level above the one it knows is failing open.
+ *
+ * Unknown or absent ⇒ false, deliberately. This gates whether the reviewer must
+ * open the payload before approving; defaulting it TRUE would park every
+ * ordinary approval behind an extra click on no evidence, and the producer
+ * already fails closed to `write` when its classifier is missing.
+ */
+function buildIrreversible(event: RuntimeEventEnvelope): boolean {
+  const payload = event.payload;
+  const opClass = stringField(payload.op_class)?.toLowerCase() ?? null;
+  if (opClass === "destructive") {
+    return true;
+  }
+  const risk = stringField(payload.risk_level)?.toLowerCase() ?? null;
+  return risk === "high" || risk === "critical";
 }
 
 /**
