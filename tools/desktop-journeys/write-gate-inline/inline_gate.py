@@ -169,7 +169,18 @@ def _read_gate(session: DriverSession) -> dict:
         risk: row ? row.getAttribute('data-risk') : null,
         title: text('[data-testid=tc-write-gate-title]'),
         connector: text('[data-testid=tc-write-gate-connector]'),
-        reviewLabel: text('[data-testid=tc-write-gate-review]'),
+        // The ACCESSIBLE NAME, not textContent. The two lanes label this
+        // control differently: an irreversible write keeps a worded button
+        // ("Review →" / "Hide", because the disclosure is its only way
+        // forward), while a reversible one is an icon-only chevron whose name
+        // lives in aria-label. Reading textContent reported the empty string
+        // for the lane production actually emits, so this field looked
+        // captured and proved nothing.
+        reviewLabel: (function () {
+          var el = document.querySelector('[data-testid=tc-write-gate-review]');
+          if (!el) return null;
+          return el.getAttribute('aria-label') || (el.textContent || '').trim();
+        })(),
         bodyPresent: !!document.querySelector('[data-testid=tc-write-gate-body]'),
         bodyParams: text('[data-testid=tc-write-gate-body-params]'),
         bodyReversibility: text('[data-testid=tc-write-gate-body-reversibility]'),
