@@ -863,7 +863,12 @@ describe("TcWriteGateRow — no presentation at all", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("tc-write-gate-review"));
-    const html = container.innerHTML;
+    // React's `useId` for the accessible description is unique PER MOUNT, so
+    // two renders of identical props differ by that value alone. Normalising it
+    // is the point of this test surviving, not a weakening of it: the claim is
+    // "null and undefined produce the same DOM", and an id React guarantees to
+    // differ is the one thing that cannot be part of that claim.
+    const html = container.innerHTML.replace(/_r_[0-9a-z]+_/g, "_rID_");
     unmount();
     return html;
   }
@@ -1093,5 +1098,50 @@ describe("TcWriteGateRow — the header's shrink order", () => {
         `${hostSheet} must not own the ask card's class names`,
       ).toBe(false);
     }
+  });
+});
+
+// THE ANNOUNCEMENT, NOT THE MARKUP.
+//
+// Asserted through `toHaveAccessibleDescription` rather than by querying the
+// hidden span, because the span existing proves nothing about what is
+// announced.
+//
+// WHAT THIS DOES NOT COVER, stated so nobody reads it as more than it is: it
+// does NOT pin the choice of `aria-describedby` over `aria-description`.
+// Swapping them keeps all three tests green — jest-dom resolves both — so the
+// reason for that choice is real-world AT support, which jsdom does not model,
+// and it is recorded in the component instead. Do not "simplify" it to
+// `aria-description` on the strength of a green suite here; the last time that
+// was tried the computed description in a real browser was measurably empty.
+describe("TcWriteGateRow — what a screen reader is told", () => {
+  it("names the ask and says the run is waiting on it", () => {
+    row();
+    const card = screen.getByTestId("tc-write-gate");
+    expect(card).toHaveAccessibleName(
+      "Approval: Create an issue in Parth-test",
+    );
+    expect(card).toHaveAccessibleDescription(/paused on this decision/i);
+    expect(card).toHaveAccessibleDescription(/nothing runs until you/i);
+  });
+
+  it("makes irreversibility audible, not just visible", () => {
+    // `data-risk` is not an ARIA attribute and the risk dot is `aria-hidden`,
+    // so before this the only non-visual carrier of "this cannot be undone" was
+    // the chip's text — one node, easily missed, and absent entirely from the
+    // card's own description.
+    row({ irreversible: true });
+    expect(screen.getByTestId("tc-write-gate")).toHaveAccessibleDescription(
+      /cannot be undone/i,
+    );
+  });
+
+  it("does not describe a reversible write as undoable-only-via-the-payload", () => {
+    // The reversible arm must NOT inherit the destructive sentence; a card that
+    // over-warns on every ordinary write teaches people to ignore the warning.
+    row();
+    expect(screen.getByTestId("tc-write-gate")).not.toHaveAccessibleDescription(
+      /cannot be undone/i,
+    );
   });
 });

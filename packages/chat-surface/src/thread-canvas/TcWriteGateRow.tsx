@@ -40,7 +40,7 @@
 //
 // Kit-only styling; framework-agnostic (no window/document/fetch).
 
-import { useState, type ReactElement } from "react";
+import { useId, useState, type ReactElement } from "react";
 
 import type { ApprovalPresentation } from "../approvals/presentation";
 import type { ActivityParam } from "../approvals/types";
@@ -197,6 +197,18 @@ export function TcWriteGateRow({
   const payloadSeen = open && hasWriteGateEvidence(params, presentation);
   const bodyApprove = irreversible && payloadSeen;
   const risk = irreversible ? "high" : "normal";
+  const descriptionId = useId();
+  // DERIVED, not a canned reassurance. The old copy was a standing claim about
+  // the product ("You're always asked before Copilot acts outside this chat"),
+  // which is reassuring and says nothing about the decision actually in front
+  // of you. This says what is true of THIS ask, and in doing so carries the
+  // fact that is otherwise visual-only: `data-risk` is not an ARIA attribute
+  // and the dot is `aria-hidden`, so without this the difference between a
+  // reversible write and one nothing here can undo reached a screen-reader user
+  // through the chip alone.
+  const description = irreversible
+    ? "The run is paused on this decision. This cannot be undone from inside the app, so approving requires opening the payload first."
+    : "The run is paused on this decision. Nothing runs until you approve or decline.";
   // Resolved ONCE and used by both approve buttons. Two reads of the same field
   // would be two chances to disagree, and a header promising "Approve & sign"
   // over a body button that says "Approve" is two controls claiming to do
@@ -244,7 +256,24 @@ export function TcWriteGateRow({
       // attribute and the dot is decorative, so the chip below is what
       // actually carries "destructive" to a screen reader.
       aria-label={`Approval: ${title}`}
+      // …and `aria-label` alone was the whole announcement: an approval read as
+      // its title plus three buttons, with no statement of what pressing one
+      // does. The description below restores what `ConsentCard` carried before
+      // the three shapes were consolidated into this one.
+      //
+      // TWO THINGS ABOUT ITS FORM, both learned the hard way and both worth
+      // keeping. It is `aria-describedby` pointing at a visually-hidden node,
+      // NOT `aria-description` — the latter is ARIA 1.3 and thinly implemented,
+      // and with it the computed accessible description was measurably EMPTY,
+      // i.e. deleted for screen readers rather than merely unpainted. And the
+      // hidden node uses the clip-rect idiom, never `display:none` /
+      // `visibility:hidden` / `width:0`, each of which removes the node from
+      // the accessibility tree and lands in the same place.
+      aria-describedby={descriptionId}
     >
+      <span id={descriptionId} className="apc__a11y-only">
+        {description}
+      </span>
       <div
         className="tc-write-gate__hd"
         data-testid="tc-write-gate-row"
