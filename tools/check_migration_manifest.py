@@ -10,7 +10,10 @@ Usage:
     python tools/check_migration_manifest.py            # check all services
     python tools/check_migration_manifest.py --write    # regenerate manifests
 
-Exit code: 0 on success, 1 on drift, 2 on usage error.
+Exit code: 0 on success, 1 on drift, 2 on usage error (a service declared in
+SERVICE_MIGRATION_DIRS whose migrations dir is missing). Both non-zero codes
+fail CI; they differ so the log says whether to run `--write` or to fix this
+tool's own configuration.
 """
 
 from __future__ import annotations
@@ -24,9 +27,23 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+# Services that own SQL migrations. `ai-backend` deliberately does not: the
+# Postgres storage backend and its 54 yoyo migrations were removed wholesale
+# (e03840ed), leaving the in-memory and file-native adapters, so there is no
+# schema for it to lock. Product persistence lives in `backend` -- see the
+# root CLAUDE.md service-boundary rules.
+#
+# A directory listed here and missing on disk is a hard error, not a skip. That
+# is the point: this tuple went stale for exactly as long as nothing ran the
+# gate, and a silent skip would have hidden it for longer.
 SERVICE_MIGRATION_DIRS: tuple[Path, ...] = (
     REPO_ROOT / "services" / "backend" / "migrations",
-    REPO_ROOT / "services" / "ai-backend" / "migrations",
+)
+
+# Derived, never hand-listed: `--service` choices and the declared dirs cannot
+# drift apart, because adding a service above is the only way to add a choice.
+SERVICE_CHOICES: tuple[str, ...] = tuple(
+    path.parents[0].name for path in SERVICE_MIGRATION_DIRS
 )
 
 
@@ -148,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--service",
         action="append",
-        choices=("backend", "ai-backend"),
+        choices=SERVICE_CHOICES,
         help="Limit to one or more services (default: all).",
     )
     args = parser.parse_args(argv)
@@ -160,13 +177,16 @@ def main(argv: list[str] | None = None) -> int:
             path for path in SERVICE_MIGRATION_DIRS if path.parents[0].name in wanted
         )
 
-    failures = 0
+    # Report the worst status, not merely "something failed". The codes are
+    # ordered by severity (2 structural > 1 drift > 0 clean), so `max` keeps the
+    # distinction this module's docstring promises: drift is a normal, fixable
+    # CI failure (`--write` and commit), while a missing declared dir means the
+    # tool's own configuration is wrong and no `--write` will fix it.
+    worst = 0
     for migrations_dir in selected:
-        rc = check_or_write(migrations_dir, write=args.write)
-        if rc != 0:
-            failures += 1
+        worst = max(worst, check_or_write(migrations_dir, write=args.write))
 
-    return 1 if failures else 0
+    return worst
 
 
 if __name__ == "__main__":

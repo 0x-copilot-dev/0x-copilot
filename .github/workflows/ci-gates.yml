@@ -119,20 +119,5 @@ jobs:
       - name: Reader methods contain no write SQL
         run: python tools/check_reader_methods.py
 
-      # Scoped to `backend` deliberately, and this is the ONLY gate here that is
-      # scoped at all. tools/check_migration_manifest.py hardcodes two service
-      # migration dirs; services/ai-backend/migrations does not exist, so its
-      # per-service check returns 2 ("missing migrations dir") and main folds
-      # that into a process exit of 1 -- an unscoped invocation is red on a clean
-      # tree even though it verified `backend` correctly on the way past. That is
-      # a defect in the gate's own configuration, not a finding about the
-      # repository, and a required check cannot be wired red. The manifest for
-      # the service that HAS migrations is fully enforced, which is strictly more
-      # than the zero enforcement this gate had yesterday.
-      #
-      # Fix and then delete `--service backend`: either create
-      # services/ai-backend/migrations with a MANIFEST.lock, or drop that path
-      # from SERVICE_MIGRATION_DIRS. Until one of those happens, widening this
-      # line wedges every PR.
       - name: Migration manifests
-        run: python tools/check_migration_manifest.py --service backend
+        run: python tools/check_migration_manifest.py
