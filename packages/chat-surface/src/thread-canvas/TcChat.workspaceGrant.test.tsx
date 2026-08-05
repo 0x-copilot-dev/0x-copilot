@@ -7,7 +7,7 @@
 // resume the run with no grant, which is precisely the failure this whole path
 // exists to remove (an ungranted read answered with an empty listing).
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -110,11 +110,18 @@ describe("TcChat — mid-run folder grant ask", () => {
         "/Users/parthpahwa/Downloads",
       );
       expect(screen.getByText(/Let the agent read Downloads\?/)).toBeTruthy();
-      // Never the `/decision` Approve/Reject card.
+      // Never the `/decision` Approve/Decline ask card.
+      //
+      // Both names are ones product code really emits: `tc-write-gate` is the
+      // ask card's root and `tc-chat-approval-approve-appr-fs-1` is the exact
+      // approve `renderAskCard` would give THIS approval id. Naming the id is
+      // what keeps the negative honest — a global name would go null the moment
+      // anyone renamed it, and this test would then pass over the very card it
+      // exists to keep out, whose approve resumes the run with no folder grant.
+      expect(screen.queryByTestId("tc-write-gate")).toBeNull();
       expect(
         screen.queryByTestId("tc-chat-approval-approve-appr-fs-1"),
       ).toBeNull();
-      expect(screen.queryByTestId("tc-chat-conf-approve-appr-fs-1")).toBeNull();
     },
   );
 
@@ -147,7 +154,7 @@ describe("TcChat — mid-run folder grant ask", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     // And emphatically not a `/decision` approve, which would resume the run
-    // without a grant.
+    // without a grant. Named for THIS approval, so the check cannot go quiet.
     expect(
       screen.queryByTestId("tc-chat-approval-approve-appr-fs-1"),
     ).toBeNull();
@@ -183,8 +190,14 @@ describe("TcChat — mid-run folder grant ask", () => {
     expect(
       screen.queryByTestId("tc-chat-workspace-grant-appr-fs-1"),
     ).toBeNull();
+    // The positive half of the pair above: an approval with no grant block DOES
+    // reach the ordinary ask card, so the negative assertions are not passing
+    // because the card is unreachable from this file.
+    const card = within(
+      screen.getByTestId("tc-chat-approval-appr-fs-1"),
+    ).getByTestId("tc-write-gate");
     expect(
-      screen.getByTestId("tc-chat-approval-approve-appr-fs-1"),
+      within(card).getByTestId("tc-chat-approval-approve-appr-fs-1"),
     ).toBeTruthy();
   });
 });

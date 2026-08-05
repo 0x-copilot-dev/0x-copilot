@@ -153,21 +153,122 @@ that wires three already-built pieces:
 `useRunSession.events` — projected once inside `ThreadCanvas`. The out-of-canvas
 consumers use PURE selectors over that same array, never a second SSE subscription or
 projector: `projectSubagents` (fleets + the Agents-tab "N live" count),
-`projectApprovals`/`toApprovalsQueue` (the in-chat `ApprovalCard`/conf-card + the
+`projectApprovals`/`toApprovalsQueue` (the in-chat ask card + the
 Approvals-tab count), and `projectRunTodos` (the pinned checklist). `RunWorkspaceRail`
 recomposes the workspace `[Chat · Sources · Agents · Approvals]` tabs and receives the
 single `TcChat` as an injected `chatSlot`, so mode/tab switches never spawn a second
 chat mount.
 
-**Approvals are inline.** Every approval card (confirmation, question, workspace
-grant, MCP auth, and the receipt a resolved one leaves behind) interleaves into the
-transcript through `mergeStream`, anchored on `TcChatApproval.createdAtMs`. The two
-pinned strips are **deleted**; `renderApprovalItem` is the single renderer, and `mode`
-picks only between the Studio 4-zone card and the Focus conf-card. Two consequences
-worth keeping: a resolved approval STAYS as its receipt (dropping it would reflow the
-thread and erase who decided what), and `MessageListBody`'s load/error notice must
-never early-return past the cards — inline, that hid a parked run's only way out.
-Reachability moved to a `tc-chat-approvals-waiting` line above the composer.
+**Approvals are inline, and there is ONE ask card.** Every approval card (the ask,
+question, workspace grant, MCP auth) interleaves into the transcript through
+`mergeStream`, anchored on `TcChatApproval.createdAtMs`. The two pinned strips are
+**deleted** and `renderApprovalItem` is the single renderer — it now takes **no
+`mode`**, because Studio and Focus render byte-identical approvals (pinned by
+`TcChat.test.tsx` "renders the SAME card in Focus as in Studio, to the byte").
+
+What it branches on is the **kind** of ask, never a skin for it, because each kind
+resolves through a different seam: an ask → Approve/Decline and the host `/decision`
+POST; a question → an ANSWER the wire carries; a folder ask → `WorkspaceGrantPort`
+and an OS dialog; a connector ask → `McpAuthPort` and an OAuth redirect. Collapsing
+any of those into the ask card posts the wrong thing (for an `mcp_discovery:` id, a
+`/decision` POST 404s and resumes a run that still has no grant). Branch ORDER is
+load-bearing: the write gate goes first because its wire shape is `ask_a_question`,
+so the question branch would otherwise render a yes/no about a real side effect as a
+free-text box.
+
+The ask itself is `TcWriteGateRow` — one compact card for a parked MCP write AND for
+an ordinary `tool_action`/`mcp_tool`. Every gate-specific prop is optional and
+degrades to omission, never to an empty frame. Three safety properties live in it and
+must not dissolve: the header is identical collapsed and expanded (the actions never
+move out from under a cursor); **no approve control for an irreversible write is
+reachable in one click from the collapsed card** — which is why the header approve
+(one click) and the body approve (only after the payload rendered) are DISTINCT
+testids, since one shared name would make every "no blind approval" assertion pass
+over a button that is one click away; and **the header never clips its own decision**.
+
+That last one is a layout rule with a safety consequence. The frame is
+`overflow: hidden`, so an over-wide row is cut at its END — where the buttons are — and
+the row carries one unbounded string, the `linear · write` meta, whose vendor half is
+an arbitrary-length MCP server slug. It is therefore the item that gives way
+(`flex: 0 1 auto`, `min-width: 0`, ellipsis) while the chip and `.tc-write-gate__actions`
+stay `flex: none`. Anything added to that row must be bounded or shrinkable; an
+unbounded `flex: none` item makes Approve the thing that disappears in a narrow column,
+which is an approval nobody can act on. jsdom runs no layout, so
+`TcWriteGateRow.test.tsx` asserts the shrink CONTRACT via `getComputedStyle` against
+the real `review-surfaces.css` — that contract is what decides the clipping order.
+
+The meta's second half is the ACCESS AXIS, and it is not a word this package chooses.
+`buildCategory` derives it from the payload's `read_only` boolean exactly as the
+producer does (`stream_events._approval_category`: `True → READ`, `False → WRITE`), and
+emits **nothing** when the payload carried no boolean — an `mcp_auth` gate names a
+connector and says nothing about access, so the card renders the bare vendor. The
+richer three-value `ApprovalCategory` (`read`/`write`/`action`) never reaches the
+client: `_approval_requested_payload` drops `category` and `vendor` from the
+allow-list. Do not print a third word here without widening that allow-list first.
+
+Two ghosts to not resurrect. `renderStudioApprovalCard`/`renderConfCard` rendered the
+SAME `ConsentCard`, differing in a wrapper testid, two button testids, one sentence of
+visually-hidden copy, and a `.conf-card` class **that has no CSS rule anywhere in the
+product** — a mode split that painted nothing. And the comments here and in `TcChat`
+called the Studio arm "the 4-zone `ApprovalCard`" for a long time while `ApprovalCard`
+sat unused; it survives on the barrel only for the deprecated web `ApprovalTool` path,
+and its `.atlas-approval-card*` CSS is declared only in `apps/frontend/src/styles.css`,
+so anything that mounts it on desktop renders unstyled.
+
+Two consequences worth keeping: a SETTLED approval renders nothing, either way it went — the
+`ApprovalReceipt` line it used to collapse to was bare text in a transcript made of
+cards, restating the tool card below it when approved and standing as the only
+non-card row when denied; the decision survives on the run's event stream, which the
+Approvals tab and the audit views project from. And `MessageListBody`'s load/error
+notice must never early-return past the cards — inline, that hid a parked run's only
+way out. Reachability moved to a `tc-chat-approvals-waiting` line above the composer.
+When an approval renders nothing, its `<li>` wrapper is skipped too — an empty row
+still contributes the stream's margin and would leave the gap the receipt used to
+fill. What stays a card is the ASK: the surface that takes Approve/Decline is a card
+and must not degrade into a line of text.
+
+**The testid scheme, before you rename anything here.** One rule: **anything that
+takes a DECISION is named after the approval it decides; everything structural on the
+card keeps a global name.** Two asks parked at once is a drawn state, and a global
+`tc-write-gate-approve` is ambiguous in it — Playwright refuses an ambiguous selector,
+so "two cards parked" becomes a decision that never happened.
+
+| Node                                                  | testid                               | driven by                                                         |
+| ----------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- |
+| ask wrapper                                           | `tc-chat-approval-<id>`              | 7 fs journeys, by the `tc-chat-approval-` PREFIX                  |
+| stream `<li>`                                         | `tc-chat-approval-item-<id>`         | `agent-todos/todos_with_gate.py`                                  |
+| Approve (header, reversible only)                     | `tc-chat-approval-approve-<id>`      | jA/jF/jH/jI/jJ, by the `tc-chat-approval-approve-` PREFIX         |
+| Decline                                               | `tc-chat-approval-reject-<id>`       | `connectors/gate_audit_events.py`, EXACT with the id interpolated |
+| Approve (body, irreversible only)                     | `tc-chat-approval-body-approve-<id>` | `write-gate-inline/inline_gate.py`                                |
+| card root / row / title / connector / review / body\* | `tc-write-gate*` (global)            | `write-gate-inline/inline_gate.py`, at DOCUMENT level             |
+
+Three consequences that are load-bearing:
+
+- The body approve is `…-body-approve-<id>`, **never** `…-approve-body-<id>`: the
+  latter would match `[data-testid^=tc-chat-approval-approve-]`, and the five journeys
+  that press Approve by that prefix would press the one control an irreversible write
+  withholds until its payload has rendered. The safety property is carried by the
+  SHAPE of the name, not only by the branch that renders the button.
+- `TcWriteGateRow` takes those three names as props (`approveTestId` / `declineTestId`
+  / `bodyApproveTestId`) and `renderAskCard` supplies them. The `tc-write-gate-*`
+  defaults are for a STANDALONE mount and are exercised only by
+  `TcWriteGateRow.test.tsx`; nothing in the mounted app emits them, so a negative
+  assertion written against one passes **vacuously**. There is no second, unscoped
+  alias — do not add one.
+- Query controls through `within(wrapper)` anyway. The scoped name proves the button
+  exists; `within` proves it belongs to the card carrying that id.
+
+`tc-chat-conf-*` and `tc-chat-approval-receipt-*` have no emitter at all. A leftover
+negative on either passes vacuously — re-point it at something product code really
+paints (`.atlas-approval-receipt` for the receipt) or delete it.
+
+When you assert "this approval did NOT render the ask card", prefer the CARD over the
+id: `tc-write-gate` is `TcWriteGateRow`'s own root and is stamped for every ask, every
+id, both hosts, so a rename of the id-scoped decision names cannot silence it. Pair it
+with a POSITIVE assertion naming the card that did render (`tc-chat-mcp-auth-<id>` +
+`tc-chat-connector-<id>` for a connector consent, `tc-chat-workspace-grant-*` for a
+folder ask). A negative alone only says "not that name"; the pair says which of the
+branches in `renderApprovalItem` was taken.
 
 **The agent todo panel.** `TcTodoList` renders the agent's working checklist, the ONLY
 pinned element above the composer inside `TcChat` — single-mount, identical in Focus

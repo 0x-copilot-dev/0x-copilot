@@ -1,7 +1,7 @@
 // PR-3.10 — approval projection off the SINGLE run event stream.
 //
 // Source: docs/plan/desktop-redesign/phase-3/PRD.md
-//   FR-3.22 (in-chat 4-zone `ApprovalCard` + `ApprovalReceipt`; Focus `.conf-card`)
+//   FR-3.22 (the in-chat ask card — ONE shape, Studio and Focus alike)
 //   FR-3.12 (Approvals tab pending count badge)
 //   FR-3.3  (single projection — no second SSE subscription / projector)
 //   §2      ("approvals as content" — the pending approval is the conversation)
@@ -12,7 +12,7 @@
 // subscription and instantiates NO second `useEventProjector`; `RunDestination`
 // memoizes it against `session.events` and threads the result into the two
 // approval consumers that live OUTSIDE `ThreadCanvas`:
-//   (a) the in-chat `ApprovalCard` / `.conf-card` in `TcChat`  → `approvals`
+//   (a) the in-chat ask card in `TcChat`                      → `approvals`
 //   (b) the Approvals-tab pending count in `RunWorkspaceRail`  → `approvalsQueue`
 //
 // The reduction mirrors the host-owned approval reducer in
@@ -31,6 +31,7 @@ import {
   parseConnectorTrust,
   parseWorkspaceGrantRequest,
   type ApprovalPresentation,
+  type ApprovalPreview,
   type ConnectorTrust,
   type WorkspaceGrantRequest,
 } from "../../approvals/presentation";
@@ -46,8 +47,8 @@ export type RunApprovalDecision = "approved" | "rejected";
 export type RunApprovalKind = ApprovalsQueueItem["approvalKind"];
 
 /**
- * One approval seen on the run stream, projected for BOTH the in-chat
- * `ApprovalCard`/`.conf-card` and the Approvals-tab queue. The presentational
+ * One approval seen on the run stream, projected for BOTH the in-chat ask
+ * card and the Approvals-tab queue. The presentational
  * subset (`approvalId`/`title`/`reason`/`summary`/`category`/`params`/
  * `resolved`/`decision`/`createdAtMs`) is structurally compatible with
  * `TcChatApproval` so `RunDestination` can hand it straight to `TcChat` without
@@ -88,10 +89,15 @@ export interface RunApproval {
    * connect; `null` on a custom MCP server, which has no catalog identity.
    */
   readonly connectorSlug: string | null;
-  /** Vendor·access pill ({ vendor: "SLACK", access: "ACTION" }); null when unknown. */
+  /**
+   * Vendor·access pill ({ vendor: "SLACK", access: "WRITE" }); null when the
+   * payload names no connector at all. `access` is separately nullable, because
+   * the wire can name the connector without saying what the call does to it —
+   * see `buildCategory`, and note that the card degrades one segment at a time.
+   */
   readonly category: {
     readonly vendor: string;
-    readonly access: string;
+    readonly access: string | null;
   } | null;
   /** Inset key/value frame projected from `payload.arguments` (primitives only). */
   readonly params: readonly ActivityParam[];
@@ -176,7 +182,7 @@ interface MutableApproval {
   serverId: string | null;
   catalogSlug: string | null;
   connectorSlug: string | null;
-  category: { vendor: string; access: string } | null;
+  category: { vendor: string; access: string | null } | null;
   params: ActivityParam[];
   target: string | null;
   presentation: ApprovalPresentation | null;
@@ -285,6 +291,13 @@ function reduceRequested(
     order.push(approvalId);
   }
   const existing = byId.get(approvalId);
+  // Resolved BEFORE the params frame, because the frame is filtered against it.
+  // A redelivered event carrying no shape must not erase a shape an earlier
+  // frame established — replay would otherwise flatten a rows card to params.
+  const presentation =
+    parseApprovalPresentation(payload.presentation) ??
+    existing?.presentation ??
+    null;
   byId.set(approvalId, {
     approvalId,
     title:
@@ -322,14 +335,23 @@ function reduceRequested(
     connectorSlug:
       stringField(payload.connector_slug) ?? existing?.connectorSlug ?? null,
     category: buildCategory(event),
-    params: buildParams(payload.arguments),
+    // Filtered against the preview so the draft is not printed twice — once as
+    // the card's preview frame and again as an untruncated `<dd>` in the params
+    // grid. See `buildParams`.
+    //
+    // Keyed on the DECLARED layout, byte-for-byte the same predicate the body
+    // renders on (`TcWriteGatePayload`: layout === "preview"). Filtering on
+    // `preview !== null` alone looks equivalent and is not: a presentation that
+    // carries a preview block under any OTHER layout would have the argument
+    // removed here and never drawn there, so the one string the user is
+    // approving would vanish from the card entirely. Whatever hides a param must
+    // be the same condition that shows it.
+    params: buildParams(
+      payload.arguments,
+      presentation?.layout === "preview" ? presentation.preview : null,
+    ),
     target: buildTarget(payload.arguments),
-    // A redelivered event carrying no shape must not erase a shape an earlier
-    // frame established — replay would otherwise flatten a rows card to params.
-    presentation:
-      parseApprovalPresentation(payload.presentation) ??
-      existing?.presentation ??
-      null,
+    presentation,
     connectorTrust: mergeConnectorTrust(
       parseConnectorTrust(payload),
       existing?.connectorTrust,
@@ -472,25 +494,97 @@ function resolveApprovalKind(event: RuntimeEventEnvelope): RunApprovalKind {
   return kind;
 }
 
+/**
+ * The `linear · write` meta: which connector, and what the call does to it.
+ *
+ * WHAT THE WIRE ACTUALLY CARRIES. The producer computes a real three-value axis
+ * — `ApprovalCategory` = `read` | `write` | `action`
+ * (`services/ai-backend/src/runtime_api/schemas/common.py`) — and spreads it
+ * onto the approval payload as `category`
+ * (`stream_events.McpApprovalMetadata`). It does not reach us: the
+ * client-visible allow-list
+ * (`runtime_api/schemas/events.py::_approval_requested_payload`) lists neither
+ * `category` nor `vendor`. What DOES survive that projection is the boolean the
+ * producer derived the axis from — `read_only` — so the axis is derived here
+ * exactly as `stream_events._approval_category` derives it:
+ * `True → READ`, `False → WRITE`. Nothing is invented and nothing diverges;
+ * both sides read one field one way.
+ *
+ * "ACTION" was what an absent-or-false `read_only` used to print, and it was
+ * wrong twice over. `_approval_category` never returns `ACTION` for a boolean
+ * at all, so a Linear issue creation — a write, `read_only: false` — rendered
+ * `linear · action`, contradicting the design AND the backend. And it printed a
+ * word over payloads that say nothing about access whatsoever: an
+ * `mcp_auth_required` gate carries a `server_id` and no `read_only`, so a
+ * connector the run merely wants to CONNECT to was labelled as taking an
+ * action. An unstated axis is now omitted — the card degrades a segment at a
+ * time and renders the bare vendor.
+ *
+ * NOT read here: `payload.category`. It is a real producer field, not an
+ * invented one, but the allow-list above deletes it on every path, so a read
+ * would be a dead branch whose green test would read as evidence the field
+ * arrives. If that allow-list is ever widened, add the read here and prefer the
+ * server's word — it is the only thing that could ever say `action`.
+ *
+ * Also NOT reachable from here: `destructive`. That axis lives on the gate's
+ * `op_class`, which `_ask_a_question_requested_payload` drops, which is why
+ * `TcChat.isIrreversible` — a substring match for "destructive" — is unreachable
+ * in production. This function could not emit it before and cannot now; see the
+ * note on `isIrreversible`.
+ */
 function buildCategory(
   event: RuntimeEventEnvelope,
-): { vendor: string; access: string } | null {
+): { vendor: string; access: string | null } | null {
   const payload = event.payload;
   const vendor =
     stringField(payload.server_name) ?? stringField(payload.server_id);
   if (vendor === null) {
     return null;
   }
-  const access = payload.read_only === true ? "READ" : "ACTION";
-  return { vendor, access };
+  return { vendor, access: accessAxis(payload.read_only) };
+}
+
+/**
+ * READ / WRITE / nothing — the producer's own mapping, plus an honest gap.
+ *
+ * Strict identity on both booleans rather than a truthiness test, so "absent"
+ * and "false" stay distinguishable: they are the difference between "the wire
+ * did not say" and "the wire said this writes".
+ */
+function accessAxis(value: unknown): string | null {
+  if (value === true) return "READ";
+  if (value === false) return "WRITE";
+  return null;
 }
 
 const PARAM_LIMIT = 6;
 
-function buildParams(value: unknown): ActivityParam[] {
+/**
+ * The key/value frame, from the raw call arguments — minus the one the card
+ * already shows in full.
+ *
+ * These params are NOT the server's curated allow-list (which deliberately omits
+ * `body` / `text` / `description`); they are the first few primitive top-level
+ * arguments in object order, with no length cap. So a 2000-character draft that
+ * the preview frame renders — scrollable, pre-wrapped, with its own volumetric
+ * meta line — would otherwise ALSO land in the grid as an untruncated `<dd>`,
+ * printing the same string twice with the second copy in the worse shape.
+ *
+ * Matched on the VALUE rather than by re-declaring the producer's list of
+ * preview keys (`text`/`body`/`message`/…): the question being answered is
+ * literally "would this render the same string twice", and duplicating a
+ * server-side key list here is how the two drift. `startsWith` rather than
+ * equality because the producer trims and caps the preview at 2000 characters,
+ * so a longer argument shares only its prefix.
+ */
+function buildParams(
+  value: unknown,
+  preview: ApprovalPreview | null,
+): ActivityParam[] {
   if (typeof value !== "object" || value === null) {
     return [];
   }
+  const shown = preview === null ? null : preview.text;
   const out: ActivityParam[] = [];
   for (const [label, raw] of Object.entries(value as Record<string, unknown>)) {
     if (out.length >= PARAM_LIMIT) {
@@ -501,6 +595,13 @@ function buildParams(value: unknown): ActivityParam[] {
       typeof raw === "number" ||
       typeof raw === "boolean"
     ) {
+      if (
+        shown !== null &&
+        typeof raw === "string" &&
+        raw.trim().startsWith(shown)
+      ) {
+        continue;
+      }
       out.push({ label, value: String(raw) });
     }
   }

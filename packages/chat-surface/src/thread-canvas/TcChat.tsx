@@ -30,15 +30,21 @@ import {
   type FleetProjection,
   type SubagentActivityRecord,
 } from "../subagents";
-// PR-3.10 — in-chat approvals. Reuses the hoisted Phase-1E consent family: the
-// 4-zone `ApprovalCard` (pending, Studio) and the collapsed `ApprovalReceipt`
-// (resolved). Presentation only — resolution is the injected onApprove/onReject
-// (host owns the POST, D28). Focus mode renders a local `.conf-card` variant.
+// PR-3.10 — in-chat approvals. EVERY pending ask that is decided with
+// Approve/Decline — a parked write and an ordinary tool action alike — renders
+// as the same compact `TcWriteGateRow`, in both modes. A settled approval
+// renders nothing; the `ApprovalReceipt` line it used to collapse to is gone.
+// Presentation only — resolution is the injected onApprove/onReject (host owns
+// the POST, D28).
+//
+// What survives from the Phase-1E consent family here is the set of asks that
+// are NOT Approve/Decline: a question you answer, a folder you hand over, a
+// connector you sign in to. `ConsentCard` is no longer mounted by this file
+// (and the 4-zone `ApprovalCard` these comments used to name never was — it was
+// an unused import for a long time); both stay on the barrel for the deprecated
+// web ChatScreen path, which is their only remaining consumer.
 import {
-  ApprovalCard,
-  ApprovalReceipt,
   type ActivityParam,
-  ConsentCard,
   ConnectorConsentCard,
   type ConnectorConsentState,
   QuestionCard,
@@ -121,10 +127,15 @@ export interface TcChatApproval {
    * its own path is built on. See `RunApproval.connectorSlug`.
    */
   readonly connectorSlug?: string | null;
-  /** Vendor·access pill; null when unknown. */
+  /**
+   * Vendor·access pill; null when the payload names no connector. `access` is
+   * separately nullable because the wire can name the connector without saying
+   * what the call does to it (an `mcp_auth` gate carries no `read_only`), and
+   * the card renders the vendor alone rather than guessing an axis.
+   */
   readonly category: {
     readonly vendor: string;
-    readonly access: string;
+    readonly access: string | null;
   } | null;
   /** Inset key/value frame. */
   readonly params: readonly ActivityParam[];
@@ -148,7 +159,7 @@ export interface TcChatApproval {
    * fixture or a host that projects no grants keeps its current shape.
    */
   readonly workspaceGrant?: WorkspaceGrantRequest | null;
-  /** Resolved? Pending → card / conf-card; resolved → receipt. */
+  /** Resolved? Pending → the ask card; resolved → nothing at all. */
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
   readonly decision: "approved" | "rejected" | null;
@@ -437,11 +448,10 @@ export interface TcChatProps {
   readonly toolCallCitations?: readonly CitationSourceRef[];
   /**
    * PR-3.10 — pending + recently-resolved approvals projected off the run
-   * stream. Studio renders each pending one as the hoisted 4-zone
-   * `ApprovalCard` (Approve ⌘↵ / Reject ⌘⌫) and each resolved one as an
-   * `ApprovalReceipt`; Focus renders pending ones as `.conf-card` confirmation
-   * cards (FR-3.22). The host hides them while scrubbed off-now by passing `[]`;
-   * as a safeguard the chat also hides them whenever the scrub cursor is off-now.
+   * stream. A pending one renders as the compact ask card, identically in both
+   * modes; a RESOLVED one renders nothing. The host hides them while scrubbed
+   * off-now by passing `[]`; as a safeguard the chat also hides them whenever
+   * the scrub cursor is off-now.
    */
   readonly approvals?: readonly TcChatApproval[];
   /** Resolve the approval (host owns the POST); fires on Approve / `⌘↵`. */
@@ -593,18 +603,20 @@ const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
 const EMPTY_TOOL_CALLS: readonly ToolCallEntry[] = [];
 const EMPTY_TOOL_CALL_CITATIONS: readonly CitationSourceRef[] = [];
 const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
-const APPROVAL_REASSURANCE =
-  "You're always asked before Copilot acts outside this chat.";
 // WC-P5a (AD-7): the Connect card's persistent rule line. Connecting starts an
 // OAuth flow in a new tab (the host owns the redirect); nothing is shared until
 // you approve on the vendor's consent screen.
 const MCP_AUTH_REASSURANCE =
   "Connecting opens the vendor's sign-in — Copilot never sees your password.";
-// Focus states the pause, Studio states the policy. Both are server-independent
-// product facts, which is why they are constants here rather than fields on the
-// model-authored presentation block.
-const FOCUS_APPROVAL_REASSURANCE =
-  "The agent paused here — nothing runs until you decide.";
+// GONE WITH THE TWO-SHAPE SPLIT, and worth naming so it is not lost silently:
+// the mode-specific reassurances ("You're always asked before Copilot acts
+// outside this chat." in Studio, "The agent paused here — nothing runs until
+// you decide." in Focus) were `ConsentCard`'s ONLY accessible description —
+// visually hidden, referenced by `aria-describedby`. The compact ask card has
+// no slot for one, so an approval currently announces as its title plus three
+// buttons. Restoring it means a prop on the card, not a constant here: the
+// claim has to reach the DOM to be worth anything, and there is exactly one
+// shape now, so there is one claim to make, not two.
 
 type LoadState =
   | { readonly status: "idle" }
@@ -702,10 +714,10 @@ export function TcChat(props: TcChatProps): ReactElement {
   // Question cards are exempt because a resolved question still shows the
   // answer the user gave, which the transcript does not repeat.
   const liveApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
-  // Inline, EVERY approval renders — resolved ones as their receipt, in place.
-  // The old strip filtered resolved ones out because a receipt pinned above the
-  // composer was noise; anchored in the transcript it is the opposite, the only
-  // record of who decided what and when, sitting where it happened.
+  // Inline, a PENDING approval renders in place, anchored where it was asked.
+  // A settled one renders nothing at all — see `renderApprovalItem`. The old
+  // strip filtered resolved ones out for the same reason, and the receipt that
+  // briefly replaced them was worse: bare text in a transcript of cards.
   const visibleApprovals = liveApprovals;
   // The decision surface can now scroll away, which is exactly what the pinned
   // strip prevented. This is the replacement: one line of chrome, not a card,
@@ -754,9 +766,9 @@ export function TcChat(props: TcChatProps): ReactElement {
   const filteredToolCalls = filterToolCallsByScrub(toolCalls, scrub.scrubbedTo);
 
   // Focus and Studio render the SAME transcript + composer (single-mount,
-  // FR-3.9): the streamed reply, the ghost banner, and the composer are shared.
-  // They differ only in the wrapper (Focus centers the column) and the approval
-  // affordance (Focus `.conf-card`, Studio the 4-zone `ApprovalCard`).
+  // FR-3.9): the streamed reply, the ghost banner, the approvals and the
+  // composer are all shared. The only thing left that the mode changes here is
+  // the wrapper — Focus centers the column.
   const ghostBanner =
     ghost && ghostLabel !== null ? (
       <div
@@ -882,9 +894,10 @@ export function TcChat(props: TcChatProps): ReactElement {
     </div>
   );
 
-  // Both modes now render the SAME tail. The two blocks used to differ only in
-  // their approvals strip — one conf-card list, one 4-zone list — and that
-  // difference moved inside `renderApprovalItem`, so the duplicate went with it.
+  // Both modes render the SAME tail. The two blocks used to differ only in
+  // their approvals strip — one conf-card list, one big-card list — that
+  // difference first moved inside `renderApprovalItem` and has now been deleted
+  // outright: there is one ask card, and both modes render it.
   return (
     <div
       data-testid="tc-chat"
@@ -903,15 +916,27 @@ export function TcChat(props: TcChatProps): ReactElement {
 }
 
 // PR-3.10 — in-chat approval renderers. Pure presentation over the injected
-// projection: Studio uses the hoisted 4-zone `ApprovalCard`, Focus a local
-// `.conf-card` confirmation card; a resolved approval collapses to the hoisted
-// `ApprovalReceipt`. Resolution is the injected onApprove/onReject (D28).
+// projection: every pending Approve/Decline ask is the SAME compact card, a
+// SETTLED approval renders nothing, and resolution is the injected
+// onApprove/onReject (D28).
 
 /**
- * The ONE approval renderer. Every card kind is chosen here, and `mode` picks
- * only between the two confirmation shapes (Studio's 4-zone `ApprovalCard`,
- * Focus's `.conf-card`) — the question / receipt / workspace-grant / mcp-auth
- * branches are mode-independent.
+ * The ONE approval renderer, and now genuinely one: what is chosen here is the
+ * KIND of ask, never a skin for it. `mode` is not a parameter at all — Studio
+ * and Focus render byte-identical approvals.
+ *
+ * The branches are kinds because each resolves through a DIFFERENT seam, not
+ * because each wants a different look:
+ *   - a write gate / tool action → Approve or Decline, host `/decision` POST
+ *   - a question                 → an ANSWER, whose text the wire carries
+ *   - a folder ask               → `WorkspaceGrantPort`, an OS dialog
+ *   - a connector ask            → `McpAuthPort`, an OAuth redirect
+ * Collapsing any of those into the ask card would post the wrong thing (or,
+ * for a `mcp_discovery:` id, post to a row that does not exist and 404).
+ *
+ * ORDER IS LOAD-BEARING. The write gate goes first because its wire shape is
+ * `ask_a_question`, so the question branch would otherwise claim it and render
+ * a yes/no about a real side effect as a free-text box.
  *
  * This used to be a 16-call-site conditional written out TWICE, once per mode
  * block. Approvals now interleave into the transcript like every other card
@@ -919,17 +944,27 @@ export function TcChat(props: TcChatProps): ReactElement {
  */
 function renderApprovalItem(
   approval: TcChatApproval,
-  mode: TcChatMode,
   handlers: ApprovalHandlers,
 ): ReactNode {
   if (!approval.resolved && isWriteGateApproval(approval)) {
-    return renderWriteGateRow(approval, handlers);
+    return renderAskCard(approval, handlers);
   }
   if (approval.question !== null) {
     return renderQuestionCard(approval, handlers.onAnswer);
   }
   if (approval.resolved) {
-    return renderApprovalReceipt(approval);
+    // A settled approval leaves NOTHING behind, either way it went.
+    //
+    // The receipt was one line of bare text — "✓ Approved · <title>" — in a
+    // transcript otherwise made of cards, which is what made it read as debris
+    // rather than as a record. Approved, it restated the tool card directly
+    // below it; denied, it was the only row in the thread that was not a card
+    // at all. Neither loses the decision: it is on the run's event stream,
+    // which is what the Approvals tab and the audit views project from.
+    //
+    // This is only about what survives the click. The decision surface itself —
+    // the card that asks and takes Approve/Reject — is a card and stays one.
+    return null;
   }
   if (isWorkspaceGrantApproval(approval)) {
     return renderWorkspaceGrantCard(
@@ -950,9 +985,10 @@ function renderApprovalItem(
       handlers.onConnectorMute,
     );
   }
-  return mode === "focus"
-    ? renderConfCard(approval, handlers.onApprove, handlers.onReject)
-    : renderStudioApprovalCard(approval, handlers.onApprove, handlers.onReject);
+  // Everything else that is decided with Approve/Decline — a `tool_action`, an
+  // `mcp_tool` call, an unrecognised kind — is the SAME card as a parked write.
+  // It was never a different question; it was the same question drawn twice.
+  return renderAskCard(approval, handlers);
 }
 
 /** Everything `renderApprovalItem` needs, bundled so the interleave pass can carry it. */
@@ -977,8 +1013,10 @@ interface ApprovalHandlers {
   readonly onWorkspaceGrantDeny?: (approvalId: string) => void;
   readonly onWorkspaceGrantCancel?: (approvalId: string) => void;
   /**
-   * Open a parked write's detail on the canvas. The compact row keeps only the
-   * ask; everything a reviewer needs to judge it lives on the Studio surface.
+   * Told that the reader opened a parked write's detail. A NOTIFICATION, not a
+   * navigation: the card expands IN PLACE and does so whether or not this is
+   * wired (no host supplies it today). Passed only when the host actually
+   * supplied one — see `renderAskCard`.
    */
   readonly onReviewWriteGate?: (approvalId: string) => void;
   /**
@@ -992,41 +1030,13 @@ interface ApprovalHandlers {
   readonly ledgerIdByApprovalId?: (approvalId: string) => string | undefined;
 }
 
-function renderStudioApprovalCard(
-  approval: TcChatApproval,
-  onApprove?: (approvalId: string) => void,
-  onReject?: (approvalId: string) => void,
-): ReactNode {
-  return (
-    <div
-      key={`approval-${approval.approvalId}`}
-      data-testid={`tc-chat-approval-${approval.approvalId}`}
-      data-approval-id={approval.approvalId}
-    >
-      <ConsentCard
-        title={approval.title}
-        presentation={approval.presentation}
-        params={approval.params}
-        // Server-derived, and passed OUTSIDE the presentation block on purpose:
-        // a reassurance is a claim, and the narrative layer must never carry one.
-        reassurance={APPROVAL_REASSURANCE}
-        showChords
-        onApprove={() => onApprove?.(approval.approvalId)}
-        onReject={() => onReject?.(approval.approvalId)}
-        approveTestId={`tc-chat-approval-approve-${approval.approvalId}`}
-        rejectTestId={`tc-chat-approval-reject-${approval.approvalId}`}
-        testId={`tc-chat-consent-${approval.approvalId}`}
-      />
-    </div>
-  );
-}
-
-// WC-P5a (AD-7) — the `mcp_auth` Connect card. Reuses the hoisted 4-zone
-// `ApprovalCard` frame but swaps Approve/Reject for Connect/Skip wired to the
-// host `McpAuthPort`, NOT `onApprove`/`onReject`: a connector-auth gate resolves
-// via OAuth (a host `mcp_auth_resolved` decision after the redirect returns, P5b)
-// and a `mcp_discovery:` suggestion is never a persisted approval row, so a
-// `/decision` POST would 404 (AD-7). Rendered in BOTH Studio and Focus (the
+// WC-P5a (AD-7) — the `mcp_auth` Connect card. Its own frame
+// (`ConnectorConsentCard`), and Connect/Skip rather than Approve/Reject, wired
+// to the host `McpAuthPort` and NOT to `onApprove`/`onReject`: a connector-auth
+// gate resolves via OAuth (a host `mcp_auth_resolved` decision after the
+// redirect returns, P5b) and a `mcp_discovery:` suggestion is never a persisted
+// approval row, so a `/decision` POST would 404 (AD-7). Rendered in BOTH modes
+// with no difference between them, like every other ask here (the
 // connector-auth affordance is mode-agnostic). When no port is wired, or the
 // payload carried no `server_id`, the actions render disabled — the gate stays
 // visible but inert (never a crash, never a `/decision` fallback).
@@ -1171,74 +1181,114 @@ function renderConnectedConnectorReceipt(
   );
 }
 
-function renderConfCard(
-  approval: TcChatApproval,
-  onApprove?: (approvalId: string) => void,
-  onReject?: (approvalId: string) => void,
-): ReactNode {
-  return (
-    <div
-      key={`conf-${approval.approvalId}`}
-      className="conf-card"
-      data-testid={`tc-chat-conf-card-${approval.approvalId}`}
-      data-approval-id={approval.approvalId}
-    >
-      <ConsentCard
-        title={approval.title}
-        presentation={approval.presentation}
-        params={approval.params}
-        reassurance={FOCUS_APPROVAL_REASSURANCE}
-        onApprove={() => onApprove?.(approval.approvalId)}
-        onReject={() => onReject?.(approval.approvalId)}
-        approveTestId={`tc-chat-conf-approve-${approval.approvalId}`}
-        rejectTestId={`tc-chat-conf-reject-${approval.approvalId}`}
-        testId={`tc-chat-conf-consent-${approval.approvalId}`}
-      />
-    </div>
-  );
-}
-
-// A question renders the SAME card in both modes. Focus and Studio differ in
-// how much context sits around the chat, not in what an interrupt looks like —
-// and unlike an approval there is no denser variant worth having.
-function renderWriteGateRow(
+/**
+ * THE ask card — every approval that is settled with Approve or Decline, in
+ * both modes, whether or not a write gate parked it.
+ *
+ * There used to be three of these: a parked write got the compact row, Studio
+ * got a big `ConsentCard`, Focus got the same `ConsentCard` inside a
+ * `.conf-card` wrapper that has no CSS rule anywhere in the product. So the
+ * "two shapes" the mode chose between were one shape with two sets of testids
+ * and two different reassurance strings — while the surface that actually
+ * looked different was the one nobody could pick: the write gate.
+ *
+ * Everything gate-specific degrades to omission rather than to an empty frame,
+ * which is what lets one card serve both. An ordinary `tool_action` ask has no
+ * vendor, no access axis and no ledger row; it renders as title + reason +
+ * params + the decision, and none of the missing pieces leave a hole.
+ *
+ * The decision controls are APPROVAL-SCOPED here, for every ask, write gates
+ * included — one card body, three ids that name the approval they decide. Two
+ * asks parked at once is a drawn state, and a global `tc-write-gate-approve`
+ * is ambiguous in it: Playwright refuses the selector, so "two cards parked"
+ * becomes a decision that never happened. Six live desktop journeys already
+ * select these names (five by the `tc-chat-approval-approve-` prefix,
+ * `connectors/gate_audit_events.py` by the exact reject id), so this is the
+ * scheme the packaged app is driven by — do not add a second, unscoped alias.
+ */
+function renderAskCard(
   approval: TcChatApproval,
   handlers: ApprovalHandlers,
 ): ReactNode {
+  // Captured so the presence check below narrows it — `handlers.x` is a
+  // property read, and TS will not narrow one across a closure boundary.
+  const notifyReview = handlers.onReviewWriteGate;
   return (
     <div
-      key={`write-gate-${approval.approvalId}`}
-      data-testid={`tc-chat-write-gate-${approval.approvalId}`}
+      key={`approval-${approval.approvalId}`}
+      data-testid={`tc-chat-approval-${approval.approvalId}`}
       data-approval-id={approval.approvalId}
     >
       <TcWriteGateRow
         title={approval.title}
+        // `linear · write`. Both halves come off the same projected category,
+        // so they arrive or vanish together; a non-MCP ask has neither and the
+        // meta span is simply not rendered.
         connector={approval.category?.vendor ?? null}
+        access={approval.category?.access ?? null}
         irreversible={isIrreversible(approval)}
-        // The payload was already sitting here — the row simply never showed
-        // it, which is why reviewing a write meant leaving the transcript.
+        // Why the agent is asking. The card shows it in the expanded body only
+        // — a compact ask that has to be read before it can be decided is not
+        // a compact ask — and omits the paragraph when it is empty.
+        reason={approval.reason}
+        // The payload was already sitting here — the old cards showed it, the
+        // row simply never did, which is why reviewing a write meant leaving
+        // the transcript.
         params={approval.params}
+        // The server-projected SHAPE, and the verb the approve button promises.
+        // Null on the write-gate lane — that wire shape carries no presentation
+        // — and the card renders exactly as before when it is. It is the plain
+        // `mcp_tool` lane that has one, and dropping it here is what made a
+        // batch of twelve payees render as a params frame that did not contain
+        // the batch, and a 2000-character draft render as a `<dd>`.
+        presentation={approval.presentation}
         // Joined host-side from the ledger fold; `undefined` for an approval
-        // with no gate (a plain question, a workspace grant), where the honest
-        // answer is that there is no ledger row rather than a guessed id.
+        // with no gate, where the honest answer is that there is no ledger row
+        // rather than a guessed id. Absent ⇒ the audit line is omitted.
         ledgerId={handlers.ledgerIdByApprovalId?.(approval.approvalId)}
+        approveTestId={`tc-chat-approval-approve-${approval.approvalId}`}
+        declineTestId={`tc-chat-approval-reject-${approval.approvalId}`}
+        // NOT `…-approve-body-<id>`: that would match the
+        // `[data-testid^=tc-chat-approval-approve-]` prefix five journeys press,
+        // and an irreversible write's only approve is meant to be unreachable
+        // until the payload has rendered. The safety property is enforced by
+        // the SHAPE of the name, not only by the branch that renders it.
+        bodyApproveTestId={`tc-chat-approval-body-approve-${approval.approvalId}`}
         onApprove={() => handlers.onApprove?.(approval.approvalId)}
         onDecline={() => handlers.onReject?.(approval.approvalId)}
-        onReview={() => handlers.onReviewWriteGate?.(approval.approvalId)}
+        // Omitted when no host is listening, rather than passed as a function
+        // that calls nothing. The card treats it as a notification either way,
+        // so the disclosure works regardless — but wrapping "nobody is
+        // listening" in a callback is how a dead control hides.
+        {...(notifyReview === undefined
+          ? {}
+          : { onReview: () => notifyReview(approval.approvalId) })}
       />
     </div>
   );
 }
 
 /**
- * Whether this write cannot be undone from inside the app.
+ * Whether this ask cannot be undone from inside the app.
  *
  * The PDP knows — it sorts every tool onto a read / write / destructive axis —
  * but `op_class` is NOT on the `gate.opened` ledger row, so the canvas fold
  * fails closed to "write" for every gate and cannot answer this. The projected
  * approval's access label is the only signal that survives to the client today,
- * so an unlabelled gate reads as reversible: it keeps the ordinary Approve
+ * so an unlabelled ask reads as reversible: it keeps the ordinary Approve
  * button rather than inventing a severity nobody asserted.
+ *
+ * Which means, today, ALWAYS FALSE outside a hand-built fixture: the two
+ * producers of `category.access` emit only `READ` / `WRITE` / nothing (the
+ * approval projection's `buildCategory`, derived from the payload's `read_only`
+ * boolean) and `READ` / `WRITE` / `ACTION` (the deprecated web tool labels).
+ * Nothing can currently say "destructive", so the card's destructive lane — no
+ * one-click Approve, the "can't be undone" chip — is unreachable from a real
+ * payload. Do not read a green test suite as evidence that it works: fixing it
+ * is a backend allow-list change (the gate's `op_class` is dropped at
+ * `_ask_a_question_requested_payload`) plus a client read, not a card change.
+ * Correcting the axis word from `ACTION` to `WRITE` did not move that lane one
+ * way or the other — neither string has ever contained "destructive".
  */
 export function isIrreversible(approval: TcChatApproval): boolean {
   return (approval.category?.access ?? "")
@@ -1270,21 +1320,6 @@ function renderQuestionCard(
   );
 }
 
-function renderApprovalReceipt(approval: TcChatApproval): ReactNode {
-  return (
-    <div
-      key={`receipt-${approval.approvalId}`}
-      data-testid={`tc-chat-approval-receipt-${approval.approvalId}`}
-      data-decision={approval.decision ?? "approved"}
-    >
-      <ApprovalReceipt
-        kind={approval.decision === "rejected" ? "rejected" : "approved"}
-        title={approval.title}
-      />
-    </div>
-  );
-}
-
 interface MessageListBodyProps {
   readonly state: LoadState;
   readonly messages: ReadonlyArray<TcChatMessage>;
@@ -1297,11 +1332,10 @@ interface MessageListBodyProps {
   readonly toolCallCitations: readonly CitationSourceRef[];
   /**
    * Approvals interleaved into the transcript at the point they were asked, so
-   * the decision sits beside the tool call that provoked it and STAYS there
-   * once resolved. In the pinned-strip model a resolved approval was dropped —
-   * correct then (a receipt above the composer was noise) and wrong now: a card
-   * that vanishes from the middle of the conversation reflows the transcript
-   * and erases the record of who decided what, mid-thread.
+   * the decision sits beside the tool call that provoked it. Nothing survives
+   * the decision, whichever way it went — approved, the tool card it released
+   * says the same thing better; declined, the run's event stream is the record,
+   * and it is the one the Approvals tab and the audit views already read.
    */
   readonly approvals: readonly TcChatApproval[];
   readonly approvalHandlers: ApprovalHandlers;
@@ -1439,6 +1473,11 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       );
     }
     if (item.kind === "approval") {
+      const content = renderApprovalItem(item.approval, approvalHandlers);
+      // An approved approval renders nothing at all now. The wrapper has to go
+      // with it — an empty <li> still contributes the row's margin, which would
+      // leave the gap the receipt used to occupy.
+      if (content === null) return null;
       return (
         <li
           key={`approval-item-${item.approval.approvalId}`}
@@ -1446,7 +1485,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           data-testid={`tc-chat-approval-item-${item.approval.approvalId}`}
           data-approval-pending={item.approval.resolved ? "false" : "true"}
         >
-          {renderApprovalItem(item.approval, mode, approvalHandlers)}
+          {content}
         </li>
       );
     }
