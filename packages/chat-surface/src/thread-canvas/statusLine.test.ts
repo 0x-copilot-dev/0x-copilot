@@ -1,5 +1,5 @@
-// Unit tests for `projectStatusLine` (PRD-B2 D6). Pure fold to the run's latest
-// consequential ledger beat.
+// Unit tests for `projectStatusLine` (PRD-B2 D6). Pure predicate: is a surface
+// still being built?
 
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -30,14 +30,46 @@ function ev(
   };
 }
 
+function created(surfaceId: string, connector = "linear", op = "get_issue") {
+  return ev("surface.created", {
+    v: 1,
+    surface_id: surfaceId,
+    kind: "record",
+    source: { connector, op },
+    title: "t",
+    payload_ref: "call:c1",
+  });
+}
+
+function derived(surfaceId: string) {
+  return ev("view.derived", {
+    v: 1,
+    surface_id: surfaceId,
+    tier: "generic",
+    basis: "schema",
+  });
+}
+
 describe("projectStatusLine", () => {
   it("is idle with no v2 events", () => {
-    const line = projectStatusLine([ev("model_delta", { text: "hi" })]);
-    expect(line.kind).toBe("idle");
-    expect(line.ledgerId).toBeNull();
+    expect(projectStatusLine([ev("model_delta", { text: "hi" })]).kind).toBe(
+      "idle",
+    );
   });
 
-  it("reports the latest op line with connector.op and ledger id", () => {
+  it("is assembling while a surface has no derived view yet", () => {
+    expect(projectStatusLine([created("s1")]).kind).toBe("assembling");
+  });
+
+  it("goes QUIET once the view lands — the strip has nothing left to say", () => {
+    // The behaviour this file exists to pin. A settled surface used to draw
+    // `view.derived · linear.get_issue · ra7f·002`, which restated the
+    // provenance footer above it and added a ledger coordinate no reader can
+    // use. Everything it said is said better one line up.
+    expect(projectStatusLine([created("s1"), derived("s1")]).kind).toBe("idle");
+  });
+
+  it("is idle for a read that produced no surface", () => {
     const line = projectStatusLine([
       ev("read.executed", {
         v: 1,
@@ -48,59 +80,35 @@ describe("projectStatusLine", () => {
         payload_ref: "call:c1",
       }),
     ]);
-    // read.executed with no following surface ⇒ not assembling.
-    expect(line.kind).toBe("op");
-    expect(line.text).toBe("read.executed · linear.get_issue · ra7f·001");
-    expect(line.ledgerId).toBe("ra7f·001");
+    expect(line.kind).toBe("idle");
   });
 
-  it("is assembling while a surface has no derived view yet", () => {
+  it("stays assembling while ANY surface is unresolved", () => {
     const line = projectStatusLine([
-      ev("surface.created", {
-        v: 1,
-        surface_id: "s1",
-        kind: "record",
-        source: { connector: "linear", op: "get_issue" },
-        title: "t",
-        payload_ref: "call:c1",
-      }),
+      created("s1"),
+      derived("s1"),
+      created("s2", "github", "get_pr"),
     ]);
     expect(line.kind).toBe("assembling");
-    expect(line.text).toContain("surface.created · linear.get_issue");
   });
 
-  it("resolves connector.op for a latest view.derived via its surface.created", () => {
-    const line = projectStatusLine([
-      ev("surface.created", {
-        v: 1,
-        surface_id: "s1",
-        kind: "record",
-        source: { connector: "github", op: "get_pr" },
-        title: "t",
-        payload_ref: "call:c1",
-      }),
-      ev("view.derived", {
-        v: 1,
-        surface_id: "s1",
-        tier: "generic",
-        basis: "schema",
-      }),
-    ]);
-    // view.derived is the latest; the surface now has a view ⇒ op (not assembling).
-    expect(line.kind).toBe("op");
-    expect(line.text).toBe("view.derived · github.get_pr · ra7f·002");
+  it("is order-independent — a view seen before its create still settles", () => {
+    // Set membership, not a fold over the latest event, so out-of-order
+    // delivery cannot make a finished surface look unfinished.
+    expect(projectStatusLine([derived("s1"), created("s1")]).kind).toBe("idle");
   });
 
-  it("omits the connector.op segment when a view.derived cannot resolve it", () => {
-    // view.derived for a surface whose create was never seen ⇒ no source.
-    const line = projectStatusLine([
-      ev("view.derived", {
-        v: 1,
-        surface_id: "ghost",
-        tier: "generic",
-        basis: "schema",
-      }),
-    ]);
-    expect(line.text).toBe("view.derived · ra7f·001");
+  it("ignores a view for a surface whose create was never seen", () => {
+    expect(projectStatusLine([derived("ghost")]).kind).toBe("idle");
+  });
+
+  it("degrades rather than throwing on a malformed payload", () => {
+    const bad = ev("surface.created", {});
+    const nulled = {
+      ...ev("surface.created", {}),
+      payload: null,
+    } as unknown as RuntimeEventEnvelope;
+    expect(() => projectStatusLine([bad, nulled])).not.toThrow();
+    expect(projectStatusLine([bad, nulled]).kind).toBe("idle");
   });
 });

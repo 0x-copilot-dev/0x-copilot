@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Surface card status strip — options</title>
+    <style>
+      :root {
+        --bg: #09090b;
+        --bg-elev: #0d0d10;
+        --surface: #111114;
+        --surface-muted: #16161a;
+        --border: rgba(255, 255, 255, 0.06);
+        --border-strong: rgba(255, 255, 255, 0.1);
+        --text: #ececf1;
+        --muted: #98989f;
+        --subtle: #64646d;
+        --accent: #5fb2ec;
+        --jade: #57c785;
+        --ember: #f0764f;
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+        --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 56px 28px 96px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0 0 8px;
+      }
+      .lede {
+        color: var(--muted);
+        max-width: 62ch;
+        margin: 0 0 44px;
+      }
+      h2 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--subtle);
+        margin: 0 0 4px;
+      }
+      .opt-title {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 6px;
+        letter-spacing: -0.005em;
+      }
+      .opt-note {
+        color: var(--muted);
+        margin: 0 0 18px;
+        max-width: 64ch;
+      }
+      section {
+        margin: 0 0 52px;
+      }
+      /* ---- the surface card ---- */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .tbl {
+        padding: 14px 16px 4px;
+        border-bottom: 1px solid var(--border);
+      }
+      .tbl-h {
+        display: grid;
+        grid-template-columns: 90px 1fr 90px 74px;
+        gap: 12px;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--subtle);
+        padding-bottom: 7px;
+      }
+      .tbl-r {
+        display: grid;
+        grid-template-columns: 90px 1fr 90px 74px;
+        gap: 12px;
+        padding: 7px 0;
+        border-top: 1px solid var(--border);
+        align-items: center;
+      }
+      .chip {
+        display: inline-block;
+        font-size: 10.5px;
+        padding: 1.5px 7px;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .chip.hot {
+        color: var(--ember);
+        border-color: color-mix(in oklab, var(--ember) 40%, transparent);
+      }
+      .chip.ok {
+        color: var(--jade);
+        border-color: color-mix(in oklab, var(--jade) 40%, transparent);
+      }
+      .hdr {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 11px 16px;
+        border-bottom: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        letter-spacing: 0.05em;
+      }
+      .hdr .op {
+        text-transform: uppercase;
+        color: var(--text);
+      }
+      .hdr .ms {
+        color: var(--muted);
+      }
+      .push {
+        margin-left: auto;
+      }
+      .ref {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--subtle);
+      }
+      .toggles {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 16px;
+      }
+      .seg {
+        display: inline-flex;
+        background: var(--surface-muted);
+        border-radius: 7px;
+        padding: 2px;
+      }
+      .seg span {
+        padding: 3.5px 11px;
+        border-radius: 5px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .seg span.on {
+        background: #26262c;
+        color: var(--text);
+      }
+      .regen {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .strip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px 10px;
+        font-size: 12px;
+        color: var(--subtle);
+      }
+      .strip .dot {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--subtle);
+        flex: none;
+      }
+      .strip.live .dot {
+        background: var(--accent);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+      }
+      .strip em {
+        font-style: italic;
+      }
+      .strip.empty {
+        padding: 0;
+      }
+      /* ---- annotation ---- */
+      .flag {
+        position: relative;
+        border-left: 2px solid var(--ember);
+        padding: 2px 0 2px 12px;
+        margin: 12px 0 0 16px;
+        color: var(--muted);
+        font-size: 12px;
+        max-width: 66ch;
+      }
+      .flag b {
+        color: var(--ember);
+        font-weight: 600;
+      }
+      .good {
+        border-left-color: var(--jade);
+      }
+      .good b {
+        color: var(--jade);
+      }
+      .pair {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 720px) {
+        .pair {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      .state {
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--subtle);
+        margin: 0 0 7px;
+      }
+      table.cmp {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+        font-size: 12.5px;
+      }
+      table.cmp th,
+      table.cmp td {
+        text-align: left;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      table.cmp th {
+        color: var(--subtle);
+        font-weight: 600;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      table.cmp td:first-child {
+        white-space: nowrap;
+        color: var(--muted);
+      }
+      .rec {
+        border: 1px solid color-mix(in oklab, var(--jade) 30%, transparent);
+        background: color-mix(in oklab, var(--jade) 6%, transparent);
+        border-radius: 9px;
+        padding: 16px 18px;
+        margin-top: 28px;
+      }
+      .rec h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        color: var(--jade);
+      }
+      .rec p {
+        margin: 0 0 8px;
+        color: var(--muted);
+      }
+      .rec p:last-child {
+        margin-bottom: 0;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+        color: var(--text);
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: 44px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Surface card — the status strip</h1>
+      <p class="lede">
+        The strip under a surface card currently prints the raw ledger event
+        name and a ledger coordinate. Three options for what it should say
+        instead, each shown in both states that matter: while the view is being
+        built, and once it has settled.
+      </p>
+
+      <!-- ================= TODAY ================= -->
+      <section>
+        <h2>Today</h2>
+        <p class="opt-title">What ships now</p>
+        <p class="opt-note">
+          The strip is fed by <code>projectStatusLine</code>, which builds one
+          string for every state: <code>event_type · connector.op · ledgerId</code>.
+        </p>
+
+        <div class="card">
+          <div class="tbl">
+            <div class="tbl-h">
+              <div>Status</div>
+              <div>Title</div>
+              <div>Assignee</div>
+              <div>Urgency</div>
+            </div>
+            <div class="tbl-r">
+              <div><span class="chip hot">triggered</span></div>
+              <div>Facade 5xx above threshold</div>
+              <div style="color: var(--muted)">Arun M.</div>
+              <div><span class="chip hot">high</span></div>
+            </div>
+            <div class="tbl-r">
+              <div><span class="chip">acknowledged</span></div>
+              <div>Worker queue depth &gt; 500</div>
+              <div style="color: var(--muted)">Riya S.</div>
+              <div><span class="chip">medium</span></div>
+            </div>
+          </div>
+          <div class="hdr">
+            <span class="op">incidents.list_incidents</span>
+            <span class="ms">28ms</span>
+            <span class="chip">read-only</span>
+            <span class="ref push">R252·009</span>
+          </div>
+          <div class="toggles">
+            <div class="seg"><span>Generic</span><span class="on">Shaped</span></div>
+            <span class="regen push">Looks wrong? Regenerate</span>
+          </div>
+          <div class="strip">
+            <span class="dot"></span>
+            <em>view.derived · incidents.list_incidents · r252·010</em>
+          </div>
+        </div>
+
+        <p class="flag">
+          <b>Duplication.</b> <code>incidents.list_incidents</code> is already in
+          the header, one line up. The strip repeats it.
+        </p>
+        <p class="flag">
+          <b>Two coordinates, neither legible.</b> <code>R252·009</code> and
+          <code>r252·010</code> are the same operation one sequence apart. A user
+          has no model for either.
+        </p>
+        <p class="flag">
+          <b>Jargon restating the UI.</b> <code>view.derived</code> means "a view
+          was chosen" — which the <em>Generic / Shaped</em> toggle directly above
+          already says in English, and says better because you can act on it.
+        </p>
+      </section>
+
+      <hr />
+
+      <!-- ================= OPTION A ================= -->
+      <section>
+        <h2>Option A</h2>
+        <p class="opt-title">Quiet when settled</p>
+        <p class="opt-note">
+          The strip earns its line only while something is in flight. Once the
+          view lands, it renders nothing and the row collapses — the header and
+          the toggle already carry the state.
+        </p>
+        <div class="pair">
+          <div>
+            <p class="state">While building</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="strip live">
+                <span class="dot"></span><span>Shaping…</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p class="state">Settled</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="toggles">
+                <div class="seg">
+                  <span>Generic</span><span class="on">Shaped</span>
+                </div>
+                <span class="regen push">Looks wrong? Regenerate</span>
+              </div>
+              <div class="strip empty"></div>
+            </div>
+          </div>
+        </div>
+        <p class="flag good">
+          <b>Removes a line</b> and the whole class of ledger jargon. Nothing a
+          user could read is lost — every word was said above it.
+        </p>
+      </section>
+
+      <!-- ================= OPTION B ================= -->
+      <section>
+        <h2>Option B</h2>
+        <p class="opt-title">Say when, not what</p>
+        <p class="opt-note">
+          Replace the event name with freshness — the one thing the card does not
+          already state. Answers "can I trust this number right now?"
+        </p>
+        <div class="pair">
+          <div>
+            <p class="state">While building</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="strip live">
+                <span class="dot"></span><span>Shaping…</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p class="state">Settled</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="toggles">
+                <div class="seg">
+                  <span>Generic</span><span class="on">Shaped</span>
+                </div>
+                <span class="regen push">Looks wrong? Regenerate</span>
+              </div>
+              <div class="strip live">
+                <span class="dot"></span><span>Read just now · 3 rows</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="flag">
+          <b>Watch for a third clock.</b> The header already shows
+          <code>28ms</code> and the canvas already has a <em>Live</em> pill. This
+          risks being the third thing on screen talking about time.
+        </p>
+      </section>
+
+      <!-- ================= OPTION C ================= -->
+      <section>
+        <h2>Option C</h2>
+        <p class="opt-title">Say how it was built</p>
+        <p class="opt-note">
+          Keep a provenance line, but in the user's terms — where the shape came
+          from. This is the only option that surfaces something genuinely new:
+          whether a human-curated spec or an inferred one drew this.
+        </p>
+        <div class="pair">
+          <div>
+            <p class="state">While building</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="strip live">
+                <span class="dot"></span><span>Shaping…</span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p class="state">Settled</p>
+            <div class="card">
+              <div class="hdr">
+                <span class="op">incidents.list_incidents</span>
+                <span class="ms">28ms</span>
+                <span class="chip">read-only</span>
+              </div>
+              <div class="toggles">
+                <div class="seg">
+                  <span>Generic</span><span class="on">Shaped</span>
+                </div>
+                <span class="regen push">Looks wrong? Regenerate</span>
+              </div>
+              <div class="strip">
+                <span class="dot"></span
+                ><span>Layout inferred from this result</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="flag good">
+          <b>Explains the Regenerate button.</b> "Inferred" tells you why you
+          might want to regenerate; a curated layout would say
+          <em>Built-in layout for incidents</em> and set a different expectation.
+        </p>
+      </section>
+
+      <hr />
+
+      <section>
+        <h2>Compared</h2>
+        <table class="cmp">
+          <tr>
+            <th>Option</th>
+            <th>Says something new</th>
+            <th>Cost</th>
+          </tr>
+          <tr>
+            <td>A — quiet</td>
+            <td>No, by design — nothing new was there</td>
+            <td>~40 lines deleted; strip becomes two states</td>
+          </tr>
+          <tr>
+            <td>B — freshness</td>
+            <td>Yes, but a third clock on one card</td>
+            <td>Needs a relative-time source the strip lacks</td>
+          </tr>
+          <tr>
+            <td>C — provenance</td>
+            <td>Yes — inferred vs curated is invisible today</td>
+            <td>
+              Needs <code>basis</code> plumbed to the strip; it rides
+              <code>view.derived</code> already
+            </td>
+          </tr>
+        </table>
+
+        <div class="rec">
+          <h3>Recommendation — A now, C next</h3>
+          <p>
+            A is a deletion and can ship immediately: it removes the jargon, the
+            two unreadable coordinates and a whole line of chrome, and loses
+            nothing a person could read.
+          </p>
+          <p>
+            C is the only option that adds real information, and the data is
+            already on the wire — <code>view.derived</code> carries the basis
+            (built-in, learned, shape-matched, inferred). But it is a product
+            decision about whether users should see how a layout was chosen, so
+            it wants its own call rather than riding a cleanup.
+          </p>
+          <p>
+            Either way the ledger ids leave the card face. If they are worth
+            keeping for support, they belong on a copy affordance or the events
+            view — not printed twice on a card someone is reading.
+          </p>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
