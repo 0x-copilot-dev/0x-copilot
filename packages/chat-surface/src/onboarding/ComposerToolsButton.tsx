@@ -8,6 +8,12 @@ import type { CSSProperties, ReactNode } from "react";
 
 import { Icon } from "../icons/Icon";
 
+/**
+ * "Tools" is the pill's ACCESSIBLE name only — it is deliberately not rendered
+ * as visible text. The composer action row reads as icon + count (`🔌 2`), the
+ * same register the model pill and the rest of the row use; the plug glyph
+ * already carries the meaning, so the word was pure width.
+ */
 export const COMPOSER_TOOLS_BUTTON_COPY = {
   label: "Tools",
 } as const;
@@ -32,13 +38,12 @@ export function ComposerToolsButton(
       disabled={disabled}
       aria-haspopup="dialog"
       aria-expanded={open}
-      aria-label="Tools"
+      aria-label={COMPOSER_TOOLS_BUTTON_COPY.label}
       data-testid="first-run-tools-button"
       data-open={open ? "true" : undefined}
       style={disabled === true ? disabledStyle : undefined}
     >
       <Icon name="plug" size={11} />
-      <span className="ui-cpill__lb">{COMPOSER_TOOLS_BUTTON_COPY.label}</span>
       {activeCount > 0 ? (
         <span
           className="ui-cpill__n"

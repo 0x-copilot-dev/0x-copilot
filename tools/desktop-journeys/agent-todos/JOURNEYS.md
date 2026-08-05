@@ -64,8 +64,13 @@ see what is being asked, why, and that nothing is happening until I answer.
 **Expected.**
 
 - The consent card is anchored **in the transcript**, right after the tool call
-  that provoked it — neither strip (`tc-chat-approvals`, `tc-chat-conf-cards`)
-  exists any more.
+  that provoked it, and **no approval node renders anywhere else**. The two
+  retired strips (`tc-chat-approvals`, `tc-chat-conf-cards`) are no longer
+  probed by name: nothing emits those ids, so their absence proved nothing. The
+  journey now collects every `[data-testid^="tc-chat-approval-"]` node outside
+  `tc-chat-messages` and requires the list to be empty, which catches a pinned
+  strip coming back under any name. The reachability line above the composer is
+  `tc-chat-approvals-waiting` and does not match that prefix.
 - The checklist is the LAST element before the composer, so opening a gate never
   shifts it.
 - A compact `N approvals waiting ↓` line replaces the strip's reachability role.

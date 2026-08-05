@@ -7,6 +7,17 @@
 > All file:line references below were read against the current worktree
 > (`main` has advanced past the audit — verified 2026-07-21).
 
+> **SUPERSEDED where it names testids (2026-08-05).** Every approval is now the
+> ONE card `TcWriteGateRow`, rendered by `renderAskCard`; `renderStudioApprovalCard`
+> / `renderConfCard` and both pinned strips are deleted. So the instructions below
+> to "preserve every `data-testid` verbatim" name ids that no longer exist —
+> `tc-chat-conf-*` and `tc-chat-approval-receipt-*` have NO emitter anywhere, and a
+> test asserting either is absent passes vacuously. Do not re-derive names from this
+> document. The live scheme is the table in `packages/chat-surface/CLAUDE.md`:
+> the wrapper is `tc-chat-approval-<id>`, the decision controls are
+> `tc-chat-approval-approve-<id>` / `-reject-<id>` / `-body-approve-<id>`, and the
+> card's structural ids stay `tc-write-gate*`.
+
 ## Problem statement
 
 **What a user sees today.** When the agent pauses for sign-off, the pending

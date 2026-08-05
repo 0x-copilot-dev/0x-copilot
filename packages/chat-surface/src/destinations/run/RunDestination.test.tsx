@@ -50,11 +50,27 @@ import { runModeKey } from "./useRunMode";
 
 const CONV = "conv-1" as ConversationId;
 
+// Every pending Approve/Decline ask is now the SAME compact card, in both
+// modes — and both halves of it are id-scoped. The wrapper is
+// `tc-chat-approval-<id>` (the prefix seven live journeys anchor on) and the
+// decision controls are `tc-chat-approval-approve-<id>` /
+// `tc-chat-approval-reject-<id>` (the names five journeys press by prefix and
+// `connectors/gate_audit_events.py` presses exactly). The helpers still resolve
+// the wrapper first and query inside it: the scoped name alone proves the
+// button exists, `within` proves it belongs to the card that carries that id.
 const approvalCardTid = (id: string): string => `tc-chat-approval-${id}`;
 const approvalApproveTid = (id: string): string =>
   `tc-chat-approval-approve-${id}`;
 const approvalRejectTid = (id: string): string =>
   `tc-chat-approval-reject-${id}`;
+const approvalApprove = (id: string): HTMLElement =>
+  within(screen.getByTestId(approvalCardTid(id))).getByTestId(
+    approvalApproveTid(id),
+  );
+const approvalReject = (id: string): HTMLElement =>
+  within(screen.getByTestId(approvalCardTid(id))).getByTestId(
+    approvalRejectTid(id),
+  );
 
 const CAPABILITIES: TransportCapabilities = {
   substrate: "web",
@@ -1052,8 +1068,8 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     // The in-chat approval card renders the pending approval with Approve/Reject.
     const card = screen.getByTestId(approvalCardTid("appr-1"));
     expect(card).toHaveTextContent("Post to #launch-aurora");
-    expect(screen.getByTestId(approvalApproveTid("appr-1"))).not.toBeNull();
-    expect(screen.getByTestId(approvalRejectTid("appr-1"))).not.toBeNull();
+    expect(approvalApprove("appr-1")).not.toBeNull();
+    expect(approvalReject("appr-1")).not.toBeNull();
     // …and the Approvals tab shows the accent pending count badge (FR-3.12).
     expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
       "1",
@@ -1064,20 +1080,22 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     const transport = await renderWithApproval();
 
     act(() => {
-      fireEvent.click(screen.getByTestId(approvalApproveTid("appr-1")));
+      fireEvent.click(approvalApprove("appr-1"));
     });
 
     // Optimistic: the live decision surface goes, and the rail badge with it.
-    // What it leaves behind changed with inline approvals — the card no longer
-    // sits in a pinned strip where a "✓ Approved" line would cost the scarcest
-    // vertical space, so the receipt now stays put in the transcript as the
-    // record of the decision, at the point it was made.
+    // A settled approval leaves NOTHING behind — the receipt line that used to
+    // sit here was bare text in a transcript of cards, and above an approved
+    // write it merely restated the tool card below it. The record survives on
+    // the event stream, which is what the Approvals tab and the audit views read.
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(
-      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toHaveAttribute("data-decision", "approved");
+    // The receipt is asserted on its own class. `tc-chat-approval-receipt-*`
+    // is a testid product code never emitted, so a query for it was null
+    // regardless of what the transcript did; `.atlas-approval-receipt` is
+    // what `ApprovalReceipt` actually paints if anyone remounts it.
+    expect(document.querySelector(".atlas-approval-receipt")).toBeNull();
     expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
     expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
     // The host POSTed the decision through the Transport port (host owns POST).
@@ -1096,18 +1114,20 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     await renderWithApproval();
 
     act(() => {
-      fireEvent.click(screen.getByTestId(approvalRejectTid("appr-1")));
+      fireEvent.click(approvalReject("appr-1"));
     });
 
     // Resolved is resolved: the live decision surface retires either way, and
-    // the receipt records WHICH way — a rejection is the more important of the
-    // two to keep, since nothing downstream in the transcript will show it.
+    // neither way leaves a trace in the transcript.
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(
-      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toHaveAttribute("data-decision", "rejected");
+    // The receipt is asserted on its own class. `tc-chat-approval-receipt-*`
+    // is a testid product code never emitted, so a query for it was null
+    // regardless of what the transcript did; `.atlas-approval-receipt` is
+    // what `ApprovalReceipt` actually paints if anyone remounts it.
+    expect(document.querySelector(".atlas-approval-receipt")).toBeNull();
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
   });
 
   it("retires the card on a server `approval_resolved` frame, not just a local click", async () => {
@@ -1123,9 +1143,17 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     await waitFor(() =>
       expect(screen.queryByTestId(approvalCardTid("appr-1"))).toBeNull(),
     );
-    expect(
-      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toBeInTheDocument();
+    // A settled approval renders nothing, so the card's absence alone cannot
+    // tell "frame processed" from "transcript never rendered". The rail badge
+    // clearing is the positive proof that the frame landed, and the transcript
+    // is asserted present so this cannot pass on an empty mount.
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+    expect(screen.getByTestId("tc-chat-messages")).toBeInTheDocument();
+    // The receipt is asserted on its own class. `tc-chat-approval-receipt-*`
+    // is a testid product code never emitted, so a query for it was null
+    // regardless of what the transcript did; `.atlas-approval-receipt` is
+    // what `ApprovalReceipt` actually paints if anyone remounts it.
+    expect(document.querySelector(".atlas-approval-receipt")).toBeNull();
   });
 
   it("hides in-chat approvals + the count while scrubbed off-now, restoring on snap-to-now (FR-3.15)", async () => {
@@ -2657,6 +2685,30 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     const connect = await screen.findByTestId(
       "tc-chat-mcp-connect-mcp_auth:run-1:linear",
     );
+
+    // It is the CONNECTOR-CONSENT card that rendered — asserted here, while the
+    // card is still `pending` and both its controls are on screen (Connect moves
+    // it to `connecting`, which swaps them for a Cancel).
+    //
+    // `tc-chat-mcp-auth-<id>` is the wrapper `renderApprovalItem` emits ONLY
+    // down the `isMcpAuthApproval` branch, and `tc-chat-connector-<id>` is
+    // `ConnectorConsentCard`'s own root — so this fails if that branch is
+    // reordered away, and fails differently if the branch survives but stops
+    // mounting the consent card.
+    const authWrapper = screen.getByTestId(
+      "tc-chat-mcp-auth-mcp_auth:run-1:linear",
+    );
+    expect(authWrapper.getAttribute("data-server-id")).toBe("linear");
+    const consentCard = within(authWrapper).getByTestId(
+      "tc-chat-connector-mcp_auth:run-1:linear",
+    );
+    // The two controls this gate resolves through live INSIDE that card —
+    // Connect and Skip, never Approve/Decline.
+    expect(consentCard.contains(connect)).toBe(true);
+    expect(
+      within(consentCard).getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
+    ).toBeTruthy();
+
     // Connect → the injected port, keyed by the payload's server_id.
     act(() => {
       fireEvent.click(connect);
@@ -2686,9 +2738,31 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
     );
-    // …and the standard Approve/Reject card was not used.
+
+    // …and NEITHER connector ever produced an ask card. The consent card was
+    // proved positively above; this is the other half, and it is stated first
+    // WITHOUT an id, because a purely id-scoped negative is how this assertion
+    // went vacuous the first time — it named an id that existed nowhere in the
+    // product, so it passed over any card at all, including the one it was
+    // written to forbid.
+    //
+    // `tc-write-gate` is the ask card's own root: `TcWriteGateRow` stamps it on
+    // every ask it renders, for every approval id and in both hosts. Keyed on
+    // the CARD rather than on an id, it cannot go quiet if the id-scoped names
+    // below are renamed again. Document-wide, because the cockpit has exactly
+    // one transcript and neither of the two connectors on screen may open one.
+    expect(screen.queryAllByTestId("tc-write-gate")).toHaveLength(0);
+    // Then the id-scoped names, which localise a failure to THIS approval: the
+    // ask wrapper and both of its decision controls, all three of them testids
+    // product code really emits for an ask card.
     expect(
-      screen.queryByTestId("tc-chat-approval-approve-mcp_auth:run-1:linear"),
+      screen.queryByTestId(approvalCardTid("mcp_auth:run-1:linear")),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(approvalApproveTid("mcp_auth:run-1:linear")),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(approvalRejectTid("mcp_auth:run-1:linear")),
     ).toBeNull();
   });
 
@@ -2979,9 +3053,9 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     act(() => {
       transport.emit(approvalRequested("appr-1"));
     });
-    await screen.findByTestId(approvalApproveTid("appr-1"));
+    await screen.findByTestId(approvalCardTid("appr-1"));
     act(() => {
-      fireEvent.click(screen.getByTestId(approvalApproveTid("appr-1")));
+      fireEvent.click(approvalApprove("appr-1"));
     });
     await waitFor(() =>
       expect(

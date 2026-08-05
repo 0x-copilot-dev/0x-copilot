@@ -76,7 +76,7 @@ describe("projectApprovals", () => {
     expect(approval.approvalId).toBe("a-1");
     expect(approval.title).toBe("Post to #launch-aurora");
     expect(approval.approvalKind).toBe("mcp_tool");
-    expect(approval.category).toEqual({ vendor: "SLACK", access: "ACTION" });
+    expect(approval.category).toEqual({ vendor: "SLACK", access: "WRITE" });
     expect(approval.target).toBe("#launch-aurora");
     // Primitive arguments become the inset key/value frame.
     expect(approval.params).toEqual([
@@ -227,6 +227,87 @@ describe("projectApprovals", () => {
     const projection = projectApprovals([withSlug, withoutSlug]);
     expect(projection.pending).toHaveLength(1);
     expect(projection.pending[0].catalogSlug).toBe("linear");
+  });
+});
+
+// The `linear · write` meta. The axis is not a label this file is free to
+// choose: the backend derives one from `read_only`
+// (`stream_events._approval_category`: True → READ, False → WRITE) and the two
+// derivations have to agree, because they are two reads of one boolean. It used
+// to emit ACTION for `read_only: false`, a word the backend's own enum reserves
+// for a value that mapping never returns — so a write was labelled as neither
+// the design's word nor the server's.
+describe("projectApprovals — the access axis", () => {
+  function withReadOnly(readOnly: unknown): RuntimeEventEnvelope {
+    seq = 0;
+    return envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "a-axis",
+        approval_kind: "mcp_tool",
+        display_name: "Create an issue in Parth-test",
+        server_name: "linear",
+        ...(readOnly === undefined ? {} : { read_only: readOnly }),
+      },
+    });
+  }
+
+  it("calls a write a WRITE, which is what the backend calls it", () => {
+    const projection = projectApprovals([withReadOnly(false)]);
+    expect(projection.pending[0].category).toEqual({
+      vendor: "linear",
+      access: "WRITE",
+    });
+  });
+
+  it("calls a read a READ", () => {
+    const projection = projectApprovals([withReadOnly(true)]);
+    expect(projection.pending[0].category).toEqual({
+      vendor: "linear",
+      access: "READ",
+    });
+  });
+
+  it("omits the axis when the payload never stated one, keeping the vendor", () => {
+    // An `mcp_auth_required` gate is the real instance of this: it names a
+    // connector and carries no `read_only` at all. Printing a word here is
+    // asserting something about a call nobody described — the card degrades one
+    // segment at a time and shows the bare vendor instead.
+    const projection = projectApprovals([withReadOnly(undefined)]);
+    expect(projection.pending[0].category).toEqual({
+      vendor: "linear",
+      access: null,
+    });
+  });
+
+  it("treats a non-boolean read_only as unstated, not as a write", () => {
+    // Strict identity on both arms. A truthiness test would read the string
+    // "false" as a read and `0` as a write, and a permissive one would collapse
+    // "the wire did not say" into "the wire said this writes".
+    for (const value of ["false", "true", 0, 1, null]) {
+      const projection = projectApprovals([withReadOnly(value)]);
+      expect(projection.pending[0].category).toEqual({
+        vendor: "linear",
+        access: null,
+      });
+    }
+  });
+
+  it("still drops the whole meta when no connector is named", () => {
+    seq = 0;
+    const projection = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "a-bare",
+          approval_kind: "tool_action",
+          display_name: "Do the thing",
+          read_only: false,
+        },
+      }),
+    ]);
+    // A bare `write` with nothing to attribute it to is noise, not provenance.
+    expect(projection.pending[0].category).toBeNull();
   });
 });
 
@@ -387,5 +468,118 @@ describe("projectApprovals — workspace folder grant", () => {
       "/Users/ada/notes",
     );
     expect(projection.approvals[0]?.workspaceGrant?.mode).toBe("read_write");
+  });
+});
+
+// ONE STRING, ONE FRAME.
+//
+// The params frame is NOT the server's curated allow-list (which deliberately
+// omits `body`/`text`/`description`) — it is the first six primitive top-level
+// arguments in object order, with no length cap. So the same draft the preview
+// renders scrollable, pre-wrapped and with a volumetric meta line would also
+// land in the key/value grid as an untruncated `<dd>`: the identical string,
+// twice, with the second copy in the worse shape.
+describe("projectApprovals — the preview and the params frame", () => {
+  const draft =
+    "Launch Week is here. Over the next 7 days we're shipping one thing a day, " +
+    "and every one of them started as somebody's Friday-afternoon side quest.";
+
+  function withPreview(args: Record<string, unknown>): RuntimeEventEnvelope {
+    return envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "a-1",
+        approval_kind: "mcp_tool",
+        display_name: "Post to #launch-aurora",
+        server_name: "SLACK",
+        read_only: false,
+        arguments: args,
+        presentation: {
+          layout: "preview",
+          approve_label: "Approve & send",
+          preview: { text: draft, meta: "26 words · 148 characters" },
+        },
+      },
+    });
+  }
+
+  it("drops the argument the preview already renders in full", () => {
+    seq = 0;
+    const approval = projectApprovals([
+      withPreview({ channel: "#launch-aurora", text: draft }),
+    ]).pending[0];
+    expect(approval.presentation?.preview?.text).toBe(draft);
+    // The draft is the preview's job. What stays is where it is going.
+    expect(approval.params).toEqual([
+      { label: "channel", value: "#launch-aurora" },
+    ]);
+  });
+
+  it("drops it even when the producer truncated the preview", () => {
+    // The producer trims and caps at 2000 characters, so a longer argument
+    // shares only its prefix with the preview — equality would miss it, and
+    // the whole 2000-character body would print again in the grid.
+    seq = 0;
+    const long = `${draft} ${"x".repeat(40)}`;
+    const approval = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "a-1",
+          approval_kind: "mcp_tool",
+          server_name: "SLACK",
+          arguments: { channel: "#launch-aurora", body: `  ${long}  ` },
+          presentation: {
+            layout: "preview",
+            preview: { text: draft, meta: null },
+          },
+        },
+      }),
+    ]).pending[0];
+    expect(approval.params).toEqual([
+      { label: "channel", value: "#launch-aurora" },
+    ]);
+  });
+
+  it("keeps a different argument that merely happens to be long", () => {
+    seq = 0;
+    const approval = projectApprovals([
+      withPreview({ channel: "#launch-aurora", subject: "Launch Week recap" }),
+    ]).pending[0];
+    expect(approval.params).toEqual([
+      { label: "channel", value: "#launch-aurora" },
+      { label: "subject", value: "Launch Week recap" },
+    ]);
+  });
+
+  it("leaves the frame alone when there is no preview to duplicate", () => {
+    seq = 0;
+    const approval = projectApprovals([requested("a-1")]).pending[0];
+    expect(approval.params).toEqual([
+      { label: "channel", value: "#launch-aurora" },
+      { label: "dry_run", value: "false" },
+    ]);
+  });
+
+  it("still filters against a preview an EARLIER frame established", () => {
+    // Replay keeps the shape (a redelivered frame that omits it must not erase
+    // it), so the frame it filters must be the kept one — otherwise the draft
+    // reappears in the grid on the second delivery of the same approval.
+    seq = 0;
+    const first = withPreview({ channel: "#launch-aurora", text: draft });
+    const redelivered = envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "a-1",
+        approval_kind: "mcp_tool",
+        server_name: "SLACK",
+        arguments: { channel: "#launch-aurora", text: draft },
+      },
+    });
+    const approval = projectApprovals([first, redelivered]).pending[0];
+    expect(approval.presentation?.layout).toBe("preview");
+    expect(approval.params).toEqual([
+      { label: "channel", value: "#launch-aurora" },
+    ]);
   });
 });

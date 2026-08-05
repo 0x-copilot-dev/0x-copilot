@@ -206,7 +206,7 @@ import {
 } from "./workspaceStageLifecycle";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
-// event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
+// event stream (FR-3.3). Feeds the in-chat ask card (TcChat) and
 // the Approvals-tab count (RunWorkspaceRail); no second subscription/projector.
 import {
   overlayApprovalDecisions,
@@ -2051,7 +2051,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // user's optimistic Approve/Reject so the in-chat card flips to its receipt
   // immediately, before the trailing `approval_resolved` SSE frame lands; the
   // server projection then reconciles it (a server-resolved approval always
-  // wins). The two approval consumers — TcChat (card/conf-card) and the rail
+  // wins). The two approval consumers — TcChat (the ask card) and the rail
   // (Approvals tab + count) — both read this ONE projection.
   const [localDecisions, setLocalDecisions] =
     useState<ReadonlyMap<string, RunApprovalDecision>>(EMPTY_DECISIONS);
@@ -4234,7 +4234,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             />
           )
         }
-        // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
+        // PR-3.10: the in-chat ask card — the SAME card in Studio and Focus.
         approvals={chatApprovals}
         onApprove={handleApprove}
         onReject={handleReject}
