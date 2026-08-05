@@ -1058,18 +1058,21 @@ export {
 // === end Phase 1 (PR-1.6) ===
 
 // === Consent cards, built to 0xCopilot App v3 ===
-// The design-accurate replacements for the single generic approval frame:
-// `ConsentCard` (one frame, three shapes — params / decidable rows / the draft
-// itself) and `ConnectorConsentCard` (the four-state connector ask with its
-// server-derived trust line). `QuestionCard` is the third member and the odd one
-// out — `ask_a_question` is an INTERRUPT, not a consent: it blocks the run, it
-// can outlive the screen you are on, and its answer is an answer. Its CSS ships
-// from this package (`approvals/approvals.css`) and BOTH hosts import it; the
-// previous card's rules lived only in the web app, so desktop rendered a bare
-// frame. Resolution stays host-owned (the `/decision` POST).
+// `ConnectorConsentCard` (the four-state connector ask with its server-derived
+// trust line) and `QuestionCard` — the odd one out, because `ask_a_question` is
+// an INTERRUPT rather than a consent: it blocks the run, it can outlive the
+// screen you are on, and its answer is an answer. Their CSS ships from this
+// package (`approvals/approvals.css`) and BOTH hosts import it; the previous
+// card's rules lived only in the web app, so desktop rendered a bare frame.
+// Resolution stays host-owned (the `/decision` POST).
+//
+// `ConsentCard` was the third member — one frame, three shapes — and is DELETED.
+// The approval consolidation left it with no mount anywhere in the product, and
+// what it was for now lives in the one ask card: the rows batch and the draft
+// preview render in `TcWriteGatePayload`, and its visually-hidden
+// `aria-describedby` description is back on the card itself, derived from the
+// ask rather than a standing claim about the product.
 export {
-  ConsentCard,
-  type ConsentCardProps,
   ConnectorConsentCard,
   type ConnectorConsentCardProps,
   type ConnectorConsentState,

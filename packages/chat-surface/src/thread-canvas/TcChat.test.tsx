@@ -1170,9 +1170,16 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         <TcChat conversationId="c" mode="studio" approvals={[approval()]} />,
       ),
     );
-    const studioHtml = screen
-      .getByTestId("tc-chat-approval-appr-1")
-      .outerHTML.trim();
+    // React's `useId` for the card's accessible description is unique per
+    // MOUNT, and the two arms below are two mounts by construction. Normalising
+    // it keeps the claim intact — "Focus and Studio render the same card" — by
+    // excluding the one value React guarantees will differ between any two
+    // renders, which no assertion about sameness could ever have included.
+    const normalise = (html: string): string =>
+      html.replace(/_r_[0-9a-z]+_/g, "_rID_");
+    const studioHtml = normalise(
+      screen.getByTestId("tc-chat-approval-appr-1").outerHTML.trim(),
+    );
     // An equality over two empty wrappers would pass while proving nothing, so
     // the captured side is checked to be the real card first.
     expect(studioHtml).toContain(approveTid("appr-1"));
@@ -1188,9 +1195,9 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         <TcChat conversationId="c" mode="focus" approvals={[approval()]} />,
       ),
     );
-    expect(screen.getByTestId("tc-chat-approval-appr-1").outerHTML.trim()).toBe(
-      studioHtml,
-    );
+    expect(
+      normalise(screen.getByTestId("tc-chat-approval-appr-1").outerHTML.trim()),
+    ).toBe(studioHtml);
   });
 
   it("fires onApprove / onReject with the approval id", () => {
@@ -1266,23 +1273,22 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
   it.each(["studio", "focus"] as const)(
     "announces itself as an approval, by name, in %s mode",
     (mode) => {
-      // WHAT THIS USED TO ASSERT, and what changed.
+      // The announcement, in both modes, and it took two passes to get whole.
       //
-      // `ConsentCard` carried a visually-hidden reassurance span wired through
-      // `aria-describedby` — "The agent paused here — nothing runs until you
-      // decide." in Focus, "You're always asked before Copilot acts outside
-      // this chat." in Studio. That was the ONLY home for either string; they
-      // were never painted. The unified card has no `reassurance` prop, so BOTH
-      // are gone and an approval now announces as its name plus its controls.
+      // `ConsentCard` carried a visually-hidden reassurance wired through
+      // `aria-describedby` — the ONLY home for either of its two strings, never
+      // painted — and the consolidation dropped it, leaving an approval to
+      // announce as its name plus three buttons. It is back, but NOT as the old
+      // copy: those were standing claims about the product ("You're always
+      // asked before Copilot acts outside this chat"), reassuring and silent
+      // about the decision actually in front of you. The card now derives its
+      // description from the ask, which also makes irreversibility audible —
+      // `data-risk` is not ARIA and the dot is `aria-hidden`, so that fact used
+      // to reach a screen reader through the chip alone.
       //
-      // This is a real, deliberate reduction and it is recorded here rather
-      // than deleted: the previous assertion is the only reason anyone would
-      // notice. What the card gained is the other half — `TcWriteGateRow`
-      // announced as an UNNAMED article containing three buttons, and now
-      // carries an accessible name in both modes. Restoring the description
-      // means giving the card a `reassurance` prop; a mode-VARYING one would
-      // rebuild the split this change exists to remove, so it would have to be
-      // one string for both surfaces, which is a copy decision.
+      // Asserted in BOTH modes on purpose: one card, one announcement. A
+      // mode-varying description would rebuild the split this change removed.
+      // The wording itself is pinned in `TcWriteGateRow.test.tsx`.
       const { transport } = makeTransport(() =>
         Promise.resolve(SAMPLE_RESPONSE),
       );
@@ -1294,6 +1300,7 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
       );
       const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
       expect(card).toHaveAccessibleName("Approval: Post to #launch-aurora");
+      expect(card).toHaveAccessibleDescription(/paused on this decision/i);
       // The design reserves "Approve & sign" for actions that actually reach a
       // wallet; it arrived via `presentation.approve_label`, which the unified
       // card does not read. A generic approval promises no signature either way.
