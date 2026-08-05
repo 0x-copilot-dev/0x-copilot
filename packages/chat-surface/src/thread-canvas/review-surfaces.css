@@ -752,40 +752,366 @@
   overflow: auto;
 }
 
-/* ── parked write, expandable in place ────────────────────────────────────
+/* ── the ask: one card, two heights ───────────────────────────────────────
  *
- * The row itself keeps its inline geometry (see the 42px-rhythm note in
- * TcWriteGateRow.tsx — it is measured against the tool cards it sits between,
- * and moving it here without that rationale is how it gets re-broken). These
- * rules own only the container and the body the row expands into.
+ * `.tc-write-gate` is now the FRAME — one border, one radius, `overflow:
+ * hidden` — with a header and an optional body inside it. It used to be a bare
+ * grid wrapper around a `.ui-card` row, with the body pulled back up under it
+ * by a negative margin to fake a single object. That worked, but it meant the
+ * row's geometry lived in inline `CSSProperties` (which beat every rule in this
+ * file), so none of the design's header spec could be expressed here at all.
+ * The inline styles are gone; this block owns the whole card.
  *
- * No height cap, unlike `.tc-inline-artifact__body`: a gate body is a short
+ * THE HEADER NEVER MOVES. `.tc-write-gate__hd` is byte-identical collapsed and
+ * expanded — expanding only appends `.tc-write-gate__body` below it — so a card
+ * growing under the cursor cannot swap what is beneath it. Anything added to
+ * the header must therefore be state-invariant in WIDTH: the chevron is a fixed
+ * square, the "Review" label does not change with `open`, and the chip depends
+ * on the ask, not on the disclosure.
+ *
+ * THE HEADER NEVER CLIPS ITS DECISION. The frame is `overflow: hidden`, so an
+ * over-wide row is silently cut at its END — which is exactly where the buttons
+ * are. The row is therefore ordered by what may give way: the title shrinks
+ * first (`flex: 1`, `min-width: 0`, ellipsis), then the meta (same, and it is
+ * the only unbounded string on the row — an arbitrary MCP server slug), while
+ * the chip and the actions are `flex: none`. Anything added here must be either
+ * bounded or shrinkable; an unbounded `flex: none` item makes the approve
+ * button the thing that disappears in a narrow column.
+ *
+ * Height: the design draws 44px; this keeps the measured 42px, which is the
+ * tool card's exact height in THIS app (24px `--sm` button + 2 × `--space-sm`
+ * padding + 2px border). The design's claim is that the ask matches the card
+ * beside it, and 42 is what that claim resolves to here — so the rhythm is
+ * derived, never a magic number, and it changes only when `.ui-button--sm` does.
+ *
+ * No height cap on the body, unlike `.tc-inline-artifact__body`: it is a short
  * <dl> of tool arguments, not a document. If a param value ever grows long
  * enough to need one, cap it here AND give it its own `overflow: auto` — the
  * artifact block above records why capping alone clips silently.
  */
 
 .tc-write-gate {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
   display: grid;
   max-width: 100%;
+  /* Clips the body's corners to the frame's radius, so the two states are one
+     object rather than a row with a card loose beneath it. */
+  overflow: hidden;
+}
+
+/* Risk marks the FRAME, quietly — a tinted hairline, never a coloured panel.
+   `color-mix` rather than `--color-danger-line`: that token is a frozen dark
+   literal, so it would draw an ember rim around light-theme red text. */
+.tc-write-gate[data-risk="high"] {
+  border-color: color-mix(in srgb, var(--color-danger) 32%, transparent);
+}
+
+.tc-write-gate__hd {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-sm);
+  padding-left: var(--space-md);
+}
+
+.tc-write-gate__dot {
+  background: var(--color-accent);
+  border-radius: 50%;
+  flex: none;
+  height: 6px;
+  width: 6px;
+}
+
+.tc-write-gate[data-risk="high"] .tc-write-gate__dot {
+  background: var(--color-danger);
+}
+
+/* The title carried `.ui-body`, which has twenty usages in this repo and zero
+   declarations anywhere — so it had no type register at all and inherited
+   whatever the transcript happened to be. Scoped here rather than by authoring
+   `.ui-body` in the kit, which would silently restyle five artifact renderers
+   and two other surfaces. */
+.tc-write-gate__title {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-normal);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `linear · write`. Mono metadata, lowercase at the source — it was
+   `.ui-mono-caps`, which uppercases, so a connector slug shouted.
+ *
+ * SHRINKABLE, and the only thing on this row that had to become so. The vendor
+ * half is an MCP server slug — arbitrary length, chosen by whoever registered
+ * the server, and the one unbounded string in the header. As `flex: none` with
+ * `white-space: nowrap` and no cap it could not give way, so in a narrow chat
+ * column a long slug pushed the decision controls past the frame's
+ * `overflow: hidden` and clipped them: an approval you cannot act on, which is
+ * strictly worse than an approval you cannot fully read.
+ *
+ * `flex: 0 1 auto` + `min-width: 0` makes this the item that absorbs the
+ * shrink. The title's `flex: 1` gives it `flex-basis: 0`, so its shrink
+ * contribution (factor × basis) is zero and it takes the leftover rather than
+ * competing; the chip and the actions stay `flex: none`. Provenance therefore
+ * ellipsises before the decision does — the same priority the card states
+ * everywhere else, expressed in the layout.
+ *
+ * The chip is deliberately NOT shrinkable: it is the only non-visual signal
+ * that the write is destructive, and its string is fixed-length anyway. */
+.tc-write-gate__meta {
+  color: var(--color-text-subtle);
+  flex: 0 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-caption);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `.ui-badge--danger` already IS the design's outlined no-fill chip. Only two
+   deltas are local: the squared corner the design draws on this one, and a
+   border that follows the theme's `--color-danger` instead of the frozen
+   `--color-danger-line` literal. */
+.tc-write-gate__chip {
+  border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+
+/* `flex: none` is the guarantee, not a default: the controls are the last item
+   on the row, so anything the row cannot fit is clipped off THEM. They keep
+   their intrinsic width and everything ahead of them (title, then meta) gives
+   way instead. Do not make this shrinkable to win back a few pixels — a
+   half-visible Approve is the failure this row is arranged to prevent. */
+.tc-write-gate__actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: var(--space-xs);
+}
+
+/* Reject is a ghost at rest and commits to a colour only on hover or focus —
+   ember, the single destructive hue. A resting red button reads as the
+   RECOMMENDED action, which refusal never is, and making refusal look expensive
+   is how people learn to approve without reading. `--color-danger-bg` is an
+   opaque themed fill, not a wash, so the tint is mixed here. */
+.tc-write-gate__reject:hover:not(:disabled),
+.tc-write-gate__reject:focus-visible {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
+}
+
+/* 22px square, composed on `.ui-icon-button--ghost` so tone and hover stay the
+   kit's. Only the size rung (the kit's smallest is 28px) and the radius are
+   local. */
+.tc-write-gate__chev {
+  border-radius: var(--radius-sm);
+  flex: none;
+  height: 1.375rem;
+  width: 1.375rem;
+}
+
+/* One chevron path, rotated — the icon SSOT has no `chevronUp`, and a rotation
+   is the honest expression of "same glyph, other direction" anyway. */
+.tc-write-gate[data-open="true"] .tc-write-gate__chev svg,
+.tc-write-gate[data-open="true"] .tc-write-gate__review svg {
+  transform: rotate(180deg);
+}
+
+/* Neither `.ui-button` nor `.ui-icon-button` has a base focus ring, and the
+   design mock fakes focus with a demo class — so the three controls that gained
+   a hover-only colour or lost their label must author their own, or the ember
+   -on-focus requirement ships keyboard-invisible. */
+.tc-write-gate__reject:focus-visible,
+.tc-write-gate__review:focus-visible,
+.tc-write-gate__chev:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
 }
 
 .tc-write-gate__body {
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border);
   display: grid;
   gap: var(--space-sm);
-  border: 1px solid var(--color-border);
-  border-top: none;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--color-surface);
   padding: var(--space-md);
-  /* Pulled up under the row so the two read as one object rather than a row
-     with a card loose beneath it. The row's own radius is --radius-lg. */
-  margin-top: calc(var(--radius-lg) * -1);
-  padding-top: calc(var(--space-md) + var(--radius-lg));
+}
+
+/* EVERY text node in the body wraps, no exceptions, because every one of them
+   carries a string this app did not author: the reason is the model's
+   (`payload.reason ?? payload.message`), the row and preview text is projected
+   from the connector's own arguments, and provenance comes off the wire.
+ *
+ * This is not cosmetic, and the failure is not "a long word looks bad". The card
+ * is `display: grid` with an implicit `auto` column, so an unbreakable token
+ * sets the BODY's min-content width, which becomes the TRACK width, which the
+ * header — a grid item in the same track — stretches to. The header then
+ * overflows a frame that is `overflow: hidden`, and the decision controls are
+ * clipped out of reach: an approval nobody can answer, produced by a string the
+ * model chose. Measured at 356px → 1022px inside a 358px column from one
+ * 138-char token.
+ *
+ * So the rule is per-CONTAINER, not per-class: anything that lands in the body
+ * inherits it, including whatever gets added next. */
+.tc-write-gate__body,
+.tc-write-gate__body * {
+  overflow-wrap: anywhere;
+}
+
+.tc-write-gate__reason {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
 }
 
 .tc-write-gate[data-open="true"]
   .tc-write-gate__body
   [data-testid$="-approve"] {
   justify-self: start;
+}
+
+/* ── the shaped evidence: the batch, and the draft ───────────────────────────
+ *
+ * Both live BELOW the header, for the same reason the params frame does: the
+ * header is byte-identical collapsed and expanded, so anything whose height
+ * grows with content has to be in the body or the buttons move.
+ *
+ * They sit on `--color-surface-muted`, not `--color-bg-elevated`. The body is
+ * ALREADY `--color-bg-elevated`, so the token that reads "raised" one level up
+ * reads as nothing at all here — an inset frame drawn in the colour it is drawn
+ * on. `--color-surface-muted` is the rung that separates from the body, and it
+ * separates in the right DIRECTION in both themes: lighter than the body in
+ * dark, darker than it in light.
+ */
+
+/* --- rows: the batch this call will execute, one line per item --- */
+
+.tc-write-gate__rows {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tc-write-gate__row {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.tc-write-gate__row:last-child {
+  border-bottom: 0;
+}
+
+.tc-write-gate__row-name {
+  align-items: center;
+  color: var(--color-text);
+  display: flex;
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  gap: var(--space-xs);
+  letter-spacing: var(--tracking-caption);
+  min-width: 0;
+}
+
+.tc-write-gate__row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Server-derived monogram, aria-hidden — the label beside it is the name. */
+.tc-write-gate__avatar {
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  display: grid;
+  flex: none;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-semibold);
+  height: 1.125rem;
+  letter-spacing: var(--tracking-caption);
+  place-items: center;
+  width: 1.125rem;
+}
+
+.tc-write-gate__row-note {
+  color: var(--color-text-muted);
+  flex: none;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+}
+
+/* Tabular figures: a column of amounts is only scannable when the digits line
+   up, and scanning it is the whole reason the batch is drawn as rows. */
+.tc-write-gate__row-value {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-caption);
+}
+
+/* --- preview: the literal content about to leave the workspace --- */
+
+/* Capped AND scrollable, together. The artifact block above this file records
+   why a cap alone is a bug: it clips silently, and a draft whose tail is
+   invisible is exactly the thing consent cannot be given over. */
+.tc-write-gate__preview {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-loose);
+  margin: 0;
+  max-height: 13rem;
+  /* `overflow-wrap` deliberately absent — the body-wide rule above owns it for
+     every text node in here, so there is one place to change it. */
+  overflow-y: auto;
+  padding: var(--space-sm) var(--space-md);
+  /* Model-authored content rendered as plain text. `pre-wrap` preserves the
+     author's line breaks without letting the string style the card. */
+  white-space: pre-wrap;
+}
+
+/* "412 words · 2,140 characters" — what keeps a scrolled or truncated preview
+   honest about how much there is. */
+.tc-write-gate__preview-meta {
+  color: var(--color-text-muted);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  letter-spacing: var(--tracking-caption);
+  margin-top: var(--space-xs);
+}
+
+/* Which run, against which account. Quiet by construction: it is attribution,
+   never the thing being consented to. */
+.tc-write-gate__provenance {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  letter-spacing: var(--tracking-caption);
+  margin: 0;
 }

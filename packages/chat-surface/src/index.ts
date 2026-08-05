@@ -1780,7 +1780,7 @@ export {
 // stream (`session.events`) — the SAME array `projectSubagents` reads (FR-3.3;
 // no second SSE subscription / projector). It yields the pending + resolved
 // approvals that feed the two approval consumers living outside ThreadCanvas:
-// the in-chat 4-zone `ApprovalCard` / Focus `.conf-card` (`TcChat.approvals`)
+// the in-chat ask card, one shape in both modes (`TcChat.approvals`)
 // and the Approvals-tab pending count (`RunWorkspaceRail.approvalsQueue`, via
 // `toApprovalsQueue`). `overlayApprovalDecisions` folds the user's optimistic
 // Approve/Reject in before the trailing `approval_resolved` frame. `RunDestination`

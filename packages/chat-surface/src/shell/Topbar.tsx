@@ -11,14 +11,22 @@ import {
 // DESIGN-SPEC §1: the topbar is 46px tall (was 44 for the legacy breadcrumb).
 const TOPBAR_HEIGHT = 46;
 
-// DESIGN-SPEC §1: the command/search trigger sits at 250px on the right. The
-// shared `CommandPaletteTrigger` ships `minWidth: 200` inline; per FR-2.16 we
-// size it here via its `className` prop rather than editing the shared default.
-// The component only declares `min-width` inline (never `width`), so a class
-// rule setting `width` wins without a specificity fight. `flex: none` stops it
-// shrinking when a long title competes for the row.
+// DESIGN-SPEC §1: the command/search trigger sits at 250px on the right. Per
+// FR-2.16 we size it here via its `className` prop rather than editing the
+// shared default.
+//
+// 250px is expressed as a flex BASIS, not a `width`. It used to be
+// `width:250px;flex:none` — 250px at every window width, no matter how little
+// room was left. Since the row cannot wrap, a narrow window pushed the trigger
+// past the right edge, where the desktop frame's `overflow: hidden` clipped it
+// out of existence. The distinction matters twice over: `flex:none` refuses to
+// shrink, and a definite `width` ALSO makes the item contribute its full 250px
+// to the topbar's min-content, so the row stays wide even where the flex
+// algorithm would have yielded. A basis is the preferred size and nothing more —
+// still exactly 250px whenever it fits, and able to give ground when it does not
+// (the label ellipsizes; the search glyph and ⌘K hint are the last to go).
 const TRIGGER_CLASS = "cs-topbar-cmd-trigger";
-const TRIGGER_WIDTH_CSS = `.${TRIGGER_CLASS}{width:250px;flex:none;}`;
+const TRIGGER_WIDTH_CSS = `.${TRIGGER_CLASS}{flex:0 1 250px;min-width:0;}`;
 
 // Registry-resolved titles for the FULL widened slug union.
 //

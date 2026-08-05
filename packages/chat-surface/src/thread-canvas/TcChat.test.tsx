@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_CONNECTOR_TRUST } from "../approvals";
 import {
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -978,9 +979,27 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
   });
 });
 
-// PR-3.10 (FR-3.22) — in-chat approvals: the 4-zone ApprovalCard (Studio), the
-// `.conf-card` confirmation variant (Focus), and the collapsed receipt on
-// resolution.
+// PR-3.10 (FR-3.22) — in-chat approvals. There is now ONE ask card: the same
+// compact `tc-write-gate` row for a parked write and for an ordinary
+// `tool_action`, identical in Focus and Studio, and nothing at all once settled.
+//
+// What these tests used to assert is worth recording, because the names lied
+// about it for a long time: the Studio arm claimed to be "the 4-zone
+// ApprovalCard" and was in fact a `ConsentCard`, and the Focus arm was the SAME
+// `ConsentCard` inside a `.conf-card` div that has no CSS rule anywhere in the
+// product. The mode split was five deltas — a wrapper testid, an inert class,
+// two button testids, and one sentence of visually-hidden copy — over one
+// component. It is gone; `renderApprovalItem` takes no `mode`.
+//
+// The decision controls therefore moved into that one card, but they KEPT
+// their approval-scoped names: `tc-chat-approval-approve-<id>` /
+// `-reject-<id>` / `-body-approve-<id>`, supplied by `renderAskCard` through
+// the card's `approveTestId` / `declineTestId` / `bodyApproveTestId` props.
+// (`tc-write-gate-approve` and friends are the STANDALONE defaults, exercised
+// by `TcWriteGateRow.test.tsx`; nothing in the mounted app emits them.)
+// Queries below still go through `within(card)` — two asks on screen at once is
+// a drawn state, and scoping proves the control belongs to the wrapper whose id
+// it decides on rather than merely existing somewhere on the page.
 function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
   return {
     approvalId: "appr-1",
@@ -989,7 +1008,10 @@ function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
     summary: "Posts the launch note to #launch-aurora",
     approvalKind: "tool_action",
     serverId: null,
-    category: { vendor: "SLACK", access: "ACTION" },
+    // What `buildCategory` emits for a real `read_only: false` payload. It used
+    // to say ACTION, which is a word neither the backend nor the design has:
+    // `stream_events._approval_category` maps that same boolean to WRITE.
+    category: { vendor: "SLACK", access: "WRITE" },
     params: [{ label: "channel", value: "#launch-aurora" }],
     presentation: null,
     connectorTrust: EMPTY_CONNECTOR_TRUST,
@@ -1073,8 +1095,74 @@ describe("TcChat — a parked write is one row, not a question", () => {
   });
 });
 
+/** The ask card for one approval, scoped by its id-bearing wrapper. */
+const askCard = (id: string): HTMLElement =>
+  screen.getByTestId(`tc-chat-approval-${id}`);
+
+// The three decision controls, by the APPROVAL-SCOPED names `renderAskCard`
+// emits. Written as helpers rather than inline template strings so a rename has
+// exactly one edit site here, and so a query for a control can never silently
+// address a different card's button than the wrapper it was read through.
+//
+// `bodyApproveTid` is deliberately `…-body-approve-<id>` and not
+// `…-approve-body-<id>`: the five journeys that press Approve select by the
+// `tc-chat-approval-approve-` PREFIX, and the body approve is the one control
+// an irreversible write withholds until its payload has rendered.
+const approveTid = (id: string): string => `tc-chat-approval-approve-${id}`;
+const rejectTid = (id: string): string => `tc-chat-approval-reject-${id}`;
+const bodyApproveTid = (id: string): string =>
+  `tc-chat-approval-body-approve-${id}`;
+
 describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
-  it("renders a pending approval as the 4-zone ApprovalCard in Studio", () => {
+  it.each(["studio", "focus"] as const)(
+    "renders a pending tool_action as the compact ask card in %s mode",
+    (mode) => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      render(
+        withTransport(
+          transport,
+          <TcChat conversationId="c" mode={mode} approvals={[approval()]} />,
+        ),
+      );
+      const card = askCard("appr-1");
+      expect(card).toHaveTextContent("Post to #launch-aurora");
+      // The ask is a CARD, in both modes — the one thing that may never
+      // degrade into a line of text is the surface that takes the decision.
+      expect(within(card).getByTestId("tc-write-gate")).toBeTruthy();
+      expect(within(card).getByTestId(approveTid("appr-1"))).toHaveTextContent(
+        "Approve",
+      );
+      // "Decline", not "Reject": the refusal is a decision the run continues
+      // past, and it now sits FIRST so the safe option is the first Tab stop.
+      expect(within(card).getByTestId(rejectTid("appr-1"))).toHaveTextContent(
+        "Decline",
+      );
+      // `SLACK · WRITE` arrives as the projection's enum and is lower-cased on
+      // the way out rather than reached via `text-transform`, so what a screen
+      // reader hears is what is on screen. "write", not "action": the axis is
+      // the backend's own word for `read_only: false`.
+      expect(
+        within(card).getByTestId("tc-write-gate-connector").textContent,
+      ).toBe("SLACK · write");
+      // The retired surfaces are GONE, not merely unasserted — checked in both
+      // modes, because the `.conf-card` wrapper and the `tc-chat-conf-*`
+      // controls only ever rendered in Focus.
+      expect(screen.queryByTestId("tc-chat-conf-card-appr-1")).toBeNull();
+      expect(screen.queryByTestId("tc-chat-conf-approve-appr-1")).toBeNull();
+      expect(screen.queryByTestId("tc-chat-conf-consent-appr-1")).toBeNull();
+      expect(document.querySelector(".conf-card")).toBeNull();
+    },
+  );
+
+  it("renders the SAME card in Focus as in Studio, to the byte", () => {
+    // The mode split was never a different card — it was one `ConsentCard`
+    // under two wrapper testids, an inert `.conf-card` class, and one sentence
+    // of visually-hidden copy. Comparing rendered markup is what stops it
+    // growing back by accident: any mode-conditional attribute, class, label or
+    // ordering difference inside the ask fails here, not just the ones someone
+    // thought to name.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
       withTransport(
@@ -1082,14 +1170,27 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         <TcChat conversationId="c" mode="studio" approvals={[approval()]} />,
       ),
     );
-    const card = screen.getByTestId("tc-chat-approval-appr-1");
-    expect(card).toHaveTextContent("Post to #launch-aurora");
-    expect(
-      screen.getByTestId("tc-chat-approval-approve-appr-1"),
-    ).toHaveTextContent("Approve");
-    expect(
-      screen.getByTestId("tc-chat-approval-reject-appr-1"),
-    ).toHaveTextContent("Reject");
+    const studioHtml = screen
+      .getByTestId("tc-chat-approval-appr-1")
+      .outerHTML.trim();
+    // An equality over two empty wrappers would pass while proving nothing, so
+    // the captured side is checked to be the real card first.
+    expect(studioHtml).toContain(approveTid("appr-1"));
+    expect(studioHtml).toContain("Post to #launch-aurora");
+    // Torn down between the two, deliberately: RTL binds `screen` to
+    // `document.body`, so leaving the first mount up would make the second
+    // query ambiguous and the comparison meaningless.
+    cleanup();
+
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" approvals={[approval()]} />,
+      ),
+    );
+    expect(screen.getByTestId("tc-chat-approval-appr-1").outerHTML.trim()).toBe(
+      studioHtml,
+    );
   });
 
   it("fires onApprove / onReject with the approval id", () => {
@@ -1108,20 +1209,24 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    // The control's testid names an approval and the handler is called with an
+    // approval id. This pins that they are the SAME id — a scoped name is only
+    // worth having if the card underneath it decides on the approval it names.
+    const card = askCard("appr-1");
+    fireEvent.click(within(card).getByTestId(approveTid("appr-1")));
     expect(onApprove).toHaveBeenCalledWith("appr-1");
-    fireEvent.click(screen.getByTestId("tc-chat-approval-reject-appr-1"));
+    fireEvent.click(within(card).getByTestId(rejectTid("appr-1")));
     expect(onReject).toHaveBeenCalledWith("appr-1");
   });
 
-  it("keeps a resolved approval in the transcript, never pinned above the composer", async () => {
-    // The original rule here was "a resolved approval is history, so drop it" —
-    // right while approvals were PINNED (a "✓ Approved" line above the input
-    // added nothing and pushed the conversation up), and wrong once they are
-    // anchored in the transcript. Inline, dropping it would reflow the thread
-    // mid-conversation and erase the record of who decided what, in place.
+  it("leaves nothing behind once settled, either way it went", async () => {
+    // The receipt was one line of BARE TEXT in a transcript made of cards, which
+    // is what made it read as debris. Approved, it restated the tool card right
+    // below it; denied, it was the only non-card row in the thread. The decision
+    // survives on the event stream, which the Approvals tab projects from.
     //
-    // The half that still holds is the half about pinning, so both are asserted.
+    // Nothing may be pinned above the composer either; that half of the older
+    // rule still holds and is asserted alongside.
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const { rerender } = render(
       withTransport(
@@ -1133,58 +1238,70 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
         />,
       ),
     );
-    const receipt = await screen.findByTestId(
-      "tc-chat-approval-receipt-appr-1",
-    );
-    expect(screen.getByTestId("tc-chat-messages").contains(receipt)).toBe(true);
-    // Resolved ⇒ no live decision surface, and nothing pinned.
-    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
-    expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
+    await screen.findByTestId("tc-chat-messages");
 
-    rerender(
-      withTransport(
-        transport,
-        <TcChat
-          conversationId="c"
-          mode="studio"
-          approvals={[approval({ resolved: true, decision: "rejected" })]}
-        />,
-      ),
-    );
-    expect(
-      await screen.findByTestId("tc-chat-approval-receipt-appr-1"),
-    ).toHaveAttribute("data-decision", "rejected");
+    for (const decision of ["approved", "rejected"] as const) {
+      rerender(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[approval({ resolved: true, decision })]}
+          />,
+        ),
+      );
+      // The receipt is asserted on the CLASS `ApprovalReceipt` really paints.
+      // `tc-chat-approval-receipt-<id>` is a testid no product code emits, so
+      // querying it was null whatever the transcript did.
+      expect(document.querySelector(".atlas-approval-receipt")).toBeNull();
+      // The wrapper goes with it — an empty row would leave the receipt's gap.
+      expect(screen.queryByTestId("tc-chat-approval-item-appr-1")).toBeNull();
+      // Settled ⇒ no live decision surface, and nothing pinned.
+      expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+      expect(screen.queryByTestId("tc-chat-approvals-waiting")).toBeNull();
+    }
   });
 
-  it("renders a pending approval as a `.conf-card` in Focus mode", () => {
-    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
-    render(
-      withTransport(
-        transport,
-        <TcChat conversationId="c" mode="focus" approvals={[approval()]} />,
-      ),
-    );
-    const conf = screen.getByTestId("tc-chat-conf-card-appr-1");
-    expect(conf).toHaveClass("conf-card");
-    expect(conf).toHaveTextContent("Post to #launch-aurora");
-    // The reassurance is ANNOUNCED, not painted. It is boilerplate identical on
-    // every card, so it earns no pixels in the strip above the composer — but a
-    // screen-reader user meeting their first approval still needs it, so it
-    // survives as the card's accessible description. Asserted on the CARD, not
-    // the `.conf-card` wrapper: the wrapper would inherit the hidden node's text
-    // either way, so it cannot tell announced from displayed.
-    expect(
-      screen.getByTestId("tc-chat-conf-consent-appr-1"),
-    ).toHaveAccessibleDescription(/The agent paused here/);
-    // The design reserves "Approve & sign" for actions that actually reach a
-    // wallet; it arrives via `presentation.approve_label` on those approvals.
-    // A generic approval promises no signature.
-    expect(screen.getByTestId("tc-chat-conf-approve-appr-1")).toHaveTextContent(
-      "Approve",
-    );
-    // The Studio ApprovalCard is NOT used in Focus.
-    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
-  });
+  it.each(["studio", "focus"] as const)(
+    "announces itself as an approval, by name, in %s mode",
+    (mode) => {
+      // WHAT THIS USED TO ASSERT, and what changed.
+      //
+      // `ConsentCard` carried a visually-hidden reassurance span wired through
+      // `aria-describedby` — "The agent paused here — nothing runs until you
+      // decide." in Focus, "You're always asked before Copilot acts outside
+      // this chat." in Studio. That was the ONLY home for either string; they
+      // were never painted. The unified card has no `reassurance` prop, so BOTH
+      // are gone and an approval now announces as its name plus its controls.
+      //
+      // This is a real, deliberate reduction and it is recorded here rather
+      // than deleted: the previous assertion is the only reason anyone would
+      // notice. What the card gained is the other half — `TcWriteGateRow`
+      // announced as an UNNAMED article containing three buttons, and now
+      // carries an accessible name in both modes. Restoring the description
+      // means giving the card a `reassurance` prop; a mode-VARYING one would
+      // rebuild the split this change exists to remove, so it would have to be
+      // one string for both surfaces, which is a copy decision.
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      render(
+        withTransport(
+          transport,
+          <TcChat conversationId="c" mode={mode} approvals={[approval()]} />,
+        ),
+      );
+      const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+      expect(card).toHaveAccessibleName("Approval: Post to #launch-aurora");
+      // The design reserves "Approve & sign" for actions that actually reach a
+      // wallet; it arrived via `presentation.approve_label`, which the unified
+      // card does not read. A generic approval promises no signature either way.
+      expect(within(card).getByTestId(approveTid("appr-1"))).toHaveTextContent(
+        "Approve",
+      );
+    },
+  );
 
   it("hides approvals while scrubbed off-now", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
@@ -1198,6 +1315,278 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     );
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
     expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
+  });
+});
+
+// THE SAFETY PROPERTY, PINNED AT THE WIRING BOUNDARY.
+//
+// `TcWriteGateRow.test.tsx` proves the rule against a literal `irreversible`
+// prop, which proves the COMPONENT and nothing about whether anything ever sets
+// it. The predicate in between is `isIrreversible`, reading
+// `category.access` for the substring "destructive" — so a rename of that
+// field, or a projection that stops emitting the label, silently returns false
+// for every approval and every component test stays green while the destructive
+// lane never renders. That is the "a fix can land on a dead branch" shape, and
+// these are the tests that would see it.
+//
+// Worth stating plainly: today NEITHER producer of `category.access` can emit
+// "destructive" — the approval projection writes READ/ACTION and the web tool
+// labels write READ/WRITE/ACTION — so in production this lane is unreachable
+// and these tests drive a label only a fixture can supply. They pin the WIRE
+// (predicate → card), which is the half that can rot silently; making the label
+// real needs a backend allow-list change.
+describe("TcChat — a destructive ask reaches the card's destructive lane", () => {
+  const destructive = (over: Partial<TcChatApproval> = {}) =>
+    approval({
+      title: "Delete the launch channel",
+      category: { vendor: "SLACK", access: "DESTRUCTIVE" },
+      ...over,
+    });
+
+  it.each(["studio", "focus"] as const)(
+    "exposes no one-click approve in %s mode",
+    (mode) => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      render(
+        withTransport(
+          transport,
+          <TcChat conversationId="c" mode={mode} approvals={[destructive()]} />,
+        ),
+      );
+      const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+      expect(card.getAttribute("data-risk")).toBe("high");
+      // Not "there is no approve": no approve reachable in ONE CLICK from the
+      // collapsed card. Both names are checked, because the rule is expressed
+      // by the SPLIT between them.
+      expect(within(card).queryByTestId(approveTid("appr-1"))).toBeNull();
+      expect(within(card).queryByTestId(bodyApproveTid("appr-1"))).toBeNull();
+      // Declining stays one click, in every state. Making someone expand to say
+      // no is what leaves a write parked forever.
+      expect(within(card).getByTestId(rejectTid("appr-1"))).toBeTruthy();
+      // …and the chip is the only non-visual signal that this is destructive:
+      // the dot is aria-hidden and `data-risk` is not an ARIA attribute.
+      expect(within(card).getByTestId("tc-write-gate-chip").textContent).toBe(
+        "can't be undone",
+      );
+    },
+  );
+
+  it("opens approval only after the payload it is made on is on screen", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const onApprove = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[destructive()]}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    // Still no one-click approve — the rule is ORDER, not location.
+    expect(within(card).queryByTestId(approveTid("appr-1"))).toBeNull();
+    fireEvent.click(within(card).getByTestId(bodyApproveTid("appr-1")));
+    expect(onApprove).toHaveBeenCalledWith("appr-1");
+  });
+
+  it("withholds approval entirely when the ask carries no payload", () => {
+    // A gate can open before its approval projection lands, so an empty params
+    // frame is a REAL state — and approving over it is exactly the blind
+    // approval the whole lane exists to prevent.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[destructive({ params: [] })]}
+        />,
+      ),
+    );
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    expect(within(card).getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(within(card).queryByTestId(approveTid("appr-1"))).toBeNull();
+    expect(within(card).queryByTestId(bodyApproveTid("appr-1"))).toBeNull();
+  });
+});
+
+// The generalisation, at the wiring boundary: every gate-shaped prop is
+// optional, so an ordinary tool approval — no connector, no ledger row, no
+// arguments, no reason — must render through the same card WITHOUT a hole in
+// it. Each of these is a real production state, not a degraded one: `category`
+// is null for every non-MCP ask, `ledgerId` is undefined for every approval
+// with no `gate.opened` row (i.e. all of them except a parked write), and
+// `params` is empty whenever the tool's arguments are non-primitive.
+describe("TcChat — a bare approval renders no empty frames", () => {
+  const bare = (over: Partial<TcChatApproval> = {}) =>
+    approval({
+      title: "Send the weekly digest",
+      category: null,
+      params: [],
+      reason: "",
+      summary: null,
+      ...over,
+    });
+
+  it("omits the meta, the params frame, the audit anchor and the reason", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[bare()]} />,
+      ),
+    );
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    expect(within(card).getByTestId("tc-write-gate-title").textContent).toBe(
+      "Send the weekly digest",
+    );
+    // No connector ⇒ no meta span, rather than a dangling separator.
+    expect(within(card).queryByTestId("tc-write-gate-connector")).toBeNull();
+    // Not destructive by default: an unlabelled ask is an ordinary one, never a
+    // severity nobody asserted.
+    expect(within(card).queryByTestId("tc-write-gate-chip")).toBeNull();
+    expect(within(card).getByTestId(approveTid("appr-1"))).toBeTruthy();
+
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    expect(within(card).getByTestId("tc-write-gate-body")).toBeTruthy();
+    // Nothing framed: an empty params table reads as "it will send nothing",
+    // which is a different claim from "we do not have the arguments".
+    expect(within(card).queryByTestId("tc-write-gate-body-params")).toBeNull();
+    // And the audit anchor is OMITTED, never guessed. It anchors on
+    // `gate.opened` — a different event from the `approval_requested` this card
+    // was projected from — so deriving one locally would point at the wrong
+    // ledger row. No host join ⇒ no line.
+    expect(
+      within(card).queryByTestId("tc-write-gate-body-ledger-id"),
+    ).toBeNull();
+    expect(within(card).queryByTestId("tc-write-gate-body-reason")).toBeNull();
+  });
+
+  it("still says whether it can be undone, which is the one thing it always knows", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[bare()]} />,
+      ),
+    );
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    expect(
+      within(card).getByTestId("tc-write-gate-body-reversibility").textContent,
+    ).toBe("You can undo this from the connector if it's wrong.");
+  });
+});
+
+// THE WIRE, end to end. The projection has carried `presentation` all along;
+// `renderAskCard` simply stopped reading it, so a shape the backend spent a
+// whole projector deriving reached the client and rendered nowhere. Two lanes
+// reach this card and only one of them ever HAS a presentation: the write gate
+// rides `ask_a_question`, whose allow-list carries no presentation and no
+// arguments, so it must be unaffected. These pin both halves.
+describe("TcChat — the projected shape reaches the card", () => {
+  const draft =
+    "Launch Week is here. Over the next 7 days we're shipping one thing a day.";
+
+  const shaped = (over: Partial<TcChatApproval> = {}) =>
+    approval({
+      approvalKind: "mcp_tool",
+      presentation: {
+        layout: "preview",
+        approveLabel: "Approve & send",
+        rejectLabel: null,
+        provenance: null,
+        rows: [],
+        preview: { text: draft, meta: "14 words · 72 characters" },
+      },
+      ...over,
+    });
+
+  function mount(approvals: readonly TcChatApproval[]): void {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={approvals} />,
+      ),
+    );
+  }
+
+  it("shows the draft the connector will receive, and the verb for sending it", () => {
+    mount([shaped()]);
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    // The verb is on the collapsed card — it is what the button promises, so
+    // it cannot be behind the disclosure.
+    expect(within(card).getByTestId(approveTid("appr-1")).textContent).toBe(
+      "Approve & send",
+    );
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    expect(
+      within(card).getByTestId("tc-write-gate-body-preview").textContent,
+    ).toContain(draft);
+    expect(
+      within(card).getByTestId("tc-write-gate-body-preview-meta").textContent,
+    ).toBe("14 words · 72 characters");
+  });
+
+  it("draws a batch as its line items", () => {
+    mount([
+      shaped({
+        title: "Sign the payout batch",
+        presentation: {
+          layout: "rows",
+          approveLabel: "Approve & sign",
+          rejectLabel: null,
+          provenance: null,
+          preview: null,
+          rows: [
+            {
+              label: "Mira Patel",
+              value: "2,400 USDC",
+              note: "design",
+              initials: "MP",
+              rowId: "p1",
+              status: "pending",
+              decidable: true,
+            },
+          ],
+        },
+      }),
+    ]);
+    const card = within(askCard("appr-1")).getByTestId("tc-write-gate");
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    const rows = within(card).getByTestId("tc-write-gate-body-rows");
+    expect(rows.textContent).toContain("Mira Patel");
+    expect(rows.textContent).toContain("2,400 USDC");
+  });
+
+  it("leaves a parked write — which never carries a shape — untouched", () => {
+    mount([
+      approval({
+        approvalId: "mcp_write:run_abc:call_1",
+        approvalKind: "ask_a_question",
+        title: "Create an issue in Parth-test",
+        presentation: null,
+      }),
+    ]);
+    const card = within(askCard("mcp_write:run_abc:call_1")).getByTestId(
+      "tc-write-gate",
+    );
+    expect(
+      within(card).getByTestId(approveTid("mcp_write:run_abc:call_1"))
+        .textContent,
+    ).toBe("Approve");
+    fireEvent.click(within(card).getByTestId("tc-write-gate-review"));
+    expect(within(card).queryByTestId("tc-write-gate-body-preview")).toBeNull();
+    expect(within(card).queryByTestId("tc-write-gate-body-rows")).toBeNull();
   });
 });
 
@@ -1216,7 +1605,11 @@ function mcpAuthApproval(
     summary: "MCP authentication required",
     approvalKind: "mcp_auth",
     serverId: "linear",
-    category: { vendor: "Linear", access: "ACTION" },
+    // `access: null` is what an `mcp_auth_required` payload really projects to:
+    // it names a `server_id` and carries no `read_only`, so there is no axis to
+    // state. It used to read ACTION here, labelling a connector the run merely
+    // wants to sign into as one taking an action.
+    category: { vendor: "Linear", access: null },
     params: [],
     ...overrides,
   });
@@ -1266,13 +1659,15 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(
       screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
     ).toHaveTextContent("Deny");
-    // …and NOT the Approve/Reject `/decision` card.
+    // …and NOT the Approve/Decline `/decision` ask card. Asserted on THREE
+    // names that all exist in product code — the card root plus the two
+    // approval-scoped decision controls this very id would carry if the ask
+    // card had rendered — so none of these negatives can pass vacuously.
+    expect(screen.queryByTestId("tc-write-gate")).toBeNull();
     expect(
-      screen.queryByTestId("tc-chat-approval-approve-mcp_auth:run_1:linear"),
+      screen.queryByTestId(approveTid("mcp_auth:run_1:linear")),
     ).toBeNull();
-    expect(
-      screen.queryByTestId("tc-chat-approval-reject-mcp_auth:run_1:linear"),
-    ).toBeNull();
+    expect(screen.queryByTestId(rejectTid("mcp_auth:run_1:linear"))).toBeNull();
   });
 
   it("Connect calls beginAuth(serverId), Skip calls skipAuth(serverId); onApprove/onReject never fire", () => {
@@ -1365,10 +1760,10 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(
       screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
     ).not.toBeNull();
-    // Not the Focus `.conf-card` Approve/Reject variant.
-    expect(
-      screen.queryByTestId("tc-chat-conf-card-mcp_auth:run_1:linear"),
-    ).toBeNull();
+    // Not the ask card either — and in Focus specifically, which is where the
+    // retired `.conf-card` variant used to claim this. There is no Focus
+    // variant now, so the check that means something is the CARD's absence.
+    expect(screen.queryByTestId("tc-write-gate")).toBeNull();
   });
 
   it("degrades gracefully with no port wired (buttons render but are inert)", () => {
@@ -1394,7 +1789,7 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(record.calls.some((c) => c.path.includes("/decision"))).toBe(false);
   });
 
-  it("still routes a normal tool_action approval through Approve/Reject (no regression)", () => {
+  it("still routes a normal tool_action approval through Approve/Decline (no regression)", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const { port } = makePort();
     const onApprove = vi.fn();
@@ -1410,8 +1805,10 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
         />,
       ),
     );
-    // A tool_action approval keeps the Approve/Reject `/decision` card…
-    fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    // A tool_action approval keeps the Approve/Decline `/decision` card…
+    fireEvent.click(
+      within(askCard("appr-1")).getByTestId(approveTid("appr-1")),
+    );
     expect(onApprove).toHaveBeenCalledWith("appr-1");
     // …and never the Connect card.
     expect(screen.queryByTestId("tc-chat-mcp-auth-appr-1")).toBeNull();
@@ -2013,7 +2410,7 @@ describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () =
       expect(group.contains(card)).toBe(false);
     }
     // And the approve control is actually clickable, not just present.
-    expect(screen.getByTestId("tc-chat-approval-approve-appr-1")).toBeVisible();
+    expect(within(card).getByTestId(approveTid("appr-1"))).toBeVisible();
   });
 
   it("splits a run of tool calls in two when an approval lands between them", () => {

@@ -147,7 +147,7 @@ describe("ChatShell", () => {
     mount({ activeDestination: "home" });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "home");
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px minmax(0, 1fr)" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
     // "closed" must keep meaning "a rail exists and is collapsed".
@@ -163,7 +163,9 @@ describe("ChatShell", () => {
     const shell = shellRoot();
     // Right rail starts collapsed (0 track) — first-open state of a REAL rail.
     expect(shell).toHaveAttribute("data-right-rail-open", "closed");
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 224px 1fr 0" });
+    expect(shell).toHaveStyle({
+      gridTemplateColumns: "48px 224px minmax(0, 1fr) 0",
+    });
     expect(
       screen.getByRole("complementary", { name: /home panel/i }),
     ).toBeInTheDocument();
@@ -174,7 +176,7 @@ describe("ChatShell", () => {
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "chats");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "48px 1fr",
+      gridTemplateColumns: "48px minmax(0, 1fr)",
     });
     // The ContextPanel is absent for chats — single source of truth: no
     // double-sidebar.
@@ -235,7 +237,7 @@ describe("ChatShell", () => {
     fireEvent.click(screen.getByTestId("right-rail-toggle"));
     expect(shell).toHaveAttribute("data-right-rail-open", "open");
     expect(shell).toHaveStyle({
-      gridTemplateColumns: "48px 224px 1fr 380px",
+      gridTemplateColumns: "48px 224px minmax(0, 1fr) 380px",
     });
   });
 
@@ -274,7 +276,7 @@ describe("ChatShell", () => {
       "every conversation with the agent",
     );
     // Still full-bleed for the SIDE columns: no ContextPanel, no RightRail.
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px minmax(0, 1fr)" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
   });
@@ -308,7 +310,7 @@ describe("ChatShell", () => {
     mount({ activeDestination: "run", profile: "single_user_desktop" });
     const shell = shellRoot();
     expect(shell).toHaveAttribute("data-active-destination", "run");
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px minmax(0, 1fr)" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
     expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
@@ -327,7 +329,7 @@ describe("ChatShell", () => {
       onOpenSettings: () => {},
     });
     const shell = shellRoot();
-    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr" });
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px minmax(0, 1fr)" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
     // The gear is active; Projects is NOT highlighted while in Settings.

@@ -39,7 +39,22 @@ def log(line: str) -> None:
 
 
 def observe(s: DriverSession) -> dict:
-    """Read the layout and the checklist exactly as the user sees them."""
+    """Read the layout and the checklist exactly as the user sees them.
+
+    ``approvalsOutsideTranscript`` replaces the two dead strip probes
+    (``tc-chat-approvals`` / ``tc-chat-conf-cards``). Nothing in the product
+    emits either id any more, so asserting their absence asserted nothing at
+    all. The invariant they stood for is still real, so it is checked directly:
+    NO approval node may render outside the transcript. A pinned strip that grew
+    back — under ANY name — puts one here.
+
+    The prefix is deliberately ``tc-chat-approval-`` with the trailing hyphen.
+    It matches the stream ``<li>`` (``tc-chat-approval-item-<id>``), the ask
+    wrapper (``tc-chat-approval-<id>``) and its three decision controls
+    (``-approve-`` / ``-reject-`` / ``-body-approve-<id>``), and it does NOT
+    match the reachability line ``tc-chat-approvals-waiting``, which lives above
+    the composer on purpose and is asserted present separately.
+    """
     js = """(()=>{
       const chat=document.querySelector('[data-testid=tc-chat]');
       if(!chat) return "null";
@@ -58,10 +73,9 @@ def observe(s: DriverSession) -> dict:
         cardPresent:!!card,
         cardInTranscript:!!(card&&messages&&messages.contains(card)),
         cardPending:card&&card.getAttribute('data-approval-pending'),
-        strips:{
-          approvals:!!document.querySelector('[data-testid=tc-chat-approvals]'),
-          confCards:!!document.querySelector('[data-testid=tc-chat-conf-cards]'),
-        },
+        approvalsOutsideTranscript:[...document.querySelectorAll('[data-testid^="tc-chat-approval-"]')]
+          .filter((n)=>!(messages&&messages.contains(n)))
+          .map((n)=>n.getAttribute('data-testid')),
         waitingLine:(document.querySelector('[data-testid=tc-chat-approvals-waiting]')||{}).innerText||null,
         todoBlocked:root&&root.getAttribute('data-blocked'),
         todoRows:rows,
@@ -115,12 +129,16 @@ def main() -> int:
         log("── T6 parked on a folder ask ───────────────────────────────")
         log(f"      DOM order: {view['order']}")
 
-        # 1. The card is in the transcript; both strips are gone.
+        # 1. The card is in the transcript, and NOTHING approval-shaped is
+        #    anywhere else — which is the claim the two dead strip ids used to
+        #    stand in for, stated so that a strip under a new name fails too.
         assert view["cardInTranscript"], (
             f"the consent card is not anchored in the transcript: {view!r}"
         )
-        assert not view["strips"]["approvals"], "the Studio strip still renders"
-        assert not view["strips"]["confCards"], "the Focus strip still renders"
+        assert view["approvalsOutsideTranscript"] == [], (
+            "approval nodes rendered outside the transcript — a pinned strip is "
+            f"back: {view['approvalsOutsideTranscript']!r}"
+        )
         log("PASS  T6a consent card anchored in the transcript, no strips")
 
         # 2. The checklist is the last thing before the composer, always.

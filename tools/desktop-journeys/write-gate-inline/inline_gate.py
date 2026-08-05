@@ -137,6 +137,22 @@ def _result(outcome: str, reason: str | None = None) -> None:
     print(json.dumps(payload, sort_keys=True), flush=True)
 
 
+#: The three DECISION controls are named after the approval they decide —
+#: `tc-chat-approval-approve-<id>` / `-reject-<id>` / `-body-approve-<id>` — so
+#: two parked asks can never make a click ambiguous. Everything structural on
+#: the card (`tc-write-gate`, `-row`, `-title`, `-connector`, `-review`,
+#: `-body*`) is still a global name, which is why only these three are matched
+#: by PREFIX here and the rest stay exact.
+#:
+#: `-body-approve-` deliberately does not start with `-approve-`: an
+#: irreversible write's only approve lives in the body, and a prefix that
+#: swallowed it would let any "press Approve" journey press the one control the
+#: card withholds until its payload has been read.
+APPROVE_SELECTOR = "[data-testid^=tc-chat-approval-approve-]"
+BODY_APPROVE_SELECTOR = "[data-testid^=tc-chat-approval-body-approve-]"
+DECLINE_SELECTOR = "[data-testid^=tc-chat-approval-reject-]"
+
+
 def _read_gate(session: DriverSession) -> dict:
     """The write-gate row as the DOM actually has it."""
 
@@ -158,14 +174,19 @@ def _read_gate(session: DriverSession) -> dict:
         bodyParams: text('[data-testid=tc-write-gate-body-params]'),
         bodyReversibility: text('[data-testid=tc-write-gate-body-reversibility]'),
         bodyLedgerId: text('[data-testid=tc-write-gate-body-ledger-id]'),
-        rowApprove: !!document.querySelector('[data-testid=tc-write-gate-approve]'),
-        bodyApprove: !!document.querySelector('[data-testid=tc-write-gate-body-approve]'),
-        decline: !!document.querySelector('[data-testid=tc-write-gate-decline]'),
+        rowApprove: !!document.querySelector('__APPROVE__'),
+        bodyApprove: !!document.querySelector('__BODY_APPROVE__'),
+        decline: !!document.querySelector('__DECLINE__'),
         mode: (document.querySelector('[data-testid=thread-canvas]') || {}).getAttribute
           ? document.querySelector('[data-testid=thread-canvas]').getAttribute('data-mode')
           : null,
       };
     })()"""
+    js = (
+        js.replace("__APPROVE__", APPROVE_SELECTOR)
+        .replace("__BODY_APPROVE__", BODY_APPROVE_SELECTOR)
+        .replace("__DECLINE__", DECLINE_SELECTOR)
+    )
     return session.evaluate(js) or {}
 
 
@@ -331,7 +352,7 @@ def main() -> int:
 
                 # Decline. Never approve: the safe terminal state, and it leaves
                 # a resolved gate behind.
-                session.click("[data-testid=tc-write-gate-decline]")
+                session.click(DECLINE_SELECTOR)
                 time.sleep(3)
                 session.shot("03-declined")
                 completed = True

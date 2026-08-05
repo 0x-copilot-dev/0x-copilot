@@ -293,27 +293,25 @@ describe("desktop Run cockpit — the mid-run folder ask", () => {
       expect(decisionPosts(recorder)).toHaveLength(1);
     });
     expect(decisionPosts(recorder)[0]?.body).toEqual({ decision: "approved" });
-    // The ask is settled, not left hanging: the decision surface gives way.
-    //
-    // Where the receipt goes has now flipped twice, so the reasoning is worth
-    // keeping. It was dropped when approvals were PINNED above the composer —
-    // by then the run had continued, so a "✓ Approved" line carried no
-    // information and only cost height. Approvals are now anchored in the
-    // transcript instead, and there the receipt is the opposite: the only
-    // record of who decided what, at the point it was decided. So it is back,
-    // and it must be INSIDE the transcript rather than pinned.
+    // The ask is settled, not left hanging: the decision surface gives way, and
+    // a granted ask leaves no "✓ Approved" line behind. The grant itself is the
+    // durable record — the folder pill names what was granted, and the decision
+    // is on the event stream the Approvals tab and audit views read — so a line
+    // restating it in the transcript is the same fact twice.
     await waitFor(() => {
       expect(card(container)).toBeNull();
     });
-    const receipt = container.querySelector(
-      `[data-testid='tc-chat-approval-receipt-${APPROVAL_ID}']`,
-    );
-    expect(receipt).not.toBeNull();
+    // Asserted on the receipt component's OWN class, not on a
+    // `tc-chat-approval-receipt-<id>` testid: that testid is emitted nowhere in
+    // product code (`ApprovalReceipt` only ever rendered `.atlas-approval-*`
+    // classes), so a query for it would have been null whatever the transcript
+    // did. `.atlas-approval-receipt` is what a remounted receipt would paint.
+    expect(container.querySelector(".atlas-approval-receipt")).toBeNull();
+    // The transcript itself is still mounted — the card retired, it did not take
+    // the thread with it.
     expect(
-      container
-        .querySelector("[data-testid='tc-chat-messages']")
-        ?.contains(receipt as Node),
-    ).toBe(true);
+      container.querySelector("[data-testid='tc-chat-messages']"),
+    ).not.toBeNull();
   });
 
   it("shows the failure and leaves the run paused when the capability is opted out", async () => {

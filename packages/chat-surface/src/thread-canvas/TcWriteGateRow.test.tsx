@@ -6,9 +6,14 @@
 // loudest thing on it — the old twelve-line card offered Approve next to a
 // paragraph nobody reads while a run is streaming.
 
-import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
+import type { ApprovalPresentation } from "../approvals/presentation";
 import { TcWriteGateRow } from "./TcWriteGateRow";
 
 function row(overrides: Partial<Parameters<typeof TcWriteGateRow>[0]> = {}) {
@@ -98,6 +103,65 @@ describe("TcWriteGateRow — untrusted text", () => {
     expect(
       screen.getByTestId("tc-write-gate-decline").hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("disables the irreversible lane's body approve once a decision is in flight", () => {
+    // The check above runs on the default (reversible) fixture, so it proved
+    // nothing about the arm where approving is the expensive one — and it
+    // could not, because `tc-write-gate-body-approve` does not exist until the
+    // card is expanded. This drives the sequence that actually produces it:
+    // expand, click, and the host flips `busy` while the POST is in flight. A
+    // body Approve that stays live there is a double-submitted write that
+    // cannot be undone.
+    const props = {
+      title: "Delete the staging index",
+      connector: "elastic",
+      irreversible: true,
+      params: [{ label: "count", value: "14" }],
+      onApprove: vi.fn(),
+      onDecline: vi.fn(),
+    };
+    const { rerender } = render(<TcWriteGateRow {...props} />);
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const approve = screen.getByTestId("tc-write-gate-body-approve");
+    expect(approve.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(approve);
+    expect(props.onApprove).toHaveBeenCalledTimes(1);
+
+    rerender(<TcWriteGateRow {...props} busy />);
+    // Frozen, not unmounted: the evidence stays on screen while the decision
+    // lands, and the second click cannot happen.
+    expect(screen.getByTestId("tc-write-gate-body-params")).toBeTruthy();
+    for (const tid of [
+      "tc-write-gate-body-approve",
+      "tc-write-gate-decline",
+      "tc-write-gate-review",
+    ]) {
+      expect(screen.getByTestId(tid).hasAttribute("disabled")).toBe(true);
+    }
+    fireEvent.click(screen.getByTestId("tc-write-gate-body-approve"));
+    expect(props.onApprove).toHaveBeenCalledTimes(1);
+  });
+});
+
+// THE STATE ATTRIBUTE THE STYLESHEET IS KEYED ON.
+//
+// `review-surfaces.css` selects `.tc-write-gate[data-open="true"]` to rotate the
+// chevron and to lay out the body approve, and the live packaged-app journey
+// (`tools/desktop-journeys/write-gate-inline/inline_gate.py`) reads the same
+// attribute to decide whether the card opened. Nothing asserted it, so a
+// refactor that kept `open` purely in React state would leave the card
+// functionally correct, visually wrong, and the journey unable to tell.
+describe("TcWriteGateRow — the open state is on the DOM, not only in React", () => {
+  it("flips data-open on the card when the disclosure is used", () => {
+    row({ params: [{ label: "repo", value: "Parth-test" }] });
+    const card = () => screen.getByTestId("tc-write-gate");
+    expect(card().getAttribute("data-open")).toBe("false");
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(card().getAttribute("data-open")).toBe("true");
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(card().getAttribute("data-open")).toBe("false");
+    expect(screen.queryByTestId("tc-write-gate-body")).toBeNull();
   });
 });
 
@@ -244,5 +308,790 @@ describe("TcWriteGateRow — expand in place", () => {
     expect(screen.getByTestId("tc-write-gate-body-params")).toBeTruthy();
     fireEvent.click(screen.getByTestId("tc-write-gate-approve"));
     expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+});
+
+// THE LAYOUT RULE, pinned. "Expanding adds a body underneath and moves
+// nothing" is what makes a card that grows under the cursor safe to click on —
+// otherwise the button you were reaching for slides out from under you at the
+// exact moment you commit. jsdom has no layout engine, so what is asserted is
+// the thing layout is DERIVED from: the header's controls, their order, and
+// their labels are identical in both states. A width-varying label ("Review →"
+// → "Hide") is precisely how this used to break.
+describe("TcWriteGateRow — the header is identical collapsed and expanded", () => {
+  function headerActions(): readonly string[] {
+    const header = screen.getByTestId("tc-write-gate-row");
+    return [...header.querySelectorAll("button")].map(
+      (button) =>
+        `${button.getAttribute("data-testid") ?? ""}:${(button.textContent ?? "").trim()}`,
+    );
+  }
+
+  it("keeps the same controls, in the same order, with the same labels — reversible", () => {
+    row({ params: [{ label: "repo", value: "Parth-test" }] });
+    const collapsed = headerActions();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(headerActions()).toEqual(collapsed);
+  });
+
+  it("keeps the same controls, in the same order, with the same labels — irreversible", () => {
+    row({ irreversible: true, params: [{ label: "count", value: "14" }] });
+    const collapsed = headerActions();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    // The body approve appears BELOW the header, never inside it.
+    expect(screen.getByTestId("tc-write-gate-body-approve")).toBeTruthy();
+    expect(headerActions()).toEqual(collapsed);
+  });
+});
+
+describe("TcWriteGateRow — the disclosure", () => {
+  it("is a labelled chevron on a reversible ask, and says which way it goes", () => {
+    // Expanding is OPTIONAL here — the decision can be made without it — so the
+    // control is quiet furniture beside the buttons that matter.
+    row();
+    const chevron = screen.getByTestId("tc-write-gate-review");
+    expect(chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(chevron.getAttribute("aria-label")).toBe("Show what it will send");
+    fireEvent.click(chevron);
+    expect(
+      screen.getByTestId("tc-write-gate-review").getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("tc-write-gate-review").getAttribute("aria-label"),
+    ).toBe("Hide what it will send");
+  });
+
+  it("stays a NAMED button on an irreversible ask, where it is the only way through", () => {
+    // A 22px unlabelled glyph as the single path forward is the dead-control
+    // shape in another costume: Approve is withheld until the payload has been
+    // seen, so this button is the primary action and has to look like one.
+    row({ irreversible: true });
+    const review = screen.getByRole("button", { name: /review/i });
+    expect(review.getAttribute("data-testid")).toBe("tc-write-gate-review");
+    expect(review.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(review);
+    expect(screen.getByRole("button", { name: /review/i })).toBeTruthy();
+  });
+});
+
+// The generalisation: everything gate-shaped is optional, so an ordinary tool
+// approval — no connector, no ledger row, no canvas detail, no arguments —
+// renders through the same card without a hole in it.
+describe("TcWriteGateRow — an ordinary approval", () => {
+  it("renders with nothing but a title and two decisions", () => {
+    const onApprove = vi.fn();
+    const onDecline = vi.fn();
+    render(
+      <TcWriteGateRow
+        title="Send the weekly digest"
+        onApprove={onApprove}
+        onDecline={onDecline}
+      />,
+    );
+    expect(screen.getByTestId("tc-write-gate-title").textContent).toBe(
+      "Send the weekly digest",
+    );
+    expect(screen.queryByTestId("tc-write-gate-connector")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-chip")).toBeNull();
+    expect(
+      screen.getByTestId("tc-write-gate-row").getAttribute("data-risk"),
+    ).toBe("normal");
+    screen.getByTestId("tc-write-gate-approve").click();
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it("expands with no host listening at all", () => {
+    // `onReview` lost its last producer, so absent is the NORMAL case now — not
+    // a degraded one. The card must not depend on it in any form.
+    render(
+      <TcWriteGateRow
+        title="Send the weekly digest"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    // Nothing to show, so nothing is framed — an empty frame reads as "it will
+    // send nothing", which is a different claim from "we do not have it".
+    expect(screen.queryByTestId("tc-write-gate-body-params")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-ledger-id")).toBeNull();
+  });
+});
+
+describe("TcWriteGateRow — the meta line", () => {
+  it("reads connector · access when both are known", () => {
+    row({ access: "write" });
+    expect(screen.getByTestId("tc-write-gate-connector").textContent).toBe(
+      "linear · write",
+    );
+  });
+
+  it("lower-cases the projection's enum rather than reaching for text-transform", () => {
+    // `category.access` arrives as the projection's enum — READ or WRITE, and
+    // nothing when the payload stated no axis. The kit's rule is that a status
+    // label is lowercase AT THE SOURCE, so a screen reader hears what is on
+    // screen — which a CSS transform cannot deliver.
+    row({ access: "WRITE" });
+    expect(screen.getByTestId("tc-write-gate-connector").textContent).toBe(
+      "linear · write",
+    );
+  });
+
+  it("drops the access half rather than printing a dangling separator", () => {
+    row({ access: null });
+    expect(screen.getByTestId("tc-write-gate-connector").textContent).toBe(
+      "linear",
+    );
+  });
+
+  it("shows nothing at all when there is no connector to attribute it to", () => {
+    row({ connector: null, access: "write" });
+    expect(screen.queryByTestId("tc-write-gate-connector")).toBeNull();
+  });
+});
+
+describe("TcWriteGateRow — the irreversible chip", () => {
+  it("says so in plain text, which is the only non-visual signal of risk", () => {
+    // The dot is aria-hidden and `data-risk` is not an ARIA attribute, so
+    // without this a screen-reader user cannot tell a destructive ask from an
+    // ordinary one until they expand it.
+    row({ irreversible: true });
+    expect(screen.getByTestId("tc-write-gate-chip").textContent).toBe(
+      "can't be undone",
+    );
+  });
+
+  it("is absent on a reversible ask", () => {
+    row();
+    expect(screen.queryByTestId("tc-write-gate-chip")).toBeNull();
+  });
+});
+
+describe("TcWriteGateRow — the reason line", () => {
+  it("shows why the agent is asking, once expanded", () => {
+    row({ reason: "This writes outside the chat." });
+    expect(screen.queryByTestId("tc-write-gate-body-reason")).toBeNull();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-reason").textContent).toBe(
+      "This writes outside the chat.",
+    );
+  });
+
+  it("is omitted when there is no reason rather than printing an empty line", () => {
+    row({ reason: "" });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-reason")).toBeNull();
+  });
+});
+
+// THE SHAPE THE BACKEND PROJECTED.
+//
+// `presentation` is the server's answer to "what kind of thing is this" —
+// projected from the exact arguments the connector will receive, never from a
+// parallel model-authored description. When the consolidated card dropped it,
+// three things went with it, and only one of them was cosmetic: a batch of
+// payees rendered as a params frame that did not contain the batch (a
+// list-of-mappings is skipped by `buildParams`), a draft rendered as an
+// untruncated `<dd>`, and every approve button said "Approve" over calls the
+// backend had labelled "Approve & send" and "Approve & sign".
+//
+// The null case is asserted just as hard as the populated ones: the write-gate
+// lane rides a wire shape that carries NO presentation, so `null` has to render
+// byte-for-byte what this card rendered before shapes existed.
+
+function shape(
+  overrides: Partial<ApprovalPresentation> = {},
+): ApprovalPresentation {
+  return {
+    layout: "params",
+    approveLabel: null,
+    rejectLabel: null,
+    provenance: null,
+    rows: [],
+    preview: null,
+    ...overrides,
+  };
+}
+
+const DRAFT =
+  "Launch Week is here.\n\nOver the next 7 days we're shipping one thing a day.";
+
+describe("TcWriteGateRow — the approve verb the backend promised", () => {
+  it("uses the projected verb on the header button, not a neutral Approve", () => {
+    // "Approve & send" is the producer telling the reader what the click does.
+    // It is the ONE field set on every presentation the backend emits, so
+    // dropping it degrades every shaped approval at once.
+    render(
+      <TcWriteGateRow
+        title="Post to #launch-aurora"
+        presentation={shape({ approveLabel: "Approve & send" })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("tc-write-gate-approve").textContent).toBe(
+      "Approve & send",
+    );
+  });
+
+  it("uses the SAME verb on the body button — two controls, one promise", () => {
+    // The irreversible lane approves from the body, the reversible lane from
+    // the header. If the verb were applied to only one of them, the two
+    // controls would disagree about what a click does — and which one you get
+    // depends on a severity flag, not on the action.
+    render(
+      <TcWriteGateRow
+        title="Sign the payout batch"
+        irreversible
+        params={[{ label: "wallet", value: "0x8f42" }]}
+        presentation={shape({ approveLabel: "Approve & sign" })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-approve").textContent).toBe(
+      "Approve & sign",
+    );
+  });
+
+  it("falls back to the neutral Approve when the wire named no verb", () => {
+    render(
+      <TcWriteGateRow
+        title="Create an issue"
+        presentation={shape({ approveLabel: null })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("tc-write-gate-approve").textContent).toBe(
+      "Approve",
+    );
+  });
+
+  it("keeps Decline as the refusal verb — the wire never names one", () => {
+    // `reject_label` is set by no producer path, so this default is what has
+    // always painted. Pinned so the prop cannot become a back door for
+    // reverting the card's deliberate "Decline" copy.
+    render(
+      <TcWriteGateRow
+        title="Post to #launch-aurora"
+        presentation={shape({ approveLabel: "Approve & send" })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("tc-write-gate-decline").textContent).toBe(
+      "Decline",
+    );
+  });
+
+  it("does not move the buttons — a verb is state-invariant", () => {
+    // The layout rule, re-pinned with a presentation in play: `approveLabel`
+    // does not change with `open`, so the header stays byte-identical.
+    render(
+      <TcWriteGateRow
+        title="Post to #launch-aurora"
+        params={[{ label: "channel", value: "#launch-aurora" }]}
+        presentation={shape({
+          layout: "preview",
+          approveLabel: "Approve & send",
+          preview: { text: DRAFT, meta: "14 words · 71 characters" },
+        })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    const header = screen.getByTestId("tc-write-gate-row");
+    const labels = (): readonly string[] =>
+      [...header.querySelectorAll("button")].map(
+        (button) =>
+          `${button.getAttribute("data-testid") ?? ""}:${(button.textContent ?? "").trim()}`,
+      );
+    const collapsed = labels();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-preview")).toBeTruthy();
+    expect(labels()).toEqual(collapsed);
+  });
+});
+
+describe("TcWriteGateRow — the preview shape", () => {
+  function previewRow(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Post to #launch-aurora"
+        connector="slack"
+        params={[{ label: "channel", value: "#launch-aurora" }]}
+        presentation={shape({
+          layout: "preview",
+          approveLabel: "Approve & send",
+          preview: { text: DRAFT, meta: "14 words · 71 characters" },
+        })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("shows the draft itself, verbatim, once expanded", () => {
+    // A params table can say the post is going to #launch-aurora. Only the
+    // draft can say whether it should be sent.
+    previewRow();
+    expect(screen.queryByTestId("tc-write-gate-body-preview")).toBeNull();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-preview").textContent,
+    ).toContain(DRAFT);
+  });
+
+  it("carries the volumetric meta WITH the draft, never as an extra", () => {
+    // The frame scrolls and the producer truncates at 2000 characters, so this
+    // line is what keeps a partial draft honest about how much there is.
+    previewRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-preview-meta").textContent,
+    ).toBe("14 words · 71 characters");
+  });
+
+  it("omits the meta rather than printing an empty line", () => {
+    previewRow({
+      presentation: shape({
+        layout: "preview",
+        preview: { text: DRAFT, meta: null },
+      }),
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body-preview")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-body-preview-meta")).toBeNull();
+  });
+
+  it("keeps the remaining arguments alongside the draft", () => {
+    // The draft is the message; the params are where it is going. The
+    // projection drops only the argument the preview already renders in full.
+    previewRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-params").textContent,
+    ).toContain("#launch-aurora");
+  });
+
+  it("renders the draft as a text node, never as markup", () => {
+    // It originates in a model completion and may itself have come from tool
+    // output.
+    previewRow({
+      presentation: shape({
+        layout: "preview",
+        preview: { text: "<img src=x onerror=alert(1)>", meta: null },
+      }),
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const preview = screen.getByTestId("tc-write-gate-body-preview");
+    expect(preview.querySelector("img")).toBeNull();
+    expect(preview.textContent).toContain("<img src=x onerror=alert(1)>");
+  });
+});
+
+describe("TcWriteGateRow — the rows shape", () => {
+  const BATCH: ApprovalPresentation = shape({
+    layout: "rows",
+    approveLabel: "Approve & sign",
+    rows: [
+      {
+        label: "Mira Patel",
+        value: "2,400 USDC",
+        note: "design",
+        initials: "MP",
+        rowId: "p1",
+        status: "pending",
+        decidable: true,
+      },
+      {
+        label: "leo.eth",
+        value: "1,150 USDC",
+        note: null,
+        initials: "LE",
+        rowId: "p2",
+        status: "pending",
+        decidable: true,
+      },
+    ],
+  });
+
+  function batchRow(over: Record<string, unknown> = {}) {
+    return render(
+      <TcWriteGateRow
+        title="Sign the payout batch"
+        connector="safe"
+        presentation={BATCH}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        {...over}
+      />,
+    );
+  }
+
+  it("draws the batch as line items, not as a params dump", () => {
+    // This is the loss that was ABSENCE rather than restyling: `buildParams`
+    // keeps only primitive top-level arguments, so the list of mappings the
+    // batch came from never reaches the params frame at all.
+    batchRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const rows = screen.getByTestId("tc-write-gate-body-rows");
+    expect(rows.querySelectorAll("li")).toHaveLength(2);
+    expect(rows.textContent).toContain("Mira Patel");
+    expect(rows.textContent).toContain("2,400 USDC");
+    expect(rows.textContent).toContain("leo.eth");
+    expect(rows.textContent).toContain("1,150 USDC");
+  });
+
+  it("carries each row's monogram and note when it has them", () => {
+    batchRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const rows = screen.getByTestId("tc-write-gate-body-rows");
+    expect(rows.textContent).toContain("MP");
+    expect(rows.textContent).toContain("design");
+  });
+
+  it("hides the monogram from assistive tech — the label is the name", () => {
+    batchRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const monogram = screen
+      .getByTestId("tc-write-gate-body-rows")
+      .querySelector(".tc-write-gate__avatar");
+    expect(monogram?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("renders read-only — there is no wire for a per-row decision", () => {
+    // The host seam is `onApprove(approvalId)` → one `/decision` POST with no
+    // per-row field. A per-row button would post the whole batch under a label
+    // that says it posts one payee.
+    batchRow();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const rows = screen.getByTestId("tc-write-gate-body-rows");
+    expect(rows.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("counts as payload seen even with zero params", () => {
+    // The safety interaction. `payloadSeen` used to be `params.length > 0`,
+    // and a rows batch projects to ZERO params — so gating on params alone
+    // would withhold Approve over a card that shows every line item it is
+    // about to sign.
+    const onApprove = vi.fn();
+    batchRow({ irreversible: true, params: [], onApprove });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    fireEvent.click(screen.getByTestId("tc-write-gate-body-approve"));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    // And still never one click from the collapsed row.
+    expect(screen.queryByTestId("tc-write-gate-approve")).toBeNull();
+  });
+
+  it("still withholds approve when the shape has nothing to draw", () => {
+    // Attribution is not evidence: a presentation carrying only a verb and a
+    // provenance line puts nothing on screen to consent to.
+    render(
+      <TcWriteGateRow
+        title="Sign the payout batch"
+        irreversible
+        params={[]}
+        presentation={shape({
+          approveLabel: "Approve & sign",
+          provenance: "Launch Week ops · Safe 3-of-5",
+        })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-body")).toBeTruthy();
+    expect(screen.queryByTestId("tc-write-gate-body-approve")).toBeNull();
+  });
+});
+
+describe("TcWriteGateRow — provenance", () => {
+  // Unreachable from any real payload today — the projector passes
+  // `provenance=` on none of its three return paths. Pinned as a degrading
+  // line, NOT as evidence that the field arrives.
+  it("prints which run and which account, in the body", () => {
+    render(
+      <TcWriteGateRow
+        title="Sign the payout batch"
+        presentation={shape({ provenance: "Launch Week ops · Safe 3-of-5" })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-body-provenance").textContent,
+    ).toBe("Launch Week ops · Safe 3-of-5");
+  });
+
+  it("is omitted when the wire carried none", () => {
+    render(
+      <TcWriteGateRow
+        title="Sign the payout batch"
+        presentation={shape({ approveLabel: "Approve & sign" })}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-provenance")).toBeNull();
+  });
+});
+
+describe("TcWriteGateRow — no presentation at all", () => {
+  // The write-gate lane rides the `ask_a_question` wire shape, which carries
+  // no presentation and no arguments. It is the MOST common ask, so "null
+  // changes nothing" is the load-bearing case, not the edge case.
+  function bare(presentation: ApprovalPresentation | null | undefined) {
+    const { container, unmount } = render(
+      <TcWriteGateRow
+        title="Create an issue in Parth-test"
+        connector="linear"
+        access="WRITE"
+        reason="This writes outside the chat."
+        params={[{ label: "repo", value: "Parth-test" }]}
+        ledgerId="r7f3·142"
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+        {...(presentation === undefined ? {} : { presentation })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const html = container.innerHTML;
+    unmount();
+    return html;
+  }
+
+  it("renders exactly what an omitted presentation renders", () => {
+    expect(bare(null)).toBe(bare(undefined));
+  });
+
+  it("adds no empty frame and no placeholder", () => {
+    render(
+      <TcWriteGateRow
+        title="Create an issue in Parth-test"
+        params={[{ label: "repo", value: "Parth-test" }]}
+        presentation={null}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-body-rows")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-preview")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-body-provenance")).toBeNull();
+    expect(screen.getByTestId("tc-write-gate-approve").textContent).toBe(
+      "Approve",
+    );
+    expect(screen.getByTestId("tc-write-gate-decline").textContent).toBe(
+      "Decline",
+    );
+  });
+});
+
+// ── the header may clip anything EXCEPT the decision ────────────────────────
+//
+// The frame is `overflow: hidden`, so a row that does not fit is cut at its
+// END — where the buttons are. The header's one unbounded string is the meta:
+// its vendor half is an MCP server slug, arbitrary length, chosen by whoever
+// registered the server. As `flex: none` with `white-space: nowrap` and no cap
+// it could not give way, so a long slug in a narrow chat column pushed Approve
+// and Decline past the clip — an approval nobody can act on, which is strictly
+// worse than an approval nobody can fully read.
+//
+// jsdom runs no layout engine, so "at 240px the button is still on screen" is
+// not measurable here and a fixed width in this file would be theatre. What
+// decides the outcome IS measurable: flexbox resolves an over-wide line by
+// shrink weight (factor × basis), and jsdom resolves the shorthands off the
+// real stylesheet. So these read the shipped CSS through the real card's DOM
+// and pin the ORDER in which the row gives way. A `flex: none` on the meta —
+// the regression — fails the first assertion.
+describe("TcWriteGateRow — the header's shrink order", () => {
+  const here =
+    typeof import.meta.dirname === "string"
+      ? import.meta.dirname
+      : dirname(fileURLToPath(import.meta.url));
+
+  let sheet: HTMLStyleElement | null = null;
+
+  function renderWithRealCss(): void {
+    sheet = document.createElement("style");
+    sheet.textContent = readFileSync(
+      resolve(here, "review-surfaces.css"),
+      "utf-8",
+    );
+    document.head.appendChild(sheet);
+    render(
+      <TcWriteGateRow
+        title="Create an issue in Parth-test"
+        // A real slug shape, long enough that no column fits it whole.
+        connector="acme-corp-internal-tooling-linear-production-us-east-1"
+        access="WRITE"
+        presentation={{
+          layout: "params",
+          rows: [],
+          preview: null,
+          approveLabel: "Approve & sign",
+          rejectLabel: null,
+          provenance: null,
+        }}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+  }
+
+  afterEach(() => {
+    sheet?.remove();
+    sheet = null;
+  });
+
+  it("lets the unbounded connector slug ellipsise, so it cannot push anything", () => {
+    renderWithRealCss();
+    const meta = screen.getByTestId("tc-write-gate-connector");
+    const style = globalThis.getComputedStyle(meta);
+    // Shrinkable and floorless: the only item on the row that carries a string
+    // nobody in this repo controls has to be the one that yields.
+    expect(style.flexShrink).toBe("1");
+    expect(style.minWidth).toBe("0px");
+    // …and yields by ellipsising rather than by wrapping the row taller.
+    expect(style.overflow).toBe("hidden");
+    expect(style.textOverflow).toBe("ellipsis");
+    expect(style.whiteSpace).toBe("nowrap");
+  });
+
+  it("never shrinks the decision controls, whatever else is on the row", () => {
+    renderWithRealCss();
+    const actions = document.querySelector(".tc-write-gate__actions");
+    expect(actions).not.toBeNull();
+    const style = globalThis.getComputedStyle(actions as Element);
+    expect(style.flexShrink).toBe("0");
+    // The guarantee is only worth having if it covers the controls themselves:
+    // both live inside the box that cannot shrink.
+    expect(actions?.contains(screen.getByTestId("tc-write-gate-approve"))).toBe(
+      true,
+    );
+    expect(actions?.contains(screen.getByTestId("tc-write-gate-decline"))).toBe(
+      true,
+    );
+    // The approve verb comes off the wire, so its width is not ours either —
+    // which is exactly why the row must absorb width elsewhere.
+    expect(screen.getByTestId("tc-write-gate-approve").textContent).toBe(
+      "Approve & sign",
+    );
+  });
+
+  it("gives the title zero shrink weight, so it takes the leftover instead of competing", () => {
+    renderWithRealCss();
+    const style = globalThis.getComputedStyle(
+      screen.getByTestId("tc-write-gate-title"),
+    );
+    // `flex: 1` ⇒ basis 0 ⇒ shrink contribution (factor × basis) of zero: the
+    // title occupies what is left after the fixed items, and ellipsises there.
+    expect(style.flexBasis).toBe("0%");
+    expect(style.minWidth).toBe("0px");
+    expect(style.textOverflow).toBe("ellipsis");
+  });
+
+  it("wraps every string in the body, so none of them can push the controls out of reach", () => {
+    // The row's shrink order above protects the HEADER from the header's own
+    // content. This protects it from the BODY's, which is a different failure
+    // and the one that actually shipped: the card is a grid, so an unbreakable
+    // token in the body sets the body's min-content width, that becomes the
+    // TRACK width, and the header — a grid item in the same track — stretches
+    // to it and overflows a frame that is `overflow: hidden`. The decision
+    // controls end up clipped out of reach, on a card whose entire job is to
+    // collect a decision. Every string down here is authored by the model or
+    // the connector, so none of them may be trusted to contain a space.
+    sheet = document.createElement("style");
+    sheet.textContent = readFileSync(
+      resolve(here, "review-surfaces.css"),
+      "utf-8",
+    );
+    document.head.appendChild(sheet);
+    const unbreakable = "x".repeat(138);
+    render(
+      <TcWriteGateRow
+        title="Create an issue in Parth-test"
+        connector="linear"
+        reason={`Copilot is asking before it writes ${unbreakable}`}
+        params={[{ label: "title", value: unbreakable }]}
+        presentation={{
+          layout: "preview",
+          rows: [],
+          preview: { text: unbreakable, meta: unbreakable },
+          approveLabel: null,
+          rejectLabel: null,
+          provenance: unbreakable,
+        }}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+
+    const body = document.querySelector(".tc-write-gate__body");
+    expect(body).not.toBeNull();
+    // Asserted over EVERY descendant rather than a list of classes, because the
+    // rule is per-container for exactly that reason: the next element added to
+    // this body inherits the protection instead of having to remember it.
+    const nodes = [body as Element, ...(body as Element).querySelectorAll("*")];
+    expect(nodes.length).toBeGreaterThan(4);
+    for (const node of nodes) {
+      expect(globalThis.getComputedStyle(node).overflowWrap).toBe("anywhere");
+    }
+  });
+
+  it("keeps the risk chip unshrinkable — it is the only non-visual risk signal", () => {
+    sheet = document.createElement("style");
+    sheet.textContent = readFileSync(
+      resolve(here, "review-surfaces.css"),
+      "utf-8",
+    );
+    document.head.appendChild(sheet);
+    render(
+      <TcWriteGateRow
+        title="Delete the production database"
+        connector="acme-corp-internal-tooling-linear-production-us-east-1"
+        access="WRITE"
+        irreversible
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    const style = globalThis.getComputedStyle(
+      screen.getByTestId("tc-write-gate-chip"),
+    );
+    // Fixed-length copy, so it costs the row nothing to keep it whole — and
+    // ellipsising "can't be undone" is not a trade worth making.
+    expect(style.flexShrink).toBe("0");
+  });
+
+  // The desktop CSS-shadowing trap: a host sheet re-declaring a package-owned
+  // class name wins the cascade and would silently restore `flex: none` here,
+  // with every assertion above still green.
+  it("owns these rules itself — no host stylesheet re-declares them", () => {
+    const root = join(here, "..", "..", "..", "..");
+    for (const hostSheet of [
+      join(root, "apps", "frontend", "src", "styles.css"),
+      join(root, "apps", "desktop", "renderer", "desktop.css"),
+    ]) {
+      let css = "";
+      try {
+        css = readFileSync(hostSheet, "utf8");
+      } catch {
+        continue; // sheet absent in this checkout — nothing to shadow
+      }
+      expect(
+        css.includes("tc-write-gate"),
+        `${hostSheet} must not own the ask card's class names`,
+      ).toBe(false);
+    }
   });
 });
