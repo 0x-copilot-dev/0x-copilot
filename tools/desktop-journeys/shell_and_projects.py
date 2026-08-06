@@ -624,6 +624,39 @@ def _thread_titles(s: DriverSession) -> list[str]:
     )
 
 
+def _move_from_chats_row(
+    s: DriverSession, conversation_id: str, project_id: str | None
+) -> None:
+    """Re-file a chat from the Chats list: row ⋯ → Move to project → pick.
+
+    The composer's filing zone is pre-first-message only, so this is the surface
+    that owns re-filing a chat that already has a transcript. The sheet mounts
+    the SAME `ProjectFilingChip`, hence the identical option testids.
+    """
+
+    s.open_destination("Chats")
+    row = f'[data-testid=chat-archive-row][data-conversation-id="{conversation_id}"]'
+    assert s.wait_for(row, 30), f"chat row {conversation_id} not in the Chats list"
+    s.click(f"{row} [data-testid=chat-archive-row-overflow-trigger]")
+    assert s.wait_for("[data-testid=chat-archive-row-overflow-menu]", 15), (
+        "the row's ⋯ menu never opened"
+    )
+    s.click("[data-testid=chat-archive-row-move-to-project]")
+    assert s.wait_for("[data-testid=desktop-project-filing-sheet]", 15), (
+        "'Move to project…' opened no sheet"
+    )
+    s.click("[data-testid=composer-project-filing-trigger]")
+    assert s.wait_for("[data-testid=composer-project-filing-menu]", 15)
+    if project_id is None:
+        s.click("[data-testid=composer-project-filing-none]")
+    else:
+        s.click(
+            "[data-testid=composer-project-filing-option]"
+            f'[data-project-id="{project_id}"]'
+        )
+    time.sleep(1.5)
+
+
 def _open_filing_menu(s: DriverSession, timeout_s: int = 30) -> None:
     """Open the composer's filing menu, waiting out any in-flight write.
 
@@ -1016,17 +1049,17 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
         f"a run started under scope A was filed elsewhere: {json.dumps(fresh)[:300]}"
     )
 
-    # D. Re-file an EXISTING chat (the PATCH path).
+    # D. Re-file an EXISTING chat (the PATCH path) — from the CHATS ROW.
+    #
+    # Not from the composer: the filing zone is pre-first-message only, so once
+    # a chat has a transcript the surface that owns re-filing is the Chats row's
+    # ⋯ → "Move to project". That is the deliberate division — filing is
+    # orientation when you START, and an action ON a chat afterwards.
     moved_id = fresh["conversation_id"]
     settled = _wait_run_settled(s, moved_id)
-    print(f"  run settled ({settled}); re-filing")
+    print(f"  run settled ({settled}); re-filing from the Chats row")
 
-    _open_filing_menu(s)
-    s.click(f'[data-testid=composer-project-filing-option][data-project-id="{b_id}"]')
-    time.sleep(1.5)
-    assert PROJECT_B in _chip_label(s), (
-        f"chip did not move to project B, reads {_chip_label(s)!r}"
-    )
+    _move_from_chats_row(s, moved_id, project_id=b_id)
     deadline = time.time() + 20
     while time.time() < deadline:
         if _project_of(s, moved_id) == b_id:
@@ -1038,10 +1071,8 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
     )
     s.shot("refiled-to-b")
 
-    # E. Unfiling clears the field.
-    _open_filing_menu(s)
-    s.click("[data-testid=composer-project-filing-none]")
-    time.sleep(1.5)
+    # E. Unfiling clears the field. `null` and "absent" differ to a PATCH.
+    _move_from_chats_row(s, moved_id, project_id=None)
     deadline = time.time() + 20
     while time.time() < deadline:
         if _project_of(s, moved_id) is None:
@@ -1050,9 +1081,6 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
     assert _project_of(s, moved_id) is None, (
         "unfiling left the chat filed as "
         f"{_project_of(s, moved_id)!r} — the write sent no explicit null"
-    )
-    assert "No project" in _chip_label(s), (
-        f"chip did not return to 'No project': {_chip_label(s)!r}"
     )
     s.shot("unfiled")
 
