@@ -36,6 +36,7 @@ from __future__ import annotations
 
 __operation_boundary__ = "presentation"
 
+import json
 import re
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -103,6 +104,11 @@ class _Keys:
     # ``structuredContent`` on the wire, ``structured_content`` in the adapter's
     # TypedDict, ``StructuredContent`` from something else. Adding a
     # punctuated variant here does nothing; it can never match.
+    # MCP content-block shape. `type` names the block kind; `text` is both
+    # the discriminator value and the field carrying the payload.
+    CONTENT_TYPE: Final[str] = "type"
+    CONTENT_TEXT: Final[str] = "text"
+
     WRAPPERS: Final[frozenset[str]] = frozenset(
         {
             "data",
@@ -420,11 +426,88 @@ class EnvelopeUnwrapper:
 
         current = output
         for _ in range(_Limits.UNWRAP_DEPTH):
+            decoded = cls._decode_content_once(current)
+            if decoded is not None:
+                current = decoded
+                continue
             peeled = cls._peel_once(current)
             if peeled is None:
                 return current
             current = peeled
         return current
+
+    @classmethod
+    def _decode_content_once(cls, value: object) -> object | None:
+        """Decode one MCP content envelope, or ``None`` when it is not one.
+
+        This is the step whose absence made every real connector render an
+        empty table. ``content_and_artifact`` hands back ``(content, artifact)``
+        and ``artifact`` is ``None`` unless the server sent
+        ``structuredContent`` — which effectively no server does. So what
+        arrives is the model-facing half::
+
+            {"result": [{"type": "text", "text": "{\\"issues\\": [...]}"}]}
+
+        The rows are right there, as a JSON *string* inside a text block, and
+        nothing parsed it. A curated spec of ``items_path: "issues"`` was
+        correct and still bound nothing, because ``issues`` is a key of the
+        document inside ``text``, not of the envelope around it.
+
+        Runs BEFORE :meth:`_peel_once` in the loop rather than inside it,
+        because that method deliberately refuses to peel to a non-``Mapping``
+        (so ``{"data": [row, row]}`` stays bindable by ``items_path: "data"``)
+        and a content envelope is exactly the list case it declines.
+        """
+
+        blocks = value
+        if isinstance(value, Mapping):
+            keys = _Shape.meaningful_keys(value)
+            if len(keys) != 1:
+                return None
+            if _KeyNamer.normalized(keys[0]) not in _Keys.WRAPPERS:
+                return None
+            blocks = value[keys[0]]
+
+        if not cls._is_content_blocks(blocks):
+            return None
+        decoded = [cls._decode_block(block) for block in blocks]
+        return decoded[0] if len(decoded) == 1 else decoded
+
+    @classmethod
+    def _is_content_blocks(
+        cls, value: object
+    ) -> TypeGuard[Sequence[Mapping[str, object]]]:
+        """A non-empty sequence of ``{"type": "text", "text": str}`` mappings.
+
+        Every element must qualify. A list carrying one text block and one row
+        mapping is a payload we would be corrupting, not an envelope.
+        """
+
+        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+            return False
+        if not value:
+            return False
+        return all(
+            isinstance(block, Mapping)
+            and block.get(_Keys.CONTENT_TYPE) == _Keys.CONTENT_TEXT
+            and isinstance(block.get(_Keys.CONTENT_TEXT), str)
+            for block in value
+        )
+
+    @classmethod
+    def _decode_block(cls, block: Mapping[str, object]) -> object:
+        """The block's JSON payload, or its raw text when it carries none.
+
+        Falling back to the string rather than dropping the block is what keeps
+        the N1 model tier's input intact: a prose result must still reach the
+        shaper, and a surface must never end up with nothing at all.
+        """
+
+        text = block[_Keys.CONTENT_TEXT]
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError):
+            return text
 
     @classmethod
     def _peel_once(cls, value: object) -> Mapping[object, object] | None:

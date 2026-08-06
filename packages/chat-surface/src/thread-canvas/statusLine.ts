@@ -27,6 +27,9 @@ export interface StatusStripLine {
   readonly kind: "idle" | "assembling";
 }
 
+/** Client-folded surfaces (`projectReceiptV2`) that never emit `view.derived`. */
+const RECEIPT_SCHEME = "receipt://";
+
 const IDLE: StatusStripLine = { kind: "idle" };
 const ASSEMBLING: StatusStripLine = { kind: "assembling" };
 
@@ -56,6 +59,12 @@ export function projectStatusLine(
     const surfaceId = surfaceIdOf(event);
     if (surfaceId === "") continue;
     if (event.event_type === "surface.created") {
+      // Only surfaces that can EARN a view count. A `receipt://` surface never
+      // emits `view.derived` — the client folds it itself (`projectReceiptV2`)
+      // — so counting one as unresolved pinned the strip on "Shaping…" for the
+      // rest of the run. A real Linear run had three receipts against one
+      // table; the table resolved in 1.4s and the strip never stopped.
+      if (surfaceId.startsWith(RECEIPT_SCHEME)) continue;
       created.add(surfaceId);
     } else if (event.event_type === "view.derived") {
       viewed.add(surfaceId);
