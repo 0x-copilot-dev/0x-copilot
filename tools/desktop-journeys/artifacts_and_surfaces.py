@@ -1,0 +1,1714 @@
+#!/usr/bin/env python3
+"""artifacts-and-surfaces — what Studio draws when the agent authors something.
+
+The big win of grouping these: five originals each paid for their own boot AND
+their own dataset publication to assert five different things about the SAME
+artifact. Here the dataset is published ONCE (AS-2) and every later phase reads
+it.
+
+Ordering is load-bearing. AS-3 asserts the canvas presents the artifact WITHOUT
+navigation, so it must run before AS-4 opens it from the Sources rail — once
+you have clicked into it, "did it present on its own?" is unanswerable. AS-1
+runs first and in its own conversation because it asserts the ABSENCE of every
+rich surface, which only means something before anything has published one.
+
+    python3 tools/desktop-journeys/artifacts_and_surfaces.py
+
+Folds in: generative-workflows/{g0_plain_chat, g2a_csv_artifact_surface,
+g2b_csv_canvas_autopresent, g2c_canvas_survives_followup,
+g2d_artifact_edit_regressions}, surface-colour, surface-follow-live,
+surface-floor.
+
+AS-9 needs the loopback fixture MCP server (`surface-floor/fixture_mcp.py`)
+listening on 8931; it skips rather than fails when nothing is there. Every
+connector in a desktop profile needs an OAuth authorization an automated
+journey must not complete in the user's name, and without SOME connected MCP
+server the PRESENT stage never fires and no surface is ever shaped.
+
+The provider key is read from services/ai-backend/.env and only ever reaches the
+password field — never printed, logged, or written to an artifact.
+"""
+
+from __future__ import annotations
+
+import base64
+import csv
+import io
+import json
+import time
+import re
+import urllib.error
+import urllib.request
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any, Final
+
+from _lib import (
+    SOURCE_TARGET,
+    ARTIFACT_JOURNEY_ENVIRONMENT,
+    SECRET_ENVIRONMENT_NAMES,
+    DriverSession,
+    JourneyPlan,
+    assert_no_plaintext_secret,
+    byok_provider,
+    load_env_key,
+    preflight_staged_runtime,
+    require,
+    runs_for_conversation,
+    wait_for_conversation_id,
+    wait_for_new_run,
+    wait_for_terminal_run,
+)
+
+STATE: dict[str, Any] = {}
+
+
+def log(line: str) -> None:
+    print(f"  {line}", flush=True)
+
+
+def new_chat(s: DriverSession) -> None:
+    """Leave the current conversation for a clean one."""
+
+    s.open_destination("Chats")
+    assert s.wait_for("[data-testid=chats-new-chat]", 30), "Chats has no New chat"
+    s.click("[data-testid=chats-new-chat]")
+    assert s.wait_for("[data-testid=run-empty-composer]", 30), (
+        "New chat did not open the empty cockpit"
+    )
+    time.sleep(1)
+
+
+PLAIN_PROMPT = (
+    "What is the difference between a Python tuple and a list? "
+    "Answer in exactly three concise bullet points from your internal knowledge. "
+    "Do not browse, call tools, read files, create artifacts, or make changes."
+)
+
+
+RICH_UI_SELECTORS = {
+    "tool card": '[data-testid^="tc-chat-tool-"]',
+    "subagent fleet card": '[data-testid^="tc-chat-fleet-"]',
+    "surface tab strip": "[data-testid=tc-tabs]",
+    "artifact frame": "[data-testid=artifact-frame]",
+    "staged-write card": "[data-testid=effect-stage-card]",
+    "staged-write approval bar": "[data-testid=tc-approve-bar]",
+    "staged draft": "[data-testid=tc-staged-draft]",
+    "staged row table": "[data-testid=tc-staged-table]",
+    "workspace stage": "[data-testid=tc-workspace-stage]",
+    "receipt launcher": "[data-testid=receipt-v2-launch]",
+    "receipt surface": "[data-testid=receipt-v2-surface]",
+}
+
+
+FOLLOW_LIVE_CREATE_PROMPT = """Create exactly two reviewable artifacts in Studio, then stop.
+
+1. A CSV dataset named `bookings-forecast.csv` with exact content:
+```csv
+month,new_bookings,renewals
+2026-09,120000,84000
+2026-10,135000,91000
+2026-11,148000,96000
+```
+2. A Markdown document named `forecast-notes.md` with exact content:
+```markdown
+# Forecast notes
+
+Assumes renewals hold at the trailing three-month average.
+```
+
+Publish both artifacts. Do not stage or write workspace files."""
+
+
+@dataclass(frozen=True)
+class ArtifactReference:
+    artifact_id: str
+    revision: int
+    kind: str
+    content_ref: str
+
+
+ARTIFACT_NAME: Final = "forecast.csv"
+
+
+APPLY_EVENTS: Final = frozenset({"write.applied", "effect.applied"})
+
+
+def _payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    value = event.get("payload")
+    return value if isinstance(value, dict) else {}
+
+
+def _dataset_artifacts(events: list[dict[str, Any]]) -> list[ArtifactReference]:
+    known_kinds: dict[str, str] = {}
+    references: list[ArtifactReference] = []
+    for event in events:
+        if event.get("event_type") not in ARTIFACT_EVENTS:
+            continue
+        payload = _payload(event)
+        artifact_id = payload.get("artifact_id")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            continue
+        kind = payload.get("kind")
+        if isinstance(kind, str):
+            known_kinds[artifact_id] = kind
+        resolved_kind = known_kinds.get(artifact_id)
+        if resolved_kind != "dataset":
+            continue
+        references.append(
+            ArtifactReference(
+                artifact_id=artifact_id,
+                revision=_required_positive_int(payload, "revision"),
+                kind=resolved_kind,
+                content_ref=_required_text(payload, "content_ref"),
+            )
+        )
+    return references
+
+
+def _artifact_detail(session: DriverSession, artifact_id: str) -> dict[str, Any]:
+    detail = session.transport("GET", f"/v1/agent/artifacts/{artifact_id}")
+    assert isinstance(detail, dict), "artifact detail is malformed"
+    return detail
+
+
+def _parse_csv_bytes(content: bytes) -> tuple[list[str], list[dict[str, str]]]:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AssertionError("CSV artifact is not valid UTF-8") from exc
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    headers = reader.fieldnames
+    assert headers is not None and all(headers), "CSV has no complete header row"
+    assert len(headers) == len(set(headers)), "CSV has duplicate headers"
+    rows = list(reader)
+    assert rows, "CSV has no data rows"
+    assert all(None not in row for row in rows), "CSV contains malformed extra cells"
+    assert all(all(value is not None for value in row.values()) for row in rows), (
+        "CSV contains a short row"
+    )
+    return list(headers), rows
+
+
+def _required_text(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    assert isinstance(value, str) and value, f"event payload omitted {key}"
+    return value
+
+
+def _required_positive_int(payload: Mapping[str, Any], key: str) -> int:
+    value = payload.get(key)
+    assert isinstance(value, int) and value > 0, f"event payload omitted {key}"
+    return value
+
+
+def _canvas_state(session: DriverSession) -> str:
+    """Which terminal state the artifact canvas is in, or `loading`.
+
+    `ArtifactFrame` renders exactly one of these testids, so this is the whole
+    state machine and not a heuristic.
+    """
+
+    return (
+        session.evaluate(
+            "(() => {"
+            "for (const id of ['artifact-frame','artifact-error','artifact-deleted','artifact-loading'])"
+            "  if (document.querySelector('[data-testid='+id+']')) return id;"
+            "return 'absent';"
+            "})()"
+        )
+        or "absent"
+    )
+
+
+ARTIFACT_EVENTS: Final = frozenset({"artifact.created", "artifact.revised"})
+
+
+UNRELATED_TOOL_MARKERS: Final = frozenset(
+    {
+        "web_search",
+        "browser",
+        "mail",
+        "discord",
+        "timeline",
+        "slack",
+        "gmail",
+        "twitter",
+        "x.com",
+    }
+)
+
+
+INITIAL_HEADERS: Final = ("month", "region", "bookings", "forecast")
+
+
+ARTIFACT_CONTENT_REF: Final = re.compile(
+    r"^artifact://(?P<artifact_id>[^/]+)/revisions/(?P<revision>[1-9][0-9]*)$"
+)
+
+
+CREATE_PROMPT: Final = """Create a reviewable CSV dataset artifact named
+forecast.csv. It must be a valid UTF-8 RFC-4180-style CSV with exactly these
+headers in this order: month,region,bookings,forecast. Include at least three
+monthly rows and integer bookings and forecast values. Keep it as an editable
+dataset/table in Studio. Do not write any local workspace file, do not stage an
+effect, do not browse, and do not use connectors or unrelated tools."""
+
+
+def run_events(session: DriverSession, run_id: str) -> list[dict[str, Any]]:
+    replay = session.transport("GET", f"/v1/agent/runs/{run_id}/events")
+    events = replay.get("events", [])
+    assert isinstance(events, list), "event replay omitted events"
+    assert all(isinstance(event, dict) for event in events), "event replay is malformed"
+    return events
+
+
+def dataset_artifact_from_run(events: list[dict[str, Any]]) -> ArtifactReference:
+    artifacts = _dataset_artifacts(events)
+    assert artifacts, "agent did not create a dataset artifact"
+    return artifacts[-1]
+
+
+def artifact_detail(session: DriverSession, artifact_id: str) -> dict[str, Any]:
+    detail = session.transport("GET", f"/v1/agent/artifacts/{artifact_id}")
+    assert isinstance(detail, dict), "artifact detail is malformed"
+    return detail
+
+
+def assert_artifact_named_forecast(detail: Mapping[str, Any]) -> None:
+    artifact = detail.get("artifact")
+    title = artifact.get("title") if isinstance(artifact, dict) else None
+    filename = detail.get("suggested_filename")
+    assert title == ARTIFACT_NAME or filename == ARTIFACT_NAME, (
+        "agent did not create the requested forecast.csv artifact"
+    )
+
+
+def read_artifact_bytes(session: DriverSession, artifact: ArtifactReference) -> bytes:
+    """Read immutable artifact bytes through the real Electron-main IPC stream."""
+
+    javascript = f"""(async()=>{{
+      const opened=await window.bridge.ipc.invoke("transport.artifact-content.open",{{
+        artifactId:{json.dumps(artifact.artifact_id)},revision:{artifact.revision}
+      }});
+      const bytes=[];
+      try {{
+        for (;;) {{
+          const next=await window.bridge.ipc.invoke("transport.artifact-content.read",{{handle:opened.handle}});
+          if (next.done) break;
+          if (next.chunk===null) throw new Error("empty artifact chunk");
+          for (const value of next.chunk) {{
+            bytes.push(value);
+            if (bytes.length>131072) throw new Error("artifact exceeds G2 bound");
+          }}
+        }}
+      }} finally {{
+        await window.bridge.ipc.invoke("transport.artifact-content.close",{{handle:opened.handle}});
+      }}
+      let binary="";
+      for (const value of bytes) binary+=String.fromCharCode(value);
+      return btoa(binary);
+    }})()"""
+    raw = session.evaluate(javascript)
+    assert isinstance(raw, str), "artifact stream did not return base64"
+    try:
+        return base64.b64decode(raw, validate=True)
+    except ValueError as exc:
+        raise AssertionError("artifact stream returned invalid base64") from exc
+
+
+def assert_dataset_surface(session: DriverSession) -> None:
+    required = {
+        "artifact frame": "[data-testid=artifact-frame]",
+        "dataset renderer": "[data-testid=artifact-dataset-renderer]",
+        "cell editor": '[role=grid][aria-label="Dataset cell editor"]',
+        "bookings cell": '[aria-label="bookings, row 2"]',
+        "revision actions": '[aria-label="Dataset revision actions"]',
+        "revision history": "[data-testid=artifact-revision-history]",
+    }
+    missing = [
+        name for name, selector in required.items() if not session.present(selector)
+    ]
+    assert not missing, f"G2 dataset table/editor is missing: {missing}"
+
+
+def open_artifact_from_sources(session: DriverSession) -> None:
+    session.click('[role=tab]:has-text("Sources")')
+    assert session.wait_for("[data-testid=sources-v2-tab]"), (
+        "Studio did not show the Sources provenance rail for the dataset"
+    )
+    source_text = str(
+        session.evaluate(
+            'document.querySelector("[data-testid=sources-v2-tab]").innerText'
+        )
+    )
+    assert "Artifact" in source_text, "dataset provenance did not identify its artifact"
+    if not session.present("[data-testid=artifact-frame]"):
+        assert session.present("[data-testid=sources-v2-open-artifact]"), (
+            "dataset source is not user-openable from provenance"
+        )
+        session.click("[data-testid=sources-v2-open-artifact]")
+        assert session.wait_for("[data-testid=artifact-frame]"), (
+            "opening the dataset source did not render an artifact surface"
+        )
+
+
+def assert_initial_csv_semantics(content: bytes) -> None:
+    headers, rows = _parse_csv_bytes(content)
+    assert tuple(headers) == INITIAL_HEADERS, (
+        "dataset artifact does not use the required forecast CSV columns"
+    )
+    assert len(rows) >= 3, "dataset artifact must contain at least three forecast rows"
+    for row in rows:
+        assert row["month"] and row["region"], "forecast row is missing its identity"
+        int(row["bookings"])
+        int(row["forecast"])
+
+
+def assert_only_workspace_or_artifact_tools(events: list[dict[str, Any]]) -> None:
+    for event in events:
+        event_type = event.get("event_type")
+        payload = _payload(event)
+        values = [
+            str(event_type or "").lower(),
+            *(
+                str(payload[key]).lower()
+                for key in ("capability", "tool", "tool_name", "name", "operation")
+                if isinstance(payload.get(key), str)
+            ),
+        ]
+        joined = " ".join(values)
+        leaked = sorted(marker for marker in UNRELATED_TOOL_MARKERS if marker in joined)
+        assert not leaked, f"G2 used unrelated tooling: {leaked}"
+        capability = payload.get("capability")
+        if isinstance(capability, str):
+            assert capability in {"workspace", "artifact"}, (
+                f"G2 used unsupported capability {capability!r}"
+            )
+
+
+def assert_no_workspace_apply(events: list[dict[str, Any]]) -> None:
+    for event in events:
+        if event.get("event_type") not in APPLY_EVENTS:
+            continue
+        # G2 permits only artifact and workspace activity. There can therefore
+        # be no benign effect application before the native approval decision.
+        raise AssertionError("workspace write was applied before explicit approval")
+
+
+TERMINAL_EVENTS = {"run_completed", "run_failed", "run_cancelled", "run_rejected"}
+
+
+def assert_artifact_precedes_the_seal(events: list[dict]) -> None:
+    """The ledger half: causal artifact facts live inside the sealed prefix."""
+
+    ordered = sorted(events, key=lambda e: e.get("sequence_no", 0))
+    names = [(e.get("sequence_no"), e.get("event_type")) for e in ordered]
+    seal = next(
+        (seq for seq, name in names if name in TERMINAL_EVENTS),
+        None,
+    )
+    assert seal is not None, f"run never sealed: {names}"
+    for event_type in ("artifact.created", "artifact.presentation_decided"):
+        seq = next((seq for seq, name in names if name == event_type), None)
+        assert seq is not None, f"{event_type} missing from the run ledger: {names}"
+        assert seq < seal, (
+            f"{event_type} landed at {seq}, after the seal at {seal} — "
+            "no live client can receive it"
+        )
+    # Nothing at all may follow the seal on the green path.
+    assert names[-1][1] in TERMINAL_EVENTS, (
+        f"events appended after the seal: {[n for n in names if n[0] > seal]}"
+    )
+
+
+def assert_canvas_presents_without_navigation(session: DriverSession) -> None:
+    """The UI half: the table is on screen with no click of any kind."""
+
+    assert session.wait_for("[data-testid=artifact-frame]", 60), (
+        "Studio never presented an artifact frame after the run completed"
+    )
+    assert session.wait_for("[data-testid=artifact-dataset-renderer]", 60), (
+        "Studio presented no dataset table for the published CSV"
+    )
+    # The regression's exact signature: the canvas' terminal narrative-only
+    # empty state must NOT be what the user is looking at.
+    panel = session.evaluate(
+        'document.querySelector("[data-testid=canvas-lifecycle-panel]")'
+        "?.getAttribute(\"data-lifecycle\") ?? 'absent'"
+    )
+    assert panel in ("absent", "presenting"), (
+        f"canvas showed the {panel!r} empty state instead of the dataset"
+    )
+
+
+FOLLOW_UP_PROMPT = (
+    "In one short sentence, and using no tools at all, what does the region "
+    "column mean?"
+)
+
+
+def canvas_state(session: DriverSession) -> dict:
+    raw = session.evaluate(
+        "(function(){"
+        "var p=document.querySelector('[data-testid=canvas-lifecycle-panel]');"
+        "return JSON.stringify({"
+        "frame:!!document.querySelector('[data-testid=artifact-frame]'),"
+        "table:!!document.querySelector('[data-testid=artifact-dataset-renderer]'),"
+        "emptyState:p?p.getAttribute('data-lifecycle'):null,"
+        "tabs:Array.from(document.querySelectorAll('[data-testid=tc-tabs] [role=tab]'))"
+        ".map(function(t){return (t.textContent||'').trim();})"
+        "});})()"
+    )
+    return json.loads(str(raw))
+
+
+def assert_canvas_shows_the_dataset(state: dict, *, when: str) -> None:
+    assert state["frame"], f"{when}: Studio showed no artifact frame"
+    assert state["table"], f"{when}: Studio showed no dataset table"
+    assert state["emptyState"] is None, (
+        f"{when}: the canvas empty state ({state['emptyState']!r}) was showing "
+        "instead of the dataset"
+    )
+
+
+ADD_ROW_PROMPT = "Add one more row to that CSV. Keep the same columns."
+
+
+STALE_CLAIM = "A newer revision exists"
+
+
+CELL = ".ui-dataset-table--editable tbody input.ui-dataset-cell-input"
+
+
+SAVE = '[aria-label="Dataset revision actions"] button.ui-button--primary'
+
+
+def current_revision(session: DriverSession, artifact_id: str) -> int:
+    detail = _artifact_detail(session, artifact_id)
+    artifact = detail.get("artifact") if isinstance(detail, dict) else None
+    assert isinstance(artifact, dict), f"no artifact record for {artifact_id}"
+    revision = artifact.get("current_revision")
+    assert isinstance(revision, int), f"no current_revision on {artifact_id}"
+    return revision
+
+
+def dataset_artifact_ids(session: DriverSession, conversation_id: str) -> set[str]:
+    """Every dataset artifact the conversation canvas holds.
+
+    Read from the conversation canvas rather than one run's events, because the
+    duplicate in BUG 2 was produced by a LATER run than the original.
+    """
+    canvas = session.transport(
+        "GET", f"/v1/agent/conversations/{conversation_id}/canvas"
+    )
+    subjects = canvas.get("subjects", []) if isinstance(canvas, dict) else []
+    return {
+        subject["subject_id"]
+        for subject in subjects
+        if isinstance(subject, dict)
+        and subject.get("kind") == "artifact"
+        and str(subject.get("renderer_hint", "")).endswith("dataset")
+    }
+
+
+def wait_for_revision(
+    session: DriverSession, artifact_id: str, at_least: int, timeout_s: int = 30
+) -> int:
+    """Poll the facade until the artifact reaches ``at_least``, or give up.
+
+    Polling rather than sleeping keeps a slow machine from being reported as a
+    regression, and returns the revision actually observed so the caller can
+    assert on a real number rather than a timeout.
+    """
+    seen = 0
+    for _ in range(timeout_s * 2):
+        seen = current_revision(session, artifact_id)
+        if seen >= at_least:
+            return seen
+        time.sleep(0.5)
+    return seen
+
+
+OKLCH = re.compile(r"oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)")
+
+
+def probe_artifact(session: DriverSession) -> str:
+    """Ask the app for the open tab's artifact detail, and report the outcome."""
+
+    uri = session.evaluate(
+        "document.querySelector('[data-testid=tc-tabs] [role=tab]')"
+        "?.getAttribute('data-uri') ?? ''"
+    )
+    match = re.search(r"artifact-[a-z]+://([^@]+)@", uri or "")
+    if match is None:
+        return f"no artifact uri on the tab (uri={uri!r})"
+    try:
+        detail = session.transport("GET", f"/v1/agent/artifacts/{match.group(1)}")
+    except Exception as exc:  # noqa: BLE001 - diagnostic only
+        return f"detail request failed: {exc}"
+    artifact = detail.get("artifact") if isinstance(detail, dict) else None
+    if not isinstance(artifact, dict):
+        return f"unexpected detail shape: {str(detail)[:160]}"
+    return (
+        f"detail ok: revision={artifact.get('current_revision')} "
+        f"media_type={artifact.get('media_type')} accent={artifact.get('accent')!r}"
+    )
+
+
+def is_identity_colour(value: str) -> bool:
+    """True when a computed colour carries real chroma, i.e. it is a hue."""
+
+    match = OKLCH.search(value or "")
+    if match is None:
+        return False
+    return float(match.group(2)) > 0.02
+
+
+def read_surface_colour(session: DriverSession) -> dict:
+    """One page evaluation; every number below is a computed style, not a token."""
+
+    js = """(() => {
+      const out = {};
+      const tab = document.querySelector('[data-testid=tc-tabs] [role=tab][data-active="true"]')
+               ?? document.querySelector('[data-testid=tc-tabs] [role=tab]');
+      if (tab) {
+        out.tabHue = tab.getAttribute('data-surface-hue');
+        const dot = tab.querySelector('.tc-tab__dot');
+        if (dot) {
+          const cs = getComputedStyle(dot);
+          out.tabDotColour = cs.backgroundColor;
+          out.tabDotOpacity = cs.opacity;
+        }
+        out.tabTitle = tab.querySelector('.tc-tab__title')?.textContent ?? null;
+        out.tabHeight = getComputedStyle(tab).height;
+        out.tabRadius = getComputedStyle(tab).borderTopLeftRadius;
+      }
+      const mount = document.querySelector('[data-testid=tc-surface-mount]');
+      if (mount) out.mountHue = mount.getAttribute('data-surface-hue');
+      out.cardTitle =
+        document.querySelector('[data-testid=artifact-frame] h1, [data-testid=artifact-frame] h2, [data-testid=artifact-frame] h3')
+          ?.textContent ?? null;
+
+      const heads = [...document.querySelectorAll('.ui-dataset-table__header')];
+      out.headerCount = heads.length;
+      // Measure the node that actually PAINTS. The editable grid puts an
+      // <input> in every header cell, and the <th> keeps its own muted colour —
+      // reading the <th> there reports grey no matter what the rule does.
+      const painted = (th) =>
+        th.querySelector('.ui-dataset-cell-input--header') ?? th;
+      const numeric = heads.filter((h) => h.classList.contains('sf-col--numeric'));
+      out.numericHeaderCount = numeric.length;
+      out.gridEditable = !!document.querySelector('.ui-dataset-table--editable');
+      if (numeric[0]) {
+        out.numericHeaderColour = getComputedStyle(painted(numeric[0])).color;
+      }
+      const text = heads.find((h) => !h.classList.contains('sf-col--numeric'));
+      if (text) out.textHeaderColour = getComputedStyle(painted(text)).color;
+
+      const bars = [...document.querySelectorAll('.sf-value-bar')];
+      out.barCount = bars.length;
+      out.barsAriaHidden = bars.every((b) => b.getAttribute('aria-hidden') === 'true');
+      if (bars[0]) out.barColour = getComputedStyle(bars[0]).backgroundColor;
+      out.barWidths = bars.slice(0, 12).map((b) => Math.round(b.getBoundingClientRect().width));
+      return out;
+    })()"""
+    return session.evaluate(js) or {}
+
+
+def assert_colour(observed: dict, canvas_accent: str | None) -> None:
+    # 1-2. The tab carries an identity, and it renders as a real hue.
+    assert observed.get("tabHue"), "canvas tab carries no data-surface-hue"
+    expected = canvas_accent or "sky"
+    assert observed["tabHue"] == expected, (
+        f"tab hue is {observed['tabHue']!r}; the artifact-dataset default is "
+        f"'sky' and the record's accent is {canvas_accent!r}"
+    )
+    dot = observed.get("tabDotColour", "")
+    assert is_identity_colour(dot), (
+        f"tab dot computed to {dot!r} — a neutral, not an identity hue. This is "
+        "the 'only black/grey/white' symptom in the shipped app."
+    )
+
+    # 3b. The tab must name the artifact, not its kind. A tab reading
+    #     "dataset artifact" beside a header reading "forecast.csv" is the same
+    #     merge defect as the accent, and the one a user actually notices.
+    tab_title = observed.get("tabTitle") or ""
+    card_title = observed.get("cardTitle") or ""
+    assert not tab_title.startswith("dataset artifact"), (
+        f"tab shows the synthesized kind label {tab_title!r}; the record's title "
+        f"({card_title!r}) never reached it"
+    )
+    if card_title:
+        assert card_title.split(".")[0][:8] in tab_title, (
+            f"tab {tab_title!r} and surface header {card_title!r} disagree"
+        )
+
+    # 3. Tab and card must not disagree about what they are showing.
+    assert observed.get("mountHue") == observed["tabHue"], (
+        f"surface mount hue {observed.get('mountHue')!r} disagrees with the "
+        f"tab's {observed['tabHue']!r}"
+    )
+
+    # 4. The assertion that catches the inert-rule defect. A class alone proves
+    #    nothing: the renderer composes inline styles, which outrank stylesheet
+    #    rules, so only a measured DIFFERENCE shows the rule actually applied.
+    assert observed.get("numericHeaderCount", 0) >= 1, (
+        "no numeric column was detected in the published CSV; expected at least "
+        f"one of {observed.get('headerCount')} headers to carry sf-col--numeric"
+    )
+    numeric_colour = observed.get("numericHeaderColour", "")
+    text_colour = observed.get("textHeaderColour", "")
+    assert numeric_colour and text_colour, "could not read both header colours"
+    assert numeric_colour != text_colour, (
+        f"numeric and text headers both computed to {numeric_colour!r} — "
+        ".sf-col--numeric is inert (an inline `color` is outranking it)"
+    )
+    assert is_identity_colour(numeric_colour), (
+        f"numeric header computed to {numeric_colour!r}, which carries no hue"
+    )
+
+    # 5. Value bars: present, decorative, and actually ordered by magnitude.
+    assert observed.get("barCount", 0) >= 2, (
+        f"expected value bars behind numeric cells, found {observed.get('barCount')}"
+    )
+    assert observed.get("barsAriaHidden") is True, (
+        "a value bar is exposed to assistive tech; it restates the number and "
+        "must stay decorative"
+    )
+    assert is_identity_colour(observed.get("barColour", "")), (
+        f"value bar computed to {observed.get('barColour')!r} — no hue"
+    )
+    widths = observed.get("barWidths") or []
+    assert len(set(widths)) > 1, (
+        f"every value bar is the same width ({widths}); the bars are not encoding "
+        "magnitude"
+    )
+
+
+def wait_for_canvas_settled(session: DriverSession, timeout_s: int = 60) -> str:
+    """Poll until the canvas leaves `artifact-loading`, and report where it went.
+
+    A screenshot taken before this settles records "Loading artifact…" and looks
+    exactly like a broken content fetch. That misread cost a round trip here, so
+    the wait is explicit and its outcome is asserted rather than assumed.
+    """
+
+    deadline = time.time() + timeout_s
+    state = _canvas_state(session)
+    while time.time() < deadline and state in {"artifact-loading", "absent"}:
+        time.sleep(0.5)
+        state = _canvas_state(session)
+    return state
+
+
+def install_ipc_recorder(session: DriverSession) -> str:
+    """Record every renderer IPC call AND ITS OUTCOME, from before the run starts.
+
+    Counting only calls made during a late window cannot answer the question
+    that is left: a request issued once and never answered looks identical to a
+    request that was never issued, because both add nothing to the window.
+
+    So this installs at mount time and tracks each call's fate — resolved,
+    rejected, or still pending. `pending > 0` for the artifact metadata path
+    means the reply never came back; `made == 0` means the component never
+    asked. Those are the only two candidates left, and they need opposite fixes.
+    """
+
+    return str(
+        session.evaluate(
+            """(() => {
+              try {
+                if (window.__ipc) return 'already';
+                const rec = {};
+                const bump = (k, f) => {
+                  rec[k] = rec[k] || { made: 0, resolved: 0, rejected: 0 };
+                  rec[k][f] += 1;
+                };
+                const inner = window.bridge.ipc.invoke.bind(window.bridge.ipc);
+                window.__ipc = rec;
+                window.bridge.ipc.invoke = function (channel, payload) {
+                  const key = channel === 'transport.request' && payload && payload.path
+                    ? 'GET ' + String(payload.path)
+                        .replace(/art_[0-9a-f-]+/g, '{artifactId}')
+                        .replace(/run_[0-9a-f-]+/g, '{runId}')
+                        .replace(/conv_[0-9a-f-]+/g, '{convId}')
+                    : channel;
+                  bump(key, 'made');
+                  let p;
+                  try { p = inner(channel, payload); }
+                  catch (e) { bump(key, 'rejected'); throw e; }
+                  return Promise.resolve(p).then(
+                    (v) => { bump(key, 'resolved'); return v; },
+                    (e) => { bump(key, 'rejected'); throw e; },
+                  );
+                };
+                return 'installed';
+              } catch (e) { return 'FAILED: ' + (e && e.message || e); }
+            })()"""
+        )
+    )
+
+
+def dump_ipc(session: DriverSession) -> dict:
+    """Read the recorder, keeping only rows that are interesting or unfinished."""
+
+    raw = session.evaluate(
+        """(() => {
+          const rec = window.__ipc || {};
+          const out = {};
+          for (const k of Object.keys(rec)) {
+            const r = rec[k];
+            const pending = r.made - r.resolved - r.rejected;
+            if (pending > 0 || k.indexOf('artifact') !== -1) {
+              out[k] = r.made + ' made / ' + r.resolved + ' resolved / '
+                     + r.rejected + ' rejected / ' + pending + ' PENDING';
+            }
+          }
+          out['__totalChannels'] = String(Object.keys(rec).length);
+          return JSON.stringify(out);
+        })()"""
+    )
+    try:
+        return json.loads(raw) if isinstance(raw, str) else {"ipc": "no result"}
+    except Exception:  # noqa: BLE001 — diagnostic only
+        return {"ipc": f"unparseable: {str(raw)[:200]}"}
+
+
+def count_ipc(session: DriverSession, seconds: int = 4) -> dict:
+    """Count IPC calls the RENDERER makes on its own over a quiet window.
+
+    A canvas parked on `artifact-loading` with zero content streams opened has
+    two possible causes, and the stream-handle counter cannot tell them apart:
+    an effect that never ran, or an effect re-running faster than its metadata
+    request completes (each run aborts the previous one before it ever reaches
+    `getArtifactContent`, so both leave the handle counter at zero).
+
+    Nobody is driving the app during this window, so any repeated
+    `transport.request` for an artifact path is the component looping.
+    """
+
+    patched = session.evaluate(
+        """(() => {
+          try {
+            if (window.__ipcCounts) return 'already';
+            const counts = {};
+            const inner = window.bridge.ipc.invoke.bind(window.bridge.ipc);
+            window.__ipcCounts = counts;
+            window.bridge.ipc.invoke = function (channel, payload) {
+              const key = channel === 'transport.request' && payload && payload.path
+                ? 'transport.request ' + String(payload.path).replace(/art_[0-9a-f-]+/, '{id}')
+                : channel;
+              counts[key] = (counts[key] || 0) + 1;
+              return inner(channel, payload);
+            };
+            return 'patched';
+          } catch (e) { return 'FAILED: ' + (e && e.message || e); }
+        })()"""
+    )
+    if not isinstance(patched, str) or patched.startswith("FAILED"):
+        return {"ipcCounting": str(patched)}
+    time.sleep(seconds)
+    counts = session.evaluate("JSON.stringify(window.__ipcCounts || {})")
+    try:
+        return {
+            "ipcCounting": f"over {seconds}s",
+            "calls": json.loads(counts) if isinstance(counts, str) else {},
+        }
+    except Exception:  # noqa: BLE001 — diagnostic only
+        return {"ipcCounting": f"unparseable: {str(counts)[:160]}"}
+
+
+def probe_canvas(session: DriverSession) -> dict:
+    """Ask the app itself which half of the artifact fetch is stuck.
+
+    `useArtifactSurface` sets `status` to ready/error/deleted on EVERY settled
+    branch, so a canvas parked on `artifact-loading` means a promise never
+    settled at all. There are only two awaits that can do that: the metadata
+    GET, and the artifact-content IPC stream. This drives both, each behind a
+    timeout, so the report names which one hangs instead of describing the
+    symptom again.
+    """
+
+    js = """(async () => {
+      const out = {};
+      const tab = document.querySelector('[data-testid=tc-tabs] [role=tab][data-active="true"]');
+      const uri = tab ? tab.getAttribute('data-uri') : null;
+      out.activeUri = uri;
+      const m = /^artifact-([a-z]+):\\/\\/([^@]+)@([0-9]+)$/.exec(uri || '');
+      if (!m) { out.parse = 'FAILED'; return JSON.stringify(out); }
+      out.kind = m[1]; out.artifactId = m[2]; out.revision = Number(m[3]);
+
+      const withTimeout = (p, ms, label) => Promise.race([
+        p.then((v) => ({ ok: true, value: v })).catch((e) => ({ ok: false, error: String(e && e.message || e) })),
+        new Promise((res) => setTimeout(() => res({ ok: false, error: 'TIMEOUT after ' + ms + 'ms', hung: true, label }), ms)),
+      ]);
+
+      const meta = await withTimeout(
+        window.bridge.ipc.invoke('transport.request', {
+          method: 'GET', path: '/v1/agent/artifacts/' + encodeURIComponent(m[2]),
+        }), 8000, 'metadata');
+      out.metadata = meta.hung ? 'HUNG' : (meta.ok ? 'ok' : 'error: ' + meta.error);
+      if (meta.ok && meta.value && meta.value.value) {
+        const a = meta.value.value.artifact || {};
+        const r = meta.value.value.current_revision || {};
+        out.metaKind = a.kind; out.metaMediaType = a.media_type;
+        out.metaCurrentRevision = r.revision; out.metaByteSize = r.byte_size;
+      }
+
+      const opened = await withTimeout(
+        window.bridge.ipc.invoke('transport.artifact-content.open', {
+          artifactId: m[2], revision: Number(m[3]),
+        }), 8000, 'content-open');
+      out.contentOpen = opened.hung ? 'HUNG' : (opened.ok ? 'ok' : 'error: ' + opened.error);
+      // The handle is `artifact-stream-N` off a counter the main process bumps
+      // on EVERY open. Since this probe's own open is the last one, N reports
+      // how many streams the app itself opened first — which separates the two
+      // ways a canvas can sit on its spinner: a component that never fetched
+      // (N stays ~0) from an effect re-running in a loop (N large).
+      if (opened.ok && opened.value) out.streamHandle = opened.value.handle;
+      if (opened.ok && opened.value && opened.value.handle) {
+        const read = await withTimeout(
+          window.bridge.ipc.invoke('transport.artifact-content.read', {
+            handle: opened.value.handle,
+          }), 8000, 'content-read');
+        out.contentRead = read.hung ? 'HUNG' : (read.ok ? ('ok done=' + read.value.done) : 'error: ' + read.error);
+      }
+      return JSON.stringify(out);
+    })()"""
+    raw = session.evaluate(js)
+    try:
+        return json.loads(raw) if isinstance(raw, str) else {"probe": "no result"}
+    except Exception:  # noqa: BLE001 — diagnostic only
+        return {"probe": f"unparseable: {str(raw)[:200]}"}
+
+
+def read_strip(session: DriverSession) -> dict:
+    """One page evaluation. Every field is read from the live DOM, not a fixture."""
+
+    js = """(() => {
+      const strip = document.querySelector('[data-testid=tc-tabs]');
+      const tabs = [...document.querySelectorAll('[data-testid=tc-tabs] [role=tab]')];
+      return {
+        stripHeight: strip ? Math.round(strip.getBoundingClientRect().height) : null,
+        tabs: tabs.map((t) => ({
+          uri: t.getAttribute('data-uri'),
+          title: (t.querySelector('.tc-tab__title') || {}).textContent || null,
+          active: t.getAttribute('data-active'),
+          pinned: t.getAttribute('data-pinned'),
+          live: t.getAttribute('data-live'),
+          hue: t.getAttribute('data-surface-hue'),
+          hasClose: !!t.querySelector('.tc-tab__close'),
+          hasPinGlyph: !!t.querySelector('.tc-tab__pin'),
+        })),
+        followLiveChip: !!document.querySelector('[data-testid=tc-tabs-follow-live]'),
+        followLiveBanner: !!document.querySelector('[data-testid=run-follow-live-banner]'),
+        scrubBanner: !!document.querySelector('[data-testid=run-viewing-banner]'),
+      };
+    })()"""
+    return session.evaluate(js) or {}
+
+
+def assert_no_alert(before: dict, after: dict, clicked_uri: str) -> None:
+    tabs = after.get("tabs") or []
+
+    # 3. Switching still works — the whole point is that this is now ordinary.
+    active = [t for t in tabs if t.get("active") == "true"]
+    assert len(active) == 1, f"expected exactly one active tab, got {len(active)}"
+    assert active[0]["uri"] == clicked_uri, (
+        f"clicked {clicked_uri!r} but {active[0]['uri']!r} is active"
+    )
+
+    # 4-5. The reported defect, and its chip-shaped replacement, are both absent.
+    assert not after["followLiveBanner"], (
+        "the full-bleed 'PINNED TO … · THE RUN HAS MOVED ON' banner is back on a "
+        "TERMINAL run — it is offering to follow a stream that has ended"
+    )
+    assert not after["followLiveChip"], (
+        "the follow-live chip rendered on a terminal run; there is no live tail "
+        "to resume following"
+    )
+
+    # 6-7. No pin chrome at all: the glyph is the release control, so rendering
+    #      it while the chip is (correctly) suppressed is a dead button on a tab
+    #      that has also lost its only close affordance.
+    pinned = [t for t in tabs if t.get("pinned") == "true"]
+    assert not pinned, (
+        f"tab(s) {[t['uri'] for t in pinned]} report a pin on a terminal run; "
+        "a pin describes a paused auto-follow, and nothing is following"
+    )
+    glyphs = [t for t in tabs if t.get("hasPinGlyph")]
+    assert not glyphs, (
+        f"pin glyph rendered on {[t['uri'] for t in glyphs]} with no chip beside "
+        "it — that button's onFollowLive is undefined"
+    )
+    closeless = [t for t in tabs if not t.get("hasClose")]
+    assert not closeless, (
+        f"tab(s) {[t['uri'] for t in closeless]} have no close button; the pin "
+        "swallowed it"
+    )
+
+    # 8. A terminal run cannot land work anywhere, so nothing may pulse.
+    live = [t for t in tabs if t.get("live") == "true"]
+    assert not live, (
+        f"tab(s) {[t['uri'] for t in live]} still show the live pulse after the "
+        "run reached a terminal status"
+    )
+
+    # 9. The measured cost of the old banner: a plain tab click moved the canvas.
+    assert before["stripHeight"] == after["stripHeight"], (
+        f"the strip changed height on a tab click "
+        f"({before['stripHeight']}px → {after['stripHeight']}px); everything "
+        "below it just reflowed"
+    )
+
+
+FIXTURE_URL = "http://127.0.0.1:8931/mcp"
+
+
+ASK = (
+    "Use the incidents connector to list the open incidents, then stop and "
+    "show me what came back. Do not summarise them in prose."
+)
+
+
+class FloorJourney:
+    """Drives the app to a real MCP read and judges the surface it produces."""
+
+    def __init__(self, session: DriverSession) -> None:
+        self.session = session
+        self.findings: list[str] = []
+
+    # -- helpers ---------------------------------------------------------
+
+    def post(self, path: str, body: dict) -> object:
+        """Authenticated POST through the app. ``_lib.transport`` is GET-shaped."""
+
+        payload = json.dumps({"method": "POST", "path": path, "body": body})
+        js = (
+            "(async()=>{try{const r=await window.bridge.ipc.invoke("
+            f'"transport.request",{payload});'
+            'if(r&&r.kind==="transport-result"){'
+            'if(!r.ok)return "ERR:HTTP "+String(r.error?.status??"?")+" "'
+            '+String(r.error?.message??"");'
+            "return JSON.stringify(r.value);}return JSON.stringify(r);}"
+            'catch(e){return "ERR:"+e.message}})()'
+        )
+        raw = self.session.evaluate(js)
+        if isinstance(raw, str) and raw.startswith("ERR:"):
+            raise RuntimeError(f"POST {path} -> {raw}")
+        return json.loads(raw)
+
+    def note(self, ok: bool, claim: str) -> bool:
+        self.findings.append(f"{'PASS' if ok else 'FAIL'}  {claim}")
+        return ok
+
+    # -- steps -----------------------------------------------------------
+
+    def register_fixture(self) -> str:
+        """Register the loopback connector. No OAuth: ``auth_mode: none``."""
+
+        created = self.post(
+            "/v1/mcp/servers",
+            {
+                "url": FIXTURE_URL,
+                "display_name": "Incidents",
+                "transport": "http",
+                "auth_mode": "none",
+            },
+        )
+        assert isinstance(created, dict), created
+        server_id = str(created.get("id") or created.get("server_id") or "")
+        assert server_id, f"no server id in {created}"
+        return server_id
+
+    def wait_for_surface(self, timeout_s: int = 180) -> bool:
+        """A rendered archetype, not merely a finished run.
+
+        Keyed on the renderer's own testid rather than on run status: a run can
+        complete having rendered nothing, which is exactly the failure this
+        journey exists to catch.
+        """
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if self.session.present("[data-testid=table-renderer]") or (
+                self.session.present("[data-testid=record-renderer]")
+            ):
+                return True
+            time.sleep(2)
+        return False
+
+    # -- pipeline trace ---------------------------------------------------
+
+    def _run_id(self) -> str:
+        """The run under test, from the API rather than the DOM.
+
+        The run cockpit carries no ``data-run-id`` — that attribute exists only
+        on the Activity and Routines rows — so scraping it silently yielded ``""``
+        and disarmed both ledger hops. The journey drives exactly one run, so the
+        newest run for this profile is unambiguous and comes from the same
+        authenticated transport the app itself uses.
+        """
+
+        try:
+            runs = self.session.transport("GET", "/v1/agent/runs?limit=1")
+        except Exception as exc:  # noqa: BLE001 — trace only
+            print(f"[trace] run lookup failed: {exc}")
+            return ""
+        rows = (runs or {}).get("runs") or (runs or {}).get("items") or []
+        if not rows:
+            return ""
+        row = rows[0]
+        return str(row.get("id") or row.get("run_id") or "")
+
+    def _hop_ledger(self, run_id: str) -> dict:
+        """Hop 1 — what the emitter actually WROTE, read off disk.
+
+        Read from the app's own JSONL store rather than from injected
+        instrumentation: a probe that lives in the client can only ever prove
+        what the client believes. The file is the emitter's own output, so a
+        disagreement between this hop and hop 2 localises the break to the
+        transport allow-list — which has silently stripped a field before.
+        """
+
+        root = self.session._user_data_dir
+        found: dict = {"searched": str(root), "events": [], "error": None}
+        if not run_id:
+            # Without a run id every conversation's rows would be collected and
+            # the identity check could pass by accident off an unrelated run.
+            found["error"] = "no run_id in DOM — refusing to guess"
+            return found
+        try:
+            # `events.jsonl` is per-CONVERSATION, not per-run
+            # (`runtime_adapters/file/_paths.py:104` — conversation_dir/EVENTS_FILE),
+            # so the run id never appears in the path and every row must be
+            # filtered on its own envelope. Filtering by filename here silently
+            # skipped the right ledger on any conversation past its first turn.
+            for path in root.rglob("events.jsonl"):
+                for line in path.read_text(errors="replace").splitlines():
+                    if '"surface.created"' not in line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if row.get("run_id") != run_id:
+                        continue
+                    payload = row.get("payload") or row.get("data") or {}
+                    state = payload.get("state")
+                    found["events"].append(
+                        {
+                            "surface_id": payload.get("surface_id"),
+                            "state_keys": None if state is None else sorted(state),
+                            "rows": len((state or {}).get("data") or [])
+                            if state
+                            else 0,
+                            "file": str(path),
+                        }
+                    )
+        except OSError as exc:
+            # One unreadable file must not take the whole journey down with it.
+            found["error"] = f"{type(exc).__name__}: {exc}"
+        return found
+
+    def _hop_server(self, run_id: str) -> dict:
+        """Hop 2 — what the HTTP endpoint SERVES for those same surfaces."""
+
+        if not run_id:
+            return {"error": "no run_id in DOM"}
+        try:
+            served = self.session.transport("GET", f"/v1/agent/runs/{run_id}/surfaces")
+        except Exception as exc:  # noqa: BLE001 — trace only
+            return {"error": str(exc)}
+        return {
+            "surfaces": [
+                {
+                    "surface_id": row.get("surface_id"),
+                    "state_keys": (
+                        None if row.get("state") is None else sorted(row["state"])
+                    ),
+                }
+                for row in (served or {}).get("surfaces", [])
+            ]
+        }
+
+    def _hop_client(self) -> dict:
+        """Hop 3 — what the canvas KEYS its tabs by, straight from the DOM."""
+
+        # `.tc-tab[data-uri]` (TcTabs.tsx:88), NOT `[data-testid^=tc-tab]` — that
+        # prefix also matches the `tc-tabs-unpin-*` close buttons, and the
+        # textContent fallback then yielded the tab LABEL ("incidents ·
+        # list_incidents") instead of the URI. Comparing labels to surface ids
+        # made the codec check vacuous: a label can never contain "%3A".
+        raw = self.session.evaluate(
+            "(()=>{const t=[...document.querySelectorAll('.tc-tab[data-uri]')]"
+            ".map(e=>e.getAttribute('data-uri'));"
+            "const slot=document.querySelector('[data-canvas-slot-testid=tc-surface-slot]');"
+            "return JSON.stringify({tabs:t, activeUri: slot?slot.getAttribute('data-active-uri'):null});})()"
+        )
+        try:
+            return json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {"raw": raw}
+
+    def diagnose(self) -> dict:
+        """Trace all four hops and print them as one table.
+
+        The architecture's central invariant is that ``surface_id`` is ONE value:
+        what the ledger writes, what the endpoint serves, and what the canvas
+        keys its tabs by are the same string with no codec between them. The
+        bug this journey was written to catch was precisely a violation of that
+        — the canvas minted ``table://legacy-v2/table%3A%2F%2F…`` and then
+        looked it up in a map that could never contain it. So the trace prints
+        the identity at each hop side by side; divergence is the finding.
+        """
+
+        run_id = self._run_id()
+        ledger = self._hop_ledger(run_id)
+        server = self._hop_server(run_id)
+        client = self._hop_client()
+
+        print(f"\n[trace] run_id: {run_id!r}")
+        print("[trace] hop 1 LEDGER (events.jsonl on disk)")
+        for e in ledger["events"] or [{"surface_id": None, "state_keys": "NO EVENTS"}]:
+            print(
+                f"          surface_id={e.get('surface_id')!r} "
+                f"state={e.get('state_keys')} rows={e.get('rows', 0)}"
+            )
+        if not ledger["events"]:
+            print(f"          (searched {ledger['searched']})")
+            if ledger.get("error"):
+                print(f"          ERROR: {ledger['error']}")
+        print("[trace] hop 2 SERVER  (GET /v1/agent/runs/{id}/surfaces)")
+        for s in server.get("surfaces") or [{"surface_id": server.get("error")}]:
+            print(
+                f"          surface_id={s.get('surface_id')!r} state={s.get('state_keys')}"
+            )
+        print("[trace] hop 3 CLIENT  (canvas tab keys)")
+        print(f"          tabs={client.get('tabs')} active={client.get('activeUri')!r}")
+
+        ledger_ids = {e["surface_id"] for e in ledger["events"] if e.get("surface_id")}
+        server_ids = {
+            s["surface_id"] for s in server.get("surfaces", []) if s.get("surface_id")
+        }
+        client_ids = {t for t in (client.get("tabs") or []) if t}
+        print("[trace] hop 4 IDENTITY")
+        print(f"          ledger={sorted(ledger_ids)}")
+        print(f"          server={sorted(server_ids)}")
+        print(f"          client={sorted(client_ids)}")
+
+        return {
+            "run_id": run_id,
+            "ledger_ids": ledger_ids,
+            "server_ids": server_ids,
+            "client_ids": client_ids,
+            "ledger_error": ledger.get("error"),
+        }
+
+    def read_surface(self) -> dict:
+        """Read what is actually on screen, out of the live DOM."""
+
+        js = """(()=>{
+          const el = document.querySelector('[data-testid=table-renderer]')
+                  || document.querySelector('[data-testid=record-renderer]');
+          if(!el) return JSON.stringify({present:false});
+          const q = (s)=>[...el.querySelectorAll(s)].map(n=>n.textContent.trim());
+          return JSON.stringify({
+            present:true,
+            kind: el.getAttribute('data-testid'),
+            spec: el.getAttribute('data-spec'),
+            title: (el.querySelector('[data-testid=surface-title]')||{}).textContent,
+            headers: q('th'),
+            firstRow: q('[data-testid^=table-cell-0-]'),
+            fieldLabels: q('[data-testid^=field-][data-testid$=-label]'),
+            badges: q('[data-surface-format=badge]'),
+            body: el.textContent.slice(0, 400),
+          });
+        })()"""
+        return json.loads(self.session.evaluate(js))
+
+    def run(self) -> int:
+        s = self.session
+        s.sign_in_local()
+        s.ftue_add_key("openai", load_env_key("openai"))
+        s.shot("01-signed-in")
+
+        server_id = self.register_fixture()
+        print(f"[floor] registered loopback connector: {server_id}")
+
+        servers = s.transport("GET", "/v1/mcp/servers")
+        rows = servers.get("servers", servers) if isinstance(servers, dict) else servers
+        self.note(bool(rows), f"the connector is registered ({len(rows)} server(s))")
+        s.shot("02-connector-registered")
+
+        s.send_first_run_message(ASK)
+        rendered = self.wait_for_surface()
+        s.shot("03-after-run")
+
+        if not self.note(rendered, "a surface renderer mounted on screen"):
+            print("\n".join(self.findings))
+            return 1
+
+        trace = self.diagnose()
+
+        # ONE IDENTITY. The defect this journey exists to catch was the canvas
+        # minting `table://legacy-v2/table%3A%2F%2F…` and resolving it against a
+        # map that could never hold it. Both halves are asserted: no codec
+        # artefact may appear in a tab key, and a tab key must be a value the
+        # ledger itself wrote. Either alone would pass while the bug was live.
+        codecs = [
+            uri
+            for uri in trace["client_ids"]
+            if "legacy-v2" in uri
+            or "surfaces-v2" in uri
+            or "%3A" in uri
+            or "%2F" in uri
+        ]
+        self.note(not codecs, f"no URI codec survives on a tab key ({codecs})")
+        # Both notes are UNCONDITIONAL. A guard here (`if ledger_ids:`) would turn
+        # "the trace could not find the ledger" into a silent pass, which is the
+        # gate-that-cannot-start failure this repo has already paid for once.
+        # An empty ledger while a renderer is mounted is itself the finding.
+        self.note(
+            bool(trace["ledger_ids"]),
+            f"the ledger on disk has surface.created rows for this run "
+            f"({trace['ledger_error'] or sorted(trace['ledger_ids'])})",
+        )
+        shared = trace["client_ids"] & trace["ledger_ids"]
+        self.note(
+            bool(shared),
+            "a tab key is byte-identical to a surface_id the ledger wrote "
+            f"(shared={sorted(shared)})",
+        )
+
+        surface = self.read_surface()
+        print("[floor] on-screen surface:", json.dumps(surface, indent=2)[:900])
+
+        self.note(surface.get("spec") == "present", "the renderer received a SPEC")
+        self.note(
+            "No spec matched" not in (surface.get("body") or ""),
+            "the retired apology does not appear",
+        )
+        title = (surface.get("title") or "").strip()
+        self.note(title not in ("", "Untitled"), f"the header is titled ({title!r})")
+        slots = surface.get("headers") or surface.get("fieldLabels") or []
+        self.note(len(slots) >= 3, f"at least 3 bound slots ({slots})")
+        self.note(bool(surface.get("badges")), "a low-cardinality value drew as a chip")
+
+        s.shot("04-surface")
+        print("\n".join(self.findings))
+        return 0 if all(f.startswith("PASS") for f in self.findings) else 1
+
+
+# ── setup ────────────────────────────────────────────────────────────────────
+def sign_in_and_key(s: DriverSession) -> None:
+    preflight_staged_runtime(target=SOURCE_TARGET)
+    provider, key = byok_provider()
+    STATE["provider"], STATE["key"] = provider, key
+    log(f"provider={provider} key_len={len(key)} (value withheld)")
+    status = s.rpc("status")
+    assert status.get("target") == "source", f"target={status.get('target')!r}"
+    assert status.get("posture") == "prod", f"posture={status.get('posture')!r}"
+    s.sign_in_local()
+    s.ftue_add_key(provider, key)
+    catalog = s.transport("GET", "/v1/agent/models")
+    assert any(
+        isinstance(m, dict) and m.get("provider") == provider and m.get("configured")
+        for m in catalog.get("models", [])
+    ), "entered BYOK provider was not configured"
+
+
+# ── AS-1: the counterexample ─────────────────────────────────────────────────
+def as1_plain_chat_publishes_nothing(s: DriverSession) -> None:
+    """An ordinary question must produce NO rich UI at all.
+
+    G0 is the counterexample protecting the "surfaces, not transcripts" rule
+    from becoming "surface everything". It runs first, and in a conversation of
+    its own, because it asserts an ABSENCE — once anything has published, the
+    claim is unfalsifiable.
+    """
+
+    s.send_first_run_message(PLAIN_PROMPT)
+    conversation_id = wait_for_conversation_id(s)
+    run_id = wait_for_new_run(s, conversation_id, 0)
+    wait_for_terminal_run(s, run_id)
+    time.sleep(2)
+    s.shot("g0-plain-answer-no-rich-ui")
+
+    assistant = s.evaluate(
+        "document.querySelectorAll('[data-testid^=tc-chat-message-]"
+        "[data-role=assistant]').length"
+    )
+    assert int(assistant or 0) >= 1, "no assistant message for a plain question"
+
+    leaked = [sel for sel in RICH_UI_SELECTORS if s.present(sel)]
+    assert not leaked, f"plain chat rendered rich UI: {leaked}"
+
+    runs = runs_for_conversation(s, conversation_id)
+    assert len(runs) == 1, f"expected exactly one run, got {len(runs)}"
+    events = run_events(s, run_id)
+    finals = [e for e in events if e.get("event_type") == "final_response"]
+    assert len(finals) == 1, f"expected exactly one final_response, got {len(finals)}"
+    artifacts = [
+        e for e in events if str(e.get("event_type", "")).startswith("artifact.")
+    ]
+    assert not artifacts, f"plain chat emitted artifact events: {artifacts!r}"
+    log(f"one run, one final_response, {len(events)} events, no rich UI")
+
+
+# ── AS-2…AS-7: one published dataset, read many ways ─────────────────────────
+def as2_publish_a_dataset(s: DriverSession) -> None:
+    """Publish the dataset every later phase reads, and police the tools used.
+
+    Deliberately requests no workspace grant, opens no native folder picker,
+    stages no filesystem effect, and writes no local file.
+    """
+
+    new_chat(s)
+    s.send(CREATE_PROMPT)
+    conversation_id = wait_for_conversation_id(s)
+    run_id = wait_for_new_run(s, conversation_id, 0)
+    wait_for_terminal_run(s, run_id)
+
+    events = run_events(s, run_id)
+    assert_only_workspace_or_artifact_tools(events)
+    assert_no_workspace_apply(events)
+    artifact = dataset_artifact_from_run(events)
+    assert_artifact_named_forecast(artifact_detail(s, artifact.artifact_id))
+
+    STATE.update(
+        {"conversation_id": conversation_id, "run_id": run_id, "artifact": artifact}
+    )
+    log(f"published {artifact.artifact_id} in run {run_id}")
+
+
+def as3_the_canvas_presents_it_without_navigation(s: DriverSession) -> None:
+    """DEPENDS ON AS-2, and must precede AS-4.
+
+    G2A reached the artifact by clicking into the Sources rail. That is a real
+    path, but not the path a user takes: the reported failure was simply
+    "finish a run, look at Studio, the table is not there" — and G2A passed
+    throughout. Once AS-4 has navigated, this claim cannot be made.
+    """
+
+    require(STATE.get("run_id"), "needs the run AS-2 creates")
+    assert_artifact_precedes_the_seal(run_events(s, STATE["run_id"]))
+    assert_canvas_presents_without_navigation(s)
+    s.shot("canvas-auto-presented-csv")
+
+
+def as4_the_dataset_surface_renders_from_sources(s: DriverSession) -> None:
+    """DEPENDS ON AS-2. Open it by hand and check the surface and the bytes."""
+
+    artifact = STATE.get("artifact")
+    require(artifact, "needs the artifact AS-2 publishes")
+    open_artifact_from_sources(s)
+    assert_dataset_surface(s)
+    assert_initial_csv_semantics(read_artifact_bytes(s, artifact))
+    s.shot("generated-csv-surface")
+
+
+def as5_the_canvas_survives_a_chat_only_follow_up(s: DriverSession) -> None:
+    """DEPENDS ON AS-2. PRD-02: a second message must not erase turn 1's surface.
+
+    Where the surface was being lost: the canvas folds `session.events`, and
+    binding a new run replaces that stream, so an artifact published on turn 1
+    stopped existing as far as the canvas was concerned.
+    """
+
+    conversation_id = STATE.get("conversation_id")
+    run_one = STATE.get("run_id")
+    require(conversation_id and run_one, "needs the run AS-2 creates")
+
+    assert s.wait_for("[data-testid=artifact-dataset-renderer]", 60), (
+        "the dataset is not on the canvas before the follow-up; PRD-02 cannot "
+        "be assessed"
+    )
+    assert_canvas_shows_the_dataset(canvas_state(s), when="before the follow-up")
+
+    before = len(runs_for_conversation(s, conversation_id))
+    s.send(FOLLOW_UP_PROMPT)
+    run_two = wait_for_new_run(s, conversation_id, before)
+    assert run_two != run_one, "the follow-up did not bind a new run"
+    wait_for_terminal_run(s, run_two)
+
+    assert_canvas_shows_the_dataset(canvas_state(s), when="after the follow-up")
+    s.shot("dataset-still-open-after-followup")
+
+    # Turn 2 produced no artifact: identity widened, run state did not.
+    turn_two = {e.get("event_type") for e in run_events(s, run_two)}
+    assert "artifact.created" not in turn_two, (
+        "the follow-up produced an artifact; this no longer tests a chat-only turn"
+    )
+    canvas = s.transport("GET", f"/v1/agent/conversations/{conversation_id}/canvas")
+    subjects = canvas.get("subjects", [])
+    assert subjects, "conversation canvas returned no subjects"
+    assert any(sub.get("run_id") == run_one for sub in subjects), (
+        "the subject was not attributed to the run that produced it"
+    )
+
+
+def as6_artifact_edit_regressions(s: DriverSession) -> None:
+    """DEPENDS ON AS-2. Two defects reported from live use, reproduced.
+
+    BUG 1 — "Save patched revision" returned 409 and the surface claimed a
+    newer revision existed, on a run that had already gone terminal.
+    BUG 2 — asking for another row minted a SECOND dataset artifact instead of
+    revising the one on screen.
+
+    Both were fixed on unit-test evidence alone; this asserts the FACADE TRUTH,
+    not the DOM's opinion.
+    """
+
+    artifact = STATE.get("artifact")
+    conversation_id = STATE.get("conversation_id")
+    require(artifact and conversation_id, "needs the artifact AS-2 publishes")
+
+    open_artifact_from_sources(s)
+    assert_dataset_surface(s)
+    assert s.wait_for(CELL), "no editable dataset cell"
+
+    # BUG 1 — save a cell edit while the run is terminal.
+    s.fill(CELL, "edited-by-journey")
+    s.shot("cell-edited")
+    s.click(SAVE)
+    revision = wait_for_revision(s, artifact.artifact_id, 2)
+    s.shot("after-save")
+    page_text = s.evaluate("document.body.innerText") or ""
+    assert STALE_CLAIM not in page_text, (
+        f"BUG 1 REGRESSED: the surface claimed {STALE_CLAIM!r} after a save on "
+        "a terminal run"
+    )
+    assert revision >= 2, (
+        "BUG 1 REGRESSED: saving a cell edit on a completed run did not append "
+        f"a revision (still at r{revision})"
+    )
+
+    # BUG 2 — ask for another row; it must REVISE, not re-publish.
+    before_ids = dataset_artifact_ids(s, conversation_id)
+    assert artifact.artifact_id in before_ids
+    # Back to Chat first: `open_artifact_from_sources` left the rail on Sources,
+    # where the composer is not mounted at all, so a fill would fail on a
+    # missing selector rather than on anything about the product.
+    s.click('[role=tab]:has-text("Chat")')
+    assert s.wait_for("[data-testid=composer-textarea]"), (
+        "returning to the Chat tab did not mount the composer"
+    )
+    before_runs = len(runs_for_conversation(s, conversation_id))
+    s.send(ADD_ROW_PROMPT)
+    added_run = wait_for_new_run(s, conversation_id, before_runs)
+    wait_for_terminal_run(s, added_run)
+
+    extra = dataset_artifact_ids(s, conversation_id) - before_ids
+    assert not extra, (
+        f"BUG 2 REGRESSED: adding a row minted a second dataset artifact "
+        f"({sorted(extra)}) instead of revising"
+    )
+    revised = wait_for_revision(s, artifact.artifact_id, revision + 1)
+    assert revised > revision, (
+        f"BUG 2 REGRESSED: the artifact did not gain a revision (still r{revised})"
+    )
+    s.shot("after-add-row")
+
+
+def as7_the_studio_identity_colour(s: DriverSession) -> None:
+    """DEPENDS ON AS-2. The accent, measured with getComputedStyle in the real app.
+
+    This cannot be a unit test: every layer of the colour system has already
+    produced a defect that a passing unit test walked straight past.
+    """
+
+    conversation_id = STATE.get("conversation_id")
+    require(conversation_id, "needs the conversation AS-2 creates")
+
+    if not s.wait_for("[data-testid=artifact-dataset-renderer]", 90):
+        # Self-diagnosing on the most likely failure, so a red run names its
+        # cause instead of only its symptom.
+        s.shot("no-dataset-diagnostic")
+        diagnostic = {
+            "lifecycle": s.evaluate(
+                "document.querySelector('[data-testid=canvas-lifecycle-panel]')"
+                "?.getAttribute('data-lifecycle') ?? 'absent'"
+            ),
+            "tabs": s.evaluate(
+                "[...document.querySelectorAll('[data-testid=tc-tabs] [role=tab]')]"
+                ".map(t => t.getAttribute('data-uri'))"
+            ),
+            "frameText": s.evaluate(
+                "document.querySelector('[data-testid=artifact-frame]')"
+                "?.textContent?.slice(0, 120) ?? 'absent'"
+            ),
+            "artifactProbe": probe_artifact(s),
+        }
+        raise AssertionError(
+            "Studio never presented the dataset for the published CSV; "
+            f"diagnostic={json.dumps(diagnostic, sort_keys=True)}"
+        )
+
+    canvas = s.transport("GET", f"/v1/agent/conversations/{conversation_id}/canvas")
+    subjects = canvas.get("subjects") or []
+    assert subjects, "conversation canvas returned no subjects"
+    artifact = next((sub for sub in subjects if sub.get("kind") == "artifact"), None)
+    assert artifact is not None, "no artifact subject on the canvas"
+    assert "accent" in artifact, (
+        "the canvas subject has no `accent` field — the seam a publish_artifact "
+        "colour travels through is missing on the wire"
+    )
+    observed = read_surface_colour(s)
+    s.shot("surface-colour-canvas")
+    log(f"observed={observed} canvas_accent={artifact.get('accent')}")
+    assert_colour(observed, artifact.get("accent"))
+
+
+def as8_switching_finished_artifacts_raises_no_alert(s: DriverSession) -> None:
+    """Two artifacts, run SEALED, click the older tab — no follow-live banner.
+
+    The exact user action that used to raise a full-bleed
+    `PINNED TO <TAB> · THE RUN HAS MOVED ON` banner, offering to follow a
+    stream that had already ended.
+
+    Its own conversation, and the IPC recorder is installed BEFORE the run so
+    the artifact surface's very first request is captured — installing after
+    the hang can only see calls that come later, which is why an earlier
+    window read zero and proved nothing.
+    """
+
+    new_chat(s)
+    recorder = install_ipc_recorder(s)
+    assert recorder == "installed", (
+        f"could not install the IPC recorder ({recorder!r}); the run would "
+        "produce an unfalsifiable result"
+    )
+    s.send(FOLLOW_LIVE_CREATE_PROMPT)
+    conversation_id = wait_for_conversation_id(s)
+    run_id = wait_for_new_run(s, conversation_id, 0)
+    wait_for_terminal_run(s, run_id)
+
+    assert s.wait_for("[data-testid=tc-tabs] [role=tab]", 90), (
+        "no surface tab ever appeared; the run published nothing"
+    )
+    deadline = time.time() + 60
+    before = read_strip(s)
+    while time.time() < deadline and len(before.get("tabs") or []) < 2:
+        time.sleep(1)
+        before = read_strip(s)
+    # Let the artifact CONTENT resolve before the screenshot: the tab strip is
+    # projected from the ledger fold and lands almost immediately, the artifact
+    # body is a separate fetch behind it. Shooting between the two records
+    # "Loading artifact…", indistinguishable from a broken content fetch.
+    wait_for_canvas_settled(s)
+    s.shot("two-artifacts-sealed")
+
+    tabs = before.get("tabs") or []
+    require(len(tabs) >= 2, f"the run published {len(tabs)} artifact(s); need two")
+
+    s.click("[data-testid=tc-tabs] [role=tab]")
+    time.sleep(2)
+    after = read_strip(s)
+    s.shot("older-tab-selected")
+    log(f"ipc calls recorded: {count_ipc(s)}")
+    try:
+        assert_no_alert(s, after)
+    except AssertionError:
+        # The banner is a symptom; what the canvas thought and what the surface
+        # actually requested is the cause. Dump both before failing, or the next
+        # step is another full boot just to find out.
+        print(f"  DIAGNOSTIC canvas={json.dumps(probe_canvas(s), sort_keys=True)}")
+        print(f"  DIAGNOSTIC ipc={json.dumps(dump_ipc(s), sort_keys=True)[:1200]}")
+        raise
+
+
+def as9_the_inference_floor(s: DriverSession) -> None:
+    """A connector nobody wrote a spec for still renders a legible, shaped surface.
+
+    With no model call and no provider credential involved in the shaping, and
+    the ledger's provenance agreeing with what is drawn. Needs the loopback
+    fixture MCP server; skips when it is not listening.
+    """
+
+    try:
+        urllib.request.urlopen(FIXTURE_URL, timeout=2)
+    except urllib.error.HTTPError:
+        pass  # an HTTP error still proves something is listening
+    except Exception:  # noqa: BLE001
+        require(
+            False,
+            f"no fixture MCP server on {FIXTURE_URL} — start "
+            "tools/desktop-journeys/surface-floor/fixture_mcp.py",
+        )
+    new_chat(s)
+    FloorJourney(s).run()
+
+
+def main() -> int:
+    plan = JourneyPlan("artifacts-and-surfaces")
+    plan.boot(
+        "source · fresh",
+        lambda: DriverSession(name="artifacts-and-surfaces"),
+        setup=sign_in_and_key,
+        env=ARTIFACT_JOURNEY_ENVIRONMENT,
+        clear_env=SECRET_ENVIRONMENT_NAMES,
+        phases=[
+            (
+                "AS-1",
+                "plain chat publishes no rich UI at all",
+                as1_plain_chat_publishes_nothing,
+            ),
+            (
+                "AS-2",
+                "publish the dataset every later phase reads",
+                as2_publish_a_dataset,
+            ),
+            (
+                "AS-3",
+                "the canvas presents it without navigation [needs AS-2]",
+                as3_the_canvas_presents_it_without_navigation,
+            ),
+            (
+                "AS-4",
+                "the dataset surface renders from Sources [needs AS-2]",
+                as4_the_dataset_surface_renders_from_sources,
+            ),
+            (
+                "AS-5",
+                "the canvas survives a chat-only follow-up [needs AS-2]",
+                as5_the_canvas_survives_a_chat_only_follow_up,
+            ),
+            (
+                "AS-6",
+                "artifact edit regressions: save, and revise-not-republish [needs AS-2]",
+                as6_artifact_edit_regressions,
+            ),
+            (
+                "AS-7",
+                "the Studio identity colour, measured live [needs AS-2]",
+                as7_the_studio_identity_colour,
+            ),
+            (
+                "AS-8",
+                "switching between finished artifacts raises no alert",
+                as8_switching_finished_artifacts_raises_no_alert,
+            ),
+            (
+                "AS-9",
+                "the inference floor shapes an unspecified connector",
+                as9_the_inference_floor,
+            ),
+        ],
+    )
+    code = plan.finish()
+    key = STATE.get("key")
+    if key:
+        assert_no_plaintext_secret(key, (plan_run_dir(),))
+    return code
+
+
+def plan_run_dir():
+    from _lib import RUNS_DIR
+
+    return RUNS_DIR / "artifacts-and-surfaces"
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
