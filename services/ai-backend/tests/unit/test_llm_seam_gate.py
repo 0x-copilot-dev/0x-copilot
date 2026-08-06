@@ -34,10 +34,10 @@ def test_canonical_chat_model_consumer_inventory_is_reviewed() -> None:
         "build_chat_model_from_id -> build_chat_model",
         "agent_runtime/execution/deep_agent_builder.py:"
         "build_deep_agent -> build_chat_model",
-        "runtime_worker/jobs/proposal_extractor.py:"
-        "ProposalExtractor._invoke_model -> build_chat_model",
-        "runtime_worker/jobs/todo_extractor.py:"
-        "TodoExtractor._invoke_model -> build_chat_model",
+        # `jobs/proposal_extractor.py` and `jobs/todo_extractor.py` each held a
+        # `_invoke_model -> build_chat_model` site until 2026-08-06. Both jobs were
+        # deleted as adjudicated orphans — the worker never enqueued either, and the
+        # desktop runs no job loop at all — so the seam has two fewer consumers.
         "runtime_worker/model_invocation_composition.py:"
         "_RouteModelResolver.resolve -> build_chat_model",
     )
