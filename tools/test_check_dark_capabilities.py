@@ -338,12 +338,22 @@ class TestGateIsNotBlindAgain:
     *in scope*, which is the property that was actually missing.
     """
 
-    #: The generative-UI flags detector B brought into scope. Neither satisfies
-    #: the old ``RUNTIME_*`` prefix AND ``_BACKEND``/``_ENABLE_*`` name test, so
-    #: both were invisible; the third such flag,
-    #: ``SURFACE_SPEC_STORE_BACKEND``, is pinned by the next test because it
-    #: came back into scope by the other route (the dropped prefix).
-    GENERATIVE_UI_FLAGS = ("SURFACES_V2", "RUNTIME_TIER2_GENERATION")
+    #: Flags detector B brought into scope. Neither satisfies the old
+    #: ``RUNTIME_*`` prefix AND ``_BACKEND``/``_ENABLE_*`` name test, so both
+    #: were invisible, and each probes a *different* half of that old test:
+    #: ``SURFACES_V2`` fails the prefix, ``RUNTIME_PROPAGATE_QUEUE_TRACE`` fails
+    #: the name. A third such flag, ``SURFACE_SPEC_STORE_BACKEND``, is pinned by
+    #: the next test because it came back into scope by the dropped prefix.
+    #:
+    #: The name half was probed by ``RUNTIME_TIER2_GENERATION`` until 2026-08-06,
+    #: when the tier-2 render-adapter generator was deleted as an orphan and took
+    #: its flag with it. ``RUNTIME_PROPAGATE_QUEUE_TRACE`` replaces it because it
+    #: is the only live flag left with that exact shape — ``RUNTIME_``-prefixed,
+    #: no ``_BACKEND`` suffix, no ``RUNTIME_ENABLE_`` prefix. If it too is ever
+    #: removed, substitute another rather than dropping the half: a one-flag
+    #: tuple would let the name-test blindness return unnoticed, which is the
+    #: whole failure FINDINGS.md §4.6b recorded.
+    GENERATIVE_UI_FLAGS = ("SURFACES_V2", "RUNTIME_PROPAGATE_QUEUE_TRACE")
 
     @staticmethod
     def _declared() -> dict:
