@@ -142,7 +142,7 @@
 - **ai-backend:** keep response_format through the tool wrapper stack ([`2a1b13e1`](https://github.com/0x-copilot-dev/0x-copilot/commit/2a1b13e1d2f2fad6c85beb0d9f87f7dac1966989))
 - **audit:** enroll the two inert P2-1 MCP modules — the ratchet caught them ([`41dff7cd`](https://github.com/0x-copilot-dev/0x-copilot/commit/41dff7cd99ba38bdab1e6b869548dc303cd88165))
 - **ai-backend:** mark truncation on model-facing tool error messages (T2.2) ([`86e37070`](https://github.com/0x-copilot-dev/0x-copilot/commit/86e370705a97cd6e16793a8e6a96be522f0cfddf))
-- **tools:** orphan scanner skips __main__-guarded entry points (PR1) ([`d599d755`](https://github.com/0x-copilot-dev/0x-copilot/commit/d599d75516338691477b2518fb188b6d55c67507))
+- **tools:** orphan scanner skips **main**-guarded entry points (PR1) ([`d599d755`](https://github.com/0x-copilot-dev/0x-copilot/commit/d599d75516338691477b2518fb188b6d55c67507))
 - **ai-backend:** one value for the tool_call_budget default, gated (T0.3) ([`4540d4a5`](https://github.com/0x-copilot-dev/0x-copilot/commit/4540d4a524b5f6ce637874d9b9427968546ea011))
 - **facade:** the bypass pill was stripped at the proxy, on both hosts ([`2abb9b0b`](https://github.com/0x-copilot-dev/0x-copilot/commit/2abb9b0b8c9f4458704d540ea37d5de3dc32e516))
 - **filesystem:** the master switch said "offered" to the UI and "off" to the run ([`b09f036c`](https://github.com/0x-copilot-dev/0x-copilot/commit/b09f036c2e0751d402c4f5cf73b588ba3196cbc3))
@@ -186,7 +186,7 @@
 ### Maintenance
 
 - **desktop-journeys:** 64 scripts become 9, and a phase runner keeps the verdicts ([`e8622a1d`](https://github.com/0x-copilot-dev/0x-copilot/commit/e8622a1dd024c59a0afc80e1d7af0f72484b7101))
-- **tools:** stop a package __init__ vouching for its own submodules ([`f9792d82`](https://github.com/0x-copilot-dev/0x-copilot/commit/f9792d8249cd469e403e3a611988c8c9c4b5dbbe))
+- **tools:** stop a package **init** vouching for its own submodules ([`f9792d82`](https://github.com/0x-copilot-dev/0x-copilot/commit/f9792d8249cd469e403e3a611988c8c9c4b5dbbe))
 - **ai-backend:** delete the schema package the Postgres removal orphaned ([`9efbac42`](https://github.com/0x-copilot-dev/0x-copilot/commit/9efbac42cbeacdcdf5ab3e1f62dc101a16e63c2f))
 - **surfaces:** checkpoint the verified-green baseline before the identity refactor ([`0ce86e03`](https://github.com/0x-copilot-dev/0x-copilot/commit/0ce86e03d788e9e7efe85fdfe4c5abce607f6c9c))
 - **desktop-journeys:** live proof that the gate's audit anchor is the ledger's ([`cde55756`](https://github.com/0x-copilot-dev/0x-copilot/commit/cde55756ff6168fa7596afd8c307039fa07aae34))
