@@ -264,7 +264,24 @@ describe("ProjectFilingChip", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("keeps the pill mid-conversation — filing is a fact, not a chore", () => {
+  it("withdraws the zone once the chat is under way when unfiled", () => {
+    render(
+      <ProjectFilingChip
+        value={null}
+        options={options}
+        onChange={vi.fn()}
+        hasSentFirstMessage
+      />,
+    );
+
+    // "FILED UNDER · No project" states an ABSENCE. The zone carries a fact or
+    // nothing; re-filing an in-progress chat lives on the Chats row instead.
+    expect(
+      screen.queryByTestId("composer-project-filing"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("withdraws the zone entirely once the chat is under way, even when filed", () => {
     render(
       <ProjectFilingChip
         value={ACME}
@@ -275,10 +292,13 @@ describe("ProjectFilingChip", () => {
       />,
     );
 
-    // Only the empty state is gated. Where the work lands stays visible, and
-    // re-filing stays reachable, for the chat's whole life.
-    const trigger = screen.getByTestId("composer-project-filing-trigger");
-    expect(trigger).toHaveTextContent("Acme renewal");
+    // Filing is orientation — decided as you start, like the folder bar. Under
+    // a transcript the row is chrome below the thing you are reading, so the
+    // WHOLE zone leaves, filed or not, in Studio and Focus alike. Re-filing an
+    // in-progress chat lives on the Chats row's "Move to project".
+    expect(
+      screen.queryByTestId("composer-project-filing"),
+    ).not.toBeInTheDocument();
   });
 
   it("disables the trigger without hiding what the chat is filed under", () => {
