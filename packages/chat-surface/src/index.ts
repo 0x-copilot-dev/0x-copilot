@@ -22,7 +22,10 @@ export {
 export { TransportProvider, useTransport } from "./providers/TransportProvider";
 export {
   ArtifactDownloadAction,
-  ArtifactEditor,
+  // `ArtifactEditor` was here and is deleted — the raw-markdown `<textarea>`
+  // mounted below the rendered artifact. Editing is in-place on the rendered
+  // blocks now; a host wires nothing for it beyond what `ArtifactSurface`
+  // already does.
   ArtifactFrame,
   ArtifactRevisionHistory,
   ArtifactSurface,
@@ -2325,3 +2328,51 @@ export {
 export type { ThreadScopeOption } from "./shell/ThreadSwitcher";
 export type { ChatsArchiveOptions } from "./destinations/chats";
 // === end Projects filing + thread scope (P0) ===
+
+// === Editable surface Phase 1 (block model + splice engine) ===
+// An artifact body is ONE STRING rendered markdown -> HTML, which is why a table
+// in it cannot be clicked into: there is no table component, only text shaped
+// like a grid. These are the pure halves of the fix — a second reading of that
+// string as a list of blocks, each owning the exact `[start, end)` span it
+// occupies, and the splice that writes one span back.
+//
+// The rule they exist to enforce is SPLICE, NEVER REGENERATE. A document carries
+// prose around its table, links inside cells, and constructs the model does not
+// attempt to understand; parsing the whole thing and re-emitting it would
+// reformat or drop one of them, so `applyEdits` copies every byte outside the
+// edited spans through untouched. `parseBlocks` is total — anything unmodelled
+// becomes a `raw` block that round-trips verbatim rather than a guess.
+//
+// EDITABILITY IS NOT ON THE WIRE. `SurfaceSpec` stays read-only by construction
+// (`spec_models.py:255`, "zero side-effectful members"): the model authors specs,
+// so a spec carrying a handler, a URL or a template would be a model-authored
+// side effect. What is editable is decided HERE, by the host renderer, over
+// values the user typed.
+//
+// Pure functions only — no React, no ports, no substrate primitives — so the
+// renderers that mount on top of them stay the only thing either host has to
+// bind. The renderers are the other half of Phase 1 and land beside these.
+export {
+  applyEdits,
+  blockEdit,
+  cellEdit,
+  escapeTableCellText,
+  headerCellEdit,
+  parseBlocks,
+  spliceBlock,
+  spliceCell,
+  spliceHeaderCell,
+  unescapeTableCellText,
+  type ColumnAlignment,
+  type DocumentBlock,
+  type DocumentBlockKind,
+  type DocumentEdit,
+  type EditableBlock,
+  type HeadingBlock,
+  type ParagraphBlock,
+  type RawBlock,
+  type RawBlockReason,
+  type TableBlock,
+  type TableCell,
+} from "./artifacts";
+// === end Editable surface Phase 1 ===

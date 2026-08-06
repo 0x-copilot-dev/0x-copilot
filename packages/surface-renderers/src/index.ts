@@ -98,11 +98,20 @@ export {
   CodeArtifactRenderer,
   DatasetArtifactRenderer,
   DocumentArtifactRenderer,
+  // Editable surface Phase 1. `ArtifactEditorActions` is the ONLY thing a host
+  // wires to make a document editable — a `{disabled, saveRevision}` object it
+  // builds around its own transport. Editability is never on the wire and never
+  // on a `SurfaceSpec`; a surface the host did not open renders read-only.
+  EditableDocument,
   FileArtifactRenderer,
   RawArtifactFallback,
+  hostEditorActions,
   parseCsv,
   registerArtifactAdapters,
+  type ArtifactEditorActions,
   type ArtifactRenderState,
+  type ArtifactRevisionSaveOutcome,
+  type EditableDocumentProps,
 } from "./artifacts";
 export {
   formatValue,
