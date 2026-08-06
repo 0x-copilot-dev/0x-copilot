@@ -117,6 +117,11 @@ class Values:
     BASIS_SCHEMA = "schema"
     BASIS_REGISTRY = "registry"
     BASIS_GENERATED = "generated"
+    # A model chose the shape and returned paths INTO the payload, so the values
+    # on screen are still the connector's. Split from ``generated`` because a
+    # receipt that folded the two together would claim a model authored data it
+    # only pointed at — see ``ViewBasis`` in ``ledger_models``.
+    BASIS_SELECTED = "selected"
 
     # ``payload_ref`` scheme (D1/D7): ``call:<call_id>`` resolves to the
     # ``tool_result`` event carrying the same ``call_id`` in this run's replay.

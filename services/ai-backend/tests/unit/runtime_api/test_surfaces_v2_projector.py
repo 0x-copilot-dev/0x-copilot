@@ -15,7 +15,7 @@ from runtime_api.schemas.common import (
     RuntimeApiEventType,
     RuntimeEventRedactionState,
 )
-from agent_runtime.surfaces_v2.ledger_models import CURRENT_LEDGER_WRITER
+from agent_runtime.surfaces_v2.ledger_models import CURRENT_LEDGER_WRITER, ViewBasis
 from runtime_api.schemas.events import RuntimeEventPresentationProjector as P
 
 # The append funnel signs every ledger row it projects, so each allow-list result
@@ -154,6 +154,47 @@ class TestViewDerivedProjection:
             payload={"v": 1, "surface_id": "s1", "tier": "generic", "gen": {"ms": 1}},
         )
         assert "gen" not in safe
+
+    def test_every_declared_basis_reaches_the_wire(self) -> None:
+        """Including ``selected`` — a model chose the shape, values stay the
+        connector's. The transport allow-list has silently stripped a field
+        before, and provenance is the last thing that should reach a receipt
+        half-told.
+        """
+
+        for basis in ViewBasis:
+            safe = P.payload_for_event(
+                event_type=RuntimeApiEventType.VIEW_DERIVED,
+                payload={
+                    "v": 1,
+                    "surface_id": "s1",
+                    "tier": "shaped",
+                    "basis": basis.value,
+                },
+            )
+            assert safe["basis"] == basis.value, basis
+
+    def test_an_undeclared_basis_is_dropped(self) -> None:
+        """``basis`` is a closed vocabulary, not free text.
+
+        An emitter that skipped the payload model could otherwise put a word
+        nobody declared onto the wire, leaving every reader to invent a meaning
+        for it. Dropping is the honest outcome: no claim beats a false one.
+        """
+
+        safe = P.payload_for_event(
+            event_type=RuntimeApiEventType.VIEW_DERIVED,
+            payload={
+                "v": 1,
+                "surface_id": "s1",
+                "tier": "telepathy",
+                "basis": "vibes",
+            },
+        )
+
+        assert "basis" not in safe
+        assert "tier" not in safe
+        assert safe["surface_id"] == "s1"
 
 
 class TestReceiptEmittedProjection:

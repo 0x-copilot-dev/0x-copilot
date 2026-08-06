@@ -44,13 +44,23 @@ _RENDER_FALLBACK_TOTAL = "surfaces_render_fallback_total"
 class SpecgenVerdict:
     """Bounded ``verdict`` label values for ``surfaces_specgen_total``.
 
-    Mirrors the per-attempt verdict computed in
-    :meth:`SurfaceSpecGenerator.generate` so the metric vocabulary and the
-    metering-log vocabulary never drift.
+    The per-attempt verdict of both model questions the generator asks —
+    :meth:`SurfaceSpecGenerator.generate` (a SurfaceSpec) and
+    :meth:`SurfaceSpecGenerator.shape` (the shaping answer) — is one of these
+    constants, read from here rather than spelled inline, so the metric
+    vocabulary and the metering-log vocabulary cannot drift apart.
+
+    ``DECLINED`` is the shaping question's alone and is **not** a failure: the
+    model looked at the payload and said nothing here is worth drawing. It needs
+    its own label precisely because it must not be readable as either success
+    (nothing rendered) or breakage (nothing is wrong) — a run full of declines
+    over confirmations is healthy, and a dashboard that could not see the
+    difference would either alarm on it or hide a broken prompt behind it.
     """
 
     OK = "ok"
     RETRY_OK = "retry_ok"
+    DECLINED = "declined"
     SCHEMA_INVALID = "schema_invalid"
     LINT_FAILED = "lint_failed"
     MODEL_ERROR = "model_error"

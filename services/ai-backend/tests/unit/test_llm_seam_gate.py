@@ -30,6 +30,13 @@ def test_canonical_chat_model_consumer_inventory_is_reviewed() -> None:
         "SurfaceViewCoordinator._completion_for -> build_chat_model_from_id",
         "agent_runtime/capabilities/surfaces/generator.py:"
         "build_surface_generation_scheduler -> build_chat_model_from_id",
+        # Ladder rung 5 — the read-path shaping call. Reviewed as the fourth
+        # shaping consumer of the same funnel: identical construction to the
+        # three above (resolver-gated model id, BYOK kwargs, fail-soft to "no
+        # shaping"), and it is what makes ``SurfaceSpecGenerator.shape`` reachable
+        # from a run at all.
+        "agent_runtime/capabilities/surfaces/shape_request.py:"
+        "build_read_path_shaper -> build_chat_model_from_id",
         "agent_runtime/execution/deep_agent_builder.py:"
         "build_chat_model_from_id -> build_chat_model",
         "agent_runtime/execution/deep_agent_builder.py:"

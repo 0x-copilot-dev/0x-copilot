@@ -34,6 +34,10 @@ from agent_runtime.capabilities.surfaces import (
     build_surface_generation_scheduler,
     build_surface_spec_store,
 )
+from agent_runtime.capabilities.surfaces.shape_request import (
+    ReadPathShaper,
+    build_read_path_shaper,
+)
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
@@ -523,6 +527,16 @@ class RuntimeRunHandler:
             if surface_scheduler is not None
             else None
         )
+        # Rung 5 of the same ladder: the SHAPING question, for a payload the
+        # deterministic rungs could not bind at all (an array at the root, prose,
+        # a CSV block). Bound beside the refinement scheduler and gated by the
+        # same resolver, so a run with no shaping model gets neither.
+        surface_shaper = self._build_read_path_shaper(run)
+        surface_shaper_token = (
+            ReadPathShaper.bind_for_run(surface_shaper)
+            if surface_shaper is not None
+            else None
+        )
         # Generative Surfaces v2 (PRD-A3 D4): a run-scoped Work Ledger emitter,
         # bound only when ``SURFACES_V2`` is on. The tool middleware reaches it
         # via the ContextVar to record ``action.classified`` / ``read.executed``
@@ -945,6 +959,8 @@ class RuntimeRunHandler:
                 WorkLedgerEmitter.unbind(work_ledger_emitter_token)
             if surface_scheduler_token is not None:
                 SurfaceGenerationScheduler.unbind(surface_scheduler_token)
+            if surface_shaper_token is not None:
+                ReadPathShaper.unbind(surface_shaper_token)
             if resolver_token is not None:
                 CitationResolver.unbind(resolver_token)
             if allocator_token is not None:
@@ -2789,6 +2805,49 @@ class RuntimeRunHandler:
             # ladder) rather than crash the run.
             logging.getLogger(__name__).warning(
                 "[surfaces] run.generation_scheduler_unavailable run=%s",
+                run.run_id,
+                exc_info=True,
+            )
+            return None
+
+    def _build_read_path_shaper(self, run: RunRecord) -> ReadPathShaper | None:
+        """Build a run-scoped read-path shaper (ladder rung 5), or ``None``.
+
+        Same gate as the refinement scheduler (``ShapingModelResolver``), and the
+        same fail-soft posture: constructing the shaping chat model can raise
+        (no resolvable provider key), and a display-only rung must degrade to
+        "off" rather than crash the run. Metered as ``view_shaping``, like every
+        other shaping call, so one purpose covers the whole subsystem's spend.
+        """
+
+        import os  # noqa: PLC0415 - local to keep the module import surface small
+
+        async def _emit_usage(payload: Mapping[str, object]) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.MODEL,
+                event_type=RuntimeApiEventType.USAGE_RECORDED,
+                payload=dict(payload),
+            )
+
+        try:
+            return build_read_path_shaper(
+                environ=os.environ,
+                run_provider=run.model_provider,
+                usage_meter=MeteredModelInvocation(
+                    meter=UsageMeter(
+                        recorder=self.usage_recorder,
+                        emit_event=_emit_usage,
+                        surfaces_v2=self.settings.execution.surfaces_v2,
+                        attribution_edge_store=self.persistence,
+                    ),
+                    run=run,
+                    purpose=Purpose.VIEW_SHAPING,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "[surfaces] run.read_path_shaper_unavailable run=%s",
                 run.run_id,
                 exc_info=True,
             )

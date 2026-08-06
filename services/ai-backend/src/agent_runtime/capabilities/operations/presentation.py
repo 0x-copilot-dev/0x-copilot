@@ -16,6 +16,7 @@ from agent_runtime.capabilities.surfaces.generator import (
     SurfaceGenerationScheduler,
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
+from agent_runtime.capabilities.surfaces.shape_request import ReadPathShaper
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 
 __operation_boundary__ = "presentation"
@@ -36,12 +37,17 @@ class SurfaceLedgerOperationOutcomePresenter:
         if emitter is None:
             return
         scheduler = SurfaceGenerationScheduler.active()
+        # Rung 5 (the shaping question) is awaited inside ``project``, unlike the
+        # scheduler's fire-and-forget refinement, because its answer decides
+        # whether there is a surface at all. It is reached only for a payload the
+        # deterministic ladder could not bind, so the common read pays nothing.
+        shaper = ReadPathShaper.active()
         projector = (
-            SurfaceProjector(store=scheduler.store, scheduler=scheduler)
+            SurfaceProjector(store=scheduler.store, scheduler=scheduler, shaper=shaper)
             if scheduler is not None
-            else SurfaceProjector()
+            else SurfaceProjector(shaper=shaper)
         )
-        envelope = projector.resolve(
+        envelope = await projector.project(
             outcome.capability,
             outcome.op,
             outcome.output,

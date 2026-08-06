@@ -140,9 +140,38 @@ class ViewTier(StrEnum):
 
 
 class ViewBasis(StrEnum):
+    """What a shaped view was shaped ON — the provenance a receipt reads.
+
+    The four members answer two questions at once: was a model involved, and
+    whose values is the user looking at?
+
+    * ``registry`` — a curated spec a person wrote. No model call.
+    * ``schema`` — deterministic inference off the payload's own structure. No
+      model call. (``registry`` and ``schema`` are what keep surfaces working
+      for a user with no provider key.)
+    * ``selected`` — a model chose the shape and returned paths INTO the
+      payload. **The values are still the connector's.**
+    * ``generated`` — a model produced the values themselves, for prose and
+      other payloads with no paths to point at.
+
+    ``selected`` exists because folding it into ``generated`` would record
+    "a model wrote these numbers" over data the connector returned verbatim, and
+    folding it into ``schema`` would record "no model was involved" over a call
+    that was made and billed. Either way an audit export would state something
+    that is not true; the split is what makes the receipt honest. The producing
+    vocabulary is ``ShapingBindingMode`` in
+    ``capabilities.surfaces.shaping_answer``, whose ``view_basis`` property is
+    the single place a binding mode is mapped onto a basis.
+
+    Append-only: order is part of the pinned cross-language contract
+    (``work_ledger.json`` → ``packages/api-types/src/ledger.ts``), and a replayed
+    row written before a member existed must still validate.
+    """
+
     SCHEMA = "schema"
     REGISTRY = "registry"
     GENERATED = "generated"
+    SELECTED = "selected"
 
 
 class ViewKeep(StrEnum):

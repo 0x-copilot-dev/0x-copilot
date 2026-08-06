@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import ClassVar, Literal
 from uuid import uuid4
 
 from pydantic import (
@@ -50,6 +50,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     CURRENT_LEDGER_WRITER,
     LedgerWriter,
     UnknownLedgerWriterError,
+    ViewBasis,
+    ViewTier,
     WorkLedgerVocabulary,
 )
 from agent_runtime.validation import ValueNormalizer
@@ -199,6 +201,25 @@ class _OperationFields:
     LATENCY_MS = "latency_ms"
     FAILURE_CODE = "failure_code"
     RETRYABLE = "retryable"
+
+
+class _ViewDerivedVocabulary:
+    """The two ``view.derived`` fields whose values are a closed set, not free text.
+
+    Derived from the ledger enums rather than restated, so a member added to
+    ``ViewBasis`` reaches the wire by being declared once — which is what makes
+    this file a genuine fourth declaration of that key rather than a
+    pass-through that lets new values ride along by accident.
+
+    The filtering earns its keep in the other direction. ``_text`` forwards any
+    non-empty string, so an emitter that skipped the payload model could put an
+    undeclared basis on the wire, and every reader downstream would have to
+    decide for itself what a word it has never heard of means. An unlisted value
+    is dropped instead.
+    """
+
+    TIER: ClassVar[frozenset[str]] = frozenset(member.value for member in ViewTier)
+    BASIS: ClassVar[frozenset[str]] = frozenset(member.value for member in ViewBasis)
 
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -1582,17 +1603,27 @@ class RuntimeEventPresentationProjector:
         Keeps ``v`` / ``surface_id`` / ``tier`` / ``basis`` / optional
         ``spec_ref`` / optional ``gen{model}``. ``gen`` is re-built from a nested
         allow-list (``ms`` is not measured in A3, so only ``model`` survives).
+
+        ``tier`` and ``basis`` are closed vocabularies rather than free text and
+        are filtered as such (:class:`_ViewDerivedVocabulary`) — this is the
+        provenance a receipt reads, and a basis nobody declared is worse than no
+        basis at all.
         """
 
         safe_payload: JsonObject = {}
         cls._copy_payload_version(payload, safe_payload)
-        for text_key in (
-            _LedgerKeys.Field.SURFACE_ID,
-            _LedgerKeys.Field.TIER,
-            _LedgerKeys.Field.BASIS,
-            _LedgerKeys.Field.SPEC_REF,
+        for text_key, vocabulary in (
+            (_LedgerKeys.Field.SURFACE_ID, None),
+            (_LedgerKeys.Field.TIER, _ViewDerivedVocabulary.TIER),
+            (_LedgerKeys.Field.BASIS, _ViewDerivedVocabulary.BASIS),
+            (_LedgerKeys.Field.SPEC_REF, None),
         ):
-            value = cls._text(payload.get(text_key))
+            raw_value = payload.get(text_key)
+            value = (
+                cls._text(raw_value)
+                if vocabulary is None
+                else cls._vocabulary_text(raw_value, vocabulary)
+            )
             if value is not None:
                 safe_payload[text_key] = value
         gen = payload.get(_LedgerKeys.Field.GEN)
@@ -2590,6 +2621,18 @@ class RuntimeEventPresentationProjector:
         if value is None:
             return None
         return value.lower()
+
+    @classmethod
+    def _vocabulary_text(cls, value: object, allowed: frozenset[str]) -> str | None:
+        """Text, but only when the contract's own vocabulary declares the value.
+
+        ``_text`` forwards any non-empty string, which is right for a title and
+        wrong for an enum-valued field: it is one guarantee short of "this word
+        means what the contract says it means".
+        """
+
+        text = cls._text(value)
+        return text if text is not None and text in allowed else None
 
     @classmethod
     def _text(cls, value: object) -> str | None:

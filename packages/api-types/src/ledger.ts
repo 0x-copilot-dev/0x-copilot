@@ -157,7 +157,17 @@ export type SurfaceKind =
   | "receipt"
   | "gate";
 export type ViewTier = "raw" | "generic" | "shaped";
-export type ViewBasis = "schema" | "registry" | "generated";
+/**
+ * What a shaped view was shaped ON.
+ *
+ * `registry` is a curated spec a person wrote and `schema` is deterministic
+ * inference off the payload's structure — neither involves a model. `selected`
+ * means a model chose the shape but returned paths into the payload, so the
+ * values on screen are still the connector's; `generated` means the model
+ * produced the values itself. The last two are separate because a receipt that
+ * folded them together would claim a model authored data it only pointed at.
+ */
+export type ViewBasis = "schema" | "registry" | "generated" | "selected";
 export type ViewKeep = "generic" | "shaped";
 export type RevisionAuthor = "agent" | "user";
 export type DecisionKind = "approve" | "reject" | "hold" | "restore";

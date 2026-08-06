@@ -94,6 +94,7 @@ const ENUM_TUPLES = {
     "schema",
     "registry",
     "generated",
+    "selected",
   ] as const satisfies readonly ViewBasis[],
   view_keep: ["generic", "shaped"] as const satisfies readonly ViewKeep[],
   revision_author: [

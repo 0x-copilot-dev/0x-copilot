@@ -111,9 +111,11 @@ class SpecRung:
     producers of one fact is the defect this module already fixed once for
     ``source``).
 
-    ``generated`` is here for completeness of the vocabulary only: the model
-    upgrade lands out of band, as a second ``view.derived`` emitted by
-    :meth:`WorkLedgerEmitter.on_spec_generated`, never through this path.
+    ``selected`` and ``generated`` are the two model rungs. They arrive through
+    this path when the projector asked the *shaping* question inline (a payload
+    the deterministic ladder could not bind), and ``generated`` also still
+    arrives out of band, as a second ``view.derived`` emitted by
+    :meth:`WorkLedgerEmitter.on_spec_generated`.
     """
 
     BUILTIN = "builtin"
@@ -121,6 +123,7 @@ class SpecRung:
     SHAPE_MATCH = "shape_match"
     INFERRED = "inferred"
     GENERATED = "generated"
+    SELECTED = "selected"
 
 
 class _ViewDerivation:
@@ -137,10 +140,14 @@ class _ViewDerivation:
     * shape_match ⇒ ``shaped`` / ``schema`` — see below.
     * inferred ⇒ ``shaped`` / ``schema`` — derived deterministically from the
       payload's own structure.
-    * generated ⇒ ``shaped`` / ``generated`` (emitted by ``on_spec_generated``).
-    * no spec at all ⇒ ``generic`` / ``schema``. The floor makes this
-      unreachable in production, but the emitter stays total over an envelope
-      that carries none.
+    * selected ⇒ ``shaped`` / ``selected`` — a model chose the shape and
+      returned paths into the payload, so the values are still the connector's.
+    * generated ⇒ ``shaped`` / ``generated`` (inline from the shaping rung, or
+      out of band from ``on_spec_generated``).
+    * no spec at all ⇒ ``generic`` / ``schema``. Reached by a payload that
+      decodes to something a dot-path cannot address and that the model was not
+      asked about (or could not answer): the honest generic view, never a table
+      bound to the adapter's own envelope.
 
     ``shape_match`` is the one that has to be argued, because both readings are
     defensible: the spec IS a curated registry entry, but the connector it was
@@ -160,6 +167,7 @@ class _ViewDerivation:
         SpecRung.SHAPE_MATCH: (Values.TIER_SHAPED, Values.BASIS_SCHEMA),
         SpecRung.INFERRED: (Values.TIER_SHAPED, Values.BASIS_SCHEMA),
         SpecRung.GENERATED: (Values.TIER_SHAPED, Values.BASIS_GENERATED),
+        SpecRung.SELECTED: (Values.TIER_SHAPED, Values.BASIS_SELECTED),
     }
     _NO_SPEC: tuple[str, str] = (Values.TIER_GENERIC, Values.BASIS_SCHEMA)
     # An unstated rung over a spec that IS present. This used to report

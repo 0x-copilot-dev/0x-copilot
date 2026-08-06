@@ -44,7 +44,7 @@
       "gate"
     ],
     "view_tier": ["raw", "generic", "shaped"],
-    "view_basis": ["schema", "registry", "generated"],
+    "view_basis": ["schema", "registry", "generated", "selected"],
     "view_keep": ["generic", "shaped"],
     "revision_author": ["agent", "user"],
     "decision_kind": ["approve", "reject", "hold", "restore"],
