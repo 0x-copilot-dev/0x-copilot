@@ -1145,6 +1145,140 @@ def test_older_claude_models_keep_manual_thinking() -> None:
     assert not builder_module._anthropic_is_adaptive_only("gpt-5.6")
 
 
+def test_thinking_mode_predicates_partition_on_the_generation_boundary() -> None:
+    """The two modes are mutually exclusive, and BOTH directions are guarded.
+
+    Measured against the live API, which is why this is stated as a partition
+    rather than as two independent rules:
+
+        claude-sonnet-5    adaptive OK   enabled 400
+        claude-sonnet-4-5  adaptive 400  enabled OK
+        claude-haiku-4-5   adaptive 400  enabled OK
+
+    Asserted together so neither half can be relaxed on its own — the bug this
+    pins existed because only the first half was ever written.
+    """
+
+    adaptive_only = builder_module._anthropic_is_adaptive_only
+    rejects_adaptive = builder_module._anthropic_rejects_adaptive
+
+    for name in ("claude-sonnet-5", "claude-opus-4-7", "claude-fable-5"):
+        assert adaptive_only(name), name
+        assert not rejects_adaptive(name), name
+    for name in ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1"):
+        assert not adaptive_only(name), name
+        assert rejects_adaptive(name), name
+
+    # An unrecognised name is coerced in NEITHER direction: both predicates are
+    # false, so the caller's configured mode survives untouched. Guessing here
+    # is what would break a model we have never seen.
+    for name in ("gpt-5.6", "claude-experimental", "llama-3"):
+        assert not adaptive_only(name), name
+        assert not rejects_adaptive(name), name
+
+
+def test_claude_45_rejects_adaptive_so_the_builder_sends_manual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mirror of the Sonnet 5 case, and the one that shipped broken.
+
+    Adaptive is the default when nothing configures a mode, and
+    ``ModelSelection`` synthesises a bare ``ModelReasoningConfig()`` for every
+    Anthropic thinking model — so a packaged desktop with no reasoning env sent
+    ``type: "adaptive"`` to Claude Haiku 4.5 and failed EVERY run on it with
+    ``400 adaptive thinking is not supported on this model``.
+    """
+
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="anthropic",
+                model_name="claude-haiku-4-5",
+                max_input_tokens=200_000,
+                timeout_seconds=60,
+                temperature=0,
+                supports_streaming=True,
+                # Exactly what ModelSelection synthesises: no mode, no budget.
+                reasoning=ModelReasoningConfig(),
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    thinking = chat_models.calls[0].kwargs["thinking"]
+    assert thinking["type"] == "enabled"
+    # Manual thinking 400s without a budget, and the adaptive config it was
+    # coerced from can never carry one, so the floor is supplied.
+    assert thinking["budget_tokens"] == builder_module._ANTHROPIC_MIN_THINKING_BUDGET
+    assert thinking["display"] == "summarized"
+    # `output_config.effort` is adaptive-only and must not survive the coercion.
+    assert "output_config" not in chat_models.calls[0].kwargs
+
+
+def test_manual_thinking_budget_stays_below_the_output_cap() -> None:
+    """`max_tokens` must be STRICTLY greater than `thinking.budget_tokens`.
+
+    Equal is ``400 `max_tokens` must be greater than `thinking.budget_tokens```,
+    so a deployment whose output cap matches its thinking budget would fail
+    every run. With no cap on the request there is nothing to collide with.
+    """
+
+    budget_for = builder_module._anthropic_manual_budget
+    floor = builder_module._ANTHROPIC_MIN_THINKING_BUDGET
+
+    # No cap: the configured budget stands.
+    assert budget_for(ModelReasoningConfig(budget_tokens=4_000), None) == 4_000
+    # Unconfigured: the API floor.
+    assert budget_for(ModelReasoningConfig(), None) == floor
+    # Cap above the budget: untouched.
+    assert budget_for(ModelReasoningConfig(budget_tokens=4_000), 8_000) == 4_000
+    # Cap equal to the budget: clamped strictly below it.
+    assert budget_for(ModelReasoningConfig(budget_tokens=4_000), 4_000) == 3_999
+    # Cap with no room to both think and answer: thinking is dropped rather
+    # than sent as a request the API will reject.
+    assert budget_for(ModelReasoningConfig(budget_tokens=4_000), floor) is None
+
+
+def test_no_room_for_thinking_drops_the_kwarg_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cap too small to think under yields no `thinking` at all — not a 400."""
+
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="anthropic",
+                model_name="claude-haiku-4-5",
+                max_input_tokens=200_000,
+                max_output_tokens=512,
+                timeout_seconds=60,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=ModelReasoningConfig(),
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    assert "thinking" not in chat_models.calls[0].kwargs
+
+
 def test_subagent_checkpoint_suffix_keeps_tool_calls_in_continuing_messages() -> None:
     """The suffix must instruct the model to package checkpoint text inside the
     SAME assistant message as the next tool call. A tool-call-free message is
