@@ -36,6 +36,8 @@ from _lib import (
     load_env_key,
     load_env_value,
     require,
+    runs_for_conversation,
+    wait_for_conversation_id,
 )
 
 # argv provider → (catalog provider slug, substring the model pill should show).
@@ -82,7 +84,13 @@ def _has_error(s: DriverSession) -> bool:
 
 
 def _await_reply(s: DriverSession, *, timeout_s: int = 120, minimum: int = 2) -> int:
-    """Wait for a real streamed assistant reply, failing fast on an error surface."""
+    """Wait for a real streamed assistant reply, failing fast on an error surface.
+
+    On timeout, ASK THE SERVER why. "no reply within 120s" is the symptom of a
+    slow model, a dead worker and a run that failed on a 400 alike, and it sent
+    a real diagnosis (`adaptive thinking is not supported on this model`) to a
+    log nobody was reading. The run's own terminal status names it.
+    """
 
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -93,9 +101,22 @@ def _await_reply(s: DriverSession, *, timeout_s: int = 120, minimum: int = 2) ->
         if count >= minimum:
             return count
         time.sleep(1)
+
+    detail = ""
+    try:
+        conversation_id = wait_for_conversation_id(s, timeout_s=5)
+        runs = runs_for_conversation(s, conversation_id)
+        if runs:
+            run = s.transport("GET", f"/v1/agent/runs/{runs[0]['run_id']}")
+            detail = (
+                f"; run {runs[0]['run_id'][:8]} status={run.get('status')!r} "
+                f"safe_error={run.get('safe_error')!r}"
+            )
+    except Exception as exc:  # noqa: BLE001 — a diagnosis must not mask the failure
+        detail = f"; (could not read the run back: {exc})"
     raise AssertionError(
         f"run did not stream an assistant reply within {timeout_s}s "
-        f"(messages={_messages(s)})"
+        f"(messages={_messages(s)}){detail}"
     )
 
 
@@ -135,12 +156,23 @@ def fr2_catalog_marks_provider_configured(s: DriverSession) -> None:
         f"expected {CATALOG_PROVIDER} models configured=true after adding a key; "
         f"none of {len(provider_models)} are configured"
     )
-    # openrouter is ALWAYS_SELECTABLE (configured even with no key); prove it.
-    openrouter = [m for m in models if m.get("provider") == "openrouter"]
-    if openrouter:
-        assert all(m.get("configured") for m in openrouter), (
-            "openrouter models must be configured=true (ALWAYS_SELECTABLE)"
-        )
+    # `configured` means ONE thing: the provider has a usable credential, from
+    # the deployment env or the caller's own BYOK key (`ModelCatalog._configured`).
+    # There is no always-selectable carve-out, so no provider may report
+    # configured=true without a key.
+    #
+    # The assertion this replaces demanded exactly that carve-out for
+    # openrouter, citing an `ALWAYS_SELECTABLE` rule that exists nowhere in the
+    # product — it survived only because nothing had run it in a while.
+    unkeyed = [
+        m
+        for m in models
+        if m.get("provider") not in {CATALOG_PROVIDER} and m.get("configured")
+    ]
+    assert not unkeyed, (
+        "a provider with no key reports configured=true: "
+        f"{sorted({m.get('provider') for m in unkeyed})}"
+    )
     print(
         f"  {len(configured)}/{len(provider_models)} {CATALOG_PROVIDER} models "
         f"configured=true; default_model_id={DEFAULT_MODEL_ID}"
