@@ -28,6 +28,7 @@ from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.identity import Identity
 from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
+    ConversationCardEventsResponse,
     ActiveRunCountResponse,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -239,6 +240,31 @@ class RuntimeApiRoutes:
             limit=limit,
             before=before,
             include_deleted=include_deleted,
+        )
+
+    @classmethod
+    async def get_conversation_card_events(
+        cls,
+        request: Request,
+        conversation_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        run_limit: int = Query(50, ge=1, le=200),
+    ) -> ConversationCardEventsResponse:
+        """Return card-bearing frames across a conversation's runs.
+
+        A settled turn's tool cards exist only in its run's event stream, which
+        the client drops on rebind — so a completed turn rendered bare with no
+        way to recover. This returns the frames those cards are folded from for
+        the whole conversation, and the client runs its EXISTING fold over them;
+        no second projection is introduced on either side.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).list_conversation_card_events(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            run_limit=run_limit,
         )
 
     @classmethod
@@ -983,6 +1009,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=RunListResponse,
             name=Keys.RouteName.GET_CONVERSATION_RUNS,
+        )
+        router.add_api_route(
+            "/conversations/{conversation_id}/card-events",
+            RuntimeApiRoutes.get_conversation_card_events,
+            methods=["GET"],
+            response_model=ConversationCardEventsResponse,
+            name=Keys.RouteName.GET_CONVERSATION_CARD_EVENTS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}/canvas",
