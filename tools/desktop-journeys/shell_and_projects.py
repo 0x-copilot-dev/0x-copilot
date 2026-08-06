@@ -30,11 +30,52 @@ from _lib import DriverSession, JourneyPlan, load_env_key, require
 PROVIDER = os.environ.get("SHELL_OVERFLOW_PROVIDER", "anthropic")
 
 # The two short window heights the walk is repeated at. 600 is what a user gets
-# by halving the default window; 420 is short enough that the sign-in card
-# genuinely overflows and is reachable only by scrolling `.loginx-shell`.
-# (Measured: the FTUE body still fits at 420 — its regression was the
-# sized-past-the-frame one, which is height independent.)
-SIZES: list[tuple[int, int]] = [(1200, 600), (1200, 420)]
+# by halving the default window; the second is THE SHORTEST WINDOW THE APP
+# ALLOWS, measured at runtime rather than written down.
+#
+# It used to be a literal 420, and that number could never be reached: the
+# BrowserWindow sets `minHeight` (`apps/desktop/main/window.ts`, pinned by
+# `window.test.ts`), the window manager clamps to it, and `apply_size`'s vacuity
+# guard then failed every phase that walked these sizes — permanently, on a
+# state no user can produce. Measuring means this tracks the app's own minimum
+# for free and can never again test a window that cannot exist.
+#
+# Shortness is not what carries these phases anyway: `assert_surface_self_scrolls`
+# checks the surface OWNS an internal scroll, is not clipped by the frame, and is
+# reachable at both ends — structural properties that hold whether or not the
+# content happens to overflow at a given height (it reports "fits, no scroll
+# needed" as a pass). The original note conceded as much: the FTUE's regression
+# was the sized-past-the-frame one, "which is height independent".
+TALL_SHORT_HEIGHT = 600
+SIZE_WIDTH = 1200
+
+_shortest_height: int | None = None
+
+
+def short_sizes(s: DriverSession) -> list[tuple[int, int]]:
+    """`[(1200, 600), (1200, <app minimum>)]`, measuring the minimum once.
+
+    Asking for an absurd height and reading back what the window actually became
+    IS the measurement — the clamp is the app's own `minHeight`.
+    """
+
+    global _shortest_height
+    if _shortest_height is None:
+        reported = s.resize(SIZE_WIDTH, 1)
+        viewport = reported.get("viewport") or {}
+        got = viewport.get("innerHeight")
+        assert got is not None, f"could not measure the window floor: {reported}"
+        _shortest_height = int(got)
+        print(f"  [size] app's shortest window measured at {_shortest_height}px")
+        # A floor at or above the default would mean the walk never shortens the
+        # window at all, and every short-window assertion below would be
+        # vacuous — the exact failure this whole mechanism exists to prevent.
+        assert _shortest_height < TALL_SHORT_HEIGHT, (
+            f"the window floor ({_shortest_height}px) is not shorter than "
+            f"{TALL_SHORT_HEIGHT}px — there is no short window left to test"
+        )
+    return [(SIZE_WIDTH, TALL_SHORT_HEIGHT), (SIZE_WIDTH, _shortest_height)]
+
 
 FRAME = "[data-testid=desktop-window-frame]"
 
@@ -318,7 +359,7 @@ def sp1_signin_gate_short(s: DriverSession) -> None:
 
     v = Violations()
     assert s.wait_for("[data-testid=sign-in-gate]"), "sign-in gate never appeared"
-    for width, height in SIZES:
+    for width, height in short_sizes(s):
         apply_size(s, v, width, height)
         time.sleep(0.4)
         assert_document_frozen(s, v, f"sign-in @{height}")
@@ -343,7 +384,7 @@ def sp2_ftue_surface_short(s: DriverSession) -> None:
         "FTUE surface never appeared after sign-in"
     )
     time.sleep(1.0)
-    for width, height in SIZES:
+    for width, height in short_sizes(s):
         apply_size(s, v, width, height)
         time.sleep(0.4)
         assert_document_frozen(s, v, f"ftue @{height}")
@@ -397,7 +438,7 @@ def sp4_shell_frozen_at_short_heights(s: DriverSession) -> None:
     """Every destination and settings section, at both short heights."""
 
     v = Violations()
-    for width, height in SIZES:
+    for width, height in short_sizes(s):
         apply_size(s, v, width, height)
         time.sleep(0.5)
         assert_document_frozen(s, v, f"shell @{height}")

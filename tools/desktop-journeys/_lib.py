@@ -759,8 +759,20 @@ class DriverSession:
         self.click('button[aria-label="Send message"]')
 
     def open_destination(self, aria_label: str) -> None:
-        """Click a left nav-rail destination, e.g. "Chats" / "Run"."""
-        self.click(f'[aria-label="{aria_label}"][data-destination]')
+        """Click a left nav-rail destination, e.g. "Chats" / "Run".
+
+        Matches the BADGED form too. `AppRail` renders
+        `aria-label={showBadge ? f"{label} ({count})" : label}`, so the moment a
+        run is live the Run item becomes "Run (1)" and an exact-label selector
+        stops matching — precisely when the app has something to report, which
+        is when the later phases of a journey run. The two alternatives are
+        mutually exclusive (an item is badged or it is not), so this still
+        resolves to exactly one element and stays strict-mode safe.
+        """
+        self.click(
+            f'[data-destination][aria-label="{aria_label}"], '
+            f'[data-destination][aria-label^="{aria_label} ("]'
+        )
         time.sleep(2)
 
     def on_run(self) -> bool:
