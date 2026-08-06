@@ -99,6 +99,14 @@ export interface RunComposerFiling {
   readonly onCreateProject?: () => void;
   /** Read-only chrome (a write in flight). */
   readonly disabled?: boolean;
+  /**
+   * Which composer this is, in the only sense the chip cares about.
+   * `RunComposer` mounts only once a run is bound (always true);
+   * `RunEmptyComposer` and the FTUE only before one (always false). Each states
+   * its own phase rather than the binder guessing, because the BINDER is shared
+   * by both and cannot tell them apart.
+   */
+  readonly hasSentFirstMessage?: boolean;
 }
 
 export interface RunComposerBindings {
@@ -603,6 +611,7 @@ export function useRunComposerBindings(
         onChange={filing.onChange}
         onCreateProject={filing.onCreateProject}
         disabled={filing.disabled}
+        hasSentFirstMessage={filing.hasSentFirstMessage}
         renderMenu={renderFilingMenu}
       />
     );

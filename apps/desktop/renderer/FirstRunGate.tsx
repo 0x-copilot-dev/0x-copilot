@@ -435,6 +435,8 @@ export function FirstRunSurfaceMount({
         onChange={setFiledProjectId}
         onCreateProject={openCreate}
         disabled={launchPhase === "starting"}
+        // First run is pre-first-message by definition — setup is the point.
+        hasSentFirstMessage={false}
         renderMenu={renderPlusMenu}
       />
     ),
