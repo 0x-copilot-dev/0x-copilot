@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CORPUS_FRAGMENTS, MARKDOWN_CORPUS } from "./corpus";
+import { generateDocument, MARKDOWN_CORPUS, mulberry32 } from "./corpus";
 import { parseBlocks } from "./parseBlocks";
 import {
   applyEdits,
@@ -39,32 +39,6 @@ function assertContiguous(source: string, blocks: DocumentBlock[]): void {
     cursor = block.end;
   }
   expect(cursor).toBe(source.length);
-}
-
-/** Deterministic PRNG so a failing generated document is reproducible from the seed. */
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const SEPARATORS = ["\n\n", "\n", "\n\n\n", "\n \n"];
-
-function generateDocument(random: () => number): string {
-  const count = 1 + Math.floor(random() * 6);
-  let document = random() < 0.1 ? "\n\n" : "";
-  for (let index = 0; index < count; index += 1) {
-    const fragment =
-      CORPUS_FRAGMENTS[Math.floor(random() * CORPUS_FRAGMENTS.length)];
-    document += fragment;
-    document += SEPARATORS[Math.floor(random() * SEPARATORS.length)];
-  }
-  return random() < 0.2 ? document.trimEnd() : document;
 }
 
 describe("parseBlocks round trip", () => {

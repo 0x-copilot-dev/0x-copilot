@@ -90,6 +90,7 @@ export {
   type EditableDocumentProps,
 } from "./EditableDocument";
 export {
+  addressableCells,
   commitEdit,
   documentEditFor,
   documentEditsFor,
@@ -101,6 +102,17 @@ export {
   type PendingEdit,
   type PendingEdits,
 } from "./documentEdits";
+// The structural half of the same layer: the operations that change WHICH
+// spans a document has, and the staging that lets one of them be pending
+// alongside a cell edit without the two becoming an overlapping batch.
+export {
+  remapTarget,
+  stageStructural,
+  structuralEditsFor,
+  type NewBlockTemplate,
+  type StagedDocument,
+  type StructuralOp,
+} from "./structuralEdits";
 export { FileArtifactRenderer } from "./FileArtifactRenderer";
 export { RawArtifactFallback } from "./RawArtifactFallback";
 export {

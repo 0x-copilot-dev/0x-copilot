@@ -33,6 +33,7 @@ import {
   type DocumentEdit,
   type EditableBlock,
   type TableBlock,
+  type TableCell,
 } from "@0x-copilot/chat-surface";
 
 /** One editable span, addressed by its position in the parsed block list. */
@@ -216,11 +217,44 @@ function withoutKey(pending: PendingEdits, key: string): PendingEdits {
 }
 
 /**
+ * The cells of one row the editor lets a user REACH: the columns the header
+ * declares, and no more.
+ *
+ * A GFM row may be ragged in either direction, and the two rags are not
+ * symmetrical — which is why this caps one end and pads neither.
+ *
+ * A row with MORE cells than the header is truncated by the RENDERER: remark-gfm
+ * drops the excess, so a `| 6 | 7 | 8 | 9 |` row under a three-column header
+ * shows `6 7 8` and the `9` appears nowhere a reader can see. Handing that cell
+ * to a control would offer someone a value the document never displays, and
+ * their typing would land where no render will ever show it — the one failure
+ * this whole path exists to prevent, arriving through the table rather than
+ * through a span. The bytes are not touched: they stay where the user wrote
+ * them, they travel with the row through every structural edit, and they come
+ * back into view the moment the table gains a column. The block model keeps them
+ * for that reason; the editor declines to ADDRESS them for this one.
+ *
+ * A row with FEWER cells goes the other way and needs no rule here: the renderer
+ * pads it with empties, and the editor cannot, because a padded cell has no span
+ * to splice into and inventing one would rewrite the row's shape.
+ */
+export function addressableCells(
+  block: TableBlock,
+  row: readonly TableCell[],
+): readonly TableCell[] {
+  return row.length > block.headerCells.length
+    ? row.slice(0, block.headerCells.length)
+    : row;
+}
+
+/**
  * Every cell of one table in tab order: the header row, then each body row.
  *
  * Built from the rows as written rather than from `columns × rows`, because a
  * RAGGED row keeps its own length in the block model. Indexing arithmetic would
- * land Tab on a cell that has no span to splice into.
+ * land Tab on a cell that has no span to splice into — and `addressableCells` is
+ * the same rule from the other end, so Tab cannot land on a cell the table does
+ * not draw either.
  */
 function cellSequence(
   block: TableBlock,
@@ -232,7 +266,7 @@ function cellSequence(
     column,
   }));
   block.rows.forEach((row, row_) =>
-    row.forEach((_cell, column) =>
+    addressableCells(block, row).forEach((_cell, column) =>
       sequence.push({ kind: "cell", block: blockIndex, row: row_, column }),
     ),
   );

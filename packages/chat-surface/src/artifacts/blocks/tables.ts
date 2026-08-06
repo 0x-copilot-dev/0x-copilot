@@ -57,12 +57,35 @@ function readCell(
 }
 
 /**
- * Splits one table row into cells, dropping the optional outer pipes.
+ * One cell's span BEFORE its padding is trimmed — everything between the two
+ * delimiters that bound it.
+ *
+ * A `TableCell` is what the user edits; a slot is where the row's structure is.
+ * The two differ by the padding spaces, and that difference is exactly what a
+ * structural edit needs: `slots[i].end` is the offset of the pipe that closes
+ * cell `i` (or, for the last slot, the row's trimmed end), so a column can be
+ * removed by deleting `[slots[i].start, slots[i + 1].start)` — the cell WITH the
+ * delimiter that follows it. Trimmed cell spans cannot express that; they stop
+ * short of the pipes on both sides.
+ */
+export interface RowSlot {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Splits one table row into slots at its unescaped pipes, dropping the optional
+ * outer pipes.
  *
  * Returns an empty array for a row that carries no cell at all (`|` on its own),
  * which is how a caller rejects it as a header or delimiter row.
+ *
+ * Slots are contiguous with one delimiter between them: `slots[i].end` is the
+ * pipe position and `slots[i + 1].start` is one past it. The last slot ends at
+ * the row's trimmed content end, which is the character BEFORE a trailing outer
+ * pipe when the row has one.
  */
-export function splitRowCells(source: string, line: Line): TableCell[] {
+export function rowSlots(source: string, line: Line): RowSlot[] {
   const pipes = unescapedPipePositions(line.text, line.start);
   let contentStart = line.start;
   let contentEnd = line.contentEnd;
@@ -86,13 +109,24 @@ export function splitRowCells(source: string, line: Line): TableCell[] {
   }
   if (lastPipe < firstPipe) return [];
 
-  const cells: TableCell[] = [];
+  const slots: RowSlot[] = [];
   for (let index = firstPipe; index < lastPipe; index += 1) {
-    cells.push(readCell(source, cursor, pipes[index]));
+    slots.push({ start: cursor, end: pipes[index] });
     cursor = pipes[index] + 1;
   }
-  cells.push(readCell(source, cursor, lastCellEnd));
-  return cells;
+  slots.push({ start: cursor, end: lastCellEnd });
+  return slots;
+}
+
+/**
+ * Splits one table row into cells: the slots above, with the padding trimmed off
+ * each one. Cells and slots are derived from the SAME scan, so a structural edit
+ * and a cell edit can never disagree about where a row's columns are.
+ */
+export function splitRowCells(source: string, line: Line): TableCell[] {
+  return rowSlots(source, line).map((slot) =>
+    readCell(source, slot.start, slot.end),
+  );
 }
 
 /**

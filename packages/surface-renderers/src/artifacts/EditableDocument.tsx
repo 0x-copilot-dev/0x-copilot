@@ -8,11 +8,13 @@
 //
 // Three properties hold this together, and none of them is decoration:
 //
-// 1. **Splice, never regenerate.** Save is `applyEdits(source, pending)`: every
-//    byte outside an edited span is copied through untouched, so the prose
-//    around the table, the links inside cells, and every construct the block
-//    model declines to understand survive a round trip by construction. This
-//    component never re-emits markdown; it only names spans.
+// 1. **Splice, never regenerate.** Every change here is `applyEdits` over a
+//    span of the document as it stands: every byte outside that span is copied
+//    through untouched, so the prose around the table, the links inside cells,
+//    and every construct the block model declines to understand survive a round
+//    trip by construction. This component never re-emits markdown; it only
+//    names spans, and for a structural change it does not even do that — it
+//    asks the block package which span to write (`structuralEdits.ts`).
 //
 // 2. **Nothing leaves on a keystroke.** Edits accumulate in local state and one
 //    Save turns the batch into one new revision, through the SAME host call the
@@ -34,10 +36,32 @@
 // non-optional — it is ONE raw block, so without it the toolbar invited a click
 // that had no target anywhere on screen.
 //
-// What no block gets here is STRUCTURE. There is no way to add or delete a
-// table row or column, add or delete a block, or reorder blocks — every one of
-// those changes the document's SHAPE rather than a span in it, which is a
-// different primitive from the one this file is built on.
+// STRUCTURE is the fourth property, and it is a different primitive from the
+// other three. A row, a column and a block can be added, deleted and reordered
+// here — but "delete row 2" is not a span replacement, it is a change to WHICH
+// spans the document has, and its span CONTAINS the span of any cell edit still
+// pending in that row. One batch holding both would hand `applyEdits` an
+// overlapping pair and throw, in front of a user, over edits they can see on
+// screen.
+//
+// So the two are STAGED rather than merged (`structuralEdits.ts`): a structural
+// change is spliced immediately into a working document, and text edits stay
+// pending against that working document. Both are unsaved until the same Save,
+// both are dropped by the same Discard, and both count in "N unsaved edits" —
+// what differs is only which string the pending map is addressed against.
+//
+// Deleting is therefore undoable exactly as long as everything else here is.
+// Discard restores the artifact's own source, deleted rows and blocks included;
+// after Save it is the host's revision history that holds the previous one. A
+// control that can destroy a row of a user's data with no way back is a trap
+// whatever it saves them in clicks, so this is the property to keep if any of
+// the rest of the file changes.
+//
+// The controls sit IN FLOW — a row of buttons above the header, a cell at the
+// end of each row, a strip under each block — never over the content they act
+// on, and never revealed by a hover a keyboard cannot perform. Each one is a
+// real `<button>` in document order, which is the whole of what makes them
+// reachable.
 
 import {
   useEffect,
@@ -65,6 +89,7 @@ import {
 } from "@0x-copilot/chat-surface";
 
 import {
+  addressableCells,
   commitEdit,
   documentEditsFor,
   nextCellTarget,
@@ -76,6 +101,11 @@ import {
   type PendingEdits,
 } from "./documentEdits";
 import type { ArtifactEditorActions } from "./model";
+import {
+  stageStructural,
+  type StagedDocument,
+  type StructuralOp,
+} from "./structuralEdits";
 
 const NO_PENDING_EDITS: PendingEdits = {};
 const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
@@ -181,8 +211,79 @@ interface EditSession {
   readonly previous: PendingEdit | undefined;
 }
 
+/**
+ * Everything unsaved, and the document it is unsaved against.
+ *
+ * `base` is the artifact's source with the STRUCTURAL changes already spliced
+ * in, and `pending` holds the text edits addressed against `base` — the two
+ * stages that let a deleted row and an edited cell be pending at once. Save
+ * composes them (`applyEdits(base, pending)`); Discard drops the whole record
+ * and goes back to `source`.
+ *
+ * It carries the identity it was taken against — `documentKey` AND the source
+ * bytes — because a new revision is a new base document, and a draft addressed
+ * at the old one cannot be adjusted onto the new one. It is dropped instead.
+ */
+interface Draft {
+  readonly documentKey: string;
+  readonly source: string;
+  readonly base: string;
+  /** Staged structural changes, counted so the unsaved-edit total includes them. */
+  readonly structural: number;
+  readonly pending: PendingEdits;
+}
+
+function freshDraft(documentKey: string, source: string): Draft {
+  return {
+    documentKey,
+    source,
+    base: source,
+    structural: 0,
+    pending: NO_PENDING_EDITS,
+  };
+}
+
+/**
+ * What a block is CALLED in a control's accessible name — "Move up: Table 3".
+ *
+ * The 1-based BLOCK index is the ordinal, matching the field labels above it
+ * (`Paragraph 3` is the third block, not the third paragraph), so the two names
+ * for one block never disagree.
+ */
+function describeBlock(block: DocumentBlock, index: number): string {
+  switch (block.kind) {
+    case "heading":
+      return `Heading ${index + 1}`;
+    case "paragraph":
+      return `Paragraph ${index + 1}`;
+    case "table":
+      return `Table ${index + 1}`;
+    case "raw":
+      return block.reason === "blank"
+        ? `Block ${index + 1}`
+        : `${RAW_LABEL[block.reason]} ${index + 1}`;
+  }
+}
+
+/**
+ * A CONTENT-LESS block is not a neighbour to trade places with.
+ *
+ * The leading run of blank lines in a document is a block, and it is the one
+ * `swapBlocksEdits` names as unable to hold the last slot: swapping content
+ * into it leaves the other slot empty, and the document reparses with a
+ * different number of blocks than the move assumed. It also renders nothing, so
+ * a move "up" into it would look like a move that did nothing at all.
+ */
+function contentless(block: DocumentBlock): boolean {
+  return block.kind === "raw" && block.reason === "blank";
+}
+
 export interface EditableDocumentProps {
-  /** The artifact's source, verbatim. The only string Save ever splices into. */
+  /**
+   * The artifact's source, verbatim: the document every unsaved change is
+   * measured from, and the one Discard goes back to. Save splices into it plus
+   * whatever structure is already staged on top — see `Draft`.
+   */
   readonly source: string;
   /** The host's permission to write, and the call that writes. */
   readonly actions: ArtifactEditorActions;
@@ -197,23 +298,46 @@ export interface EditableDocumentProps {
 }
 
 export function EditableDocument(props: EditableDocumentProps): ReactElement {
-  const blocks = useMemo(() => parseBlocks(props.source), [props.source]);
-  const [pending, setPending] = useState<PendingEdits>(NO_PENDING_EDITS);
+  const [stored, setStored] = useState<Draft>(() =>
+    freshDraft(props.documentKey, props.source),
+  );
   const [session, setSession] = useState<EditSession | null>(null);
   const [status, setStatus] = useState<
-    "idle" | "saving" | "conflict" | "error"
+    "idle" | "saving" | "conflict" | "error" | "blocked"
   >("idle");
   const prefix = props.idPrefix ?? "doc";
 
+  // Derived during render rather than reset by an effect: a draft addressed at
+  // a document that is no longer on screen must never be the thing rendered,
+  // not even for the one frame an effect would take to clear it.
+  const draft =
+    stored.documentKey === props.documentKey && stored.source === props.source
+      ? stored
+      : freshDraft(props.documentKey, props.source);
+  const pending = draft.pending;
+  // The blocks are the WORKING document's, not the artifact's: a staged row is
+  // a real row with real spans, which is what makes it something to type into.
+  const blocks = useMemo(() => parseBlocks(draft.base), [draft.base]);
+
   useEffect(() => {
-    setPending(NO_PENDING_EDITS);
     setSession(null);
     setStatus("idle");
-  }, [props.documentKey]);
+  }, [props.documentKey, props.source]);
 
   const saving = status === "saving";
   const editable = !props.actions.disabled && !saving;
-  const dirtyCount = Object.keys(pending).length;
+  const dirtyCount = draft.structural + Object.keys(pending).length;
+
+  const updateDraft = (change: (current: Draft) => Draft): void => {
+    setStored((current) =>
+      change(
+        current.documentKey === props.documentKey &&
+          current.source === props.source
+          ? current
+          : freshDraft(props.documentKey, props.source),
+      ),
+    );
+  };
 
   const valueOf = (target: EditTarget): string =>
     pending[targetKey(target)]?.value ?? originalValue(blocks, target) ?? "";
@@ -234,7 +358,10 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
   // Save closure-safe — there is no half-typed value living somewhere Save
   // cannot see.
   const change = (target: EditTarget, value: string): void => {
-    setPending((current) => commitEdit(current, blocks, target, value));
+    updateDraft((current) => ({
+      ...current,
+      pending: commitEdit(current.pending, blocks, target, value),
+    }));
   };
   /**
    * Closes the session, but only if it is still this target's.
@@ -251,7 +378,10 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
     );
   };
   const cancel = (target: EditTarget, previous: PendingEdit | undefined) => {
-    setPending((current) => revertEdit(current, target, previous));
+    updateDraft((current) => ({
+      ...current,
+      pending: revertEdit(current.pending, target, previous),
+    }));
     close(target);
   };
   const move = (target: EditTarget, step: 1 | -1): void => {
@@ -262,15 +392,50 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
     }
     setSession({ target: next, previous: pending[targetKey(next)] });
   };
+  /**
+   * Splices one structural change into the working document.
+   *
+   * Nothing is sent — this is the same batch a cell edit joins, and Save is
+   * still the only thing that reaches the host. What it does do is move the
+   * pending text edits onto the new document (`stageStructural`), because a
+   * deleted row moves every row under it and an edit addressed at "row 3" would
+   * otherwise land on what is now row 2. A change that cannot be carried across
+   * is refused whole, with the edits left exactly where they are.
+   */
+  const stage = (op: StructuralOp): void => {
+    if (!editable) return;
+    let staged: StagedDocument;
+    try {
+      staged = stageStructural(draft.base, blocks, pending, op);
+    } catch {
+      setStatus("blocked");
+      return;
+    }
+    // Written from `draft` rather than from whatever the setter is handed: the
+    // staged document was computed against THAT record, and a base from one
+    // draft with a pending map from another is a pair of offsets into two
+    // different strings.
+    setStored({
+      ...draft,
+      base: staged.source,
+      pending: staged.pending,
+      structural: draft.structural + 1,
+    });
+    // An open field's target may have moved with the change. Closing it loses
+    // nothing: every keystroke is already in the batch, so a session decides
+    // where the cursor is and never where an edit lives.
+    setSession(null);
+    setStatus("idle");
+  };
   const discard = (): void => {
-    setPending(NO_PENDING_EDITS);
+    setStored(freshDraft(props.documentKey, props.source));
     setSession(null);
     setStatus("idle");
   };
   const save = (): void => {
     let next: string;
     try {
-      next = applyEdits(props.source, documentEditsFor(blocks, pending));
+      next = applyEdits(draft.base, documentEditsFor(blocks, pending));
     } catch {
       // A target that no longer resolves, or a batch that overlaps. Neither is
       // recoverable by guessing, and the edits stay on screen.
@@ -337,65 +502,164 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
       </span>
     );
 
-  const renderTable = (block: TableBlock, index: number): ReactElement => (
-    <div style={tableWrapStyle} key={index}>
-      <table style={tableStyle} data-testid={`${prefix}-table-${index}`}>
-        <thead>
-          <tr>
-            {block.headerCells.map((_cell, column) => {
-              const target: EditTarget = {
-                kind: "header",
-                block: index,
-                column,
-              };
-              return (
-                <th
-                  key={column}
-                  scope="col"
-                  style={headerStyle(block.alignments[column] ?? null)}
-                  {...openProps(target)}
-                >
-                  {renderSpan(
-                    target,
-                    `Column ${column + 1} name`,
-                    `${prefix}-header-${index}-${column}`,
-                  )}
-                </th>
-              );
-            })}
-          </tr>
-        </thead>
-        <tbody>
-          {block.rows.map((row, rowIndex) => (
-            <tr key={rowIndex}>
-              {row.map((_cell, column) => {
+  /**
+   * A table, with its structural controls in cells of their own.
+   *
+   * The column controls are a row ABOVE the header and the row controls a cell
+   * at the END of each row, so every button sits beside what it acts on and over
+   * nothing. They are `<td>`, never `<th>`: a control is not a heading for the
+   * column beneath it, and marking one up as `scope="col"` would have a screen
+   * reader announce "Delete" as the name of every cell in that column.
+   *
+   * The last column's Delete is disabled rather than hidden. A table with no
+   * columns is not a table — there is no delimiter row that declares zero — so
+   * emptying one is `Delete Table N`, which says what it does.
+   *
+   * A row is drawn through `addressableCells`, which is what keeps this table
+   * and the document's own render agreeing about which cells there are: a row
+   * carrying MORE cells than the header renders only the columns the header
+   * declares, because that is all remark-gfm shows the reader. The rule is
+   * stated once, in `documentEdits.ts`, and Tab reads the same one.
+   */
+  const renderTable = (block: TableBlock, index: number): ReactElement => {
+    const name = describeBlock(block, index);
+    const columns = block.headerCells.length;
+    return (
+      <div style={tableWrapStyle} key={index}>
+        <table style={tableStyle} data-testid={`${prefix}-table-${index}`}>
+          <thead>
+            {editable ? (
+              <tr>
+                {block.headerCells.map((_cell, column) => (
+                  <td key={column} style={controlCellStyle}>
+                    <ControlButton
+                      testId={`${prefix}-delete-column-${index}-${column}`}
+                      label={`Delete column ${
+                        block.headers[column] || column + 1
+                      } of ${name}`}
+                      disabled={columns < 2}
+                      onClick={() =>
+                        stage({ kind: "delete-column", block: index, column })
+                      }
+                    >
+                      Delete
+                    </ControlButton>
+                  </td>
+                ))}
+                <td style={controlCellStyle}>
+                  <ControlButton
+                    testId={`${prefix}-add-column-${index}`}
+                    label={`Add column to ${name}`}
+                    onClick={() => stage({ kind: "add-column", block: index })}
+                  >
+                    Add column
+                  </ControlButton>
+                </td>
+              </tr>
+            ) : null}
+            <tr>
+              {block.headerCells.map((_cell, column) => {
                 const target: EditTarget = {
-                  kind: "cell",
+                  kind: "header",
                   block: index,
-                  row: rowIndex,
                   column,
                 };
-                const header = block.headers[column] || `Column ${column + 1}`;
                 return (
-                  <td
+                  <th
                     key={column}
-                    style={cellStyle(block.alignments[column] ?? null)}
+                    scope="col"
+                    style={headerStyle(block.alignments[column] ?? null)}
                     {...openProps(target)}
                   >
                     {renderSpan(
                       target,
-                      `${header}, row ${rowIndex + 1}`,
-                      `${prefix}-cell-${index}-${rowIndex}-${column}`,
+                      `Column ${column + 1} name`,
+                      `${prefix}-header-${index}-${column}`,
                     )}
-                  </td>
+                  </th>
                 );
               })}
+              {editable ? <td style={controlCellStyle} /> : null}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {addressableCells(block, row).map((_cell, column) => {
+                  const target: EditTarget = {
+                    kind: "cell",
+                    block: index,
+                    row: rowIndex,
+                    column,
+                  };
+                  const header =
+                    block.headers[column] || `Column ${column + 1}`;
+                  return (
+                    <td
+                      key={column}
+                      style={cellStyle(block.alignments[column] ?? null)}
+                      {...openProps(target)}
+                    >
+                      {renderSpan(
+                        target,
+                        `${header}, row ${rowIndex + 1}`,
+                        `${prefix}-cell-${index}-${rowIndex}-${column}`,
+                      )}
+                    </td>
+                  );
+                })}
+                {editable ? (
+                  <td style={controlCellStyle}>
+                    <ControlButton
+                      testId={`${prefix}-insert-row-${index}-${rowIndex}`}
+                      label={`Add row below row ${rowIndex + 1} of ${name}`}
+                      onClick={() =>
+                        stage({
+                          kind: "insert-row",
+                          block: index,
+                          row: rowIndex,
+                        })
+                      }
+                    >
+                      Add row
+                    </ControlButton>
+                    <ControlButton
+                      testId={`${prefix}-delete-row-${index}-${rowIndex}`}
+                      label={`Delete row ${rowIndex + 1} of ${name}`}
+                      onClick={() =>
+                        stage({
+                          kind: "delete-row",
+                          block: index,
+                          row: rowIndex,
+                        })
+                      }
+                    >
+                      Delete
+                    </ControlButton>
+                  </td>
+                ) : null}
+              </tr>
+            ))}
+          </tbody>
+          {editable ? (
+            <tfoot>
+              <tr>
+                <td colSpan={columns + 1} style={controlCellStyle}>
+                  <ControlButton
+                    testId={`${prefix}-add-row-${index}`}
+                    label={`Add row to ${name}`}
+                    onClick={() => stage({ kind: "add-row", block: index })}
+                  >
+                    Add row
+                  </ControlButton>
+                </td>
+              </tr>
+            </tfoot>
+          ) : null}
+        </table>
+      </div>
+    );
+  };
 
   const renderHeading = (block: HeadingBlock, index: number): ReactElement => {
     const target: EditTarget = { kind: "prose", block: index };
@@ -497,7 +761,7 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
     );
   };
 
-  const renderBlock = (block: DocumentBlock, index: number): ReactNode => {
+  const renderContent = (block: DocumentBlock, index: number): ReactNode => {
     switch (block.kind) {
       case "table":
         return renderTable(block, index);
@@ -508,6 +772,107 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
       case "raw":
         return renderRaw(block, index);
     }
+  };
+
+  /**
+   * The two controls that add a block, at one BOUNDARY between blocks.
+   *
+   * Boundaries rather than blocks is what makes every position reachable: each
+   * block's strip offers the boundary AFTER it, and the strip at the top of the
+   * document offers boundary 0. That top strip is also the only affordance an
+   * empty document has — deleting the last block leaves one, and it is the way
+   * back.
+   */
+  const insertControls = (
+    boundary: number,
+    where: string,
+  ): readonly ReactElement[] => [
+    <ControlButton
+      key="paragraph"
+      testId={`${prefix}-insert-paragraph-${boundary}`}
+      label={`Add paragraph ${where}`}
+      onClick={() =>
+        stage({ kind: "add-block", boundary, template: "paragraph" })
+      }
+    >
+      Add paragraph
+    </ControlButton>,
+    <ControlButton
+      key="table"
+      testId={`${prefix}-insert-table-${boundary}`}
+      label={`Add table ${where}`}
+      onClick={() => stage({ kind: "add-block", boundary, template: "table" })}
+    >
+      Add table
+    </ControlButton>,
+  ];
+
+  const renderBlockActions = (
+    block: DocumentBlock,
+    index: number,
+  ): ReactElement => {
+    const name = describeBlock(block, index);
+    const swappable = (other: number): boolean =>
+      other >= 0 && other < blocks.length && !contentless(blocks[other]);
+    return (
+      <div
+        role="group"
+        aria-label={`Actions for ${name}`}
+        // NOT `-block-actions-`: `${prefix}-block-N` is a paragraph's own span,
+        // and a testid under that prefix reads as one to anything scanning the
+        // document for editable blocks.
+        data-testid={`${prefix}-actions-${index}`}
+        style={blockActionsStyle}
+      >
+        <ControlButton
+          testId={`${prefix}-move-up-${index}`}
+          label={`Move up: ${name}`}
+          disabled={!swappable(index - 1)}
+          onClick={() =>
+            stage({ kind: "swap-blocks", first: index, second: index - 1 })
+          }
+        >
+          Move up
+        </ControlButton>
+        <ControlButton
+          testId={`${prefix}-move-down-${index}`}
+          label={`Move down: ${name}`}
+          disabled={!swappable(index + 1)}
+          onClick={() =>
+            stage({ kind: "swap-blocks", first: index, second: index + 1 })
+          }
+        >
+          Move down
+        </ControlButton>
+        {insertControls(index + 1, `after ${name}`)}
+        <ControlButton
+          testId={`${prefix}-delete-block-${index}`}
+          label={`Delete ${name}`}
+          onClick={() => stage({ kind: "delete-block", block: index })}
+        >
+          Delete
+        </ControlButton>
+      </div>
+    );
+  };
+
+  /**
+   * One block and the strip of controls that acts on it, under it.
+   *
+   * A block that renders nothing — the blank run between two blocks — gets no
+   * strip either. There is nothing on screen for the controls to be about, and a
+   * row of buttons floating in the whitespace of a document would be exactly the
+   * affordance-with-no-target this file already refuses to draw.
+   */
+  const renderBlock = (block: DocumentBlock, index: number): ReactNode => {
+    const content = renderContent(block, index);
+    if (content === null) return null;
+    return (
+      <div key={index} style={blockWrapStyle}>
+        {content}
+        {editable ? renderBlockActions(block, index) : null}
+      </div>
+    );
   };
 
   return (
@@ -524,8 +889,9 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
         style={actionBarStyle}
       >
         <span className="ui-caption" style={hintStyle}>
-          Click any cell, paragraph or block to edit it in place. Changes stay
-          local until you save a new revision.
+          Click any cell, paragraph or block to edit it in place, or use the
+          controls to add, delete and reorder. Changes stay local until you save
+          a new revision.
         </span>
         <span className="ui-caption" data-testid={`${prefix}-editor-status`}>
           {dirtyCount === 0
@@ -560,8 +926,67 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
           Could not save this revision. Your local edits are still here.
         </p>
       ) : null}
-      <div style={bodyStyle}>{blocks.map(renderBlock)}</div>
+      {status === "blocked" ? (
+        <p className="ui-caption" role="alert">
+          Could not add that change on top of your unsaved edits. Save or
+          discard them first, then try it again.
+        </p>
+      ) : null}
+      <div style={bodyStyle}>
+        {editable ? (
+          <div
+            role="group"
+            aria-label="Add a block at the top of the document"
+            data-testid={`${prefix}-document-actions`}
+            style={blockActionsStyle}
+          >
+            {insertControls(0, "at the top of the document")}
+          </div>
+        ) : null}
+        {blocks.map(renderBlock)}
+      </div>
     </section>
+  );
+}
+
+interface ControlButtonProps {
+  readonly testId: string;
+  /** The whole sentence a screen reader needs: "Delete row 2 of Table 3". */
+  readonly label: string;
+  readonly disabled?: boolean;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}
+
+/**
+ * One structural control: a real button, named for what it acts on.
+ *
+ * The visible text is the verb alone because these sit inside table cells and a
+ * strip under a block, where the surrounding row already says which row or
+ * block it belongs to. The accessible name is the whole sentence and CONTAINS
+ * that visible text, so the button a voice-control user asks for by the words
+ * they can see is the button that gets pressed.
+ *
+ * The click stops here. A control inside a table cell would otherwise bubble
+ * into that cell's own click handler and open an editor over the thing it just
+ * changed.
+ */
+function ControlButton(props: ControlButtonProps): ReactElement {
+  return (
+    <button
+      aria-label={props.label}
+      className="ui-button ui-button--ghost ui-button--sm"
+      data-testid={props.testId}
+      disabled={props.disabled ?? false}
+      style={controlButtonStyle}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onClick();
+      }}
+    >
+      {props.children}
+    </button>
   );
 }
 
@@ -700,6 +1125,41 @@ const bodyStyle: CSSProperties = {
   flexDirection: "column",
   gap: 10,
   minWidth: 0,
+};
+
+/** A block and its own controls, one under the other and closer than blocks are. */
+const blockWrapStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  minWidth: 0,
+};
+
+/**
+ * The strip of controls under a block: in flow, wrapping, and never positioned
+ * over anything. It takes vertical space on purpose — that is the cost of a
+ * control the reader can see without hovering and reach without a pointer.
+ */
+const blockActionsStyle: CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 4,
+  minWidth: 0,
+};
+
+/** A cell that holds controls rather than content: no border, no cell padding. */
+const controlCellStyle: CSSProperties = {
+  padding: "2px 4px",
+  textAlign: "left",
+  verticalAlign: "middle",
+  whiteSpace: "nowrap",
+};
+
+const controlButtonStyle: CSSProperties = {
+  fontSize: "var(--font-size-xs, 12px)",
+  lineHeight: 1.4,
+  padding: "1px 6px",
 };
 
 const tableWrapStyle: CSSProperties = {

@@ -32,4 +32,18 @@ export {
   spliceCell,
   spliceHeaderCell,
 } from "./splice";
+// The structural half: the operations that change WHICH spans exist rather than
+// what one span holds. They return `DocumentEdit[]` like `cellEdit` does, so a
+// structural change batches with a text change through the same `applyEdits` and
+// there is no second way a document is written.
+export {
+  addBlockEdits,
+  addColumnEdits,
+  addRowEdits,
+  blockContentEnd,
+  deleteBlockEdits,
+  deleteColumnEdits,
+  deleteRowEdits,
+  swapBlocksEdits,
+} from "./structure";
 export { escapeTableCellText, unescapeTableCellText } from "./tables";

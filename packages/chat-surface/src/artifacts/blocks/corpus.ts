@@ -60,6 +60,30 @@ export const HEADERLESS_PIPES = `a | b
 1 | 2
 `;
 
+/**
+ * A table with no outer pipes whose cells are the ones that stop being cells the
+ * moment the pipes around them go.
+ *
+ * Every line here is a row while the pipes hold it together, and three of them
+ * are one character away from being something else entirely: `spare | ---` loses
+ * its opening and leaves `---`, a thematic break; `gateway | -` leaves ` -`, a
+ * list; `--- | x` keeps its opening but loses its only pipe when the LAST column
+ * goes, and `---` alone is a thematic break again. Each one ends the table where
+ * it stands and turns every row below it into pipe-noise in a paragraph — which
+ * is why the corpus properties, which reparse and compare block kinds, are what
+ * hold this shut rather than a string comparison. A lone `-` meaning "no value"
+ * is among the commonest cells a real data table has; none of this is exotic.
+ */
+export const PIPELESS_PLACEHOLDERS = `Item | Note
+--- | ---
+a | 1
+spare | ---
+gateway | -
+--- | x
+
+Everything above is one table.
+`;
+
 export const TABLE_INTERRUPTING_PROSE = `Here is the breakdown.
 | A | B |
 | --- | --- |
@@ -213,6 +237,7 @@ export const MARKDOWN_CORPUS: Readonly<Record<string, string>> = {
   EMPTY_CELLS_TABLE,
   ALIGNED_TABLE,
   HEADERLESS_PIPES,
+  PIPELESS_PLACEHOLDERS,
   TABLE_INTERRUPTING_PROSE,
   LIST_AND_QUOTE,
   TIGHT_CONTAINERS,
@@ -231,7 +256,7 @@ export const MARKDOWN_CORPUS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Fragments the generative round-trip test shuffles into synthetic documents.
+ * Fragments the generative round-trip tests shuffle into synthetic documents.
  * Each one is a whole construct; the generator only decides the order and how
  * many blank lines separate them, which is where a scanner's coverage bugs live.
  */
@@ -247,6 +272,9 @@ export const CORPUS_FRAGMENTS: readonly string[] = [
   "| Only |\n| :-: |\n| one |",
   "| A | B |\n| --- | --- |\n| 1 |",
   "no | outer | pipes\n--- | --- | ---\n1 | 2 | 3",
+  // Cells that stop being cells once the pipes around them go — see
+  // `PIPELESS_PLACEHOLDERS`.
+  "Item | Note\n--- | ---\nspare | ---\ngateway | -\n--- | x",
   "```\ncode | with | pipes\n| --- |\n```",
   "~~~py\nx = 1\n~~~",
   "    indented code",
@@ -263,3 +291,41 @@ export const CORPUS_FRAGMENTS: readonly string[] = [
   "| Escaped \\| pipe | b |\n| --- | --- |\n| x \\| y | z |",
   "|  |  |\n| --- | --- |\n|  | x |",
 ];
+
+/**
+ * Deterministic PRNG, so a failing generated document is reproducible from its
+ * seed rather than from a lucky re-run.
+ */
+export function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const SEPARATORS = ["\n\n", "\n", "\n\n\n", "\n \n"];
+
+/**
+ * Shuffles `CORPUS_FRAGMENTS` into one synthetic document.
+ *
+ * The generator decides three things only — which constructs, in what order, and
+ * how much blank space between them — because those are what a hand-written
+ * example cannot cover. `"\n"` is in the separator list on purpose: two
+ * constructs with NO blank line between them is where a paragraph swallows the
+ * block under it and a container lazily continues into the next one.
+ */
+export function generateDocument(random: () => number): string {
+  const count = 1 + Math.floor(random() * 6);
+  let document = random() < 0.1 ? "\n\n" : "";
+  for (let index = 0; index < count; index += 1) {
+    const fragment =
+      CORPUS_FRAGMENTS[Math.floor(random() * CORPUS_FRAGMENTS.length)];
+    document += fragment;
+    document += SEPARATORS[Math.floor(random() * SEPARATORS.length)];
+  }
+  return random() < 0.2 ? document.trimEnd() : document;
+}

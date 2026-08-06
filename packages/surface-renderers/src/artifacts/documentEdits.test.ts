@@ -2,6 +2,7 @@ import { applyEdits, parseBlocks } from "@0x-copilot/chat-surface";
 import { describe, expect, it } from "vitest";
 
 import {
+  addressableCells,
   commitEdit,
   documentEditFor,
   documentEditsFor,
@@ -62,6 +63,43 @@ describe("documentEdits", () => {
     ).toBeNull();
     expect(
       nextCellTarget(blocks, { kind: "cell", block: 0, row: 1, column: 2 }, 1),
+    ).toBeNull();
+  });
+
+  it("stops Tab at the header's width, because a row's EXCESS cells are drawn nowhere", () => {
+    // The other rag. A row with MORE cells than the header is truncated by the
+    // renderer — remark-gfm shows three cells of a four-cell row under a
+    // three-column header — so the editor draws three and Tab must walk the
+    // same three. Landing on the fourth would open a field over a value the
+    // document never displays.
+    const source = [
+      "| A | B | C |",
+      "| --- | --- | --- |",
+      "| 6 | 7 | 8 | 9 |",
+      "| x | y | z |",
+      "",
+    ].join("\n");
+    const blocks = parseBlocks(source);
+    const table = blocks[0];
+    if (table.kind !== "table") throw new Error("expected a table");
+    // The MODEL still has the cell — the bytes are the user's and travel with
+    // the row. It is the editor that declines to address it.
+    expect(table.rows.map((row) => row.length)).toEqual([4, 3]);
+    expect(
+      addressableCells(table, table.rows[0]).map((cell) => cell.text),
+    ).toEqual(["6", "7", "8"]);
+
+    const third: EditTarget = { kind: "cell", block: 0, row: 0, column: 2 };
+    expect(nextCellTarget(blocks, third, 1)).toEqual({
+      kind: "cell",
+      block: 0,
+      row: 1,
+      column: 0,
+    });
+    // A target naming the excess cell is not in the sequence at all, so Tab out
+    // of it goes nowhere rather than deeper into cells nobody can see.
+    expect(
+      nextCellTarget(blocks, { kind: "cell", block: 0, row: 0, column: 3 }, 1),
     ).toBeNull();
   });
 

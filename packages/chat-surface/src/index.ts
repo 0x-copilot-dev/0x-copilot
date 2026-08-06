@@ -2352,16 +2352,31 @@ export type { ChatsArchiveOptions } from "./destinations/chats";
 // Pure functions only — no React, no ports, no substrate primitives — so the
 // renderers that mount on top of them stay the only thing either host has to
 // bind. The renderers are the other half of Phase 1 and land beside these.
+//
+// The `*Edits` family is the STRUCTURAL half: adding and deleting a row, a
+// column or a block, and reordering two blocks. They are span operations like
+// the rest — a new row is a zero-width insertion, a new column is one insertion
+// per row batched together — and they return `DocumentEdit[]`, so structure and
+// text go through the same `applyEdits` and a document has exactly one way to
+// change.
 export {
+  addBlockEdits,
+  addColumnEdits,
+  addRowEdits,
   applyEdits,
+  blockContentEnd,
   blockEdit,
   cellEdit,
+  deleteBlockEdits,
+  deleteColumnEdits,
+  deleteRowEdits,
   escapeTableCellText,
   headerCellEdit,
   parseBlocks,
   spliceBlock,
   spliceCell,
   spliceHeaderCell,
+  swapBlocksEdits,
   unescapeTableCellText,
   type ColumnAlignment,
   type DocumentBlock,
