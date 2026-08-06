@@ -61,6 +61,15 @@ export interface FirstRunCreateRunInput {
    * authorize a write.
    */
   readonly filesystemBypass?: FilesystemBypassSelection;
+  /**
+   * The project this first chat is filed under, or `null`/omitted for none.
+   *
+   * It rides step 1 (`POST /v1/agent/conversations`), not the run: filing is a
+   * property of the chat, and the FTUE's conversation does not exist until that
+   * call — the same reason the create path, rather than a PATCH, is what the
+   * Run cockpit uses for a chat filed before its first message.
+   */
+  readonly projectId?: string | null;
 }
 
 export interface FirstRunLaunchResult {

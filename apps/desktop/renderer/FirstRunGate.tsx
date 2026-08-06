@@ -11,6 +11,7 @@ import {
 import {
   Acknowledgment,
   FIRST_RUN_SUGGESTIONS,
+  ProjectFilingChip,
   FirstRunLocalCard,
   FirstRunSurface,
   OnboardingComposer,
@@ -37,6 +38,7 @@ import {
   type FirstRunLaunchResult,
   type FirstRunStage,
   type HashRouter,
+  type ProjectId,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
 
@@ -56,6 +58,10 @@ import { toReadableRunAttachments } from "./onboarding/firstRunAttachments";
 import { createFirstRunConnectorsPort } from "./onboarding/firstRunConnectorsPort";
 import { createFirstRunProfilePort } from "./onboarding/firstRunProfilePort";
 import { createFirstRunRunsPort } from "./onboarding/firstRunRunsPort";
+import {
+  useProjectCreate,
+  useProjectFilingOptions,
+} from "./projects/useProjectFiling";
 import { useOnboardingComposerModels } from "./onboarding/useOnboardingComposerModels";
 import { useDesktopComposerBypassWithTransport } from "./composer/useDesktopComposerBypass";
 import { bridgeWorkspaceGrantPort } from "./workspaceGrantPort";
@@ -408,6 +414,35 @@ export function FirstRunSurfaceMount({
       disabled: launchPhase === "starting",
     });
 
+  // Where this first chat gets filed. Held here rather than in the composer
+  // because the FTUE's conversation does not exist until send — the pick has to
+  // survive until `createFirstRun` can put it on the create body.
+  const [filedProjectId, setFiledProjectId] = useState<ProjectId | null>(null);
+  // The transport is passed EXPLICITLY: this component body sits outside the
+  // `TransportProvider` it mounts below, so the context read finds nothing.
+  const { options: projectOptions, reload: reloadProjectOptions } =
+    useProjectFilingOptions(transport);
+  const { openCreate, sheet: projectCreateSheet } = useProjectCreate({
+    onCreated: setFiledProjectId,
+    reload: reloadProjectOptions,
+    transport,
+  });
+  const projectFilingSlot = useMemo<ReactNode>(
+    () => (
+      <ProjectFilingChip
+        value={filedProjectId}
+        options={projectOptions}
+        onChange={setFiledProjectId}
+        onCreateProject={openCreate}
+        disabled={launchPhase === "starting"}
+        // First run is pre-first-message by definition — setup is the point.
+        hasSentFirstMessage={false}
+        renderMenu={renderPlusMenu}
+      />
+    ),
+    [filedProjectId, projectOptions, openCreate, launchPhase, renderPlusMenu],
+  );
+
   const { launch: startLaunch, reset: resetLaunch } = launch;
   const handleSubmit = useCallback(
     (payload: {
@@ -426,9 +461,10 @@ export function FirstRunSurfaceMount({
         webSearchEnabled: webSearchRef.current,
         pausedConnectorIds: pausedConnectorIdsRef.current,
         filesystemBypass,
+        projectId: filedProjectId,
       });
     },
-    [launchPhase, resetLaunch, startLaunch, filesystemBypass],
+    [launchPhase, resetLaunch, startLaunch, filesystemBypass, filedProjectId],
   );
 
   // P4 — featured 1-click connect. The renderer cannot open an external URL on
@@ -513,6 +549,14 @@ export function FirstRunSurfaceMount({
           onDismissError={resetLaunch}
           toolsTrigger={ctx.toolsTrigger}
           bypassTrigger={bypassTrigger}
+          // The filing zone. Omitting it here repeated PRD-FS-10 §7 exactly:
+          // the affordance existed on every composer EXCEPT first run, which is
+          // the one send that CREATES the conversation and therefore the only
+          // place filing can ride the create rather than a follow-up PATCH.
+          // `OnboardingComposer` derives its props from `AssistantComposerProps`
+          // precisely so a new composer prop reaches first run for free — that
+          // only works if the host actually passes it.
+          projectFilingSlot={projectFilingSlot}
           disabled={launchPhase === "starting"}
         />
       );
@@ -524,6 +568,7 @@ export function FirstRunSurfaceMount({
       onModelChange,
       resolveAttachment,
       handleSubmit,
+      projectFilingSlot,
       launchPhase,
       launch.error,
       resetLaunch,
@@ -592,6 +637,10 @@ export function FirstRunSurfaceMount({
 
   return (
     <TransportProvider transport={transport}>
+      {/* The create sheet the filing chip's "New project…" opens. A sibling of
+          the surface, not a child of the composer: it is a scrim over the whole
+          screen. Without this mount the row would be a dead click. */}
+      {projectCreateSheet}
       <FirstRunSurface
         providerKeys={providerKeys}
         models={models}

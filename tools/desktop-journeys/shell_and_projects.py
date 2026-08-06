@@ -367,6 +367,23 @@ def sp3_enter_the_shell(s: DriverSession) -> None:
     key = load_env_key(PROVIDER)  # value never printed
     print(f"  provider={PROVIDER} key_len={len(key)} (value withheld)")
     s.ftue_add_key(PROVIDER, key)
+
+    # The FTUE composer carries the filing zone too. It was missing at first,
+    # which repeated PRD-FS-10 §7's folder-bar bug exactly: the affordance
+    # existed on every composer EXCEPT first run — the one send that CREATES the
+    # conversation, and so the only place filing can ride the create rather than
+    # a follow-up PATCH. A wiring claim, which is why it is asserted live: the
+    # host has to pass the prop, and `OnboardingComposer` derives it silently.
+    assert s.present("[data-testid=composer-project-filing]"), (
+        "no filing zone on the FTUE composer — first run is the one send that "
+        "creates the conversation, so filing must be reachable there"
+    )
+    # Zero projects on a fresh install ⇒ the create-only variant.
+    assert s.present("[data-testid=composer-project-filing-create]"), (
+        "FTUE filing zone rendered with no way to act"
+    )
+    s.shot("ftue-filing-zone")
+
     assert s.wait_for("[data-testid=first-run-skip]", 30), "FTUE skip missing"
     s.click("[data-testid=first-run-skip]")
     assert s.wait_for("[data-component=chat-shell]", 60), (
@@ -670,19 +687,20 @@ def sp6_create_from_chip_files_the_chat(s: DriverSession) -> None:
         "filing chip is not below the composer frame — the above/below split "
         "(folders up, project down) has been broken"
     )
-    assert "No project" in _chip_label(s), (
-        f"a fresh chat should read 'No project', got {_chip_label(s)!r}"
+    # With ZERO projects the zone is the CREATE-ONLY variant: a direct
+    # "New project" button, not a pill whose menu's only real entry would be
+    # "No project" — an absence reported as though it were a filing decision.
+    # Assert the AFFORDANCE, not one shape of it; the pill and its menu are
+    # asserted in SP-7 onwards, once a project exists.
+    assert s.present("[data-testid=composer-project-filing-create]"), (
+        "zero-project zone is not the create-only variant — a fresh install has "
+        "nothing to pick, so the zone must offer the way to make one"
     )
     s.shot("chip-unfiled-zero-projects")
 
-    s.click("[data-testid=composer-project-filing-trigger]")
-    assert s.wait_for("[data-testid=composer-project-filing-menu]")
-    assert s.present("[data-testid=composer-project-filing-new]"), (
-        "'New project…' missing — with no projects the menu has no exit"
-    )
-    s.click("[data-testid=composer-project-filing-new]")
+    s.click("[data-testid=composer-project-filing-create]")
     assert s.wait_for("[data-testid=desktop-project-create-sheet]", 20), (
-        "the chip's 'New project…' opened nothing"
+        "the zone's 'New project' opened nothing"
     )
     # Create words, not edit words: the sheet reused the edit editor and said
     # "Edit project" / "Save" for a project that did not exist yet.
@@ -1019,7 +1037,11 @@ def main() -> int:
         phases=[
             ("SP-1", "sign-in gate reachable at short heights", sp1_signin_gate_short),
             ("SP-2", "FTUE surface reachable at short heights", sp2_ftue_surface_short),
-            ("SP-3", "add a key and enter the shell", sp3_enter_the_shell),
+            (
+                "SP-3",
+                "add a key, meet filing on the FTUE, enter the shell",
+                sp3_enter_the_shell,
+            ),
             (
                 "SP-4",
                 "document frozen across every destination + settings section",

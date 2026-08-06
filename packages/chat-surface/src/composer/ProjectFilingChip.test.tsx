@@ -226,6 +226,61 @@ describe("ProjectFilingChip", () => {
     expect(onCreateProject).not.toHaveBeenCalled();
   });
 
+  it("offers the create-only variant when the chat has no projects yet", () => {
+    render(
+      <ProjectFilingChip
+        value={null}
+        options={[]}
+        onChange={vi.fn()}
+        onCreateProject={vi.fn()}
+      />,
+    );
+
+    // A pill whose menu's only real entry is "No project" reports an absence as
+    // though it were a decision; the direct action is the honest empty state.
+    expect(
+      screen.getByTestId("composer-project-filing-create"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("composer-project-filing-trigger"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("withdraws the create-only variant once the chat is under way", () => {
+    render(
+      <ProjectFilingChip
+        value={null}
+        options={[]}
+        onChange={vi.fn()}
+        onCreateProject={vi.fn()}
+        hasSentFirstMessage
+      />,
+    );
+
+    // "Make a project" is SETUP. Under a transcript it is only an invitation to
+    // stop working — the same reason the folder bar leaves after message one.
+    expect(
+      screen.queryByTestId("composer-project-filing"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the pill mid-conversation — filing is a fact, not a chore", () => {
+    render(
+      <ProjectFilingChip
+        value={ACME}
+        options={options}
+        onChange={vi.fn()}
+        onCreateProject={vi.fn()}
+        hasSentFirstMessage
+      />,
+    );
+
+    // Only the empty state is gated. Where the work lands stays visible, and
+    // re-filing stays reachable, for the chat's whole life.
+    const trigger = screen.getByTestId("composer-project-filing-trigger");
+    expect(trigger).toHaveTextContent("Acme renewal");
+  });
+
   it("disables the trigger without hiding what the chat is filed under", () => {
     render(
       <ProjectFilingChip

@@ -59,6 +59,8 @@ export interface FirstRunLaunchPayload {
   readonly pausedConnectorIds?: readonly string[];
   /** PRD-FS-10 §4.3 — the bypass pill's selection at send time. */
   readonly filesystemBypass?: FilesystemBypassSelection;
+  /** The project the first chat is filed under at send time, or null. */
+  readonly projectId?: string | null;
 }
 
 export interface UseFirstRunLaunchOptions {
@@ -153,6 +155,7 @@ export function useFirstRunLaunch(
           webSearchEnabled: payload.webSearchEnabled,
           pausedConnectorIds: payload.pausedConnectorIds,
           filesystemBypass: payload.filesystemBypass,
+          projectId: payload.projectId,
         })
         .then((result) => {
           setPhase("handoff");

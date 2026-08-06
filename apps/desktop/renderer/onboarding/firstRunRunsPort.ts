@@ -44,11 +44,20 @@ export function createFirstRunRunsPort(transport: Transport): FirstRunRunsPort {
     async createFirstRun(
       input: FirstRunCreateRunInput,
     ): Promise<FirstRunLaunchResult> {
+      // `project_id` rides step 1, and only when the user picked one — an
+      // absent key is the byte-identical body every unfiled first run has
+      // always posted, so an unfiled FTUE send is unchanged.
+      const conversationBody: Record<string, unknown> = {
+        title: firstRunTitle(input.userInput),
+      };
+      if (input.projectId != null && input.projectId !== "") {
+        conversationBody.project_id = input.projectId;
+      }
       const conversation =
         await transport.request<CreateConversationResponseLite>({
           method: "POST",
           path: "/v1/agent/conversations",
-          body: { title: firstRunTitle(input.userInput) },
+          body: conversationBody,
         });
       const conversationId = conversation.conversation_id ?? "";
       if (conversationId === "") {

@@ -101,6 +101,15 @@ export interface ProjectFilingChipProps {
   readonly onCreateProject?: () => void;
   /** Read-only chrome (shared-chat recipient view, in-flight write). */
   readonly disabled?: boolean;
+  /**
+   * Has this chat already sent a message? Mirrors the composer prop of the same
+   * name, and gates ONE thing: the create-only empty state. A chat with no
+   * projects yet shows "New project" before it starts and nothing after — see
+   * the branch below. The pill is unaffected and renders for the chat's whole
+   * life. Defaults to `false` (pre-first-message), so a caller that has not
+   * thought about it gets the affordance rather than silently losing it.
+   */
+  readonly hasSentFirstMessage?: boolean;
   /** Host slot for the menu popover (portal + outside-click). */
   readonly renderMenu?: (args: ProjectFilingMenuSlotArgs) => ReactNode;
 }
@@ -188,6 +197,7 @@ export function ProjectFilingChip(
     onChange,
     onCreateProject,
     disabled = false,
+    hasSentFirstMessage = false,
     renderMenu,
   } = props;
 
@@ -338,6 +348,14 @@ export function ProjectFilingChip(
   // binding, not a guess here.
   if (options.length === 0) {
     if (onCreateProject === undefined) return null;
+    // …and once the chat is under way, not even that. "Make a project" is SETUP,
+    // and setup belongs before the work rather than under a transcript — the
+    // same rule that takes the folder bar away after the first message. The
+    // distinction is between filing as a FACT about the chat (the pill, which
+    // stays for the chat's whole life: it says where the work lands and lets you
+    // move it) and filing as a chore not yet done. Mid-conversation the second
+    // one is only an invitation to stop what you are doing.
+    if (hasSentFirstMessage) return null;
     return (
       <div
         style={rootStyle}
