@@ -23,6 +23,21 @@
 //    function the host closed over its own transport. It is never on the wire,
 //    never on a `SurfaceSpec`, and never inferred from content: a surface the
 //    host did not deliberately open renders read-only.
+//
+// Every block that owns one text span is editable in place: a heading, a
+// paragraph, and a `raw` block — the list, fence, quote, HTML, divider and
+// setext heading the block model declines to model. A table is the one kind
+// edited by its parts instead, because its spans are its cells. "In place" is
+// the load-bearing half of that sentence: the field holds that block's own text
+// at that block's own position, and never the document's source in a box
+// underneath it. A checklist-only document is the case that made this
+// non-optional — it is ONE raw block, so without it the toolbar invited a click
+// that had no target anywhere on screen.
+//
+// What no block gets here is STRUCTURE. There is no way to add or delete a
+// table row or column, add or delete a block, or reorder blocks — every one of
+// those changes the document's SHAPE rather than a span in it, which is a
+// different primitive from the one this file is built on.
 
 import {
   useEffect,
@@ -44,6 +59,8 @@ import {
   type HeadingBlock,
   type MarkdownTextProps,
   type ParagraphBlock,
+  type RawBlock,
+  type RawBlockReason,
   type TableBlock,
 } from "@0x-copilot/chat-surface";
 
@@ -62,6 +79,27 @@ import type { ArtifactEditorActions } from "./model";
 
 const NO_PENDING_EDITS: PendingEdits = {};
 const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+
+/**
+ * What a raw block is CALLED, for its field's accessible name.
+ *
+ * The reason the scanner already recorded is the honest description of the
+ * thing being edited — a screen reader should say "List", not "Block 3" — and
+ * this map is the only place this component says anything at all about a
+ * construct it deliberately does not model. It is total over every reason that
+ * is editable, so a reason added upstream fails the typecheck here rather than
+ * shipping a field with no name; `blank` is excluded because it renders no
+ * field, and a label for it would be a string no one could ever hear.
+ */
+const RAW_LABEL: Record<Exclude<RawBlockReason, "blank">, string> = {
+  blockquote: "Quote",
+  "fenced-code": "Code block",
+  html: "HTML block",
+  "indented-code": "Code block",
+  list: "List",
+  "setext-heading": "Heading",
+  "thematic-break": "Divider",
+};
 
 /**
  * A link inside an editable block stays a link.
@@ -384,7 +422,60 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
         <ProseField
           key={index}
           testId={`${testId}-input`}
+          enter="commit-unless-shift"
           {...fieldProps(target, `Paragraph ${index + 1}`)}
+        />
+      );
+    }
+    return (
+      <div
+        key={index}
+        data-testid={testId}
+        data-modified={isDirty(target) ? "true" : "false"}
+        style={proseReadStyle(editable)}
+        {...openProps(target)}
+      >
+        <MarkdownText
+          type="text"
+          text={valueOf(target)}
+          status={{ type: "complete" }}
+          components={BLOCK_COMPONENTS}
+        />
+      </div>
+    );
+  };
+
+  /**
+   * A raw block — a list, a fence, a quote — edited IN PLACE, as its own span.
+   *
+   * Be precise about what this is, because a `textarea` was deleted from this
+   * file and this one is not it. That one held THE WHOLE DOCUMENT and sat
+   * UNDERNEATH the render, so ticking one checklist item meant finding it among
+   * every other byte of markdown in the artifact. This holds ONE block, appears
+   * where that block already is, shows no byte of any other block, and exists
+   * only while that block is open.
+   *
+   * The block model refuses to model a list's items — so this offers the
+   * block's own lines and nothing finer. That is the trade the `raw` catch-all
+   * makes: the bytes of a construct nothing here understands stay exactly as
+   * written, and the user still has a way in.
+   */
+  const renderRaw = (block: RawBlock, index: number): ReactNode => {
+    // A blank run is the whitespace BETWEEN blocks: nothing to show, nothing to
+    // edit, and an empty span sitting where the document paints no control.
+    // `documentEditFor` refuses the same target from the other side, so this is
+    // a missing affordance rather than a hidden one.
+    if (block.reason === "blank") return null;
+    const target: EditTarget = { kind: "prose", block: index };
+    const testId = `${prefix}-raw-${index}`;
+    const label = `${RAW_LABEL[block.reason]} ${index + 1}`;
+    if (isEditing(target)) {
+      return (
+        <ProseField
+          key={index}
+          testId={`${testId}-input`}
+          enter="newline"
+          {...fieldProps(target, label)}
         />
       );
     }
@@ -415,19 +506,7 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
       case "paragraph":
         return renderParagraph(block, index);
       case "raw":
-        // Not editable in place, and preserved byte-for-byte: an unmodelled
-        // construct is shown as the renderer shows it and spliced around, never
-        // through. A blank run has nothing to show at all.
-        return block.reason === "blank" ? null : (
-          <div key={index} data-testid={`${prefix}-raw-${index}`}>
-            <MarkdownText
-              type="text"
-              text={block.text}
-              status={{ type: "complete" }}
-              components={BLOCK_COMPONENTS}
-            />
-          </div>
-        );
+        return renderRaw(block, index);
     }
   };
 
@@ -445,8 +524,8 @@ export function EditableDocument(props: EditableDocumentProps): ReactElement {
         style={actionBarStyle}
       >
         <span className="ui-caption" style={hintStyle}>
-          Click any cell or paragraph to edit it in place. Changes stay local
-          until you save a new revision.
+          Click any cell, paragraph or block to edit it in place. Changes stay
+          local until you save a new revision.
         </span>
         <span className="ui-caption" data-testid={`${prefix}-editor-status`}>
           {dirtyCount === 0
@@ -496,19 +575,39 @@ interface FieldProps {
   readonly onMove: (step: 1 | -1) => void;
 }
 
+/** What Enter ALONE does in a field — the one thing the three shapes differ on. */
+type EnterBehaviour = "commit" | "commit-unless-shift" | "newline";
+
 /**
- * The keyboard contract, shared by both field shapes.
+ * The keyboard contract, shared by every field shape.
  *
- * Enter commits, Escape reverts, Tab moves to the next cell. Tab is
- * `preventDefault`ed because the move is ours to make: letting the browser move
- * focus would land on whatever DOM happens to be next, not on the next cell.
+ * Escape reverts, Tab moves to the next cell (and closes when there is none),
+ * and ⌘/Ctrl+Enter always commits. Tab is `preventDefault`ed because the move is
+ * ours to make: letting the browser move focus would land on whatever DOM
+ * happens to be next, not on the next cell.
+ *
+ * What Enter alone does depends on whether a newline is structure or damage in
+ * the span being edited. In a cell or a heading it ends the construct, so Enter
+ * commits; in a paragraph it is the rarer intent, so Enter commits and
+ * Shift+Enter adds the line. In a RAW block the lines ARE the construct — "add
+ * another checklist item" is the commonest edit that field exists to serve — so
+ * Enter adds a line and ⌘Enter, Tab or a click away closes it.
+ *
+ * Nothing is at stake in that choice, which is why it can follow the content:
+ * every keystroke has already landed in the pending batch, so closing a session
+ * decides where the cursor goes, never whether the edit survives.
  */
 function keyHandler(
   props: FieldProps,
-  allowNewline: boolean,
+  enter: EnterBehaviour,
 ): (event: KeyboardEvent) => void {
   return (event) => {
-    if (event.key === "Enter" && !(allowNewline && event.shiftKey)) {
+    if (event.key === "Enter") {
+      const inserts =
+        !(event.metaKey || event.ctrlKey) &&
+        (enter === "newline" ||
+          (enter === "commit-unless-shift" && event.shiftKey));
+      if (inserts) return;
       event.preventDefault();
       props.onCommit();
       return;
@@ -536,25 +635,28 @@ function CellField(props: FieldProps): ReactElement {
       value={props.value}
       onChange={(event) => props.onChange(event.target.value)}
       onBlur={props.onCommit}
-      onKeyDown={keyHandler(props, false)}
+      onKeyDown={keyHandler(props, "commit")}
     />
   );
 }
 
 /**
- * One paragraph, where the paragraph is.
+ * One block's own text, where that block is.
  *
  * This is a `textarea`, so be precise about what was deleted: a whole-document
  * raw-markdown box mounted UNDERNEATH the render, in which a reader had to find
  * a cell among pipes. This holds ONE block, sits at that block's place in the
  * document, exists only while that block is being edited, and never shows a
- * byte of any other block. Shift+Enter adds a line; Enter commits.
+ * byte of any other block. It serves a paragraph and a raw block alike — the
+ * difference between them is `enter`, and nothing else.
  *
  * The narrow start is the design's (`EDITABLE-SURFACE-DESIGN.md`, open question
  * 2): plain text, spliced by span. A rich-text round trip back to markdown is
  * its own class of bug and is not what this phase buys.
  */
-function ProseField(props: FieldProps): ReactElement {
+function ProseField(
+  props: FieldProps & { readonly enter: EnterBehaviour },
+): ReactElement {
   const lines = props.value.split("\n").length;
   return (
     <textarea
@@ -566,7 +668,7 @@ function ProseField(props: FieldProps): ReactElement {
       value={props.value}
       onChange={(event) => props.onChange(event.target.value)}
       onBlur={props.onCommit}
-      onKeyDown={keyHandler(props, true)}
+      onKeyDown={keyHandler(props, props.enter)}
     />
   );
 }

@@ -15,6 +15,7 @@ export type {
   DocumentEdit,
   EditableBlock,
   HeadingBlock,
+  HeadingSeparators,
   ParagraphBlock,
   RawBlock,
   RawBlockReason,

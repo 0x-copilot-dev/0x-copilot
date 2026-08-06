@@ -21,6 +21,24 @@ const RAGGED = [
   "",
 ].join("\n");
 
+/**
+ * One shape per construct the block model routes to `raw`, each followed by a
+ * block the edit must not reach. Every one of them absorbs the blank line
+ * beneath it into its FOOTPRINT, which is exactly the byte an edit spliced
+ * against `[start, end)` would delete.
+ */
+const SHAPES: Record<string, string> = {
+  checklistOnly: "- [ ] Draft the memo\n- [ ] Send it to Ana\n",
+  listThenProse: "- one\n- two\n\nProse under the list.\n",
+  fenceThenProse:
+    "```js\nconst pipes = '| a | b |';\n```\n\nAfter the fence.\n",
+  quoteThenHeading: "> quoted line\n\n## Next section\n",
+  breakThenProse: "---\n\nBody under the divider.\n",
+  setextThenProse: "Setext title\n===\n\nBody.\n",
+  headingThenList: "# Title\n\n- one\n- two\n\nEnd.\n",
+  leadingBlank: "\n\n# Title\n\n- only item\n",
+};
+
 describe("documentEdits", () => {
   it("walks a ragged table by the cells that exist, never by row × column arithmetic", () => {
     const blocks = parseBlocks(RAGGED);
@@ -106,6 +124,58 @@ describe("documentEdits", () => {
         "x",
       ),
     ).toThrow(/No block at index 4/);
+  });
+
+  it("edits a raw block through the same primitive, and keeps the blank line it absorbed", () => {
+    const source = SHAPES.listThenProse;
+    const blocks = parseBlocks(source);
+    const target: EditTarget = { kind: "prose", block: 0 };
+
+    // The list is one block whose value is its own lines — no per-item control,
+    // because nothing in the block model claims to understand a list item.
+    expect(originalValue(blocks, target)).toBe("- one\n- two");
+    // Adding a line is a legal edit of that text; the paragraph below keeps the
+    // blank line that separates it, so the two do not become one block.
+    expect(
+      applyEdits(source, [
+        documentEditFor(blocks, target, "- one\n- two\n- 3"),
+      ]),
+    ).toBe("- one\n- two\n- 3\n\nProse under the list.\n");
+    // Round-tripping the untouched value is byte-identical, which is the same
+    // statement made from the other end.
+    expect(
+      applyEdits(source, [documentEditFor(blocks, target, "- one\n- two")]),
+    ).toBe(source);
+  });
+
+  it("refuses a blank run, which is the whitespace between blocks and has no control", () => {
+    const blocks = parseBlocks(SHAPES.leadingBlank);
+    const target: EditTarget = { kind: "prose", block: 0 };
+    expect(blocks[0]).toMatchObject({ kind: "raw", reason: "blank" });
+    expect(originalValue(blocks, target)).toBeNull();
+    expect(() => documentEditFor(blocks, target, "typed")).toThrow(
+      /not editable prose \(raw blank\)/,
+    );
+  });
+
+  it("replaces exactly one block's own span, for every editable block of every shape", () => {
+    for (const [name, source] of Object.entries(SHAPES)) {
+      parseBlocks(source).forEach((block, index) => {
+        if (block.kind === "table") return;
+        if (block.kind === "raw" && block.reason === "blank") return;
+        const blocks = parseBlocks(source);
+        const next = applyEdits(source, [
+          documentEditFor(blocks, { kind: "prose", block: index }, "REPLACED"),
+        ]);
+        // Everything before the block's TEXT and everything after it is copied
+        // through — including the blank line the block absorbed into its
+        // footprint, which is the byte that stops an edited list being welded
+        // to whatever follows it.
+        expect(`${name}[${index}] ${next}`).toBe(
+          `${name}[${index}] ${source.slice(0, block.textStart)}REPLACED${source.slice(block.textEnd)}`,
+        );
+      });
+    }
   });
 
   it("applies a whole batch against the original offsets, in any order", () => {

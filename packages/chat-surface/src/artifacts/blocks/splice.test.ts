@@ -25,7 +25,12 @@ import {
   spliceHeaderCell,
 } from "./splice";
 import { escapeTableCellText, unescapeTableCellText } from "./tables";
-import type { EditableBlock, ParagraphBlock, TableBlock } from "./blockModel";
+import type {
+  EditableBlock,
+  HeadingBlock,
+  ParagraphBlock,
+  TableBlock,
+} from "./blockModel";
 
 function tableOf(source: string): TableBlock {
   const table = parseBlocks(source).find(
@@ -33,6 +38,14 @@ function tableOf(source: string): TableBlock {
   );
   if (table === undefined) throw new Error("expected a table block");
   return table;
+}
+
+function headingOf(source: string): HeadingBlock {
+  const heading = parseBlocks(source).find(
+    (block): block is HeadingBlock => block.kind === "heading",
+  );
+  if (heading === undefined) throw new Error("expected a heading block");
+  return heading;
 }
 
 function paragraphOf(source: string): ParagraphBlock {
@@ -117,6 +130,51 @@ describe("spliceHeaderCell and spliceBlock", () => {
     expect(spliceBlock(BUG_DOCUMENT, heading, "My Linear queue")).toContain(
       "# My Linear queue\n\n| Issue |",
     );
+  });
+});
+
+describe("filling in a heading that has no text", () => {
+  const fill = (source: string, next: string): string =>
+    spliceBlock(source, headingOf(source), next);
+
+  it("does not weld the text to the opening marker", () => {
+    // `######Summary` renders as a bold line of prose, not a heading — the
+    // splice was local and the document was still corrupted.
+    expect(fill("######\n", "Summary")).toBe("###### Summary\n");
+    expect(fill("#\n", "Summary")).toBe("# Summary\n");
+    expect(parseBlocks(fill("######\n", "Summary"))[0].kind).toBe("heading");
+  });
+
+  it("does not weld the text to a closing marker", () => {
+    // `# Summary###` stays a heading and reads `Summary###`: the closing run
+    // the user never touched became part of their text.
+    expect(fill("# ###\n", "Summary")).toBe("# Summary ###\n");
+    expect(headingOf(fill("# ###\n", "Summary")).text).toBe("Summary");
+  });
+
+  it("adds nothing when the source already separates the span", () => {
+    expect(fill("# \n", "Summary")).toBe("# Summary\n");
+    expect(fill("#\t\n", "Summary")).toBe("#\tSummary\n");
+    expect(fill("#   \n", "Summary")).toBe("#   Summary\n");
+  });
+
+  it("writes nothing at all when the replacement is empty", () => {
+    // Both directions of the empty case: clearing a heading that had text, and
+    // "clearing" one that never had any. Neither may leave a stray space.
+    expect(fill("######\n", "")).toBe("######\n");
+    expect(fill("# ###\n", "")).toBe("# ###\n");
+    expect(fill("# Title ###\n", "")).toBe("#  ###\n");
+    expect(headingOf(fill("# Title ###\n", "")).text).toBe("");
+  });
+
+  it("still refuses to reformat the text it is given", () => {
+    // The separator is the ONLY thing the engine adds. Inline markdown, a
+    // trailing hash that is not a closing run, a link — all verbatim.
+    expect(fill("######\n", "**Bold** [a](b)")).toBe(
+      "###### **Bold** [a](b)\n",
+    );
+    expect(fill("######\n", "C#")).toBe("###### C#\n");
+    expect(headingOf(fill("######\n", "C#")).text).toBe("C#");
   });
 });
 

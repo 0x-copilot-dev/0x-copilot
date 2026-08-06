@@ -16,10 +16,12 @@
 //     line by construction and a newline inside it would end the heading and
 //     leave the rest as a stray paragraph.
 //
-// A paragraph is written back verbatim. A blank line typed into one really does
-// split it in two on the next read — that is a legal markdown edit, not
-// corruption, and inventing a rule against it would be this module editing the
-// user's prose.
+// A paragraph is written back verbatim, and so is a `raw` block — a list's
+// items, a fence's code, a quote's lines. A blank line typed into a paragraph
+// really does split it in two on the next read, and a `-` deleted from a list
+// item really does turn that line into prose; both are legal markdown edits the
+// user made, not corruption, and inventing a rule against either would be this
+// module editing the user's document.
 
 import {
   blockEdit,
@@ -29,6 +31,7 @@ import {
   unescapeTableCellText,
   type DocumentBlock,
   type DocumentEdit,
+  type EditableBlock,
   type TableBlock,
 } from "@0x-copilot/chat-surface";
 
@@ -75,6 +78,35 @@ export function targetKey(target: EditTarget): string {
 const LINE_BREAK_RUN = /(?:\r\n|\n|\r)+/g;
 
 /**
+ * The block a `prose` target addresses, or `null` when it addresses none.
+ *
+ * `prose` is the target kind for every block whose editable span is ONE text
+ * span: a heading, a paragraph, and a `raw` block alike. That `raw` belongs in
+ * that list is the point — the block model declining to UNDERSTAND a list is
+ * not it declining to let a user touch one. A raw block owns
+ * `[textStart, textEnd)` exactly as a paragraph does and splices through the
+ * same primitive; what it does not get is STRUCTURE, which is why a list is
+ * edited as its own lines and has no per-item control.
+ *
+ * A `blank` run is the one exclusion. Its span is empty and its position is
+ * BETWEEN two blocks, so writing there would insert text where the document
+ * paints nothing to click. The renderer draws no affordance for it; this is the
+ * same rule stated on the side a stale target could otherwise reach.
+ */
+function editableProse(block: DocumentBlock): EditableBlock | null {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return block;
+    case "raw":
+      return block.reason === "blank" ? null : block;
+    case "table":
+      // A table's editable spans are its cells; there is no whole-table span.
+      return null;
+  }
+}
+
+/**
  * The span's value as a user should see and type it: raw markdown, except that
  * a cell's `\|` is shown as the `|` it stands for. Returns `null` when the
  * target does not address an editable span in these blocks.
@@ -85,11 +117,7 @@ export function originalValue(
 ): string | null {
   const block = blocks[target.block];
   if (block === undefined) return null;
-  if (target.kind === "prose") {
-    return block.kind === "heading" || block.kind === "paragraph"
-      ? block.text
-      : null;
-  }
+  if (target.kind === "prose") return editableProse(block)?.text ?? null;
   if (block.kind !== "table") return null;
   const cell =
     target.kind === "header"
@@ -116,12 +144,20 @@ export function documentEditFor(
     throw new RangeError(`No block at index ${target.block}`);
   }
   if (target.kind === "prose") {
-    if (block.kind !== "heading" && block.kind !== "paragraph") {
-      throw new RangeError(`Block ${target.block} is not editable prose`);
+    const prose = editableProse(block);
+    if (prose === null) {
+      throw new RangeError(
+        `Block ${target.block} is not editable prose (${
+          block.kind === "raw" ? `raw ${block.reason}` : block.kind
+        })`,
+      );
     }
+    // A heading is one line by construction. Everything else — a paragraph's
+    // prose, a list's items, a fence's code — is written back verbatim, line
+    // breaks and all, because there the lines ARE the construct.
     return blockEdit(
-      block,
-      block.kind === "heading" ? value.replace(LINE_BREAK_RUN, " ") : value,
+      prose,
+      prose.kind === "heading" ? value.replace(LINE_BREAK_RUN, " ") : value,
     );
   }
   if (block.kind !== "table") {

@@ -17,6 +17,7 @@
 import type {
   DocumentEdit,
   EditableBlock,
+  HeadingBlock,
   TableBlock,
   TableCell,
 } from "./blockModel";
@@ -129,12 +130,30 @@ export function headerCellEdit(
  * It targets `textStart`/`textEnd`, never the block's full footprint: `end`
  * includes the blank line that separates this block from the next, and
  * swallowing it would weld two blocks into one.
+ *
+ * A heading is the one kind whose replacement is not the caller's string
+ * verbatim: an empty ATX heading has nothing between its text span and its `#`
+ * marker, so the separator is written WITH the text or the spliced line stops
+ * being a heading. See `HeadingSeparators`.
  */
 export function blockEdit(
   block: EditableBlock,
   nextText: string,
 ): DocumentEdit {
-  return { start: block.textStart, end: block.textEnd, text: nextText };
+  return {
+    start: block.textStart,
+    end: block.textEnd,
+    text: block.kind === "heading" ? headingText(block, nextText) : nextText,
+  };
+}
+
+function headingText(block: HeadingBlock, nextText: string): string {
+  // An empty replacement stays exactly empty. Clearing a heading must not write
+  // a separator nobody asked for, and `blockEdit(block, block.text)` has to be
+  // the identity edit for EVERY block — including the text-less heading whose
+  // own text is `""`.
+  if (nextText.length === 0) return nextText;
+  return `${block.separators.before}${nextText}${block.separators.after}`;
 }
 
 /**

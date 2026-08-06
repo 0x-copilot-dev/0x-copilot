@@ -12,7 +12,7 @@
 // the classifier errs toward `raw` — the catch-all costs a block its in-place
 // editing, never a byte of the document.
 
-import type { HeadingBlock } from "./blockModel";
+import type { HeadingBlock, HeadingSeparators } from "./blockModel";
 
 /** One source line: its content span, and its span including the line terminator. */
 export interface Line {
@@ -160,11 +160,23 @@ export function interruptsParagraph(line: Line): boolean {
   return ordered !== null && Number(ordered[1]) === 1;
 }
 
-/** Parses an ATX heading line into its level and the span of its editable text. */
+/**
+ * Parses an ATX heading line into its level, the span of its editable text, and
+ * the separators a replacement must carry.
+ *
+ * The regex's `$` alternative is what makes the last part necessary: `######`
+ * is a heading whose text span is EMPTY and lands immediately after the hash
+ * run, with no space in the source to sit inside. See `HeadingSeparators`.
+ */
 export function readAtxHeading(
   source: string,
   line: Line,
-): { level: HeadingBlock["level"]; textStart: number; textEnd: number } | null {
+): {
+  level: HeadingBlock["level"];
+  textStart: number;
+  textEnd: number;
+  separators: HeadingSeparators;
+} | null {
   const match = ATX_HEADING.exec(line.text);
   if (match === null || isIndentedCode(line)) return null;
   // `#{1,6}` bounds the run, so the length is in range by construction.
@@ -186,5 +198,21 @@ export function readAtxHeading(
         textEnd -= 1;
     }
   }
-  return { level, textStart, textEnd };
+  // Both loops above stopped ON a non-space, so the only byte that can abut the
+  // span is a marker `#` — every other neighbour is whitespace or the end of the
+  // line, and both already separate the text from the marker. A `#` does not,
+  // and welding to one is how `######` + `Summary` stops being a heading at all.
+  // Non-empty text always has whitespace on both sides (the `$` alternative only
+  // matches a hash run with nothing after it, and a closing run is only stripped
+  // when a space precedes it), so in practice this only ever fires for a
+  // text-less heading — but it is derived from the source rather than assumed.
+  return {
+    level,
+    textStart,
+    textEnd,
+    separators: {
+      before: source[textStart - 1] === "#" ? " " : "",
+      after: source[textEnd] === "#" ? " " : "",
+    },
+  };
 }

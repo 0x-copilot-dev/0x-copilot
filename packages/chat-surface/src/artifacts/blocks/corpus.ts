@@ -150,6 +150,32 @@ export const HEADING_EDGE_CASES = `#Not a heading
 ######
 `;
 
+/**
+ * Headings with NO text, which is where the editable span is zero-width and the
+ * byte on each side of it is a `#`.
+ *
+ * These are the documents that proved "splice, never regenerate" can be held to
+ * the letter and still corrupt a document: writing `Summary` into `######`
+ * produced `######Summary`, which reparses as a PARAGRAPH, and writing it into
+ * `# ###` produced `# Summary###`, a heading whose text now ends in the closing
+ * run. Both are one span replacement with every other byte identical — and both
+ * changed something the user never named. Every variant is here because the
+ * generic properties in `roundTrip.test.ts` are what cover them, not a
+ * hand-written example per case.
+ */
+export const EMPTY_HEADINGS = `#
+
+######
+
+# ###
+
+###### ###
+
+#\t
+
+# Real heading
+`;
+
 export const CRLF_DOCUMENT =
   "# Title\r\n\r\n| A | B |\r\n| --- | --- |\r\n| 1 | 2 |\r\n\r\nTail.\r\n";
 
@@ -195,6 +221,7 @@ export const MARKDOWN_CORPUS: Readonly<Record<string, string>> = {
   FRONT_MATTER,
   HTML_AND_INDENTED_CODE,
   HEADING_EDGE_CASES,
+  EMPTY_HEADINGS,
   CRLF_DOCUMENT,
   NO_TRAILING_NEWLINE,
   UNCLOSED_FENCE,
@@ -211,6 +238,9 @@ export const MARKDOWN_CORPUS: Readonly<Record<string, string>> = {
 export const CORPUS_FRAGMENTS: readonly string[] = [
   "# Heading one",
   "###### Heading six ###",
+  "#",
+  "######",
+  "# ###",
   "Plain prose with **bold** and a [link](https://example.com/a|b).",
   "Two-line\nparagraph body.",
   "| A | B |\n| --- | --- |\n| 1 | 2 |",

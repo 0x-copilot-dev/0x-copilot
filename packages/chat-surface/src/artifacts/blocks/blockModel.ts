@@ -59,10 +59,35 @@ interface BlockSpan {
    * filler blocks between them, and no byte belongs to two blocks.
    *
    * This is deliberately NOT the editable span: replacing `[start, end)` of a
-   * paragraph would swallow the blank line under it and weld two blocks
-   * together. Editing goes through `textStart`/`textEnd`.
+   * block would swallow the blank line under it and weld two blocks together.
+   * Editing goes through `textStart`/`textEnd` — every kind but `table`, whose
+   * editable spans are its cells.
    */
   readonly end: number;
+}
+
+/**
+ * The whitespace a replacement has to carry so the spliced line is STILL a
+ * heading holding exactly that text. Each side is `""` or a single space.
+ *
+ * A heading with no text has a zero-width text span, and the byte on each side
+ * of it is a `#`: `######` puts the span hard against the opening run, `# ###`
+ * puts it hard against the closing one. Written naively, `Summary` welds to the
+ * marker — `######Summary` is a PARAGRAPH, and `# Summary###` is a heading that
+ * reads `Summary###`. Either way the edit changed something the user did not
+ * name, which is the one thing this whole module exists to prevent.
+ *
+ * A table cell solves the same problem by anchoring its empty span one
+ * character INTO the padding (`|  |` splices to `| x |`). A text-less heading
+ * has no padding to anchor in, so the separator has to be written with the
+ * text. `blockEdit` writes it; a caller assembling a `DocumentEdit` by hand
+ * must too.
+ */
+export interface HeadingSeparators {
+  /** Goes before the replacement when the `#` run abuts the text span. */
+  readonly before: string;
+  /** Goes after the replacement when a closing `#` run abuts the text span. */
+  readonly after: string;
 }
 
 /** An ATX heading (`## Title`). Setext headings route to `raw` — see `RawBlockReason`. */
@@ -75,6 +100,12 @@ export interface HeadingBlock extends BlockSpan {
   readonly textEnd: number;
   /** `source.slice(textStart, textEnd)` — raw markdown, inline formatting preserved. */
   readonly text: string;
+  /**
+   * What a non-empty replacement must be wrapped in to keep this a heading.
+   * Both sides are `""` for every heading that already carries text — only a
+   * text-less one can have the marker sitting against its span.
+   */
+  readonly separators: HeadingSeparators;
 }
 
 /** A run of plain text lines. Its `text` may span several lines and hold inline markdown. */
@@ -127,21 +158,45 @@ export type RawBlockReason =
   | "setext-heading";
 
 /**
- * The catch-all. A `raw` block is not editable in place; it round-trips verbatim
- * and a renderer shows it as rendered markdown.
+ * The catch-all: a span the scanner declines to MODEL, kept verbatim.
  *
- * This is the safety valve, not a failure: an unmodelled construct is preserved
+ * Declining to model it is not the same as declining to edit it. A `raw` block
+ * owns one contiguous text span like a paragraph does, so it is edited the same
+ * way — in place, at its own position, by replacing exactly
+ * `[textStart, textEnd)`. What it does not get is STRUCTURE: a list has no
+ * per-item control, and a table drawn inside a code fence has no cells, because
+ * nothing here claims to understand either.
+ *
+ * That is the safety valve, not a failure: an unmodelled construct is preserved
  * byte-identical instead of being mangled by a model that half-understands it.
  */
 export interface RawBlock extends BlockSpan {
   readonly kind: "raw";
   readonly reason: RawBlockReason;
-  /** `source.slice(start, end)` — the span verbatim, trailing blank lines included. */
+  /** Start of the editable text: the first character of the block's first line. */
+  readonly textStart: number;
+  /**
+   * End of the editable text: the last CONTENT line's final character, before
+   * its terminator. A `blank` run has no content line, so its span is empty.
+   *
+   * The gap between this and `end` is the blank-line run the block absorbed,
+   * and keeping it OUT of the editable span is what stops an edited list being
+   * welded to the paragraph beneath it. Blank lines that sit INSIDE the
+   * construct — inside a fence, between two items of a loose list — are content
+   * and stay in the span.
+   */
+  readonly textEnd: number;
+  /** `source.slice(textStart, textEnd)` — the span verbatim, markdown and all. */
   readonly text: string;
 }
 
-/** The blocks that carry a single editable text span (`spliceBlock` takes these). */
-export type EditableBlock = HeadingBlock | ParagraphBlock;
+/**
+ * The blocks that carry a single editable text span (`blockEdit` takes these).
+ *
+ * A `table` is the one kind that does not: its editable spans are its cells,
+ * one per `TableCell`, and there is no whole-table span to replace.
+ */
+export type EditableBlock = HeadingBlock | ParagraphBlock | RawBlock;
 
 /** One block of a markdown document. */
 export type DocumentBlock =

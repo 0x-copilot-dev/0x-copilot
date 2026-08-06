@@ -12,6 +12,7 @@ import {
   BUG_DOCUMENT,
   CRLF_DOCUMENT,
   EMPTY_CELLS_TABLE,
+  EMPTY_HEADINGS,
   ESCAPED_PIPE_TABLE,
   FENCE_WITH_PIPES,
   FRONT_MATTER,
@@ -208,6 +209,24 @@ describe("table shapes", () => {
 });
 
 describe("heading edge cases", () => {
+  it("names the separator a text-less heading's replacement needs", () => {
+    // The zero-width span is fine; what is NOT fine is writing into it as if a
+    // space were already there. Which side needs one is read off the source
+    // rather than assumed, so a heading with room on both sides asks for
+    // neither and one with room on neither asks for both.
+    const separators = parseBlocks(EMPTY_HEADINGS).map((block) =>
+      block.kind === "heading" ? block.separators : null,
+    );
+    expect(separators).toEqual([
+      { before: " ", after: "" }, // `#`          — marker, then nothing
+      { before: " ", after: "" }, // `######`     — the same at max depth
+      { before: "", after: " " }, // `# ###`      — a space, then a closing run
+      { before: "", after: " " }, // `###### ###`
+      { before: "", after: "" }, // `#\t`        — a tab is a separator too
+      { before: "", after: "" }, // `# Real heading`
+    ]);
+  });
+
   it("follows CommonMark on markers, closing runs and empty headings", () => {
     const blocks = parseBlocks(HEADING_EDGE_CASES);
     expect(blocks.map((block) => block.kind)).toEqual([

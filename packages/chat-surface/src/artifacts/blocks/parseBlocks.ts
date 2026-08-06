@@ -75,7 +75,9 @@ export function parseBlocks(source: string): DocumentBlock[] {
       // the blank run beneath it.
       const from = index;
       index = skipBlank(lines, index);
-      blocks.push(rawBlock(source, lines, from, index, "blank"));
+      // No content line at all, hence `contentEnd === from`: the block covers
+      // the run and its editable span is empty.
+      blocks.push(rawBlock(source, lines, from, from, index, "blank"));
       continue;
     }
     const scanned = scanBlock(source, lines, index);
@@ -129,6 +131,7 @@ function scanBlock(source: string, lines: Line[], from: number): Scanned {
         textStart: heading.textStart,
         textEnd: heading.textEnd,
         text: source.slice(heading.textStart, heading.textEnd),
+        separators: heading.separators,
       },
       nextLine,
     };
@@ -150,19 +153,37 @@ function raw(
   reason: RawBlockReason,
 ): Scanned {
   const nextLine = skipBlank(lines, contentEnd);
-  return { block: rawBlock(source, lines, from, nextLine, reason), nextLine };
+  return {
+    block: rawBlock(source, lines, from, contentEnd, nextLine, reason),
+    nextLine,
+  };
 }
 
+/**
+ * `[from, contentEnd)` are the block's own lines; `[contentEnd, nextLine)` is
+ * the blank run it absorbs. The footprint spans both, the editable text spans
+ * only the first — the same separation a paragraph draws, for the same reason:
+ * an edit that reached into the blank run would weld this block to the next.
+ */
 function rawBlock(
   source: string,
   lines: Line[],
   from: number,
+  contentEnd: number,
   nextLine: number,
   reason: RawBlockReason,
 ): RawBlock {
   const start = lines[from].start;
-  const end = lines[nextLine - 1].end;
-  return { kind: "raw", start, end, reason, text: source.slice(start, end) };
+  const textEnd = contentEnd > from ? lines[contentEnd - 1].contentEnd : start;
+  return {
+    kind: "raw",
+    start,
+    end: lines[nextLine - 1].end,
+    reason,
+    textStart: start,
+    textEnd,
+    text: source.slice(start, textEnd),
+  };
 }
 
 function skipBlank(lines: Line[], from: number): number {
