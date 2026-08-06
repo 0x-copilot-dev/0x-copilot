@@ -2267,122 +2267,15 @@ p {
  * Native <details>: closed by default, dashed-pill summary on hover,
  * solid pill once open, italic accent-bordered body, blinking cursor
  * while reasoning is mid-stream (driven by `data-status="running"`). */
-.aui-reasoning-group {
-  align-self: stretch;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  margin: 0 0 var(--space-2xs);
-  max-width: 760px;
-  padding: 0;
-  width: 100%;
-}
+/* The reasoning group's rules MOVED to
+   `packages/chat-surface/src/messages/markdown.css`.
 
-.aui-reasoning-group > summary {
-  align-items: center;
-  background: transparent;
-  border: 1px dashed transparent;
-  border-radius: var(--radius-full);
-  color: var(--color-text-subtle);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  gap: var(--space-sm);
-  list-style: none;
-  padding: var(--space-2xs) var(--space-sm);
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease;
-  user-select: none;
-}
-
-.aui-reasoning-group > summary::-webkit-details-marker {
-  display: none;
-}
-
-.aui-reasoning-group > summary:hover,
-.aui-reasoning-group > summary:focus-visible {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-.aui-reasoning-group[open] > summary {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-.aui-reasoning-group__icon {
-  color: var(--color-accent);
-  display: inline-flex;
-  flex-shrink: 0;
-  height: 0.875rem;
-  width: 0.875rem;
-}
-
-.aui-reasoning-group[data-status="running"] .aui-reasoning-group__icon {
-  animation: reasoning-spin 1.5s linear infinite;
-}
-
-.aui-reasoning-group__label {
-  white-space: nowrap;
-}
-
-.aui-reasoning-group__time {
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
-  margin-left: var(--space-xs);
-}
-
-.aui-reasoning-group__time:empty {
-  display: none;
-}
-
-.aui-reasoning-group__content {
-  background: var(--color-surface-muted);
-  border-left: 2px solid var(--color-accent);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  border-top: 0;
-  color: var(--color-text-muted);
-  display: grid;
-  font-size: var(--font-size-xs);
-  font-style: italic;
-  gap: var(--space-sm);
-  line-height: 1.65;
-  margin-top: var(--space-2xs);
-  padding: var(--space-md) var(--space-lg);
-  white-space: pre-wrap;
-}
-
-.aui-reasoning-group__content :where(strong, em) {
-  color: var(--color-text);
-  font-style: normal;
-  font-weight: var(--font-weight-medium);
-}
-
-.aui-reasoning-group[data-status="running"]
-  .aui-reasoning-group__content::after {
-  animation: reasoning-cursor-blink 1s steps(1, end) infinite;
-  color: var(--color-accent);
-  content: "▍";
-  font-style: normal;
-  margin-left: 0.125rem;
-}
-
-@keyframes reasoning-cursor-blink {
-  0%,
-  50% {
-    opacity: 1;
-  }
-  51%,
-  100% {
-    opacity: 0;
-  }
-}
+   They lived here, in a HOST stylesheet, while `ReasoningGroup` ships from the
+   package and both hosts mount it — so desktop rendered the group completely
+   unstyled: the label at the inherited base size instead of `--font-size-xs`,
+   and the NATIVE `<details>` marker instead of our own, because neither
+   `list-style: none` nor the `::-webkit-details-marker` reset ever loaded.
+   That is what "the font is too large and the chevron is too small" was. */
 
 @keyframes planning-word-pulse {
   0%,

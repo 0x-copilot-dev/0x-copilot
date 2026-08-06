@@ -185,6 +185,19 @@ export interface ToolCallEntry {
   readonly subagentTaskIds?: readonly string[];
   /** Anchor: `sequence_no` of the first (started) frame. */
   readonly sequenceNo: number;
+  /**
+   * The run this call belongs to — WHICH seq space `sequenceNo` lives in.
+   *
+   * Without it `sequenceNo` is not an address, it is an offset into an unnamed
+   * origin: every run numbers its events from 0, so run A's seq 3 and run B's
+   * seq 3 are different moments that sort as the same one. The renderer used to
+   * merge every card into a single seq order on that basis, which piled every
+   * run's cards onto whichever turn was active — the same collision the message
+   * side has always guarded against with `TcChatMessage.run_id`.
+   *
+   * Null only when the frame carried no `run_id`, which no runtime event should.
+   */
+  readonly runId: string | null;
   /** Anchor timestamp (epoch ms) for interleave; null if unparseable. */
   readonly createdAtMs: number | null;
 }
@@ -1019,6 +1032,7 @@ interface MutableToolCall {
   durationMs?: number;
   subagentTaskIds?: readonly string[];
   sequenceNo: number;
+  runId: string | null;
   createdAtMs: number | null;
 }
 
@@ -1065,6 +1079,9 @@ function reduceToolStarted(
       prior?.subagentTaskIds,
     // The started frame is the earliest, so it wins the anchor when present.
     sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    // Pinned to the frame that OPENED the call, like `sequenceNo` — a later
+    // result frame cannot move a card into another run.
+    runId: prior?.runId ?? event.run_id ?? null,
     createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
   });
 }
@@ -1112,6 +1129,9 @@ function reduceToolDelta(
       readToolTaskIds(event.payload?.["subagent_task_ids"]) ??
       prior?.subagentTaskIds,
     sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    // Pinned to the frame that OPENED the call, like `sequenceNo` — a later
+    // result frame cannot move a card into another run.
+    runId: prior?.runId ?? event.run_id ?? null,
     createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
   });
 }
@@ -1168,6 +1188,9 @@ function reduceToolResult(
       readToolTaskIds(event.payload?.["subagent_task_ids"]) ??
       prior?.subagentTaskIds,
     sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    // Pinned to the frame that OPENED the call, like `sequenceNo` — a later
+    // result frame cannot move a card into another run.
+    runId: prior?.runId ?? event.run_id ?? null,
     createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
   });
 }
@@ -1189,6 +1212,7 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
       ? { subagentTaskIds: m.subagentTaskIds }
       : {}),
     sequenceNo: m.sequenceNo,
+    runId: m.runId,
     createdAtMs: m.createdAtMs,
   };
 }
