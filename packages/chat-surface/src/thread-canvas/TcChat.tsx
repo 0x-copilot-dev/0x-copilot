@@ -1823,15 +1823,67 @@ function mergeStream(
   const anchored: AnchoredItem[] = [];
   const out: StreamItem[] = [];
 
+  // CARDS BELONG TO A RUN, NOT TO THE TRANSCRIPT.
+  //
+  // `sequenceNo` is an offset, not an address: every run numbers its events
+  // from 0, so run A's seq 3 and run B's seq 3 are different moments that sort
+  // as the same one. Merging every card into one seq order on that basis put
+  // EVERY run's cards into the active run's block — turn t-1 rendered bare
+  // while turn t collected the pile, growing each turn. The message side has
+  // always guarded against exactly this (`message.run_id === runId` below); the
+  // cards were simply never given the identity to be guarded by.
+  //
+  // So a card from a settled run is flushed with ITS OWN turn, in message
+  // order, and only the active run's cards take part in the seq interleave.
+  // A card whose `runId` is null cannot be placed — it is treated as the active
+  // run's, which is what the whole stream was assumed to be before this.
+  const settledCards = new Map<string, AnchoredItem[]>();
+  const cardRun = (id: string | null): string | null =>
+    id === null || id === runId ? null : id;
+  const stash = (id: string, entry: AnchoredItem): void => {
+    const bucket = settledCards.get(id);
+    if (bucket === undefined) settledCards.set(id, [entry]);
+    else bucket.push(entry);
+  };
+  let pendingRun: string | null = null;
+  const flushRun = (id: string | null | undefined): void => {
+    if (id == null) return;
+    const bucket = settledCards.get(id);
+    if (bucket === undefined) return;
+    settledCards.delete(id);
+    bucket.sort((a, b) => a.seq - b.seq);
+    for (const entry of bucket) out.push(entry.item);
+  };
+
+  // Partitioned BEFORE the walk below, because that walk is what drains the
+  // buckets — populating them afterwards left every settled card to fall
+  // through to the tail, which is the bug this function exists to fix.
+  for (const toolCall of toolCalls) {
+    const entry: AnchoredItem = {
+      seq: cardSeq(toolCall.sequenceNo),
+      item: { kind: "tool", toolCall },
+    };
+    const settled = cardRun(toolCall.runId);
+    if (settled !== null) stash(settled, entry);
+    else anchored.push(entry);
+  }
+
   for (const message of messages) {
     const seqBearing =
       runId !== null &&
       message.run_id === runId &&
       message.parts.some((part) => typeof part.seq === "number");
     if (!seqBearing) {
+      // Flushed when the run CHANGES, not when it first appears: a turn is
+      // `user → assistant`, and the cards belong after the answer they were
+      // produced for, not between the question and it.
+      if (message.run_id !== pendingRun) flushRun(pendingRun);
+      pendingRun = message.run_id ?? null;
       out.push({ kind: "message", message });
       continue;
     }
+    if (message.run_id !== pendingRun) flushRun(pendingRun);
+    pendingRun = message.run_id ?? null;
     message.parts.forEach((part, index) => {
       anchored.push({
         seq: typeof part.seq === "number" ? part.seq : Number.MAX_SAFE_INTEGER,
@@ -1846,12 +1898,6 @@ function mergeStream(
     anchored.push({
       seq: cardSeq(fleet.sequenceNo),
       item: { kind: "fleet", fleet },
-    });
-  }
-  for (const toolCall of toolCalls) {
-    anchored.push({
-      seq: cardSeq(toolCall.sequenceNo),
-      item: { kind: "tool", toolCall },
     });
   }
   for (const approval of approvals) {
@@ -1876,6 +1922,13 @@ function mergeStream(
     });
   }
 
+  // A settled run with no message in this transcript (a turn still loading, or
+  // one whose message failed to fetch) would otherwise have its cards silently
+  // dropped. They go before the active block, which is where their run ran.
+  flushRun(pendingRun);
+  for (const id of [...settledCards.keys()]) {
+    flushRun(id);
+  }
   anchored.sort((a, b) => a.seq - b.seq);
   for (const entry of anchored) {
     out.push(entry.item);
