@@ -49,6 +49,7 @@ import {
 import {
   ProjectEditor,
   ProjectFilingChip,
+  useOptionalTransport,
   useTransport,
   type ProjectColorHue,
   type ProjectEditorSavePayload,
@@ -147,8 +148,24 @@ let cachedProjects: ReadonlyArray<ProjectSummary> | null = null;
  * `options.length > 0` for the same reason — a picker with nothing to pick is
  * worse than no picker.
  */
-export function useProjectFilingOptions(): ProjectFilingOptions {
-  const transport = useTransport();
+export function useProjectFilingOptions(
+  transportOverride?: Transport,
+): ProjectFilingOptions {
+  // EXPLICIT transport, optionally.
+  //
+  // `useTransport()` THROWS when no provider sits above the caller, and the
+  // FTUE binder is exactly that caller: `FirstRunGate` builds its own transport
+  // and mounts `TransportProvider` around the surface, so its own component body
+  // is outside the provider. Calling the context hook there took down the whole
+  // first-run screen (the key card never rendered). Callers inside the shell
+  // keep passing nothing.
+  const contextTransport = useOptionalTransport();
+  const transport = transportOverride ?? contextTransport;
+  if (transport === null) {
+    throw new Error(
+      "useProjectFilingOptions: pass a Transport, or mount under TransportProvider",
+    );
+  }
   const [projects, setProjects] = useState<ReadonlyArray<ProjectSummary>>(
     () => cachedProjects ?? [],
   );
@@ -498,13 +515,22 @@ export interface UseProjectCreateOptions {
   readonly onCreated?: (id: ProjectId) => void;
   /** Refresh the caller's option list so the new project appears at once. */
   readonly reload?: () => void;
+  /** Transport for callers outside a `TransportProvider` (the FTUE binder). */
+  readonly transport?: Transport;
 }
 
 export function useProjectCreate(
   options: UseProjectCreateOptions = {},
 ): ProjectCreateFlow {
-  const { onCreated, reload } = options;
-  const transport = useTransport();
+  const { onCreated, reload, transport: transportOverride } = options;
+  // Same seam as `useProjectFilingOptions` — see the note there.
+  const contextTransport = useOptionalTransport();
+  const transport = transportOverride ?? contextTransport;
+  if (transport === null) {
+    throw new Error(
+      "useProjectCreate: pass a Transport, or mount under TransportProvider",
+    );
+  }
   const [open, setOpen] = useState(false);
 
   const openCreate = useCallback((): void => setOpen(true), []);

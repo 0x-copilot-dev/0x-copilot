@@ -127,10 +127,24 @@ def main() -> int:
         s.ftue_add_key("anthropic", key)
         s.shot("composer-no-projects")
 
-        # The chip is HIDDEN with zero projects (the desktop binder passes no
-        # `onCreateProject`, so a chip here would be a control that cannot act).
-        # Recorded as a fact, not asserted as desirable — see JOURNEYS.md.
-        print(f"[projects-filing] chip with 0 projects: present={_chip_present(s)}")
+        # The FTUE composer carries the filing zone too. It was missing at
+        # first, which repeated PRD-FS-10 §7's folder-bar bug exactly: the
+        # affordance existed on every composer EXCEPT first run — the one send
+        # that CREATES the conversation, and so the only place filing can ride
+        # the create rather than a follow-up PATCH.
+        assert _chip_present(s), (
+            "no filing zone on the FTUE composer — first run is the one send "
+            "that creates the conversation, so filing must be available there"
+        )
+        # With ZERO projects the zone renders its create-only variant — a direct
+        # "New project" button rather than a pill whose menu's only real entry
+        # would be "No project". So assert the AFFORDANCE, not one shape of it:
+        # a fresh install must have a way into filing, and on first run that way
+        # is necessarily "make one".
+        assert s.present("[data-testid=composer-project-filing-create]"), (
+            "FTUE filing zone rendered with no way to act: expected the "
+            "create-only variant while the user has no projects"
+        )
 
         # 2. Leave the FTUE hero for the workspace shell ----------------------
         # The first-run surface has no nav rail — `open_destination` cannot work
@@ -158,20 +172,20 @@ def main() -> int:
             "filing chip is not below the composer frame — the above/below "
             "split (folders up, project down) has been broken"
         )
-        assert "No project" in (_chip_label(s) or ""), (
-            f"a fresh chat should read 'No project', got {_chip_label(s)!r}"
+        # With zero projects the zone is the CREATE-ONLY variant (70dabbf8):
+        # a direct "New project" button rather than a pill whose menu's only
+        # real entry would be "No project". Assert that shape here; the pill and
+        # its menu are asserted below, once a project exists.
+        assert s.present("[data-testid=composer-project-filing-create]"), (
+            "zero-project zone is not the create-only variant — a fresh install "
+            "has nothing to pick, so the zone must offer the way to make one"
         )
         s.shot("chip-unfiled-zero-projects")
 
-        # 4. Create the first project FROM the chip ---------------------------
-        s.click("[data-testid=composer-project-filing-trigger]")
-        assert s.wait_for("[data-testid=composer-project-filing-menu]")
-        assert s.present("[data-testid=composer-project-filing-new]"), (
-            "'New project…' missing — with no projects the menu has no exit"
-        )
-        s.click("[data-testid=composer-project-filing-new]")
+        # 4. Create the first project FROM the zone ---------------------------
+        s.click("[data-testid=composer-project-filing-create]")
         assert s.wait_for("[data-testid=desktop-project-create-sheet]", 20), (
-            "the chip's 'New project…' opened nothing"
+            "the zone's 'New project' opened nothing"
         )
         # Create words, not edit words: the sheet reused the edit editor and
         # said "Edit project" / "Save" for a project that did not exist yet.
