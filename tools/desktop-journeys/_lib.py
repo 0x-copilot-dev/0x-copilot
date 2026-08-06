@@ -36,7 +36,12 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 import urllib.request
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 # ── paths ────────────────────────────────────────────────────────────────────
@@ -206,6 +211,14 @@ class DriverSession:
         self.run_dir = RUNS_DIR / name
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._shot = 0
+        # Drop the previous run's PNGs before this one writes any. Shots are
+        # numbered from 1 each time, so a run that stops early leaves
+        # higher-numbered files from an OLDER run sitting beside the current
+        # ones — and `07-…png` from a build you have since changed looks
+        # entirely convincing. Same trap the README documents for stale staged
+        # runtimes, one directory down.
+        for png in (self.run_dir / "screenshots").glob("*.png"):
+            png.unlink()
         env = dict(os.environ)
         env["CTL_PORT"] = str(self.port)
         env["POSTURE"] = "prod"
@@ -239,6 +252,10 @@ class DriverSession:
         self._env = env
         self._proc: subprocess.Popen | None = None
         self._log = None
+        #: Set by ``JourneyPlan`` so a merged journey's screenshots say which
+        #: phase produced them. One boot now carries a dozen phases, and
+        #: ``07-transcript.png`` alone cannot tell you which claim it evidences.
+        self.phase_prefix = ""
 
     @property
     def _user_data_dir(self) -> Path:
@@ -519,7 +536,8 @@ class DriverSession:
 
     def shot(self, label: str) -> None:
         self._shot += 1
-        self.rpc("screenshot", name=f"{self._shot:02d}-{label}")
+        prefix = f"{self.phase_prefix}-" if self.phase_prefix else ""
+        self.rpc("screenshot", name=f"{self._shot:02d}-{prefix}{label}")
 
     def resize(self, width: int, height: int) -> dict:
         """Resize the REAL desktop window's content area, as a user dragging it would.
@@ -711,6 +729,35 @@ class DriverSession:
         time.sleep(0.3)
         self.click('button[aria-label="Send message"]')
 
+    def send(self, text: str, *, timeout_s: int = 180) -> None:
+        """Send from WHICHEVER composer is on screen, waiting for an idle one.
+
+        Every journey used to own the first message in its boot, so
+        ``send_first_run_message`` was always right. Grouped phases share a
+        boot, and only the first of them meets the FTUE composer — the rest
+        send into the run cockpit. Both are `composer-textarea`, so the only
+        real difference is that the run composer is BUSY while a run streams:
+        the send button is `aria-label="Stop response"` in flight, and filling
+        the textarea mid-stream loses the text to a re-render.
+        """
+
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if self.evaluate(
+                "!!document.querySelector('button[aria-label=\"Send message\"]') && "
+                "!document.querySelector('button[aria-label=\"Stop response\"]')"
+            ):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError(f"no idle composer within {timeout_s}s")
+        assert self.wait_visible("[data-testid=composer-textarea]", 30), (
+            "the composer textarea never became visible"
+        )
+        self.fill("[data-testid=composer-textarea]", text)
+        time.sleep(0.3)
+        self.click('button[aria-label="Send message"]')
+
     def open_destination(self, aria_label: str) -> None:
         """Click a left nav-rail destination, e.g. "Chats" / "Run"."""
         self.click(f'[aria-label="{aria_label}"][data-destination]')
@@ -734,3 +781,509 @@ class DriverSession:
         return self.evaluate(
             '(document.querySelector(".atlas-model-pill")||{}).innerText||null'
         )
+
+
+# ── shared run/preflight helpers ─────────────────────────────────────────────
+# These began as private functions inside `g2_csv_lifecycle`, and were then
+# imported ACROSS set boundaries (`focus-inline-artifacts` reached into
+# `generative-workflows` to get them). Every merged journey that drives a real
+# run needs them, so they belong here.
+
+#: Statuses a run can end on. Anything else means it is still moving.
+TERMINAL_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "rejected", "timed_out"}
+)
+
+#: Plaintext provider keys the LAUNCHING SHELL may have exported. The desktop
+#: supervisor forwards these, so a journey that wants to reproduce a true
+#: keyless first-run has to clear them.
+SECRET_ENVIRONMENT_NAMES = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+#: The lane the artifact/workspace journeys need switched on.
+ARTIFACT_JOURNEY_ENVIRONMENT = {
+    "RUNTIME_ENABLE_DESKTOP_FILESYSTEM": "1",
+    "SURFACES_V2": "true",
+    "ARTIFACT_EFFECTS_V2": "true",
+    "ARTIFACT_DRAFTS_V2": "true",
+    "OPERATION_GATEWAY_MODE": "enforce",
+    "WORKSPACE_EFFECT_MODE": "enforce",
+}
+
+
+def preflight_staged_runtime(*, target: str = SOURCE_TARGET) -> None:
+    """Require the real supervised services, or raise ``PhaseSkipped``.
+
+    ``target`` selects WHICH stage to require, and must match the target the
+    caller's ``DriverSession`` will launch. Gating on the other one would skip
+    on a perfectly good stage — or, worse, green-light a stage that is not
+    under test.
+    """
+
+    runtime = staged_runtime_dir(target=target)
+    manifest_path = runtime / "staging-manifest.json"
+    if not manifest_path.is_file():
+        raise PhaseSkipped(
+            "host staged runtime is absent; run make desktop-supervised or stage "
+            "the host runtime with tools/desktop-runtime/stage.mjs"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"staging manifest is malformed at {manifest_path}"
+        ) from exc
+    if manifest.get("host_exec") is not True:
+        raise PhaseSkipped(
+            "staged runtime is not host-executable; re-stage with "
+            "tools/desktop-runtime/stage.mjs"
+        )
+    required = (
+        runtime / "python" / "bin" / "python3.13",
+        runtime / "postgres" / "bin" / "postgres",
+        runtime / "services" / "backend",
+        runtime / "services" / "ai-backend",
+        runtime / "services" / "backend-facade",
+    )
+    missing = [
+        path.relative_to(runtime).as_posix() for path in required if not path.exists()
+    ]
+    if missing:
+        raise PhaseSkipped(
+            "staged runtime is incomplete (missing " + ", ".join(missing) + ")"
+        )
+
+
+def byok_provider(*, env_var: str = "JOURNEY_PROVIDER") -> tuple[str, str]:
+    """Pick a provider that actually has a local key. Never returns the key alone."""
+
+    requested = os.environ.get(env_var, "auto").strip().lower()
+    if requested not in {"auto", "openai", "anthropic"}:
+        raise AssertionError(f"{env_var} must be auto, openai, or anthropic")
+    providers = (requested,) if requested != "auto" else ("openai", "anthropic")
+    for provider in providers:
+        try:
+            return provider, load_env_key(provider)
+        except SystemExit:
+            # load_env_key emits only a variable/path; never a provider key.
+            continue
+    label = requested if requested != "auto" else "OpenAI or Anthropic"
+    raise PhaseSkipped(
+        f"no local {label} BYOK key is available through services/ai-backend/.env"
+    )
+
+
+def runs_for_conversation(session: DriverSession, conversation_id: str) -> list[dict]:
+    listing = session.transport(
+        "GET", f"/v1/agent/conversations/{conversation_id}/runs"
+    )
+    runs = listing.get("runs", [])
+    assert isinstance(runs, list), "facade run list omitted its run array"
+    assert all(isinstance(run, dict) for run in runs), "facade run list is malformed"
+    return runs
+
+
+def wait_for_conversation_id(session: DriverSession, timeout_s: int = 60) -> str:
+    """Wait until the first composer submission binds the new conversation.
+
+    A fresh profile intentionally has no conversation route before the user
+    sends their first message; the UI creates and selects that conversation as
+    one atomic submission flow.
+    """
+
+    deadline = time.time() + timeout_s
+    last_route = ""
+    while time.time() < deadline:
+        last_route = str(session.evaluate("window.location.hash") or "")
+        match = re.fullmatch(r"#/convo/([^/?#]+)(?:[?#].*)?", last_route)
+        if match is not None:
+            return match.group(1)
+        time.sleep(0.25)
+    raise AssertionError(
+        f"the prompt did not bind a conversation route; got {last_route!r}"
+    )
+
+
+def wait_for_new_run(
+    session: DriverSession, conversation_id: str, before_count: int = 0
+) -> str:
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        runs = runs_for_conversation(session, conversation_id)
+        if len(runs) > before_count:
+            run_id = runs[0].get("run_id")
+            assert isinstance(run_id, str) and run_id, "facade run omitted run_id"
+            return run_id
+        time.sleep(0.5)
+    raise AssertionError("the app did not create a run for the prompt")
+
+
+def wait_for_terminal_run(session: DriverSession, run_id: str) -> dict:
+    deadline = time.time() + 180
+    last: dict = {}
+    while time.time() < deadline:
+        result = session.transport("GET", f"/v1/agent/runs/{run_id}")
+        assert isinstance(result, dict), "run inspection returned a non-object response"
+        last = result
+        status = result.get("status")
+        if status in TERMINAL_STATUSES:
+            assert status == "completed", (
+                f"agent run ended {status!r}: {result.get('safe_error')!r}"
+            )
+            return result
+        time.sleep(0.5)
+    raise AssertionError(
+        f"run did not become terminal; last status={last.get('status')!r}"
+    )
+
+
+def assert_no_plaintext_secret(secret: str, roots: tuple[Path, ...]) -> None:
+    """Search journey-owned files WITHOUT ever returning a matching secret value."""
+
+    needle = secret.encode("utf-8")
+    assert needle, "BYOK value unexpectedly empty"
+    for root in roots:
+        if not root.exists():
+            continue
+        paths = (root,) if root.is_file() else root.rglob("*")
+        for path in paths:
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                with path.open("rb") as handle:
+                    previous = b""
+                    while chunk := handle.read(64 * 1024):
+                        if needle in previous + chunk:
+                            raise AssertionError(
+                                "plaintext BYOK material appeared in journey-owned "
+                                "logs, screenshots, user data, or fixture workspace"
+                            )
+                        previous = (previous + chunk)[-(len(needle) - 1) :]
+            except OSError:
+                # Shutdown can remove an owned transient file; it cannot make a
+                # missing file evidence of a credential leak.
+                continue
+
+
+# ── phase runner ─────────────────────────────────────────────────────────────
+# One supervised boot costs initdb + migrations + three service starts, so the
+# suite used to spend most of its wall clock booting: 64 scripts, 64 boots. The
+# journeys are now grouped by what they need from the machine (target, profile,
+# lane) and share one boot per group.
+#
+# Sharing a boot must not cost what a script per claim bought. Those were 64
+# independent verdicts; a naive concatenation has ONE, aborts at the first
+# assertion, and lets one absent prerequisite hide every later claim. So a boot
+# runs PHASES: each is isolated, records its own outcome, and the next one runs
+# regardless. The file's exit code is the aggregate, and the per-phase table is
+# the thing you read.
+
+
+class Outcome(StrEnum):
+    """What became of one phase. Only ``PASSED`` is a pass."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    SKIPPED = "skipped"
+
+
+class PhaseBlocked(Exception):
+    """A declared PRODUCT/harness capability is absent — exit `2` territory.
+
+    Raise this when the thing under test cannot exist yet (no local stdio
+    fixture bridge, no binary DOCX contract). It is a statement about the
+    product, and it must never be dressed up as a pass.
+    """
+
+
+class PhaseSkipped(Exception):
+    """A LOCAL prerequisite is absent — exit `3` territory.
+
+    Raise this when this machine cannot run the phase (no staged runtime, no
+    BYOK key in `.env`, no connected MCP server, no macOS native automation).
+    It is a statement about the box, not about the product.
+    """
+
+
+def require(condition: object, reason: str) -> None:
+    """Skip this phase unless a local prerequisite holds."""
+    if not condition:
+        raise PhaseSkipped(reason)
+
+
+def blocked_unless(condition: object, reason: str) -> None:
+    """Block this phase unless a declared product capability is present."""
+    if not condition:
+        raise PhaseBlocked(reason)
+
+
+@dataclass
+class PhaseResult:
+    boot: str
+    phase_id: str
+    title: str
+    outcome: Outcome
+    seconds: float
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome is Outcome.PASSED
+
+
+#: A phase is ``(id, one-line claim, callable)``. The callable takes the live
+#: ``DriverSession`` and asserts; returning normally is the pass.
+Phase = tuple[str, str, Callable[[DriverSession], None]]
+
+
+@contextmanager
+def scoped_env(
+    overrides: Mapping[str, str] | None = None,
+    *,
+    clear: Sequence[str] = (),
+) -> Iterator[None]:
+    """Apply env for the duration of a boot, then put the shell back.
+
+    Unset means unset: a supervisor default is frequently the thing under test,
+    so ``clear`` removes names outright rather than leaving whatever the calling
+    shell happened to export.
+    """
+
+    names = {*(overrides or {}), *clear}
+    previous = {name: os.environ.get(name) for name in names}
+    for name in clear:
+        os.environ.pop(name, None)
+    os.environ.update(overrides or {})
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+class JourneyPlan:
+    """Runs grouped phases across one or more boots and reports one verdict.
+
+    Typical shape of a merged journey::
+
+        plan = JourneyPlan("workspace-consent")
+        plan.boot(
+            "default lane",
+            lambda: DriverSession(name="workspace-consent"),
+            setup=sign_in_with_key,          # a failure here skips the phases
+            phases=[
+                ("FS1", "an ungranted path never empty-succeeds", fs1),
+                ("FS2", "the folder affordance is the composer bar", fs2),
+            ],
+        )
+        raise SystemExit(plan.finish())
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.results: list[PhaseResult] = []
+        self._started = time.time()
+
+    # -- recording --
+    def _record(
+        self,
+        boot: str,
+        phase_id: str,
+        title: str,
+        outcome: Outcome,
+        seconds: float,
+        detail: str = "",
+    ) -> PhaseResult:
+        result = PhaseResult(boot, phase_id, title, outcome, seconds, detail)
+        self.results.append(result)
+        mark = {
+            Outcome.PASSED: "PASS",
+            Outcome.FAILED: "FAIL",
+            Outcome.BLOCKED: "BLOCKED",
+            Outcome.SKIPPED: "SKIP",
+        }[outcome]
+        line = f"  [{mark:<7}] {phase_id:<10} {title} ({seconds:.1f}s)"
+        print(line, flush=True)
+        if detail:
+            print(f"            → {detail}", flush=True)
+        return result
+
+    # -- execution --
+    def run_phase(self, boot: str, phase: Phase, session: DriverSession) -> PhaseResult:
+        """Run one phase in isolation. Never raises — the outcome is the return."""
+
+        phase_id, title, fn = phase
+        session.phase_prefix = phase_id.lower().replace(" ", "-")
+        started = time.time()
+        try:
+            fn(session)
+        except PhaseSkipped as exc:
+            return self._record(
+                boot, phase_id, title, Outcome.SKIPPED, time.time() - started, str(exc)
+            )
+        except PhaseBlocked as exc:
+            return self._record(
+                boot, phase_id, title, Outcome.BLOCKED, time.time() - started, str(exc)
+            )
+        except BaseException as exc:  # noqa: BLE001 — one phase must not end the run
+            traceback.print_exc()
+            detail = f"{type(exc).__name__}: {exc}".strip()
+            return self._record(
+                boot, phase_id, title, Outcome.FAILED, time.time() - started, detail
+            )
+        finally:
+            session.phase_prefix = ""
+        return self._record(
+            boot, phase_id, title, Outcome.PASSED, time.time() - started
+        )
+
+    def boot(
+        self,
+        label: str,
+        factory: Callable[[], DriverSession],
+        *,
+        phases: Sequence[Phase],
+        setup: Callable[[DriverSession], None] | None = None,
+        env: Mapping[str, str] | None = None,
+        clear_env: Sequence[str] = (),
+    ) -> None:
+        """Launch one app, run every phase against it, tear it down.
+
+        A boot failure, or a ``setup`` failure, marks the whole group rather
+        than exploding: the phases record as skipped/failed with the reason and
+        any LATER ``boot()`` call in the same file still runs. That is the point
+        of grouping by prerequisite — one absent capability must cost its own
+        group and nothing else.
+        """
+
+        print(f"\n── boot: {label} ({len(phases)} phases)", flush=True)
+        with scoped_env(env, clear=clear_env):
+            try:
+                session = factory()
+            except BaseException as exc:  # noqa: BLE001
+                self._skip_group(label, phases, Outcome.FAILED, f"boot rejected: {exc}")
+                return
+            try:
+                with session:
+                    if setup is not None:
+                        try:
+                            setup(session)
+                        except PhaseSkipped as exc:
+                            self._skip_group(
+                                label, phases, Outcome.SKIPPED, f"setup: {exc}"
+                            )
+                            return
+                        except BaseException as exc:  # noqa: BLE001
+                            traceback.print_exc()
+                            self._skip_group(
+                                label,
+                                phases,
+                                Outcome.FAILED,
+                                f"setup failed: {type(exc).__name__}: {exc}",
+                            )
+                            return
+                    for phase in phases:
+                        self.run_phase(label, phase, session)
+            except SystemExit as exc:
+                # DriverSession.start raises SystemExit when the app never came
+                # up. That is this group's verdict, not the file's.
+                self._skip_group(label, phases, Outcome.FAILED, str(exc))
+            except BaseException as exc:  # noqa: BLE001
+                traceback.print_exc()
+                self._skip_group(
+                    label, phases, Outcome.FAILED, f"{type(exc).__name__}: {exc}"
+                )
+
+    def _skip_group(
+        self,
+        label: str,
+        phases: Sequence[Phase],
+        outcome: Outcome,
+        reason: str,
+    ) -> None:
+        recorded = {(r.boot, r.phase_id) for r in self.results}
+        for phase_id, title, _ in phases:
+            if (label, phase_id) not in recorded:
+                self._record(label, phase_id, title, outcome, 0.0, reason)
+
+    # -- reporting --
+    def counts(self) -> dict[str, int]:
+        return {
+            outcome.value: sum(1 for r in self.results if r.outcome is outcome)
+            for outcome in Outcome
+        }
+
+    @property
+    def exit_code(self) -> int:
+        """`0` only when every phase ran and passed.
+
+        Severity order is deliberate: a real defect outranks a missing product
+        capability, which outranks a missing local prerequisite. A run with even
+        one skipped phase is never `0`, because the file did not prove what its
+        name claims.
+        """
+
+        outcomes = {r.outcome for r in self.results}
+        if not self.results:
+            return EXIT_SKIPPED
+        if Outcome.FAILED in outcomes:
+            return 1
+        if Outcome.BLOCKED in outcomes:
+            return EXIT_BLOCKED
+        if Outcome.SKIPPED in outcomes:
+            return EXIT_SKIPPED
+        return 0
+
+    def finish(self) -> int:
+        """Print the phase table + machine-readable summary; return the exit code."""
+
+        counts = self.counts()
+        code = self.exit_code
+        elapsed = time.time() - self._started
+        print(f"\n══ {self.name} — {len(self.results)} phases in {elapsed:.0f}s")
+        for result in self.results:
+            if not result.ok:
+                print(
+                    f"   {result.outcome.value.upper():<8} {result.phase_id:<10} "
+                    f"{result.title}" + (f" — {result.detail}" if result.detail else "")
+                )
+        print(
+            "   "
+            + "  ".join(f"{name}={value}" for name, value in counts.items())
+            + f"  → exit {code}"
+        )
+        print(
+            json.dumps(
+                {
+                    "journey": self.name,
+                    "outcome": (
+                        "passed"
+                        if code == 0
+                        else {1: "failed", 2: "blocked", 3: "skipped"}[code]
+                    ),
+                    "counts": counts,
+                    "seconds": round(elapsed, 1),
+                    "phases": [
+                        {
+                            "boot": r.boot,
+                            "id": r.phase_id,
+                            "title": r.title,
+                            "outcome": r.outcome.value,
+                            "seconds": round(r.seconds, 1),
+                            **({"detail": r.detail} if r.detail else {}),
+                        }
+                        for r in self.results
+                    ],
+                }
+            ),
+            flush=True,
+        )
+        return code

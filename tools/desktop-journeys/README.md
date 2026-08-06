@@ -29,18 +29,42 @@ before you trust a result:**
 ```
 tools/desktop-journeys/
   README.md              ← you are here (setup + how to run)
-  _lib.py                ← shared harness: DriverSession, load_env_key, common actions
-  runs/                  ← per-journey screenshots + logs (git-ignored)
-  provider-key-byok/     ← a SET of journeys → one JOURNEYS.md + runnable scripts
-  focus-mode/
-  chat-rich-cards/       ← required live tool + subagent card matrix
-  chat-nav-model/
-  shell-overflow/        ← the shell must never scroll the document (incl. short windows)
+  MIGRATION.md           ← why there are nine files and not sixty-four
+  _lib.py                ← DriverSession, the phase runner, shared run helpers
+  _workspace_lib.py      ← workspace lanes, grants, macOS native-dialog driving
+  _release_matrix_lib.py ← the G3-G10 release-matrix vocabulary
+  runs/                  ← per-journey screenshots + evidence + logs (git-ignored)
+
+  first_run.py               shell_and_projects.py     workspace_consent.py
+  transcript_rendering.py    artifacts_and_surfaces.py workspace_bypass.py
+  composer_and_budgets.py    mcp_connected.py          installed_payload.py
 ```
 
-One **folder per set** of related journeys; each set has one **`JOURNEYS.md`**
-describing the user story + expected outcomes + the testIds it asserts, plus one or
-more runnable `*.py` scripts.
+**Nine journeys, not sixty-four scripts.** One supervised boot costs initdb +
+migrations + three service starts, so the old shape spent most of its wall clock
+booting. Journeys are grouped by **what they need from the machine** — target,
+profile, lane, model — and each group shares one boot.
+
+Sharing a boot does not cost the per-claim verdict. Each file runs **phases**:
+isolated, individually reported as `passed` / `failed` / `blocked` / `skipped`,
+and the next one runs whatever the last one did. Read the phase table the run
+prints; the exit code is only its aggregate.
+
+| Journey                     | What it covers                                                     |
+| --------------------------- | ------------------------------------------------------------------ |
+| `first_run.py`              | sign-in, BYOK, model preselect, where the first message lands      |
+| `transcript_rendering.py`   | rich cards, Focus, thinking, interleaving, timeline, citations     |
+| `composer_and_budgets.py`   | the Tools pill, todo checklist, tool-call limits, run health       |
+| `shell_and_projects.py`     | the fixed window frame, and filing a chat into a project           |
+| `workspace_consent.py`      | the folder bar, the ungranted ask, approvals (DEFAULT lane)        |
+| `workspace_bypass.py`       | the execution-mode pill and what a grant buys (default + enforce)  |
+| `artifacts_and_surfaces.py` | Studio artifacts, the canvas, identity colour, the inference floor |
+| `mcp_connected.py`          | everything needing a REAL connected MCP server (reuse profile)     |
+| `installed_payload.py`      | the shipped npm artifact and the G3-G10 release matrix             |
+
+Two `installed-payload` journeys are still standalone and unfolded:
+`generative-workflows/g1_markdown_lifecycle.py` and `g2_csv_lifecycle.py`. See
+[MIGRATION.md](./MIGRATION.md).
 
 ## Prerequisites
 
@@ -143,19 +167,17 @@ git-ignored.
 ## Running a journey
 
 ```bash
-# from the repo root
-python3 tools/desktop-journeys/chat-nav-model/new_chat.py
-
-# The required desktop rich-chat matrix: direct web search, one subagent,
-# two parallel subagents, and web search + two subagents in ONE message.
-python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py
+# from the repo root — 3.11+ required (StrEnum); a miniconda 3.10 on PATH will
+# die at import before executing a line of product code.
+/opt/homebrew/bin/python3.13 tools/desktop-journeys/first_run.py
+/opt/homebrew/bin/python3.13 tools/desktop-journeys/transcript_rendering.py
 ```
 
-Each script spawns its own driver on `CTL_PORT` (default 8790), runs hermetically in
-a throwaway userData subdir (fresh first-run), writes screenshots + a `driver.log`
-under `runs/<name>/`, exits non-zero unless it passed, and cleans up the app.
+Each file spawns its own driver on `CTL_PORT` (default 8790), runs its phases,
+writes screenshots + evidence + a `driver.log` under `runs/<name>/`, prints a
+per-phase table plus a machine-readable JSON summary, and tears the app down.
 
-### Exit codes — only `0` means the journey ran and passed
+### Exit codes — only `0` means every phase ran and passed
 
 | Code | Meaning                                                                                                    |
 | ---- | ---------------------------------------------------------------------------------------------------------- |
@@ -171,7 +193,7 @@ caller that legitimately wants to tolerate a skip can match on the code or the
 `outcome` field rather than on silence:
 
 ```bash
-python3 tools/desktop-journeys/generative-workflows/g2a_csv_artifact_surface.py; code=$?
+/opt/homebrew/bin/python3.13 tools/desktop-journeys/artifacts_and_surfaces.py; code=$?
 [ "$code" -eq 0 ] || [ "$code" -eq 3 ] || exit "$code"
 ```
 
@@ -182,7 +204,7 @@ Use this after `make desktop-install` to drive the exact global
 dependency — instead of the source checkout:
 
 ```bash
-python3 tools/desktop-journeys/installed-payload/installed_payload_smoke.py
+/opt/homebrew/bin/python3.13 tools/desktop-journeys/installed_payload.py
 ```
 
 The driver reports `target: installed-payload`, its global CLI package root, and
@@ -192,7 +214,7 @@ same installed artifact, set the target once:
 
 ```bash
 COPILOT_DESKTOP_TEST_TARGET=installed-payload \
-  python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py
+  /opt/homebrew/bin/python3.13 tools/desktop-journeys/transcript_rendering.py
 ```
 
 `APP_DIR` is rejected for this target. That guard prevents an apparently green
@@ -217,7 +239,7 @@ npm run build --workspace @0x-copilot/desktop     # bundles the branch's rendere
 cd /path/to/main/checkout
 APP_DIR="$PWD/.claude/worktrees/<name>/apps/desktop" \
 COPILOT_HOME="$PWD/apps/desktop/resources" \
-  python3 tools/desktop-journeys/<set>/<journey>.py
+  /opt/homebrew/bin/python3.13 tools/desktop-journeys/<journey>.py
 
 # 4. after merge: git worktree remove -f .claude/worktrees/<name> && git branch -D <branch>
 ```
@@ -260,7 +282,7 @@ the same profile** — a normal launch has a real `shell.openExternal` — compl
 the consent, quit, then run the journey:
 
 ```bash
-# 1. Connect by hand, in the journey's own profile. FS-F is
+# 1. Connect by hand, in the journey's own profile. mcp_connected.py uses
 #    DriverSession(name="fs-f-linear-mcp"), so the subdir is:
 COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \
 COPILOT_DESKTOP_USER_DATA_SUBDIR=journey-fs-f-linear-mcp-reuse \
@@ -272,7 +294,7 @@ COPILOT_DESKTOP_USER_DATA_SUBDIR=journey-fs-f-linear-mcp-reuse \
 #    that COPILOT_RUNTIME_DIR pointed at above, or you get a different database.
 COPILOT_HOME="$PWD/apps/desktop/resources" \
 COPILOT_JOURNEY_DOTENV=/path/to/services/ai-backend/.env \
-  python3 tools/desktop-journeys/filesystem-access/jF_linear_mcp.py
+  /opt/homebrew/bin/python3.13 tools/desktop-journeys/mcp_connected.py
 ```
 
 What silently defeats this:
@@ -289,7 +311,7 @@ What silently defeats this:
   (`apps/desktop/main/posture.ts`), which is what the driver launches with
   (`POSTURE=prod` ⇒ `COPILOT_PRODUCTION=1`). A dev-mint launch signs in a
   different persona, and the journey would not see what that persona connected.
-- **`FS_F_FRESH=1` throws the profile away** on purpose — a virgin install has no
+- **A fresh profile throws the connection away** on purpose — a virgin install has no
   MCP servers, which is a different (and narrower) question.
 
 The same handoff applies to anything else needing a browser round trip: Google
@@ -308,7 +330,7 @@ sign-in, a custom MCP server's OAuth, any future connector.
   assert on the returned `viewport`, since a window manager may refuse a size.
 - `document_scroll()` — measure whether the DOCUMENT can scroll. It must never be able
   to: the desktop window is a fixed frame and every scroll region lives inside
-  `.desktop-window-frame`. See [`shell-overflow/`](./shell-overflow/JOURNEYS.md).
+  `.desktop-window-frame`. See `shell_and_projects.py` phases SP-1 … SP-5.
 - `transport(method, path)` — an **authenticated** facade call made through the app
   (`window.bridge.ipc.invoke("transport.request", …)`), e.g. `transport("GET",
 "/v1/agent/models")` to read the model catalog as the signed-in user.
@@ -317,21 +339,41 @@ sign-in, a custom MCP server's OAuth, any future connector.
 Service logs for the supervised stack: `~/Library/Application Support/0xCopilot/logs/`
 (or the run's `runs/<name>/driver.log` for the Electron main-process output).
 
-## Writing a new journey set
+## Adding a claim
 
-1. `mkdir tools/desktop-journeys/<set>/` with a `JOURNEYS.md` (user story, steps,
-   expected outcome, testIds asserted, and what BLOCKS full coverage if anything).
-2. Add `<journey>.py` that `from _lib import DriverSession, load_env_key`, walks the
-   flow, asserts, and screenshots. Keep testIds in `_lib.py`'s common actions when
-   shared, so a renamed testId is fixed in one place.
-3. Never hardcode a key; never print a key. Prefer asserting through `transport()`
-   for backend truth and DOM reads for what the user actually sees.
+**Add a phase to the journey that already boots what you need — do not add a
+tenth file.** Find the journey whose boot class matches (target, profile, lane,
+model) and append a phase:
+
+```python
+def xx7_the_thing_you_are_proving(s: DriverSession) -> None:
+    """One line stating the claim, then why a unit test cannot make it."""
+    ...assert...
+
+# in main()'s phases list:
+("XX-7", "the thing you are proving", xx7_the_thing_you_are_proving),
+```
+
+Four rules, each learned the expensive way:
+
+1. **Order phases by the state they consume**, and say so in the docstring. A
+   phase needing the virgin FTUE composer must precede anything that sends.
+2. **Dependent phases declare what they need.** `require(STATE.get(k), ...)` so a
+   missing predecessor SKIPS rather than failing with a confusing error.
+3. **Model-driven shape is `blocked`, not `failed`.** If the model declines to
+   call web search, the shape under test never occurred — that is a statement
+   about the run, not about the renderer.
+4. **A phase that writes a persisted setting runs last**, or it silently
+   rewrites an earlier phase's premise.
+
+A genuinely new boot class (a lane or target no journey uses) is the only reason
+to add a file. Never hardcode a key; never print one. Prefer `transport()` for
+backend truth and DOM reads for what the user actually sees.
 
 ## Rich chat is a required matrix, not a single happy path
 
-[`chat-rich-cards/JOURNEYS.md`](./chat-rich-cards/JOURNEYS.md) is the canonical
-desktop proof for chat cards. It performs four real, keyed runs in one fresh
-desktop session:
+`transcript_rendering.py` phases **TR-1 … TR-5** are the canonical desktop proof
+for chat cards. They perform four real, keyed runs in one session:
 
 | Case               | What must appear in the desktop transcript                                                 |
 | ------------------ | ------------------------------------------------------------------------------------------ |
@@ -341,7 +383,11 @@ desktop session:
 | Mixed run          | a direct `web_search` tool card **and** a two-agent fleet in the same message              |
 | Retained history   | after the next message starts, the completed prior subagent remains in the Agents panel    |
 
-It then verifies the actual desktop controls: tool-card disclosure by pointer,
+They are ordered and DEPENDENT: TR-3 asserts that TR-1's tool card and TR-2's
+fleet card SURVIVE a new run binding, so it skips rather than fails if its
+predecessors produced nothing.
+
+They then verify the actual desktop controls: tool-card disclosure by pointer,
 Space, and Enter; a terminal fleet-card disclosure by pointer, Space, and Enter;
 a **live** fleet-child expansion by pointer, Space, and Enter; and the same
 keyboard contract for that exact task in the Agents-side-panel row. Both
