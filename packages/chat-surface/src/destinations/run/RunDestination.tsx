@@ -81,6 +81,7 @@ import {
   type SubagentEntry,
   type SubagentListResponse,
   type SurfaceEdits,
+  RuntimeEventEnvelope,
 } from "@0x-copilot/api-types";
 import { isArtifactTransport } from "@0x-copilot/chat-transport";
 
@@ -423,6 +424,7 @@ function useConversationFleetArchive(
   conversationId: ConversationId,
   runIds: readonly string[],
   liveFleets: readonly FleetProjection[],
+  cardFrames: readonly RuntimeEventEnvelope[],
 ): ConversationFleetArchive {
   const [archived, setArchived] =
     useState<readonly FleetProjection[]>(EMPTY_FLEET_ARCHIVE);
@@ -465,28 +467,9 @@ function useConversationFleetArchive(
       setArchived(EMPTY_FLEET_ARCHIVE);
       return undefined;
     }
-    let cancelled = false;
-    void Promise.all(
-      replayRunIds.map(async (runId) => {
-        const response = await transport.request<RuntimeEventReplayResponse>({
-          method: "GET",
-          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
-        });
-        return projectSubagents(response.events ?? []).fleets;
-      }),
-    )
-      .then((fleetGroups) => {
-        if (!cancelled) setArchived(fleetGroups.flat());
-      })
-      .catch(() => {
-        // Cards already observed live remain visible. A historical replay is a
-        // progressive enhancement, so a transient failure must not block chat.
-        if (!cancelled) setArchived(EMPTY_FLEET_ARCHIVE);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, conversationId, replayRunIds]);
+    setArchived(projectSubagents(cardFrames).fleets);
+    return undefined;
+  }, [conversationId, replayRunIds, cardFrames]);
 
   const fleets = useMemo(() => {
     const merged = new Map<string, FleetProjection>();
@@ -549,11 +532,72 @@ function useConversationTodos(
   return runTodos ?? held;
 }
 
+/** `GET /v1/agent/conversations/{id}/card-events` — card frames for every run. */
+interface ConversationCardEventsPayload {
+  readonly events?: readonly RuntimeEventEnvelope[] | null;
+  readonly run_ids?: readonly string[] | null;
+  readonly has_more?: boolean | null;
+}
+
+const EMPTY_CARD_FRAMES: readonly RuntimeEventEnvelope[] = [];
+
+/**
+ * The conversation's settled card frames, fetched ONCE and folded twice.
+ *
+ * Both archives below rebuild a settled turn's cards from the same frames —
+ * tool calls through `projectToolCalls`, fleets through `projectSubagents` —
+ * and each used to replay every run's FULL event ledger to get them. That was
+ * `2N` requests for an N-turn conversation, every time it was reopened, to
+ * recover a handful of cards per run.
+ *
+ * One request now, carrying only card-bearing frames. The folds are untouched
+ * and still live on this side: the endpoint returns frames, never folded cards,
+ * so "what a tool card is" still has exactly one implementation, shared with
+ * the live path.
+ */
+function useConversationCardFrames(
+  transport: ReturnType<typeof useTransport>,
+  conversationId: ConversationId,
+): readonly RuntimeEventEnvelope[] {
+  const [frames, setFrames] =
+    useState<readonly RuntimeEventEnvelope[]>(EMPTY_CARD_FRAMES);
+
+  useEffect(() => {
+    if (conversationId === "new") {
+      setFrames(EMPTY_CARD_FRAMES);
+      return undefined;
+    }
+    let cancelled = false;
+    void transport
+      .request<ConversationCardEventsPayload>({
+        method: "GET",
+        path: `/v1/agent/conversations/${encodeURIComponent(conversationId)}/card-events`,
+      })
+      .then((payload) => {
+        if (!cancelled) {
+          const events = payload.events ?? EMPTY_CARD_FRAMES;
+          setFrames(events.length > 0 ? events : EMPTY_CARD_FRAMES);
+        }
+      })
+      .catch(() => {
+        // Cards already observed live remain visible. History is a progressive
+        // enhancement, so a transient failure must not block chat.
+        if (!cancelled) setFrames(EMPTY_CARD_FRAMES);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId]);
+
+  return frames;
+}
+
 function useConversationToolCallArchive(
   transport: ReturnType<typeof useTransport>,
   conversationId: ConversationId,
   runIds: readonly string[],
   liveToolCalls: readonly ToolCallEntry[],
+  cardFrames: readonly RuntimeEventEnvelope[],
 ): ConversationToolCallArchive {
   const [archived, setArchived] = useState<readonly ToolCallEntry[]>(
     EMPTY_TOOL_CALL_ARCHIVE,
@@ -597,28 +641,9 @@ function useConversationToolCallArchive(
       setArchived(EMPTY_TOOL_CALL_ARCHIVE);
       return undefined;
     }
-    let cancelled = false;
-    void Promise.all(
-      replayRunIds.map(async (runId) => {
-        const response = await transport.request<RuntimeEventReplayResponse>({
-          method: "GET",
-          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
-        });
-        return projectToolCalls(response.events ?? []);
-      }),
-    )
-      .then((toolCallGroups) => {
-        if (!cancelled) setArchived(toolCallGroups.flat());
-      })
-      .catch(() => {
-        // Cards already observed live remain visible. A historical replay is a
-        // progressive enhancement, so a transient failure must not block chat.
-        if (!cancelled) setArchived(EMPTY_TOOL_CALL_ARCHIVE);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, conversationId, replayRunIds]);
+    setArchived(projectToolCalls(cardFrames));
+    return undefined;
+  }, [conversationId, replayRunIds, cardFrames]);
 
   const toolCalls = useMemo(() => {
     const merged = new Map<string, ToolCallEntry>();
@@ -1928,11 +1953,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     subagentProjection.subagents,
   );
+  // Fetched once here and folded by BOTH archives below — the fleet fold and
+  // the tool fold read the same frames, and each used to replay every run's
+  // full ledger to get them.
+  const cardFrames = useConversationCardFrames(transport, conversationId);
   const conversationFleets = useConversationFleetArchive(
     transport,
     conversationId,
     session.runs.map((run) => run.runId),
     subagentProjection.fleets,
+    cardFrames,
   );
   const transcriptFleets = useMemo(
     () =>
@@ -1966,6 +1996,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     session.runs.map((run) => run.runId),
     toolCalls,
+    cardFrames,
   );
 
   // The agent's checklist, projected off the SAME `session.events` (FR-3.3 — a
