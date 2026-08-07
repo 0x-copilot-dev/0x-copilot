@@ -12,7 +12,6 @@ from agent_runtime.capabilities.skills.manifest import (
     SkillManifestParser,
     SkillManifestReader,
 )
-from agent_runtime.capabilities.skills.policy import SkillAccessPolicy
 from agent_runtime.capabilities.skills.sources import (
     ConfiguredSkill,
     SkillSource,
@@ -52,12 +51,6 @@ class SkillPolicyTestMixin:
             ),
             source=source,
             skill_directory=tmp_path / self.Paths.SKILLS / self.Paths.RESEARCH_PLAN,
-        )
-
-    def main_agent_policy(self, skill: ConfiguredSkill) -> SkillAccessPolicy:
-        return SkillAccessPolicy.for_main_agent(
-            allowed_sources={skill.source.path},
-            allowed_tools={self.Names.DOC_SEARCH},
         )
 
 

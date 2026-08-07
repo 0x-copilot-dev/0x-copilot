@@ -7,8 +7,8 @@ tries to pass an identifier, path, tenant, or other unbounded value.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from datetime import UTC, datetime
 import re
 
 import pytest
@@ -34,16 +34,6 @@ from agent_runtime.surfaces_v2.repair_reconciliation import (
     RepairPlanner,
     RepairPlanningRequest,
     RepairSnapshotRecord,
-)
-from agent_runtime.surfaces_v2.retention import (
-    RetentionCandidate,
-    RetentionCandidateKind,
-    RetentionCandidateState,
-    RetentionEnumerationCoverage,
-    RetentionPlanner,
-    RetentionPlanningPolicy,
-    RetentionPlanningRequest,
-    RetentionReferenceEnumeration,
 )
 from copilot_audit_chain import AuditChainSigner
 
@@ -195,44 +185,6 @@ def test_untrusted_metric_inputs_are_collapsed_to_closed_labels(
         attributes == {"boundary": "other", "reason": "other", "enforcement": "unknown"}
         for attributes in emitted
     )
-
-
-def test_retention_planner_emits_due_lag_without_candidate_or_tenant() -> None:
-    metrics = _RecordingMetrics()
-    candidate = RetentionCandidate(
-        candidate_id="candidate_1",
-        tenant_id="tenant_1",
-        kind=RetentionCandidateKind.ARTIFACT_BLOB,
-        state=RetentionCandidateState.ACTIVE,
-        retention_expires_at=_NOW - timedelta(hours=2),
-        enumeration=RetentionReferenceEnumeration(
-            coverage=RetentionEnumerationCoverage.COMPLETE_TENANT,
-        ),
-    )
-    request = RetentionPlanningRequest(
-        tenant_id="tenant_1",
-        snapshot_id="snapshot_1",
-        as_of=_NOW,
-        policy=RetentionPlanningPolicy(physical_grace_period=timedelta(hours=1)),
-        candidates=(candidate,),
-    )
-
-    plan = RetentionPlanner(metrics=metrics).plan(request)  # type: ignore[arg-type]
-
-    assert plan.decisions[0].state.value == "logical_tombstone_only"
-    assert metrics.plan_successes[0]["planner"] == "retention"
-    decision = metrics.plan_successes[0]["decisions"]
-    assert isinstance(decision, Sequence)
-    assert decision[0].candidate_kind == "artifact_blob"
-    assert metrics.retention_lags == [
-        {
-            "candidate_kind": "artifact_blob",
-            "stage": "tombstone_due",
-            "elapsed_seconds": 7200.0,
-        }
-    ]
-    assert "candidate_1" not in repr(metrics.plan_successes)
-    assert "tenant_1" not in repr(metrics.plan_successes)
 
 
 def test_repair_planner_emits_effect_reconcile_backlog_only() -> None:

@@ -29,15 +29,6 @@ from agent_runtime.capabilities.operations.disposition import (
     PresentationDispositionPolicy,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
-from agent_runtime.capabilities.operations.tree import (
-    OperationNode,
-    OperationNodeStatus,
-    OperationTree,
-    OperationTreeEvent,
-    OperationTreeProjection,
-    OperationUsageRecord,
-    OperationUsageTotals,
-)
 
 __all__ = (
     "GateResolution",
@@ -58,13 +49,6 @@ __all__ = (
     "OperationPresentationOutcome",
     "OperationRawResult",
     "OperationResultSummary",
-    "OperationNode",
-    "OperationNodeStatus",
-    "OperationTree",
-    "OperationTreeEvent",
-    "OperationTreeProjection",
-    "OperationUsageRecord",
-    "OperationUsageTotals",
     "PresentationDispositionPolicy",
     "PresentationPlan",
     "ProposedEffect",

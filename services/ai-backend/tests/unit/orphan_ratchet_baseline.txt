@@ -23,33 +23,11 @@
 # Regenerate the current set with:
 #   python3 tools/ai-backend-smells/orphans.py services/ai-backend
 # Format: one dotted module path per line, sorted.
-agent_runtime.api.inbox_fallback
-agent_runtime.capabilities.browser.operation_adapter
-agent_runtime.capabilities.dataflow.validator
 agent_runtime.capabilities.mcp.credentials.backend
-agent_runtime.capabilities.operations.tree
-agent_runtime.capabilities.render_adapter_generator.capability
-agent_runtime.capabilities.render_adapter_generator.config
-agent_runtime.capabilities.skills.policy
-agent_runtime.capabilities.tools.builtin.load_tool
-agent_runtime.capabilities.tools.code_tool_adapter
-agent_runtime.capabilities.tools.privacy
 agent_runtime.capabilities.workspace.patch_plan
-agent_runtime.context.tool_result_admission_gate
 agent_runtime.delegation.subagents.coordination
 agent_runtime.harness_quality.golden_traces
 agent_runtime.harness_quality.operational_corpus
 agent_runtime.observability.context_origin_conformance
-agent_runtime.persistence.encryption
-agent_runtime.persistence.records.approvals
-agent_runtime.persistence.records.audit
-agent_runtime.persistence.records.subagents
-agent_runtime.presentation.lifecycle
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
-agent_runtime.surfaces_v2.retention
-runtime_adapters.file.migration
-runtime_worker.jobs.proposal_extractor
-runtime_worker.jobs.routine_scheduler
-runtime_worker.jobs.todo_extractor
-runtime_worker.jobs.todo_recurrence_materializer
