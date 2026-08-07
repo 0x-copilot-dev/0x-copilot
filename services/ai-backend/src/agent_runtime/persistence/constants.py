@@ -1,4 +1,4 @@
-"""Constants for durable runtime persistence contracts and migrations."""
+"""Constants for durable runtime persistence contracts."""
 
 from __future__ import annotations
 
@@ -69,7 +69,6 @@ class Keys:
 class Values:
     """Known persistence values that should remain stable across adapters."""
 
-    MIGRATION_ID = "0001_agent_runtime_persistence"
     SCHEMA_VERSION = 1
 
     class AggregateType:

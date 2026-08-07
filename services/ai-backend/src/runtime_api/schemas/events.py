@@ -2904,6 +2904,38 @@ class RuntimeEventEnvelope(_RuntimeEventBase):
         )
 
 
+class ConversationCardEventsResponse(RuntimeContract):
+    """Card-bearing frames for EVERY run in a conversation, newest run first.
+
+    Why frames and not folded cards. The transcript is assembled by the renderer
+    over one seq order — ``TurnPartsProjection`` says so explicitly, and refuses
+    to persist cards into the sealed turn for exactly that reason: it would make
+    a second source of truth for card state. That reasoning is right, and this
+    endpoint keeps it. What was actually missing is more mundane: the renderer
+    folds cards from the ACTIVE run's event stream, and a settled run's stream
+    is dropped the moment the client rebinds. So a completed turn lost its tool
+    cards with nowhere to get them back from — not because the fold was wrong,
+    but because the input was gone.
+
+    This hands that input back, scoped to a conversation and filtered to the
+    frames that carry cards, and lets the SAME client fold run over them. No
+    second projection exists, on either side of the wire.
+
+    Each envelope carries its own ``run_id``, which is what lets the renderer
+    anchor a card to the turn that produced it — ``sequence_no`` alone cannot,
+    because every run numbers from 0.
+    """
+
+    events: tuple[RuntimeEventEnvelope, ...]
+    #: Runs whose frames are included, newest first. A run with no card-bearing
+    #: frame still appears here, so the client can tell "this turn ran no tools"
+    #: apart from "this turn's frames were truncated away".
+    run_ids: tuple[str, ...]
+    #: True when older runs were dropped by ``run_limit``. The client renders
+    #: what it got rather than pretending the thread starts there.
+    has_more: bool = False
+
+
 class RuntimeEventReplayResponse(RuntimeContract):
     """Replay response for persisted ordered events."""
 

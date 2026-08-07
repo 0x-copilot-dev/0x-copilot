@@ -9,6 +9,7 @@ function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
   return {
     createdAtMs: 0,
     id: "web-search-1",
+    runId: "run-1",
     result: { source_count: 2 },
     sequenceNo: 2,
     status: "complete",

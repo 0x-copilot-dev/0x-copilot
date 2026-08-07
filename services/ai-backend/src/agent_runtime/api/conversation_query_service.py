@@ -8,6 +8,8 @@ state; returns typed Pydantic responses for HTTP routes and the SSE adapter.
 
 from __future__ import annotations
 
+from typing import Final
+
 import base64
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -40,6 +42,9 @@ from agent_runtime.surfaces_v2.receipt_export_v2 import (
 from copilot_audit_chain import AuditChainSigner
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    RuntimeEventEnvelope,
+    RuntimeApiEventType,
+    ConversationCardEventsResponse,
     ActiveRunCountResponse,
     AgentRunStatus,
     ConversationBucket,
@@ -673,6 +678,80 @@ class ConversationQueryService:
             latest_sequence_no=latest_sequence_no,
             run_status=run.status,
             has_more=False,
+        )
+
+    #: The frames a CARD is folded from — tool calls and subagent fleets, the
+    #: two families the transcript rebuilds for a settled turn. Deliberately NOT
+    #: every visible event: this endpoint exists so a completed turn can show
+    #: its cards, and shipping whole ledgers back is the per-run replay it
+    #: replaces. Kept beside the client folds it feeds (``projectToolCalls`` and
+    #: ``projectSubagents``) — if either learns a new frame, add it here, and if
+    #: a THIRD card family appears it belongs here rather than in a third
+    #: endpoint.
+    _CARD_EVENT_TYPES: Final = frozenset(
+        {
+            RuntimeApiEventType.TOOL_CALL_STARTED,
+            RuntimeApiEventType.TOOL_CALL_DELTA,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
+            RuntimeApiEventType.TOOL_RESULT,
+            RuntimeApiEventType.SUBAGENT_FLEET_STARTED,
+            RuntimeApiEventType.SUBAGENT_FLEET_FINISHED,
+        }
+    )
+
+    async def list_conversation_card_events(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        run_limit: int,
+    ) -> ConversationCardEventsResponse:
+        """Return card-bearing frames for a conversation's runs, newest run first.
+
+        A settled turn's tool cards live only in its run's event stream, which
+        the client drops when it rebinds to the next run — so a completed turn
+        rendered bare and could not recover. This gives the renderer that input
+        back for the whole conversation, filtered to the frames cards are folded
+        from, so the fold stays where it already is instead of being duplicated
+        server-side (see :class:`ConversationCardEventsResponse`).
+
+        Scope is checked once, on the CONVERSATION: every run returned belongs to
+        it by construction, so a per-run re-check would be a round-trip that can
+        only ever agree with the first one.
+        """
+
+        await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        bounded = min(max(1, run_limit), Values.MAX_MESSAGE_LIMIT)
+        # One extra, only to answer `has_more` honestly — a client that renders
+        # a truncated thread as if it were the whole thread is worse than one
+        # that knows it is truncated.
+        records = await self._persistence.list_runs_for_conversation(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            limit=bounded + 1,
+        )
+        has_more = len(records) > bounded
+        kept = tuple(records[:bounded])
+
+        collected: list[RuntimeEventEnvelope] = []
+        for record in kept:
+            events = await self._event_store.list_events_after(
+                org_id=org_id,
+                run_id=record.run_id,
+                after_sequence=0,
+            )
+            collected.extend(
+                event for event in events if event.event_type in self._CARD_EVENT_TYPES
+            )
+        return ConversationCardEventsResponse(
+            events=tuple(collected),
+            run_ids=tuple(record.run_id for record in kept),
+            has_more=has_more,
         )
 
     async def list_run_surfaces(

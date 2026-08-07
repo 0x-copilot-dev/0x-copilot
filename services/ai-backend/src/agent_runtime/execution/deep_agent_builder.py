@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
 from langchain.agents.middleware import AgentMiddleware
@@ -23,6 +23,7 @@ from agent_runtime.execution.checkpointing import (
 )
 from agent_runtime.execution.contracts import (
     ModelConfig,
+    ModelReasoningConfig,
     ModelReasoningDisplay,
     ModelReasoningEffort,
     ModelThinkingMode,
@@ -741,6 +742,44 @@ def _merge_compat_reasoning_kwargs(
         kwargs["extra_body"] = {"reasoning": payload}
 
 
+#: The generation that replaced manual thinking with adaptive. The two modes
+#: partition STRICTLY on this boundary — measured against the live API:
+#:
+#:     claude-sonnet-5    adaptive OK   enabled 400 ("not supported for this model")
+#:     claude-sonnet-4-5  adaptive 400  enabled OK
+#:     claude-haiku-4-5   adaptive 400  enabled OK
+#:
+#: so one boundary answers both directions, and neither mode is safe to send
+#: blind.
+_ADAPTIVE_THINKING_GENERATION: Final = (4, 7)
+
+#: Anthropic's floor for `thinking.budget_tokens` in manual mode.
+_ANTHROPIC_MIN_THINKING_BUDGET: Final = 1024
+
+
+def _anthropic_generation(model_name: str) -> tuple[int, int] | None:
+    """``(major, minor)`` for a Claude model name, or None if unrecognised.
+
+    Parses the VERSION rather than substring-matching it. A bare ``"-5" in
+    name`` test also matches ``claude-sonnet-4-5``, which is a different
+    generation with the opposite thinking contract.
+
+    None means "do not touch the caller's mode". Both predicates below are
+    false for an unrecognised name, so an unknown model keeps exactly what it
+    was configured with rather than being coerced on a guess.
+    """
+
+    normalized = model_name.strip().lower().replace("_", "-")
+    if not normalized.startswith("claude"):
+        return None
+    match = re.search(r"claude-[a-z]+-(\d+)(?:[-.](\d+))?", normalized)
+    if match is None:
+        return None
+    major = int(match.group(1))
+    minor = int(match.group(2)) if match.group(2) is not None else 0
+    return major, minor
+
+
 def _anthropic_is_adaptive_only(model_name: str) -> bool:
     """Whether this Claude model REJECTS manual (`type: "enabled"`) thinking.
 
@@ -748,26 +787,58 @@ def _anthropic_is_adaptive_only(model_name: str) -> bool:
     4.6 generation and returns a 400 on 4.7 and later, where adaptive thinking
     plus ``output_config.effort`` replaced it. A family predicate rather than a
     list so a new model in a known generation does not silently reintroduce the
-    failure; unknown names keep the caller's mode, because guessing "adaptive"
-    for a model that only supports manual would break it the other way.
+    failure.
     """
 
-    normalized = model_name.strip().lower().replace("_", "-")
-    if not normalized.startswith("claude"):
-        return False
-    # Parse the VERSION rather than substring-matching it. A bare `"-5" in name`
-    # test also matches `claude-sonnet-4-5`, which supports manual thinking
-    # perfectly well — coercing it to adaptive breaks a working model in the
-    # opposite direction, which is the failure this predicate exists to avoid.
-    match = re.search(r"claude-[a-z]+-(\d+)(?:[-.](\d+))?", normalized)
-    if match is None:
-        return False
-    major = int(match.group(1))
-    minor = int(match.group(2)) if match.group(2) is not None else 0
-    if major >= 5:
-        return True
-    # 4.7 dropped manual thinking; 4.6 deprecated it but still accepts it.
-    return major == 4 and minor >= 7
+    generation = _anthropic_generation(model_name)
+    return generation is not None and generation >= _ADAPTIVE_THINKING_GENERATION
+
+
+def _anthropic_rejects_adaptive(model_name: str) -> bool:
+    """Whether this Claude model REJECTS adaptive thinking — the mirror.
+
+    The half that was missing. ``_anthropic_is_adaptive_only`` only ever
+    coerced manual UP to adaptive; nothing coerced adaptive DOWN, and adaptive
+    is what an unconfigured deployment gets (``_anthropic_model_kwargs``
+    defaults to it, and ``ModelSelection`` synthesises a bare
+    ``ModelReasoningConfig()`` for every Anthropic thinking model). So a
+    packaged desktop with no reasoning env sent ``type: "adaptive"`` to Claude
+    Haiku 4.5 and failed EVERY run on it with
+
+        400 — "adaptive thinking is not supported on this model"
+
+    while Sonnet 5 was fine, which is why it survived review.
+    """
+
+    generation = _anthropic_generation(model_name)
+    return generation is not None and generation < _ADAPTIVE_THINKING_GENERATION
+
+
+def _anthropic_manual_budget(
+    reasoning: ModelReasoningConfig, max_output_tokens: int | None
+) -> int | None:
+    """A ``budget_tokens`` the API will accept, or None when there is no room.
+
+    Two constraints, both measured rather than assumed:
+
+    * manual thinking REQUIRES the field — omitting it is
+      ``400 thinking.enabled.budget_tokens: Field required``, which is what a
+      coercion to manual would have hit had it just reused the adaptive config
+      (adaptive forbids ``budget_tokens``, so that config never carries one);
+    * ``max_tokens`` must be STRICTLY greater than it — equal is
+      ``400 `max_tokens` must be greater than `thinking.budget_tokens```.
+
+    With no ``max_tokens`` on the request there is nothing to collide with, so
+    the configured budget stands.
+    """
+
+    budget = reasoning.budget_tokens or _ANTHROPIC_MIN_THINKING_BUDGET
+    if max_output_tokens is None:
+        return budget
+    if max_output_tokens <= _ANTHROPIC_MIN_THINKING_BUDGET:
+        # No room to think and answer. Thinking off beats a run that 400s.
+        return None
+    return min(budget, max_output_tokens - 1)
 
 
 def _anthropic_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
@@ -794,9 +865,24 @@ def _anthropic_model_kwargs(model_config: ModelConfig) -> dict[str, object]:
         model_config.model_name
     ):
         mode = ModelThinkingMode.ADAPTIVE
+    # ...and the mirror. Adaptive is the default when nothing configured a mode,
+    # so this is the branch an out-of-the-box deployment actually takes on every
+    # pre-4.7 Claude — Haiku 4.5, Sonnet 4.5, Opus 4.5.
+    elif mode is ModelThinkingMode.ADAPTIVE and _anthropic_rejects_adaptive(
+        model_config.model_name
+    ):
+        mode = ModelThinkingMode.ENABLED
+
     thinking: dict[str, object] = {"type": mode.value}
-    if mode is ModelThinkingMode.ENABLED and reasoning.budget_tokens is not None:
-        thinking["budget_tokens"] = reasoning.budget_tokens
+    if mode is ModelThinkingMode.ENABLED:
+        # Unconditional, not `if budget is not None`: manual thinking 400s
+        # without the field, and a config that arrived here by coercion FROM
+        # adaptive can never carry one (the contract validator forbids the
+        # combination).
+        budget = _anthropic_manual_budget(reasoning, model_config.max_output_tokens)
+        if budget is None:
+            return {}
+        thinking["budget_tokens"] = budget
     # `display` governs whether the thinking SUMMARY comes back at all, and it
     # defaults to "omitted" on Sonnet 5 / Opus 5 / Fable 5 — which streams
     # thinking blocks with an empty field and emits no thinking deltas. We were

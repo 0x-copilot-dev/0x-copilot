@@ -193,7 +193,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     catalogRefreshKey,
     conversationId,
     conversationModel,
-    filing,
+    // mid-conversation: the create-only empty state is gone, the pill stays.
+    useMemo(
+      () =>
+        filing === undefined
+          ? undefined
+          : { ...filing, hasSentFirstMessage: true },
+      [filing],
+    ),
   );
 
   // Provider-key writes must re-drive the catalog. The model popover's inline

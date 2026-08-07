@@ -19,7 +19,11 @@ export {
   type InlineDiffState,
   type TcInlineDiffProps,
 } from "./thread-canvas";
-export { TransportProvider, useTransport } from "./providers/TransportProvider";
+export {
+  TransportProvider,
+  useOptionalTransport,
+  useTransport,
+} from "./providers/TransportProvider";
 export {
   ArtifactDownloadAction,
   // `ArtifactEditor` was here and is deleted — the raw-markdown `<textarea>`

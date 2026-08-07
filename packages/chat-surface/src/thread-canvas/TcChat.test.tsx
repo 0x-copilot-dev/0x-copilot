@@ -698,6 +698,10 @@ function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
     title: "Search the web",
     status: "running",
     sequenceNo: 3,
+    // Unlabelled by default, which the transcript reads as "the active run" —
+    // byte-identical to the behaviour before cards carried a run at all. Tests
+    // that care about anchoring pass `runId` explicitly.
+    runId: null,
     createdAtMs: 1716000030000,
     ...overrides,
   };
@@ -2470,5 +2474,187 @@ describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () =
       ),
     );
     expect(screen.getAllByTestId("tool-run-group")).toHaveLength(2);
+  });
+});
+
+// CARDS STAY WITH THEIR TURN.
+//
+// Reported from the live app: ask a question, get an answer with a tool card;
+// ask a second question, and the FIRST turn's card has moved down under the
+// second one. By the third turn every card seen so far was piled on the newest
+// message and every earlier turn was bare.
+//
+// The cause was that `sequenceNo` is an offset, not an address — each run
+// numbers from 0, so run A's seq 3 and run B's seq 3 sorted as one moment. The
+// transcript merged every card into a single seq order on that basis. Messages
+// were always guarded (`message.run_id === activeRunId`); cards had no run
+// identity to be guarded by.
+describe("TcChat — a card belongs to the turn that produced it", () => {
+  const twoTurns: readonly TcChatMessage[] = [
+    {
+      message_id: "u1",
+      role: "user",
+      parts: [{ type: "text", text: "are there any csv in the folder" }],
+      run_id: "runA",
+    },
+    {
+      message_id: "a1",
+      role: "assistant",
+      run_id: "runA",
+      parts: [{ type: "text", text: "Yes, there are two CSV files", seq: 9 }],
+    },
+    {
+      message_id: "u2",
+      role: "user",
+      parts: [{ type: "text", text: "what's in the csvs" }],
+      run_id: "runB",
+    },
+    {
+      message_id: "a2",
+      role: "assistant",
+      run_id: "runB",
+      parts: [{ type: "text", text: "They contain benchmark rows", seq: 9 }],
+    },
+  ];
+
+  // Colliding seqs ON PURPOSE: this is the real shape, and the bug is invisible
+  // unless the two runs number their cards the same way — which they always do.
+  const glob = toolCall({
+    id: "glob",
+    title: "Calling glob",
+    status: "complete",
+    sequenceNo: 3,
+    runId: "runA",
+  });
+  const readFile = toolCall({
+    id: "read_file",
+    title: "Calling read_file",
+    status: "complete",
+    sequenceNo: 3,
+    runId: "runB",
+  });
+
+  function order(): string[] {
+    return [...screen.getByTestId("tc-chat-messages").querySelectorAll("li")]
+      .map((li) => (li.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter((text) => text.length > 0);
+  }
+  const indexOf = (needle: string): number =>
+    order().findIndex((text) => text.includes(needle));
+
+  it("keeps the settled turn's card above the next question", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          activeRunId="runB"
+          messages={twoTurns}
+          toolCalls={[glob, readFile]}
+        />,
+      ),
+    );
+
+    const answer1 = indexOf("Yes, there are two CSV files");
+    const globCard = indexOf("Calling glob");
+    const question2 = indexOf("what's in the csvs");
+    const readCard = indexOf("Calling read_file");
+
+    for (const [label, at] of [
+      ["answer 1", answer1],
+      ["glob card", globCard],
+      ["question 2", question2],
+      ["read_file card", readCard],
+    ] as const) {
+      expect({ label, rendered: at >= 0 }).toEqual({ label, rendered: true });
+    }
+    // Turn 1's card sits with turn 1 — ABOVE the second question, which is the
+    // whole claim. Before the fix it rendered below it, next to turn 2's card.
+    expect(globCard).toBeGreaterThan(answer1);
+    expect(globCard).toBeLessThan(question2);
+    // …and turn 2's card stays with turn 2.
+    expect(readCard).toBeGreaterThan(question2);
+  });
+
+  it("does not pile a third turn's cards onto the newest message", () => {
+    // The accumulation half of the report: by turn 3 every card seen so far was
+    // under the last message. Each card must sit after its own question.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          activeRunId="runC"
+          messages={[
+            ...twoTurns,
+            {
+              message_id: "u3",
+              role: "user",
+              parts: [{ type: "text", text: "write a random csv" }],
+              run_id: "runC",
+            },
+            {
+              message_id: "a3",
+              role: "assistant",
+              run_id: "runC",
+              parts: [{ type: "text", text: "Written", seq: 9 }],
+            },
+          ]}
+          toolCalls={[
+            glob,
+            readFile,
+            toolCall({
+              id: "write_file",
+              title: "Calling write_file",
+              status: "complete",
+              sequenceNo: 3,
+              runId: "runC",
+            }),
+          ]}
+        />,
+      ),
+    );
+
+    expect(indexOf("Calling glob")).toBeLessThan(indexOf("what's in the csvs"));
+    expect(indexOf("Calling read_file")).toBeLessThan(
+      indexOf("write a random csv"),
+    );
+    expect(indexOf("Calling write_file")).toBeGreaterThan(
+      indexOf("write a random csv"),
+    );
+  });
+
+  it("treats a card with no run as the active run's, as before", () => {
+    // Back-compat: everything upstream of this change emitted cards with no run
+    // identity at all, and the transcript assumed a single run. An unlabelled
+    // card must keep interleaving rather than vanish.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          activeRunId="runB"
+          messages={twoTurns}
+          toolCalls={[
+            toolCall({
+              id: "legacy",
+              title: "Calling legacy",
+              status: "complete",
+              sequenceNo: 3,
+              runId: null,
+            }),
+          ]}
+        />,
+      ),
+    );
+    expect(indexOf("Calling legacy")).toBeGreaterThan(
+      indexOf("what's in the csvs"),
+    );
   });
 });

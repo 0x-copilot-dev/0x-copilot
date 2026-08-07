@@ -101,6 +101,21 @@ export interface ProjectFilingChipProps {
   readonly onCreateProject?: () => void;
   /** Read-only chrome (shared-chat recipient view, in-flight write). */
   readonly disabled?: boolean;
+  /**
+   * Has this chat already sent a message? Mirrors the composer prop of the same
+   * name.
+   *
+   * Once the chat is under way the zone renders only when it has a FACT to
+   * state — i.e. the chat IS filed. Before that it renders whatever helps you
+   * decide: "New project" with no projects yet, the pill otherwise. The two
+   * things it withdraws mid-conversation are a chore ("+ New project") and an
+   * absence ("No project"); both are setup, and setup belongs before the work,
+   * which is the same rule that takes the folder bar away after message one.
+   *
+   * Defaults to `false` (pre-first-message), so a caller that has not thought
+   * about it gets the affordance rather than silently losing it.
+   */
+  readonly hasSentFirstMessage?: boolean;
   /** Host slot for the menu popover (portal + outside-click). */
   readonly renderMenu?: (args: ProjectFilingMenuSlotArgs) => ReactNode;
 }
@@ -188,6 +203,7 @@ export function ProjectFilingChip(
     onChange,
     onCreateProject,
     disabled = false,
+    hasSentFirstMessage = false,
     renderMenu,
   } = props;
 
@@ -318,6 +334,20 @@ export function ProjectFilingChip(
     ) : open ? (
       <div style={inlineMenuStyle}>{menuBody}</div>
     ) : null;
+
+  // The zone is PRE-FIRST-MESSAGE ONLY, in both Studio and Focus.
+  //
+  // Filing is orientation: you decide where work belongs as you start it, the
+  // same moment you decide which folder the agent may read. Once a transcript
+  // exists the row is chrome under the thing you are actually reading, and both
+  // of its states earn their place badly — "+ New project" is a chore, and
+  // "FILED UNDER · No project" is an absence dressed as a decision.
+  //
+  // This mirrors the folder bar exactly (PRD-FS-10 §4.1), which leaves for the
+  // same reason. Re-filing an in-progress chat is NOT lost with it: the Chats
+  // row's ⋯ → "Move to project" owns that, which is the surface whose job is
+  // acting on a chat you are not currently in.
+  if (hasSentFirstMessage) return null;
 
   // ZERO PROJECTS is not "filed under nothing" — it is "you have none yet", and
   // the only useful thing to offer is the way to make one. The picker's own

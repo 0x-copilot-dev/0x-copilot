@@ -1,4 +1,18 @@
-
+# Orphan-module ratchet baseline for tools/ai-backend-smells/orphans.py.
+# Every line is a module in services/ai-backend/src that NOTHING in src imports:
+# built, usually tested, and never reached at runtime. Ten such modules sat
+# invisible for up to 2.5 months because "landed, not yet wired" is a state this
+# repo had no ledger for (docs/plan/ai-backend-consolidation/HANDOFF.md §4-5).
+#
+# These are DEBT, not approval. The ratchet (tests/unit/test_orphan_ratchet.py)
+# fails when a module NOT listed here becomes an orphan — so a new unwired
+# module can no longer land unnoticed.
+# To land a component ahead of its wiring, add its module here AND record what
+# it waits on in docs/audit/ai-backend-smells/PENDING-WIRINGS.md (T1.1). When you
+# wire an orphan up (or delete it), prune its line here in the same change — the
+# list is meant to shrink, and the ratchet now FAILS on a line it can no longer
+# reproduce, so a stale entry can no longer ride along silently.
+#
 # This file is the MODULE-scale baseline only, and its format admits nothing
 # else: one dotted module path per line. The same "built but never reached"
 # defect at function scale — a ledger event type with readers and no producer,
@@ -6,34 +20,14 @@
 # ratcheted by the same test file against READER_ONLY_EVENTS in
 # tests/unit/ledger_event_producers.py, where an entry must carry its reason.
 #
-#   python3 tools/ai-backend-smells/orphans.py services/ai-backend
-# Every line is a module in services/ai-backend/src that NOTHING in src imports:
-# Format: one dotted module path per line, sorted.
-# Orphan-module ratchet baseline for tools/ai-backend-smells/orphans.py.
 # Regenerate the current set with:
-# These are DEBT, not approval. The ratchet (tests/unit/test_orphan_ratchet.py)
-# To land a component ahead of its wiring, add its module here AND record what
-# built, usually tested, and never reached at runtime. Ten such modules sat
-# fails when a module NOT listed here becomes an orphan — so a new unwired
-# invisible for up to 2.5 months because "landed, not yet wired" is a state this
-# it waits on in docs/audit/ai-backend-smells/PENDING-WIRINGS.md (T1.1). When you
-# list is meant to shrink.
-# module can no longer land unnoticed.
-# repo had no ledger for (docs/plan/ai-backend-consolidation/HANDOFF.md §4-5).
-# wire an orphan up (or delete it), prune its line here in the same change — the
-agent_runtime.api.inbox_fallback
+#   python3 tools/ai-backend-smells/orphans.py services/ai-backend
+# Format: one dotted module path per line, sorted.
 agent_runtime.capabilities.mcp.credentials.backend
-agent_runtime.capabilities.tools.code_tool_adapter
-agent_runtime.capabilities.tools.privacy
 agent_runtime.capabilities.workspace.patch_plan
-agent_runtime.context.tool_result_admission_gate
+agent_runtime.delegation.subagents.coordination
+agent_runtime.harness_quality.golden_traces
 agent_runtime.harness_quality.operational_corpus
 agent_runtime.observability.context_origin_conformance
 agent_runtime.release.e2_final_conformance
 agent_runtime.release.promotion
-agent_runtime.surfaces_v2.retention
-runtime_worker.jobs.encrypt_existing_columns
-runtime_worker.jobs.proposal_extractor
-runtime_worker.jobs.routine_scheduler
-runtime_worker.jobs.todo_extractor
-runtime_worker.jobs.todo_recurrence_materializer

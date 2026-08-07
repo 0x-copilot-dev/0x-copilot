@@ -10,21 +10,9 @@ from agent_runtime.presentation.policy import (
     PresentationPolicyDecision,
     PresentationPolicyInput,
 )
-from agent_runtime.presentation.lifecycle import (
-    CanvasLifecycleProjection,
-    CanvasLifecycleState,
-    CanvasProjection,
-    CanvasSubject,
-    CanvasSubjectKind,
-)
 
 __all__ = (
     "PresentationPolicy",
     "PresentationPolicyDecision",
     "PresentationPolicyInput",
-    "CanvasLifecycleProjection",
-    "CanvasLifecycleState",
-    "CanvasProjection",
-    "CanvasSubject",
-    "CanvasSubjectKind",
 )
