@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local email surface + quiet block chrome</title>
+    <style>
+      :root {
+        --bg: #09090b;
+        --surface: #111114;
+        --surface-2: #16161a;
+        --raised: #1d1d23;
+        --border: rgba(255, 255, 255, 0.06);
+        --border-2: rgba(255, 255, 255, 0.1);
+        --text: #ececf1;
+        --muted: #98989f;
+        --subtle: #64646d;
+        --accent: #5fb2ec;
+        --jade: #57c785;
+        --ember: #f0764f;
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+        --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 13px;
+        line-height: 1.55;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap {
+        max-width: 1000px;
+        margin: 0 auto;
+        padding: 52px 28px 96px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0 0 8px;
+      }
+      .lede {
+        color: var(--muted);
+        max-width: 66ch;
+        margin: 0 0 40px;
+      }
+      h2 {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--subtle);
+        margin: 0 0 6px;
+      }
+      .t {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 6px;
+        letter-spacing: -0.005em;
+      }
+      .n {
+        color: var(--muted);
+        margin: 0 0 18px;
+        max-width: 68ch;
+      }
+      section {
+        margin: 0 0 50px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .doc {
+        padding: 18px 20px;
+      }
+      .blk {
+        position: relative;
+        padding: 3px 0;
+      }
+      .blk h3 {
+        font-size: 17px;
+        margin: 0 0 8px;
+        font-weight: 600;
+      }
+      .blk p {
+        margin: 0 0 10px;
+        color: var(--text);
+      }
+      /* crowded (today) */
+      .strip {
+        display: flex;
+        gap: 14px;
+        padding: 5px 0 9px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      /* quiet (proposed) */
+      .gutter {
+        position: absolute;
+        left: -30px;
+        top: 3px;
+        display: flex;
+        gap: 2px;
+        opacity: 0;
+        transition: opacity 0.12s;
+      }
+      .blk:hover .gutter,
+      .blk.hovered .gutter {
+        opacity: 1;
+      }
+      .gbtn {
+        width: 19px;
+        height: 19px;
+        border-radius: 4px;
+        border: 1px solid var(--border-2);
+        background: var(--raised);
+        color: var(--subtle);
+        font-size: 11px;
+        line-height: 17px;
+        text-align: center;
+        cursor: pointer;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 4px 0 8px;
+      }
+      th {
+        text-align: left;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: var(--subtle);
+        font-weight: 600;
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      td {
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border);
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      .cell-hint {
+        outline: 1px dashed rgba(95, 178, 236, 0.35);
+        outline-offset: -1px;
+        border-radius: 3px;
+      }
+      .flag {
+        border-left: 2px solid var(--ember);
+        padding: 2px 0 2px 12px;
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        max-width: 70ch;
+      }
+      .flag b {
+        color: var(--ember);
+        font-weight: 600;
+      }
+      .good {
+        border-left-color: var(--jade);
+      }
+      .good b {
+        color: var(--jade);
+      }
+      /* email */
+      .mail-hdr {
+        display: grid;
+        grid-template-columns: 58px 1fr;
+        gap: 2px 10px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px;
+      }
+      .mail-hdr .k {
+        color: var(--subtle);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        padding-top: 3px;
+      }
+      .mail-hdr .v {
+        color: var(--text);
+      }
+      .mail-body {
+        padding: 16px 18px;
+        line-height: 1.65;
+      }
+      .del {
+        background: color-mix(in oklab, var(--ember) 20%, transparent);
+        color: #ffc4b0;
+        text-decoration: line-through;
+        border-radius: 2px;
+        padding: 0 1px;
+      }
+      .ins {
+        background: color-mix(in oklab, var(--jade) 20%, transparent);
+        color: #bff0d2;
+        border-radius: 2px;
+        padding: 0 1px;
+      }
+      .caret {
+        display: inline-block;
+        width: 2px;
+        height: 1em;
+        background: var(--accent);
+        vertical-align: -2px;
+        animation: bl 1s steps(2) infinite;
+      }
+      @keyframes bl {
+        to {
+          opacity: 0;
+        }
+      }
+      .foot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 18px;
+        border-top: 1px solid var(--border);
+        background: var(--surface-2);
+      }
+      .btn {
+        font-size: 12px;
+        padding: 5px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border-2);
+        background: var(--raised);
+        color: var(--text);
+      }
+      .btn.p {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #08131d;
+        font-weight: 600;
+      }
+      .push {
+        margin-left: auto;
+      }
+      .mono {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--subtle);
+      }
+      .chip {
+        font-size: 10.5px;
+        padding: 1.5px 7px;
+        border-radius: 999px;
+        border: 1px solid var(--border-2);
+        color: var(--muted);
+      }
+      .chip.w {
+        color: var(--ember);
+        border-color: color-mix(in oklab, var(--ember) 40%, transparent);
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: 42px 0;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Quiet chrome, and what email looks like</h1>
+      <p class="lede">
+        Two things at once, because they are the same problem: chrome competing
+        with content. Every block currently carries five always-visible buttons,
+        and email — the surface where the content matters most — would be
+        unreadable under that.
+      </p>
+
+      <!-- ============ 1. today ============ -->
+      <section>
+        <h2>Today</h2>
+        <p class="t">Five buttons per block, always drawn</p>
+        <div class="card">
+          <div class="doc">
+            <div class="blk">
+              <h3>Release checklist</h3>
+              <div class="strip">
+                Move up · Move down · Add paragraph · Add table · Delete
+              </div>
+            </div>
+            <div class="blk">
+              <table>
+                <tr>
+                  <th>Item</th>
+                  <th>Owner</th>
+                  <th>Status</th>
+                </tr>
+                <tr>
+                  <td>Freeze the branch</td>
+                  <td>Arun M.</td>
+                  <td>Done</td>
+                </tr>
+                <tr>
+                  <td>Smoke the packaged app</td>
+                  <td>Riya S.</td>
+                  <td>In progress</td>
+                </tr>
+              </table>
+              <div class="strip">
+                Add row · Add column · Move up · Move down · Add paragraph · Add
+                table · Delete
+              </div>
+            </div>
+            <div class="blk">
+              <p>Please review each item before the release is approved.</p>
+              <div class="strip">
+                Move up · Move down · Add paragraph · Add table · Delete
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="flag">
+          <b>The chrome outweighs the document.</b> Seventeen controls for three
+          blocks of content, none of them the thing you came to read.
+        </p>
+      </section>
+
+      <!-- ============ 2. quiet ============ -->
+      <section>
+        <h2>Proposed</h2>
+        <p class="t">Text is the interface; controls arrive on hover</p>
+        <p class="n">
+          Nothing is removed — every operation stays reachable. It moves to a
+          gutter that appears for the block under the cursor, and to keyboard.
+          The default state of a document is the document.
+        </p>
+        <div class="card">
+          <div class="doc" style="padding-left: 44px">
+            <div class="blk hovered">
+              <span class="gutter"
+                ><span class="gbtn">⋮⋮</span><span class="gbtn">+</span></span
+              >
+              <h3>Release checklist</h3>
+            </div>
+            <div class="blk">
+              <span class="gutter"
+                ><span class="gbtn">⋮⋮</span><span class="gbtn">+</span></span
+              >
+              <table>
+                <tr>
+                  <th>Item</th>
+                  <th>Owner</th>
+                  <th>Status</th>
+                </tr>
+                <tr>
+                  <td class="cell-hint">Freeze the branch</td>
+                  <td>Arun M.</td>
+                  <td>Done</td>
+                </tr>
+                <tr>
+                  <td>Smoke the packaged app</td>
+                  <td>Riya S.</td>
+                  <td>In progress</td>
+                </tr>
+              </table>
+            </div>
+            <div class="blk">
+              <span class="gutter"
+                ><span class="gbtn">⋮⋮</span><span class="gbtn">+</span></span
+              >
+              <p>Please review each item before the release is approved.</p>
+            </div>
+          </div>
+          <div class="foot">
+            <span class="mono">3 blocks</span>
+            <span class="push"></span>
+            <span class="mono">no unsaved edits</span>
+          </div>
+        </div>
+        <p class="flag good">
+          <b>⋮⋮ is drag-to-reorder</b> — replacing Move&nbsp;up / Move&nbsp;down
+          with the gesture people already expect. <b>+</b> opens insert (row,
+          column, paragraph, table). Delete moves into that menu. Row and column
+          controls live at the row and column, on hover — not in a strip under
+          the table.
+        </p>
+      </section>
+
+      <hr />
+
+      <!-- ============ 3. email ============ -->
+      <section>
+        <h2>Email — a local mailbox, no Gmail, no CASA gate</h2>
+        <p class="t">Reading is a table. Writing is the interesting surface.</p>
+        <p class="n">
+          <code>list_messages</code> decodes to rows and renders as any other
+          table — nothing email-specific needed. The surface worth building is
+          the <em>compose</em>, and its shape already exists in the tree:
+          <code>EmailState { to, cc, subject, body }</code> plus a streaming word
+          diff.
+        </p>
+
+        <div class="card">
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              padding: 10px 18px;
+              border-bottom: 1px solid var(--border);
+            "
+          >
+            <span class="mono">EMAIL · DRAFT</span>
+            <span class="chip w">will send</span>
+            <span class="push"></span>
+            <span class="mono">local mailbox</span>
+          </div>
+
+          <div class="mail-hdr">
+            <span class="k">To</span
+            ><span class="v">riya.s@northwind.test</span>
+            <span class="k">Cc</span><span class="v" style="color: var(--subtle)">—</span>
+            <span class="k">Subject</span
+            ><span class="v">Release 2.4 — sign-off needed by Friday</span>
+          </div>
+
+          <div class="mail-body">
+            <p>Hi Riya,</p>
+            <p>
+              The release checklist is
+              <span class="del">nearly done</span>
+              <span class="ins">complete except for the packaged-app smoke test</span
+              >, which is
+              <span class="ins">still assigned to you</span
+              ><span class="del">outstanding</span>. Could you
+              <span class="ins">confirm sign-off by Friday</span
+              ><span class="caret"></span>
+            </p>
+            <p style="color: var(--subtle)">Thanks,<br />Parth</p>
+          </div>
+
+          <div class="foot">
+            <span class="mono">agent is editing the body · 68%</span>
+            <span class="push"></span>
+            <span class="btn">Discard</span>
+            <span class="btn">Edit myself</span>
+            <span class="btn p">Approve &amp; send</span>
+          </div>
+        </div>
+
+        <p class="flag good">
+          <b>You watch it write.</b> Red is removed, green is added, the caret is
+          where it is still typing. Nothing sends until Approve — the same write
+          gate every other connector write goes through.
+        </p>
+        <p class="flag">
+          <b>Email is the sharpest case for the scope bug.</b> "The object you
+          approve is the object that is sent" is an abstraction for a priority
+          field. Here it is literally the message. Today
+          <code>target_args</code> can carry fields the diff never showed — on
+          email that is a <code>Cc</code> you never saw. That is why the fix must
+          be confining the payload to the edited fields, not merely listing more
+          of it.
+        </p>
+        <p class="flag">
+          <b>Nothing mints an <code>email://</code> surface yet.</b> The renderer
+          matches on that URI and no producer emits one. A read produces a table
+          of messages, and there is no gesture that turns "this row" into
+          "compose a reply to it" — that handoff is the actual missing piece,
+          not the renderer.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>
