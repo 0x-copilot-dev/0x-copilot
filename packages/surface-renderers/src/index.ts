@@ -76,6 +76,28 @@ export {
   ARCHETYPE_ADAPTERS,
   IMPLEMENTED_ARCHETYPES,
   registerArchetypeAdapters,
+  // Editable surface Phase 2 — the connector half. A `table://` surface renders
+  // as editable cells when, and only when, the host attached a write-back grant
+  // (`hostConnectorEditor` reads it off the render state). Save STAGES; the
+  // decision is taken at the write gate that already exists.
+  EditableConnectorTable,
+  EDITABLE_ROW_CAP,
+  hostConnectorEditor,
+  asConnectorRow,
+  buildConnectorRowEdits,
+  cellKey,
+  editableCellText,
+  isEditableCell,
+  rowKeyFor,
+  rowsOf,
+  rowTitleFor,
+  type ConnectorEditsResult,
+  type ConnectorFieldChange,
+  type ConnectorRow,
+  type ConnectorRowEdit,
+  type ConnectorSurfaceEditorActions,
+  type EditableConnectorTableProps,
+  type PendingCellEdits,
   RecordRenderer,
   RecordDiffRenderer,
   recordAdapter,

@@ -1599,6 +1599,43 @@ export interface ShapeRequestAccepted {
   status: "requested";
 }
 
+// ---------------------------------------------------------------------------
+// Connector write-back wire types. Save on an edited CONNECTOR-origin surface:
+// `POST /v1/agent/surfaces/{surface_id}/write-back`, which returns the same
+// `StagedWriteView` the stage routes return, with the rows sitting STAGED.
+//
+// It is not an apply and there is no shortcut to one. Execution stays
+// `POST /v1/agent/stages/{stage_id}/apply` — a second, deliberate gesture the
+// user makes at the write gate against a stager this lane does not compose.
+// ---------------------------------------------------------------------------
+
+/** One row's batched cell edits, plus that row exactly as the surface read it.
+ *
+ *  `row` is the provenance half the user did NOT type: the server admits an arg
+ *  bound to a connector-read value (a record id, a scoping key) precisely
+ *  because it appears here. Send the row verbatim — a trimmed copy makes a
+ *  legitimate binding unprovable and the save is refused.
+ *
+ *  `changes[].new` is the value the user typed, VERBATIM. Nothing between the
+ *  cell and the connector re-types it: the model picks the op and maps field
+ *  names, and the staged `target_args` carry this exact value. Do not send a
+ *  display-formatted string here — what is sent is what was typed. */
+export interface SurfaceRowEdit {
+  row_key: string;
+  title: string;
+  row: Readonly<Record<string, unknown>>;
+  changes: readonly RowFieldChange[];
+}
+
+/** Body for `POST /v1/agent/surfaces/{surface_id}/write-back`. `run_id` names
+ *  the run that owns the surface (the canvas is per-run); the connector and the
+ *  read op are folded server-side out of that run's own ledger and are never
+ *  client-declared. */
+export interface SurfaceWriteBackRequest {
+  run_id: string;
+  edits: readonly SurfaceRowEdit[];
+}
+
 /** FR-E2 wording, wire-safe (NEW, A1-defined). Not a ledger event type — a
  * receipt-format construct the E-wave receipt fold assigns per row. */
 export type ReceiptAttribution =

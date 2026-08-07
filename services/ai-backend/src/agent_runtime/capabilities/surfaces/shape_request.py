@@ -51,6 +51,7 @@ from agent_runtime.capabilities.surfaces.generator import (
     GenFailure,
     GenToolDescriptor,
     ShapingCredentials,
+    ShapingModelBuild,
     SurfaceSpecGenerator,
 )
 from agent_runtime.capabilities.surfaces.projector import ShapedSurface
@@ -544,6 +545,12 @@ def build_read_path_shaper(
     cannot build a shaping model" is precisely shaping being off, and keeping the
     degrade next to the thing that fails beats relying on every caller to wrap
     the call.
+
+    ``credentials`` carries the run's BYOK material into that construction, and
+    it is not optional in practice: on a packaged desktop install the process
+    env holds no provider key by design, so a builder called without it builds
+    a model with no credential, fails, and turns rung 5 off for every run. The
+    caller that holds the run's hydrated context (the worker) must pass it.
     """
 
     model_id = ShapingModelResolver.resolve(environ=environ, run_provider=run_provider)
@@ -553,28 +560,22 @@ def build_read_path_shaper(
         from agent_runtime.capabilities.surfaces.generator import (  # noqa: PLC0415
             LangChainSpecCompletion,
         )
-        from agent_runtime.execution.deep_agent_builder import (  # noqa: PLC0415
-            build_chat_model_from_id,
-        )
 
-        try:
-            extra_kwargs = (credentials or ShapingCredentials()).model_kwargs_for(
-                model_id
-            )
-            model = build_chat_model_from_id(
-                model_id, extra_kwargs=extra_kwargs or None
-            )
-        except Exception:  # noqa: BLE001 - display-only upgrade; never fail a run
-            # No exc_info and no kwargs in the line: the failure is routinely a
-            # missing credential, and the kwargs hold key material.
+        build = ShapingModelBuild.attempt(model_id=model_id, credentials=credentials)
+        if not build.ok:
+            # No exc_info and no kwargs in the line — the kwargs hold key
+            # material. ``describe()`` carries the failure CLASS and the
+            # exception type name, which is what separates "nobody gave this
+            # run a key" from "the model id is wrong".
             _LOGGER.warning(
-                "%s shaping_model_unavailable model=%s: rung 5 is off for this "
+                "%s shaping_model_unavailable model=%s %s: rung 5 is off for this "
                 "run; surfaces still render from the deterministic floor",
                 _SHAPER_PREFIX,
                 model_id,
+                build.describe(),
             )
             return None
-        completion = LangChainSpecCompletion(model=model, model_id=model_id)
+        completion = LangChainSpecCompletion(model=build.model, model_id=model_id)
     generator = SurfaceSpecGenerator(
         completion=completion,  # type: ignore[arg-type]
         usage_meter=usage_meter,  # type: ignore[arg-type]

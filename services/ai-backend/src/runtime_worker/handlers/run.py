@@ -29,6 +29,7 @@ from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
 from agent_runtime.capabilities.surfaces import (
+    ShapingCredentials,
     SurfaceGenerationScheduler,
     SurfaceSpecStorePort,
     build_surface_generation_scheduler,
@@ -517,11 +518,23 @@ class RuntimeRunHandler:
             if citation_resolver is not None
             else None
         )
+        # The shaping subsystem's credential, read ONCE off the same hydrated
+        # context the run's own chat model is built from (``factory.py`` composes
+        # workspace + user-policy kwargs from these very fields). Both shaping
+        # builders below take it: the shaping model is a second outbound call on
+        # the run's provider, and on a packaged BYOK install the process env
+        # holds no key at all — a builder called without this constructs a model
+        # with no credential, fails, and turns its rung off for every run.
+        # One producer, two consumers: a second lookup is how one of them goes
+        # stale without anyone noticing.
+        shaping_credentials = ShapingCredentials.from_runtime_context(hydrated_context)
         # Generative-UI (PRD-07): a run-scoped spec-generation scheduler, bound
         # only when ``SURFACE_SPEC_MODEL`` is set. On a projector ladder miss the
         # tool layer reaches it via the ContextVar and fires a fire-and-forget
         # generation; ``surface_spec_generated`` then upgrades the surface.
-        surface_scheduler = self._build_surface_generation_scheduler(run)
+        surface_scheduler = self._build_surface_generation_scheduler(
+            run, credentials=shaping_credentials
+        )
         surface_scheduler_token = (
             SurfaceGenerationScheduler.bind_for_run(surface_scheduler)
             if surface_scheduler is not None
@@ -531,7 +544,9 @@ class RuntimeRunHandler:
         # deterministic rungs could not bind at all (an array at the root, prose,
         # a CSV block). Bound beside the refinement scheduler and gated by the
         # same resolver, so a run with no shaping model gets neither.
-        surface_shaper = self._build_read_path_shaper(run)
+        surface_shaper = self._build_read_path_shaper(
+            run, credentials=shaping_credentials
+        )
         surface_shaper_token = (
             ReadPathShaper.bind_for_run(surface_shaper)
             if surface_shaper is not None
@@ -2726,7 +2741,7 @@ class RuntimeRunHandler:
         )
 
     def _build_surface_generation_scheduler(
-        self, run: RunRecord
+        self, run: RunRecord, *, credentials: ShapingCredentials
     ) -> SurfaceGenerationScheduler | None:
         """Build a run-scoped surface-spec generation scheduler, or ``None``.
 
@@ -2738,6 +2753,11 @@ class RuntimeRunHandler:
         The emit callback ships ``surface_spec_generated`` back onto the same
         event producer every other emission uses, so the FE upgrades the surface
         in place.
+
+        ``credentials`` is required, not optional: the refinement model is a
+        second outbound call on the run's provider and ``extra_kwargs`` is the
+        only channel a BYOK key travels on. Omitting it built the model with no
+        credential on every packaged install, which is how refinement was dark.
         """
 
         import os  # noqa: PLC0415 - local to keep the module import surface small
@@ -2796,6 +2816,7 @@ class RuntimeRunHandler:
                 # PRD-B3 shaping-on default: the run's provider drives the cheapest
                 # shaping model when SURFACE_SPEC_MODEL is unset and SURFACES_V2 is on.
                 run_provider=run.model_provider,
+                credentials=credentials,
             )
         except Exception:  # noqa: BLE001
             # PRD-E3: with SURFACES_V2 default-on, this build now runs for every
@@ -2810,14 +2831,17 @@ class RuntimeRunHandler:
             )
             return None
 
-    def _build_read_path_shaper(self, run: RunRecord) -> ReadPathShaper | None:
+    def _build_read_path_shaper(
+        self, run: RunRecord, *, credentials: ShapingCredentials
+    ) -> ReadPathShaper | None:
         """Build a run-scoped read-path shaper (ladder rung 5), or ``None``.
 
-        Same gate as the refinement scheduler (``ShapingModelResolver``), and the
-        same fail-soft posture: constructing the shaping chat model can raise
-        (no resolvable provider key), and a display-only rung must degrade to
-        "off" rather than crash the run. Metered as ``view_shaping``, like every
-        other shaping call, so one purpose covers the whole subsystem's spend.
+        Same gate as the refinement scheduler (``ShapingModelResolver``), the
+        same required ``credentials`` (see that method), and the same fail-soft
+        posture: constructing the shaping chat model can raise (no resolvable
+        provider key), and a display-only rung must degrade to "off" rather than
+        crash the run. Metered as ``view_shaping``, like every other shaping
+        call, so one purpose covers the whole subsystem's spend.
         """
 
         import os  # noqa: PLC0415 - local to keep the module import surface small
@@ -2834,6 +2858,7 @@ class RuntimeRunHandler:
             return build_read_path_shaper(
                 environ=os.environ,
                 run_provider=run.model_provider,
+                credentials=credentials,
                 usage_meter=MeteredModelInvocation(
                     meter=UsageMeter(
                         recorder=self.usage_recorder,

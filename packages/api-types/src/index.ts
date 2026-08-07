@@ -95,6 +95,8 @@ export type {
   GateDecision,
   ShapeRequestBody,
   ShapeRequestAccepted,
+  SurfaceRowEdit,
+  SurfaceWriteBackRequest,
   WriteStagedPayload,
   RevisionAddedPayload,
   DecisionRecordedPayload,

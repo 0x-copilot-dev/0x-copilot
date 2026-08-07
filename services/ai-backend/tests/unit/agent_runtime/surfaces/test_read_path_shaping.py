@@ -24,6 +24,8 @@ import asyncio
 import json
 from collections.abc import Mapping
 
+import pytest
+
 from agent_runtime.capabilities.operations.contracts import (
     OperationPresentationOutcome,
 )
@@ -32,6 +34,7 @@ from agent_runtime.capabilities.operations.presentation import (
 )
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
+    ShapingCredentials,
     SpecCompletionResult,
     SurfaceSpecGenerator,
 )
@@ -638,3 +641,99 @@ class TestShapingIsOffWhenNoModelResolves:
         assert ReadPathShaper.max_per_run_from_env(
             {"SURFACE_SHAPE_MAX_PER_RUN": "-3"}
         ) == (ReadPathShaper.DEFAULT_MAX_PER_RUN)
+
+
+class TestRungFiveGetsTheRunsCredential:
+    """AC13 for the READ path. The refinement builder was pinned; this was not.
+
+    ``extra_kwargs`` is the only channel a BYOK key travels on, and a packaged
+    install has no provider key in its process env — so a rung-5 builder that
+    drops the credential is a rung that never runs.
+    """
+
+    class RecordingFactory:
+        def __init__(self) -> None:
+            self.model_id: str | None = None
+            self.extra_kwargs: Mapping[str, object] | None = None
+
+        def __call__(
+            self, model_id: str, *, extra_kwargs: Mapping[str, object] | None = None
+        ) -> object:
+            self.model_id = model_id
+            self.extra_kwargs = extra_kwargs
+            return object()
+
+    def _build(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        environ: Mapping[str, str],
+        credentials: ShapingCredentials | None,
+    ) -> tuple[ReadPathShaper | None, "RecordingFactory"]:
+        factory = self.RecordingFactory()
+        monkeypatch.setattr(
+            "agent_runtime.execution.deep_agent_builder.build_chat_model_from_id",
+            factory,
+        )
+        shaper = build_read_path_shaper(environ=dict(environ), credentials=credentials)
+        return (shaper, factory)
+
+    def test_the_byok_key_reaches_the_shaping_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        shaper, factory = self._build(
+            monkeypatch,
+            environ={"SURFACE_SPEC_MODEL": "anthropic:claude-haiku-4-5"},
+            credentials=ShapingCredentials(provider_keys={"anthropic": "sk-ant-user"}),
+        )
+
+        assert isinstance(shaper, ReadPathShaper)
+        assert factory.model_id == "anthropic:claude-haiku-4-5"
+        assert factory.extra_kwargs == {"api_key": "sk-ant-user"}
+
+    def test_the_key_follows_the_shaping_provider_not_the_run_provider(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Handing a client the WRONG provider's key is worse than having none:
+        # it authenticates as garbage instead of degrading honestly.
+        _, factory = self._build(
+            monkeypatch,
+            environ={"SURFACE_SPEC_MODEL": "anthropic:claude-haiku-4-5"},
+            credentials=ShapingCredentials(
+                provider_keys={"openai": "sk-openai", "anthropic": "sk-ant"}
+            ),
+        )
+
+        assert factory.extra_kwargs == {"api_key": "sk-ant"}
+
+    def test_the_privacy_ratchet_reaches_the_shaping_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Rung 5 is a second outbound call carrying the same user data, so
+        # workspace + user opt-out apply to it exactly as to the run model.
+        _, factory = self._build(
+            monkeypatch,
+            environ={"SURFACE_SPEC_MODEL": "anthropic:claude-haiku-4-5"},
+            credentials=ShapingCredentials(
+                provider_keys={"anthropic": "sk-ant"},
+                user_policies_json={"privacy": {"training_opt_out": True}},
+                workspace_behavior_overrides={"training_data_opt_out": True},
+            ),
+        )
+
+        assert factory.extra_kwargs == {
+            "extra_headers": {"anthropic-disable-training": "true"},
+            "api_key": "sk-ant",
+        }
+
+    def test_no_credential_passes_no_extra_kwargs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, factory = self._build(
+            monkeypatch,
+            environ={"SURFACE_SPEC_MODEL": "openai:gpt-5.4-mini"},
+            credentials=None,
+        )
+
+        assert factory.model_id == "openai:gpt-5.4-mini"
+        assert factory.extra_kwargs is None

@@ -272,6 +272,9 @@ describe("AUDIT: everything editable at once", () => {
       "",
     ].join("\n");
     const { saveRevision } = renderEditable(source);
+    // The D28 ban is on PRODUCT code reaching a browser primitive; this file
+    // declares itself a deletable scratch harness and sweeps the rendered DOM.
+    // eslint-disable-next-line no-restricted-globals
     const ids = Array.from(document.querySelectorAll("[data-testid]"))
       .map((n) => n.getAttribute("data-testid")!)
       .filter(

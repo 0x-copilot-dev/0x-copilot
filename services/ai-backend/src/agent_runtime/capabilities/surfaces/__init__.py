@@ -31,6 +31,7 @@ from agent_runtime.capabilities.surfaces.backend_store import (
 from agent_runtime.capabilities.surfaces.generator import (
     GenFailure,
     GenToolDescriptor,
+    ShapingCredentials,
     SpecAuthoringSkill,
     SurfaceGenerationScheduler,
     SurfaceSpecGenerator,
@@ -66,6 +67,7 @@ __all__ = [
     "ShapeRequestError",
     "ShapeRequestOutcome",
     "ShapeRequestRunner",
+    "ShapingCredentials",
     "SpecAuthoringSkill",
     "SpecKey",
     "StoredSpec",

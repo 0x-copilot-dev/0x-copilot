@@ -2391,3 +2391,27 @@ export {
   type TableCell,
 } from "./artifacts";
 // === end Editable surface Phase 1 ===
+
+// === Editable surface Phase 2 (connector write-back) ===
+// The connector half of the design's Save table. An artifact origin splices its
+// deltas into its own source and makes a revision; a connector origin cannot be
+// local, so Save POSTs the batch to
+// `POST /v1/agent/surfaces/{surface_id}/write-back`, which maps it onto one
+// connector op and STAGES it. The rows come back PROPOSED — applying them is the
+// write gate's job and a second, deliberate gesture; nothing here can reach it.
+//
+// `createConnectorSurfaceEditor` is the only thing a host wires: it closes over
+// the host's own `Transport` port and the run that owns the surface.
+// `attachConnectorEditor` puts the resulting grant on the render STATE, which is
+// how a live function reaches a pure renderer without ever riding the wire or a
+// model-authored `SurfaceSpec`.
+export {
+  attachConnectorEditor,
+  CONNECTOR_EDITOR_FIELD,
+  createConnectorSurfaceEditor,
+  surfaceWriteBackPath,
+  type ConnectorSurfaceEditorActions,
+  type ConnectorSurfaceEditorConfig,
+  type ConnectorWriteBackResult,
+} from "./surfaces";
+// === end Editable surface Phase 2 ===

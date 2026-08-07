@@ -2609,6 +2609,116 @@ class ShapingCredentials:
         return dict(value) if isinstance(value, Mapping) else {}
 
 
+@dataclass(frozen=True)
+class ShapingModelBuild:
+    """One attempt to construct the shaping chat model, plus a SAFE diagnosis.
+
+    Both shaping builders — refinement (:func:`build_surface_generation_scheduler`)
+    and the read path's rung 5 (``build_read_path_shaper``) — construct the same
+    model from the same credential, so they ask through here rather than each
+    keeping a copy of the try/except. Two copies is how one of them silently
+    stops threading the credential, which is exactly what happened.
+
+    **Why a reason token exists at all.** The degrade line used to log the model
+    id and nothing else, deliberately ("the kwargs hold key material"), and that
+    cost a real misdiagnosis: ``shaping_model_unavailable model=gpt-5.4-mini``
+    reads as a bad model id when the actual cause was a credential that never
+    reached the builder. The fix is not to log the kwargs — it is to log the
+    CLASS of failure, which is decidable from facts we already hold:
+
+    * :data:`UNKNOWN_PROVIDER` — the id names no provider we can route to.
+    * :data:`REGION_UNAVAILABLE` — the user pinned a data-residency region this
+      deployment has no mapping for.
+    * :data:`NO_RUN_CREDENTIAL` — construction failed and the run carried no key
+      for the shaping model's provider, so the process env was the only possible
+      source. On a packaged BYOK install that env is empty by design, which
+      makes this the expected reading of a dark shaping subsystem.
+    * :data:`MODEL_UNCONSTRUCTIBLE` — construction failed although a credential
+      *was* supplied; the cause is the model or the provider client, not the key.
+
+    :attr:`error` is the exception's TYPE NAME only. A type name carries no key
+    material, and it is enough to separate an ``ImportError`` from a provider
+    client's own auth error without ``exc_info`` and without the kwargs.
+    """
+
+    #: The kwarg the credential travels on. Presence is read (never logged) to
+    #: separate "no key was supplied" from "a key was supplied and it still
+    #: failed" — the two failures have completely different operator actions.
+    _API_KEY_KWARG: ClassVar[str] = "api_key"
+
+    UNKNOWN_PROVIDER: ClassVar[str] = "unknown_provider"
+    REGION_UNAVAILABLE: ClassVar[str] = "region_unavailable"
+    NO_RUN_CREDENTIAL: ClassVar[str] = "no_run_credential"
+    MODEL_UNCONSTRUCTIBLE: ClassVar[str] = "model_unconstructible"
+
+    model: object | None = None
+    reason: str | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether a model was constructed. ``False`` ⇒ shaping is off this run."""
+
+        return self.model is not None
+
+    @classmethod
+    def attempt(
+        cls, *, model_id: str, credentials: "ShapingCredentials | None"
+    ) -> "ShapingModelBuild":
+        """Compose the credential and build the model; never raises.
+
+        ``credentials`` omitted is not an error — it means the shaping model
+        gets whatever the process env holds, which on a packaged install is
+        nothing, and the returned :attr:`reason` says so.
+        """
+
+        from agent_runtime.execution.provider_kwargs import (  # noqa: PLC0415
+            RegionUnavailableError,
+        )
+
+        try:
+            extra_kwargs = (credentials or ShapingCredentials()).model_kwargs_for(
+                model_id
+            )
+        except RegionUnavailableError as exc:
+            return cls(reason=cls.REGION_UNAVAILABLE, error=type(exc).__name__)
+        except ValueError as exc:
+            # ``SurfaceModelConfigFactory.from_id`` raises this for an id whose
+            # provider cannot be parsed or inferred.
+            return cls(reason=cls.UNKNOWN_PROVIDER, error=type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - display-only; never fail a run
+            return cls(reason=cls.MODEL_UNCONSTRUCTIBLE, error=type(exc).__name__)
+
+        from agent_runtime.execution.deep_agent_builder import (  # noqa: PLC0415
+            build_chat_model_from_id,
+        )
+
+        supplied = bool(extra_kwargs.get(cls._API_KEY_KWARG))
+        try:
+            model = build_chat_model_from_id(
+                model_id, extra_kwargs=extra_kwargs or None
+            )
+        except ValueError as exc:
+            return cls(reason=cls.UNKNOWN_PROVIDER, error=type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - display-only; never fail a run
+            return cls(
+                reason=(
+                    cls.MODEL_UNCONSTRUCTIBLE if supplied else cls.NO_RUN_CREDENTIAL
+                ),
+                error=type(exc).__name__,
+            )
+        return cls(model=model)
+
+    def describe(self) -> str:
+        """``reason=<class> error=<ExcType>`` — safe to log verbatim.
+
+        Never includes the composed kwargs, the key, the endpoint, or a message
+        from the provider client (which can echo request material).
+        """
+
+        return f"reason={self.reason or 'unknown'} error={self.error or 'none'}"
+
+
 def build_surface_generation_scheduler(
     *,
     store: SurfaceSpecStorePort,
@@ -2652,28 +2762,21 @@ def build_surface_generation_scheduler(
     if not model_id:
         return None
     if completion is None:
-        from agent_runtime.execution.deep_agent_builder import (  # noqa: PLC0415
-            build_chat_model_from_id,
-        )
-
-        try:
-            extra_kwargs = (credentials or ShapingCredentials()).model_kwargs_for(
-                model_id
-            )
-            model = build_chat_model_from_id(
-                model_id, extra_kwargs=extra_kwargs or None
-            )
-        except Exception:  # noqa: BLE001 - display-only upgrade; never fail a run
-            # No exc_info and no kwargs in the line: the failure is routinely a
-            # missing credential, and the kwargs hold key material.
+        build = ShapingModelBuild.attempt(model_id=model_id, credentials=credentials)
+        if not build.ok:
+            # No exc_info and no kwargs in the line — the kwargs hold key
+            # material. ``describe()`` carries the failure CLASS and the
+            # exception type name, which is what separates "nobody gave this
+            # run a key" from "the model id is wrong".
             _LOGGER.warning(
-                "%s shaping_model_unavailable model=%s: refinement is off for this "
-                "run; surfaces still render from the inference floor",
+                "%s shaping_model_unavailable model=%s %s: refinement is off for "
+                "this run; surfaces still render from the inference floor",
                 _METER_PREFIX,
                 model_id,
+                build.describe(),
             )
             return None
-        completion = LangChainSpecCompletion(model=model, model_id=model_id)
+        completion = LangChainSpecCompletion(model=build.model, model_id=model_id)
     metrics = SurfaceSpecgenMetrics()
     generator = SurfaceSpecGenerator(
         completion=completion, metrics=metrics, usage_meter=usage_meter
@@ -2704,6 +2807,7 @@ __all__ = [
     "ShapingAnswerLinter",
     "ShapingAnswerSchema",
     "ShapingCredentials",
+    "ShapingModelBuild",
     "ShapingPromptBuilder",
     "ShapingSampleBudget",
     "ShapingSchemaError",

@@ -100,6 +100,15 @@ import { projectCitations } from "./projectCitations";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
+// Editable surface Phase 2: the grant that makes a connector-read surface's
+// cells clickable. Built here because this is the only place that holds all
+// three halves — the host Transport, the run that owns the surface, and the
+// surface's own id — and attached to the hydrated render state, never to the
+// `SurfaceSpec` (the model authors those).
+import {
+  attachConnectorEditor,
+  createConnectorSurfaceEditor,
+} from "../../surfaces/connectorWriteBack";
 import type { SurfaceHue } from "../../surfaces/surfaceHue";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
@@ -135,6 +144,7 @@ import {
   type LedgerViewTier,
   type LedgerShapeRequestState,
 } from "../../thread-canvas";
+import type { SurfacePayload } from "../../thread-canvas/eventProjector";
 // PRD-C2/D1/D3/E1/E2 — the Generative Surfaces v2 canvas mount pieces. All are
 // pure presentational components + pure ledger folds + one Transport-fed fetch;
 // the cockpit composes them behind the `surfacesV2` flag (flag off ⇒ never
@@ -2841,9 +2851,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // map the compatibility reader owned, which held nothing, so the hydrated
   // payload sitting in `hydration` was never consulted. One source of content
   // is the property that made that bug impossible to reintroduce here.
+  //
+  // The hydrated state is also where the connector-write GRANT is attached.
+  // Every surface in this map came from a connector read on this run — that is
+  // what a v2 surface IS — so the origin test is the lookup itself, not a second
+  // guess at a URI. A miss stays a miss and carries no grant: an artifact tab
+  // resolves through `renderSurfaceOverride` into `ArtifactSurface`, which owns
+  // the OTHER half of the design's Save table (a local revision) and must not
+  // acquire this one by accident.
+  //
+  // Withheld while scrubbed is handled a layer up — `ThreadCanvas` consults this
+  // resolver only when `scrubbedSeq === null` — so a time-travelled surface has
+  // no editor by construction rather than by a flag we could forget to set.
   const resolveSurfaceState = useMemo(
-    () => (surfacesV2 ? (uri: string) => hydration.stateFor(uri) : undefined),
-    [surfacesV2, hydration],
+    () =>
+      surfacesV2
+        ? (uri: string): SurfacePayload | undefined => {
+            const state = hydration.stateFor(uri);
+            if (state === undefined) return undefined;
+            const editor = createConnectorSurfaceEditor({
+              transport,
+              runId: session.runId,
+              surfaceId: uri,
+            });
+            return attachConnectorEditor(state, editor) as SurfacePayload;
+          }
+        : undefined,
+    [surfacesV2, hydration, transport, session.runId],
   );
   const visibleSurfaceTabs = useMemo(() => {
     const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));

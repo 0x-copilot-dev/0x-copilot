@@ -32,6 +32,9 @@ import {
   type SurfaceState,
 } from "../_shared/specTypes";
 import { resolveColumnWindow } from "../sheet/_columns";
+import { rowsOf } from "./connectorEdits";
+import { hostConnectorEditor } from "./connectorEditor";
+import { EditableConnectorTable } from "./EditableConnectorTable";
 
 const KICKER = "Table";
 
@@ -43,25 +46,70 @@ export const ROW_RENDER_CAP = 200;
  * ≥50 columns window through the shared `sheet/_columns` helper; >200 rows show
  * a "showing 200 of N" cap. Spec-less state falls back to the no-spec view
  * (PRD-02).
+ *
+ * Two renderings, one archetype. Read-only is the default and the only thing a
+ * connector table gets unless the HOST attached a write-back grant — an object
+ * it built around its own Transport and the run that owns the surface, never a
+ * field decoded from tool output, never something a model-authored `SurfaceSpec`
+ * could carry. When it is present the rows render as editable CELLS, and Save
+ * stages them for approval rather than writing anything.
+ *
+ * The grant alone is not enough: a spec-less table has no columns to address a
+ * cell by, so it stays read-only however the host is wired. Editability is the
+ * conjunction of "the host opened this" and "this surface has a shape".
  */
 export function TableRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
   const data = dataFromState(state);
+  const editor = hostConnectorEditor(state);
   return (
     <article
       style={pageStyle}
       data-testid="table-renderer"
       data-mode="current"
       data-spec={spec ? "present" : "absent"}
+      data-editable={spec && editor !== null ? "true" : "false"}
       aria-label="Table surface"
     >
       <section style={cardStyle}>
-        {spec
-          ? renderWithSpec(spec, data, toolNameFromState(state))
-          : renderFallback(state, data)}
+        {spec === undefined ? (
+          renderFallback(state, data)
+        ) : editor === null ? (
+          renderWithSpec(spec, data, toolNameFromState(state))
+        ) : (
+          <EditableConnectorTable
+            spec={spec}
+            data={data}
+            rows={rowsOf(spec, data)}
+            title={titleFor(spec, data, toolNameFromState(state))}
+            actions={editor}
+          />
+        )}
       </section>
     </article>
   );
+}
+
+/**
+ * The surface's own title — computed here so the read view and the editable view
+ * cannot end up calling one surface two things.
+ *
+ * A table's title lives OUTSIDE its rows: `{"team": {...}, "issues": [...]}`
+ * yields `team.name`. Plenty of list payloads carry no such headline at all, and
+ * because `title_path` is schema-REQUIRED the inference floor has to emit some
+ * path even when none resolves. Falling through to the header's "Untitled" in
+ * that case reads as a broken surface rather than an untitled one, so the tool
+ * that produced the rows is the honest label — and it is the fallback the
+ * floor's own spec (PRD §3.3 step 4) always intended. `?? ""` keeps
+ * `SurfaceHeader`'s own "Untitled" as the last resort, for the one case where
+ * even the tool has no name to give.
+ */
+function titleFor(
+  spec: SurfaceSpec,
+  data: unknown,
+  toolName: string | undefined,
+): string {
+  return formatValue(resolvePath(data, spec.title_path)) || (toolName ?? "");
 }
 
 function renderWithSpec(
@@ -69,17 +117,7 @@ function renderWithSpec(
   data: unknown,
   toolName: string | undefined,
 ): ReactElement {
-  // A table's title lives OUTSIDE its rows — `{"team": {...}, "issues": [...]}`
-  // yields `team.name`. Plenty of list payloads carry no such headline at all,
-  // and because `title_path` is schema-REQUIRED the inference floor has to emit
-  // some path even when none resolves. Falling through to the header's
-  // "Untitled" in that case reads as a broken surface rather than an untitled
-  // one, so the tool that produced the rows is the honest label — and it is the
-  // fallback the floor's own spec (PRD §3.3 step 4) always intended.
-  // `?? ""` keeps `SurfaceHeader`'s own "Untitled" as the last resort, for the
-  // one case where even the tool has no name to give.
-  const title =
-    formatValue(resolvePath(data, spec.title_path)) || (toolName ?? "");
+  const title = titleFor(spec, data, toolName);
   const columns: readonly SurfaceColumn[] = spec.columns ?? [];
   const rawItems = spec.items_path
     ? resolvePath(data, spec.items_path)
