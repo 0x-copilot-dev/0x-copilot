@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from starlette import status
 
 from agent_runtime.api.constants import Keys, Messages
+from agent_runtime.api.conversation_title import ConversationTitle
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
 from agent_runtime.api.connector_access_modes_resolver import (
@@ -237,6 +238,10 @@ class RunCoordinator:
         # ``created=False`` means an idempotent replay; skip re-enqueuing
         # to avoid a duplicate worker pickup for the same run_id.
         if created:
+            await self._name_conversation_if_untitled(
+                conversation=conversation,
+                user_message=user_message,
+            )
             await self._persistence.write_audit_log(
                 event_type="run_created",
                 record={
@@ -743,6 +748,61 @@ class RunCoordinator:
                 request.org_id,
             )
         return decision
+
+    async def _name_conversation_if_untitled(
+        self,
+        *,
+        conversation: ConversationRecord,
+        user_message: MessageRecord,
+    ) -> None:
+        """Give a nameless conversation a title from the message that opened it.
+
+        Nothing generated one. A conversation was titled only by an explicit
+        PATCH, so the ordinary path — open the cockpit, type, send — left it
+        unset and the Run header fell through to the literal ``"Untitled run"``.
+        Seen in the live desktop app on a five-exchange thread.
+
+        Here rather than in a host because the hosts can only name a
+        conversation they create FROM a prompt; every other flow creates it
+        first and has nothing to name it after yet. One seam covers all of them.
+
+        Deliberately narrow:
+
+        - only on ``created`` (the caller's guard), so an idempotent replay does
+          not rename anything;
+        - only when the title is absent or blank, so a user's own title — and a
+          host-supplied first-run title — always wins;
+        - failure is swallowed. A conversation that could not be renamed is a
+          cosmetic loss; failing the run over it would turn a naming problem
+          into an unanswerable prompt.
+        """
+
+        existing = (conversation.title or "").strip()
+        if existing:
+            return
+        title = ConversationTitle.derive(user_message.content_text)
+        try:
+            await self._persistence.update_conversation(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                conversation_id=conversation.conversation_id,
+                title=title,
+                title_changed=True,
+                folder=None,
+                folder_changed=False,
+                archived=None,
+                archived_changed=False,
+                project_id=None,
+                project_id_changed=False,
+                now=datetime.now(timezone.utc),
+            )
+        except Exception:  # noqa: BLE001 — see the docstring's last bullet.
+            _LOGGER.warning(
+                "[conversation] auto-title failed conversation=%s run_scope=%s",
+                conversation.conversation_id,
+                conversation.org_id,
+                exc_info=True,
+            )
 
     async def _prior_run_ids_for_chain(
         self,

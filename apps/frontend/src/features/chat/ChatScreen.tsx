@@ -90,6 +90,7 @@ import {
 } from "./chatModel/citationLinkReducer";
 import {
   citationsForRun,
+  conversationTitleFromPrompt,
   emptyCitationRegistry,
   type CitationRegistryByRun,
 } from "@0x-copilot/chat-surface";
@@ -2572,12 +2573,11 @@ function isMcpAuthResumePayload(
   );
 }
 
+/** Delegates to the shared derivation — this used to be a second, drifted copy
+ *  (44 chars + "..." here, 60 + nothing on desktop, each believing it matched
+ *  the other). `ai-backend` mirrors the same rules server-side. */
 function titleFromPrompt(prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 44) {
-    return normalized || "New chat";
-  }
-  return `${normalized.slice(0, 43)}...`;
+  return conversationTitleFromPrompt(prompt);
 }
 
 function currentTitle(
