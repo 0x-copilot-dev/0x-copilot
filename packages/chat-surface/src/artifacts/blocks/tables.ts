@@ -12,7 +12,7 @@
 //   * `\|` is a literal pipe inside a cell, not a delimiter;
 //   * a body row keeps its own cell count, ragged or not.
 
-import { indentWidth, isSpaceChar, type Line } from "./lines";
+import { indentWidth, isListItem, isSpaceChar, type Line } from "./lines";
 import type { ColumnAlignment, TableCell } from "./blockModel";
 
 const DELIMITER_CELL = /^:?-+:?$/;
@@ -139,6 +139,13 @@ export function readDelimiterRow(
   line: Line,
 ): ColumnAlignment[] | null {
   if (indentWidth(line.text) >= 4) return null;
+  // `-` is both a delimiter character and a bullet, and the bullet wins: `- | ---`
+  // opens a LIST to remark-gfm, so `a | b` above it is a paragraph and not a
+  // header. Nothing else in `DELIMITER_CELL`'s alphabet can start a list item —
+  // `+`/`*` and a digit all fail the cell test — so this one line is the whole
+  // rule. Without it the scanner mounts an editable grid over what the user is
+  // looking at as prose followed by a bullet.
+  if (isListItem(line)) return null;
   if (unescapedPipePositions(line.text, 0).length === 0) return null;
   const cells = splitRowCells(source, line);
   if (cells.length === 0) return null;

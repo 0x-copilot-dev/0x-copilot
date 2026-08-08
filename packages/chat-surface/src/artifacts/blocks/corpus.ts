@@ -329,3 +329,111 @@ export function generateDocument(random: () => number): string {
   }
   return random() < 0.2 ? document.trimEnd() : document;
 }
+
+/**
+ * Single LINES, for the differential suite's near-miss generator.
+ *
+ * `CORPUS_FRAGMENTS` above are whole constructs, and that is what makes them
+ * blind to the failure this alphabet exists to find: a construct is decided by
+ * the line UNDER it, so a scanner and a renderer disagree at the seam between two
+ * lines that each look unambiguous alone. `a | b` is prose or a header row
+ * depending on what follows; `- | ---` is a delimiter row to a permissive
+ * scanner and a bullet to remark-gfm. Crossing the alphabet with itself is what
+ * puts every such pair in front of the oracle.
+ *
+ * Grouped by what they are one character away from being.
+ */
+export const NEAR_MISS_LINES: readonly string[] = [
+  // prose, and prose that could be a header row
+  "a",
+  "a | b",
+  "| a | b |",
+  "| a |b|",
+  "a \\| b",
+  "**a** | b",
+  "a|",
+  "|a",
+  "1 | 2",
+  // near-heading
+  "#a",
+  "# a",
+  "# a #",
+  "#",
+  "####### a",
+  "   # a",
+  "    # a",
+  // near-delimiter-row
+  "---",
+  "--- | ---",
+  "| --- | --- |",
+  "|---|---|",
+  "- | ---",
+  "-- | --",
+  "-|-",
+  "| - |",
+  "| -",
+  "- |",
+  ":--- | ---:",
+  "--:|:--",
+  "-- -",
+  "\\| | ---",
+  "***",
+  "___",
+  "===",
+  // near-list
+  "-",
+  "- x",
+  "* x",
+  "+ x",
+  "1. x",
+  "2. x",
+  "1) x",
+  "  - x",
+  "    - x",
+  // containers and code
+  "> q",
+  ">",
+  "    code",
+  "```",
+  "```js",
+  "~~~",
+  // html, types 6 and 7 — the pair that decides whether a paragraph continues
+  "<div>",
+  "</div>",
+  "<!-- c -->",
+  "<br/>",
+  "<span>x</span>",
+  // blanks
+  "",
+  " ",
+];
+
+/**
+ * Every ordered pair of `NEAR_MISS_LINES`, as a two-line document.
+ *
+ * Exhaustive rather than sampled: the alphabet is small enough that the whole
+ * cross product costs less than a generator that might miss the one pair that
+ * matters.
+ */
+export function nearMissPairs(): string[] {
+  const documents: string[] = [];
+  for (const first of NEAR_MISS_LINES) {
+    for (const second of NEAR_MISS_LINES) {
+      documents.push(`${first}\n${second}\n`);
+    }
+  }
+  return documents;
+}
+
+/** A document of `lineCount` lines drawn from `NEAR_MISS_LINES`. */
+export function generateNearMissDocument(
+  random: () => number,
+  lineCount = 4,
+): string {
+  let document = "";
+  for (let index = 0; index < lineCount; index += 1) {
+    document +=
+      NEAR_MISS_LINES[Math.floor(random() * NEAR_MISS_LINES.length)] + "\n";
+  }
+  return random() < 0.2 ? document.trimEnd() : document;
+}

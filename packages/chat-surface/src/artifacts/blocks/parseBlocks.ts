@@ -22,10 +22,25 @@
 //
 // Every classification rule was measured against the renderer these blocks sit
 // under — `remark-gfm`, reached through Streamdown — rather than read off the
-// CommonMark spec. Two of them are not what the spec reading suggests, and both
-// were found by that comparison rather than by inspection: a table interrupts an
-// ordinary paragraph but NOT a container's lazy continuation line, and there is
-// no front matter, because no front-matter plugin is loaded.
+// CommonMark spec, and `rendererParity.test.ts` is where that measurement lives:
+// a differential harness that runs this scanner and remark over the corpus and
+// over generated near-miss documents and compares what each one made of them.
+//
+// Several rules here are not what a spec reading suggests, and every one of them
+// was found by that harness rather than by inspection:
+//
+//   * a table interrupts an ordinary paragraph but NOT a container's lazy
+//     continuation line;
+//   * `- | ---` is a BULLET, not a delimiter row, so the prose above it is a
+//     paragraph and not a header (`tables.ts`);
+//   * a paragraph cut short by a delimiter row hands the header line to the
+//     table rather than re-dispatching on it (`Scanned.tableFollows`);
+//   * HTML block type 7 cannot interrupt a paragraph, and `<span>x</span>` is
+//     not an HTML block at all (`lines.ts`);
+//   * lazy continuation needs an OPEN paragraph, which is what a heading, an
+//     empty item or an inline tag inside a container takes away
+//     (`leavesParagraphOpen`, `readListEnd`);
+//   * and there is no front matter, because no front-matter plugin is loaded.
 
 import type {
   ColumnAlignment,
@@ -46,6 +61,9 @@ import {
   isListItem,
   isSetextUnderline,
   isThematicBreak,
+  leavesParagraphOpen,
+  listItemContentColumn,
+  opensSwallowingRun,
   readAtxHeading,
   splitLines,
   startsBlock,
@@ -68,6 +86,8 @@ export function parseBlocks(source: string): DocumentBlock[] {
   const lines = splitLines(source);
   const blocks: DocumentBlock[] = [];
   let index = 0;
+  // Set by the paragraph reader when it stopped ON a header row. See `Scanned`.
+  let tableFollows = false;
 
   while (index < lines.length) {
     if (isBlankLine(lines[index])) {
@@ -78,11 +98,13 @@ export function parseBlocks(source: string): DocumentBlock[] {
       // No content line at all, hence `contentEnd === from`: the block covers
       // the run and its editable span is empty.
       blocks.push(rawBlock(source, lines, from, from, index, "blank"));
+      tableFollows = false;
       continue;
     }
-    const scanned = scanBlock(source, lines, index);
+    const scanned = scanBlock(source, lines, index, tableFollows);
     blocks.push(scanned.block);
     index = scanned.nextLine;
+    tableFollows = scanned.tableFollows === true;
   }
 
   return blocks;
@@ -91,10 +113,34 @@ export function parseBlocks(source: string): DocumentBlock[] {
 interface Scanned {
   readonly block: DocumentBlock;
   readonly nextLine: number;
+  /**
+   * This block ended because a TABLE starts on `nextLine`, and the scanner must
+   * read one there rather than dispatch afresh.
+   *
+   * Only a paragraph sets it, and only for the lines that end a paragraph
+   * WITHOUT interrupting it — in practice an ordered item numbered anything but
+   * `1`. `a` / `2. x` / `| - |` is a paragraph and a one-column table whose
+   * header reads `2. x` in remark-gfm, because the item never got to start a
+   * list: it was paragraph text until the delimiter row underneath it cut the
+   * paragraph short. Re-dispatching on that line instead reads `2. x` as the
+   * list start it looks like in isolation, and the table disappears.
+   */
+  readonly tableFollows?: boolean;
 }
 
-function scanBlock(source: string, lines: Line[], from: number): Scanned {
+function scanBlock(
+  source: string,
+  lines: Line[],
+  from: number,
+  tableFollows: boolean,
+): Scanned {
   const line = lines[from];
+
+  if (tableFollows) {
+    // The paragraph above already proved a header + delimiter pair sits here.
+    const table = readTable(source, lines, from);
+    if (table !== null) return table;
+  }
 
   if (isIndentedCode(line)) {
     const end = readIndentedCodeEnd(lines, from);
@@ -286,22 +332,77 @@ function continuesLazily(lines: Line[], at: number): boolean {
  * A list runs until a blank line that is NOT followed by more list content — an
  * item's own paragraph, a nested item, or a loose list's next item — or until a
  * line that starts a block of its own.
+ *
+ * Two bits of state decide where it stops, and neither can be recomputed from
+ * the previous line alone — a line's meaning depends on how it was consumed.
+ *
+ * `paragraphOpen` is the precondition for the next UNMARKED line to continue
+ * lazily, because what a lazy line continues is a paragraph. A marker line
+ * decides it outright; an owned line is read from the item's CONTENT COLUMN
+ * (`- |` over `    # a` is a heading, since only two of those four spaces are
+ * the item's own indent); a lazy line is paragraph text whatever it looks like,
+ * which is why an indented `# a` under `> q` is prose and not a heading.
+ *
+ * `swallowing` is the difference between a paragraph that ended and a block that
+ * is still OPEN. A fence or an HTML block inside an item runs to the next blank
+ * line and eats everything between, nested bullets included — so `- x` /
+ * `<br/>` / `    - x` is one item with no second list in it, and the delimiter
+ * row two lines further down starts a table OUTSIDE the list. Without this bit
+ * that `    - x` reads as a nested item, the item looks like it reopened a
+ * paragraph, and the table vanishes into the raw block.
+ *
+ * A blank line ends both, so the run past one starts over.
  */
 function readListEnd(lines: Line[], from: number): number {
   let index = from;
+  let paragraphOpen = true;
+  let swallowing = false;
+  // The innermost item's content column, and the SHALLOWEST one still open.
+  let contentColumn = 1;
+  let outerColumn = 1;
   for (;;) {
     // `index === from` is load-bearing, not defensive: it guarantees the first
     // line is consumed, so every path through this loop advances and the block
     // can never be empty. An empty block would put `end` before `start` and
     // break the coverage property the whole model rests on.
-    while (
-      index < lines.length &&
-      !isBlankLine(lines[index]) &&
-      (index === from ||
-        isListItem(lines[index]) ||
-        indentWidth(lines[index].text) >= 2 ||
-        continuesLazily(lines, index))
-    ) {
+    while (index < lines.length && !isBlankLine(lines[index])) {
+      // A run holds a whole LIST, so any item continues it — one written at the
+      // top level, or one nested inside the item currently open.
+      const markerColumn = swallowing
+        ? null
+        : (listItemContentColumn(lines[index]) ??
+          listItemContentColumn(lines[index], contentColumn));
+      const marker = index === from || markerColumn !== null;
+      // Owned by INDENTATION means indented to an OPEN item's content column, not
+      // to some fixed depth. Two directions matter and they are different items:
+      // under `1) x` (content at column 3) a `  - x` two columns in is too
+      // shallow to be nested and starts its own list, while under a nested
+      // `  - x` (content at 4) a `   # a` three columns in is still inside the
+      // OUTER item and belongs to the same run.
+      const owned = marker || indentWidth(lines[index].text) >= outerColumn;
+      if (!owned && (!paragraphOpen || !continuesLazily(lines, index))) break;
+      if (marker) {
+        const opened = Math.max(
+          1,
+          markerColumn ?? listItemContentColumn(lines[index]) ?? 1,
+        );
+        outerColumn = index === from ? opened : Math.min(outerColumn, opened);
+        contentColumn = opened;
+        paragraphOpen = leavesParagraphOpen(lines[index]);
+        swallowing = opensSwallowingRun(lines[index]);
+      } else if (owned) {
+        if (!swallowing) {
+          // Strip no more than the line actually carries: it is owned at some
+          // level between `outerColumn` and `contentColumn`, and reading it from
+          // deeper than its own indent would make a heading look like prose.
+          const at = Math.min(contentColumn, indentWidth(lines[index].text));
+          paragraphOpen = leavesParagraphOpen(lines[index], at);
+          swallowing = opensSwallowingRun(lines[index], at);
+        }
+      } else {
+        paragraphOpen = leavesParagraphOpen(lines[index]);
+        swallowing = opensSwallowingRun(lines[index]);
+      }
       index += 1;
     }
     if (index < lines.length && !isBlankLine(lines[index])) return index;
@@ -313,20 +414,40 @@ function readListEnd(lines: Line[], from: number): number {
         indentWidth(lines[afterBlank].text) >= 2)
     ) {
       index = afterBlank;
+      paragraphOpen = true;
+      swallowing = false;
       continue;
     }
     return index;
   }
 }
 
-/** A blockquote runs to the first blank line, or to the first line that starts a block. */
+/**
+ * A blockquote runs to the first blank line, or to the first line that starts a
+ * block — with the same `paragraphOpen` rule a list follows, and for the same
+ * reason: `> # h` never opened a paragraph, so the unmarked line under it starts
+ * a new block instead of continuing the quote.
+ *
+ * A list item ends it too, and that is the one place a container is STRICTER
+ * than a paragraph. `a` / `2. x` is one paragraph, because an ordered item
+ * numbered anything but 1 cannot interrupt one — but `> q` / `2. x` is a quote
+ * and then a list, because an unmarked line only continues the quote lazily if
+ * it would be paragraph text on its own, and that line opens a list instead.
+ * Measured against remark-gfm; it does not fall out of the spec reading.
+ */
 function readBlockquoteEnd(lines: Line[], from: number): number {
   let index = from + 1;
-  while (
-    index < lines.length &&
-    !isBlankLine(lines[index]) &&
-    (isBlockquote(lines[index]) || continuesLazily(lines, index))
-  ) {
+  let paragraphOpen = leavesParagraphOpen(lines[from]);
+  while (index < lines.length && !isBlankLine(lines[index])) {
+    if (
+      !isBlockquote(lines[index]) &&
+      (!paragraphOpen ||
+        isListItem(lines[index]) ||
+        !continuesLazily(lines, index))
+    ) {
+      break;
+    }
+    paragraphOpen = leavesParagraphOpen(lines[index]);
     index += 1;
   }
   return index;
@@ -390,6 +511,7 @@ function readTableHead(
 function readParagraph(source: string, lines: Line[], from: number): Scanned {
   let index = from + 1;
   let setext = false;
+  let tableFollows = false;
   while (index < lines.length && !isBlankLine(lines[index])) {
     if (isSetextUnderline(lines[index])) {
       // A setext heading. It outranks the thematic break `---` would otherwise
@@ -403,7 +525,15 @@ function readParagraph(source: string, lines: Line[], from: number): Scanned {
     if (interruptsParagraph(lines[index])) break;
     // A table is the one construct that may interrupt a paragraph, matching
     // remark-gfm (verified against the renderer, not assumed).
-    if (readTableHead(source, lines, index) !== null) break;
+    if (readTableHead(source, lines, index) !== null) {
+      // …with one exception, also measured: an HTML block start wins the line
+      // back. `a` / `<br/>` / `| - |` renders as a paragraph and an HTML block,
+      // not as a table headed by `<br/>` — the tag is a type-7 start, which
+      // could not interrupt the paragraph but CAN open a block once the
+      // delimiter row has ended it.
+      tableFollows = !isHtmlBlockStart(lines[index]);
+      break;
+    }
     index += 1;
   }
 
@@ -422,5 +552,6 @@ function readParagraph(source: string, lines: Line[], from: number): Scanned {
       text: source.slice(textStart, textEnd),
     },
     nextLine,
+    tableFollows,
   };
 }

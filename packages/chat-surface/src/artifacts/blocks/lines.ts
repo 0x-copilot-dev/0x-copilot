@@ -85,8 +85,58 @@ const THEMATIC_BREAK =
 const BLOCKQUOTE = /^ {0,3}>/;
 const BULLET_ITEM = /^ {0,3}[-+*](?:[ \t]+\S|[ \t]*$)/;
 const ORDERED_ITEM = /^ {0,3}(\d{1,9})[.)](?:[ \t]+\S|[ \t]*$)/;
-const HTML_START = /^ {0,3}<[!?/A-Za-z]/;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+
+/**
+ * CommonMark's HTML block type 6 tag names, verbatim.
+ *
+ * The list is the whole difference between an HTML block that may interrupt a
+ * paragraph and one that may not, so it is spelled out rather than approximated
+ * by "looks like a tag" — see `isHtmlParagraphInterrupt`.
+ */
+const HTML_BLOCK_TAGS =
+  "address|article|aside|base|basefont|blockquote|body|caption|center|col|" +
+  "colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|" +
+  "form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|" +
+  "link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|" +
+  "section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
+
+/**
+ * HTML block types 1-6 — every type EXCEPT type 7, which is the generic
+ * "one complete tag alone on a line" case.
+ *
+ * `<script`/`<pre`/`<style`/`<textarea` (1), `<!--` (2), `<?` (3), `<!DOCTYPE`
+ * (4), `<![CDATA[` (5), and an open or close tag from `HTML_BLOCK_TAGS` (6).
+ */
+const HTML_PARAGRAPH_INTERRUPT = new RegExp(
+  "^ {0,3}(?:" +
+    "<(?:script|pre|style|textarea)(?:[ \\t>]|$)" +
+    "|<!--" +
+    "|<\\?" +
+    "|<!\\[CDATA\\[" +
+    "|<![A-Za-z]" +
+    `|</?(?:${HTML_BLOCK_TAGS})(?:[ \\t]|/?>|$)` +
+    ")",
+  "i",
+);
+
+/**
+ * HTML block type 7: ONE complete open or closing tag, alone on its line.
+ *
+ * "Alone" is the whole rule and the reason this is spelled out rather than
+ * approximated by `<` plus a letter. `<br/>` opens a block; `<span>x</span>`
+ * does not, because the tag is followed by text — it is a paragraph carrying
+ * inline html, and remark-gfm will happily read a delimiter row under it as a
+ * TABLE whose header is that line.
+ */
+const HTML_TAG_NAME = "[A-Za-z][A-Za-z0-9-]*";
+const HTML_ATTRIBUTE =
+  "(?:[ \\t]+[A-Za-z_:][A-Za-z0-9_.:-]*" +
+  "(?:[ \\t]*=[ \\t]*(?:[^ \\t\"'=<>`]+|'[^']*'|\"[^\"]*\"))?)";
+const HTML_TYPE_7 = new RegExp(
+  `^ {0,3}(?:<${HTML_TAG_NAME}${HTML_ATTRIBUTE}*[ \\t]*/?>` +
+    `|</${HTML_TAG_NAME}[ \\t]*>)[ \\t]*$`,
+);
 
 /** 4+ columns of indentation: an indented code block, and never a table or heading. */
 export function isIndentedCode(line: Line): boolean {
@@ -114,8 +164,138 @@ export function isListItem(line: Line): boolean {
   return BULLET_ITEM.test(line.text) || ORDERED_ITEM.test(line.text);
 }
 
+const BLOCKQUOTE_MARKER = /^ {0,3}>[ \t]?/;
+const LIST_MARKER = /^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|[ \t]*$)/;
+/** Drops up to `columns` columns of leading whitespace, tabs counted as stops. */
+function dropColumns(text: string, columns: number): string {
+  let width = 0;
+  let index = 0;
+  while (index < text.length && width < columns) {
+    if (text[index] === " ") width += 1;
+    else if (text[index] === "\t") width += 4 - (width % 4);
+    else break;
+    index += 1;
+  }
+  return text.slice(index);
+}
+
+/**
+ * The column an item's own content starts at when this line opens a list item
+ * `indent` columns in, or `null` when it opens none.
+ *
+ * The `indent` argument is what makes a NESTED item visible. `    - x` is
+ * indented code at the top level, and the item it really is inside `-` (whose
+ * content starts at column 2), which is the difference between one list and a
+ * list plus a stranded paragraph.
+ */
+export function listItemContentColumn(line: Line, indent = 0): number | null {
+  const own = indentWidth(line.text);
+  if (own < indent || own - indent >= 4) return null;
+  const text = dropColumns(line.text, own);
+  if (!BULLET_ITEM.test(text) && !ORDERED_ITEM.test(text)) return null;
+  const marker = LIST_MARKER.exec(text);
+  if (marker === null) return null;
+  const width = indentWidth(marker[0].replace(/\S/g, " "));
+  // An item with nothing after its marker has no space to measure, and its
+  // content column is one past the marker.
+  const empty = marker[0].trimEnd().length === marker[0].length;
+  return own + width + (empty ? 1 : 0);
+}
+
+/**
+ * The line's own content: past the indentation the container owns, and past any
+ * container markers it carries.
+ */
+function blockContent(text: string, indent: number): string {
+  let content = dropColumns(text, indent);
+  for (;;) {
+    const quote = BLOCKQUOTE_MARKER.exec(content);
+    if (quote !== null) {
+      content = content.slice(quote[0].length);
+      continue;
+    }
+    const item = LIST_MARKER.exec(content);
+    if (item !== null) {
+      content = content.slice(item[0].length);
+      continue;
+    }
+    return content;
+  }
+}
+
+/**
+ * Whether this line opens a run that SWALLOWS the lines under it — a fence or an
+ * HTML block, both of which run past a heading, a nested bullet and anything
+ * else until a blank line closes them.
+ *
+ * It is the difference between a paragraph that merely ended and a block that is
+ * still open, and only the second one blocks the lines below from meaning
+ * anything: `- x` / `<br/>` / `    - x` is ONE item whose html block ate the
+ * nested bullet, so the delimiter row two lines later starts a table outside the
+ * list rather than continuing it.
+ */
+export function opensSwallowingRun(line: Line, indent = 0): boolean {
+  if (isBlankLine(line)) return false;
+  const content = blockContent(line.text, indent);
+  return (
+    FENCE.test(content) ||
+    HTML_PARAGRAPH_INTERRUPT.test(content) ||
+    HTML_TYPE_7.test(content)
+  );
+}
+
+/**
+ * Whether a paragraph is still OPEN under this line — the precondition for the
+ * next unmarked line to continue a container lazily.
+ *
+ * Lazy continuation continues a paragraph, not a container, so a container whose
+ * last line closed one has nothing left to continue and ends instead. `- x` /
+ * `   # a` / `x` is a list holding a heading and then a SEPARATE paragraph;
+ * consuming that `x` into the list is how a table written two lines further down
+ * disappears inside a raw block. `> # h` and an empty `-` close it the same way,
+ * never having opened one at all — and `<br/>` closes it while staying inside the
+ * item, which is why this is a question about the paragraph and not about the
+ * container.
+ *
+ * Container markers are stripped so the test reads the line's CONTENT (an item's
+ * `# a` is a heading exactly as it would be at the top level). Leading SPACES are
+ * not: every classifier below already refuses 4 columns of indentation, which is
+ * what keeps an indented line inside a quote reading as the prose it is rather
+ * than as the heading it resembles.
+ */
+export function leavesParagraphOpen(line: Line, indent = 0): boolean {
+  if (isBlankLine(line)) return false;
+  const content = blockContent(line.text, indent);
+  if (content.trim().length === 0) return false;
+  if (ATX_HEADING.test(content)) return false;
+  if (THEMATIC_BREAK.test(content)) return false;
+  if (FENCE.test(content)) return false;
+  if (HTML_PARAGRAPH_INTERRUPT.test(content)) return false;
+  if (HTML_TYPE_7.test(content)) return false;
+  return true;
+}
+
 export function isHtmlBlockStart(line: Line): boolean {
-  return !isIndentedCode(line) && HTML_START.test(line.text);
+  if (isIndentedCode(line)) return false;
+  return (
+    HTML_PARAGRAPH_INTERRUPT.test(line.text) || HTML_TYPE_7.test(line.text)
+  );
+}
+
+/**
+ * Whether an HTML block starting here may interrupt a paragraph — types 1-6 but
+ * NOT type 7.
+ *
+ * This is the one place the distinction is worth the tag list. `<br/>` and
+ * `<span>x</span>` are type 7: written under a line of prose they are INLINE
+ * html inside that paragraph, and `a\n<br/>\nb` is a single paragraph to
+ * remark-gfm. Treating them as a block start there does not merely mislabel one
+ * span — the html run then swallows every line to the next blank one, so the
+ * `# Heading` written under `<br/>` stops being a heading. Measured against
+ * remark-gfm, like every other rule here.
+ */
+export function isHtmlParagraphInterrupt(line: Line): boolean {
+  return !isIndentedCode(line) && HTML_PARAGRAPH_INTERRUPT.test(line.text);
 }
 
 /** `===` / `---` under a paragraph line: a setext heading, which outranks a thematic break. */
@@ -141,12 +321,15 @@ export function startsBlock(line: Line): boolean {
  *
  * Two CommonMark rules are load-bearing here and are implemented exactly:
  * indented code does NOT interrupt (it is a lazy continuation line), and an
- * ordered list interrupts only when it starts at `1`. Two are deliberately
- * loose: an empty list item is treated as an interrupter when it is a bullet
- * (`-` alone is far more often a setext underline, which is checked first), and
- * `HTML_START` covers CommonMark's html types 1-7 with one regex where the spec
- * distinguishes them. Both looser cases can only move a span from `paragraph`
- * into `raw`, which renders the same markdown and costs only in-place editing.
+ * ordered list interrupts only when it starts at `1`. A third — HTML block type
+ * 7 does not interrupt — is exact too, and is the reason `isHtmlBlockStart` is
+ * NOT the predicate used here; see `isHtmlParagraphInterrupt`.
+ *
+ * One rule stays deliberately loose: an empty list item is treated as an
+ * interrupter when it is a bullet (`-` alone is far more often a setext
+ * underline, which is checked first). That looser case can only move a span from
+ * `paragraph` into `raw`, which renders the same markdown and costs only
+ * in-place editing.
  */
 export function interruptsParagraph(line: Line): boolean {
   if (isIndentedCode(line)) return false;
@@ -154,7 +337,7 @@ export function interruptsParagraph(line: Line): boolean {
   if (isFence(line)) return true;
   if (isThematicBreak(line)) return true;
   if (isBlockquote(line)) return true;
-  if (isHtmlBlockStart(line)) return true;
+  if (isHtmlParagraphInterrupt(line)) return true;
   if (BULLET_ITEM.test(line.text)) return true;
   const ordered = ORDERED_ITEM.exec(line.text);
   return ordered !== null && Number(ordered[1]) === 1;
