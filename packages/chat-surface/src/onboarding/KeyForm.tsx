@@ -207,123 +207,134 @@ export function KeyForm({
 
   return (
     <div className="fr-kf" data-testid="first-run-keyform">
-      {resolved ? (
-        <div
-          className={
-            provider !== null
-              ? "fr-kf__resolved"
-              : "fr-kf__resolved fr-kf__resolved--unknown"
-          }
-          data-testid="first-run-key-resolved"
-          data-provider={provider?.id ?? ""}
-        >
-          {provider !== null ? (
-            <>
-              <span
-                className="fr-kf__dot"
-                aria-hidden="true"
-                data-swatch={provider.dotColor}
-                style={{ backgroundColor: provider.dotColor }}
-              />
-              <span className="fr-kf__who">{provider.label}</span>
-            </>
-          ) : null}
-          <button
-            type="button"
-            className="fr-kf__masked"
-            onClick={() => setSettled(false)}
-            aria-label="Edit key"
-            data-testid="first-run-key-edit"
-          >
-            {maskKey(apiKey)}
-          </button>
-          {provider !== null ? (
-            <button
-              type="button"
-              className="fr-kf__link"
-              onClick={() => setPicking((open) => !open)}
-              aria-expanded={picking}
-              data-testid="first-run-key-change"
-            >
-              {FIRST_RUN_COPY.keyForm.change}
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <TextInput
-          className="fr-kf__input"
-          type="password"
-          autoComplete="new-password"
-          spellCheck={false}
-          value={apiKey}
-          placeholder={inputPlaceholder}
-          aria-label="API key"
-          onChange={(event) => handleChange(event.target.value)}
-          onPaste={() => {
-            // React fires onChange after onPaste; settling on the next tick
-            // lets the new value land first, so the verdict reads the pasted
-            // key rather than the empty field it replaced.
-            setTimeout(() => {
-              if (aliveRef.current) setSettled(true);
-            }, 0);
-          }}
-          onBlur={() => setSettled(true)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              setSettled(true);
+      {/* The field and its menu share one positioning context so the menu can
+          OVERLAY rather than push. In flow it grew the card by its own height,
+          and `.fr-gate`'s `align-items: stretch` grew the sibling card to
+          match — so pasting an unrecognised key reflowed the whole gate and
+          opened a void in the local-model card beside it. */}
+      <div className="fr-kf__field">
+        {resolved ? (
+          <div
+            className={
+              provider !== null
+                ? "fr-kf__resolved"
+                : "fr-kf__resolved fr-kf__resolved--unknown"
             }
-          }}
-          data-testid="first-run-key-input"
-        />
-      )}
-
-      {unknown ? (
-        <p className="fr-kf__error" data-testid="first-run-key-unknown">
-          {FIRST_RUN_COPY.keyForm.unknown}
-        </p>
-      ) : null}
-
-      {listOpen ? (
-        <div
-          className="fr-kf__picker"
-          role="listbox"
-          aria-label={FIRST_RUN_COPY.keyForm.choose}
-          data-testid="first-run-key-picker"
-        >
-          {providers.map((p) => (
+            data-testid="first-run-key-resolved"
+            data-provider={provider?.id ?? ""}
+          >
+            {provider !== null ? (
+              <>
+                <span
+                  className="fr-kf__dot"
+                  aria-hidden="true"
+                  data-swatch={provider.dotColor}
+                  style={{ backgroundColor: provider.dotColor }}
+                />
+                <span className="fr-kf__who">{provider.label}</span>
+              </>
+            ) : null}
             <button
-              key={p.id}
               type="button"
-              role="option"
-              aria-selected={p.id === providerId}
-              className={
-                p.id === providerId
-                  ? "fr-kf__pick fr-kf__pick--on"
-                  : "fr-kf__pick"
-              }
-              onClick={() => {
-                setOverride(p.id);
-                setPicking(false);
-                setSettled(true);
-                setError(null);
-              }}
-              data-testid={`first-run-key-pick-${p.id}`}
+              className="fr-kf__masked"
+              onClick={() => setSettled(false)}
+              aria-label="Edit key"
+              data-testid="first-run-key-edit"
             >
-              <span
-                className="fr-kf__dot"
-                aria-hidden="true"
-                data-swatch={p.dotColor}
-                style={{ backgroundColor: p.dotColor }}
-              />
-              <span className="fr-kf__pick-label">{p.label}</span>
-              {p.keyPrefix !== undefined ? (
-                <span className="fr-kf__pick-hint">{p.keyPrefix}…</span>
-              ) : null}
+              {maskKey(apiKey)}
             </button>
-          ))}
-        </div>
-      ) : null}
+            {provider !== null ? (
+              <button
+                type="button"
+                className="fr-kf__link"
+                onClick={() => setPicking((open) => !open)}
+                aria-expanded={picking}
+                data-testid="first-run-key-change"
+              >
+                {FIRST_RUN_COPY.keyForm.change}
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <TextInput
+            className="fr-kf__input"
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={apiKey}
+            placeholder={inputPlaceholder}
+            aria-label="API key"
+            onChange={(event) => handleChange(event.target.value)}
+            onPaste={() => {
+              // React fires onChange after onPaste; settling on the next tick
+              // lets the new value land first, so the verdict reads the pasted
+              // key rather than the empty field it replaced.
+              setTimeout(() => {
+                if (aliveRef.current) setSettled(true);
+              }, 0);
+            }}
+            onBlur={() => setSettled(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                setSettled(true);
+              }
+            }}
+            data-testid="first-run-key-input"
+          />
+        )}
+
+        {listOpen ? (
+          <div
+            className="fr-kf__picker"
+            role="listbox"
+            aria-label={FIRST_RUN_COPY.keyForm.choose}
+            data-testid="first-run-key-picker"
+          >
+            {/* The question heads the list that answers it — so the menu can
+                overlay without hiding the reason it opened. */}
+            {unknown ? (
+              <p
+                className="fr-kf__picker-head"
+                data-testid="first-run-key-unknown"
+              >
+                {FIRST_RUN_COPY.keyForm.unknown}
+              </p>
+            ) : null}
+            {providers.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="option"
+                aria-selected={p.id === providerId}
+                className={
+                  p.id === providerId
+                    ? "fr-kf__pick fr-kf__pick--on"
+                    : "fr-kf__pick"
+                }
+                onClick={() => {
+                  setOverride(p.id);
+                  setPicking(false);
+                  setSettled(true);
+                  setError(null);
+                }}
+                data-testid={`first-run-key-pick-${p.id}`}
+              >
+                <span
+                  className="fr-kf__dot"
+                  aria-hidden="true"
+                  data-swatch={p.dotColor}
+                  style={{ backgroundColor: p.dotColor }}
+                />
+                <span className="fr-kf__pick-label">{p.label}</span>
+                {p.keyPrefix !== undefined ? (
+                  <span className="fr-kf__pick-hint">{p.keyPrefix}…</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
 
       <p className="fr-kf__note" data-testid="first-run-key-note">
         {note}

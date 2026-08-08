@@ -93,6 +93,17 @@ JS_ROW_SHRINK = """
 })()
 """
 
+# The gate's two card heights. The picker must OVERLAY, so opening it may not
+# change either one — in flow it grew the key card and `align-items: stretch`
+# grew the local-model card with it, opening a void beside the form.
+JS_GATE_HEIGHTS = """
+(() => {
+  const cards = Array.from(document.querySelectorAll('.fr-gcard'));
+  if (cards.length < 2) return null;
+  return cards.map(c => Math.round(c.getBoundingClientRect().height));
+})()
+"""
+
 JS_ALERT_TEXT = (
     "((document.querySelector('[role=alert]')||{}).innerText||'').trim().slice(0,200)"
 )
@@ -197,6 +208,22 @@ def vp2_settled_row_never_clips_its_own_control(s: DriverSession) -> None:
         f"  masked shrink={shrink['maskedShrink']} min-width={shrink['maskedMinWidth']}"
         f", Change fixed and on screen"
     )
+
+    # And the menu OVERLAYS. Toggled from Change, the row itself does not
+    # change, so any height delta is the picker's alone. In flow it added its
+    # own height to the card and `.fr-gate`'s `align-items: stretch` grew the
+    # local-model card to match, opening a void beside the form.
+    closed = s.evaluate(JS_GATE_HEIGHTS)
+    s.click("[data-testid=first-run-key-change]")
+    assert s.wait_for("[data-testid=first-run-key-picker]", 10), (
+        "Change did not open the provider picker"
+    )
+    opened = s.evaluate(JS_GATE_HEIGHTS)
+    assert closed and opened and closed == opened, (
+        f"opening the picker resized the gate: {closed} -> {opened}"
+    )
+    s.click("[data-testid=first-run-key-change]")  # close it again
+    print(f"  picker overlays; gate cards steady at {opened}px")
 
 
 def vp2b_an_unrecognised_key_asks_instead_of_guessing(s: DriverSession) -> None:

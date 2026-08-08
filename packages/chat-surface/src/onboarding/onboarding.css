@@ -302,14 +302,42 @@
   text-underline-offset: 2px;
 }
 
+/* Anchors the picker so it can OVERLAY the card instead of growing it. */
+.fr-kf__field {
+  position: relative;
+}
+
 /* The fallback provider list. Vertical, so a fifth provider costs a row rather
-   than another wrap — the failure mode the tri-toggle had. */
+   than another wrap — the failure mode the tri-toggle had.
+   ABSOLUTE, not in flow: rendered in flow it added its own height to the card,
+   and `.fr-gate`'s `align-items: stretch` grew the sibling local-model card to
+   match — so pasting an unrecognised key reflowed the whole gate and opened a
+   void beside it. A menu overlays; only a menu that is not a menu pushes. */
 .fr-kf__picker {
+  position: absolute;
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  right: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
+  /* Opaque: it sits over the card, so a transparent list would read the card's
+     own text through its rows. */
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
+}
+
+/* The question heads the list that answers it, so the menu can overlay without
+   covering the reason it opened. */
+.fr-kf__picker-head {
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-danger);
 }
 
 .fr-kf__pick {
