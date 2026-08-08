@@ -41,11 +41,18 @@ _HINT_CHARS = 4
 # Ordered longest-prefix-first so ``sk-ant-`` and ``sk-or-`` win over the
 # bare ``sk-`` (OpenAI) when detecting which provider a pasted key most
 # likely belongs to. OpenRouter keys are ``sk-or-v1-…``.
+#
+# ``acp-`` (Virtuals) is here for DETECTION only — see ``_PREFIX_EXEMPT``. The
+# two concerns are deliberately decoupled: knowing that an ``acp-`` key is a
+# Virtuals key is useful, but asserting that every Virtuals key starts with
+# ``acp-`` would 400 any that does not, and that prefix is not published in
+# Virtuals' documentation. Detection may guess; rejection may not.
 _KNOWN_PREFIXES: tuple[tuple[ProviderName, str], ...] = (
     (ProviderName.ANTHROPIC, "sk-ant-"),
     (ProviderName.OPENROUTER, "sk-or-"),
     (ProviderName.OPENAI, "sk-"),
     (ProviderName.GOOGLE, "AIza"),
+    (ProviderName.VIRTUALS, "acp-"),
 )
 
 
@@ -256,9 +263,17 @@ def validate_api_key_format(*, provider: ProviderName, api_key: str) -> str:
     return cleaned
 
 
-#: Providers whose key format we cannot assert, so the prefix-mismatch gate is
-#: skipped. Membership means "unknown format", never "unvalidated" — every other
-#: bound still applies and the live probe remains the authority.
+#: Providers whose key format we cannot ASSERT, so the prefix-mismatch gate is
+#: skipped for them. Membership means "unknown format", never "unvalidated" —
+#: every other bound still applies and the live probe remains the authority.
+#:
+#: Virtuals appears in ``_KNOWN_PREFIXES`` *and* here, which is not a
+#: contradiction: ``acp-`` is good enough to infer a provider FROM a key, and
+#: not good enough to reject a key for lacking it. Concretely — an ``acp-`` key
+#: submitted as Anthropic is still rejected (the detected provider disagrees
+#: with the requested one), while a Virtuals key with some other shape is
+#: accepted and left to the live probe. Drop Virtuals from this set only once
+#: the prefix is confirmed for every key the gateway issues.
 _PREFIX_EXEMPT: frozenset[ProviderName] = frozenset(
     {ProviderName.OPENAI_COMPATIBLE, ProviderName.VIRTUALS}
 )

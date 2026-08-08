@@ -245,24 +245,113 @@
   width: 100%;
 }
 
-.fr-kf__prov {
-  align-self: flex-start;
-  max-width: 100%;
-  /* The toggle carries FOUR providers since Virtuals joined, and
-     `SegmentedControl` is an `inline-flex` row that does not wrap on its own —
-     so on a narrow window the last option used to spill past `max-width`
-     instead of reflowing. `flex-wrap` is NOT among the component's inline
-     styles, so this rule applies without needing `!important`.
-     `row-gap` keeps a wrapped second line off the first. */
-  flex-wrap: wrap;
-  row-gap: var(--space-xs);
-}
-
-/* Provider tri-toggle option = leading swatch dot + label. */
-.fr-kf__opt {
-  display: inline-flex;
+/* The settled row — what the input becomes once the provider is known. It is
+   the same height as the input it replaces, so resolving a key does not make
+   the card jump. */
+.fr-kf__resolved {
+  display: flex;
   align-items: center;
   gap: var(--space-xs);
+  min-height: 36px;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+}
+
+/* Nothing matched: neutral, not alarming — the user has done nothing wrong. */
+.fr-kf__resolved--unknown {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
+}
+
+.fr-kf__who {
+  font-weight: 600;
+  flex: none;
+}
+
+/* The masked key gives way first. It is the only unbounded string in the row,
+   and the controls either side of it must never be what gets clipped. */
+.fr-kf__masked {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-text-subtle);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.fr-kf__link {
+  flex: none;
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The fallback provider list. Vertical, so a fifth provider costs a row rather
+   than another wrap — the failure mode the tri-toggle had. */
+.fr-kf__picker {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.fr-kf__pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  font: inherit;
+  font-size: var(--font-size-sm); /* 13px */
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fr-kf__pick:last-child {
+  border-bottom: 0;
+}
+
+.fr-kf__pick:hover,
+.fr-kf__pick--on {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.fr-kf__pick-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The prefix hint is why a row is the right answer — it must not be the thing
+   that pushes the label out of view. */
+.fr-kf__pick-hint {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-text-subtle);
 }
 
 .fr-kf__dot {

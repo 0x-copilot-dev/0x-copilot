@@ -45,38 +45,50 @@ LABEL = "Virtuals"
 SETTINGS_BUTTON = '[aria-label="Settings"]'
 NAV_PROVIDER_KEYS = '[data-slug="provider-keys"]'
 
-# Long enough to clear the format gate (>= 20 chars) and carry no other
-# vendor's prefix, so it reaches the LIVE probe rather than dying client-side.
-# That is the point of VP-3: the format check must NOT be what stops it.
-WRONG_KEY = "virtuals-deliberately-wrong-key-0000000000"
+# Carries Virtuals' `acp-` prefix so the form INFERS Virtuals, and is long
+# enough to clear the format gate — so it reaches the LIVE probe rather than
+# dying client-side. That is the point of VP-3: neither inference nor the format
+# check may be what stops it.
+WRONG_KEY = "acp-deliberately-wrong-key-00000000000000"
+# No known prefix — the one input that must make the form ASK instead of guess.
+UNKNOWN_KEY = "zz-deliberately-unrecognised-key-000000"
 
-# The toggle's rows, in DOM order, with the swatch each one carries.
-JS_KEY_PROVIDER_ROWS = """
+# What the settled row concluded, read off the DOM the user is looking at.
+JS_RESOLVED = """
 (() => {
-  const g = document.querySelector('[data-testid=segmented-control]');
-  if (!g) return null;
-  return Array.from(g.querySelectorAll('[role=radio]')).map(n => ({
+  const n = document.querySelector('[data-testid=first-run-key-resolved]');
+  if (!n) return null;
+  return {
+    provider: n.getAttribute('data-provider') || '',
     text: (n.innerText || '').trim(),
-    checked: n.getAttribute('aria-checked') === 'true',
-    swatch: (n.querySelector('.fr-kf__dot') || {}).getAttribute
-      ? n.querySelector('.fr-kf__dot').getAttribute('data-swatch')
-      : null,
-  }));
+    connect: ((document.querySelector('[data-testid=first-run-key-connect]')
+      || {}).innerText || '').trim(),
+  };
 })()
 """
 
-# The toggle wraps rather than spilling once it carries a fourth provider.
-# jsdom runs no layout, so this is the only place the rule is actually MEASURED.
-JS_TOGGLE_LAYOUT = """
+# The settled row's shrink contract, MEASURED against the real stylesheet.
+# Same class of bug as TcWriteGateRow: the row holds one unbounded string (the
+# masked key) beside a control (Change). If the string does not give way first,
+# the control is what gets clipped — and jsdom, running no layout, would report
+# a perfectly healthy row either way.
+JS_ROW_SHRINK = """
 (() => {
-  const g = document.querySelector('.fr-kf__prov');
-  if (!g) return null;
-  const cs = getComputedStyle(g);
-  const r = g.getBoundingClientRect();
+  const row = document.querySelector('[data-testid=first-run-key-resolved]');
+  if (!row) return null;
+  const masked = row.querySelector('[data-testid=first-run-key-edit]');
+  const change = row.querySelector('[data-testid=first-run-key-change]');
+  if (!masked || !change) return null;
+  const m = getComputedStyle(masked), c = getComputedStyle(change);
+  const rowBox = row.getBoundingClientRect();
+  const changeBox = change.getBoundingClientRect();
   return {
-    flexWrap: cs.flexWrap,
-    right: Math.round(r.right),
-    clientWidth: document.documentElement.clientWidth,
+    maskedShrink: m.flexShrink,
+    maskedMinWidth: m.minWidth,
+    maskedOverflow: m.overflow,
+    changeShrink: c.flexShrink,
+    changeVisible: changeBox.width > 0
+      && Math.round(changeBox.right) <= Math.round(rowBox.right) + 1,
   };
 })()
 """
@@ -125,50 +137,98 @@ def sign_in(s: DriverSession) -> None:
 
 
 # ── phases ───────────────────────────────────────────────────────────────────
-def vp1_ftue_offers_virtuals_first(s: DriverSession) -> None:
-    """The first-run toggle leads with Virtuals and carries four providers."""
+def vp1_key_field_asks_nothing_and_infers(s: DriverSession) -> None:
+    """One field, no provider choice — and an `acp-` key resolves to Virtuals."""
 
     s.shot("ftue-gate")
     s.click("[data-testid=first-run-add-key]")
     assert s.wait_for("[data-testid=first-run-keyform]", 20), "KeyForm never opened"
-    s.shot("ftue-keyform-virtuals-first")
+    s.shot("ftue-keyform-one-field")
 
-    rows = s.evaluate(JS_KEY_PROVIDER_ROWS)
-    assert rows, "provider toggle not found"
-    labels = [r["text"] for r in rows]
-    assert labels[0].startswith(LABEL), f"Virtuals must lead the toggle; got {labels}"
-    assert len(rows) == 4, f"expected four providers, got {labels}"
-    assert rows[0]["checked"], (
-        f"the leading provider must be preselected; checked={[r['checked'] for r in rows]}"
+    # The toggle is gone: the card asks for a key and nothing else.
+    assert not s.present("[data-testid=segmented-control]"), (
+        "a provider toggle is still rendered — the form should ask nothing"
     )
-    assert rows[0]["swatch"] == "#5ad1e8", (
-        f"Virtuals swatch is inline data, got {rows[0]['swatch']!r}"
+    assert not s.present("[data-testid=first-run-key-picker]"), (
+        "the fallback picker is open before a key was even entered"
     )
-    print(f"  toggle: {labels} (preselected={labels[0]!r})")
+
+    s.fill("[data-testid=first-run-key-input]", WRONG_KEY)
+    s.press("[data-testid=first-run-key-input]", "Tab")  # blur takes the verdict
+    assert s.wait_for("[data-testid=first-run-key-resolved]", 10), (
+        "the key never resolved to a provider"
+    )
+    s.shot("ftue-key-inferred-virtuals")
+
+    row = s.evaluate(JS_RESOLVED)
+    assert row and row["provider"] == PROVIDER, (
+        f"acp- must infer Virtuals; resolved to {row and row['provider']!r}"
+    )
+    # The destination is named on the control the user is about to press.
+    assert LABEL in row["connect"], (
+        f"Connect must name the provider; button reads {row['connect']!r}"
+    )
+    print(f"  resolved={row['provider']!r}, button={row['connect']!r}")
 
 
-def vp2_toggle_wraps_rather_than_spilling(s: DriverSession) -> None:
-    """The fourth row must reflow, not overflow — measured on the real screen.
+def vp2_settled_row_never_clips_its_own_control(s: DriverSession) -> None:
+    """The masked key gives way before Change does — measured, not asserted.
 
-    `SegmentedControl` is an inline-flex row that does not wrap on its own, so
-    adding a fourth provider could push the last option past the viewport. Unit
-    tests cannot see this: jsdom performs no layout, so a green DOM assertion
-    would say nothing about whether the row fits.
+    jsdom performs no layout, so a unit test cannot tell a healthy row from one
+    whose only escape hatch has been pushed off the edge by a long key.
     """
 
-    layout = s.evaluate(JS_TOGGLE_LAYOUT)
-    assert layout, ".fr-kf__prov not found"
-    assert layout["flexWrap"] == "wrap", (
-        f"toggle must be allowed to wrap; flex-wrap={layout['flexWrap']!r}"
+    shrink = s.evaluate(JS_ROW_SHRINK)
+    assert shrink, "settled row or its controls not found"
+    assert shrink["maskedShrink"] != "0", (
+        f"the masked key must shrink; flex-shrink={shrink['maskedShrink']!r}"
     )
-    assert layout["right"] <= layout["clientWidth"], (
-        f"toggle overflows the viewport: right={layout['right']} "
-        f"> clientWidth={layout['clientWidth']}"
+    assert shrink["maskedMinWidth"] in ("0px", "0"), (
+        f"a flex item needs min-width:0 to shrink; got {shrink['maskedMinWidth']!r}"
     )
+    assert shrink["maskedOverflow"] == "hidden", (
+        f"the masked key must clip itself; overflow={shrink['maskedOverflow']!r}"
+    )
+    assert shrink["changeShrink"] == "0", (
+        f"Change must not shrink; flex-shrink={shrink['changeShrink']!r}"
+    )
+    assert shrink["changeVisible"], "Change is clipped out of the settled row"
     print(
-        f"  flex-wrap={layout['flexWrap']}, right={layout['right']}px "
-        f"within {layout['clientWidth']}px"
+        f"  masked shrink={shrink['maskedShrink']} min-width={shrink['maskedMinWidth']}"
+        f", Change fixed and on screen"
     )
+
+
+def vp2b_an_unrecognised_key_asks_instead_of_guessing(s: DriverSession) -> None:
+    """No prefix match is the ONE case that asks the user anything."""
+
+    s.click("[data-testid=first-run-key-edit]")
+    assert s.wait_for("[data-testid=first-run-key-input]", 10), (
+        "editing the key did not restore the input"
+    )
+    s.fill("[data-testid=first-run-key-input]", UNKNOWN_KEY)
+    s.press("[data-testid=first-run-key-input]", "Tab")
+    assert s.wait_for("[data-testid=first-run-key-picker]", 10), (
+        "an unrecognised key did not open the provider picker"
+    )
+    s.shot("ftue-unknown-key-picker")
+
+    row = s.evaluate(JS_RESOLVED)
+    assert row is not None and row["provider"] == "", (
+        f"a provider was invented for an unrecognised key: {row and row['provider']!r}"
+    )
+    # Every provider is offered, each with the prefix that explains the miss.
+    for pid in ("virtuals", "anthropic", "openai", "openrouter"):
+        assert s.present(f"[data-testid=first-run-key-pick-{pid}]"), (
+            f"{pid} missing from the fallback picker"
+        )
+    print("  no guess made; picker offers all four providers")
+
+    # Put the recognised key back for VP-3.
+    s.click("[data-testid=first-run-key-edit]")
+    s.fill("[data-testid=first-run-key-input]", WRONG_KEY)
+    s.press("[data-testid=first-run-key-input]", "Tab")
+    assert s.wait_for("[data-testid=first-run-key-resolved]", 10)
 
 
 def vp3_a_wrong_key_is_rejected_end_to_end(s: DriverSession) -> None:
@@ -180,7 +240,6 @@ def vp3_a_wrong_key_is_rejected_end_to_end(s: DriverSession) -> None:
     is back.
     """
 
-    s.fill("[data-testid=first-run-key-input]", WRONG_KEY)
     s.click("[data-testid=first-run-key-connect]")
 
     # The reject travels DOM → facade → backend → compute.virtuals.io and back.
@@ -325,11 +384,20 @@ def main() -> int:
         lambda: DriverSession(name="virtuals-provider"),
         setup=sign_in,
         phases=[
-            ("VP-1", "first-run offers Virtuals first", vp1_ftue_offers_virtuals_first),
+            (
+                "VP-1",
+                "one field, and acp- infers Virtuals",
+                vp1_key_field_asks_nothing_and_infers,
+            ),
             (
                 "VP-2",
-                "the four-row toggle wraps, not spills",
-                vp2_toggle_wraps_rather_than_spilling,
+                "the settled row never clips Change",
+                vp2_settled_row_never_clips_its_own_control,
+            ),
+            (
+                "VP-2b",
+                "an unknown key asks, never guesses",
+                vp2b_an_unrecognised_key_asks_instead_of_guessing,
             ),
             (
                 "VP-3",

@@ -63,6 +63,13 @@ export interface FirstRunKeyProvider {
   readonly dotColor: string; // inline swatch value (SPEC §Data)
   readonly placeholder: string; // "sk-ant-…"
   readonly keyPrefix?: string; // client format-check hint
+  /**
+   * When true, `keyPrefix` may be used to RECOGNISE this provider but never to
+   * reject a key that lacks it. Set for a provider whose format we have not
+   * confirmed — guessing right is useful, guessing wrong must not cost the user
+   * a key they cannot submit.
+   */
+  readonly keyPrefixIsAdvisory?: boolean;
 }
 
 // SPEC §Data — dot colors are swatch data, not the app accent. (Anthropic's
@@ -74,10 +81,13 @@ export const FIRST_RUN_KEY_PROVIDERS: readonly FirstRunKeyProvider[] = [
     label: "Virtuals",
     meta: "60+ models",
     dotColor: "#5ad1e8",
-    // No `keyPrefix` — the format is undocumented, so `checkFirstRunKeyFormat`
-    // falls through to its permissive length check rather than rejecting a key
-    // it cannot actually recognise.
     placeholder: "paste your Virtuals key",
+    // `acp-` is used to INFER this provider from a pasted key, never to reject
+    // one for lacking it — the prefix is not in Virtuals' public docs, so
+    // `checkFirstRunKeyFormat` deliberately skips the prefix gate for Virtuals
+    // and leaves the verdict to the live probe. See `keyPrefixIsAdvisory`.
+    keyPrefix: "acp-",
+    keyPrefixIsAdvisory: true,
   },
   {
     id: "anthropic",
@@ -214,9 +224,17 @@ export const FIRST_RUN_COPY = {
     btn: "Add a key",
   },
   keyForm: {
-    placeholder: "sk-…  paste your API key",
+    placeholder: "paste your API key",
     note: "stored in your OS keychain — never uploaded",
     btn: "Connect",
+    /** Shown once a key resolves; the provider name is appended. */
+    btnFor: "Connect",
+    /** Re-opens the provider list from a settled row. */
+    change: "Change",
+    /** No prefix matched — the ONE case that asks the user anything. */
+    unknown: "We can't tell whose key this is.",
+    /** Label above the fallback picker. */
+    choose: "Choose a provider",
   },
   topbar: {
     brandLead: "0x",
@@ -253,6 +271,7 @@ export function checkFirstRunKeyFormat(
   }
   if (
     provider.keyPrefix !== undefined &&
+    provider.keyPrefixIsAdvisory !== true &&
     !trimmed.startsWith(provider.keyPrefix)
   ) {
     return {

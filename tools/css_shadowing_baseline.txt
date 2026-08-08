@@ -133,8 +133,6 @@ apps/frontend/src/styles.css :: .fr-kf__dot
 apps/frontend/src/styles.css :: .fr-kf__error
 apps/frontend/src/styles.css :: .fr-kf__input
 apps/frontend/src/styles.css :: .fr-kf__note
-apps/frontend/src/styles.css :: .fr-kf__opt
-apps/frontend/src/styles.css :: .fr-kf__prov
 apps/frontend/src/styles.css :: .gbtn
 apps/frontend/src/styles.css :: .gbtn--pri
 apps/frontend/src/styles.css :: .gbtn--pri:hover:not(:disabled)

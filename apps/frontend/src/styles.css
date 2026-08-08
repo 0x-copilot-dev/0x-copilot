@@ -2182,17 +2182,6 @@ p {
   width: 100%;
 }
 
-.fr-kf__prov {
-  align-self: flex-start;
-  max-width: 100%;
-}
-
-.fr-kf__opt {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
 .fr-kf__dot {
   display: inline-block;
   width: 8px;
