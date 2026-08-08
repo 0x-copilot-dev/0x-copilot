@@ -140,3 +140,57 @@ _Remediation._ Refuse on the op, not on the binding: in RowWriteComposer.compose
 
 The four probes live outside the repo at `~/Documents/work/scratch-attacks/`.
 They are the regression suite for any fix: each must REJECT after remediation.
+
+---
+
+# Status after two hardening passes (2026-08-08)
+
+## Closed
+
+All three CRITICALs and the highs, by a total account rather than more guards.
+Every `StagedRow` carries `sends: tuple[StagedArg, ...]` — one entry per key in
+`target_args`, keyed by the connector's own arg name, tagged `edited` / `carried` /
+`proposed`. `RowsetValidator` enforces an ordered bijection with type-tagged value
+identity, and the check now runs at **three** points, the last immediately before
+dispatch — it previously ran only at staging, so a payload that reached the fold without
+`sends` folded to `()` and dispatched unchallenged.
+
+Each of the four probes was re-run by an independent agent and now REJECTS. The worked
+exploit still _composes_ but no longer _hides_: `sends` carries
+`[cc/edited, to/carried, subject/carried, body/carried]` and the body is on screen.
+
+The render half was clipped and is fixed — see below; that mattered as much as the rule.
+
+## Open
+
+**The op VERB is disclosed but not enforced.** Rule 7 addresses the record by VALUE, so:
+
+    [REFUSED] create, row has id         -> UNADDRESSED_RECORD
+    [STAGED ] create, title == id value  -> target_args={priority, team_id, title}
+
+A row whose `title` happens to equal its key reads as addressed, and a CREATE staged from
+an edit gesture goes through. The approver does see `connector.op` in the review footer,
+so the verb is not hidden — but nothing enforces that the operation matches the gesture.
+
+**The email send lane is dark**, deliberately. A `send_reply` op declares
+`required = [to, subject, body]`: the required set IS the content, and `input_schema`
+carries no signal separating "addresses a record" from "is the message". It refuses as
+`UNBOUNDED_OP` before staging.
+
+Both wait on the same thing: **a connector- or catalogue-authored declaration naming the
+addressing args**, captured beside `input_schema` at read time. No heuristic was
+substituted for it, because every heuristic in this area is what the four attackers walked
+through.
+
+## The lesson that generalises past this lane
+
+The disclosure was correct in the DOM and clipped on screen:
+
+    width   value ink visible      origin note
+    760px   6.3% / 2.7%            0px
+    1200px  19.1% / 10.4%          0px
+
+No ellipsis — a cut value read as a complete short value. The suite was green because
+**jsdom performs no layout**; `toHaveTextContent` asserts presence, the exact thing CSS
+then hides. Any assertion that a user can SEE something needs `getComputedStyle` against
+the real stylesheet, not a DOM query.
