@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "electron": "42.1.0",
-    "playwright": "1.62.0"
+    "playwright": "1.62.1"
   },
   "scripts": {
     "assemble": "node scripts/assemble-payload.mjs",
