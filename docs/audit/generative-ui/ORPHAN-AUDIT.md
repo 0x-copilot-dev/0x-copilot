@@ -197,7 +197,66 @@ SheetDiff (485), Sheet (299), Opportunity (218), Slide (184), SlideDiff (141),
   why `isLegacySurfaceCreated` must guess "is this record historic?" from five string signals,
   all of which match current data. The guessing is a symptom; the missing stamp is the cause.
 
-### ⚠️ One slice was not adversarially verified
+### The receipt / audit-export slice — now verified (2026-08-05)
+
+The slice below was originally unchecked; it has since been mapped and adversarially attacked.
+**All four modules stay `dark`, and the recommendation is WIRE IT, not delete it.** The
+original verdict was right by accident — its stated mechanism is wrong.
+
+**Every backend gate is OPEN on the packaged desktop.** The original claim was that
+`receipt_export_v2` is store-gated off, citing `in_memory/runtime_api_store.py:115`
+(`receipt_export_v2_available = False`). But the desktop runs the **file** store
+(`service-env.ts:512` sets `RUNTIME_STORE_BACKEND="file"`), and
+`file/runtime_api_store.py:271` sets that flag **`True`**. The signer gate is open too
+(`service-env.ts:424,557` set `AUDIT_HMAC_KEY`), and the catalog is wired unconditionally
+(`runtime_api/app.py:735`). Both routes would return 200 if anything called them.
+
+**It is dark because nothing above the facade calls it.** Repo-wide, `receipt/export` appears
+only in the route, the facade proxy, type declarations (`api-types/src/ledger.ts:1745,1775,1789`),
+an authz route table, and tests. `ReceiptExportV2` has zero consumers in `packages/` or `apps/`.
+This is the limitation the repo's own gate concedes at
+`tools/check_route_reachability.py:105-107` — facade-reachable is not user-reachable — which is
+why no receipt entry appears in the route baseline.
+
+**Four corrections to earlier claims, including two of mine:**
+
+| Claim                                                           | Reality                                                                                                                                                                                                |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `receipt_export.py` (v1) is superseded by v2                    | **v2 depends on v1.** `receipt_export_v2.py:978` calls `ReceiptExportVerifier(...).verify(bundle)` in `_verify_legacy`. Deleting v1 breaks v2.                                                         |
+| Deleting the lane would strand `packages/audit-chain`           | **Refuted.** `copilot_audit_chain` has ten non-test `src` importers; only two are in this lane. `services/backend`'s `store.py`, `connectors/store.py`, `projects/store.py` are independent consumers. |
+| `receipt.py` is a third caller of `ReceiptFoldV2`               | A **re-export, not a call** — `receipt.py:44` imports it; the only other occurrences are `__all__` at `:688-689`.                                                                                      |
+| `packages/audit-chain` is "shared Python + TS" (root CLAUDE.md) | **Python-only.** No `package.json`, no TS. `docs/audit/flows/data-persistence-retention.md:155` already records this correction.                                                                       |
+
+**A live side effect nobody had noticed.** `FileAuditExportVerificationStore.__init__`
+(`file/audit_export_verification_store.py:40-46`) eagerly does
+`mkdir(mode=0o700, parents=True, exist_ok=True)`, and the store is constructed at every API
+boot (`app.py:226` → `_build_coordinators:516` → `:735`). So **a packaged desktop creates an
+`audit_export_verification/` directory on every boot and never writes a byte into it** — the
+object is live, every writer is unreachable.
+
+**The worker arm is doubly unreachable.** `AuditExportVerificationSamplingLoop`'s only
+construction site is `runtime_worker/__main__.py:415`, and that module never executes on
+desktop (the app runs an in-process worker built directly at `runtime_api/app.py:1416-1495`).
+Setting `AUDIT_EXPORT_VERIFICATION_SAMPLING_ENABLED=true` would still start nothing.
+
+**Why it is not a deletion candidate.**
+
+1. A prior audit already ruled on it. `docs/audit/ai-backend-smells/REDUCTION-LEDGER.md:184`,
+   under _"Genuine gaps — keep, and in two cases wire"_: `audit_export_verification` (614) —
+   _"real **compliance** obligations, currently unwired. **WIRE_IT.**"_
+2. All four are **11–12 days old** (2026-07-24/25), and `TASKS.md:81` adopts: nothing younger
+   than 30 days is deleted without asking its author.
+3. PRD-E1 §D7 states verbatim the rule root CLAUDE.md restates — _"run execution does not
+   silently claim audit exportability if the adapter is no-op/in-memory"_ — and these files are
+   its **only** implementation (`in_memory/runtime_api_store.py:113-115` +
+   `conversation_query_service.py:808`).
+
+Note it is **not** in the customer-facing matrix: `docs/security/control-mapping.md` cites
+`runtime_audit_log` / `PostgresRuntimeApiStore.write_audit_log` for audit durability, not this
+lane. So deleting it would not falsify a customer claim — but it would delete a spec'd control
+a prior audit told us to wire.
+
+### ⚠️ (historical) One slice was not adversarially verified
 
 The `refute:receipt-audit` agent died on a connection error. The receipt/audit lane's not-live
 claims — `receipt_export_v2.py` (1,028), `receipt_v2.py` (793), `audit_export_verification.py`

@@ -18,9 +18,13 @@ from agent_runtime.api.stage_ledger import RuntimeStageLedger
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.rowset import (
     AgentHold,
+    ProposedRow,
     RowFieldChange,
+    RowsetValidationError,
+    RowsetValidator,
     RowStance,
     StagedRow,
+    StagedRowAccounting,
 )
 from agent_runtime.surfaces_v2.staging import (
     InvalidRowset,
@@ -67,14 +71,21 @@ class _FakePolicy:
 
 
 def _rows(n: int, *, changes: int = 1) -> tuple[StagedRow, ...]:
+    """Fully-accounted rows: every change is an arg, every arg is disclosed."""
+
     return tuple(
-        StagedRow(
-            row_key=f"row{i}",
-            title=f"Issue {i}",
-            target_args={"id": f"row{i}", "priority": 2},
-            changes=tuple(
-                RowFieldChange(field=f"f{j}", old=1, new=2) for j in range(changes)
-            ),
+        StagedRowAccounting.for_proposed(
+            ProposedRow(
+                row_key=f"row{i}",
+                title=f"Issue {i}",
+                target_args={
+                    "id": f"row{i}",
+                    **{f"f{j}": 2 for j in range(changes)},
+                },
+                changes=tuple(
+                    RowFieldChange(field=f"f{j}", old=1, new=2) for j in range(changes)
+                ),
+            )
         )
         for i in range(n)
     )
@@ -171,8 +182,12 @@ class TestStageRowset:
     async def test_duplicate_row_keys_rejected_422_no_event(self) -> None:
         h = Harness()
         dup = (
-            StagedRow(row_key="x", title="A", target_args={}),
-            StagedRow(row_key="x", title="B", target_args={}),
+            StagedRowAccounting.for_proposed(
+                ProposedRow(row_key="x", title="A", target_args={"id": "x"})
+            ),
+            StagedRowAccounting.for_proposed(
+                ProposedRow(row_key="x", title="B", target_args={"id": "x"})
+            ),
         )
         with pytest.raises(InvalidRowset):
             await h.stage(dup)
@@ -295,4 +310,61 @@ class TestRecordRowDecision:
                 stage_id=state.stage_id,
                 decision="hold",
                 row_keys=["row0"],
+            )
+
+
+class TestTheAccountSurvivesTheLedgerRoundTrip:
+    """A replayed run must be reviewable on the terms it was staged on.
+
+    ``sends`` rides the ``revision.added`` payload beside ``target_args``
+    themselves. If it did not survive the fold, a reopened stage would present
+    rows whose outbound fields nobody can see — and the fail-closed answer would
+    be a stage that can no longer be approved at all.
+    """
+
+    async def test_sends_is_emitted_on_the_ledger_and_folded_back(self) -> None:
+        h = Harness()
+        staged = _rows(1)
+
+        state = await h.stage(staged)
+
+        revision = h.store.events_by_run[_RUN][2]
+        assert revision.payload["rowset"]["rows"][0]["sends"] == [
+            {
+                "arg": "id",
+                "origin": "proposed",
+                "column": None,
+                "old": None,
+                "new": "row0",
+            },
+            {
+                "arg": "f0",
+                "origin": "proposed",
+                "column": "f0",
+                "old": 1,
+                "new": 2,
+            },
+        ]
+        assert state.staged_row("row0").sends == staged[0].sends
+
+    async def test_a_replayed_row_whose_account_is_gone_cannot_be_revalidated(
+        self,
+    ) -> None:
+        # The migration case, driven through the REAL fold: a ledger row written
+        # before this rule carries no ``sends``, so the row the fold rebuilds
+        # refuses at the validator. A write proposed under the old accounting is
+        # not approvable under the new one — the correct answer, not a bug to
+        # route around.
+        h = Harness()
+        state = await h.stage(_rows(1))
+        h.store.events_by_run[_RUN][2].payload["rowset"]["rows"][0].pop("sends")
+
+        replayed = await h.stager.get_state(
+            org_id=_ORG, run_id=_RUN, stage_id=state.stage_id
+        )
+
+        assert replayed.staged_row("row0").sends == ()
+        with pytest.raises(RowsetValidationError):
+            RowsetValidator.validate(
+                rows=(replayed.staged_row("row0"),), agent_holds=()
             )

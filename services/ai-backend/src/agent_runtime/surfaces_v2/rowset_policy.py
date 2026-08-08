@@ -41,4 +41,30 @@ class RowsetPolicyResolver:
             return False
 
 
-__all__ = ["RowsetPolicyResolver"]
+@dataclass(frozen=True)
+class NeverBypassPolicy:
+    """A ``WritePolicyResolverPort`` that auto-applies NOTHING, ever.
+
+    ``WriteStager.policy_resolver=None`` already means "nothing auto-applies",
+    so this exists for the case where the difference between *unwired* and
+    *deliberately refused* is load-bearing: the connector write-back lane
+    (:mod:`agent_runtime.capabilities.surfaces.write_back`) stages rows the
+    model composed from a user's cell edits, and the user has not yet SEEN the
+    ``target_args`` at staging time — they saw a cell diff. Letting an
+    allow-always connector policy fire there would apply an argument set nobody
+    ever reviewed, which is the exact inverse of the WYSIWYG property staging
+    exists to hold.
+
+    Stating it as a resolver rather than as a ``None`` keeps the refusal
+    greppable and testable, and means a future composition root that starts
+    injecting a resolver by default cannot silently re-open the branch.
+    """
+
+    def bypass_for(self, *, connector: str, op: str) -> bool:
+        """Always ``False`` — this lane has no auto-apply branch."""
+
+        del connector, op
+        return False
+
+
+__all__ = ["NeverBypassPolicy", "RowsetPolicyResolver"]

@@ -21,23 +21,42 @@ Spec-acquisition ladder (D4, floored by the generative-UI-floor PRD §3.3):
 4. **inferred** — rung 0,
    :class:`~agent_runtime.capabilities.surfaces.infer.SurfaceSpecInferrer`
    derives a real spec from the payload's own structure. Deterministic, free,
-   and it cannot fail, so a mapping-shaped output now ALWAYS ships a spec. Async
+   and it cannot fail, so a mapping-shaped payload now ALWAYS ships a spec. Async
    generation is still invited here (when a scheduler is wired): the model is a
    *refinement* of the inferred spec, no longer its only supplier, and its
    result arrives via ``surface_spec_generated`` and merges by URI (PRD-04).
+5. **shaped** — the model, asked the *shaping* question rather than the
+   spec-refinement one (:mod:`.shaping_answer`), and reached only through
+   :meth:`SurfaceProjector.project`. It exists because rungs 1–4 all assume the
+   payload has addressable structure and a measured matrix of eight real MCP
+   shapes says five do not: an array at the root, prose, a markdown table, a CSV
+   block, a multi-block result. For those the floor is not *worse* than the
+   model — it has nothing at all, which is precisely when one model call is
+   worth making. Its answer may also be **no surface**, which no spec can say.
 
 That inversion is the point of the PRD: having a spec used to be the happy path
 and everything else a failure state the user read as an apology ("No spec
 matched …"). With rung 0 unconditional there is no failure state to word.
 
+Rungs 4 and 5 are mutually exclusive by construction — rung 4 answers for a
+mapping and rung 5 is only consulted when nothing answered — so a read costs **at
+most one** model call whichever way it goes.
+
 Every rung reads the payload **after**
 :class:`~agent_runtime.capabilities.surfaces.infer.EnvelopeUnwrapper` has peeled
-its wrapper envelopes, and the peeled value is what ships as ``state.data`` —
-see :meth:`SurfaceProjector._unwrapped` for why the two must be the same value.
+its wrapper envelopes and decoded its MCP content blocks, and that decoded value
+is what ships as ``state.data`` — see :meth:`SurfaceProjector._decoded` for why
+the two must be the same value, and why the projector no longer falls back to
+the wrapper when the decode lands on something that is not a mapping.
 
-The URI grammar is ``<archetype>://<server-slug>/<tool-or-resource>/<id>``; the
-id segment is derived from a common id field on the output, else a stable hash
-of the call id, so the same logical resource yields the same URI across events.
+The URI grammar is ``<scheme>://<server-slug>/<tool-or-resource>/<id>``; the id
+segment is derived from a common id field on the output, else a stable hash of
+the call id, so the same logical resource yields the same URI across events.
+``scheme`` is the archetype's own name for every rung but one: an email draft
+mints ``email://`` (:mod:`.email_surface`), because the client keys its renderer
+on the scheme and the composer that draws a draft is not one of the ten
+archetypes the frozen contract can name. The archetype on the envelope stays
+truthful (``record``) either way.
 """
 
 from __future__ import annotations
@@ -52,6 +71,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.capabilities.surfaces import builtin
+from agent_runtime.capabilities.surfaces.email_surface import EmailDraftSurface
 from agent_runtime.capabilities.surfaces.infer import (
     EnvelopeUnwrapper,
     SurfaceSpecInferrer,
@@ -107,6 +127,72 @@ class SurfaceGenerationSchedulerPort(Protocol):
 
 
 @dataclass(frozen=True)
+class ShapedSurface:
+    """What one model shaping answer became: a renderable pair, or a refusal.
+
+    The shaping contract (:mod:`.shaping_answer`) deliberately stops short of a
+    :class:`SurfaceSpec` — its answer carries a literal ``title`` and a spec is
+    paths-only by construction — so *something* has to turn an answer into the
+    two halves a renderer reads. That translation belongs to the seam's
+    implementation, not to the projector, which is why this type is the seam's
+    return value rather than the answer itself.
+
+    ``spec is None`` is a **decline**: the model looked and said nothing here is
+    worth drawing. It is a first-class answer, not a failure, and it is the one
+    outcome that ends with no surface at all — which is exactly what no spec can
+    express and why the shaping question was asked in the first place.
+
+    ``data`` travels beside the spec because the two are one resolution: a
+    ``generate`` answer's rows ARE the data, and shipping the spec while leaving
+    the connector's payload underneath it would bind every path to nothing.
+    """
+
+    spec: SurfaceSpec | None = None
+    data: object = None
+    rung: SurfaceSpecRung | None = None
+
+    @classmethod
+    def declined(cls) -> "ShapedSurface":
+        """The model's honest "nothing here" — no surface, not an empty one."""
+
+        return cls()
+
+    @property
+    def renders(self) -> bool:
+        return self.spec is not None
+
+
+@runtime_checkable
+class SurfaceShapingPort(Protocol):
+    """Rung-5 seam: ask the model to shape a payload the floor cannot bind.
+
+    Awaited, unlike :class:`SurfaceGenerationSchedulerPort`, and the difference
+    is the point. A refinement improves a surface the user is already reading,
+    so it fires and forgets. A shaping answer decides whether there is a surface
+    *at all* and what it binds — emitting first and correcting later would put
+    the wrong table on screen, which is the defect this rung exists to remove.
+
+    ``None`` means the seam had no answer to give (no shaping model configured,
+    a provider error, an unusable answer). It is distinct from
+    :meth:`ShapedSurface.declined`, which is the model answering "no": one is an
+    outage, the other is a judgement, and only the second suppresses the surface.
+    Implementations must never raise — a display upgrade may not fail a read.
+    """
+
+    async def shape(
+        self,
+        *,
+        server: str,
+        tool: str,
+        tool_descriptor: object,
+        payload: object,
+        source: SurfaceSource | None,
+    ) -> ShapedSurface | None:
+        """Shape ``payload``, or return ``None`` when no answer is available."""
+        ...
+
+
+@dataclass(frozen=True)
 class _LadderResult:
     """What the acquisition ladder produced, and which rung produced it.
 
@@ -115,14 +201,30 @@ class _LadderResult:
     second party deriving that from the spec alone cannot tell a curated spec
     from an inferred one. One producer, one value — the rule
     :meth:`SurfaceProjector._state_source` already documents for ``source``.
+
+    ``scheme`` and ``data`` are the two things ONE rung — the ``email://``
+    draft rung — resolves that the others do not. Every other rung answers
+    "which spec binds this payload" and leaves the payload and the URI's scheme
+    alone; the email rung additionally decides that this surface is drawn by the
+    composer rather than by the record renderer, and normalises the connector's
+    field names onto the four keys that composer reads. Both ride here rather
+    than being recomputed in ``_floor_envelope`` for the same reason the rung
+    does: the ladder is the one party that knows which rung answered, and a
+    second derivation is how two producers of one fact start disagreeing.
     """
 
     spec: SurfaceSpec | None
     rung: SurfaceSpecRung | None
+    #: Presentation scheme override, or ``None`` to use the archetype's own name
+    #: (the ``<archetype>://…`` grammar every other rung produces).
+    scheme: str | None = None
+    #: Replacement for ``state.data`` when the rung normalised the payload, or
+    #: ``None`` to ship the decoded payload unchanged.
+    data: object | None = None
 
     @property
     def wants_refinement(self) -> bool:
-        """Whether async model generation should still be invited.
+        """Whether async model *refinement* should still be invited.
 
         Rung 0 is a *floor*, not an answer. An inferred spec renders instantly
         and is precisely the artefact the model is now asked to improve (PRD
@@ -137,9 +239,28 @@ class _LadderResult:
         install already generated and stored for exactly this shape — so paying
         for a refinement per novel tool *name* would spend the model on aliases
         of a shape that was solved once.
+
+        "No spec at all" used to be included here and no longer is. It is not a
+        spec worth refining; it is a payload with nothing to refine, and asking
+        for a *refinement* of nothing is what produced specs whose paths bound
+        the adapter's own envelope. That case is :attr:`wants_shaping` now, and
+        the two are mutually exclusive so a read still costs at most one call.
         """
 
-        return self.rung is None or self.rung is SurfaceSpecRung.INFERRED
+        return self.rung is SurfaceSpecRung.INFERRED
+
+    @property
+    def wants_shaping(self) -> bool:
+        """Whether the shaping question is the one worth asking (rung 5).
+
+        True only when the deterministic ladder produced nothing at all. That
+        happens for exactly the payloads rungs 1–4 cannot address — the decoded
+        value is not a mapping, so there is no key to point a dot-path at — and
+        it is the one state where a model call buys a surface rather than a
+        nicer version of one.
+        """
+
+        return self.spec is None
 
 
 @dataclass(frozen=True)
@@ -162,6 +283,7 @@ class SurfaceProjector:
     store: SurfaceSpecReadPort | None = None
     enabled: bool = True
     scheduler: SurfaceGenerationSchedulerPort | None = None
+    shaper: SurfaceShapingPort | None = None
 
     def resolve(
         self,
@@ -172,40 +294,154 @@ class SurfaceProjector:
         call_id: str | None = None,
         tool_descriptor: object | None = None,
     ) -> SurfaceEnvelope | None:
-        """Return a surface envelope for a non-error tool output, or ``None``.
+        """The deterministic ladder only: rungs 1–4, no model, no awaiting.
 
         ``None`` when emission is disabled or ``output`` is not a mapping
-        (str/None/list scalars have no surface). A mapping ALWAYS yields an
-        envelope carrying a spec: curated, stored, or — when neither knows this
-        tool — inferred from the payload's own structure. When the curated and
-        stored rungs both miss, an async generation is also scheduled (given a
-        wired scheduler and an enabled model) so the surface upgrades in place
-        once ``surface_spec_generated`` lands.
+        (str/None/list scalars have no surface). A payload that DECODES to a
+        mapping always yields an envelope carrying a spec: curated, stored, or —
+        when neither knows this tool — inferred from its own structure. When the
+        curated and stored rungs both miss, an async refinement is also
+        scheduled (given a wired scheduler and an enabled model) so the surface
+        upgrades in place once ``surface_spec_generated`` lands.
+
+        A payload that decodes to something that is NOT a mapping yields an
+        envelope with **no spec** — the honest generic view over the decoded
+        value. :meth:`project` is the entry point that can do better than that,
+        by asking the model; this one is what a caller with no shaping seam
+        gets, and it is byte-identical to what shipped before rung 5 existed for
+        every payload the floor could already bind.
         """
 
         if not self.enabled:
             return None
         if not isinstance(output, Mapping):
             return None
-
-        data = self._unwrapped(output)
+        data = self._decoded(output)
         source = self._state_source(server_name, tool_name)
         ladder = self._resolve_ladder(server_name, tool_name, data, source)
+        return self._floor_envelope(
+            server_name=server_name,
+            tool_name=tool_name,
+            data=data,
+            source=source,
+            ladder=ladder,
+            call_id=call_id,
+            tool_descriptor=tool_descriptor,
+        )
+
+    async def project(
+        self,
+        server_name: str,
+        tool_name: str,
+        output: object,
+        *,
+        call_id: str | None = None,
+        tool_descriptor: object | None = None,
+    ) -> SurfaceEnvelope | None:
+        """The whole ladder, rung 5 included. The production read-path entry.
+
+        Identical to :meth:`resolve` whenever the deterministic floor produced a
+        spec — same envelope, same timing, same scheduled refinement, and no
+        model call is made here at all. The only payloads that reach the shaper
+        are the ones the floor had nothing for, and for those the answer is
+        awaited rather than merged in later, because it decides *whether* there
+        is a surface. Emitting the floor's non-answer first and correcting it
+        afterwards is how a canvas tab opens showing the adapter's own envelope
+        and then, maybe, changes its mind.
+
+        Three ways it ends:
+
+        * the model renders ⇒ its spec and data, under a rung that records
+          whether the values are the connector's (``selected``) or the model's
+          (``generated``);
+        * the model declines ⇒ ``None``. **No surface at all**, which is the
+          honest outcome for an acknowledgement or an empty result and the one
+          thing rungs 1–4 structurally cannot say;
+        * no answer — no shaping model, a provider error, an unusable answer ⇒
+          exactly what :meth:`resolve` would have returned. A user with no
+          provider key is never worse off than before this rung existed.
+        """
+
+        if not self.enabled:
+            return None
+        if not isinstance(output, Mapping):
+            return None
+        data = self._decoded(output)
+        source = self._state_source(server_name, tool_name)
+        ladder = self._resolve_ladder(server_name, tool_name, data, source)
+        floor = self._floor_envelope(
+            server_name=server_name,
+            tool_name=tool_name,
+            data=data,
+            source=source,
+            ladder=ladder,
+            call_id=call_id,
+            tool_descriptor=tool_descriptor,
+        )
+        if not ladder.wants_shaping or self.shaper is None:
+            return floor
+        shaped = await self.shaper.shape(
+            server=server_name,
+            tool=tool_name,
+            tool_descriptor=tool_descriptor,
+            payload=data,
+            source=source,
+        )
+        if shaped is None:
+            return floor
+        if not shaped.renders:
+            return None
+        return self._shaped_envelope(
+            server_name=server_name,
+            tool_name=tool_name,
+            source=source,
+            shaped=shaped,
+            call_id=call_id,
+        )
+
+    # -- envelope assembly ----------------------------------------------------
+
+    def _floor_envelope(
+        self,
+        *,
+        server_name: str,
+        tool_name: str,
+        data: object,
+        source: SurfaceSource | None,
+        ladder: _LadderResult,
+        call_id: str | None,
+        tool_descriptor: object | None,
+    ) -> SurfaceEnvelope:
+        """The envelope the deterministic ladder produced, plus its refinement.
+
+        Two values are read off the ladder rather than derived here. ``scheme``
+        is the segment before ``://`` — the archetype's own name for every rung
+        but the ``email://`` one. ``state_data`` is what ships as
+        ``state.data``; the email rung replaces the decoded payload with the
+        normalised composer state, and the ORIGINAL decoded payload stays as the
+        id basis so the URI's id segment can still come from a draft id the
+        connector supplied. Deriving the id from a payload the surface does not
+        draw is the mistake :meth:`_shaped_envelope` names; deriving it from a
+        normalised state that carries no id would be a fresh hash — and a fresh
+        tab — every time the same draft is read.
+        """
+
         archetype = (
             ladder.spec.archetype
             if ladder.spec is not None
             else self._infer_archetype(data)
         )
+        state_data = data if ladder.data is None else ladder.data
         surface_uri = self._build_uri(
-            archetype=archetype,
+            scheme=ladder.scheme or archetype.value,
             server_name=server_name,
             tool_name=tool_name,
             output=data,
             call_id=call_id,
         )
         if ladder.wants_refinement and self.scheduler is not None:
-            # The peeled payload, deliberately: a spec the model authors against
-            # the wrapper binds paths that miss the data we ship.
+            # The decoded payload, deliberately: a spec the model authors
+            # against the wrapper binds paths that miss the data we ship.
             self.scheduler.maybe_schedule(
                 server=server_name,
                 tool=tool_name,
@@ -217,14 +453,47 @@ class SurfaceProjector:
             surface_uri=surface_uri,
             archetype=archetype,
             spec_rung=ladder.rung,
-            state=SurfaceState(spec=ladder.spec, source=source, data=data),
+            state=SurfaceState(spec=ladder.spec, source=source, data=state_data),
+        )
+
+    def _shaped_envelope(
+        self,
+        *,
+        server_name: str,
+        tool_name: str,
+        source: SurfaceSource | None,
+        shaped: ShapedSurface,
+        call_id: str | None,
+    ) -> SurfaceEnvelope:
+        """The envelope a rendering shaping answer produced.
+
+        The URI is derived from the SHAPED data and archetype rather than the
+        floor's, because this is the only surface record that will be written
+        for this call — there is no earlier one to stay compatible with, and an
+        id built from a payload the surface does not draw is a join key pointing
+        at the wrong thing.
+        """
+
+        assert shaped.spec is not None  # narrowed by ``ShapedSurface.renders``
+        archetype = shaped.spec.archetype
+        return SurfaceEnvelope(
+            surface_uri=self._build_uri(
+                scheme=archetype.value,
+                server_name=server_name,
+                tool_name=tool_name,
+                output=shaped.data,
+                call_id=call_id,
+            ),
+            archetype=archetype,
+            spec_rung=shaped.rung,
+            state=SurfaceState(spec=shaped.spec, source=source, data=shaped.data),
         )
 
     # -- payload normalisation ------------------------------------------------
 
     @staticmethod
-    def _unwrapped(output: Mapping[str, object]) -> Mapping[str, object]:
-        """Peel wrapper envelopes off the payload, before anything reads it.
+    def _decoded(output: Mapping[str, object]) -> object:
+        """Decode the payload once, before anything reads it.
 
         This runs FIRST — ahead of spec lookup, archetype inference and URI
         construction — and its result is what ships as ``state.data``, because
@@ -238,14 +507,24 @@ class SurfaceProjector:
         against the wrapper and missed — a hand-authored spec that matched
         perfectly still rendered nothing.
 
-        :class:`EnvelopeUnwrapper` is typed to return ``object`` because it is
-        total over any input; given a ``Mapping`` it can only return that
-        mapping or a mapping peeled out of it, so the guard is a narrowing for
-        the type checker rather than a reachable branch.
+        **It returns whatever the decode produced, including a non-mapping, and
+        that is the fix rung 5 is built on.** This used to fall back to the
+        original wrapper when the decode landed on a list or a string, on the
+        reasoning that a mapping is what the rest of the ladder needs. What that
+        produced was measured: a connector whose real answer is a JSON array
+        arrives as ``{"result": [{"type": "text", "text": "[…]"}]}``, the decode
+        correctly yields the array, the fallback threw it away, and rung 0 then
+        inferred a perfectly valid table of ``ID`` / ``Type`` / ``Text`` over
+        ``items_path: "result"`` — the *adapter's* fields, with the entire
+        connector payload in one cell. It looks like it worked. Five of eight
+        measured payload shapes did this.
+
+        Returning the decoded value means the floor honestly has no spec for
+        those payloads (:meth:`SurfaceSpecInferrer.infer` answers only for a
+        mapping), which is both the truth and the trigger for asking the model.
         """
 
-        peeled = EnvelopeUnwrapper.unwrap(output)
-        return peeled if isinstance(peeled, Mapping) else output
+        return EnvelopeUnwrapper.unwrap(output)
 
     # -- provenance -----------------------------------------------------------
 
@@ -294,15 +573,15 @@ class SurfaceProjector:
         self,
         server_name: str,
         tool_name: str,
-        output: Mapping[str, object],
+        output: object,
         source: SurfaceSource | None,
     ) -> _LadderResult:
-        """Climb the ladder over the already-unwrapped payload.
+        """Climb the ladder over the already-decoded payload.
 
         Ordered strongest-first, and the order is the design (floor PRD §3.4)::
 
-            exact (server, tool)  →  exact shape hash  →  nearest-neighbour
-            skeleton match        →  rung 0 inference
+            exact (server, tool)  →  email draft  →  exact shape hash  →
+            nearest-neighbour skeleton match      →  rung 0 inference
 
         The first two rungs are keyed on ``(server, tool)``, which is precisely
         why they miss every tool nobody has met yet — the audit found Linear's
@@ -319,10 +598,16 @@ class SurfaceProjector:
         connector provenance the schema requires; the inferrer stamps a generic
         placeholder when a call is nameless, rather than refusing to infer.
 
-        Returns an empty result — never raises — if inference ever declines,
-        which today it does only for a non-mapping the caller already rejected.
+        Returns an empty result — never raises — when the decoded payload is
+        not a mapping. Every rung below reads keys: a curated spec is keyed on
+        the pair but still binds paths, both shape rungs hash a mapping, and
+        rung 0 answers ``None`` by contract. An empty result is therefore the
+        honest report that the deterministic ladder has nothing here, and it is
+        what invites rung 5 (:attr:`_LadderResult.wants_shaping`).
         """
 
+        if not isinstance(output, Mapping):
+            return _LadderResult(None, None)
         curated = builtin.lookup(server_name, tool_name)
         if curated is not None:
             return _LadderResult(curated, SurfaceSpecRung.BUILTIN)
@@ -330,6 +615,9 @@ class SurfaceProjector:
             stored = self.store.get(server=server_name, tool=tool_name)
             if stored is not None:
                 return _LadderResult(stored, SurfaceSpecRung.STORE)
+        drafted = self._email_draft(output, source)
+        if drafted is not None:
+            return drafted
         learned = self._learned_for_shape(output)
         if learned is not None:
             return _LadderResult(learned, SurfaceSpecRung.SHAPE_MATCH)
@@ -340,6 +628,41 @@ class SurfaceProjector:
         if inferred is not None:
             return _LadderResult(inferred, SurfaceSpecRung.INFERRED)
         return _LadderResult(None, None)
+
+    @staticmethod
+    def _email_draft(
+        output: Mapping[str, object], source: SurfaceSource | None
+    ) -> _LadderResult | None:
+        """The ``email://`` rung: a payload that IS a draft gets the composer.
+
+        Placed AFTER the two name-keyed rungs and BEFORE the two shape ones, and
+        both halves of that position are deliberate. A curated or stored spec is
+        a decision a human made about this exact ``(server, tool)``, and a
+        structural guess must not overrule it. The shape rungs below are the
+        general form of the same guess this rung makes, and they would bind an
+        email draft as a plain record — correct, and not what the product has an
+        ``EmailRenderer`` for.
+
+        Reported as :data:`SurfaceSpecRung.SHAPE_MATCH`, the rung whose meaning
+        is "a spec a person wrote, reused for a connector nobody curated". That
+        is exactly what this is: the composer's four slots were designed by
+        hand, and matched here by structure. It is not ``inferred`` (nothing was
+        derived from the payload's own vocabulary) and it is not ``builtin``
+        (no human vouched for this connector). The rung also decides what
+        happens next: ``SHAPE_MATCH`` does not want refinement, so a draft costs
+        zero model calls — a nano model re-authoring a spec for a renderer that
+        does not read specs would be spend for nothing.
+        """
+
+        match = EmailDraftSurface.match(output, source=source)
+        if match is None:
+            return None
+        return _LadderResult(
+            match.spec,
+            SurfaceSpecRung.SHAPE_MATCH,
+            scheme=EmailDraftSurface.SCHEME,
+            data=match.state,
+        )
 
     def _learned_for_shape(self, output: Mapping[str, object]) -> SurfaceSpec | None:
         """Read the learned cache by payload shape alone (PRD §3.6, AC14).
@@ -363,19 +686,29 @@ class SurfaceProjector:
     def _build_uri(
         self,
         *,
-        archetype: SurfaceArchetype,
+        scheme: str,
         server_name: str,
         tool_name: str,
-        output: Mapping[str, object],
+        output: object,
         call_id: str | None,
     ) -> str:
+        """``<scheme>://<server-slug>/<tool>/<id>`` — the one surface identity.
+
+        ``scheme`` is the archetype's own name for every rung but the
+        ``email://`` draft rung, which routes to a renderer the ten-value
+        archetype vocabulary cannot name (see
+        :mod:`agent_runtime.capabilities.surfaces.email_surface`). It is taken
+        as a parameter rather than read off the archetype so that override has
+        exactly one place to live.
+        """
+
         slug = builtin.server_slug(server_name) or "unknown"
         tool = builtin.tool_slug(tool_name) or "tool"
         identifier = self._derive_id(output, call_id)
-        return f"{archetype.value}://{slug}/{tool}/{identifier}"
+        return f"{scheme}://{slug}/{tool}/{identifier}"
 
     @classmethod
-    def _derive_id(cls, output: Mapping[str, object], call_id: str | None) -> str:
+    def _derive_id(cls, output: object, call_id: str | None) -> str:
         raw = cls._first_id_field(output)
         if raw is not None:
             segment = _URI_SEGMENT_SAFE.sub("-", str(raw)).strip("-")
@@ -384,14 +717,17 @@ class SurfaceProjector:
         return cls._stable_hash(output, call_id)
 
     @classmethod
-    def _first_id_field(cls, output: Mapping[str, object]) -> object | None:
+    def _first_id_field(cls, output: object) -> object | None:
         """Return the first present id-bearing scalar, top-level or one wrapper deep.
 
         Handles both flat outputs (``{"id": ...}``) and the common single-object
         envelope (``{"issue": {"identifier": ...}}``) without guessing across
-        multiple nested objects.
+        multiple nested objects. A payload that decoded to a list or a string
+        names no id field, so it falls through to the stable hash.
         """
 
+        if not isinstance(output, Mapping):
+            return None
         for field in _ID_FIELDS:
             value = output.get(field)
             if cls._is_scalar_id(value):
@@ -409,32 +745,37 @@ class SurfaceProjector:
         return isinstance(value, (str, int)) and not isinstance(value, bool)
 
     @staticmethod
-    def _stable_hash(output: Mapping[str, object], call_id: str | None) -> str:
+    def _stable_hash(output: object, call_id: str | None) -> str:
         if call_id:
             basis = call_id
         else:
             try:
                 basis = json.dumps(output, sort_keys=True, default=str)
             except (TypeError, ValueError):
-                basis = repr(sorted(output.keys()))
+                basis = repr(output)
         digest = hashlib.sha256(basis.encode("utf-8")).hexdigest()
         return digest[:_HASH_LEN]
 
     # -- archetype inference (spec-less case) ---------------------------------
 
     @staticmethod
-    def _infer_archetype(output: Mapping[str, object]) -> SurfaceArchetype:
-        """Coarse archetype for an output no rung produced a spec for.
+    def _infer_archetype(output: object) -> SurfaceArchetype:
+        """Coarse archetype for a payload no rung produced a spec for.
 
-        A top-level array of objects reads as a ``table``; everything else as a
-        ``record``. Kept, though rung 0 makes it unreachable for the mappings
-        this projector accepts: ``SurfaceSpecInferrer.infer`` is *typed*
-        ``SurfaceSpec | None``, and a projector that answered ``None.archetype``
-        the day that changed would fail the tool call outright. A one-expression
-        fallback is cheaper than that risk.
+        An array of objects — at the root, or under any top-level key — reads as
+        a ``table``; everything else as a ``record``. Rung 0 makes it
+        unreachable for a payload that DECODES to a mapping, but a payload that
+        decodes to something else has no rung 0 by contract, so this is the live
+        answer for exactly the shapes rung 5 was built for. It also stays as the
+        narrowing for ``SurfaceSpecInferrer.infer``'s ``SurfaceSpec | None``
+        return: a projector that answered ``None.archetype`` the day that
+        changed would fail the tool call outright.
         """
 
-        for value in output.values():
+        candidates: tuple[object, ...] = (
+            (output,) if not isinstance(output, Mapping) else tuple(output.values())
+        )
+        for value in candidates:
             if (
                 isinstance(value, list)
                 and value
@@ -446,8 +787,10 @@ class SurfaceProjector:
 
 __all__ = [
     "InMemorySurfaceSpecStore",
+    "ShapedSurface",
     "SurfaceGenerationSchedulerPort",
     "SurfaceProjector",
+    "SurfaceShapingPort",
     "SurfaceSpecReadPort",
     "SurfaceSpecShapeReadPort",
     "SurfaceSpecStorePort",

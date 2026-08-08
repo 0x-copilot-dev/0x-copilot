@@ -17,6 +17,7 @@ heterogeneous arrays, deep nesting, non-string keys and megabyte payloads.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -638,3 +639,70 @@ class TestInferTotality(HostilePayloadsMixin, SpecAssertionsMixin):
         assert spec.fields is None
         assert spec.title_path == "title"
         self.revalidate(spec)
+
+
+class TestMcpContentEnvelopeIsDecoded:
+    """The defect that made every real connector render an empty table.
+
+    `content_and_artifact` returns `(content, artifact)` and `artifact` is
+    `None` unless the server sent `structuredContent` — which effectively no
+    server does. So the payload that reaches the projector is the model-facing
+    half: one text block whose `text` is the JSON document. A curated spec of
+    `items_path: "issues"` was CORRECT and still bound nothing, because
+    `issues` is a key of the document inside `text`, not of the envelope.
+
+    Shape below is copied from a real Linear run
+    (`table://linear/list_issues/…`), where the block held 7,173 characters of
+    valid JSON and the table drew zero rows.
+    """
+
+    def test_a_json_text_block_is_parsed_and_peeled(self) -> None:
+        payload = {
+            "result": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "issues": [
+                                {"id": "PAR-9", "title": "Rent roll import"},
+                                {"id": "PAR-8", "title": "Water leak"},
+                            ],
+                            "hasNextPage": False,
+                        }
+                    ),
+                    "id": "blk_1",
+                }
+            ]
+        }
+
+        unwrapped = EnvelopeUnwrapper.unwrap(payload)
+
+        assert isinstance(unwrapped, Mapping)
+        # `items_path: "issues"` — the curated spec — now binds.
+        assert [row["id"] for row in unwrapped["issues"]] == ["PAR-9", "PAR-8"]
+
+    def test_a_prose_block_survives_as_text_for_the_model_tier(self) -> None:
+        # Falling back to the string rather than dropping the block is what
+        # keeps an unstructured result reaching the shaper instead of becoming
+        # an empty surface.
+        payload = {"result": [{"type": "text", "text": "no issues found"}]}
+        assert EnvelopeUnwrapper.unwrap(payload) == "no issues found"
+
+    def test_many_blocks_decode_to_a_list(self) -> None:
+        payload = {
+            "result": [
+                {"type": "text", "text": json.dumps({"a": 1})},
+                {"type": "text", "text": json.dumps({"a": 2})},
+            ]
+        }
+        assert EnvelopeUnwrapper.unwrap(payload) == [{"a": 1}, {"a": 2}]
+
+    def test_a_real_row_array_is_NOT_treated_as_an_envelope(self) -> None:
+        # `{"data": [row, row]}` must stay bindable by `items_path: "data"`.
+        # Every element has to be a text block before this decodes anything.
+        payload = {"data": [{"type": "text", "text": "x"}, {"id": 1}]}
+        assert EnvelopeUnwrapper.unwrap(payload) == payload
+
+    def test_a_structured_content_server_is_unaffected(self) -> None:
+        payload = {"structured_content": {"issues": [{"id": "A"}]}}
+        assert EnvelopeUnwrapper.unwrap(payload) == {"issues": [{"id": "A"}]}

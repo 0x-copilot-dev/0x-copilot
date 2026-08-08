@@ -157,7 +157,17 @@ export type SurfaceKind =
   | "receipt"
   | "gate";
 export type ViewTier = "raw" | "generic" | "shaped";
-export type ViewBasis = "schema" | "registry" | "generated";
+/**
+ * What a shaped view was shaped ON.
+ *
+ * `registry` is a curated spec a person wrote and `schema` is deterministic
+ * inference off the payload's structure — neither involves a model. `selected`
+ * means a model chose the shape but returned paths into the payload, so the
+ * values on screen are still the connector's; `generated` means the model
+ * produced the values itself. The last two are separate because a receipt that
+ * folded them together would claim a model authored data it only pointed at.
+ */
+export type ViewBasis = "schema" | "registry" | "generated" | "selected";
 export type ViewKeep = "generic" | "shaped";
 export type RevisionAuthor = "agent" | "user";
 export type DecisionKind = "approve" | "reject" | "hold" | "restore";
@@ -329,13 +339,41 @@ export interface RowFieldChange {
   new?: unknown;
 }
 
+/** Who authored the value an outbound argument carries. */
+export type StagedArgOrigin = "edited" | "carried" | "proposed";
+
+/** One outbound connector argument, disclosed to the reviewer.
+ *
+ *  `sends` is a server-computed, ordered, TOTAL account of the row's
+ *  `target_args`: one entry per key, in key order, `new` byte-identical to
+ *  `target_args[arg]`. It exists because `changes` is a diff of what the user
+ *  TOUCHED, and a diff can never account for the arguments that ride along
+ *  unedited — which is exactly where a one-line "cc changed" review hid a
+ *  model-authored recipient, subject and body.
+ *
+ *  `arg` is the CONNECTOR's own argument name, not the surface column, so a
+ *  rename (`body` → `bcc`) is visible rather than relabelled away; `column`
+ *  carries the surface field it was read from, or `null`.
+ *
+ *  Never client- or model-supplied: the server derives every entry from the
+ *  arguments it is about to send. */
+export interface StagedArg {
+  readonly arg: string;
+  readonly origin: StagedArgOrigin;
+  readonly column?: string | null;
+  readonly old?: unknown;
+  readonly new?: unknown;
+}
+
 /** One proposed row change — the WYSIWYG unit a user approves/holds (PRD-D3).
- *  `target_args` is server-only and never rides the wire view. */
+ *  `target_args` is server-only and never rides the wire view; `sends` is the
+ *  human-visible half and is complete by construction. */
 export interface StagedRow {
   row_key: string;
   title: string;
   target_args?: Record<string, unknown>;
   changes: readonly RowFieldChange[];
+  sends: readonly StagedArg[];
 }
 
 /** Folded per-row state (PRD-D3). `agent_hold_reason` is sticky — it survives a
@@ -456,6 +494,27 @@ export interface SurfaceCreatedPayload extends LedgerPayload {
    */
   payload_ref: string;
   state?: SurfaceCreatedState;
+  /**
+   * The sibling WRITE operations this surface's connector offered at the moment
+   * of the read, captured so a later Save can be composed against a real
+   * `input_schema` without the server loading an MCP client on the request path.
+   *
+   * Server-side write-path material: the client renders none of it. Each entry
+   * is a bounded digest — op name, capped description, and an `input_schema`
+   * reduced to argument names, argument types and the connector's own
+   * `required` list. Every value-bearing schema member (`default`, `enum`,
+   * `examples`, nested sub-schemas) is stripped before the record is written,
+   * so this can never carry connector-authored values.
+   *
+   * Absent on a surface whose connector exposes no write op, and on every run
+   * recorded before the field existed. Absence means "nothing was captured",
+   * and the write-back lane refuses rather than composing an unbounded write.
+   */
+  write_ops?: ReadonlyArray<{
+    name: string;
+    description: string;
+    input_schema: Record<string, unknown>;
+  }>;
 }
 
 export interface ViewDerivedPayload extends LedgerPayload {
@@ -1267,6 +1326,9 @@ export interface RowSetEffectReviewRow {
   readonly row_key: string;
   readonly title: string;
   readonly changes: readonly RowFieldChange[];
+  /** Every argument this row will send, in `target_args` order. Required —
+   *  a row whose outbound arguments are not disclosed cannot be reviewed. */
+  readonly sends: readonly StagedArg[];
   readonly decision: "approve" | "hold";
   readonly decision_source: "default" | "agent" | "user";
   readonly hold_reason: string | null;
@@ -1324,6 +1386,45 @@ export interface RowSetEffectActionRequest {
   readonly row_keys: readonly string[];
   readonly basis_sequence_no: number;
   readonly basis_ledger_id: string | null;
+}
+
+/** Closed key set for one disclosed outbound argument. Closed on purpose: an
+ *  unenumerated key on a `sends` entry is a value the reviewer would not see,
+ *  which is the whole failure this field exists to prevent. */
+const _STAGED_ARG_KEYS = wireKeys<StagedArg>({
+  arg: true,
+  origin: true,
+  column: true,
+  old: true,
+  new: true,
+});
+
+const _STAGED_ARG_ORIGINS: ReadonlySet<string> = new Set([
+  "edited",
+  "carried",
+  "proposed",
+]);
+
+/** Shape check for one `sends` entry. `origin` is validated as a SHAPE — the
+ *  string is one of three — never cast. */
+function _isStagedArg(candidate: unknown): candidate is StagedArg {
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    return false;
+  }
+  const entry = candidate as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(entry, _STAGED_ARG_KEYS) &&
+    typeof entry.arg === "string" &&
+    entry.arg.length > 0 &&
+    _STAGED_ARG_ORIGINS.has(String(entry.origin)) &&
+    (entry.column === null ||
+      entry.column === undefined ||
+      typeof entry.column === "string")
+  );
 }
 
 /** Fail-closed guard for the owner-scoped row-set review HTTP response. */
@@ -1396,6 +1497,12 @@ export function isRowSetEffectReview(
           Array.isArray(change) ||
           !text((change as Record<string, unknown>).field),
       ) ||
+      // A row with no disclosed outbound arguments is unreviewable, not a row
+      // with nothing to send — reject the response rather than render a diff
+      // that under-states the write.
+      !Array.isArray(row.sends) ||
+      row.sends.length === 0 ||
+      row.sends.some((entry) => !_isStagedArg(entry)) ||
       !["approve", "hold"].includes(String(row.decision)) ||
       !["default", "agent", "user"].includes(String(row.decision_source)) ||
       !(row.hold_reason === null || typeof row.hold_reason === "string") ||
@@ -1512,11 +1619,14 @@ export interface StageRowChangeView {
   new?: unknown;
 }
 
-/** One staged row in the wire view: content + folded state (PRD-D3). */
+/** One staged row in the wire view: content + folded state (PRD-D3).
+ *  `target_args` stays server-only; `sends` is the complete human-visible
+ *  account of it and is therefore required, never optional. */
 export interface StageRowView {
   row_key: string;
   title: string;
   changes: readonly StageRowChangeView[];
+  sends: readonly StagedArg[];
   stance: RowStance;
   agent_hold_reason?: string | null;
   decided_by?: "agent" | "user" | "policy" | null;
@@ -1587,6 +1697,43 @@ export interface ShapeRequestBody {
 export interface ShapeRequestAccepted {
   surface_id: string;
   status: "requested";
+}
+
+// ---------------------------------------------------------------------------
+// Connector write-back wire types. Save on an edited CONNECTOR-origin surface:
+// `POST /v1/agent/surfaces/{surface_id}/write-back`, which returns the same
+// `StagedWriteView` the stage routes return, with the rows sitting STAGED.
+//
+// It is not an apply and there is no shortcut to one. Execution stays
+// `POST /v1/agent/stages/{stage_id}/apply` — a second, deliberate gesture the
+// user makes at the write gate against a stager this lane does not compose.
+// ---------------------------------------------------------------------------
+
+/** One row's batched cell edits, plus that row exactly as the surface read it.
+ *
+ *  `row` is the provenance half the user did NOT type: the server admits an arg
+ *  bound to a connector-read value (a record id, a scoping key) precisely
+ *  because it appears here. Send the row verbatim — a trimmed copy makes a
+ *  legitimate binding unprovable and the save is refused.
+ *
+ *  `changes[].new` is the value the user typed, VERBATIM. Nothing between the
+ *  cell and the connector re-types it: the model picks the op and maps field
+ *  names, and the staged `target_args` carry this exact value. Do not send a
+ *  display-formatted string here — what is sent is what was typed. */
+export interface SurfaceRowEdit {
+  row_key: string;
+  title: string;
+  row: Readonly<Record<string, unknown>>;
+  changes: readonly RowFieldChange[];
+}
+
+/** Body for `POST /v1/agent/surfaces/{surface_id}/write-back`. `run_id` names
+ *  the run that owns the surface (the canvas is per-run); the connector and the
+ *  read op are folded server-side out of that run's own ledger and are never
+ *  client-declared. */
+export interface SurfaceWriteBackRequest {
+  run_id: string;
+  edits: readonly SurfaceRowEdit[];
 }
 
 /** FR-E2 wording, wire-safe (NEW, A1-defined). Not a ledger event type — a

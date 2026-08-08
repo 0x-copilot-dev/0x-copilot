@@ -23,7 +23,13 @@ from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitRequest,
 )
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
-from agent_runtime.surfaces_v2.rowset import AgentHold, RowFieldChange, StagedRow
+from agent_runtime.surfaces_v2.rowset import (
+    AgentHold,
+    ProposedRow,
+    RowFieldChange,
+    StagedRow,
+    StagedRowAccounting,
+)
 from agent_runtime.surfaces_v2.staging import (
     StagedWriteFold,
     StagedWriteStatus,
@@ -94,12 +100,16 @@ class _DispatcherFactory:
 
 
 def _rows(n: int) -> tuple[StagedRow, ...]:
+    """Fully-accounted rows: every change is an arg, every arg is disclosed."""
+
     return tuple(
-        StagedRow(
-            row_key=f"row{i}",
-            title=f"Issue {i}",
-            target_args={"id": f"row{i}", "priority": i + 2},
-            changes=(RowFieldChange(field="priority", old=1, new=i + 2),),
+        StagedRowAccounting.for_proposed(
+            ProposedRow(
+                row_key=f"row{i}",
+                title=f"Issue {i}",
+                target_args={"id": f"row{i}", "priority": i + 2},
+                changes=(RowFieldChange(field="priority", old=1, new=i + 2),),
+            )
         )
         for i in range(n)
     )
@@ -378,3 +388,109 @@ class TestRowsetGateRefusal:
         await h.handler.handle(forged)
         assert h.connector.execute_calls == []
         assert h.write_applied_events() == []
+
+
+def _strip_sends(harness: Harness, *row_keys: str) -> None:
+    """Remove the account from the persisted rows AFTER the apply was decided.
+
+    The residual's exact shape: the authorization is genuine and already sits in
+    the ledger, and only the disclosure is missing by the time the worker folds
+    it — a stage proposed before the accounting contract existed, or a payload
+    that lost it in transit. The handler is the last place this can be caught.
+    """
+
+    for event in harness.store.events_by_run[_RUN]:
+        rowset = event.payload.get("rowset")
+        if not isinstance(rowset, dict):
+            continue
+        for row in rowset.get("rows", []):
+            if row.get("row_key") in row_keys:
+                row.pop("sends", None)
+
+
+class TestTheAccountIsRecheckedAtTheLastPointBeforeDispatch:
+    """The authorization gate says "may this run"; this one says "can it be shown".
+
+    They are separate on purpose and neither is sufficient alone. A gate refusal
+    is a silent no-op because an unauthorized command is not an outcome; an
+    accounting refusal IS an outcome the user must see, so it emits
+    ``write.applied{failed}`` naming the row and dispatches nothing.
+    """
+
+    async def test_an_unaccounted_row_dispatches_nothing_at_all(self) -> None:
+        h = Harness()
+        state = await h.stage(_rows(3))
+        await h.apply(state.stage_id, 1, ["row0", "row1", "row2"])
+        _strip_sends(h, "row1")
+
+        await h.handler.handle(h.command)
+
+        # Not the offending row, and not its siblings either: a batch that
+        # silently shrinks is a different apply than the one authorized.
+        assert h.connector.execute_calls == []
+
+    async def test_the_refusal_is_visible_and_names_the_row_and_the_rule(self) -> None:
+        h = Harness()
+        state = await h.stage(_rows(2))
+        await h.apply(state.stage_id, 1, ["row0", "row1"])
+        _strip_sends(h, "row1")
+
+        await h.handler.handle(h.command)
+
+        applied = h.write_applied_events()
+        assert len(applied) == 1
+        payload = applied[0].payload
+        assert payload["result"] == "failed"
+        assert payload["failure"]["code"] == "rowset_unaccounted"
+        detail = payload["failure"]["detail"]
+        assert 'Row "row1"' in detail
+        assert "does not disclose every field it would send" in detail
+        assert detail.endswith("Nothing was sent.")
+        assert set(payload["row_keys"]) == {"row0", "row1"}
+
+    async def test_the_stage_is_not_left_applied(self) -> None:
+        # A failed apply consumes the approval and returns the stage to STAGED,
+        # so the user can hold the unprovable row and re-apply the rest.
+        h = Harness()
+        state = await h.stage(_rows(2))
+        await h.apply(state.stage_id, 1, ["row0", "row1"])
+        _strip_sends(h, "row0")
+
+        await h.handler.handle(h.command)
+
+        folded = h.fold()
+        assert folded.status is StagedWriteStatus.STAGED
+        assert folded.row_counts.applied == 0
+
+    async def test_a_row_whose_content_vanished_takes_the_batch_with_it(self) -> None:
+        # The other way a commanded row stops being provable: its content is
+        # gone from the fold entirely. That one is caught one gate EARLIER —
+        # dropping the row also drops it from ``state.rows``, so the commanded
+        # set no longer matches the apply decision and the authorization gate
+        # no-ops. What matters either way is that the siblings do NOT dispatch:
+        # the old ``if row is None: continue`` would have sent them.
+        h = Harness()
+        state = await h.stage(_rows(3))
+        await h.apply(state.stage_id, 1, ["row0", "row1", "row2"])
+        for event in h.store.events_by_run[_RUN]:
+            rowset = event.payload.get("rowset")
+            if isinstance(rowset, dict):
+                rowset["rows"] = [
+                    row for row in rowset["rows"] if row.get("row_key") != "row2"
+                ]
+
+        await h.handler.handle(h.command)
+
+        assert h.connector.execute_calls == []
+        assert h.write_applied_events() == []  # unauthorized ⇒ not an outcome
+
+    async def test_an_accounted_command_still_dispatches(self) -> None:
+        # The baseline the gate must not cost.
+        h = Harness()
+        state = await h.stage(_rows(2))
+        await h.apply(state.stage_id, 1, ["row0", "row1"])
+
+        await h.handler.handle(h.command)
+
+        assert len(h.connector.execute_calls) == 2
+        assert h.write_applied_events()[0].payload["result"] == "applied"

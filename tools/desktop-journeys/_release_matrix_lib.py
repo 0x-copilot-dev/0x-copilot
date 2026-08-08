@@ -68,6 +68,12 @@ FIXTURE_SERVER: Final = HERE / "local-fixture-connector" / "server.py"
 SCENARIO_PATH: Final = HERE / "scenarios" / "local-communications.json"
 FIXTURE_NAMESPACE: Final = "fixture://generative-workflows/launch-week"
 FIXTURE_WORKSPACE_ROOT: Final = "fixture://workspace/launch-week"
+
+# The Sources rail no longer paints `sources-v2-open-artifact`: the compact
+# source card that replaced the old rows (357836ce) marks an owner-routed row
+# with `data-openable` and puts the open action on the row's own button. Three
+# journeys were still driving the retired testid.
+OPEN_ARTIFACT_SOURCE: Final = "[data-testid=sources-v2-row][data-openable=true] button"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
@@ -1008,10 +1014,10 @@ def open_artifact_from_sources(session: DriverSession) -> None:
     assert session.wait_for("[data-testid=sources-v2-tab]"), (
         "Sources provenance rail did not render"
     )
-    assert session.present("[data-testid=sources-v2-open-artifact]"), (
+    assert session.present(OPEN_ARTIFACT_SOURCE), (
         "artifact provenance is not user-openable"
     )
-    session.click("[data-testid=sources-v2-open-artifact]")
+    session.click(OPEN_ARTIFACT_SOURCE)
     assert session.wait_for("[data-testid=artifact-frame]"), (
         "opening artifact provenance did not render the artifact"
     )

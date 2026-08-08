@@ -26,7 +26,10 @@ export {
 } from "./providers/TransportProvider";
 export {
   ArtifactDownloadAction,
-  ArtifactEditor,
+  // `ArtifactEditor` was here and is deleted — the raw-markdown `<textarea>`
+  // mounted below the rendered artifact. Editing is in-place on the rendered
+  // blocks now; a host wires nothing for it beyond what `ArtifactSurface`
+  // already does.
   ArtifactFrame,
   ArtifactRevisionHistory,
   ArtifactSurface,
@@ -1432,7 +1435,8 @@ export {
   type RowsetReviewRow,
   type RowsetReviewStatus,
   type LedgerStagedRow,
-  type LedgerRowChange,
+  type LedgerStagedArg,
+  type LedgerArgOrigin,
   type LedgerRowCounts,
   type LedgerRowStance,
 } from "./thread-canvas";
@@ -2329,3 +2333,90 @@ export {
 export type { ThreadScopeOption } from "./shell/ThreadSwitcher";
 export type { ChatsArchiveOptions } from "./destinations/chats";
 // === end Projects filing + thread scope (P0) ===
+
+// === Editable surface Phase 1 (block model + splice engine) ===
+// An artifact body is ONE STRING rendered markdown -> HTML, which is why a table
+// in it cannot be clicked into: there is no table component, only text shaped
+// like a grid. These are the pure halves of the fix — a second reading of that
+// string as a list of blocks, each owning the exact `[start, end)` span it
+// occupies, and the splice that writes one span back.
+//
+// The rule they exist to enforce is SPLICE, NEVER REGENERATE. A document carries
+// prose around its table, links inside cells, and constructs the model does not
+// attempt to understand; parsing the whole thing and re-emitting it would
+// reformat or drop one of them, so `applyEdits` copies every byte outside the
+// edited spans through untouched. `parseBlocks` is total — anything unmodelled
+// becomes a `raw` block that round-trips verbatim rather than a guess.
+//
+// EDITABILITY IS NOT ON THE WIRE. `SurfaceSpec` stays read-only by construction
+// (`spec_models.py:255`, "zero side-effectful members"): the model authors specs,
+// so a spec carrying a handler, a URL or a template would be a model-authored
+// side effect. What is editable is decided HERE, by the host renderer, over
+// values the user typed.
+//
+// Pure functions only — no React, no ports, no substrate primitives — so the
+// renderers that mount on top of them stay the only thing either host has to
+// bind. The renderers are the other half of Phase 1 and land beside these.
+//
+// The `*Edits` family is the STRUCTURAL half: adding and deleting a row, a
+// column or a block, and reordering two blocks. They are span operations like
+// the rest — a new row is a zero-width insertion, a new column is one insertion
+// per row batched together — and they return `DocumentEdit[]`, so structure and
+// text go through the same `applyEdits` and a document has exactly one way to
+// change.
+export {
+  addBlockEdits,
+  addColumnEdits,
+  addRowEdits,
+  applyEdits,
+  blockContentEnd,
+  blockEdit,
+  cellEdit,
+  deleteBlockEdits,
+  deleteColumnEdits,
+  deleteRowEdits,
+  escapeTableCellText,
+  headerCellEdit,
+  parseBlocks,
+  spliceBlock,
+  spliceCell,
+  spliceHeaderCell,
+  swapBlocksEdits,
+  unescapeTableCellText,
+  type ColumnAlignment,
+  type DocumentBlock,
+  type DocumentBlockKind,
+  type DocumentEdit,
+  type EditableBlock,
+  type HeadingBlock,
+  type ParagraphBlock,
+  type RawBlock,
+  type RawBlockReason,
+  type TableBlock,
+  type TableCell,
+} from "./artifacts";
+// === end Editable surface Phase 1 ===
+
+// === Editable surface Phase 2 (connector write-back) ===
+// The connector half of the design's Save table. An artifact origin splices its
+// deltas into its own source and makes a revision; a connector origin cannot be
+// local, so Save POSTs the batch to
+// `POST /v1/agent/surfaces/{surface_id}/write-back`, which maps it onto one
+// connector op and STAGES it. The rows come back PROPOSED — applying them is the
+// write gate's job and a second, deliberate gesture; nothing here can reach it.
+//
+// `createConnectorSurfaceEditor` is the only thing a host wires: it closes over
+// the host's own `Transport` port and the run that owns the surface.
+// `attachConnectorEditor` puts the resulting grant on the render STATE, which is
+// how a live function reaches a pure renderer without ever riding the wire or a
+// model-authored `SurfaceSpec`.
+export {
+  attachConnectorEditor,
+  CONNECTOR_EDITOR_FIELD,
+  createConnectorSurfaceEditor,
+  surfaceWriteBackPath,
+  type ConnectorSurfaceEditorActions,
+  type ConnectorSurfaceEditorConfig,
+  type ConnectorWriteBackResult,
+} from "./surfaces";
+// === end Editable surface Phase 2 ===

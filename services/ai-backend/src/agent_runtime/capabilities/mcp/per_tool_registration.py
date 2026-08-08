@@ -62,7 +62,10 @@ from agent_runtime.capabilities.mcp.middleware.exec_policy_tool import (
     McpExecPolicyMiddleware,
 )
 from agent_runtime.capabilities.mcp.middleware.observe_tool import McpObserveMiddleware
-from agent_runtime.capabilities.mcp.middleware.present_tool import McpPresentMiddleware
+from agent_runtime.capabilities.mcp.middleware.present_tool import (
+    ConnectorWriteOpCatalogue,
+    McpPresentMiddleware,
+)
 from agent_runtime.capabilities.mcp.middleware.policy_tool import PolicyToolMiddleware
 from agent_runtime.capabilities.mcp.tool_source import (
     AuthorizedCardLister,
@@ -354,7 +357,13 @@ class McpPerToolRegistrar:
             McpObserveMiddleware(),
             McpErrorMapMiddleware(),
             McpCitationsMiddleware(),
-            McpPresentMiddleware(),
+            # The PRESENT stage is handed the run's WRITE descriptors because
+            # only this method has seen every tool the run loaded. A read
+            # presented without them mints a surface no Save can ever compose
+            # against — the descriptors exist nowhere else once the session ends.
+            McpPresentMiddleware(
+                write_ops=ConnectorWriteOpCatalogue.from_pairs(catalog.pairs)
+            ),
         )
 
     @classmethod

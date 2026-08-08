@@ -1216,6 +1216,15 @@ class RuntimeApiRouter:
             from runtime_api.http.stages import register_stage_routes
 
             register_stage_routes(router)
+            # Connector write-back — Save on an edited surface. Registered next
+            # to the stage routes because it is their front door: it only ever
+            # STAGES, and ``/stages/{id}/apply`` above stays the single door to
+            # execution. Same flag gate ⇒ off is byte-identical.
+            from runtime_api.http.surface_write_back import (
+                register_surface_write_back_routes,
+            )
+
+            register_surface_write_back_routes(router)
             # PRD-E2 (Generative Surfaces v2) — the cross-run pending-work queue.
             # Same flag gate: off ⇒ ``GET /v1/agent/pending-work`` does not exist
             # (404) ⇒ byte-identical. Read-side only (no new events, no writes).

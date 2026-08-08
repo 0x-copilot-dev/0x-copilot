@@ -32,6 +32,7 @@ import type { KeyValueStore } from "../../storage/key-value-store";
 import {
   clearRegistry,
   registerAdapter,
+  CONNECTOR_EDITOR_FIELD,
   type SaaSRendererAdapter,
 } from "../../surfaces";
 import { RunDestination } from "./RunDestination";
@@ -152,6 +153,22 @@ function partialRowsetReview(): Record<string, unknown> {
       row_key: "success",
       title: "Success",
       changes: [{ field: "status", old: "old", new: "new" }],
+      sends: [
+        {
+          arg: "issue_id",
+          origin: "carried",
+          column: "issue_id",
+          old: "PAR-1",
+          new: "PAR-1",
+        },
+        {
+          arg: "status",
+          origin: "edited",
+          column: "status",
+          old: "old",
+          new: "new",
+        },
+      ],
       decision: "approve",
       decision_source: "user",
       hold_reason: null,
@@ -162,6 +179,22 @@ function partialRowsetReview(): Record<string, unknown> {
       row_key: "failed-a",
       title: "Failed A",
       changes: [{ field: "status", old: "old", new: "new" }],
+      sends: [
+        {
+          arg: "issue_id",
+          origin: "carried",
+          column: "issue_id",
+          old: "PAR-1",
+          new: "PAR-1",
+        },
+        {
+          arg: "status",
+          origin: "edited",
+          column: "status",
+          old: "old",
+          new: "new",
+        },
+      ],
       decision: "approve",
       decision_source: "user",
       hold_reason: null,
@@ -172,6 +205,22 @@ function partialRowsetReview(): Record<string, unknown> {
       row_key: "held",
       title: "Held",
       changes: [{ field: "status", old: "old", new: "new" }],
+      sends: [
+        {
+          arg: "issue_id",
+          origin: "carried",
+          column: "issue_id",
+          old: "PAR-1",
+          new: "PAR-1",
+        },
+        {
+          arg: "status",
+          origin: "edited",
+          column: "status",
+          old: "old",
+          new: "new",
+        },
+      ],
       decision: "hold",
       decision_source: "agent",
       hold_reason: "manual review",
@@ -182,6 +231,22 @@ function partialRowsetReview(): Record<string, unknown> {
       row_key: "failed-b",
       title: "Failed B",
       changes: [{ field: "status", old: "old", new: "new" }],
+      sends: [
+        {
+          arg: "issue_id",
+          origin: "carried",
+          column: "issue_id",
+          old: "PAR-1",
+          new: "PAR-1",
+        },
+        {
+          arg: "status",
+          origin: "edited",
+          column: "status",
+          old: "old",
+          new: "new",
+        },
+      ],
       decision: "approve",
       decision_source: "user",
       hold_reason: null,
@@ -242,21 +307,85 @@ function legacyPartialRowsetEvents(): readonly Record<string, unknown>[] {
             row_key: "success",
             title: "Success",
             changes: [{ field: "status", old: "old", new: "new" }],
+            sends: [
+              {
+                arg: "issue_id",
+                origin: "carried",
+                column: "issue_id",
+                old: "PAR-1",
+                new: "PAR-1",
+              },
+              {
+                arg: "status",
+                origin: "edited",
+                column: "status",
+                old: "old",
+                new: "new",
+              },
+            ],
           },
           {
             row_key: "failed-a",
             title: "Failed A",
             changes: [{ field: "status", old: "old", new: "new" }],
+            sends: [
+              {
+                arg: "issue_id",
+                origin: "carried",
+                column: "issue_id",
+                old: "PAR-1",
+                new: "PAR-1",
+              },
+              {
+                arg: "status",
+                origin: "edited",
+                column: "status",
+                old: "old",
+                new: "new",
+              },
+            ],
           },
           {
             row_key: "held",
             title: "Held",
             changes: [{ field: "status", old: "old", new: "new" }],
+            sends: [
+              {
+                arg: "issue_id",
+                origin: "carried",
+                column: "issue_id",
+                old: "PAR-1",
+                new: "PAR-1",
+              },
+              {
+                arg: "status",
+                origin: "edited",
+                column: "status",
+                old: "old",
+                new: "new",
+              },
+            ],
           },
           {
             row_key: "failed-b",
             title: "Failed B",
             changes: [{ field: "status", old: "old", new: "new" }],
+            sends: [
+              {
+                arg: "issue_id",
+                origin: "carried",
+                column: "issue_id",
+                old: "PAR-1",
+                new: "PAR-1",
+              },
+              {
+                arg: "status",
+                origin: "edited",
+                column: "status",
+                old: "old",
+                new: "new",
+              },
+            ],
           },
         ],
       },
@@ -864,10 +993,41 @@ describe("RunDestination — v2 mount identity (one id, no round-trip)", () => {
     // …and the payload arrived. This is the assertion that was false in
     // production while ~9,000 unit tests passed.
     expect(rendered).toHaveTextContent("INC-4127");
-    expect(seen.at(-1)).toEqual({
+    // Both halves of the hydrated payload, verbatim. `toMatchObject` rather than
+    // `toEqual` because the cockpit also attaches the connector-write GRANT to
+    // this state (asserted next) — the point of the assertion is that the
+    // CONTENT arrived, which is what was false in production while ~9,000 unit
+    // tests passed.
+    expect(seen.at(-1)).toMatchObject({
       spec: { archetype: "table" },
       data: { incidents: [{ id: "INC-4127" }] },
     });
+  });
+
+  // Editable surface Phase 2. A v2 surface came from a connector read on this
+  // run — that is what a v2 surface IS — so the hydration lookup is itself the
+  // origin test, and the grant rides on the render STATE. It is never on the
+  // `SurfaceSpec` (the model authors those) and never on the wire.
+  it("attaches the connector-write grant to the state it delivers", async () => {
+    seq = 0;
+    const seen: unknown[] = [];
+    registerAdapter(recordingTableAdapter(seen));
+    const transport = new FakeTransport();
+    hydrating(transport, PROJECTOR_ID);
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [
+      created(PROJECTOR_ID, "table", "Open incidents"),
+      derived(PROJECTOR_ID, "shaped", "schema"),
+    ]);
+    await screen.findByTestId("table-adapter");
+
+    const grant = (seen.at(-1) as Record<string, unknown>)[
+      CONNECTOR_EDITOR_FIELD
+    ] as { surfaceId: string; disabled: boolean; saveEdits: unknown };
+    expect(grant.surfaceId).toBe(PROJECTOR_ID);
+    expect(grant.disabled).toBe(false);
+    expect(typeof grant.saveEdits).toBe("function");
   });
 
   it("shows the tab and the card one identity colour, from the one URI", async () => {

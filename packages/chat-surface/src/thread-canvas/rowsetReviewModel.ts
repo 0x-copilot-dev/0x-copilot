@@ -1,17 +1,27 @@
-import type { RowSetEffectReview } from "@0x-copilot/api-types";
+import type { RowSetEffectReview, StagedArg } from "@0x-copilot/api-types";
 import type {
   LedgerApplyResult,
-  LedgerRowChange,
+  LedgerArgOrigin,
+  LedgerStagedArg,
   LedgerStagedWrite,
   LedgerStagedWriteStatus,
 } from "./ledgerProjection";
 
 export type ReviewTone = "neutral" | "warning" | "danger" | "success";
 
+/** One argument the row will send, as the review surface renders it.
+ *
+ *  `field` is the CONNECTOR's argument name, not the surface column, because
+ *  the column is what a rename hides behind; `column` carries the surface
+ *  field for context. Every outbound argument gets one of these — including
+ *  the ones the user never touched, where `before` and `after` are the same
+ *  value and the row still discloses that it is being sent. */
 export interface DiffValueModel {
   readonly field: string;
   readonly before: unknown;
   readonly after: unknown;
+  readonly origin: LedgerArgOrigin;
+  readonly column: string | null;
 }
 
 export type RowsetDecision = "approved" | "held";
@@ -26,6 +36,11 @@ export interface RowsetReviewRow {
   readonly agentHoldReason: string | null;
   readonly outcome: RowsetApplyOutcome;
   readonly canDecide: boolean;
+  /** The row's outbound arguments were not disclosed, so what would be sent is
+   *  unknown and the row cannot be reviewed. It is undecidable and is excluded
+   *  from every action scope — the client half of the server's refusal to stage
+   *  such a row, so a replayed old run cannot be approved through this UI. */
+  readonly unaccounted: boolean;
 }
 
 export interface RowsetReviewCounts {
@@ -144,12 +159,46 @@ export function rowsetResultSummary(
   return parts.join(" · ");
 }
 
-function normalizeDiff(change: LedgerRowChange): DiffValueModel {
+function normalizeSend(sent: LedgerStagedArg): DiffValueModel {
   return {
-    field: change.field,
-    before: change.old,
-    after: change.new,
+    field: sent.arg,
+    before: sent.old,
+    after: sent.new,
+    origin: sent.origin,
+    column: sent.column,
   };
+}
+
+/** Narrow a wire origin by SHAPE. An origin this build cannot name is not a
+ *  cast to a default — it makes the argument unrenderable, which makes the row
+ *  unaccounted. */
+function wireOrigin(value: StagedArg["origin"]): LedgerArgOrigin | null {
+  return value === "edited" || value === "carried" || value === "proposed"
+    ? value
+    : null;
+}
+
+/** Project the canonical review's outbound arguments, all-or-nothing: one
+ *  unreadable entry collapses the account, because a silently dropped argument
+ *  is still sent and would no longer be on screen. */
+function normalizeWireSends(
+  sends: readonly StagedArg[],
+): readonly DiffValueModel[] {
+  const out: DiffValueModel[] = [];
+  for (const sent of sends) {
+    const origin = wireOrigin(sent.origin);
+    if (typeof sent.arg !== "string" || sent.arg === "" || origin === null) {
+      return [];
+    }
+    out.push({
+      field: sent.arg,
+      before: sent.old ?? null,
+      after: sent.new ?? null,
+      origin,
+      column: typeof sent.column === "string" ? sent.column : null,
+    });
+  }
+  return out;
 }
 
 function rowOutcome(outcome: "applied" | "failed" | null): RowsetApplyOutcome {
@@ -206,20 +255,25 @@ export function projectRowsetReviewModel(
   options: RowsetReviewProjectionOptions = {},
 ): RowsetReviewModel {
   const pending = options.actionPending === true;
-  const rows: readonly RowsetReviewRow[] = (stage.rows ?? []).map((row) => ({
-    rowKey: row.rowKey,
-    title: row.title,
-    diffs: row.changes.map(normalizeDiff),
-    decision: row.stance === "held" ? "held" : "approved",
-    decidedBy: row.decidedBy,
-    agentHoldReason: row.agentHoldReason,
-    outcome: rowOutcome(row.applyOutcome),
-    canDecide:
-      stage.status === "staged" &&
-      stage.applyResult === null &&
-      row.applyOutcome === null &&
-      !pending,
-  }));
+  const rows: readonly RowsetReviewRow[] = (stage.rows ?? []).map((row) => {
+    const unaccounted = row.sends.length === 0;
+    return {
+      rowKey: row.rowKey,
+      title: row.title,
+      diffs: row.sends.map(normalizeSend),
+      decision: row.stance === "held" ? "held" : "approved",
+      decidedBy: row.decidedBy,
+      agentHoldReason: row.agentHoldReason,
+      outcome: rowOutcome(row.applyOutcome),
+      canDecide:
+        !unaccounted &&
+        stage.status === "staged" &&
+        stage.applyResult === null &&
+        row.applyOutcome === null &&
+        !pending,
+      unaccounted,
+    };
+  });
   const counts: RowsetReviewCounts = {
     total: rows.length,
     approved: rows.filter((row) => row.decision === "approved").length,
@@ -237,11 +291,23 @@ export function projectRowsetReviewModel(
     stage.status === "partially_applied" ||
     stage.applyResult === "partial" ||
     stage.applyResult === "failed";
+  // An unaccounted row is never inside an action scope. What it would send is
+  // not on screen, so approving it would approve an object nobody saw.
   const failedRowKeys = rows
-    .filter((row) => row.decision === "approved" && row.outcome === "failed")
+    .filter(
+      (row) =>
+        !row.unaccounted &&
+        row.decision === "approved" &&
+        row.outcome === "failed",
+    )
     .map((row) => row.rowKey);
   const freshRowKeys = rows
-    .filter((row) => row.decision === "approved" && row.outcome === "pending")
+    .filter(
+      (row) =>
+        !row.unaccounted &&
+        row.decision === "approved" &&
+        row.outcome === "pending",
+    )
     .map((row) => row.rowKey);
   const actionKeys = recovery ? failedRowKeys : freshRowKeys;
   const actionPending = pending || stage.status === "apply_pending";
@@ -323,20 +389,21 @@ export function projectCanonicalRowsetReviewModel(
   options: RowsetReviewProjectionOptions = {},
 ): RowsetReviewModel {
   const pending = options.actionPending === true;
-  const rows: readonly RowsetReviewRow[] = review.rows.map((row) => ({
-    rowKey: row.row_key,
-    title: row.title,
-    diffs: row.changes.map((change) => ({
-      field: change.field,
-      before: change.old,
-      after: change.new,
-    })),
-    decision: row.decision === "hold" ? "held" : "approved",
-    decidedBy: row.decision_source === "default" ? null : row.decision_source,
-    agentHoldReason: row.hold_reason,
-    outcome: row.apply_outcome ?? "pending",
-    canDecide: row.can_decide && !pending,
-  }));
+  const rows: readonly RowsetReviewRow[] = review.rows.map((row) => {
+    const diffs = normalizeWireSends(row.sends ?? []);
+    const unaccounted = diffs.length === 0;
+    return {
+      rowKey: row.row_key,
+      title: row.title,
+      diffs,
+      decision: row.decision === "hold" ? "held" : "approved",
+      decidedBy: row.decision_source === "default" ? null : row.decision_source,
+      agentHoldReason: row.hold_reason,
+      outcome: row.apply_outcome ?? "pending",
+      canDecide: !unaccounted && row.can_decide && !pending,
+      unaccounted,
+    };
+  });
   const counts: RowsetReviewCounts = {
     total: review.counts.total,
     approved: review.counts.approved,

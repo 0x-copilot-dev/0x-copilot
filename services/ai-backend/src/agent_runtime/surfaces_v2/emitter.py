@@ -3,7 +3,8 @@
 The emitter is the single seam that records, on the run's existing append-only
 event log, what the v1 pipeline already does: an executed MCP tool read
 (``action.classified`` + ``read.executed``), the v1 surface envelope it attached
-(``surface.created`` + ``view.derived``), and the async spec-generation upgrade
+(``surface.created``, plus a ``view.derived`` when a rung actually shaped it),
+and the async spec-generation upgrade
 (a second ``view.derived`` with ``basis: generated``). It never invents policy
 (``class`` is always ``unknown``, ``basis`` ``default`` in A3 — a classifier
 lands in PRD-C1) and never fails a tool call: every method swallows its own
@@ -46,7 +47,7 @@ from __future__ import annotations
 __operation_boundary__ = "presentation"
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -58,6 +59,10 @@ from agent_runtime.capabilities.surfaces.builtin import (
 )
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
+from agent_runtime.capabilities.surfaces.write_ops_capture import (
+    CapturedWriteOps,
+    WriteOpCandidate,
+)
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Titles, Values
 from agent_runtime.surfaces_v2.ledger_models import (
     CURRENT_LEDGER_WRITER,
@@ -111,9 +116,11 @@ class SpecRung:
     producers of one fact is the defect this module already fixed once for
     ``source``).
 
-    ``generated`` is here for completeness of the vocabulary only: the model
-    upgrade lands out of band, as a second ``view.derived`` emitted by
-    :meth:`WorkLedgerEmitter.on_spec_generated`, never through this path.
+    ``selected`` and ``generated`` are the two model rungs. They arrive through
+    this path when the projector asked the *shaping* question inline (a payload
+    the deterministic ladder could not bind), and ``generated`` also still
+    arrives out of band, as a second ``view.derived`` emitted by
+    :meth:`WorkLedgerEmitter.on_spec_generated`.
     """
 
     BUILTIN = "builtin"
@@ -121,6 +128,7 @@ class SpecRung:
     SHAPE_MATCH = "shape_match"
     INFERRED = "inferred"
     GENERATED = "generated"
+    SELECTED = "selected"
 
 
 class _ViewDerivation:
@@ -137,10 +145,11 @@ class _ViewDerivation:
     * shape_match ⇒ ``shaped`` / ``schema`` — see below.
     * inferred ⇒ ``shaped`` / ``schema`` — derived deterministically from the
       payload's own structure.
-    * generated ⇒ ``shaped`` / ``generated`` (emitted by ``on_spec_generated``).
-    * no spec at all ⇒ ``generic`` / ``schema``. The floor makes this
-      unreachable in production, but the emitter stays total over an envelope
-      that carries none.
+    * selected ⇒ ``shaped`` / ``selected`` — a model chose the shape and
+      returned paths into the payload, so the values are still the connector's.
+    * generated ⇒ ``shaped`` / ``generated`` (inline from the shaping rung, or
+      out of band from ``on_spec_generated``).
+    * **no spec at all ⇒ no pair, and therefore no** ``view.derived``. See below.
 
     ``shape_match`` is the one that has to be argued, because both readings are
     defensible: the spec IS a curated registry entry, but the connector it was
@@ -152,6 +161,29 @@ class _ViewDerivation:
     happened (a person approved this pairing). Identical to how ``_UNSTATED``
     below was resolved, and for the identical reason: in a durable compliance
     record, understating provenance is recoverable and overstating it is not.
+
+    **The no-spec case used to report ``generic`` / ``schema`` and that was a
+    lie of exactly the kind ``selected`` was split out to prevent.** ``schema``
+    is defined as *deterministic inference off the payload's own structure* — a
+    positive claim that a rung ran and answered. When the ladder produces no
+    spec, no rung answered: rung 0 declines by contract for a payload that is
+    not a mapping, and rung 5 was either unavailable (a dark shaping model, as
+    measured on a packaged install) or had nothing to say. Recording ``schema``
+    over that reads back, in an audit export, as "deterministic inference
+    succeeded" above a surface with no spec at all.
+
+    :class:`ViewBasis` is a closed, pinned cross-language enum whose four
+    members all describe a shaping that *happened* (registry / schema / selected
+    / generated). None of them can express "nothing was derived", and minting a
+    fifth to say it would change the contract in three mirrors in order to
+    record a non-event. So the honest answer is the absent one: **emit no**
+    ``view.derived``. A surface with no derivation has no derivation row, and
+    the fold already models that — ``SurfaceSnapshot.view`` is optional
+    (``view: {...} | null`` in ``packages/api-types/src/ledger.ts``), so a
+    client reads "not derived" rather than a fabricated basis. The surface
+    itself is unaffected: ``surface.created`` still carries the whole
+    ``{spec?, source?, data}`` state, so the generic view still renders and
+    still names the tool it came from.
     """
 
     _BY_RUNG: Mapping[str, tuple[str, str]] = {
@@ -160,8 +192,8 @@ class _ViewDerivation:
         SpecRung.SHAPE_MATCH: (Values.TIER_SHAPED, Values.BASIS_SCHEMA),
         SpecRung.INFERRED: (Values.TIER_SHAPED, Values.BASIS_SCHEMA),
         SpecRung.GENERATED: (Values.TIER_SHAPED, Values.BASIS_GENERATED),
+        SpecRung.SELECTED: (Values.TIER_SHAPED, Values.BASIS_SELECTED),
     }
-    _NO_SPEC: tuple[str, str] = (Values.TIER_GENERIC, Values.BASIS_SCHEMA)
     # An unstated rung over a spec that IS present. This used to report
     # ``registry`` on the reasoning that builtin and store were the only rungs
     # that could produce one — and its own comment predicted the failure that
@@ -178,11 +210,16 @@ class _ViewDerivation:
     _UNSTATED: tuple[str, str] = (Values.TIER_SHAPED, Values.BASIS_SCHEMA)
 
     @classmethod
-    def resolve(cls, *, rung: object, has_spec: bool) -> tuple[str, str]:
-        """Return the ``(tier, basis)`` wire pair for a rung, total over junk."""
+    def resolve(cls, *, rung: object, has_spec: bool) -> tuple[str, str] | None:
+        """The ``(tier, basis)`` wire pair, or ``None`` when nothing was derived.
+
+        Total over junk. ``None`` is not an error and not a failure — it is the
+        one honest answer for a surface no rung shaped, and its caller answers
+        it by emitting no ``view.derived`` at all.
+        """
 
         if not has_spec:
-            return cls._NO_SPEC
+            return None
         if isinstance(rung, str):
             derived = cls._BY_RUNG.get(rung)
             if derived is not None:
@@ -292,13 +329,15 @@ class WorkLedgerEmitter:
         surface_uri: object,
         latency_ms: int | None,
         spec_rung: str | None = None,
+        write_ops: Sequence[object] = (),
     ) -> None:
         """Emit the read path for one executed MCP tool call.
 
         Order: ``action.classified`` → ``read.executed`` → (only when the v1
-        projector attached an envelope) ``surface.created`` → ``view.derived``.
-        Best-effort: any failure is logged and swallowed — a ledger emit never
-        breaks a tool call.
+        projector attached an envelope) ``surface.created`` → ``view.derived``
+        (only when a rung actually shaped the surface — see
+        :class:`_ViewDerivation`). Best-effort: any failure is logged and
+        swallowed — a ledger emit never breaks a tool call.
 
         ``spec_rung`` is a :class:`SpecRung` value naming which rung of the
         ladder produced ``surface.state.spec``; it decides the ``view.derived``
@@ -308,6 +347,14 @@ class WorkLedgerEmitter:
         reports a present spec as ``registry``, which is what the builtin/store
         ladder actually resolves today; a caller that resolves a spec by
         inference must say so or the ledger will over-claim.
+
+        ``write_ops`` is the sibling WRITE ops of the connector this read came
+        from, captured by the caller at the one moment they were in hand — the
+        loaded session that served the read. It is passed IN for exactly the
+        ``source`` / ``spec_rung`` reason: this emitter holds no MCP client and
+        must never grow one to answer a question about a connector's ops. Empty
+        (the default) writes no ``write_ops`` member at all, which the
+        write-back lane reads as *"nothing was captured"* and refuses.
         """
 
         try:
@@ -346,6 +393,7 @@ class WorkLedgerEmitter:
                     tool_name=tool_name,
                     payload_ref=payload_ref,
                     spec_rung=spec_rung,
+                    write_ops=write_ops,
                 )
         except Exception:  # noqa: BLE001 - ledger emission never fails a tool call
             _LOGGER.warning(Messages.EMIT_RAISED, exc_info=True)
@@ -492,8 +540,13 @@ class WorkLedgerEmitter:
         tool_name: str,
         payload_ref: str,
         spec_rung: str | None = None,
+        write_ops: Sequence[object] = (),
     ) -> None:
-        """Emit ``surface.created`` + the first ``view.derived`` for one surface.
+        """Emit ``surface.created``, and the first ``view.derived`` if one is due.
+
+        The derivation is conditional and the surface delivery is not: a surface
+        no rung shaped still ships its whole state, and simply has no
+        ``view.derived`` (see :class:`_ViewDerivation`).
 
         ``state`` — the renderer's whole ``{spec?, source?, data}`` — rides
         ``surface.created``. This is the delivery. The ladder's
@@ -564,11 +617,32 @@ class WorkLedgerEmitter:
         carried = _CarriedState.build(state, connector=connector, op=op)
         if carried is not None:
             created[_AdditiveField.STATE] = carried
+        # Written only when the caller captured something. An empty member and
+        # an absent one would both refuse a later save, but absence is the
+        # honest record: "this read captured no write ops", not "this connector
+        # was asked and offered none".
+        captured = CapturedWriteOps.to_payload(
+            [
+                candidate
+                for candidate in write_ops
+                if isinstance(candidate, WriteOpCandidate)
+            ]
+        )
+        if captured:
+            created[Keys.Field.WRITE_OPS] = captured
         await self._sign(
             LedgerEventType.SURFACE_CREATED.value, created, Messages.SURFACE_CREATED
         )
 
-        tier, basis = _ViewDerivation.resolve(rung=spec_rung, has_spec=spec is not None)
+        derivation = _ViewDerivation.resolve(rung=spec_rung, has_spec=spec is not None)
+        if derivation is None:
+            # Nothing shaped this surface, so there is no derivation to record.
+            # The delivery above already shipped the payload and the tool's
+            # name, which is what the generic view renders from; writing a
+            # ``view.derived`` here would put a provenance claim on the ledger
+            # for a shaping that never happened (see ``_ViewDerivation``).
+            return
+        tier, basis = derivation
         derived = {
             Keys.Field.V: Values.PAYLOAD_V,
             Keys.Field.SURFACE_ID: surface_id,

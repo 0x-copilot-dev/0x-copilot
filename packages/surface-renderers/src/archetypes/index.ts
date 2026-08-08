@@ -26,6 +26,31 @@ import {
 } from "./TableRenderer";
 
 export {
+  EditableConnectorTable,
+  EDITABLE_ROW_CAP,
+  type EditableConnectorTableProps,
+} from "./EditableConnectorTable";
+export {
+  hostConnectorEditor,
+  type ConnectorSurfaceEditorActions,
+} from "./connectorEditor";
+export {
+  asConnectorRow,
+  buildConnectorRowEdits,
+  cellKey,
+  editableCellText,
+  isEditableCell,
+  rowKeyFor,
+  rowsOf,
+  rowTitleFor,
+  type ConnectorEditsResult,
+  type ConnectorFieldChange,
+  type ConnectorRow,
+  type ConnectorRowEdit,
+  type PendingCellEdits,
+} from "./connectorEdits";
+
+export {
   RecordRenderer,
   RecordDiffRenderer,
   recordAdapter,

@@ -266,7 +266,7 @@ no longer justify, so the "catches debt appearing, not debt clearing" asymmetry 
 
 ---
 
-## Wired up — blocker shipped, row retired (2)
+## Wired up — blocker shipped, row retired (3)
 
 The state this ledger exists to reach. Recorded rather than silently erased, because
 "it was pending once" is the provenance a future reader needs when they find the
@@ -281,8 +281,25 @@ module already wired and wonder whether that was deliberate.
   ("nothing in the running app imports this module yet") stopped being true at
   **P2 Wave 1** (`498ec9a5`): `tool_source.py`, `per_tool_registration.py` and
   `proxy_plane.py` all import it, and all three are reachable from `runtime_api.app`.
+- **`SurfaceSpecGenerator.shape` + `capabilities.surfaces.shaping_answer`** (~800,
+  **never enrolled**) — the shaping question (decline / select / generate) landed with 125
+  tests and **no production caller**: `grep -rn "\.shape(" services/ai-backend/src/` returned
+  nothing. Now wired as ladder **rung 5**: `SurfaceProjector.project` consults
+  `ReadPathShaper` (`capabilities/surfaces/shape_request.py`) for a payload the
+  deterministic rungs could not bind, the presenter awaits it
+  (`capabilities/operations/presentation.py`), and the worker binds it per run beside the
+  refinement scheduler. Provenance rides `ShapingBindingMode.view_basis` →
+  `SurfaceSpecRung.{SELECTED,GENERATED}` → `view.derived {basis}`.
 
-Both were pruned from [`orphan_ratchet_baseline.txt`](../../../services/ai-backend/tests/unit/orphan_ratchet_baseline.txt)
+  **The interesting part is that no row existed to retire.** The module was neither an
+  orphan by the scanner's definition (`shaping_answer` has importers — the generator
+  imports it) nor recorded here, so "built, tested, and dead" was invisible for the whole
+  time it was true. Import-reachable is not call-reachable, and a _method_ nobody calls is
+  a shape neither the ratchet nor this ledger can currently see. Worth a scanner
+  follow-up: the same blind spot as the `delegation/subagents/__init__` re-export, one
+  level down.
+
+Three of the four were pruned from [`orphan_ratchet_baseline.txt`](../../../services/ai-backend/tests/unit/orphan_ratchet_baseline.txt)
 later than they should have been — the wiring commits did not prune in the same change,
 and the ratchet only failed on **new** orphans, so two stale entries rode along silently.
 That asymmetry was the ledger's one blind spot: it caught debt appearing, not debt clearing.

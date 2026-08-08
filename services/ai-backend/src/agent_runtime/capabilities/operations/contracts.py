@@ -14,6 +14,7 @@ from typing import Protocol
 
 from pydantic import Field, field_validator, model_validator
 
+from agent_runtime.capabilities.surfaces.write_ops_capture import WriteOpCandidate
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.surfaces_v2.entities import (
     ArtifactIntent,
@@ -75,6 +76,14 @@ class OperationPresentationOutcome(RuntimeContract):
     result_ref: str = Field(min_length=1, max_length=2048)
     output: dict[str, object]
     latency_ms: int = Field(ge=0)
+    #: The sibling WRITE ops of ``capability``, as its descriptors declared them
+    #: at the instant this read ran. Carried here — not looked up later —
+    #: because this is the only moment the loaded session is in hand, and a save
+    #: arrives in another process with no way to ask. Stays generic in the same
+    #: register ``capability`` / ``op`` are: a write op is a fact about a
+    #: capability, not about MCP. Empty means nothing was captured, which the
+    #: write-back lane treats as "no write is proposable" and refuses.
+    write_ops: tuple[WriteOpCandidate, ...] = ()
 
     @field_validator("result_ref")
     @classmethod

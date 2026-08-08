@@ -7,12 +7,17 @@ entry point: it gates an untrusted dict against the schema's own required /
 const / enum declarations, then runs full field-level validation through the
 pydantic model.
 
-Nothing in here is wired into the runtime yet (PRD-01 is contracts only).
+The dot-path accessor itself — its grammar AND how it reads a value — is
+:class:`SurfaceDotPath`, public because it is not private to :class:`SurfaceSpec`:
+the shaping answer (:mod:`.shaping_answer`) constrains and resolves the same
+accessor, and a security-relevant grammar with two implementations is a grammar
+with two behaviours.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import ClassVar, Literal
 
@@ -109,10 +114,11 @@ class SurfaceSpecRung(StrEnum):
     two together. The direction of the duplication is deliberate: this module is
     pure domain and must not import the ledger emitter.
 
-    A projector only ever answers ``builtin``, ``store``, ``shape_match`` or
-    ``inferred``. ``generated`` belongs to the vocabulary because the model rung
-    lands out of band, as a ``surface_spec_generated`` event, never through this
-    envelope.
+    A projector answers ``builtin``, ``store``, ``shape_match`` or ``inferred``
+    from the deterministic ladder, and ``selected`` / ``generated`` when it asked
+    the model the *shaping* question for a payload none of those could bind
+    (``SurfaceProjector.project``). ``generated`` also still arrives out of band,
+    as a ``surface_spec_generated`` event refining an already-rendered surface.
 
     ``shape_match`` exists so provenance cannot lie. A shape match reuses a spec
     that IS curated, for a connector nobody curated — Linear's ``save_issue``
@@ -120,6 +126,13 @@ class SurfaceSpecRung(StrEnum):
     would record human sign-off on a pairing no human ever saw; folding it into
     ``inferred`` would understate a spec a person did write. It is its own rung
     because it is its own fact.
+
+    ``selected`` and ``generated`` are two rungs for the same reason. Both are a
+    model's answer, and they differ in whose values the user is looking at: a
+    ``select`` binding returns paths INTO the connector's payload, a ``generate``
+    binding returns rows the model wrote. The split is
+    ``ShapingBindingMode.view_basis``'s, carried here so the emitter's
+    ``(tier, basis)`` map states it without re-deriving it.
     """
 
     BUILTIN = "builtin"
@@ -127,6 +140,7 @@ class SurfaceSpecRung(StrEnum):
     SHAPE_MATCH = "shape_match"
     INFERRED = "inferred"
     GENERATED = "generated"
+    SELECTED = "selected"
 
 
 class _Limits:
@@ -190,8 +204,21 @@ class SurfaceSpecError(ValueError):
     """
 
 
-class _DotPath:
-    """Validator for the constrained dot-path string used by every ``*_path``."""
+class SurfaceDotPath:
+    """The dot-path accessor: its grammar, and how it reads a value.
+
+    Both halves live here because they are one contract. ``validate`` gates the
+    string against ``$defs.dotPath`` (identifier segments and array indices —
+    no expressions, no code); ``resolve`` walks a validated path against data
+    with the same segment semantics the frontend resolver uses.
+
+    Public because the dot-path is not private to :class:`SurfaceSpec`. The
+    shaping answer (:mod:`.shaping_answer`) constrains and resolves the same
+    accessor, and a second implementation of a security-relevant grammar is how
+    the two drift apart.
+    """
+
+    _MISSING = object()
 
     @classmethod
     def validate(cls, value: object, field_name: str) -> str:
@@ -200,6 +227,36 @@ class _DotPath:
         if not _Patterns.DOT_PATH.fullmatch(value):
             raise ValueError(_Messages.bad_path(field_name, value))
         return value
+
+    @classmethod
+    def resolve(cls, data: object, path: str) -> tuple[bool, object]:
+        """Read ``path`` out of ``data``.
+
+        Returns ``(found, value)`` rather than a bare value so a key that is
+        present and legitimately ``None`` is distinguishable from a key that is
+        absent — the distinction the generated-rows check turns on.
+        """
+
+        current: object = data
+        for segment in path.split("."):
+            current = cls._step(current, segment)
+            if current is cls._MISSING:
+                return (False, None)
+        return (True, current)
+
+    @classmethod
+    def _step(cls, current: object, segment: str) -> object:
+        if isinstance(current, Mapping):
+            return current.get(segment, cls._MISSING)
+        if (
+            segment.isdigit()
+            and isinstance(current, Sequence)
+            and not isinstance(current, (str, bytes))
+        ):
+            index = int(segment)
+            if 0 <= index < len(current):
+                return current[index]
+        return cls._MISSING
 
 
 class SurfaceSource(RuntimeContract):
@@ -219,7 +276,7 @@ class SurfaceField(RuntimeContract):
     @field_validator("path")
     @classmethod
     def _check_path(cls, value: str, info: ValidationInfo) -> str:
-        return _DotPath.validate(value, info.field_name or "path")
+        return SurfaceDotPath.validate(value, info.field_name or "path")
 
 
 class SurfaceColumn(RuntimeContract):
@@ -233,7 +290,7 @@ class SurfaceColumn(RuntimeContract):
     @field_validator("path")
     @classmethod
     def _check_path(cls, value: str, info: ValidationInfo) -> str:
-        return _DotPath.validate(value, info.field_name or "path")
+        return SurfaceDotPath.validate(value, info.field_name or "path")
 
 
 class SurfaceLink(RuntimeContract):
@@ -246,7 +303,7 @@ class SurfaceLink(RuntimeContract):
     @field_validator("url_path")
     @classmethod
     def _check_url_path(cls, value: str, info: ValidationInfo) -> str:
-        return _DotPath.validate(value, info.field_name or "url_path")
+        return SurfaceDotPath.validate(value, info.field_name or "url_path")
 
 
 class SurfaceSpec(RuntimeContract):
@@ -272,7 +329,7 @@ class SurfaceSpec(RuntimeContract):
     def _check_paths(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None:
             return value
-        return _DotPath.validate(value, info.field_name or "path")
+        return SurfaceDotPath.validate(value, info.field_name or "path")
 
 
 class SurfaceFieldChange(RuntimeContract):
@@ -410,6 +467,7 @@ __all__ = [
     "SurfaceArchetype",
     "SurfaceColumn",
     "SurfaceDiff",
+    "SurfaceDotPath",
     "SurfaceEnvelope",
     "SurfaceField",
     "SurfaceFieldChange",

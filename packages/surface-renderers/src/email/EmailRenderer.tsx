@@ -8,6 +8,7 @@ import {
 } from "@0x-copilot/chat-surface";
 
 import { SURFACE_PALETTE as PALETTE } from "../_shared/palette";
+import { dataFromState } from "../_shared/specTypes";
 
 type DiffVisualState = "pending" | "streaming";
 
@@ -17,6 +18,47 @@ export interface EmailState {
   readonly subject: string;
   readonly body: string;
   readonly autoSavedLabel?: string;
+}
+
+/** An `EmailState` with every slot empty — what an unreadable payload draws. */
+const EMPTY_EMAIL_STATE: EmailState = { to: "", cc: "", subject: "", body: "" };
+
+/**
+ * Read an `EmailState` out of whatever the host mounted.
+ *
+ * Two shapes arrive at this adapter and both are legitimate:
+ *
+ * - the **surface envelope** `{spec?, source?, data}` — what `TcSurfaceMount`
+ *   passes for every surface, hydrated from `GET /v1/agent/runs/{id}/surfaces`.
+ *   The backend's `email://` producer normalises the connector's field names
+ *   onto the four `EmailState` keys, so `data` IS the composer state; and
+ * - a **bare `EmailState`**, which is how this renderer has always been driven
+ *   from a standalone mount and from its own tests.
+ *
+ * `dataFromState` is the package's shared narrowing for exactly that first
+ * shape — the same one every archetype renderer uses — so there is one rule for
+ * "where does a surface keep its payload", not a second copy here.
+ *
+ * Every slot is coerced to a string and a missing one becomes empty. The
+ * composer must never print `undefined` into a recipient row, and it must never
+ * invent one: an unreadable payload draws an empty composer, not a filled one.
+ */
+export function emailStateFrom(value: unknown): EmailState {
+  const data = dataFromState(value);
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return EMPTY_EMAIL_STATE;
+  }
+  const record = data as Record<string, unknown>;
+  const text = (key: string): string =>
+    typeof record[key] === "string" ? (record[key] as string) : "";
+  const autoSavedLabel = record["autoSavedLabel"];
+  return {
+    to: text("to"),
+    cc: text("cc"),
+    subject: text("subject"),
+    body: text("body"),
+    ...(typeof autoSavedLabel === "string" ? { autoSavedLabel } : {}),
+  };
 }
 
 export interface EmailDiffPending {
@@ -51,14 +93,26 @@ const STREAM_KEYFRAMES_CSS = `
 }
 `;
 
-export const emailAdapter: SaaSRendererAdapter<EmailState, EmailDiff> = {
+/**
+ * The `email://` adapter.
+ *
+ * `renderCurrent` takes `unknown` rather than `EmailState` because the host
+ * mounts the surface envelope, not the composer state — see
+ * {@link emailStateFrom}. Narrowing happens here, at the boundary, exactly as
+ * the archetype renderers narrow theirs; the shell below still works in
+ * `EmailState` only.
+ */
+export const emailAdapter: SaaSRendererAdapter<unknown, EmailDiff> = {
   scheme: "email",
   matches: (uri: string): boolean => uri.startsWith("email://"),
-  renderCurrent: (state: EmailState): ReactElement => (
-    <EmailComposerShell state={state}>
-      <EmailBodyParagraph text={state.body} />
-    </EmailComposerShell>
-  ),
+  renderCurrent: (state: unknown): ReactElement => {
+    const email = emailStateFrom(state);
+    return (
+      <EmailComposerShell state={email}>
+        <EmailBodyParagraph text={email.body} />
+      </EmailComposerShell>
+    );
+  },
   renderDiff: (diff: EmailDiff): ReactElement => (
     <EmailComposerShell state={diff.base} drafting={diff.pending.streaming}>
       <EmailDiffBody diff={diff} />

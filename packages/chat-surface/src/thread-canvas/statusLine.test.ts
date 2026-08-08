@@ -112,3 +112,36 @@ describe("projectStatusLine", () => {
     expect(projectStatusLine([bad, nulled]).kind).toBe("idle");
   });
 });
+
+describe("projectStatusLine — receipts never earn a view", () => {
+  function receipt(id: string) {
+    return ev("surface.created", {
+      v: 1,
+      surface_id: id,
+      kind: "receipt",
+      source: { connector: "system", op: "receipt" },
+      title: "Receipt",
+      payload_ref: "call:c1",
+    });
+  }
+
+  it("does not stay assembling forever because of a receipt surface", () => {
+    // A real Linear run: three `receipt://` surfaces and one table. The table
+    // resolved in 1.4s; the strip read "Shaping…" for the rest of the run
+    // because receipts are folded client-side and never emit `view.derived`.
+    const line = projectStatusLine([
+      receipt("receipt://feffe61a"),
+      created("s1"),
+      derived("s1"),
+      receipt("receipt://5e7f8fc8"),
+      receipt("receipt://89648500"),
+    ]);
+    expect(line.kind).toBe("idle");
+  });
+
+  it("still reports assembling for a real surface awaiting its view", () => {
+    expect(
+      projectStatusLine([receipt("receipt://abc"), created("s1")]).kind,
+    ).toBe("assembling");
+  });
+});

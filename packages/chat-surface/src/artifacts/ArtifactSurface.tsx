@@ -17,7 +17,6 @@ import {
 import { TcSurfaceMount } from "../thread-canvas/TcSurfaceMount";
 import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { ArtifactDownloadPort } from "../ports/ArtifactDownloadPort";
-import { ArtifactEditor } from "./ArtifactEditor";
 import { ArtifactFrame } from "./ArtifactFrame";
 import {
   ArtifactRevisionCompare,
@@ -96,10 +95,12 @@ export function ArtifactSurface(props: {
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
   /**
-   * Scopes the DOM ids this surface's editor owns. Studio mounts exactly one
-   * artifact at a time and can leave this unset; the inline transcript card can
-   * have two expanded at once, where a shared id silently breaks `htmlFor`
-   * (the second label focuses the first field). Forwarded, not used here.
+   * Scopes the names this surface's in-place editor owns. Studio mounts exactly
+   * one artifact at a time and can leave this unset; the inline transcript card
+   * can have two expanded at once, where a shared name makes a field ambiguous
+   * to a test query and gives a screen reader two identically-labelled inputs
+   * on one page. Forwarded to the renderer through the editor grant, since the
+   * editor now lives inside the mounted surface rather than below it.
    */
   readonly idPrefix?: string;
 }): ReactElement {
@@ -224,11 +225,35 @@ export function ArtifactSurface(props: {
     setSelectedRevision(next);
     props.onNavigateRevision?.(artifactUri(kind, artifactId, next));
   };
-  const editable =
-    data.state?.preview === "ready" &&
-    data.state.text !== undefined &&
-    kind !== "file" &&
-    kind !== "dataset";
+  /**
+   * The document surface's editor capability — the ONE thing that makes a
+   * rendered block clickable, and the explicit origin gate for Phase 1.
+   *
+   * Editability is a property of the HOST RENDERER, never a member of the data.
+   * It is granted here, in the component that already knows how to append a
+   * revision, and it is granted for exactly one origin: an ARTIFACT whose kind
+   * the server reports as `document`. A connector-read surface (`record://`,
+   * `table://`, a tier-2 spec) never reaches this component at all, so it
+   * cannot acquire the capability by accident — connector write-back is Phase 2
+   * and rides the staged-diff approval gate, not this local revision path.
+   *
+   * Narrower than the raw-markdown textarea it replaces, deliberately. That
+   * textarea also opened `code` artifacts, editing a whole source file through
+   * a 16-row box; `CodeArtifactRenderer` is a source VIEWER and a markdown
+   * block model is the wrong reading of a source file, so code stays read-only
+   * here rather than getting an editor that half-understands it.
+   */
+  const documentEditor =
+    data.state !== null &&
+    data.state.kind === "document" &&
+    data.state.preview === "ready" &&
+    data.state.text !== undefined
+      ? {
+          disabled: !isArtifactTransport(props.transport),
+          saveRevision: save,
+          ...(props.idPrefix === undefined ? {} : { idPrefix: props.idPrefix }),
+        }
+      : null;
   // A dataset revision is a table change, not a text change, so the review's
   // "what changed" is handed to the dataset renderer and shown in cells
   // (PRD-03 D4). It renders there rather than in the review panel below because
@@ -255,7 +280,9 @@ export function ArtifactSurface(props: {
           },
           ...(datasetRevisionChange !== null ? { datasetRevisionChange } : {}),
         }
-      : data.state;
+      : documentEditor !== null && data.state !== null
+        ? { ...data.state, documentEditor }
+        : data.state;
   // Bounded fetch-and-diff of one revision against the current head. Two callers
   // share it — the reader's explicit "Compare to current" and the automatic
   // review of an agent revision — so both read the same bytes through the same
@@ -483,17 +510,11 @@ export function ArtifactSurface(props: {
           state={mountedState}
         />
       ) : null}
-      {editable && data.state !== null ? (
-        <ArtifactEditor
-          initialText={data.state.text!}
-          revision={data.state.revision}
-          disabled={!isArtifactTransport(props.transport)}
-          onSave={save}
-          {...(props.idPrefix === undefined
-            ? {}
-            : { idPrefix: props.idPrefix })}
-        />
-      ) : null}
+      {/* The raw-markdown textarea that used to sit HERE is deleted. Editing
+          happens inside the mounted surface above, on the blocks themselves —
+          which is the whole point: a table you can click into cannot exist
+          below a render, only inside one. The revision history and Restore
+          below are unchanged. */}
       <ArtifactRevisionReview
         review={review}
         comparison={reviewComparison}

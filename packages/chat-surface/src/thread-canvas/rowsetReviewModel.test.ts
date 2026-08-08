@@ -15,7 +15,22 @@ function row(
   return {
     rowKey,
     title: `Row ${rowKey}`,
-    changes: [{ field: "status", old: "open", new: "closed" }],
+    sends: [
+      {
+        arg: "issue_id",
+        origin: "carried",
+        column: "issue_id",
+        old: rowKey,
+        new: rowKey,
+      },
+      {
+        arg: "status",
+        origin: "edited",
+        column: "status",
+        old: "open",
+        new: "closed",
+      },
+    ],
     stance: "will_apply",
     agentHoldReason: null,
     decidedBy: null,
@@ -160,6 +175,81 @@ describe("projectRowsetReviewModel", () => {
     ).toBeNull();
   });
 
+  it("projects one diff per outbound argument, keyed by the connector's name", () => {
+    const model = projectRowsetReviewModel(
+      stage([
+        row("a", {
+          sends: [
+            {
+              arg: "issue_id",
+              origin: "carried",
+              column: "id",
+              old: "PAR-9",
+              new: "PAR-9",
+            },
+            {
+              arg: "priority",
+              origin: "edited",
+              column: "priority",
+              old: "high",
+              new: "low",
+            },
+          ],
+        }),
+      ]),
+    );
+
+    // `field` is the CONNECTOR arg (`issue_id`), not the surface column (`id`)
+    // — a rename between the two is the thing this is meant to expose.
+    expect(model.rows[0].diffs).toEqual([
+      {
+        field: "issue_id",
+        before: "PAR-9",
+        after: "PAR-9",
+        origin: "carried",
+        column: "id",
+      },
+      {
+        field: "priority",
+        before: "high",
+        after: "low",
+        origin: "edited",
+        column: "priority",
+      },
+    ]);
+    expect(model.rows[0].unaccounted).toBe(false);
+  });
+
+  it("holds an unaccounted row out of every decision and action scope", () => {
+    const model = projectRowsetReviewModel(
+      stage([row("a"), row("dark", { sends: [] }), row("c")]),
+    );
+
+    const dark = model.rows[1];
+    expect(dark.unaccounted).toBe(true);
+    expect(dark.canDecide).toBe(false);
+    expect(dark.diffs).toEqual([]);
+    expect(model.action).toMatchObject({ kind: "apply", rowKeys: ["a", "c"] });
+  });
+
+  it("holds an unaccounted row out of a retry scope too", () => {
+    const model = projectRowsetReviewModel(
+      stage(
+        [
+          row("failed-a", { applyOutcome: "failed" }),
+          row("dark", { sends: [], applyOutcome: "failed" }),
+        ],
+        { status: "partially_applied", applyResult: "partial" },
+      ),
+    );
+
+    expect(model.action).toMatchObject({
+      kind: "retry_failed",
+      rowKeys: ["failed-a"],
+      failedRowKeys: ["failed-a"],
+    });
+  });
+
   it("keeps summary and provenance connector-neutral", () => {
     const model = projectRowsetReviewModel(
       stage(
@@ -205,6 +295,22 @@ describe("projectCanonicalRowsetReviewModel", () => {
           row_key: "applied",
           title: "Applied row",
           changes: [{ field: "status", old: "open", new: "closed" }],
+          sends: [
+            {
+              arg: "issue_id",
+              origin: "carried",
+              column: "issue_id",
+              old: "PAR-1",
+              new: "PAR-1",
+            },
+            {
+              arg: "status",
+              origin: "edited",
+              column: "status",
+              old: "open",
+              new: "closed",
+            },
+          ],
           decision: "approve",
           decision_source: "user",
           hold_reason: null,
@@ -215,6 +321,22 @@ describe("projectCanonicalRowsetReviewModel", () => {
           row_key: "failed",
           title: "Failed row",
           changes: [{ field: "status", old: "open", new: "closed" }],
+          sends: [
+            {
+              arg: "issue_id",
+              origin: "carried",
+              column: "issue_id",
+              old: "PAR-1",
+              new: "PAR-1",
+            },
+            {
+              arg: "status",
+              origin: "edited",
+              column: "status",
+              old: "open",
+              new: "closed",
+            },
+          ],
           decision: "approve",
           decision_source: "default",
           hold_reason: null,
@@ -225,6 +347,22 @@ describe("projectCanonicalRowsetReviewModel", () => {
           row_key: "held",
           title: "Held row",
           changes: [{ field: "status", old: "open", new: "closed" }],
+          sends: [
+            {
+              arg: "issue_id",
+              origin: "carried",
+              column: "issue_id",
+              old: "PAR-1",
+              new: "PAR-1",
+            },
+            {
+              arg: "status",
+              origin: "edited",
+              column: "status",
+              old: "open",
+              new: "closed",
+            },
+          ],
           decision: "hold",
           decision_source: "agent",
           hold_reason: "Recent customer reply",
@@ -285,5 +423,52 @@ describe("projectCanonicalRowsetReviewModel", () => {
       pending: true,
       disabled: true,
     });
+  });
+
+  it("projects the wire's outbound account, arg-keyed and complete", () => {
+    const model = projectCanonicalRowsetReviewModel(review());
+
+    expect(model.rows[0].diffs).toEqual([
+      {
+        field: "issue_id",
+        before: "PAR-1",
+        after: "PAR-1",
+        origin: "carried",
+        column: "issue_id",
+      },
+      {
+        field: "status",
+        before: "open",
+        after: "closed",
+        origin: "edited",
+        column: "status",
+      },
+    ]);
+    expect(model.rows.every((item) => !item.unaccounted)).toBe(true);
+  });
+
+  // All-or-nothing: a dropped entry is an argument that is still sent and no
+  // longer on screen, which is worse than refusing the row outright.
+  it("makes a row undecidable when one outbound argument is unreadable", () => {
+    const base = review();
+    const model = projectCanonicalRowsetReviewModel(
+      review({
+        rows: [
+          {
+            ...base.rows[0],
+            can_decide: true,
+            sends: [
+              base.rows[0].sends[0],
+              { ...base.rows[0].sends[1], origin: "invented" as never },
+            ],
+          },
+          ...base.rows.slice(1),
+        ],
+      }),
+    );
+
+    expect(model.rows[0].unaccounted).toBe(true);
+    expect(model.rows[0].canDecide).toBe(false);
+    expect(model.rows[0].diffs).toEqual([]);
   });
 });

@@ -61,6 +61,18 @@ function rowsetRev(keys: string[]) {
         title: `Row ${k}`,
         target_args: { id: k, priority: 2 },
         changes: [{ field: "priority", old: 1, new: 2 }],
+        // One entry per `target_args` key, in wire order — the complete
+        // account of what this row sends, not the diff of what was touched.
+        sends: [
+          { arg: "id", origin: "carried", column: "id", old: k, new: k },
+          {
+            arg: "priority",
+            origin: "edited",
+            column: "priority",
+            old: 1,
+            new: 2,
+          },
+        ],
       })),
     },
   });
@@ -120,6 +132,52 @@ describe("projectLedger — bulk row-sets (PRD-D3)", () => {
       applied: 0,
       failed: 0,
     });
+  });
+
+  it("folds the row's whole outbound account, in wire order", () => {
+    seq = 0;
+    const p = projectLedger([staged(1), rowsetRev(["a"])]);
+    const row = p.stages.get(STAGE)!.rows![0];
+    expect(row.sends).toEqual([
+      { arg: "id", origin: "carried", column: "id", old: "a", new: "a" },
+      {
+        arg: "priority",
+        origin: "edited",
+        column: "priority",
+        old: 1,
+        new: 2,
+      },
+    ]);
+  });
+
+  // One unreadable entry collapses the whole account. Keeping the readable
+  // half would leave an argument that is still sent and no longer shown, which
+  // is the exact invisibility `sends` exists to remove.
+  it("refuses a partial outbound account rather than folding what it can read", () => {
+    seq = 0;
+    const open = staged(1);
+    const rev = rowsetRev(["a"]);
+    const rowset = (rev.payload as Record<string, unknown>).rowset as {
+      rows: Record<string, unknown>[];
+    };
+    rowset.rows[0].sends = [
+      { arg: "id", origin: "carried", column: "id", old: "a", new: "a" },
+      { arg: "priority", origin: "handwritten", old: 1, new: 2 },
+    ];
+    const p = projectLedger([open, rev]);
+    expect(p.stages.get(STAGE)!.rows![0].sends).toEqual([]);
+  });
+
+  it("folds an empty account for a row staged before outbound disclosure", () => {
+    seq = 0;
+    const open = staged(1);
+    const rev = rowsetRev(["a"]);
+    const rowset = (rev.payload as Record<string, unknown>).rowset as {
+      rows: Record<string, unknown>[];
+    };
+    delete rowset.rows[0].sends;
+    const p = projectLedger([open, rev]);
+    expect(p.stages.get(STAGE)!.rows![0].sends).toEqual([]);
   });
 
   it("keeps the agent pre-hold reason sticky across a user override", () => {

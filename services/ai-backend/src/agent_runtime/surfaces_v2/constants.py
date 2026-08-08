@@ -33,6 +33,12 @@ class Keys:
         # spec rather than carrying one.
         SPEC = "spec"
         SPEC_REF = "spec_ref"
+        # The sibling WRITE ops the read's connector offered at the moment this
+        # surface was minted, captured so the connector write-back lane can be a
+        # lookup rather than a live MCP load on a save request. Additive to
+        # ``surface.created``; see
+        # ``agent_runtime.capabilities.surfaces.write_ops_capture``.
+        WRITE_OPS = "write_ops"
         GEN = "gen"
         MODEL = "model"
         # ``gen.ms`` — generation duration, populated by the B3 ViewDeriver
@@ -85,6 +91,14 @@ class Keys:
         FIELD = "field"
         OLD = "old"
         NEW = "new"
+        # The server-computed, ordered, TOTAL account of ``target_args`` a
+        # staged row carries. ``target_args`` is server-only and ``changes`` is
+        # a column-keyed display diff, so this is the half a human actually
+        # reads at the approval gate — see ``surfaces_v2.rowset.StagedArg``.
+        SENDS = "sends"
+        ARG = "arg"
+        ORIGIN = "origin"
+        COLUMN = "column"
         APPLY = "apply"
         ROW_RESULTS = "row_results"
         # ``row_results[].outcome`` reuses the existing ``OUTCOME`` key above.
@@ -117,6 +131,11 @@ class Values:
     BASIS_SCHEMA = "schema"
     BASIS_REGISTRY = "registry"
     BASIS_GENERATED = "generated"
+    # A model chose the shape and returned paths INTO the payload, so the values
+    # on screen are still the connector's. Split from ``generated`` because a
+    # receipt that folded the two together would claim a model authored data it
+    # only pointed at — see ``ViewBasis`` in ``ledger_models``.
+    BASIS_SELECTED = "selected"
 
     # ``payload_ref`` scheme (D1/D7): ``call:<call_id>`` resolves to the
     # ``tool_result`` event carrying the same ``call_id`` in this run's replay.
@@ -162,6 +181,11 @@ class Values:
     FAILURE_PRECONDITION_DRIFT = "precondition_drift"
     FAILURE_CONNECTOR_ERROR = "connector_error"
     FAILURE_ATTEMPT_INDETERMINATE = "attempt_indeterminate"
+    # A commanded row could not re-establish its account of what it would send,
+    # so the commit handler dispatched NOTHING. Distinct from
+    # ``precondition_drift`` (the target moved) because nothing moved: the row
+    # is simply not provable, and the remedy is to hold it and re-apply.
+    FAILURE_ROWSET_UNACCOUNTED = "rowset_unaccounted"
     # ``decided_by.actor`` is pinned to the constant ``"user"`` here (SDR §5).
     DECIDED_BY_ACTOR_USER = "user"
     # ``connector_receipt_ref`` scheme (PRD-D2, NEW): resolves to the persisted

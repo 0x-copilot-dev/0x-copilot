@@ -4,6 +4,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from unittest.mock import patch
 
 
 WORKFLOWS = Path(__file__).resolve().parents[1]
+REPO_ROOT = WORKFLOWS.parents[2]
 sys.path.insert(0, str(WORKFLOWS.parent))
 
 from _lib import (  # noqa: E402
@@ -26,6 +28,17 @@ assert G1_SPEC is not None and G1_SPEC.loader is not None
 g1 = importlib.util.module_from_spec(G1_SPEC)
 sys.modules[G1_SPEC.name] = g1
 G1_SPEC.loader.exec_module(g1)
+
+
+def _inventoried_patterns(operator: str) -> tuple[str, ...]:
+    """The `^=` (or `$=`) testid patterns the journey's inventory declares."""
+
+    marker = f"[data-testid{operator}="
+    return tuple(
+        claim.selector[len(marker) : -1]
+        for claim in g1.PAINTED_SELECTORS
+        if claim.selector.startswith(marker) and claim.selector.endswith("]")
+    )
 
 
 def workspace_stage_events() -> list[dict[str, object]]:
@@ -66,17 +79,63 @@ def workspace_stage_events() -> list[dict[str, object]]:
 
 
 class UiSession:
+    """A fake that can only report selectors the product is claimed to paint.
+
+    The previous version answered ``selector != self.missing`` — `True` for
+    every selector it had not been explicitly told to hide. So this suite stayed
+    green over `[data-testid=artifact-editor]`, `#artifact-editor-text` and
+    `Save new revision` for as long as the raw-markdown textarea has been
+    deleted: the guards asked, the fake said yes, and nothing in the loop had
+    ever seen the product.
+
+    Presence is answered from `g1.PAINTED_SELECTORS`, whose entries are checked
+    against the real renderer sources by
+    `test_every_driven_selector_is_painted_by_product_source`. A selector that
+    is not in that inventory reads as ABSENT and is recorded in `unknown`, so a
+    guard reaching for one fails twice: on its own assertion, and on the
+    `unknown` check every test that uses this fake makes.
+    """
+
     def __init__(self, missing: str | None = None) -> None:
         self.missing = missing
         self.clicked: list[str] = []
+        self.unknown: list[str] = []
+        # A testid the product BUILDS (`doc-block-3`, `doc-cell-1-0-2-input`)
+        # has no literal to inventory, so the inventory pins its pattern and a
+        # concrete id is accepted only when an inventoried pattern covers it.
+        self.prefixes = _inventoried_patterns("^")
+        self.suffixes = _inventoried_patterns("$")
+        # The inventory is the WHOLE claim: there is no second, unverified list
+        # of "selectors we are fairly sure exist" beside it. Anything a guard
+        # reaches for has to be declared there and found in product source.
+        self.painted = {claim.selector for claim in g1.PAINTED_SELECTORS}
+
+    def _visible(self, selector: str) -> bool:
+        if selector == self.missing:
+            return False
+        if selector in self.painted or self._matches_pattern(selector):
+            return True
+        self.unknown.append(selector)
+        return False
+
+    def _matches_pattern(self, selector: str) -> bool:
+        match = re.fullmatch(r'\[data-testid="(.+)"\]', selector)
+        if match is None:
+            return False
+        value = match.group(1)
+        return value.startswith(self.prefixes) or value.endswith(self.suffixes)
 
     def present(self, selector: str) -> bool:
-        return selector != self.missing
+        return self._visible(selector)
 
     def wait_for(self, selector: str, timeout_s: int = 60) -> bool:  # noqa: ARG002
-        return selector != self.missing
+        return self._visible(selector)
+
+    def wait_visible(self, selector: str, timeout_s: int = 30) -> bool:  # noqa: ARG002
+        return self._visible(selector)
 
     def click(self, selector: str) -> None:
+        self._visible(selector)
         self.clicked.append(selector)
 
     def evaluate(self, javascript: str) -> str:
@@ -98,6 +157,73 @@ class UiSession:
         if "sources-v2-row" in javascript:
             return json.dumps(["Artifact", "Workspace activity"])
         return ""
+
+
+class EditorUiSession(UiSession):
+    """A document whose blocks answer the way the in-place editor's do.
+
+    It holds `{testid: value}` and nothing else — no rendering, no splicing, no
+    opinion about what an edit means. That is deliberate: what this fake is for
+    is proving WHICH selectors the gesture touches and that the planner's
+    skip rules run against a real document string. The splice itself is
+    asserted by `_expected_spliced_document` over real text, and the selectors
+    are checked against real product source; neither is delegated to a mock.
+    """
+
+    def __init__(self, spans: dict[str, str], **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.spans = dict(spans)
+        self.open_field: str | None = None
+        self.modified: set[str] = set()
+        self.filled: list[tuple[str, str]] = []
+        self.pressed: list[tuple[str, str]] = []
+
+    def click(self, selector: str) -> None:
+        super().click(selector)
+        match = re.fullmatch(r'\[data-testid="(.+)"\]', selector)
+        if match is not None and match.group(1) in self.spans:
+            self.open_field = match.group(1)
+
+    def fill(self, selector: str, value: str) -> None:
+        self._visible(selector)
+        self.filled.append((selector, value))
+        field = re.fullmatch(r'\[data-testid="(.+)-input"\]', selector)
+        assert field is not None, f"fill drove a non-field selector: {selector}"
+        self.spans[field.group(1)] = value
+        self.modified.add(field.group(1))
+
+    def press(self, selector: str, key: str) -> None:
+        self._visible(selector)
+        self.pressed.append((selector, key))
+        if key == "Enter":
+            self.open_field = None
+
+    def present(self, selector: str) -> bool:
+        # Inventory first, so an uninventoried field id is still RECORDED and
+        # not merely reported closed. A field only exists while its block is
+        # open, which is what makes the gesture reopen one before typing.
+        inventoried = super().present(selector)
+        field = re.fullmatch(r'\[data-testid="(.+)-input"\]', selector)
+        if field is not None and field.group(1) != self.open_field:
+            return False
+        return inventoried
+
+    def wait_visible(self, selector: str, timeout_s: int = 30) -> bool:  # noqa: ARG002
+        return self.present(selector)
+
+    def evaluate(self, javascript: str) -> object:
+        if "data-testid^=" in javascript:
+            return json.dumps(list(self.spans))
+        value = re.search(r'\[data-testid=\\?"(.+?)-input\\?"\]', javascript)
+        if value is not None and ".value" in javascript:
+            return self.spans[value.group(1)]
+        modified = re.search(r'\[data-testid=\\?"(.+?)\\?"\]', javascript)
+        if modified is not None and "data-modified" in javascript:
+            return "true" if modified.group(1) in self.modified else "false"
+        if g1.EDITOR_STATUS in javascript:
+            count = len(self.modified)
+            return f"{count} unsaved {'edit' if count == 1 else 'edits'}"
+        return super().evaluate(javascript)
 
 
 class G1MarkdownLifecycleTests(unittest.TestCase):
@@ -517,6 +643,62 @@ class G1MarkdownLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "not encrypted"):
                 g1._main_workspace_journal_snapshot(user_data)
 
+    def test_every_driven_selector_is_painted_by_product_source(self) -> None:
+        """The guard that would have caught the deleted textarea.
+
+        Nothing else in this suite can: a selector is a contract with TypeScript
+        that Python cannot execute. So each entry names the source that paints
+        it and the smallest expression that must survive there, and this reads
+        the real file. When product code retires a selector, this fails first
+        and names the selector — instead of the journey passing its guard suite
+        and then failing on a real device, or worse, not being run at all.
+        """
+
+        self.assertTrue(g1.PAINTED_SELECTORS, "the selector inventory is empty")
+        for claim in g1.PAINTED_SELECTORS:
+            with self.subTest(selector=claim.selector):
+                path = REPO_ROOT / claim.source
+                self.assertTrue(
+                    path.is_file(),
+                    f"{claim.selector} names a source file that no longer exists: "
+                    f"{claim.source}",
+                )
+                self.assertRegex(
+                    path.read_text(encoding="utf-8"),
+                    claim.emitter,
+                    f"{claim.selector} is no longer painted by {claim.source}; the "
+                    "journey drives UI the product does not render",
+                )
+
+    def test_the_retired_editor_selectors_are_really_gone(self) -> None:
+        """Pin the deletion, so nothing quietly reintroduces the old contract.
+
+        These three are what G1 drove while the surface underneath had become a
+        block editor: a whole-document textarea, its DOM id, and a button whose
+        label is now just "Save". They are asserted ABSENT from every renderer
+        source, because a journey that still names them is driving a UI no
+        reader has.
+        """
+
+        sources = [
+            path
+            for root in ("packages/surface-renderers/src", "packages/chat-surface/src")
+            for path in (REPO_ROOT / root).rglob("*.tsx")
+            if ".test." not in path.name
+        ]
+        self.assertTrue(sources, "no renderer sources found to check")
+        for retired in ('data-testid="artifact-editor"', "artifact-editor-text"):
+            painted = [
+                str(path.relative_to(REPO_ROOT))
+                for path in sources
+                if retired in path.read_text(encoding="utf-8")
+            ]
+            self.assertEqual(
+                painted,
+                [],
+                f"{retired} is painted again; G1's editor gesture assumes it is not",
+            )
+
     def test_surface_guards_require_editor_stage_diff_receipt_and_provenance(
         self,
     ) -> None:
@@ -532,15 +714,149 @@ class G1MarkdownLifecycleTests(unittest.TestCase):
         g1._assert_workspace_stage_surface(ui, stage)
         g1._assert_editor_surface(ui)
         g1._assert_receipt_and_sources(ui)
+        g1._open_first_artifact_from_sources(ui)
         self.assertIn("[data-testid=receipt-v2-open]", ui.clicked)
         self.assertIn('[role=tab]:has-text("Sources")', ui.clicked)
+        # Nothing above asked the fake about a selector outside the inventory.
+        # Without this the fake is free to invent an answer again.
+        self.assertEqual(ui.unknown, [])
 
         with self.assertRaisesRegex(AssertionError, "missing visible review UI"):
             g1._assert_workspace_stage_surface(
                 UiSession("[data-testid=tc-workspace-stage-diff]"), stage
             )
         with self.assertRaisesRegex(AssertionError, "artifact editor is missing"):
-            g1._assert_editor_surface(UiSession("#artifact-editor-text"))
+            g1._assert_editor_surface(UiSession(g1.DOCUMENT_EDITOR))
+        with self.assertRaisesRegex(AssertionError, "artifact editor is missing"):
+            g1._assert_editor_surface(
+                UiSession(f"[data-testid^={g1.PROSE_BLOCK_PREFIX}]")
+            )
+
+    def test_a_selector_outside_the_inventory_reads_as_absent(self) -> None:
+        """The fake's own contract: it cannot vouch for what it does not know.
+
+        This is the fix for the shape that hid G3 — the old fake returned
+        `selector != self.missing`, so `[data-testid=artifact-editor]` was
+        "present" years after it stopped being rendered. Presence now comes from
+        the source-verified inventory, and anything else is both absent and
+        recorded.
+        """
+
+        ui = UiSession()
+        self.assertFalse(ui.present("[data-testid=artifact-editor]"))
+        self.assertFalse(ui.wait_for("#artifact-editor-text"))
+        self.assertFalse(ui.present('button:has-text("Save new revision")'))
+        self.assertEqual(
+            ui.unknown,
+            [
+                "[data-testid=artifact-editor]",
+                "#artifact-editor-text",
+                'button:has-text("Save new revision")',
+            ],
+        )
+        # A testid the product BUILDS is accepted only through an inventoried
+        # pattern, so a renamed prefix is caught the same way a literal is.
+        self.assertTrue(ui.present('[data-testid="doc-block-4"]'))
+        self.assertTrue(ui.present('[data-testid="doc-cell-1-0-2-input"]'))
+        self.assertFalse(ui.present('[data-testid="markdown-block-4"]'))
+
+    def test_editing_drives_the_blocks_the_product_paints(self) -> None:
+        document = (
+            "# Desktop workspace review\n\n"
+            "The agent drafted this paragraph and a reader may retype it.\n\n"
+            "A second paragraph nobody edits.\n"
+        )
+        ui = EditorUiSession(
+            {
+                "doc-block-0": "Desktop workspace review",
+                "doc-block-1": (
+                    "The agent drafted this paragraph and a reader may retype it."
+                ),
+                "doc-block-2": "A second paragraph nobody edits.",
+            }
+        )
+        planned = g1._plan_user_edits(ui, document)
+        self.assertEqual(
+            [edit.test_id for edit in planned], ["doc-block-0", "doc-block-1"]
+        )
+        self.assertEqual(
+            [edit.replacement for edit in planned], list(g1.USER_EDIT_VALUES)
+        )
+        for edit in planned:
+            g1._apply_user_edit(ui, edit)
+        g1._assert_unsaved_count(ui, 2)
+        self.assertEqual(ui.unknown, [])
+        # The gesture is per-field, and it commits with a real key rather than
+        # by hoping a blur lands: `[data-testid$=-input]` is what it types into.
+        self.assertEqual(
+            [selector for selector, _ in ui.filled],
+            ['[data-testid="doc-block-0-input"]', '[data-testid="doc-block-1-input"]'],
+        )
+        self.assertEqual({key for _, key in ui.pressed}, {"Enter"})
+
+        expected = g1._expected_spliced_document(document, planned)
+        self.assertEqual(
+            expected,
+            f"# {g1.USER_EDIT_VALUES[0]}\n\n"
+            f"{g1.USER_EDIT_VALUES[1]}\n\n"
+            "A second paragraph nobody edits.\n",
+        )
+
+    def test_the_edit_planner_skips_spans_it_cannot_pin_to_one_place(self) -> None:
+        # An empty heading and a value that appears twice both make "which
+        # bytes moved" unanswerable, and the journey's whole assertion is that
+        # only those bytes moved. Skipping is the honest answer; guessing an
+        # offset would be this file re-implementing the block model badly.
+        document = "#\n\n| A | B |\n| --- | --- |\n| dup | dup |\n\nTail prose.\n"
+        ui = EditorUiSession(
+            {
+                "doc-block-0": "",
+                "doc-cell-1-0-0": "dup",
+                "doc-cell-1-0-1": "dup",
+                "doc-block-2": "Tail prose.",
+            }
+        )
+        planned = g1._plan_user_edits(ui, document)
+        self.assertEqual([edit.test_id for edit in planned], ["doc-block-2"])
+        self.assertEqual(
+            g1._expected_spliced_document(document, planned),
+            document.replace("Tail prose.", g1.USER_EDIT_VALUES[0]),
+        )
+
+        with self.assertRaisesRegex(AssertionError, "no block"):
+            g1._plan_user_edits(EditorUiSession({"doc-block-0": ""}), document)
+
+    def test_the_splice_expectation_keeps_every_other_byte(self) -> None:
+        """The assertion that separates a splice from a re-render.
+
+        A save that reformatted the table, reflowed the prose or flattened a
+        link would still contain the typed text. It would not survive this.
+        """
+
+        document = (
+            "# My Assigned Linear Issues\n\n"
+            "| Issue | Status |\n| --- | --- |\n"
+            "| [PAR-9](https://linear.app/parth/issue/PAR-9) | Triage |\n\n"
+            "All five issues are currently in **Cool** status.\n"
+        )
+        edits = [
+            g1.InPlaceEdit("doc-block-0", "My Assigned Linear Issues", "My queue"),
+            g1.InPlaceEdit("doc-cell-1-0-1", "Triage", "Warm"),
+        ]
+        spliced = g1._expected_spliced_document(document, edits)
+        self.assertEqual(
+            spliced,
+            document.replace("My Assigned Linear Issues", "My queue", 1).replace(
+                "| Triage |", "| Warm |", 1
+            ),
+        )
+        self.assertIn("[PAR-9](https://linear.app/parth/issue/PAR-9)", spliced)
+        self.assertIn("in **Cool** status.", spliced)
+
+        with self.assertRaisesRegex(AssertionError, "exactly one span"):
+            g1._expected_spliced_document(
+                document, [g1.InPlaceEdit("doc-block-9", "absent", "x")]
+            )
 
     def test_receipt_sources_and_stage_target_reject_substring_near_misses(
         self,
