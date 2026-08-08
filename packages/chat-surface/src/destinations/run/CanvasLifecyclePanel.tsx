@@ -39,9 +39,14 @@ function contentFor(
 ): { eyebrow: string; title: string; copy: string } | null {
   switch (lifecycle) {
     case "assembling":
+      // "Preparing this run" was a claim about the RUN, which is the one thing
+      // this panel promises never to make — and it was wrong in the ordinary
+      // case: seen live with `Agents 6` in the tab strip beside it, six
+      // subagents working while the largest surface in the app said the run was
+      // being prepared. The canvas is what has nothing yet; say that instead.
       return {
         eyebrow: "RUN IN PROGRESS",
-        title: "Preparing this run",
+        title: "Nothing to review yet",
         copy: "Activity will appear here if this run creates something to review.",
       };
     case "chat_only":

@@ -696,6 +696,18 @@ class ConversationQueryService:
             RuntimeApiEventType.TOOL_RESULT,
             RuntimeApiEventType.SUBAGENT_FLEET_STARTED,
             RuntimeApiEventType.SUBAGENT_FLEET_FINISHED,
+            # The third family the note above anticipated. `citation_made` binds
+            # a `[[N]]` ordinal to the tool call it cites, and the ordinal space
+            # is per-CONVERSATION while this stream was per-run: the client built
+            # its link registry from the bound run's events only, so a `[[N]]`
+            # written in an earlier turn resolved to nothing and rendered as a
+            # bare "?" over prose that was perfectly correct.
+            #
+            # Observed live: the resolver logged
+            # `resolver.match ordinal=1 tool_call_id='call_UvGh5…'` — the server
+            # had the binding all along and no `unbound_ordinal` warning was
+            # ever emitted. Only the client had forgotten it.
+            RuntimeApiEventType.CITATION_MADE,
         }
     )
 

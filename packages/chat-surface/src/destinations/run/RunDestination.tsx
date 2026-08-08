@@ -2029,9 +2029,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
   // `CitationsProvider` mounted around the single TcChat so the host chip
   // renderer resolves `[[N]]` / `[c<id>]` chips against it.
+  // `cardFrames` is the CONVERSATION's card history (every run); `session.events`
+  // is the bound run. Both are needed: `[[N]]` ordinals are allocated per
+  // conversation, so turn 2 routinely cites turn 1's tool call, and the bound
+  // run's stream cannot contain that binding. Same input the tool-card archive
+  // already reads — citations were simply never given it.
   const citationProjection = useMemo(
-    () => projectCitations(session.events),
-    [session.events],
+    () => projectCitations(session.events, cardFrames),
+    [session.events, cardFrames],
   );
 
   // Keep the inline chat-only source card on the same canonical stream as
@@ -4364,6 +4369,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // B3 Focus is a compact projection of the same lifecycle—not a hidden
       // full Studio canvas. Undefined on the v1 path preserves legacy Focus.
       focusCards={focusCards}
+      // The canvas is provably done and holds no subject, so Studio should stop
+      // reserving the slack for a surface that is not coming and give it to the
+      // transcript instead. `parked` and `assembling` are excluded on purpose —
+      // both may still resolve into a real subject.
+      canvasEmpty={
+        displayedCanvasLifecycle !== null &&
+        (displayedCanvasLifecycle.lifecycle === "chat_only" ||
+          displayedCanvasLifecycle.lifecycle === "complete_empty")
+      }
       hasInlineSubjects={inlineArtifacts.length > 0}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
