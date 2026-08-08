@@ -89,8 +89,9 @@ class Check:
             return
 
         code = response.status_code
-        if code == 200:
-            self.report("live key probe", True, "200 — the key is accepted (VALID)")
+        # Virtuals answers a successful completion with 201, not 200.
+        if 200 <= code < 300:
+            self.report("live key probe", True, f"{code} — the key is accepted (VALID)")
         elif code in (401, 403):
             self.report(
                 "live key probe",
@@ -122,7 +123,11 @@ class Check:
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": "Reply with just: ok"}],
-                    "max_tokens": 8,
+                    # Virtuals prepends a sizeable system prompt of its own, and
+                    # some models emit reasoning first — a small cap returns
+                    # `finish_reason: length` with EMPTY content on a perfectly
+                    # healthy call. Budget enough to see real text.
+                    "max_tokens": 512,
                 },
                 timeout=TIMEOUT,
             )
@@ -130,7 +135,7 @@ class Check:
         except Exception as exc:  # noqa: BLE001 - operator-facing summary
             self.report("real completion", False, f"{type(exc).__name__}: {exc}")
             return
-        if response.status_code != 200:
+        if not (200 <= response.status_code < 300):
             self.report(
                 "real completion", False, f"HTTP {response.status_code} on {model}"
             )

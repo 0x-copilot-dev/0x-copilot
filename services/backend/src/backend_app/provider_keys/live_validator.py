@@ -2,9 +2,16 @@
 
 Replaces the "format check == validated" story with a REAL check: call
 the provider's cheapest AUTHENTICATED endpoint using the submitted key.
-A 200 proves the key works, and — where that endpoint is the model
+Any 2xx proves the key works, and — where that endpoint is the model
 listing — doubles as discovery of the model ids the key can actually
 reach (the add-key wizard consumes those in a later PR).
+
+**Any 2xx, not 200.** Virtuals answers a successful completion with ``201``.
+A 200-only check called a valid key "couldn't check" and stored it as
+``skipped_unreachable``, so the probe validated nothing while looking
+healthy — the failure mode this module exists to prevent. It was invisible
+to the whole unit suite, which had assumed the OpenAI convention in every
+mock, and surfaced only when a real key was run against the real gateway.
 
 Probe endpoints:
 
@@ -25,7 +32,7 @@ Probe endpoints:
                   typo — but unlike OpenRouter it exposes no authenticated
                   metadata endpoint (``/key``, ``/credits``, ``/me`` are all
                   404). The cheapest authenticated call it *does* answer is a
-                  completion, so that is the probe.
+                  completion, so that is the probe — and it returns **201**.
 
 Security invariants (mirrors ``service.py``):
 
@@ -224,7 +231,13 @@ class ProviderKeyLiveValidator:
         self, *, provider: ProviderName, response: httpx.Response
     ) -> ProviderKeyLiveCheckResult:
         code = response.status_code
-        if code == 200:
+        # ANY 2xx is proof the credential was accepted, not 200 specifically.
+        # Virtuals answers a successful completion with **201**, so a
+        # 200-only check reported a perfectly good key as "couldn't check" and
+        # stored it with `live_check: skipped_unreachable` — the probe silently
+        # validating nothing. Found only by running the real key against the
+        # real gateway; every mock in the suite had assumed the OpenAI 200.
+        if 200 <= code < 300:
             return ProviderKeyLiveCheckResult(
                 status=LiveCheckStatus.VALID,
                 model_ids=self._model_ids_from(provider=provider, response=response),

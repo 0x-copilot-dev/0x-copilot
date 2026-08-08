@@ -76,6 +76,39 @@ class TestVirtualsProbe:
         # The probe must never carry anything a user typed.
         assert captured["messages"] == [{"role": "user", "content": " "}]
 
+    def test_201_is_valid_because_virtuals_answers_201(self) -> None:
+        """The gateway's real success status. Verified against the live API.
+
+        A 200-only check reported a working key as PROVIDER_UNREACHABLE, which
+        routes store as ``live_check: skipped_unreachable`` — the key saves, so
+        nothing looks broken, and the probe silently proves nothing. Every mock
+        in this file had assumed OpenAI's 200; only the real key found it.
+        """
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                201,
+                json={
+                    "id": "chatcmpl-x",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+
+        assert _probe(handler, ProviderName.VIRTUALS).status is LiveCheckStatus.VALID
+
+    @pytest.mark.parametrize("code", [200, 201, 202])
+    def test_any_2xx_counts_as_accepted(self, code: int) -> None:
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(code, json={})
+
+        assert _probe(handler, ProviderName.VIRTUALS).status is LiveCheckStatus.VALID
+
     def test_403_is_an_invalid_key(self) -> None:
         # The live unauthenticated response shape from the gateway.
         def handler(_: httpx.Request) -> httpx.Response:

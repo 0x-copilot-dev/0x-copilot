@@ -138,13 +138,15 @@ def staged_runtime_dir(
 def load_env_key(provider: str) -> str:
     """Read a provider key from services/ai-backend/.env. Never prints it.
 
-    provider: "openai" | "anthropic" | "openrouter" | "google"
+    provider: "openai" | "anthropic" | "openrouter" | "google" | "virtuals"
     """
     var = {
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
         "google": "GOOGLE_API_KEY",
+        # Named for the variable the Virtuals key ships under.
+        "virtuals": "VIRTUALS_ACP_KEY",
     }[provider]
     if not DOTENV.exists():
         raise SystemExit(f"{DOTENV} not found — cannot load {var}")
