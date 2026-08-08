@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Mapping, Sequence
 
 import pytest
@@ -50,6 +51,10 @@ from runtime_worker.loop import RuntimeWorker
 _ORG_ID = "org_shaping_credential"
 _USER_ID = "user_shaping_credential"
 _SECRET_KEY = "sk-unit-test-shaping-credential-000000000"
+#: A SERVICE-env key, deliberately distinct from the BYOK one. It exists to let
+#: ``create_run`` past the credential gate; if it ever reached the shaping model
+#: the assertion on ``reason=no_run_credential`` would fail, which is the point.
+_OPERATOR_KEY = "sk-unit-test-operator-env-000000000000000"
 #: What ``ShapingModelResolver`` picks for an ``openai`` run with no explicit
 #: ``SURFACE_SPEC_MODEL`` — the exact id the live log named.
 _SHAPING_MODEL_ID = "gpt-5.4-mini"
@@ -84,12 +89,24 @@ class ShapingCredentialRunMixin:
     """Drives one queued run to completion with shaping wired to recorders."""
 
     @staticmethod
-    def _settings() -> RuntimeSettings:
+    def _settings(*, environ: Mapping[str, str] | None = None) -> RuntimeSettings:
+        """Settings that cannot inherit the developer's ``services/ai-backend/.env``.
+
+        ``load`` merges that file BEFORE ``environ``, and it is gitignored — so a
+        checkout that has one resolves ``provider_settings.is_configured`` True and
+        a checkout that does not (every CI runner) resolves it False. Passing
+        ``environ`` alone does not close that: it replaces ``os.environ``, not the
+        file layer. Pinning ``env_file`` at an empty path is what makes the two
+        environments the same test.
+        """
+
         return RuntimeSettings.load(
+            env_file=os.devnull,
             environ={
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            }
+                **(environ or {}),
+            },
         )
 
     @staticmethod
@@ -281,17 +298,32 @@ class TestBothShapingBuildersGetTheRunsCredential(ShapingCredentialRunMixin):
         assert _SECRET_KEY not in json.dumps(store.audit_log, default=str)
         assert _SECRET_KEY not in caplog.text
 
-    async def test_a_run_without_a_key_still_completes_with_shaping_off(
+    async def test_a_run_without_a_byok_key_still_completes_with_shaping_off(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        # The honest degrade must survive the wiring: no key ⇒ no shaping model
-        # ⇒ both rungs off, run still completes, floor still renders. The real
-        # factory is left in place so construction genuinely fails.
+        # The honest degrade must survive the wiring: no run credential ⇒ no
+        # shaping model ⇒ both rungs off, run still completes, floor still
+        # renders. The real factory is left in place so construction genuinely
+        # fails.
+        #
+        # The posture is an OPERATOR deployment, and it has to be: shaping reads
+        # the run's BYOK credential, but ``create_run`` refuses outright when
+        # neither BYOK nor the service env can satisfy the provider. So "no key
+        # at all" cannot reach the degrade — the run never starts, which is the
+        # fail-loud BYOK lane working. The gap this covers is the deployment
+        # that HAS a service key (run allowed) and no per-user key (shaping
+        # credential empty).
+        #
+        # This test used to pass ``provider_keys={}`` with no service key and
+        # relied, unknowingly, on a developer's gitignored ``.env`` to make the
+        # run creatable at all. It was green on every laptop and red on the
+        # first CI runner that ran it.
         self._shaping_env(monkeypatch)
         store = InMemoryRuntimeApiStore()
+        operator_env = self._settings(environ={"OPENAI_API_KEY": _OPERATOR_KEY})
 
         with caplog.at_level(logging.WARNING):
-            await self._run_once(store, self._settings(), provider_keys={})
+            await self._run_once(store, operator_env, provider_keys={})
 
         unavailable = [
             record.getMessage()
