@@ -78,7 +78,8 @@ from typing import Any, Final
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent
 
-#: Default port, shared with ``floor_e2e.py`` through the same env var.
+#: Default port, shared with the journey (``artifacts_and_surfaces.py``
+#: phase AS-9) through the same env var.
 DEFAULT_PORT: Final[int] = 8931
 
 #: Overridable because a *stale* fixture is the exact failure this whole file
@@ -87,9 +88,8 @@ DEFAULT_PORT: Final[int] = 8931
 #: journey then measures a fixture nobody edited and reports it as today's
 #: result. This was hit while building the eight shapes: the probe connected,
 #: initialised, and returned "Unknown tool" for every tool added that hour.
-#: ``floor_e2e.py`` additionally asserts the connected server advertises all
-#: eight tools, which is the check that makes a stale server loud instead of
-#: confusing.
+#: AS-9 additionally asserts the connected server advertises all eight tools,
+#: which is the check that makes a stale server loud instead of confusing.
 PORT: Final[int] = int(os.environ.get("SURFACE_FIXTURE_PORT", str(DEFAULT_PORT)))
 
 #: The server name reaches the surface header, the ledger's ``source.server``
@@ -385,10 +385,10 @@ def incident_briefing() -> list[TextContent]:
     ]
 
 
-#: Bumped whenever a shape is added, removed or re-spelled. ``floor_e2e.py``
-#: reads it off the RUNNING server and refuses to measure a revision it does not
-#: recognise, which is the difference between "the pipeline regressed" and "you
-#: are talking to last week's fixture".
+#: Bumped whenever a shape is added, removed or re-spelled. AS-9 reads it off
+#: the RUNNING server and refuses to measure a revision it does not recognise,
+#: which is the difference between "the pipeline regressed" and "you are talking
+#: to last week's fixture".
 REVISION: Final[str] = "eight-shapes.1"
 
 #: The shape table, served over HTTP so the journey can verify it is talking to

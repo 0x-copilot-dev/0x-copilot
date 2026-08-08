@@ -29,6 +29,13 @@ fires and no surface is ever shaped.
     python3 tools/desktop-journeys/surface-floor/fixture_mcp.py &   # AS-9
     python3 tools/desktop-journeys/local-mailbox/fixture_mcp.py &   # AS-10
 
+AS-9 is the eight-shape surface matrix (the old standalone `floor_e2e.py`,
+folded in here): the same three incidents served in eight MCP envelopes, one
+real run each, asserting that the projected surface binds the CONNECTOR's own
+columns rather than the transport envelope's `ID / Type / Text`. It is by far
+the most expensive phase in this file — `SURFACE_FLOOR_SHAPES=1,4` drives a
+subset, and is the phase equivalent of `floor_e2e.py --shapes 1,4`.
+
 The provider key is read from services/ai-backend/.env and only ever reaches the
 password field — never printed, logged, or written to an artifact.
 """
@@ -39,23 +46,24 @@ import base64
 import csv
 import io
 import json
+import os
 import time
 import re
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from _lib import (
     SOURCE_TARGET,
     ARTIFACT_JOURNEY_ENVIRONMENT,
     SECRET_ENVIRONMENT_NAMES,
+    TERMINAL_STATUSES,
     DriverSession,
     JourneyPlan,
     assert_no_plaintext_secret,
     byok_provider,
-    load_env_key,
     preflight_staged_runtime,
     require,
     runs_for_conversation,
@@ -967,13 +975,212 @@ def assert_no_alert(before: dict, after: dict, clicked_uri: str) -> None:
     )
 
 
-FIXTURE_URL = "http://127.0.0.1:8931/mcp"
+#: Kept in step with ``surface-floor/fixture_mcp.PORT``: same env var, same
+#: default, so a journey and a fixture started from two different shells still
+#: meet.
+FIXTURE_PORT: Final[int] = int(os.environ.get("SURFACE_FIXTURE_PORT", "8931"))
+FIXTURE_ORIGIN: Final[str] = f"http://127.0.0.1:{FIXTURE_PORT}"
+FIXTURE_URL: Final[str] = f"{FIXTURE_ORIGIN}/mcp"
+FIXTURE_MANIFEST: Final[str] = f"{FIXTURE_ORIGIN}/shapes"
 
+#: The fixture revision this phase knows how to read
+#: (``surface-floor/fixture_mcp.REVISION``). A mismatch stops the phase rather
+#: than measuring a fixture whose shape numbers mean something else.
+EXPECTED_REVISION: Final[str] = "eight-shapes.1"
 
-ASK = (
-    "Use the incidents connector to list the open incidents, then stop and "
-    "show me what came back. Do not summarise them in prose."
+#: Slot labels that belong to the MCP TRANSPORT, not to any connector.
+#: ``langchain-mcp-adapters`` converts each content block to
+#: ``{"type": "text", "text": …, "id": …}``; when the ladder binds the envelope
+#: instead of the payload inside it, these three are exactly what the table
+#: draws as its columns. Measured against the real projector, not guessed — the
+#: historical defect is rung 0 inferring a perfectly valid table over
+#: ``items_path: "result"`` and stuffing the connector's whole payload into one
+#: ``Text`` cell.
+TRANSPORT_SLOTS: Final[frozenset[str]] = frozenset({"id", "type", "text"})
+
+#: Slot labels that can only have come from the fixture's own rows. Two of these
+#: with none of :data:`TRANSPORT_SLOTS` is what "the surface bound the payload"
+#: means operationally.
+CONNECTOR_SLOTS: Final[frozenset[str]] = frozenset(
+    {
+        "number",
+        "title",
+        "status",
+        "urgency",
+        "assignee",
+        "service",
+        "created at",
+        "labels",
+        "email",
+        "team",
+        "has next page",
+    }
 )
+
+#: How many connector-named slots a surface must draw before it counts as bound.
+#: One is not enough: an envelope table that happened to pick up a stray key
+#: would clear a threshold of one.
+MIN_BOUND_SLOTS: Final[int] = 2
+
+
+@dataclass(frozen=True)
+class Shape:
+    """One row of the matrix: an envelope, and the tool that serves it.
+
+    ``expected_rows`` is what a CORRECT render draws — three incidents for a
+    collection, ``None`` for the shapes whose result is one record or a
+    paragraph. It is the fixture's dataset size, cross-checked against the
+    served manifest at startup so the number lives in one place.
+    """
+
+    number: int
+    tool: str
+    wire: str
+    ask: str
+    expected_rows: int | None
+
+
+#: The prompt names the tool explicitly. Every other connector phase here
+#: deliberately asks for an OUTCOME so a descriptor rename does not look like a
+#: broken connector — this one needs the opposite: the measurement is
+#: per-envelope, and a run that picked a neighbouring tool would attribute one
+#: envelope's result to another. The suffix is shared so the phrasing cannot
+#: drift between shapes and become a variable of its own.
+_ASK_SUFFIX: Final[str] = (
+    " Call it exactly once and show me what it returned. Do not summarise the "
+    "result in prose, and do not call any other tool."
+)
+
+
+def _ask(tool: str) -> str:
+    return f"Use the incidents connector and call its `{tool}` tool.{_ASK_SUFFIX}"
+
+
+SHAPES: Final[tuple[Shape, ...]] = (
+    Shape(
+        1, "list_incidents", "json object in a text block", _ask("list_incidents"), 3
+    ),
+    Shape(
+        2,
+        "get_incident",
+        "nested json document in a text block",
+        _ask("get_incident") + " Use incident number 4471.",
+        None,
+    ),
+    Shape(
+        3,
+        "list_incidents_structured",
+        "structuredContent",
+        _ask("list_incidents_structured"),
+        3,
+    ),
+    Shape(
+        4,
+        "list_incidents_array",
+        "json array at root",
+        _ask("list_incidents_array"),
+        3,
+    ),
+    Shape(
+        5,
+        "summarize_incidents_prose",
+        "prose",
+        _ask("summarize_incidents_prose"),
+        None,
+    ),
+    Shape(
+        6,
+        "list_incidents_markdown",
+        "markdown table",
+        _ask("list_incidents_markdown"),
+        3,
+    ),
+    Shape(7, "export_incidents_csv", "csv", _ask("export_incidents_csv"), 3),
+    Shape(8, "incident_briefing", "three content blocks", _ask("incident_briefing"), 3),
+)
+
+#: Shape 1 is the Linear form — the one every real connector produces — so the
+#: deep four-hop identity trace runs on it. Before the fixture was rewritten the
+#: trace ran on a ``structuredContent`` payload, which is why it never caught
+#: anything.
+TRACE_SHAPE: Final[int] = 1
+
+#: Only a subset of the matrix can be driven when time or budget is short.
+#: ``SURFACE_FLOOR_SHAPES=1,4`` is the phase equivalent of the retired
+#: ``floor_e2e.py --shapes 1,4``.
+SHAPES_ENV: Final[str] = "SURFACE_FLOOR_SHAPES"
+
+
+def selected_shapes() -> tuple[Shape, ...]:
+    """The shapes this run drives, defaulting to all eight."""
+
+    raw = os.environ.get(SHAPES_ENV, "").strip()
+    if not raw:
+        return SHAPES
+    wanted = {int(part) for part in raw.split(",") if part.strip()}
+    chosen = tuple(shape for shape in SHAPES if shape.number in wanted)
+    assert chosen, (
+        f"{SHAPES_ENV}={raw!r} names no shape in {[s.number for s in SHAPES]}"
+    )
+    return chosen
+
+
+@dataclass
+class ShapeOutcome:
+    """What one envelope actually produced, from the DOM and from the server."""
+
+    shape: Shape
+    called: bool = False
+    rendered: bool = False
+    kind: str = "-"
+    rows: int = 0
+    slots: list[str] = field(default_factory=list)
+    server_items_path: str | None = None
+    server_rows: int | None = None
+    note: str = ""
+
+    @property
+    def slot_keys(self) -> set[str]:
+        return {slot.strip().lower() for slot in self.slots if slot.strip()}
+
+    @property
+    def bound(self) -> bool:
+        """Did the surface bind the CONNECTOR's payload, or the transport's envelope?
+
+        The distinction a single mounted-renderer assertion has no way to make.
+        A table drawn over ``{"result": [<content blocks>]}`` is a real,
+        mounted, non-empty table — it just describes the wire format, and shape
+        8 draws three rows of it, which from across the room looks exactly like
+        three incidents. Requiring connector-named slots AND forbidding
+        transport-named ones separates the two.
+        """
+
+        keys = self.slot_keys
+        if keys & TRANSPORT_SLOTS:
+            return False
+        return len(keys & CONNECTOR_SLOTS) >= MIN_BOUND_SLOTS
+
+    @property
+    def verdict(self) -> str:
+        if not self.called:
+            # What is actually measured is "no surface snapshot carries
+            # op=<tool>". That is either a tool the run never called or a
+            # PRESENT stage that dropped it, and the two are not distinguishable
+            # from here — so the verdict says what was observed and ``note``
+            # carries the endpoint's own words.
+            return "NO READ ON LEDGER"
+        if not self.rendered:
+            return "NO SURFACE"
+        if not self.bound:
+            return "ENVELOPE BOUND"
+        expected = self.shape.expected_rows
+        if expected is not None and self.rows != expected:
+            return f"PARTIAL ({self.rows}/{expected})"
+        return "OK"
+
+    @property
+    def ok(self) -> bool:
+        return self.verdict == "OK"
 
 
 def app_write(session: DriverSession, method: str, path: str, body: dict) -> object:
@@ -1001,11 +1208,19 @@ def app_write(session: DriverSession, method: str, path: str, body: dict) -> obj
 
 
 class FloorJourney:
-    """Drives the app to a real MCP read and judges the surface it produces."""
+    """Drives the app once per envelope and judges the surface each one produces.
 
-    def __init__(self, session: DriverSession) -> None:
+    One dataset, eight wire forms. Nothing about the DATA varies between them,
+    so any difference in what renders is attributable to the envelope and to
+    nothing else — which is the only way to say "the connector's columns" and
+    "the MCP envelope's columns" apart with evidence.
+    """
+
+    def __init__(self, session: DriverSession, shapes: tuple[Shape, ...]) -> None:
         self.session = session
+        self.shapes = shapes
         self.findings: list[str] = []
+        self.outcomes: list[ShapeOutcome] = []
 
     # -- helpers ---------------------------------------------------------
 
@@ -1017,6 +1232,57 @@ class FloorJourney:
     def note(self, ok: bool, claim: str) -> bool:
         self.findings.append(f"{'PASS' if ok else 'FAIL'}  {claim}")
         return ok
+
+    # -- fixture identity -------------------------------------------------
+
+    @staticmethod
+    def read_manifest() -> dict:
+        """The RUNNING fixture's own account of what it serves.
+
+        Read over plain HTTP before anything is registered, because a stale
+        fixture is a silent failure with a convincing face: a previous session's
+        server left listening on the port registers fine, initialises fine, and
+        then serves ITS tool list. That happened while these shapes were being
+        written — every newly added tool came back "Unknown tool" from a server
+        that looked perfectly healthy.
+        """
+
+        with urllib.request.urlopen(FIXTURE_MANIFEST, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def check_fixture(self) -> None:
+        """Refuse to MEASURE a fixture this phase does not recognise.
+
+        A mismatch skips rather than fails: it is a statement about this box
+        (which process is listening on the port), not about the product. Exit
+        `3` is still non-zero, so it cannot be mistaken for a pass.
+        """
+
+        manifest = self.read_manifest()
+        revision = manifest.get("revision")
+        require(
+            revision == EXPECTED_REVISION,
+            f"the fixture on :{FIXTURE_PORT} reports revision {revision!r}, not "
+            f"{EXPECTED_REVISION!r} — a stale server is listening, or the "
+            "fixture changed without this phase. Stop it and restart it.",
+        )
+        served = {row.get("tool") for row in manifest.get("shapes", [])}
+        missing = sorted({shape.tool for shape in SHAPES} - served)
+        require(
+            not missing,
+            f"the fixture on :{FIXTURE_PORT} does not serve {missing} — it is "
+            "not the one this phase was written against",
+        )
+        rows = manifest.get("rows")
+        expected = {s.expected_rows for s in SHAPES if s.expected_rows is not None}
+        assert not expected or expected == {rows}, (
+            f"the fixture serves {rows} rows; the matrix expects "
+            f"{sorted(expected)}. Update Shape.expected_rows."
+        )
+        log(
+            f"fixture {manifest.get('fixture')!r} rev {revision} on "
+            f":{FIXTURE_PORT} — {len(served)} shapes, {rows} rows"
+        )
 
     # -- steps -----------------------------------------------------------
 
@@ -1037,45 +1303,66 @@ class FloorJourney:
         assert server_id, f"no server id in {created}"
         return server_id
 
-    def wait_for_surface(self, timeout_s: int = 180) -> bool:
-        """A rendered archetype, not merely a finished run.
+    # -- run plumbing -----------------------------------------------------
 
-        Keyed on the renderer's own testid rather than on run status: a run can
-        complete having rendered nothing, which is exactly the failure this
-        journey exists to catch.
-        """
-
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            if self.session.present("[data-testid=table-renderer]") or (
-                self.session.present("[data-testid=record-renderer]")
-            ):
-                return True
-            time.sleep(2)
-        return False
-
-    # -- pipeline trace ---------------------------------------------------
-
-    def _run_id(self) -> str:
-        """The run under test, from the API rather than the DOM.
+    def _run_ids(self, limit: int = 20) -> list[str]:
+        """Run ids for this profile, newest first, from the API not the DOM.
 
         The run cockpit carries no ``data-run-id`` — that attribute exists only
-        on the Activity and Routines rows — so scraping it silently yielded ``""``
-        and disarmed both ledger hops. The journey drives exactly one run, so the
-        newest run for this profile is unambiguous and comes from the same
-        authenticated transport the app itself uses.
+        on the Activity and Routines rows — so scraping it silently yielded
+        ``""`` and disarmed both ledger hops. Each shape opens a NEW chat, so
+        the shared ``wait_for_new_run`` (which is per-conversation and takes a
+        conversation id) would need the route to have re-bound first; polling
+        the profile-wide run list is the same authenticated transport and does
+        not depend on the hash having changed yet.
         """
 
         try:
-            runs = self.session.transport("GET", "/v1/agent/runs?limit=1")
+            runs = self.session.transport("GET", f"/v1/agent/runs?limit={limit}")
         except Exception as exc:  # noqa: BLE001 — trace only
             print(f"[trace] run lookup failed: {exc}")
-            return ""
+            return []
         rows = (runs or {}).get("runs") or (runs or {}).get("items") or []
-        if not rows:
-            return ""
-        row = rows[0]
-        return str(row.get("id") or row.get("run_id") or "")
+        return [str(row.get("id") or row.get("run_id") or "") for row in rows]
+
+    def _run_id(self) -> str:
+        ids = self._run_ids(limit=1)
+        return ids[0] if ids else ""
+
+    def _wait_for_new_run(self, before: set[str], timeout_s: int = 120) -> str:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            for run_id in self._run_ids():
+                if run_id and run_id not in before:
+                    return run_id
+            time.sleep(1)
+        return ""
+
+    def _wait_terminal(self, run_id: str, timeout_s: int = 180) -> str:
+        """Poll to a terminal status. Returns the status, never raises.
+
+        Deliberately NOT ``_lib.wait_for_terminal_run``, which asserts the run
+        completed: a failed run is a matrix CELL, not an abort. The deliverable
+        is all eight envelopes measured, including the ones that break their
+        run. Raising here would delete every row after the first bad one, which
+        is how a one-read journey hides a systemic failure behind a single
+        stack trace.
+        """
+
+        deadline = time.time() + timeout_s
+        status = "unknown"
+        while time.time() < deadline:
+            try:
+                result = self.session.transport("GET", f"/v1/agent/runs/{run_id}")
+            except Exception as exc:  # noqa: BLE001 — a cell, not an abort
+                return f"lookup-failed: {exc}"
+            status = str((result or {}).get("status") or "unknown")
+            if status in TERMINAL_STATUSES:
+                return status
+            time.sleep(1)
+        return f"not-terminal ({status})"
+
+    # -- pipeline trace ---------------------------------------------------
 
     def _hop_ledger(self, run_id: str) -> dict:
         """Hop 1 — what the emitter actually WROTE, read off disk.
@@ -1167,7 +1454,7 @@ class FloorJourney:
         except json.JSONDecodeError:
             return {"raw": raw}
 
-    def diagnose(self) -> dict:
+    def diagnose(self, run_id: str) -> dict:
         """Trace all four hops and print them as one table.
 
         The architecture's central invariant is that ``surface_id`` is ONE value:
@@ -1179,7 +1466,6 @@ class FloorJourney:
         the identity at each hop side by side; divergence is the finding.
         """
 
-        run_id = self._run_id()
         ledger = self._hop_ledger(run_id)
         server = self._hop_server(run_id)
         client = self._hop_client()
@@ -1221,99 +1507,269 @@ class FloorJourney:
             "ledger_error": ledger.get("error"),
         }
 
+    # -- reading what was drawn -------------------------------------------
+
     def read_surface(self) -> dict:
-        """Read what is actually on screen, out of the live DOM."""
+        """Read what is actually on screen, out of the live DOM.
+
+        ``slots`` is the load-bearing field and it is read from the elements the
+        renderers really emit: ``th`` for a table, and the label span of each
+        ``[data-testid^=field-]`` row for a record. An earlier version looked
+        for ``[data-testid$=-label]``, which no renderer has ever emitted
+        (``primitives.tsx::FieldRow`` gives the row ``field-<path>`` and the
+        value ``field-<path>-value``; the label span carries no test id) — so
+        the record branch reported zero slots whatever it drew, and the bound /
+        unbound verdict was decided entirely by the table branch.
+        """
 
         js = """(()=>{
           const el = document.querySelector('[data-testid=table-renderer]')
                   || document.querySelector('[data-testid=record-renderer]');
           if(!el) return JSON.stringify({present:false});
           const q = (s)=>[...el.querySelectorAll(s)].map(n=>n.textContent.trim());
+          const headers = q('th');
+          const fieldRows = [...el.querySelectorAll('[data-testid^=field-]')]
+            .filter(n=>!/-(value|badge)$/.test(n.getAttribute('data-testid')||''));
+          const fieldLabels = fieldRows
+            .map(n=>((n.firstElementChild||{}).textContent||'').trim())
+            .filter(Boolean);
           return JSON.stringify({
             present:true,
             kind: el.getAttribute('data-testid'),
             spec: el.getAttribute('data-spec'),
             title: (el.querySelector('[data-testid=surface-title]')||{}).textContent,
-            headers: q('th'),
+            headers: headers,
+            fieldLabels: fieldLabels,
+            slots: headers.length ? headers : fieldLabels,
+            rows: el.querySelectorAll('[data-testid^=table-row-]').length
+                  || fieldRows.length,
             firstRow: q('[data-testid^=table-cell-0-]'),
-            fieldLabels: q('[data-testid^=field-][data-testid$=-label]'),
             badges: q('[data-surface-format=badge]'),
             body: el.textContent.slice(0, 400),
           });
         })()"""
         return json.loads(self.session.evaluate(js))
 
-    def run(self) -> int:
+    def read_server_surface(self, run_id: str, tool: str) -> dict:
+        """The served surface for ``tool``, keyed on the snapshot's own ``op``.
+
+        Attributing by ``op`` rather than by "the newest surface" is what keeps
+        a shape's verdict about that shape. A run that ignored the instruction
+        and called a neighbouring tool still produces a surface, and scoring
+        that one here would move a real finding onto the wrong envelope — the
+        matrix would then be internally consistent and wrong, which is the
+        hardest kind of wrong to notice.
+        """
+
+        try:
+            served = self.session.transport("GET", f"/v1/agent/runs/{run_id}/surfaces")
+        except Exception as exc:  # noqa: BLE001 — a cell, not an abort
+            return {"error": str(exc)}
+        for row in (served or {}).get("surfaces", []):
+            if row.get("op") != tool:
+                continue
+            state = row.get("state") or {}
+            spec = state.get("spec") or {}
+            items_path = spec.get("items_path")
+            bound = state.get("data")
+            if isinstance(items_path, str) and items_path:
+                for segment in items_path.split("."):
+                    bound = bound.get(segment) if isinstance(bound, dict) else None
+            return {
+                "surface_id": row.get("surface_id"),
+                "kind": row.get("kind"),
+                "items_path": items_path,
+                "rows": len(bound) if isinstance(bound, list) else None,
+                "labels": [
+                    entry.get("label")
+                    for entry in (spec.get("columns") or spec.get("fields") or [])
+                ],
+            }
+        return {"error": f"no served surface for op={tool!r}"}
+
+    # -- the matrix --------------------------------------------------------
+
+    def drive_shape(self, shape: Shape, *, first: bool) -> ShapeOutcome:
+        """One envelope: one chat, one read, one row of the matrix."""
+
+        outcome = ShapeOutcome(shape=shape)
+        log(f"shape {shape.number} — {shape.tool} ({shape.wire})")
+        if not first:
+            new_chat(self.session)
+        before = set(self._run_ids())
+        self.session.send(shape.ask)
+
+        run_id = self._wait_for_new_run(before)
+        if not run_id:
+            outcome.note = "no run persisted"
+            return outcome
+        status = self._wait_terminal(run_id)
+        log(f"  run {run_id} -> {status}")
+
+        served = self.read_server_surface(run_id, shape.tool)
+        outcome.called = "error" not in served
+        outcome.note = str(served.get("error") or "")
+        if outcome.called:
+            outcome.server_items_path = served.get("items_path")
+            outcome.server_rows = served.get("rows")
+
+        # The canvas needs a beat after the run seals before the newest surface
+        # is the mounted one; a read taken at the terminal event catches the
+        # PREVIOUS shape's tab and attributes it to this row.
+        time.sleep(3)
+        drawn = self.read_surface()
+        outcome.rendered = bool(drawn.get("present"))
+        if outcome.rendered:
+            outcome.kind = str(drawn.get("kind") or "-")
+            outcome.rows = int(drawn.get("rows") or 0)
+            outcome.slots = [str(slot) for slot in (drawn.get("slots") or [])]
+        self.session.shot(f"shape-{shape.number:02d}-{shape.tool}")
+        log(
+            f"  drawn kind={outcome.kind} rows={outcome.rows} "
+            f"slots={outcome.slots} | served items_path="
+            f"{outcome.server_items_path!r} rows={outcome.server_rows}"
+        )
+        return outcome
+
+    def print_matrix(self) -> None:
+        """The deliverable: one line per envelope, and why it failed."""
+
+        print("\n" + "=" * 96)
+        print("SHAPE MATRIX — one dataset, eight envelopes")
+        print("=" * 96)
+        print(
+            f"{'#':>2}  {'wire form':<38} {'rendered':<14} {'rows':>5}  "
+            f"{'bound':<6} verdict"
+        )
+        print("-" * 96)
+        for outcome in self.outcomes:
+            rendered = (
+                f"yes — {outcome.kind.replace('-renderer', '')}"
+                if outcome.rendered
+                else "NO"
+            )
+            print(
+                f"{outcome.shape.number:>2}  {outcome.shape.wire:<38} "
+                f"{rendered:<14} {outcome.rows:>5}  "
+                f"{('yes' if outcome.bound else 'NO'):<6} {outcome.verdict}"
+            )
+        print("-" * 96)
+        for outcome in self.outcomes:
+            if outcome.ok:
+                continue
+            if outcome.slots:
+                why = (
+                    "those are the MCP envelope's own fields, not the connector's"
+                    if outcome.slot_keys & TRANSPORT_SLOTS
+                    else "no connector field was bound"
+                )
+                print(
+                    f"    shape {outcome.shape.number}: drew {outcome.slots} over "
+                    f"items_path={outcome.server_items_path!r} — {why}"
+                )
+            elif outcome.note:
+                print(f"    shape {outcome.shape.number}: {outcome.note}")
+        passed = sum(1 for outcome in self.outcomes if outcome.ok)
+        print(f"\n{passed}/{len(self.outcomes)} envelopes render the connector's data.")
+        print("=" * 96)
+
+    # -- entry point -------------------------------------------------------
+
+    def run(self) -> None:
+        """Drive every selected envelope, then assert. Returning IS the pass.
+
+        Note what this does NOT do: it does not sign in and it does not add a
+        provider key. The boot's ``setup`` already did both, and re-running
+        ``sign_in_local`` against a signed-in app fails on a gate that is no
+        longer there.
+        """
+
         s = self.session
-        s.sign_in_local()
-        s.ftue_add_key("openai", load_env_key("openai"))
-        s.shot("01-signed-in")
+        self.check_fixture()
 
         server_id = self.register_fixture()
-        print(f"[floor] registered loopback connector: {server_id}")
+        log(f"registered loopback connector: {server_id}")
 
         servers = s.transport("GET", "/v1/mcp/servers")
         rows = servers.get("servers", servers) if isinstance(servers, dict) else servers
         self.note(bool(rows), f"the connector is registered ({len(rows)} server(s))")
-        s.shot("02-connector-registered")
+        s.shot("floor-00-connector-registered")
 
-        s.send_first_run_message(ASK)
-        rendered = self.wait_for_surface()
-        s.shot("03-after-run")
+        trace_run_id = ""
+        for index, shape in enumerate(self.shapes):
+            outcome = self.drive_shape(shape, first=index == 0)
+            self.outcomes.append(outcome)
+            if shape.number == TRACE_SHAPE:
+                trace_run_id = self._run_id()
 
-        if not self.note(rendered, "a surface renderer mounted on screen"):
-            print("\n".join(self.findings))
-            return 1
+        self.print_matrix()
 
-        trace = self.diagnose()
+        # -- the deep trace, on the shape every real connector produces ----
+        if trace_run_id:
+            trace = self.diagnose(trace_run_id)
+            # ONE IDENTITY. The defect this trace exists to catch was the canvas
+            # minting `table://legacy-v2/table%3A%2F%2F…` and resolving it
+            # against a map that could never hold it. Both halves are asserted:
+            # no codec artefact may appear in a tab key, and a tab key must be a
+            # value the ledger itself wrote. Either alone would pass while the
+            # bug was live.
+            codecs = [
+                uri
+                for uri in trace["client_ids"]
+                if "legacy-v2" in uri
+                or "surfaces-v2" in uri
+                or "%3A" in uri
+                or "%2F" in uri
+            ]
+            self.note(not codecs, f"no URI codec survives on a tab key ({codecs})")
+            # Both notes are UNCONDITIONAL. A guard here (`if ledger_ids:`) would
+            # turn "the trace could not find the ledger" into a silent pass,
+            # which is the gate-that-cannot-start failure this repo has already
+            # paid for once. An empty ledger while a renderer is mounted is
+            # itself the finding.
+            self.note(
+                bool(trace["ledger_ids"]),
+                "the ledger on disk has surface.created rows for the traced run "
+                f"({trace['ledger_error'] or sorted(trace['ledger_ids'])})",
+            )
+            shared = trace["client_ids"] & trace["ledger_ids"]
+            self.note(
+                bool(shared),
+                "a tab key is byte-identical to a surface_id the ledger wrote "
+                f"(shared={sorted(shared)})",
+            )
 
-        # ONE IDENTITY. The defect this journey exists to catch was the canvas
-        # minting `table://legacy-v2/table%3A%2F%2F…` and resolving it against a
-        # map that could never hold it. Both halves are asserted: no codec
-        # artefact may appear in a tab key, and a tab key must be a value the
-        # ledger itself wrote. Either alone would pass while the bug was live.
-        codecs = [
-            uri
-            for uri in trace["client_ids"]
-            if "legacy-v2" in uri
-            or "surfaces-v2" in uri
-            or "%3A" in uri
-            or "%2F" in uri
-        ]
-        self.note(not codecs, f"no URI codec survives on a tab key ({codecs})")
-        # Both notes are UNCONDITIONAL. A guard here (`if ledger_ids:`) would turn
-        # "the trace could not find the ledger" into a silent pass, which is the
-        # gate-that-cannot-start failure this repo has already paid for once.
-        # An empty ledger while a renderer is mounted is itself the finding.
-        self.note(
-            bool(trace["ledger_ids"]),
-            f"the ledger on disk has surface.created rows for this run "
-            f"({trace['ledger_error'] or sorted(trace['ledger_ids'])})",
-        )
-        shared = trace["client_ids"] & trace["ledger_ids"]
-        self.note(
-            bool(shared),
-            "a tab key is byte-identical to a surface_id the ledger wrote "
-            f"(shared={sorted(shared)})",
-        )
+        # -- per-shape claims, so a failure names its envelope ---------------
+        for outcome in self.outcomes:
+            shape = outcome.shape
+            self.note(
+                outcome.rendered,
+                f"shape {shape.number} ({shape.wire}) mounted a renderer",
+            )
+            # THE claim this phase exists for. A mounted, non-empty table is not
+            # evidence — shapes 4-8 historically drew `ID / Type / Text` over
+            # `items_path: "result"` with the connector's whole payload in one
+            # cell, and shape 8 drew three rows of it, which looks like three
+            # incidents from across the room.
+            self.note(
+                outcome.bound,
+                f"shape {shape.number} ({shape.wire}) bound the CONNECTOR's "
+                f"fields, not the transport's — drew {outcome.slots} over "
+                f"items_path={outcome.server_items_path!r}",
+            )
+            if shape.expected_rows is not None:
+                self.note(
+                    outcome.rows == shape.expected_rows,
+                    f"shape {shape.number} drew "
+                    f"{outcome.rows}/{shape.expected_rows} rows",
+                )
 
-        surface = self.read_surface()
-        print("[floor] on-screen surface:", json.dumps(surface, indent=2)[:900])
-
-        self.note(surface.get("spec") == "present", "the renderer received a SPEC")
-        self.note(
-            "No spec matched" not in (surface.get("body") or ""),
-            "the retired apology does not appear",
-        )
-        title = (surface.get("title") or "").strip()
-        self.note(title not in ("", "Untitled"), f"the header is titled ({title!r})")
-        slots = surface.get("headers") or surface.get("fieldLabels") or []
-        self.note(len(slots) >= 3, f"at least 3 bound slots ({slots})")
-        self.note(bool(surface.get("badges")), "a low-cardinality value drew as a chip")
-
-        s.shot("04-surface")
         print("\n".join(self.findings))
-        return 0 if all(f.startswith("PASS") for f in self.findings) else 1
+        failed = [finding for finding in self.findings if finding.startswith("FAIL")]
+        # The phase runner reads an EXCEPTION, not a return code. An earlier
+        # version of this class returned 0/1 and its caller discarded the value,
+        # so every finding above was decorative and the phase could not go red.
+        assert not failed, "the surface floor did not hold:\n" + "\n".join(failed)
 
 
 MAILBOX_URL = "http://127.0.0.1:8932/mcp"
@@ -1874,11 +2330,34 @@ def as8_switching_finished_artifacts_raises_no_alert(s: DriverSession) -> None:
 
 
 def as9_the_inference_floor(s: DriverSession) -> None:
-    """A connector nobody wrote a spec for still renders a legible, shaped surface.
+    """The eight-shape matrix: one dataset, eight MCP envelopes, one question.
 
-    With no model call and no provider credential involved in the shaping, and
-    the ledger's provenance agreeing with what is drawn. Needs the loopback
-    fixture MCP server; skips when it is not listening.
+    A connector nobody wrote a spec for must still render a legible, shaped
+    surface — with no model call and no provider credential involved in the
+    shaping, and the ledger's provenance agreeing with what is drawn.
+
+    **Why eight and not one.** This phase used to drive a single read and pass
+    against a fixture whose tools returned ``structuredContent`` — the one wire
+    form effectively no real MCP server produces. It was 10/10 green while every
+    real connector was broken. The fixture now serves the SAME three incidents
+    in eight envelopes (``surface-floor/fixture_mcp.py``), so any difference in
+    what renders is caused by the envelope and nothing else.
+
+    **What is asserted.** Not "a table mounted" — shapes 4-8 historically
+    mounted a perfectly real table over the MCP ENVELOPE: ``items_path:
+    "result"``, columns ``ID / Type / Text``, one row per content block with the
+    connector's whole payload in a single cell (shape 8 drew three such rows,
+    which from across the room looks exactly like three incidents). That is more
+    dangerous than an empty surface because it looks like it worked. So the
+    discriminator is whose vocabulary the drawn slots come from:
+    :data:`TRANSPORT_SLOTS` disqualifies, :data:`CONNECTOR_SLOTS` is what counts.
+
+    Needs the loopback fixture MCP server; skips when it is not listening, and
+    skips rather than measures when the server that IS listening reports a
+    revision this phase does not recognise.
+
+    Set ``SURFACE_FLOOR_SHAPES=1,4`` to drive a subset (eight real runs is the
+    most expensive phase in this file).
     """
 
     try:
@@ -1892,7 +2371,7 @@ def as9_the_inference_floor(s: DriverSession) -> None:
             "tools/desktop-journeys/surface-floor/fixture_mcp.py",
         )
     new_chat(s)
-    FloorJourney(s).run()
+    FloorJourney(s, selected_shapes()).run()
 
 
 def as10_the_local_mailbox_and_its_email_surface(s: DriverSession) -> None:
@@ -1975,7 +2454,8 @@ def main() -> int:
             ),
             (
                 "AS-9",
-                "the inference floor shapes an unspecified connector",
+                "the inference floor: eight MCP envelopes, one dataset, "
+                "connector columns not envelope columns",
                 as9_the_inference_floor,
             ),
             (

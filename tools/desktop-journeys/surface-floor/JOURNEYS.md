@@ -112,19 +112,32 @@ caught anything.
 
 ## Running it
 
+The matrix is no longer its own script. `floor_e2e.py` was deleted when 64
+journeys became 9; the matrix now lives as **phase AS-9 of
+`artifacts_and_surfaces.py`**, which is the journey that already boots what it
+needs (source target, fresh profile, BYOK key, the artifact lane).
+
 ```bash
 node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64   # after any services/* change
 npm run build --workspace @0x-copilot/desktop
-python tools/desktop-journeys/surface-floor/fixture_mcp.py &          # keep it in the foreground of its own shell
-python tools/desktop-journeys/surface-floor/floor_e2e.py              # all eight
-python tools/desktop-journeys/surface-floor/floor_e2e.py --shapes 1,4 # one or two
+python3 tools/desktop-journeys/surface-floor/fixture_mcp.py &         # keep it in its own shell
+/opt/homebrew/bin/python3.13 tools/desktop-journeys/artifacts_and_surfaces.py
 ```
 
-Needs a provider key in `services/ai-backend/.env` — the runs are real.
+To drive only part of the matrix — eight real runs is the most expensive phase
+in that file — set the shape list, which is the successor to `--shapes`:
+
+```bash
+SURFACE_FLOOR_SHAPES=1,4 \
+  /opt/homebrew/bin/python3.13 tools/desktop-journeys/artifacts_and_surfaces.py
+```
+
+Needs a provider key in `services/ai-backend/.env` — the runs are real. AS-9
+SKIPS (exit `3`, never a pass) when nothing is listening on the fixture port.
 
 **Stop the fixture when you are done.** A server left listening on 8931 answers
 the next registration happily and serves _its_ tool list; the journey then
 measures a fixture nobody edited. This cost real time while the shapes were
 being written. Two guards now exist: `SURFACE_FIXTURE_PORT` moves both halves
-off a busy port, and `floor_e2e.py` reads the fixture's `GET /shapes` manifest
-first and refuses to run against an unrecognised `revision`.
+off a busy port, and AS-9 reads the fixture's `GET /shapes` manifest first and
+skips rather than measure an unrecognised `revision`.
