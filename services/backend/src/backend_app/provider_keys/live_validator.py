@@ -18,6 +18,14 @@ Probe endpoints:
                   validate anything — so we probe the authenticated
                   ``/key`` endpoint instead; it returns usage metadata,
                   never model ids (``model_ids`` stays empty).
+* ``virtuals``    ``POST https://compute.virtuals.io/v1/chat/completions``
+                  (Bearer), one token. Virtuals has the same public-listing
+                  problem as OpenRouter — ``GET /v1/models`` answers **200 with
+                  no credential**, so probing it would report "passed" for a
+                  typo — but unlike OpenRouter it exposes no authenticated
+                  metadata endpoint (``/key``, ``/credits``, ``/me`` are all
+                  404). The cheapest authenticated call it *does* answer is a
+                  completion, so that is the probe.
 
 Security invariants (mirrors ``service.py``):
 
@@ -89,7 +97,17 @@ class ProviderKeyLiveValidator:
             "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
         ),
         ProviderName.OPENROUTER: "https://openrouter.ai/api/v1/key",
+        ProviderName.VIRTUALS: "https://compute.virtuals.io/v1/chat/completions",
     }
+    #: The model the Virtuals probe names. Only the AUTH verdict is read from
+    #: the response, so which model this is does not matter — but it must exist,
+    #: and Virtuals may retire it. That is why :meth:`_outcome_for` maps a
+    #: 400/404 to "couldn't check" rather than to a failure: a stale probe model
+    #: must never be reported to a user as a bad key.
+    _VIRTUALS_PROBE_MODEL = "z-ai-glm-4-7-flash"
+    #: One token of the cheapest model on the gateway. A completion is the only
+    #: authenticated call Virtuals answers, so the probe cannot be free.
+    _VIRTUALS_PROBE_MAX_TOKENS = 1
 
     def __init__(
         self,
@@ -130,6 +148,7 @@ class ProviderKeyLiveValidator:
                 status=LiveCheckStatus.PROVIDER_UNREACHABLE
             )
         headers = self._auth_headers(provider=provider, api_key=api_key)
+        body = self._probe_body(provider=provider)
         client = (
             self._client_factory()
             if self._client_factory is not None
@@ -137,7 +156,14 @@ class ProviderKeyLiveValidator:
         )
         try:
             async with client as session:
-                response = await session.get(url, headers=headers)
+                # A provider with a probe BODY is checked by POST; the rest are
+                # GETs against a metadata endpoint. The key stays in headers on
+                # both paths — it is never placed in a URL or a body.
+                response = (
+                    await session.get(url, headers=headers)
+                    if body is None
+                    else await session.post(url, headers=headers, json=body)
+                )
         except Exception:
             # Timeouts, DNS/connect failures, TLS errors, transport
             # bugs. The exception text may embed the URL or request
@@ -168,6 +194,22 @@ class ProviderKeyLiveValidator:
         # guard validated the host so appending a fixed path can't re-point it.
         return f"{base_url.rstrip('/')}/models"
 
+    def _probe_body(self, *, provider: ProviderName) -> dict[str, object] | None:
+        """The POST body for providers probed by completion, else ``None``.
+
+        Only Virtuals needs one today. The body carries no user content — a
+        single space and a one-token cap — because nothing about the completion
+        is read except the HTTP status.
+        """
+
+        if provider is not ProviderName.VIRTUALS:
+            return None
+        return {
+            "model": self._VIRTUALS_PROBE_MODEL,
+            "messages": [{"role": "user", "content": " "}],
+            "max_tokens": self._VIRTUALS_PROBE_MAX_TOKENS,
+        }
+
     def _auth_headers(self, *, provider: ProviderName, api_key: str) -> dict[str, str]:
         if provider is ProviderName.ANTHROPIC:
             return {
@@ -193,6 +235,15 @@ class ProviderKeyLiveValidator:
             # generativelanguage rejects bad keys with 400
             # ``API_KEY_INVALID`` rather than a 401.
             return ProviderKeyLiveCheckResult(status=LiveCheckStatus.INVALID_KEY)
+        if provider is ProviderName.VIRTUALS and code in (400, 404):
+            # The completion probe names a model (see _VIRTUALS_PROBE_MODEL). A
+            # 400/404 is the gateway rejecting that MODEL, not the key — the key
+            # already cleared the auth guard to get this far. Reporting it as
+            # "couldn't check" is what stops a retired probe model from telling
+            # every user their perfectly good key is invalid.
+            return ProviderKeyLiveCheckResult(
+                status=LiveCheckStatus.PROVIDER_UNREACHABLE
+            )
         # 5xx, 429, and anything else non-verdictive: the provider did
         # not tell us the key is bad, so "couldn't check" — never a
         # failure verdict.
@@ -210,8 +261,11 @@ class ProviderKeyLiveValidator:
             return ()
         if not isinstance(payload, dict):
             return ()
-        if provider is ProviderName.OPENROUTER:
-            # ``/api/v1/key`` returns usage/limit metadata, not models.
+        if provider in (ProviderName.OPENROUTER, ProviderName.VIRTUALS):
+            # Neither probe is a model listing: OpenRouter's ``/api/v1/key``
+            # returns usage metadata, and the Virtuals probe returns a
+            # completion. Virtuals' model discovery is the runtime's job
+            # (VirtualsModelSource), not the credential check's.
             return ()
         if provider is ProviderName.GOOGLE:
             entries = payload.get("models")
