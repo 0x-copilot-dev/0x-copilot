@@ -3,6 +3,7 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -23,6 +24,7 @@ updates:
 
   - package-ecosystem: pip
     directory: /services/backend
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -45,6 +47,7 @@ updates:
 
   - package-ecosystem: pip
     directory: /services/backend-facade
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -67,6 +70,7 @@ updates:
 
   - package-ecosystem: pip
     directory: /services/ai-backend
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -98,6 +102,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
@@ -136,6 +141,7 @@ updates:
       - /services/backend-facade
       - /services/ai-backend
       - /apps/frontend
+    target-branch: dev
     schedule:
       interval: weekly
       day: monday
