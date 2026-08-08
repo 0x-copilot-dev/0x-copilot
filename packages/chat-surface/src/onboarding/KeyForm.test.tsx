@@ -48,14 +48,17 @@ function selectProvider(id: string): void {
 }
 
 describe("<KeyForm>", () => {
-  it("defaults to Virtuals with the generic placeholder and a masked input", () => {
+  it("defaults to Virtuals with ITS placeholder and a masked input", () => {
     render(<KeyForm port={makePort(okSave())} onConnected={() => undefined} />);
     // Toggle default = first provider, which is Virtuals (the gateway row).
     const group = screen.getByTestId("segmented-control");
     expect(group.querySelector('[aria-checked="true"]')?.textContent).toContain(
       "Virtuals",
     );
-    expect(input().placeholder).toBe("sk-…  paste your API key");
+    // The placeholder follows the SELECTED provider. Virtuals publishes no
+    // documented prefix, so claiming "sk-…" here would state a format the
+    // format check deliberately does not enforce.
+    expect(input().placeholder).toBe("paste your Virtuals key");
     // Never a text field that reveals the key.
     expect(input().type).toBe("password");
     // Privacy note is verbatim.
@@ -109,7 +112,9 @@ describe("<KeyForm>", () => {
       .querySelector('[data-value="openrouter"]') as HTMLButtonElement;
     fireEvent.click(openrouter);
 
-    expect(input().placeholder).toBe("sk-…  paste your API key");
+    // The placeholder tracks the provider — this test's own name says so, and
+    // it silently did not before every row stopped being an `sk-…` vendor.
+    expect(input().placeholder).toBe("sk-or-v1-…");
     // Input wiped on switch — the Anthropic plaintext never carries over.
     expect(input().value).toBe("");
     fireEvent.change(input(), { target: { value: OPENROUTER_KEY } });

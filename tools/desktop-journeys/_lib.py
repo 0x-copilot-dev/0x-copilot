@@ -599,6 +599,7 @@ class DriverSession:
             "anthropic": "Anthropic",
             "openai": "OpenAI",
             "openrouter": "OpenRouter",
+            "virtuals": "Virtuals",
         }[provider]
         assert self.wait_for("[data-testid=first-run-add-key]"), (
             "FTUE key card never appeared"

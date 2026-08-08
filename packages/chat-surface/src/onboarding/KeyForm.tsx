@@ -55,8 +55,10 @@ export interface KeyFormProps {
   /** Provider rows for the tri-toggle. Default `FIRST_RUN_KEY_PROVIDERS`. */
   readonly providers?: readonly FirstRunKeyProvider[];
   /**
-   * Masked-input placeholder. Default `FIRST_RUN_COPY.keyForm.placeholder`, so
-   * the FTUE gate is byte-identical; ModelPill (chat/run) passes generic copy.
+   * Masked-input placeholder OVERRIDE. When omitted the input follows the
+   * selected provider's own `placeholder`, falling back to
+   * `FIRST_RUN_COPY.keyForm.placeholder`. ModelPill (chat/run) passes generic
+   * copy to pin one string across providers.
    */
   readonly placeholder?: string;
   /** Sub-note under the input. Default `FIRST_RUN_COPY.keyForm.note`. */
@@ -79,7 +81,7 @@ function toMessage(err: unknown, fallback: string): string {
 export function KeyForm({
   port,
   providers = FIRST_RUN_KEY_PROVIDERS,
-  placeholder = FIRST_RUN_COPY.keyForm.placeholder,
+  placeholder,
   note = FIRST_RUN_COPY.keyForm.note,
   connectLabel = FIRST_RUN_COPY.keyForm.btn,
   formatCheck = checkFirstRunKeyFormat,
@@ -145,6 +147,14 @@ export function KeyForm({
 
   if (provider === null) return <></>;
 
+  // An explicit prop wins (ModelPill passes generic copy), then the SELECTED
+  // provider's own hint, then the shared default. The per-provider step matters
+  // now that not every row is an `sk-…` vendor: showing "sk-…" while Virtuals is
+  // selected states a prefix we deliberately do not assert, and the format check
+  // would happily accept a key that looks nothing like it.
+  const inputPlaceholder =
+    placeholder ?? provider.placeholder ?? FIRST_RUN_COPY.keyForm.placeholder;
+
   const options = providers.map((p) => ({
     value: p.id,
     label: (
@@ -176,7 +186,7 @@ export function KeyForm({
         autoComplete="new-password"
         spellCheck={false}
         value={apiKey}
-        placeholder={placeholder}
+        placeholder={inputPlaceholder}
         aria-label={`${provider.label} API key`}
         onChange={(event) => setApiKey(event.target.value)}
         onKeyDown={(event) => {
