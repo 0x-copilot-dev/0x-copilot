@@ -37,6 +37,11 @@ half of the provenance set in
 :class:`~.write_mapping.ArgProvenanceAudit`, whose job is to prove no value was
 authored by the MODEL. The user is not the adversary there — they are the
 author, and the values they typed are the ones they are approving.
+
+That client-supplied ``row`` is a value source and never an *authorisation* to
+send a field: :class:`~.write_mapping.WriteArgScope` confines the composed args
+to the columns the diff shows plus the keys the CONNECTOR's own op schema
+requires, so padding ``row`` with extra fields widens nothing.
 """
 
 from __future__ import annotations

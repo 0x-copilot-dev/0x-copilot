@@ -14,9 +14,22 @@
 //   3. **The rest of the document does not move.** Every assertion below reads
 //      the saved bytes back: the lines outside the table are compared to the
 //      source they came from, character for character.
+//
+// The controls moved after this file was written — a block's five buttons
+// became a hover/focus gutter of two, and the operations they used to spell out
+// live in that gutter's `+` menu. Nothing here asserts a control's POSITION
+// except the tests that exist to; everything else goes through `fromBlockMenu`
+// / `fromDocumentMenu`, which is what a user does, and the assertions about
+// what a change DOES are untouched.
 
 import { parseBlocks } from "@0x-copilot/chat-surface";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DocumentArtifactRenderer } from "./DocumentArtifactRenderer";
@@ -85,6 +98,25 @@ function press(testId: string): void {
   fireEvent.click(screen.getByTestId(testId));
 }
 
+/**
+ * Opens one block's gutter menu and presses an item in it.
+ *
+ * The menu's items exist only while it is open, which is the point: a control
+ * that is mounted but hidden is one `getByRole` refuses to find and a screen
+ * reader announces anyway. Two presses here is what one press plus a hover is
+ * for a user.
+ */
+function fromBlockMenu(block: number, testId: string): void {
+  press(`doc-block-menu-${block}`);
+  press(testId);
+}
+
+/** The document's own `+` — the one control that is drawn without a hover. */
+function fromDocumentMenu(testId: string): void {
+  press("doc-document-menu");
+  press(testId);
+}
+
 function dirty(): string | null {
   return screen.getByTestId("doc-editor").getAttribute("data-dirty");
 }
@@ -107,7 +139,7 @@ describe("EditableDocument — structural edits", () => {
 
     // A staged row is a REAL row: it has cells with spans, which is what makes
     // it something to type into rather than a placeholder to save first.
-    press("doc-add-row-2");
+    fromBlockMenu(2, "doc-add-row-2");
     expect(textOf("doc-cell-2-3-0")).toBe("");
     editCell("doc-cell-2-3-0", "PAR-20");
     editCell("doc-cell-2-3-1", "Cool");
@@ -122,7 +154,7 @@ describe("EditableDocument — structural edits", () => {
     expect(textOf("doc-cell-2-1-0")).toBe("PAR-14");
 
     editCell("doc-cell-2-1-2", "Medium");
-    press("doc-add-column-2");
+    fromBlockMenu(2, "doc-add-column-2");
 
     // Seven changes, and not one of them has left: three structural, four typed.
     expect(dirty()).toBe("7");
@@ -303,7 +335,7 @@ describe("EditableDocument — structural edits", () => {
     const { saveRevision } = renderEditable(source);
 
     expect(screen.queryByTestId("doc-cell-0-0-3")).toBeNull();
-    press("doc-add-column-0");
+    fromBlockMenu(0, "doc-add-column-0");
     expect(textOf("doc-cell-0-0-3")).toBe("9");
 
     const saved = await saveAnd(saveRevision);
@@ -325,8 +357,11 @@ describe("EditableDocument — structural edits", () => {
 
   it("disables the last column's Delete instead of leaving a table with no columns", () => {
     renderEditable(["| Only |", "| --- |", "| a |", ""].join("\n"));
+    // At the column, and disabled rather than absent: the header keeps the same
+    // shape whether or not the operation it offers can be performed.
     expect(screen.getByTestId("doc-delete-column-0-0")).toBeDisabled();
     // The way to empty a one-column table is to say so.
+    press("doc-block-menu-0");
     expect(
       screen.getByRole("button", { name: "Delete Table 1" }),
     ).toBeEnabled();
@@ -335,7 +370,7 @@ describe("EditableDocument — structural edits", () => {
   it("adds a paragraph and a table after a given block, and both are editable where they land", async () => {
     const { saveRevision } = renderEditable();
 
-    press("doc-insert-paragraph-1");
+    fromBlockMenu(0, "doc-insert-paragraph-1");
     expect(textOf("doc-block-1")).toBe("New paragraph");
     fireEvent.click(screen.getByTestId("doc-block-1"));
     fireEvent.change(screen.getByTestId("doc-block-1-input"), {
@@ -357,7 +392,7 @@ describe("EditableDocument — structural edits", () => {
   it("adds a table with a row already in it, so there is somewhere to type", async () => {
     const { saveRevision } = renderEditable("# Notes\n");
 
-    press("doc-insert-table-1");
+    fromBlockMenu(0, "doc-insert-table-1");
     editCell("doc-header-1-0", "Task");
     editCell("doc-cell-1-0-0", "Draft the memo");
 
@@ -381,10 +416,10 @@ describe("EditableDocument — structural edits", () => {
   it("moves a block up and down without reflowing the blocks around it", async () => {
     const { saveRevision } = renderEditable();
 
-    press("doc-move-down-0");
+    fromBlockMenu(0, "doc-move-down-0");
     expect(textOf("doc-block-0")).toBe("Three issues are open.");
     expect(textOf("doc-block-1")).toBe("Sprint board");
-    press("doc-move-up-1");
+    fromBlockMenu(1, "doc-move-up-1");
     expect(textOf("doc-block-0")).toBe("Sprint board");
 
     // Two moves that cancel out still count as two changes — this is a batch of
@@ -396,22 +431,34 @@ describe("EditableDocument — structural edits", () => {
 
   it("refuses to move a block into the blank run above it, which would swallow the document's last block", () => {
     renderEditable("\n\n# Title\n\nProse.\n");
-    // Block 0 is that blank run: it renders nothing, so there is no strip on it
-    // and nothing above block 1 to trade places with.
+    // Block 0 is that blank run: it renders nothing, so there is no gutter on
+    // it and nothing above block 1 to trade places with.
     expect(screen.queryByTestId("doc-actions-0")).toBeNull();
+    expect(screen.queryByTestId("doc-slot-0")).toBeNull();
+    press("doc-block-menu-1");
     expect(screen.getByTestId("doc-move-up-1")).toBeDisabled();
     expect(screen.getByTestId("doc-move-down-1")).toBeEnabled();
+
+    // The drag handle refuses the same move for the same reason: an arrow key
+    // is the keyboard's half of the gesture, and it obeys one rule, not two.
+    const handle = screen.getByTestId("doc-reorder-1");
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    expect(dirty()).toBe("0");
+    expect(textOf("doc-block-1")).toBe("Title");
   });
 
   it("deletes a block, and the last one leaves a document with a way back into it", async () => {
     const { saveRevision } = renderEditable("Only this.\n");
 
-    press("doc-delete-block-0");
+    fromBlockMenu(0, "doc-delete-block-0");
     expect(screen.queryByTestId("doc-block-0")).toBeNull();
     expect(dirty()).toBe("1");
 
-    // An empty document still has the one control that can start it again.
-    press("doc-insert-paragraph-0");
+    // An empty document still has the one control that can start it again —
+    // and it is the one that is drawn without a hover, because an empty
+    // document has nothing left to hover.
+    fromDocumentMenu("doc-insert-paragraph-0");
     expect(textOf("doc-block-0")).toBe("New paragraph");
     expect(dirty()).toBe("2");
 
@@ -422,7 +469,7 @@ describe("EditableDocument — structural edits", () => {
     const { saveRevision } = renderEditable();
 
     editCell("doc-cell-2-0-1", "Warm");
-    press("doc-move-up-2");
+    fromBlockMenu(2, "doc-move-up-2");
 
     // The table is block 1 now, and the typing followed it there rather than
     // staying at the coordinates it was typed at — still marked as the edit it
@@ -502,7 +549,7 @@ describe("EditableDocument — structural edits", () => {
     // the new paragraph, so the blocks below do not shift the way it assumed.
     // The check on the far side catches it and the whole change is refused —
     // the alternative is a typed value spliced into a span nobody typed into.
-    press("doc-insert-paragraph-0");
+    fromDocumentMenu("doc-insert-paragraph-0");
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Could not add that change",
     );
@@ -514,36 +561,177 @@ describe("EditableDocument — structural edits", () => {
   it("puts every control in the keyboard's reach, named for what it acts on", () => {
     renderEditable();
 
-    // Real buttons, in document order, each with a name that says which row,
-    // column or block it belongs to — no two of them share one.
-    const names = [
-      "Add row to Table 3",
-      "Add row below row 2 of Table 3",
-      "Delete row 2 of Table 3",
-      "Add column to Table 3",
-      "Delete column Status of Table 3",
-      "Move up: Table 3",
-      "Move down: Table 3",
-      "Add paragraph after Table 3",
-      "Add table after Table 3",
-      "Delete Table 3",
-      "Add paragraph at the top of the document",
-    ];
-    for (const name of names) {
+    function realButton(name: string): HTMLElement {
       const button = screen.getByRole("button", { name });
       expect(button.tagName).toBe("BUTTON");
       expect(button).toHaveAttribute("type", "button");
+      return button;
     }
-    // A move with nowhere to go is disabled rather than absent, so the strip
-    // does not change shape under the cursor as blocks are reordered.
-    expect(screen.getByTestId("doc-move-up-0")).toBeDisabled();
-    expect(screen.getByTestId("doc-move-down-3")).toBeDisabled();
 
-    // Visible without a hover: a control revealed by a pointer event is a
-    // control a keyboard cannot find.
-    expect(
-      globalThis.getComputedStyle(screen.getByTestId("doc-actions-2")).display,
-    ).toBe("flex");
+    // The chrome that is in the tab order before any pointer moves. `getByRole`
+    // refuses a node the accessibility tree does not carry, so finding these
+    // IS the assertion: the gutter and the row and column controls are QUIET
+    // (opacity), never `display: none` and never mounted on a hover.
+    for (const name of [
+      "Reorder Table 3",
+      "Insert or delete around Table 3",
+      "Add row below row 2 of Table 3",
+      "Delete row 2 of Table 3",
+      "Delete column Status of Table 3",
+      "Add a block at the top of the document",
+    ]) {
+      realButton(name);
+    }
+
+    // Everything else is one press away, in that block's own menu — moved, not
+    // removed. The trigger says whether it is open and the panel is named for
+    // the block, so the plain verbs inside it are announced in context.
+    const trigger = screen.getByTestId("doc-block-menu-2");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-controls", "doc-block-menu-2-panel");
+    press("doc-block-menu-2");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("doc-block-menu-2-panel")).toHaveAttribute(
+      "aria-label",
+      "Change Table 3",
+    );
+    for (const name of [
+      "Add row to Table 3",
+      "Add column to Table 3",
+      "Add paragraph after Table 3",
+      "Add table after Table 3",
+      "Move up: Table 3",
+      "Move down: Table 3",
+      "Delete Table 3",
+    ]) {
+      realButton(name);
+    }
+    // Move up and Move down survive the loss of their always-visible buttons
+    // for one reason: a drag is not something a keyboard can do, and every
+    // operation a pointer can reach a keyboard has to be able to reach too.
+    expect(screen.getByTestId("doc-move-up-2")).toBeEnabled();
+
+    // A move with nowhere to go is disabled rather than absent, so the menu
+    // does not change shape as blocks are reordered.
+    press("doc-block-menu-0");
+    expect(screen.getByTestId("doc-move-up-0")).toBeDisabled();
+    press("doc-block-menu-3");
+    expect(screen.getByTestId("doc-move-down-3")).toBeDisabled();
+    // Opening one menu closes the last: only ever one panel over the document.
+    expect(screen.queryByTestId("doc-move-up-0")).toBeNull();
+
+    // The document's own menu keeps its two items and their whole-sentence
+    // names — this is the boundary a block's menu cannot offer, and an empty
+    // document's only way back in.
+    press("doc-document-menu");
+    realButton("Add paragraph at the top of the document");
+    realButton("Add table at the top of the document");
+  });
+
+  it("keeps the chrome quiet until the block, row or column is asked for", () => {
+    renderEditable();
+
+    // The default state of a document is the document. Every control is
+    // present, named and focusable; none of them is drawn.
+    for (const testId of [
+      "doc-reorder-2",
+      "doc-block-menu-2",
+      "doc-insert-row-2-0",
+      "doc-delete-row-2-0",
+      "doc-delete-column-2-1",
+    ]) {
+      expect(screen.getByTestId(testId)).not.toBeVisible();
+    }
+    // One exception, and the empty document is the whole reason for it: delete
+    // the last block and there is nothing left to hover, so the way back has to
+    // be visible from the start.
+    expect(screen.getByTestId("doc-document-menu")).toBeVisible();
+
+    // A pointer over a cell reveals that block's gutter and that ROW's own
+    // controls — not the other rows', and not the column's.
+    fireEvent.mouseOver(screen.getByTestId("doc-cell-2-0-0"));
+    expect(screen.getByTestId("doc-reorder-2")).toBeVisible();
+    expect(screen.getByTestId("doc-delete-row-2-0")).toBeVisible();
+    expect(screen.getByTestId("doc-delete-row-2-1")).not.toBeVisible();
+    expect(screen.getByTestId("doc-delete-column-2-1")).not.toBeVisible();
+    fireEvent.mouseOut(screen.getByTestId("doc-cell-2-0-0"));
+    expect(screen.getByTestId("doc-delete-row-2-0")).not.toBeVisible();
+
+    // A column's control answers to its own header, and to nothing else.
+    fireEvent.mouseOver(screen.getByTestId("doc-header-2-1"));
+    expect(screen.getByTestId("doc-delete-column-2-1")).toBeVisible();
+    expect(screen.getByTestId("doc-delete-column-2-0")).not.toBeVisible();
+
+    // FOCUS reveals exactly what hover reveals. This is the half that makes
+    // "on hover" something other than a regression: tab to the handle and it
+    // appears, with no pointer anywhere near the document.
+    expect(screen.getByTestId("doc-reorder-3")).not.toBeVisible();
+    // A REAL focus, the one Tab performs — not a synthetic focus event. `act`
+    // is only there because a native focus outside an event handler leaves
+    // React's re-render unflushed.
+    act(() => {
+      screen.getByTestId("doc-reorder-3").focus();
+    });
+    expect(screen.getByTestId("doc-reorder-3")).toHaveFocus();
+    expect(screen.getByTestId("doc-reorder-3")).toBeVisible();
+    expect(screen.getByTestId("doc-reorder-2")).not.toBeVisible();
+  });
+
+  it("reorders by dragging the handle, in one batch that Discard takes back whole", () => {
+    renderEditable();
+
+    // Three places is three adjacent swaps, and they arrive as one refusable
+    // batch — three unsaved edits, one document, nothing sent.
+    fireEvent.dragStart(screen.getByTestId("doc-reorder-3"));
+    fireEvent.dragOver(screen.getByTestId("doc-slot-0"));
+    fireEvent.drop(screen.getByTestId("doc-slot-0"));
+
+    expect(textOf("doc-block-0")).toBe("All three are unresolved.");
+    expect(textOf("doc-block-1")).toBe("Sprint board");
+    expect(textOf("doc-block-2")).toBe("Three issues are open.");
+    expect(screen.getByTestId("doc-table-3")).toBeInTheDocument();
+    expect(dirty()).toBe("3");
+
+    // And the whole drag comes back, because a structural change is staged in
+    // the same batch a keystroke joins.
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(textOf("doc-block-0")).toBe("Sprint board");
+    expect(dirty()).toBe("0");
+  });
+
+  it("reorders from the keyboard, and the focus follows the block rather than the slot", () => {
+    renderEditable();
+
+    const handle = screen.getByTestId("doc-reorder-0");
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(textOf("doc-block-0")).toBe("Three issues are open.");
+    expect(textOf("doc-block-1")).toBe("Sprint board");
+
+    // The focus travelled WITH the heading. Without that, a second press moves
+    // whatever slid into the slot the first press vacated — a keyboard reorder
+    // that reorders something else is worse than none.
+    expect(screen.getByTestId("doc-reorder-1")).toHaveFocus();
+    fireEvent.keyDown(screen.getByTestId("doc-reorder-1"), {
+      key: "ArrowDown",
+    });
+    expect(textOf("doc-block-2")).toBe("Sprint board");
+    expect(dirty()).toBe("2");
+  });
+
+  it("closes a menu on Escape and hands focus back to the control that opened it", () => {
+    renderEditable();
+
+    const trigger = screen.getByTestId("doc-block-menu-2");
+    press("doc-block-menu-2");
+    const item = screen.getByTestId("doc-delete-block-2");
+    item.focus();
+    fireEvent.keyDown(item, { key: "Escape" });
+
+    expect(screen.queryByTestId("doc-delete-block-2")).toBeNull();
+    expect(trigger).toHaveFocus();
+    // Escape out of a menu changes the document in no way at all.
+    expect(dirty()).toBe("0");
   });
 
   it("keeps its controls out of the cells they act on", () => {
@@ -579,7 +767,10 @@ describe("EditableDocument — structural edits", () => {
       "doc-add-column-2",
       "doc-delete-column-2-0",
       "doc-actions-2",
+      "doc-reorder-2",
+      "doc-block-menu-2",
       "doc-document-actions",
+      "doc-document-menu",
     ]) {
       expect(screen.queryByTestId(testId)).toBeNull();
     }

@@ -20,10 +20,14 @@ g2d_artifact_edit_regressions}, surface-colour, surface-follow-live,
 surface-floor.
 
 AS-9 needs the loopback fixture MCP server (`surface-floor/fixture_mcp.py`)
-listening on 8931; it skips rather than fails when nothing is there. Every
-connector in a desktop profile needs an OAuth authorization an automated
-journey must not complete in the user's name, and without SOME connected MCP
-server the PRESENT stage never fires and no surface is ever shaped.
+listening on 8931; AS-10 needs `local-mailbox/fixture_mcp.py` on 8932. Both
+skip rather than fail when nothing is there. Every connector in a desktop
+profile needs an OAuth authorization an automated journey must not complete in
+the user's name, and without SOME connected MCP server the PRESENT stage never
+fires and no surface is ever shaped.
+
+    python3 tools/desktop-journeys/surface-floor/fixture_mcp.py &   # AS-9
+    python3 tools/desktop-journeys/local-mailbox/fixture_mcp.py &   # AS-10
 
 The provider key is read from services/ai-backend/.env and only ever reaches the
 password field — never printed, logged, or written to an artifact.
@@ -972,6 +976,30 @@ ASK = (
 )
 
 
+def app_write(session: DriverSession, method: str, path: str, body: dict) -> object:
+    """Authenticated POST/PATCH through the app. ``_lib.transport`` is GET-shaped.
+
+    Module-level because two journeys need it (AS-9 registers a connector, AS-10
+    registers one AND binds a per-chat write scope), and a second copy of the
+    IPC spelling is a second thing to fix the day the bridge changes.
+    """
+
+    payload = json.dumps({"method": method, "path": path, "body": body})
+    js = (
+        "(async()=>{try{const r=await window.bridge.ipc.invoke("
+        f'"transport.request",{payload});'
+        'if(r&&r.kind==="transport-result"){'
+        'if(!r.ok)return "ERR:HTTP "+String(r.error?.status??"?")+" "'
+        '+String(r.error?.message??"");'
+        "return JSON.stringify(r.value);}return JSON.stringify(r);}"
+        'catch(e){return "ERR:"+e.message}})()'
+    )
+    raw = session.evaluate(js)
+    if isinstance(raw, str) and raw.startswith("ERR:"):
+        raise RuntimeError(f"{method} {path} -> {raw}")
+    return json.loads(raw)
+
+
 class FloorJourney:
     """Drives the app to a real MCP read and judges the surface it produces."""
 
@@ -982,22 +1010,9 @@ class FloorJourney:
     # -- helpers ---------------------------------------------------------
 
     def post(self, path: str, body: dict) -> object:
-        """Authenticated POST through the app. ``_lib.transport`` is GET-shaped."""
+        """Authenticated POST through the app."""
 
-        payload = json.dumps({"method": "POST", "path": path, "body": body})
-        js = (
-            "(async()=>{try{const r=await window.bridge.ipc.invoke("
-            f'"transport.request",{payload});'
-            'if(r&&r.kind==="transport-result"){'
-            'if(!r.ok)return "ERR:HTTP "+String(r.error?.status??"?")+" "'
-            '+String(r.error?.message??"");'
-            "return JSON.stringify(r.value);}return JSON.stringify(r);}"
-            'catch(e){return "ERR:"+e.message}})()'
-        )
-        raw = self.session.evaluate(js)
-        if isinstance(raw, str) and raw.startswith("ERR:"):
-            raise RuntimeError(f"POST {path} -> {raw}")
-        return json.loads(raw)
+        return app_write(self.session, "POST", path, body)
 
     def note(self, ok: bool, claim: str) -> bool:
         self.findings.append(f"{'PASS' if ok else 'FAIL'}  {claim}")
@@ -1297,6 +1312,245 @@ class FloorJourney:
         self.note(bool(surface.get("badges")), "a low-cardinality value drew as a chip")
 
         s.shot("04-surface")
+        print("\n".join(self.findings))
+        return 0 if all(f.startswith("PASS") for f in self.findings) else 1
+
+
+MAILBOX_URL = "http://127.0.0.1:8932/mcp"
+MAILBOX_MANIFEST = "http://127.0.0.1:8932/mailbox"
+MAILBOX_REVISION = "local-mailbox.1"
+
+MAILBOX_LIST_ASK = (
+    "Use the mailbox connector to list the messages in my mailbox, then stop "
+    "and show me what came back. Do not summarise them in prose."
+)
+MAILBOX_DRAFT_ASK = (
+    "Use the mailbox connector to draft a reply to message m-1041. Then stop. "
+    "Do not send it and do not describe it in prose — just draft it."
+)
+MAILBOX_SEND_ASK = (
+    "Now send that reply using the mailbox connector's send tool, to "
+    "jordan.reyes@acme.example, with no Cc."
+)
+
+
+class MailboxJourney:
+    """A local mailbox: a read that draws a table, a compose that draws email://.
+
+    The third step is the one that cannot be measured from the DOM alone. "The
+    write gate takes the decision" is a claim about a code path, so the journey
+    DECLINES the gate and then asks the fixture — over plain HTTP, outside the
+    app entirely — whether ``send_reply`` was ever called. ``sent == 0`` after a
+    decline is the measurement; a screenshot of a button is not.
+    """
+
+    def __init__(self, session: DriverSession) -> None:
+        self.session = session
+        self.findings: list[str] = []
+
+    # -- helpers ---------------------------------------------------------
+
+    def note(self, ok: bool, claim: str) -> bool:
+        self.findings.append(f"{'PASS' if ok else 'FAIL'}  {claim}")
+        return ok
+
+    @staticmethod
+    def manifest() -> dict:
+        """The fixture's own account of itself, read over plain HTTP.
+
+        Same guard the surface-floor fixture carries and for the same measured
+        reason: a PREVIOUS session's server left listening on the port answers
+        registration happily and serves its own older tool list, so the journey
+        measures a fixture nobody edited.
+        """
+
+        with urllib.request.urlopen(MAILBOX_MANIFEST, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def register(self) -> str:
+        """Register the loopback mailbox. No OAuth: ``auth_mode: none``."""
+
+        created = app_write(
+            self.session,
+            "POST",
+            "/v1/mcp/servers",
+            {
+                "url": MAILBOX_URL,
+                "display_name": "Mailbox",
+                "transport": "http",
+                "auth_mode": "none",
+            },
+        )
+        assert isinstance(created, dict), created
+        server_id = str(created.get("id") or created.get("server_id") or "")
+        assert server_id, f"no server id in {created}"
+        return server_id
+
+    def bind_write_scope(self, conversation_id: str) -> None:
+        """Grant the chat read+write on the mailbox.
+
+        Connector scope is PER CHAT and must exist before the run that needs it.
+        Without the write half the send is DENIED outright rather than gated,
+        and a journey that skipped this would report "nothing sent" while having
+        measured the allowlist instead of the gate.
+        """
+
+        servers = self.session.transport("GET", "/v1/mcp/servers")
+        rows = servers.get("servers", servers) if isinstance(servers, dict) else servers
+        names = [
+            str(row.get("name") or row.get("display_name") or "")
+            for row in rows or []
+            if MAILBOX_URL.rsplit("/", 1)[0] in str(row.get("url") or "")
+            or "mailbox" in str(row.get("name") or "").lower()
+        ]
+        assert names, f"the mailbox connector is not in the server list: {rows}"
+        app_write(
+            self.session,
+            "PATCH",
+            f"/v1/agent/conversations/{conversation_id}/connectors",
+            {"scopes": {names[0]: ["read", "write"]}},
+        )
+
+    def tab_uris(self) -> list[str]:
+        """The canvas tab keys, straight from the DOM.
+
+        `.tc-tab[data-uri]`, never `[data-testid^=tc-tab]` — that prefix also
+        matches the unpin/close buttons and yields the tab LABEL instead of the
+        URI, which makes a scheme assertion vacuous.
+        """
+
+        raw = self.session.evaluate(
+            "JSON.stringify([...document.querySelectorAll('.tc-tab[data-uri]')]"
+            ".map(e=>e.getAttribute('data-uri')))"
+        )
+        try:
+            return [uri for uri in json.loads(raw or "[]") if uri]
+        except json.JSONDecodeError:
+            return []
+
+    def read_composer(self) -> dict:
+        """What the email composer is actually showing."""
+
+        js = """(()=>{
+          const el = document.querySelector('[data-testid=email-renderer]');
+          if(!el) return JSON.stringify({present:false});
+          const v = (id)=>{const n=el.querySelector('[data-testid='+id+']');
+                           return n ? n.value : null;};
+          return JSON.stringify({
+            present:true,
+            to: v('email-to'), cc: v('email-cc'), subject: v('email-subject'),
+            body: el.textContent.slice(0, 600),
+          });
+        })()"""
+        return json.loads(self.session.evaluate(js))
+
+    # -- steps -----------------------------------------------------------
+
+    def a_read_draws_a_table(self) -> None:
+        """The first turn of a fresh chat, so it meets the empty cockpit."""
+
+        s = self.session
+        s.send_first_run_message(MAILBOX_LIST_ASK)
+        drew = s.wait_for("[data-testid=table-renderer]", 180)
+        s.shot("mailbox-01-list")
+        if not self.note(drew, "the mailbox read drew a table"):
+            return
+        headers = json.loads(
+            s.evaluate(
+                "JSON.stringify([...document.querySelectorAll("
+                "'[data-testid=table-renderer] th')].map(n=>n.textContent.trim()))"
+            )
+        )
+        lowered = {header.lower() for header in headers}
+        # The discriminator is WHOSE vocabulary the columns come from. `id` /
+        # `type` / `text` are what langchain-mcp-adapters puts on a converted
+        # content block, so any of them means the table bound the MCP envelope
+        # rather than the mailbox — a surface that looks, from across the room,
+        # like three messages.
+        self.note(
+            bool(lowered & {"subject", "from"}),
+            f"the columns are the mailbox's ({headers})",
+        )
+        self.note(
+            not (lowered & {"type", "text"}),
+            f"no transport slot leaked into the columns ({headers})",
+        )
+
+    def a_compose_draws_the_email_surface(self) -> None:
+        s = self.session
+        s.send(MAILBOX_DRAFT_ASK)
+        drew = s.wait_for("[data-testid=email-renderer]", 180)
+        s.shot("mailbox-02-compose")
+        if not self.note(drew, "the compose mounted EmailRenderer"):
+            uris = self.tab_uris()
+            print(f"[mailbox] tabs without an email surface: {uris}")
+            return
+        uris = [uri for uri in self.tab_uris() if uri.startswith("email://")]
+        self.note(bool(uris), f"a canvas tab is keyed on an email:// uri ({uris})")
+        self.note(
+            all(uri.count("://") == 1 and "%3A" not in uri for uri in uris),
+            f"the email uri is ONE identity, no codec ({uris})",
+        )
+        composed = self.read_composer()
+        print(f"[mailbox] composer: {json.dumps(composed)[:500]}")
+        self.note(bool(composed.get("to")), f"To is bound ({composed.get('to')!r})")
+        self.note(
+            bool(composed.get("subject")),
+            f"Subject is bound ({composed.get('subject')!r})",
+        )
+        self.note(
+            "Confirming the locked-price block" in (composed.get("body") or ""),
+            "the drafted body is on screen",
+        )
+        # The sibling task's reason for existing, asserted here: the fixture
+        # sends an EMPTY cc and the surface must show an empty cc. A Cc the user
+        # never saw is the failure this surface must not have.
+        self.note(
+            (composed.get("cc") or "") == "",
+            f"Cc is empty, exactly as the connector sent it ({composed.get('cc')!r})",
+        )
+
+    def a_send_parks_at_the_write_gate(self, conversation_id: str) -> None:
+        s = self.session
+        before = self.manifest().get("sent")
+        self.bind_write_scope(conversation_id)
+        s.send(MAILBOX_SEND_ASK)
+        parked = s.wait_for("[data-testid=tc-write-gate]", 180)
+        s.shot("mailbox-03-write-gate")
+        if not self.note(parked, "the send parked at the existing write gate"):
+            return
+        # Decline, which is the safe terminal state AND the measurement: the
+        # question is whether the connector was reached, and only the far end
+        # can answer that.
+        s.click("[data-testid^=tc-chat-approval-reject-]")
+        time.sleep(6)
+        after = self.manifest().get("sent")
+        self.note(
+            after == before,
+            f"a declined send never reached the connector (sent {before} -> {after})",
+        )
+        s.shot("mailbox-04-declined")
+
+    def run(self) -> int:
+        s = self.session
+        manifest = self.manifest()
+        assert manifest.get("revision") == MAILBOX_REVISION, (
+            f"the server on 8932 reports revision {manifest.get('revision')!r}, "
+            f"not {MAILBOX_REVISION!r} — you are talking to a stale fixture"
+        )
+        self.note(
+            manifest.get("sent") == 0,
+            f"the fixture starts with an empty outbox ({manifest.get('sent')})",
+        )
+
+        server_id = self.register()
+        print(f"[mailbox] registered loopback connector: {server_id}")
+
+        self.a_read_draws_a_table()
+        conversation_id = wait_for_conversation_id(s)
+        self.a_compose_draws_the_email_surface()
+        self.a_send_parks_at_the_write_gate(conversation_id)
+
         print("\n".join(self.findings))
         return 0 if all(f.startswith("PASS") for f in self.findings) else 1
 
@@ -1641,6 +1895,35 @@ def as9_the_inference_floor(s: DriverSession) -> None:
     FloorJourney(s).run()
 
 
+def as10_the_local_mailbox_and_its_email_surface(s: DriverSession) -> None:
+    """A local mailbox reads as a table and composes as an ``email://`` surface.
+
+    The one connector shape the product has a hand-built renderer for and has
+    never reached: ``EmailRenderer`` shipped registered on ``email`` in Phase 4
+    and nothing in the tree minted that scheme until the projector's draft rung.
+
+    Local on purpose. Gmail and Drive are gated OFF pending Google's CASA
+    restricted-scope review, so there is no mail connector an automated journey
+    may authorise — and a local mailbox needs no vendor, no OAuth, and no
+    compliance sign-off to be observable end to end.
+
+    Needs the loopback mailbox fixture; skips when it is not listening.
+    """
+
+    try:
+        urllib.request.urlopen(MAILBOX_URL, timeout=2)
+    except urllib.error.HTTPError:
+        pass  # an HTTP error still proves something is listening
+    except Exception:  # noqa: BLE001
+        require(
+            False,
+            f"no mailbox MCP server on {MAILBOX_URL} — start "
+            "tools/desktop-journeys/local-mailbox/fixture_mcp.py",
+        )
+    new_chat(s)
+    MailboxJourney(s).run()
+
+
 def main() -> int:
     plan = JourneyPlan("artifacts-and-surfaces")
     plan.boot(
@@ -1694,6 +1977,11 @@ def main() -> int:
                 "AS-9",
                 "the inference floor shapes an unspecified connector",
                 as9_the_inference_floor,
+            ),
+            (
+                "AS-10",
+                "a local mailbox reads as a table and composes as email://",
+                as10_the_local_mailbox_and_its_email_surface,
             ),
         ],
     )

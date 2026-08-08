@@ -89,7 +89,23 @@ class _FakeWriteOps:
         self, *, org_id: str, user_id: str, connector: str
     ) -> tuple[WriteOpCandidate, ...]:
         del org_id, user_id, connector
-        return (WriteOpCandidate(name=_WRITE_OP, description="Update one issue."),)
+        # ``required`` is what ``WriteArgScope`` reads to let the ``id`` binding
+        # through; an op that declares nothing refuses every save by design.
+        return (
+            WriteOpCandidate(
+                name=_WRITE_OP,
+                description="Update one issue.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "priority": {"type": "integer"},
+                        "team": {"type": "string"},
+                    },
+                    "required": ["id"],
+                },
+            ),
+        )
 
 
 class _FakeCompletion:

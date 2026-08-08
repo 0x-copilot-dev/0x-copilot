@@ -49,9 +49,14 @@ is what ships as ``state.data`` — see :meth:`SurfaceProjector._decoded` for wh
 the two must be the same value, and why the projector no longer falls back to
 the wrapper when the decode lands on something that is not a mapping.
 
-The URI grammar is ``<archetype>://<server-slug>/<tool-or-resource>/<id>``; the
-id segment is derived from a common id field on the output, else a stable hash
-of the call id, so the same logical resource yields the same URI across events.
+The URI grammar is ``<scheme>://<server-slug>/<tool-or-resource>/<id>``; the id
+segment is derived from a common id field on the output, else a stable hash of
+the call id, so the same logical resource yields the same URI across events.
+``scheme`` is the archetype's own name for every rung but one: an email draft
+mints ``email://`` (:mod:`.email_surface`), because the client keys its renderer
+on the scheme and the composer that draws a draft is not one of the ten
+archetypes the frozen contract can name. The archetype on the envelope stays
+truthful (``record``) either way.
 """
 
 from __future__ import annotations
@@ -66,6 +71,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.capabilities.surfaces import builtin
+from agent_runtime.capabilities.surfaces.email_surface import EmailDraftSurface
 from agent_runtime.capabilities.surfaces.infer import (
     EnvelopeUnwrapper,
     SurfaceSpecInferrer,
@@ -195,10 +201,26 @@ class _LadderResult:
     second party deriving that from the spec alone cannot tell a curated spec
     from an inferred one. One producer, one value — the rule
     :meth:`SurfaceProjector._state_source` already documents for ``source``.
+
+    ``scheme`` and ``data`` are the two things ONE rung — the ``email://``
+    draft rung — resolves that the others do not. Every other rung answers
+    "which spec binds this payload" and leaves the payload and the URI's scheme
+    alone; the email rung additionally decides that this surface is drawn by the
+    composer rather than by the record renderer, and normalises the connector's
+    field names onto the four keys that composer reads. Both ride here rather
+    than being recomputed in ``_floor_envelope`` for the same reason the rung
+    does: the ladder is the one party that knows which rung answered, and a
+    second derivation is how two producers of one fact start disagreeing.
     """
 
     spec: SurfaceSpec | None
     rung: SurfaceSpecRung | None
+    #: Presentation scheme override, or ``None`` to use the archetype's own name
+    #: (the ``<archetype>://…`` grammar every other rung produces).
+    scheme: str | None = None
+    #: Replacement for ``state.data`` when the rung normalised the payload, or
+    #: ``None`` to ship the decoded payload unchanged.
+    data: object | None = None
 
     @property
     def wants_refinement(self) -> bool:
@@ -390,15 +412,28 @@ class SurfaceProjector:
         call_id: str | None,
         tool_descriptor: object | None,
     ) -> SurfaceEnvelope:
-        """The envelope the deterministic ladder produced, plus its refinement."""
+        """The envelope the deterministic ladder produced, plus its refinement.
+
+        Two values are read off the ladder rather than derived here. ``scheme``
+        is the segment before ``://`` — the archetype's own name for every rung
+        but the ``email://`` one. ``state_data`` is what ships as
+        ``state.data``; the email rung replaces the decoded payload with the
+        normalised composer state, and the ORIGINAL decoded payload stays as the
+        id basis so the URI's id segment can still come from a draft id the
+        connector supplied. Deriving the id from a payload the surface does not
+        draw is the mistake :meth:`_shaped_envelope` names; deriving it from a
+        normalised state that carries no id would be a fresh hash — and a fresh
+        tab — every time the same draft is read.
+        """
 
         archetype = (
             ladder.spec.archetype
             if ladder.spec is not None
             else self._infer_archetype(data)
         )
+        state_data = data if ladder.data is None else ladder.data
         surface_uri = self._build_uri(
-            archetype=archetype,
+            scheme=ladder.scheme or archetype.value,
             server_name=server_name,
             tool_name=tool_name,
             output=data,
@@ -418,7 +453,7 @@ class SurfaceProjector:
             surface_uri=surface_uri,
             archetype=archetype,
             spec_rung=ladder.rung,
-            state=SurfaceState(spec=ladder.spec, source=source, data=data),
+            state=SurfaceState(spec=ladder.spec, source=source, data=state_data),
         )
 
     def _shaped_envelope(
@@ -443,7 +478,7 @@ class SurfaceProjector:
         archetype = shaped.spec.archetype
         return SurfaceEnvelope(
             surface_uri=self._build_uri(
-                archetype=archetype,
+                scheme=archetype.value,
                 server_name=server_name,
                 tool_name=tool_name,
                 output=shaped.data,
@@ -545,8 +580,8 @@ class SurfaceProjector:
 
         Ordered strongest-first, and the order is the design (floor PRD §3.4)::
 
-            exact (server, tool)  →  exact shape hash  →  nearest-neighbour
-            skeleton match        →  rung 0 inference
+            exact (server, tool)  →  email draft  →  exact shape hash  →
+            nearest-neighbour skeleton match      →  rung 0 inference
 
         The first two rungs are keyed on ``(server, tool)``, which is precisely
         why they miss every tool nobody has met yet — the audit found Linear's
@@ -580,6 +615,9 @@ class SurfaceProjector:
             stored = self.store.get(server=server_name, tool=tool_name)
             if stored is not None:
                 return _LadderResult(stored, SurfaceSpecRung.STORE)
+        drafted = self._email_draft(output, source)
+        if drafted is not None:
+            return drafted
         learned = self._learned_for_shape(output)
         if learned is not None:
             return _LadderResult(learned, SurfaceSpecRung.SHAPE_MATCH)
@@ -590,6 +628,41 @@ class SurfaceProjector:
         if inferred is not None:
             return _LadderResult(inferred, SurfaceSpecRung.INFERRED)
         return _LadderResult(None, None)
+
+    @staticmethod
+    def _email_draft(
+        output: Mapping[str, object], source: SurfaceSource | None
+    ) -> _LadderResult | None:
+        """The ``email://`` rung: a payload that IS a draft gets the composer.
+
+        Placed AFTER the two name-keyed rungs and BEFORE the two shape ones, and
+        both halves of that position are deliberate. A curated or stored spec is
+        a decision a human made about this exact ``(server, tool)``, and a
+        structural guess must not overrule it. The shape rungs below are the
+        general form of the same guess this rung makes, and they would bind an
+        email draft as a plain record — correct, and not what the product has an
+        ``EmailRenderer`` for.
+
+        Reported as :data:`SurfaceSpecRung.SHAPE_MATCH`, the rung whose meaning
+        is "a spec a person wrote, reused for a connector nobody curated". That
+        is exactly what this is: the composer's four slots were designed by
+        hand, and matched here by structure. It is not ``inferred`` (nothing was
+        derived from the payload's own vocabulary) and it is not ``builtin``
+        (no human vouched for this connector). The rung also decides what
+        happens next: ``SHAPE_MATCH`` does not want refinement, so a draft costs
+        zero model calls — a nano model re-authoring a spec for a renderer that
+        does not read specs would be spend for nothing.
+        """
+
+        match = EmailDraftSurface.match(output, source=source)
+        if match is None:
+            return None
+        return _LadderResult(
+            match.spec,
+            SurfaceSpecRung.SHAPE_MATCH,
+            scheme=EmailDraftSurface.SCHEME,
+            data=match.state,
+        )
 
     def _learned_for_shape(self, output: Mapping[str, object]) -> SurfaceSpec | None:
         """Read the learned cache by payload shape alone (PRD §3.6, AC14).
@@ -613,16 +686,26 @@ class SurfaceProjector:
     def _build_uri(
         self,
         *,
-        archetype: SurfaceArchetype,
+        scheme: str,
         server_name: str,
         tool_name: str,
         output: object,
         call_id: str | None,
     ) -> str:
+        """``<scheme>://<server-slug>/<tool>/<id>`` — the one surface identity.
+
+        ``scheme`` is the archetype's own name for every rung but the
+        ``email://`` draft rung, which routes to a renderer the ten-value
+        archetype vocabulary cannot name (see
+        :mod:`agent_runtime.capabilities.surfaces.email_surface`). It is taken
+        as a parameter rather than read off the archetype so that override has
+        exactly one place to live.
+        """
+
         slug = builtin.server_slug(server_name) or "unknown"
         tool = builtin.tool_slug(tool_name) or "tool"
         identifier = self._derive_id(output, call_id)
-        return f"{archetype.value}://{slug}/{tool}/{identifier}"
+        return f"{scheme}://{slug}/{tool}/{identifier}"
 
     @classmethod
     def _derive_id(cls, output: object, call_id: str | None) -> str:

@@ -236,8 +236,28 @@ class WriteBackHarnessMixin:
         )
 
     def candidates(self) -> tuple[WriteOpCandidate, ...]:
+        """The catalogue, with the schema a real MCP descriptor carries.
+
+        ``required`` is load-bearing rather than decoration: it is the only
+        non-model source of "which args address a record", so it is what
+        ``WriteArgScope`` lets the ``id`` binding through on. Drop it and the
+        lane refuses every save — which is the intended fail-closed edge, and
+        is why the fixture states it instead of leaving the op undescribed.
+        """
+
         return (
-            WriteOpCandidate(name=_WRITE_OP, description="Update one issue."),
+            WriteOpCandidate(
+                name=_WRITE_OP,
+                description="Update one issue.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        key: {"type": "string"}
+                        for key in ("id", "priority", "title", "blocked", "team")
+                    },
+                    "required": ["id"],
+                },
+            ),
             WriteOpCandidate(name="create_issue", description="Create an issue."),
         )
 

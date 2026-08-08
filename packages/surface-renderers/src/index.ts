@@ -19,6 +19,7 @@ import { registerArtifactAdapters } from "./artifacts";
 
 export {
   emailAdapter,
+  emailStateFrom,
   registerEmailAdapter,
   type EmailDiff,
   type EmailDiffPending,
