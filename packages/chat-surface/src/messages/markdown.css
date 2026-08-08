@@ -48,8 +48,14 @@
   animation: assistant-stream-enter 180ms ease-out;
 }
 
+/* `inherit`, not `--color-text`: reasoning is the ONE prose body in the
+ * transcript whose container deliberately quiets it — `ThinkingBlock`'s body
+ * and `.aui-reasoning-group__content` both set `--color-text-muted`, and this
+ * rule (plus the `p, li` one below) overrode BOTH, painting a thought the
+ * reader never asked to see at the same contrast as the answer. Size alone
+ * cannot carry the hierarchy if the colour argues with it. */
 .reasoning-markdown {
-  color: var(--color-text);
+  color: inherit;
   min-width: 0;
   white-space: normal;
 }
@@ -91,7 +97,7 @@
 }
 
 .reasoning-markdown :where(p, li) {
-  color: var(--color-text);
+  color: inherit;
 }
 
 .assistant-markdown :where(a),

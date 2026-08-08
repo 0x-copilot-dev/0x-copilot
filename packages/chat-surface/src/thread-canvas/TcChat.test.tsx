@@ -30,6 +30,7 @@ import {
   type TcChatApproval,
   type TcChatMessage,
   type TcChatMessagesResponse,
+  type TcChatProps,
 } from "./TcChat";
 
 // Assistant text now renders through the citation-safe markdown path
@@ -2474,6 +2475,136 @@ describe("TcChat — activity grouping keeps approvals reachable (PRD-03)", () =
       ),
     );
     expect(screen.getAllByTestId("tool-run-group")).toHaveLength(2);
+  });
+});
+
+// THE WORK THE MODEL DID WHILE THINKING BELONGS TO THE THOUGHT.
+//
+// A turn is `reasoning → tools → text`. Rendered as three peers that was a
+// "Thought for 6s" row, then a "Worked for 140ms · 2 steps" row, then the
+// answer — two collapsed disclosures in two visual languages, describing one
+// stretch of work between them. The tool calls are not the thought's sibling;
+// they are what it DID.
+describe("TcChat — tool calls folded into the thought", () => {
+  const RUN = "run-1";
+
+  /** `reasoning(1) → …cards… → text(9)`, the shape the fold is about. */
+  function thinkingTurn(reasoning = "weighing it up"): TcChatMessage[] {
+    return [
+      {
+        message_id: "u1",
+        role: "user",
+        parts: [{ type: "text", text: "any csv here?" }],
+        run_id: RUN,
+      },
+      {
+        message_id: "a1",
+        role: "assistant",
+        run_id: RUN,
+        parts: [
+          { type: "reasoning", text: reasoning, seq: 1 },
+          { type: "text", text: "Yes — two of them.", seq: 9 },
+        ],
+      },
+    ];
+  }
+
+  function renderTurn(props: Partial<TcChatProps> = {}) {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    return render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          activeRunId={RUN}
+          messages={thinkingTurn()}
+          {...props}
+        />,
+      ),
+    );
+  }
+
+  it("puts a card that ran during the thought inside it", () => {
+    renderTurn({
+      toolCalls: [
+        toolCall({ id: "call-1", runId: RUN, sequenceNo: 2 }),
+        toolCall({ id: "call-2", runId: RUN, sequenceNo: 3 }),
+      ],
+    });
+    const block = screen.getByTestId("cs-thinking-block");
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-1"))).toBe(
+      true,
+    );
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-2"))).toBe(
+      true,
+    );
+    // And there is no longer a SECOND disclosure saying the same thing.
+    expect(screen.queryByTestId("tool-run-group")).not.toBeInTheDocument();
+  });
+
+  it("states how many steps it folded away", () => {
+    // The count is the honesty guarantee: the row is collapsed by default, so
+    // without it, folding the cards in would simply be hiding them.
+    renderTurn({
+      toolCalls: [
+        toolCall({ id: "call-1", runId: RUN, sequenceNo: 2 }),
+        toolCall({ id: "call-2", runId: RUN, sequenceNo: 3 }),
+      ],
+    });
+    expect(screen.getByTestId("cs-thinking-block-steps")).toHaveTextContent(
+      "· 2 steps",
+    );
+  });
+
+  it("leaves a card that ran AFTER the thought outside it", () => {
+    // `reasoning → text → tool` — thought, spoke, then acted. That tool is not
+    // part of the thought, and a fold that swallowed it would be describing
+    // the transcript's shape rather than the model's behaviour.
+    renderTurn({
+      toolCalls: [toolCall({ id: "call-1", runId: RUN, sequenceNo: 10 })],
+    });
+    const block = screen.getByTestId("cs-thinking-block");
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-1"))).toBe(
+      false,
+    );
+    expect(screen.queryByTestId("cs-thinking-block-steps")).toBeNull();
+  });
+
+  it("never folds an approval away, even mid-thought", () => {
+    // The rule `groupActivityStream` already documents: an approval buried in
+    // a collapsed row hides a parked run's only way out. The fold stops at it,
+    // so the card after it stays outside too.
+    renderTurn({
+      toolCalls: [
+        toolCall({ id: "call-1", runId: RUN, sequenceNo: 2 }),
+        toolCall({ id: "call-2", runId: RUN, sequenceNo: 4 }),
+      ],
+      approvals: [approval({ sequenceNo: 3 })],
+    });
+    const block = screen.getByTestId("cs-thinking-block");
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    expect(block.contains(card)).toBe(false);
+    expect(within(card).getByTestId(approveTid("appr-1"))).toBeVisible();
+    // seq 2 folded in; seq 4 is past the approval, so it stays a peer.
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-1"))).toBe(
+      true,
+    );
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-2"))).toBe(
+      false,
+    );
+  });
+
+  it("keeps a card from a settled run out of the live turn's thought", () => {
+    // A prior run's seq numbers index a different event space, so "ran during
+    // this thought" is not a statement about them.
+    renderTurn({
+      toolCalls: [toolCall({ id: "call-1", runId: "run-0", sequenceNo: 2 })],
+    });
+    const block = screen.getByTestId("cs-thinking-block");
+    expect(block.contains(screen.getByTestId("tc-chat-tool-call-1"))).toBe(
+      false,
+    );
   });
 });
 

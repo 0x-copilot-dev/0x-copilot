@@ -74,7 +74,11 @@ import { ToolRunGroup } from "../activity/ToolRunGroup";
 // PRD-03 FR-3.10 — reuse the formatter that already exists rather than adding a
 // third. PRD-07 renames/consolidates it; this call site moves with it.
 import { formatSubagentDuration } from "../subagents/labels";
-import { groupActivityStream, summariseGroup } from "./groupActivity";
+import {
+  groupActivityStream,
+  summariseGroup,
+  type GroupSummary,
+} from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
@@ -1472,11 +1476,38 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
     }
     if (item.kind === "part") {
+      // The absorbed cards are rendered HERE, not inside `renderPart`, because
+      // this is the only scope holding what a card needs to draw itself
+      // (mode, citations, parked, the subagent activity map). The thinking
+      // block frames them; it never learns about any of that.
+      const absorbed = item.activity ?? [];
       return renderMessagePartItem(
         item.message,
         item.part,
         item.index,
         markdownComponents,
+        absorbed.length === 0
+          ? undefined
+          : {
+              cards: absorbed.map((a) =>
+                a.kind === "tool"
+                  ? renderToolCard(a.toolCall, mode, toolCallCitations, parked)
+                  : renderFleetCard(a.fleet, subagentActivitiesByTask),
+              ),
+              summary: summariseGroup(
+                absorbed.map((a) =>
+                  a.kind === "tool"
+                    ? {
+                        status: a.toolCall.status,
+                        createdAtMs: a.toolCall.createdAtMs,
+                        durationMs: a.toolCall.durationMs,
+                      }
+                    : { createdAtMs: a.fleet.createdAtMs },
+                ),
+                runFailed,
+              ),
+              total: absorbed.length,
+            },
       );
     }
     if (item.kind === "approval") {
@@ -1605,6 +1636,7 @@ function renderPart(
   role: TcChatMessage["role"],
   key: number | string,
   markdownComponents?: MarkdownTextProps["components"],
+  activity?: ThoughtActivity,
 ): ReactNode {
   const status: MessagePartStatus = part.status ?? { type: "complete" };
   if (part.type === "reasoning") {
@@ -1623,8 +1655,21 @@ function renderPart(
         text={part.text}
         running={status.type === "running"}
         elapsedSeconds={elapsed}
+        {...(activity === undefined
+          ? {}
+          : {
+              activity: activity.cards,
+              stepCount: activity.total,
+              failedCount: activity.summary.retried,
+              activityRunning: activity.summary.state === "running",
+            })}
       >
-        <Reasoning type="reasoning" text={part.text} status={status} />
+        {/* Omitted rather than rendered empty: a reasoning span that has
+            produced no prose yet still carries its tool cards, and an empty
+            markdown block above them adds a stray gap inside the body. */}
+        {part.text.trim() === "" ? null : (
+          <Reasoning type="reasoning" text={part.text} status={status} />
+        )}
       </ThinkingBlock>
     );
   }
@@ -1676,6 +1721,7 @@ function renderMessagePartItem(
   part: TcChatMessagePart,
   index: number,
   markdownComponents?: MarkdownTextProps["components"],
+  activity?: ThoughtActivity,
 ): ReactNode {
   return (
     <li
@@ -1686,9 +1732,18 @@ function renderMessagePartItem(
       data-part-type={part.type}
       data-part-seq={typeof part.seq === "number" ? part.seq : undefined}
     >
-      {renderPart(part, m.role, index, markdownComponents)}
+      {renderPart(part, m.role, index, markdownComponents, activity)}
     </li>
   );
+}
+
+/** The already-rendered work folded into one reasoning span, plus the counts
+ *  its header states. Assembled by `renderItem`, which owns the card
+ *  renderers; consumed only by `renderPart`. */
+interface ThoughtActivity {
+  readonly cards: readonly ReactNode[];
+  readonly summary: GroupSummary;
+  readonly total: number;
 }
 
 // PR-3.8 — reuse the hoisted `SubagentFleetCard` (Phase 1D) with the projected
@@ -1750,6 +1805,12 @@ function renderToolCard(
   );
 }
 
+/** Activity that can be folded into a reasoning span — the same two kinds
+ *  `groupActivityStream` will group, and deliberately no others. */
+type ActivityItem =
+  | { readonly kind: "fleet"; readonly fleet: FleetProjection }
+  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry };
+
 type StreamItem =
   | { readonly kind: "message"; readonly message: TcChatMessage }
   | {
@@ -1757,9 +1818,13 @@ type StreamItem =
       readonly message: TcChatMessage;
       readonly part: TcChatMessagePart;
       readonly index: number;
+      /**
+       * Tool / fleet cards that ran INSIDE this reasoning span — populated by
+       * `absorbThoughtActivity`, empty for every other part.
+       */
+      readonly activity?: readonly ActivityItem[];
     }
-  | { readonly kind: "fleet"; readonly fleet: FleetProjection }
-  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry }
+  | ActivityItem
   | { readonly kind: "approval"; readonly approval: TcChatApproval }
   | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry };
 
@@ -1930,8 +1995,59 @@ function mergeStream(
     flushRun(id);
   }
   anchored.sort((a, b) => a.seq - b.seq);
-  for (const entry of anchored) {
-    out.push(entry.item);
+  for (const item of absorbThoughtActivity(anchored.map((e) => e.item))) {
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Fold the work the model did WHILE thinking into the thought itself.
+ *
+ * A turn is `reasoning → tools → text`, and the three used to render as three
+ * peers: a "Thought for 6s" disclosure, then a "Worked for 140ms · 2 steps"
+ * disclosure, then the answer — two collapsed rows, in two different visual
+ * languages, saying one thing between them. The tool calls are not a sibling of
+ * the thought; they are what the thought DID.
+ *
+ * Absorbs only the run of tool/fleet items IMMEDIATELY following a reasoning
+ * part, which is what makes this a description of the model's behaviour rather
+ * than a bucket. `reasoning → text → tool` — thought, spoke, then acted — stops
+ * at the text, and that tool stays a peer, because it happened after the
+ * thought ended.
+ *
+ * Two kinds are deliberately NOT absorbable:
+ * - **approvals**, for the reason the group predicate already documents — an
+ *   approval buried inside a collapsed row hides a parked run's only way out;
+ * - **artifacts**, which are the run's output, not its working.
+ *
+ * Operates on the ACTIVE run's sorted items only. Cards flushed from settled
+ * runs are already in `out` by the time this runs, and they must stay peers:
+ * their seq numbers index a different run's event space, so "immediately
+ * following" is not a statement about them.
+ */
+function absorbThoughtActivity(
+  items: readonly StreamItem[],
+): readonly StreamItem[] {
+  const isActivity = (item: StreamItem): item is ActivityItem =>
+    item.kind === "tool" || item.kind === "fleet";
+  const out: StreamItem[] = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item.kind !== "part" || item.part.type !== "reasoning") {
+      out.push(item);
+      continue;
+    }
+    let j = i + 1;
+    const activity: ActivityItem[] = [];
+    while (j < items.length) {
+      const next = items[j];
+      if (!isActivity(next)) break;
+      activity.push(next);
+      j += 1;
+    }
+    out.push(activity.length === 0 ? item : { ...item, activity });
+    i = j - 1;
   }
   return out;
 }
@@ -2111,6 +2227,23 @@ const messageItemStyle = (role: TcChatMessage["role"]): CSSProperties => ({
   color: PALETTE.textHi,
   alignSelf: role === "user" ? "flex-end" : "stretch",
   maxWidth: role === "user" ? "88%" : "100%",
+  // THE QUESTION AND THE ANSWER ARE THE SAME SIZE — and now they finally look
+  // it. Both inherit the container's 13px, but the bubble was leaving
+  // `line-height` at the UA `normal` (~1.2) while `.assistant-markdown` sets
+  // 1.58, so identical type sat in a 15px line box on one side and a 20.5px
+  // box on the other. Tight leading reads as bigger, loose leading as smaller;
+  // measured they matched, and every reader saw the user's words as the larger
+  // of the two. Matching the leading is what makes the measurement true.
+  lineHeight: 1.58,
+  // Parts of ONE turn — a thought and the answer under it — are siblings in
+  // this item. Without a gap they butt together, which is what glued the
+  // answer to the bottom of the thinking row. Matches `ulStyle`'s gap so the
+  // boundary is the same 12px whether the turn's parts were seq-split into
+  // their own items or not.
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  alignItems: "stretch",
 });
 
 // PR-3.8 — the fleet card carries its own chrome (`.aui-fleet-card`), so the
