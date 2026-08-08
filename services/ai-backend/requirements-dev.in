@@ -28,4 +28,4 @@ pytest-asyncio==1.4.0
 # suite" — tests/unit/agent_runtime/capabilities/interpreter/test_registration.py),
 # so tests need the wheel: without it 30 tests fail on build_monty_interpreter
 # returning None.
-pydantic-monty==0.0.18
+pydantic-monty==0.0.19
