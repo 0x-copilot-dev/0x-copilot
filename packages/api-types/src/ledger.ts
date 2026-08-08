@@ -339,13 +339,41 @@ export interface RowFieldChange {
   new?: unknown;
 }
 
+/** Who authored the value an outbound argument carries. */
+export type StagedArgOrigin = "edited" | "carried" | "proposed";
+
+/** One outbound connector argument, disclosed to the reviewer.
+ *
+ *  `sends` is a server-computed, ordered, TOTAL account of the row's
+ *  `target_args`: one entry per key, in key order, `new` byte-identical to
+ *  `target_args[arg]`. It exists because `changes` is a diff of what the user
+ *  TOUCHED, and a diff can never account for the arguments that ride along
+ *  unedited — which is exactly where a one-line "cc changed" review hid a
+ *  model-authored recipient, subject and body.
+ *
+ *  `arg` is the CONNECTOR's own argument name, not the surface column, so a
+ *  rename (`body` → `bcc`) is visible rather than relabelled away; `column`
+ *  carries the surface field it was read from, or `null`.
+ *
+ *  Never client- or model-supplied: the server derives every entry from the
+ *  arguments it is about to send. */
+export interface StagedArg {
+  readonly arg: string;
+  readonly origin: StagedArgOrigin;
+  readonly column?: string | null;
+  readonly old?: unknown;
+  readonly new?: unknown;
+}
+
 /** One proposed row change — the WYSIWYG unit a user approves/holds (PRD-D3).
- *  `target_args` is server-only and never rides the wire view. */
+ *  `target_args` is server-only and never rides the wire view; `sends` is the
+ *  human-visible half and is complete by construction. */
 export interface StagedRow {
   row_key: string;
   title: string;
   target_args?: Record<string, unknown>;
   changes: readonly RowFieldChange[];
+  sends: readonly StagedArg[];
 }
 
 /** Folded per-row state (PRD-D3). `agent_hold_reason` is sticky — it survives a
@@ -1298,6 +1326,9 @@ export interface RowSetEffectReviewRow {
   readonly row_key: string;
   readonly title: string;
   readonly changes: readonly RowFieldChange[];
+  /** Every argument this row will send, in `target_args` order. Required —
+   *  a row whose outbound arguments are not disclosed cannot be reviewed. */
+  readonly sends: readonly StagedArg[];
   readonly decision: "approve" | "hold";
   readonly decision_source: "default" | "agent" | "user";
   readonly hold_reason: string | null;
@@ -1355,6 +1386,45 @@ export interface RowSetEffectActionRequest {
   readonly row_keys: readonly string[];
   readonly basis_sequence_no: number;
   readonly basis_ledger_id: string | null;
+}
+
+/** Closed key set for one disclosed outbound argument. Closed on purpose: an
+ *  unenumerated key on a `sends` entry is a value the reviewer would not see,
+ *  which is the whole failure this field exists to prevent. */
+const _STAGED_ARG_KEYS = wireKeys<StagedArg>({
+  arg: true,
+  origin: true,
+  column: true,
+  old: true,
+  new: true,
+});
+
+const _STAGED_ARG_ORIGINS: ReadonlySet<string> = new Set([
+  "edited",
+  "carried",
+  "proposed",
+]);
+
+/** Shape check for one `sends` entry. `origin` is validated as a SHAPE — the
+ *  string is one of three — never cast. */
+function _isStagedArg(candidate: unknown): candidate is StagedArg {
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    Array.isArray(candidate)
+  ) {
+    return false;
+  }
+  const entry = candidate as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(entry, _STAGED_ARG_KEYS) &&
+    typeof entry.arg === "string" &&
+    entry.arg.length > 0 &&
+    _STAGED_ARG_ORIGINS.has(String(entry.origin)) &&
+    (entry.column === null ||
+      entry.column === undefined ||
+      typeof entry.column === "string")
+  );
 }
 
 /** Fail-closed guard for the owner-scoped row-set review HTTP response. */
@@ -1427,6 +1497,12 @@ export function isRowSetEffectReview(
           Array.isArray(change) ||
           !text((change as Record<string, unknown>).field),
       ) ||
+      // A row with no disclosed outbound arguments is unreviewable, not a row
+      // with nothing to send — reject the response rather than render a diff
+      // that under-states the write.
+      !Array.isArray(row.sends) ||
+      row.sends.length === 0 ||
+      row.sends.some((entry) => !_isStagedArg(entry)) ||
       !["approve", "hold"].includes(String(row.decision)) ||
       !["default", "agent", "user"].includes(String(row.decision_source)) ||
       !(row.hold_reason === null || typeof row.hold_reason === "string") ||
@@ -1543,11 +1619,14 @@ export interface StageRowChangeView {
   new?: unknown;
 }
 
-/** One staged row in the wire view: content + folded state (PRD-D3). */
+/** One staged row in the wire view: content + folded state (PRD-D3).
+ *  `target_args` stays server-only; `sends` is the complete human-visible
+ *  account of it and is therefore required, never optional. */
 export interface StageRowView {
   row_key: string;
   title: string;
   changes: readonly StageRowChangeView[];
+  sends: readonly StagedArg[];
   stance: RowStance;
   agent_hold_reason?: string | null;
   decided_by?: "agent" | "user" | "policy" | null;

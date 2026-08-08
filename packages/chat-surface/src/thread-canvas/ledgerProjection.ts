@@ -193,22 +193,36 @@ export type LedgerApplyResult = "applied" | "partial" | "failed";
 /** A row's decision stance in the fold (PRD-D3). */
 export type LedgerRowStance = "will_apply" | "held";
 
-/** One folded row of a bulk row-set: content (title/diffs) + state. Rendered by
+/** One folded row of a bulk row-set: what it will send + state. Rendered by
  *  `TcStagedTableSurface`. `agentHoldReason` is STICKY — it survives a user
  *  override (FR-C7). */
 export interface LedgerStagedRow {
   readonly rowKey: string;
   readonly title: string;
-  readonly changes: readonly LedgerRowChange[];
+  /** Every argument this row will send, in the server's `target_args` order.
+   *  This REPLACES the old `changes` diff as the reviewed unit: a diff shows
+   *  only what the user touched, so an argument that rides along unedited — a
+   *  recipient, a subject, a model-authored body — was invisible at the gate.
+   *  EMPTY means the row's outbound arguments were not disclosed (an old
+   *  ledger, a truncated payload) and the row is therefore undecidable, never
+   *  "a row that sends nothing". */
+  readonly sends: readonly LedgerStagedArg[];
   readonly stance: LedgerRowStance;
   readonly agentHoldReason: string | null;
   readonly decidedBy: "agent" | "user" | "policy" | null;
   readonly applyOutcome: "applied" | "failed" | null;
 }
 
-/** One field diff on a staged row (display only, PRD-D3). */
-export interface LedgerRowChange {
-  readonly field: string;
+/** Who authored the value an outbound argument carries. */
+export type LedgerArgOrigin = "edited" | "carried" | "proposed";
+
+/** One outbound connector argument on a staged row. `arg` is the CONNECTOR's
+ *  own name (so a rename is visible, not relabelled away); `column` is the
+ *  surface field it was read from, or `null`. */
+export interface LedgerStagedArg {
+  readonly arg: string;
+  readonly origin: LedgerArgOrigin;
+  readonly column: string | null;
   readonly old: unknown;
   readonly new: unknown;
 }
@@ -420,7 +434,7 @@ interface StageAccumulator {
   // PRD-D3 row-set fold state (mirrors the Python `_StageAccumulator`).
   isRowset: boolean;
   rowOrder: string[];
-  stagedRows: Map<string, { title: string; changes: LedgerRowChange[] }>;
+  stagedRows: Map<string, { title: string; sends: LedgerStagedArg[] }>;
   agentHoldReasons: Map<string, string>;
   rowStances: Map<string, LedgerRowStance>;
   rowDecidedBy: Map<string, "agent" | "user" | "policy">;
@@ -810,21 +824,50 @@ function hydrateRowset(acc: StageAccumulator, rawRows: unknown): void {
     if (acc.stagedRows.has(rowKey)) continue;
     acc.stagedRows.set(rowKey, {
       title,
-      changes: readRowChanges(r.changes),
+      sends: readRowSends(r.sends),
     });
     acc.rowOrder.push(rowKey);
     if (!acc.rowStances.has(rowKey)) acc.rowStances.set(rowKey, "will_apply");
   }
 }
 
-function readRowChanges(value: unknown): LedgerRowChange[] {
+/** Narrow an origin by SHAPE — the value is one of three literals — so an
+ *  unknown origin is a refusal, never a cast that renders as a blank label. */
+function argOrigin(value: unknown): LedgerArgOrigin | null {
+  return value === "edited" || value === "carried" || value === "proposed"
+    ? value
+    : null;
+}
+
+/**
+ * Read a row's outbound-argument account, ALL-OR-NOTHING.
+ *
+ * Unlike the diff readers around it, this one never drops a bad entry and keeps
+ * the rest: a dropped entry is an argument that will still be sent and would no
+ * longer be on screen, which is precisely the invisibility this field exists to
+ * remove. One unreadable entry collapses the whole account to `[]`, and an
+ * empty account makes the row undecidable downstream.
+ */
+function readRowSends(value: unknown): LedgerStagedArg[] {
   if (!Array.isArray(value)) return [];
-  const out: LedgerRowChange[] = [];
+  const out: LedgerStagedArg[] = [];
   for (const raw of value) {
-    if (raw === null || typeof raw !== "object") continue;
-    const c = raw as Record<string, unknown>;
-    if (typeof c.field !== "string" || c.field.length === 0) continue;
-    out.push({ field: c.field, old: c.old ?? null, new: c.new ?? null });
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+      return [];
+    const s = raw as Record<string, unknown>;
+    if (typeof s.arg !== "string" || s.arg.length === 0) return [];
+    const origin = argOrigin(s.origin);
+    if (origin === null) return [];
+    if (s.column !== null && s.column !== undefined) {
+      if (typeof s.column !== "string") return [];
+    }
+    out.push({
+      arg: s.arg,
+      origin,
+      column: typeof s.column === "string" ? s.column : null,
+      old: s.old ?? null,
+      new: s.new ?? null,
+    });
   }
   return out;
 }
@@ -1033,7 +1076,7 @@ function composeRows(
     return {
       rowKey: rk,
       title: content?.title ?? rk,
-      changes: content?.changes ?? [],
+      sends: content?.sends ?? [],
       stance: acc.rowStances.get(rk) ?? "will_apply",
       agentHoldReason: acc.agentHoldReasons.get(rk) ?? null,
       decidedBy: acc.rowDecidedBy.get(rk) ?? null,

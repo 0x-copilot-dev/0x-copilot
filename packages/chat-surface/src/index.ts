@@ -1435,7 +1435,8 @@ export {
   type RowsetReviewRow,
   type RowsetReviewStatus,
   type LedgerStagedRow,
-  type LedgerRowChange,
+  type LedgerStagedArg,
+  type LedgerArgOrigin,
   type LedgerRowCounts,
   type LedgerRowStance,
 } from "./thread-canvas";

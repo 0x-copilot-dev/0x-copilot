@@ -447,6 +447,12 @@
   min-height: 57px;
 }
 
+/* A row whose outbound arguments were never disclosed. It reads as inert
+   because it is: no decision control on it is enabled. */
+.tc-review-table__row--unaccounted {
+  background: color-mix(in srgb, var(--color-danger) 4%, transparent);
+}
+
 .tc-review-table__decisions {
   display: flex;
   gap: 5px;
@@ -509,6 +515,12 @@
 .tc-review-table__old {
   display: flex;
   flex-direction: column;
+}
+
+/* Only a value the user REPLACED is struck through. An argument that rides
+   along unchanged shows its current value plainly — striking it would read as
+   "this is being removed" about the one class of value that is not. */
+.tc-review-table__old > span[data-origin="edited"] {
   text-decoration: line-through;
 }
 
@@ -549,6 +561,32 @@
   font-size: var(--font-size-mono-10-5);
   padding: 1px 7px;
   white-space: nowrap;
+}
+
+/* The amber chip means "the user typed this". An argument that rides along
+   unedited is still SENT and still shown, but it must not borrow the edit's
+   emphasis, or the one value the reviewer actually changed stops standing out
+   in a row of eight. */
+.tc-review-table__change
+  > span[data-origin="carried"]
+  .tc-review-table__change-value {
+  background: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text-muted);
+}
+
+/* An agent-authored value is the one nobody typed and nobody read — it carries
+   the review's only warning weight. */
+.tc-review-table__change
+  > span[data-origin="proposed"]
+  .tc-review-table__change-value {
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 32%, transparent);
+}
+
+.tc-review-table__send-origin {
+  margin-left: auto;
+  margin-right: 0;
 }
 
 .tc-review-table__note {

@@ -140,7 +140,8 @@ export {
 // === Surfaces v2 — PRD-D3 bulk row-set staging (client) ===
 export {
   type LedgerStagedRow,
-  type LedgerRowChange,
+  type LedgerStagedArg,
+  type LedgerArgOrigin,
   type LedgerRowCounts,
   type LedgerRowStance,
 } from "./ledgerProjection";

@@ -58,6 +58,8 @@ export type {
   RowStance,
   RowOutcome,
   RowFieldChange,
+  StagedArgOrigin,
+  StagedArg,
   StagedRow,
   RowState,
   RowCounts,

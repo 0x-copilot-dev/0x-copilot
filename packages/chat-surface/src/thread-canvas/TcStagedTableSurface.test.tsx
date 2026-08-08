@@ -16,7 +16,22 @@ function row(
   return {
     rowKey,
     title: `Acme renewal ${rowKey}`,
-    changes: [{ field: "priority", old: 1, new: 2 }],
+    sends: [
+      {
+        arg: "issue_id",
+        origin: "carried",
+        column: "issue_id",
+        old: "PAR-9",
+        new: "PAR-9",
+      },
+      {
+        arg: "priority",
+        origin: "edited",
+        column: "priority",
+        old: 1,
+        new: 2,
+      },
+    ],
     stance: "will_apply",
     agentHoldReason: null,
     decidedBy: null,
@@ -164,9 +179,11 @@ describe("TcStagedTableSurface", () => {
     const rows = Array.from({ length: 200 }, (_, index) =>
       row(`row-${index}`, {
         title: `Customer with a deliberately long title ${index} ${"x".repeat(120)}`,
-        changes: [
+        sends: [
           {
-            field: "a_very_long_column_name",
+            arg: "a_very_long_column_name",
+            origin: "edited",
+            column: "a_very_long_column_name",
             old: `old-${index}-${"y".repeat(100)}`,
             new: `new-${index}-${"z".repeat(100)}`,
           },
@@ -216,6 +233,119 @@ describe("TcStagedTableSurface", () => {
     });
     expect(onApply).toHaveBeenCalledWith(model.action);
     expect(onApply.mock.calls[0][0]).toBe(model.action);
+  });
+
+  // The invariant: the object the user approves is the object that is sent.
+  // A row's unedited arguments ride the wire either way — the only question is
+  // whether they were on screen when Approve became available.
+  it("renders every argument the row will send, not only the edited one", () => {
+    render(
+      <TcStagedTableSurface
+        model={projectRowsetReviewModel(
+          stage([
+            row("r1", {
+              sends: [
+                {
+                  arg: "message_id",
+                  origin: "carried",
+                  column: "message_id",
+                  old: "m-1",
+                  new: "m-1",
+                },
+                {
+                  arg: "to",
+                  origin: "carried",
+                  column: "to",
+                  old: "dana@acme.example",
+                  new: "dana@acme.example",
+                },
+                {
+                  arg: "body",
+                  origin: "proposed",
+                  column: null,
+                  old: null,
+                  new: "Confirming the renewal terms.",
+                },
+                {
+                  arg: "cc",
+                  origin: "edited",
+                  column: "cc",
+                  old: "",
+                  new: "legal@acme.example",
+                },
+              ],
+            }),
+          ]),
+        )}
+        onRowDecision={noop}
+        onApply={noop}
+      />,
+    );
+
+    const sends = screen.getAllByTestId("tc-table-row-send");
+    expect(sends.map((node) => node.getAttribute("data-arg"))).toEqual([
+      "message_id",
+      "to",
+      "body",
+      "cc",
+    ]);
+    // The recipient and the model-authored body are the two values the old
+    // `cc: "" → legal@acme.example` diff hid entirely.
+    const outbound = screen.getByTestId("tc-table-row-change");
+    expect(outbound).toHaveTextContent("dana@acme.example");
+    expect(outbound).toHaveTextContent("Confirming the renewal terms.");
+    expect(outbound).toHaveTextContent("legal@acme.example");
+  });
+
+  it("names who authored each outbound value", () => {
+    render(
+      <TcStagedTableSurface
+        model={projectRowsetReviewModel(stage())}
+        onRowDecision={noop}
+        onApply={noop}
+      />,
+    );
+
+    const notes = screen
+      .getAllByTestId("tc-table-row-send-origin")
+      .map((node) => node.textContent);
+    expect(notes).toEqual(["sending unchanged", "you edited"]);
+    const carried = screen
+      .getAllByTestId("tc-table-row-send")
+      .find((node) => node.getAttribute("data-arg") === "issue_id");
+    expect(carried).toHaveAttribute("data-origin", "carried");
+  });
+
+  // The client's own fail-closed arm: the server refuses to stage a row whose
+  // outbound arguments are undisclosed, and a replayed old run must not be
+  // approvable through this surface either.
+  it("makes a row with no disclosed outbound arguments undecidable", () => {
+    const model = projectRowsetReviewModel(
+      stage([row("accounted"), row("dark", { sends: [] })]),
+    );
+    render(
+      <TcStagedTableSurface
+        model={model}
+        onRowDecision={noop}
+        onApply={noop}
+      />,
+    );
+
+    const dark = screen
+      .getAllByTestId("tc-table-row")
+      .find((node) => node.getAttribute("data-row-key") === "dark")!;
+    expect(
+      within(dark).getByTestId("tc-table-row-unaccounted"),
+    ).toHaveTextContent(
+      "Cannot be reviewed — this row's outbound fields were not disclosed.",
+    );
+    expect(within(dark).getByTestId("tc-table-row-approve")).toBeDisabled();
+    expect(within(dark).getByTestId("tc-table-row-hold")).toBeDisabled();
+    // …and it is outside the apply scope, so Approve-all cannot carry it.
+    expect(model.action?.rowKeys).toEqual(["accounted"]);
+    expect(screen.getByTestId("tc-bulk-apply")).toHaveTextContent(
+      "Apply 1 changes",
+    );
   });
 
   it("preserves public summary helper behavior", () => {
