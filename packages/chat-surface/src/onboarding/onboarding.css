@@ -321,33 +321,44 @@
   z-index: 2;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border-strong);
+  /* Deliberately light. This is a short inline list, not a modal: the hairline
+     border and the app's SUBTLE popover lift (`.ui-card` / `.ui-artifact-surface`
+     use the same one) are enough to lift four rows off the card. The heavier
+     `--color-border-strong` + `--shadow-md` combination read as a dialog and
+     made a two-second correction feel like a decision point. */
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   /* Opaque: it sits over the card, so a transparent list would read the card's
      own text through its rows. */
   background: var(--color-surface-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-subtle);
+  padding: var(--space-xs);
+  gap: 1px;
   overflow: hidden;
 }
 
 /* The question heads the list that answers it, so the menu can overlay without
    covering the reason it opened. */
+/* A label, not a banner — no divider, and the type steps down so it reads as
+   the list's caption rather than a second heading. */
 .fr-kf__picker-head {
   margin: 0;
-  padding: var(--space-xs) var(--space-sm);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-xs) var(--space-sm) 3px;
   font-size: var(--font-size-xs); /* 12.5px */
   color: var(--color-danger);
 }
 
+/* No dividers. A rule between every row was the single biggest contributor to
+   the boxed-in look; with four rows the separation reads fine from the row
+   rhythm alone, and hover/selection carry the rest. */
 .fr-kf__pick {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
+  padding: 5px var(--space-sm); /* design-exact; tighter than the space ladder */
   background: none;
   border: 0;
-  border-bottom: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
   font: inherit;
   font-size: var(--font-size-sm); /* 13px */
   color: var(--color-text);
@@ -355,11 +366,10 @@
   cursor: pointer;
 }
 
-.fr-kf__pick:last-child {
-  border-bottom: 0;
+.fr-kf__pick:hover {
+  background: var(--color-surface-muted);
 }
 
-.fr-kf__pick:hover,
 .fr-kf__pick--on {
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
