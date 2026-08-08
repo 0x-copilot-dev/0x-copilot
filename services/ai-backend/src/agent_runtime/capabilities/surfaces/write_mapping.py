@@ -53,6 +53,36 @@ Nothing else composes. See :class:`WriteArgScope` for how "required" is read and
 why a schema that marks everything required is treated as having declared
 nothing.
 
+**Scope alone was not enough either, and the accounting is what finishes it.**
+Confining the arg SET still left the diff and the wire as two independently
+built lists. Four independent attackers walked through the gap: an ``EDITED``
+binding could name any arg (``body`` displayed, ``bcc`` dispatched), and a
+required-but-unedited arg reached ``target_args`` with no diff line at all — so
+an entire model-authored email body shipped under a one-line ``cc`` change. Two
+rules close it together:
+
+* every binding is IDENTITY-mapped — an arg is named exactly as the column or
+  row field it reads (:attr:`_Messages.ARG_NAME_MISMATCH`), so there is no
+  rename to hide behind; and
+* every composed row carries ``StagedRow.sends``, a server-built, ordered,
+  TOTAL account of ``target_args`` that ``RowsetValidator`` refuses the row
+  without.
+
+**What this lane will and will not write, stated plainly.** It dispatches an
+update-class op whose write arg names match the read's field names, declaring a
+small ``required`` set none of whose members the user edited. It refuses, with a
+constant message the client renders verbatim, an op that renames a field between
+its read and its write, an op whose ``required`` set is content the user is
+editing (a send/create-class op), an op whose declaration bounds nothing, and an
+answer that omits a required key. The email compose gesture is in the refused
+column today: ``send_reply``'s declaration does not separate the args that
+ADDRESS a record from the args the user edits, and this module has no other
+source for that distinction. That is the fail-closed rule working, not a bug —
+and the durable fix is a connector- or catalogue-authored list naming the
+addressing args, captured beside ``input_schema`` at read time. It is emphatically
+NOT a heuristic (an ``id``-like-name regex, a "first required arg" rule): every
+heuristic in this area is what the four attackers walked through.
+
 **Two enforcement layers, not one.** The answer contract (:class:`ArgBinding`)
 is source-referencing, so the ordinary path gives the model no slot to type a
 value into. It may still emit :attr:`ArgSourceKind.LITERAL`, and that member
@@ -94,7 +124,13 @@ from agent_runtime.capabilities.surfaces.generator import (
 )
 from agent_runtime.capabilities.surfaces.write_ops_capture import WriteOpCandidate
 from agent_runtime.execution.contracts import JsonObject, JsonValue, RuntimeContract
-from agent_runtime.surfaces_v2.rowset import RowFieldChange, StagedRow
+from agent_runtime.surfaces_v2.rowset import (
+    ArgOrigin,
+    RowFieldChange,
+    StagedArg,
+    StagedRow,
+    ValueFingerprint,
+)
 from agent_runtime.surfaces_v2.shaping_policy import ShapingModelResolver
 
 _LOGGER = logging.getLogger(__name__)
@@ -113,13 +149,12 @@ class _Limits:
 
     # == ``rowset._Limits.MAX_ROWS`` — the staging engine's own ceiling.
     MAX_EDITS = 200
-    # ``rowset._Limits.MAX_CHANGES_PER_ROW`` (20) MINUS the scope args a row may
-    # additionally disclose. A composed row's ``changes`` is the user's own diff
-    # plus one entry per scoping arg (see ``RowWriteComposer._disclosed``), and
-    # that sum has to stay inside the staging engine's per-row ceiling — a save
-    # that passed here and was refused two layers down would be a refusal with
-    # no diagnosis attached to the thing the user actually did.
-    MAX_CHANGES_PER_ROW = 16
+    # == ``rowset._Limits.MAX_CHANGES_PER_ROW``. It was reserved down to 16 so a
+    # row's own diff plus the scope args the composer appended to ``changes``
+    # stayed inside the staging engine's per-row ceiling. Disclosure no longer
+    # rides ``changes`` — ``StagedRow.sends`` is its own bounded list — so the
+    # reservation has nothing to reserve for, and the two numbers agree.
+    MAX_CHANGES_PER_ROW = 20
     # == ``rowset._Limits.FIELD_MAX`` — an arg name is the same kind of thing.
     NAME_MAX = 200
     # An op name is a tool name; the MCP descriptor caps its own at 200.
@@ -187,6 +222,19 @@ class _Messages:
     RELOCATED_ROW_FIELD = (
         "The proposed write would fill one of this record's identifying fields "
         "from a different field of the record. Nothing was staged."
+    )
+    ARG_NAME_MISMATCH = (
+        "This connector names one of its fields differently in the operation "
+        "that would save it, so what you edited and what would be sent cannot "
+        "be matched up. Nothing was staged."
+    )
+    MISSING_RECORD_KEY = (
+        "The proposed write does not carry the fields this operation needs to "
+        "find the record. Nothing was staged."
+    )
+    DUPLICATE_SOURCE = (
+        "The proposed write mapping reads one field twice, so two arguments "
+        "would carry the same value. Nothing was staged."
     )
     EDIT_INTO_RECORD_KEY = (
         "The proposed write would put one of your edits into a field this "
@@ -358,6 +406,23 @@ class WriteMappingAnswer(RuntimeContract):
             raise ValueError(_Messages.DUPLICATE_ARG)
         return self
 
+    @model_validator(mode="after")
+    def _keys_are_distinct(self) -> "WriteMappingAnswer":
+        """One SOURCE, one binding — the mirror of :meth:`_args_are_distinct`.
+
+        Two bindings reading the same ``key`` send one value into two connector
+        arguments. Under the identity rules (an ``EDITED`` binding's ``arg``
+        equals its ``key``; a ``ROW`` binding's likewise) this is already
+        implied — but stating it keeps the contract true independently of those
+        rules surviving, and it is the shape a future aliasing signal would have
+        to re-litigate rather than inherit.
+        """
+
+        keys = [binding.key for binding in self.args if binding.key is not None]
+        if len(set(keys)) != len(keys):
+            raise ValueError(_Messages.DUPLICATE_SOURCE)
+        return self
+
 
 class WriteMappingAnswerParser:
     """Parse + bound an untrusted answer. Total: it raises only the typed error."""
@@ -395,28 +460,6 @@ class WriteMappingAnswerParser:
 # ---------------------------------------------------------------------------
 
 
-class _ValueFingerprint:
-    """Type-tagged canonical form of a JSON value, for exact set membership.
-
-    Plain ``==`` is the wrong test twice over: ``True == 1`` and ``1 == 1.0``
-    both hold in Python, so a model could substitute a boolean for a count and
-    the audit would call it the user's own value. Tagging the type and
-    canonicalising the JSON closes both, and makes nested containers comparable
-    without a recursive walk at compare time.
-    """
-
-    @classmethod
-    def of(cls, value: object) -> str:
-        return f"{type(value).__name__}:{cls._canonical(value)}"
-
-    @staticmethod
-    def _canonical(value: object) -> str:
-        try:
-            return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):  # pragma: no cover - default= covers these
-            return repr(value)
-
-
 @dataclass(frozen=True)
 class ArgProvenanceAudit:
     """Every leaf of a composed ``target_args`` must be a value we can account for.
@@ -426,7 +469,15 @@ class ArgProvenanceAudit:
     * every ``new`` the user typed in this row's changes,
     * every ``old`` those changes carry (the value as read — a write op that
       echoes the prior value back is sending the connector its own datum), and
-    * every value reachable inside the row AS READ, at any depth.
+    * every TOP-LEVEL value of the row AS READ.
+
+    **Why top-level and not "at any depth".** The walk used to descend the row
+    to any depth, so every nested leaf was admissible. Under the ROW binding's
+    identity rule a scope arg can only ever be filled from ``edit.row[arg]``
+    where ``arg`` is a declared, required arg NAME — a top-level lookup — so a
+    deep walk admitted values no binding can reach and weakened the audit for
+    nothing. The change/``old``/``new`` half and the list / empty-container
+    rules below are untouched: they were adversarially reasoned and are correct.
 
     An arg bound to a whole value — scalar, list or object — passes when that
     value itself is admissible; fingerprints compare structurally, so a nested
@@ -449,8 +500,8 @@ class ArgProvenanceAudit:
     either.** Both were vacuous holes. ``all()`` over an empty container is
     ``True``, so a model-authored ``[]`` was admitted against every row — and
     ``labels: []`` is not a null edit, it is how a connector is told to clear a
-    field. Leaf-wise admission of a list is worse, because :meth:`_collect`
-    walks the row AS READ to any depth: a connector that returned
+    field. Leaf-wise admission of a list was worse still back when the row half
+    of ``allowed`` was collected to any depth: a connector that returned
     ``assignees: ["alice", "bob"]`` put both names in ``allowed`` individually,
     so ``["bob", "alice"]`` and ``["alice"]`` were composable from them and were
     both admitted — a re-ordered and a truncated list the user never entered.
@@ -470,9 +521,10 @@ class ArgProvenanceAudit:
 
         allowed: set[str] = set()
         for change in edit.changes:
-            allowed.add(_ValueFingerprint.of(change.new))
-            allowed.add(_ValueFingerprint.of(change.old))
-        cls._collect(edit.row, allowed)
+            allowed.add(ValueFingerprint.of(change.new))
+            allowed.add(ValueFingerprint.of(change.old))
+        for value in edit.row.values():
+            allowed.add(ValueFingerprint.of(value))
         return cls(allowed=frozenset(allowed))
 
     def offending_arg(self, target_args: Mapping[str, object]) -> str | None:
@@ -484,7 +536,7 @@ class ArgProvenanceAudit:
         return None
 
     def _admissible(self, value: object) -> bool:
-        if _ValueFingerprint.of(value) in self.allowed:
+        if ValueFingerprint.of(value) in self.allowed:
             return True
         if isinstance(value, Mapping):
             # ``bool(value)`` first: an empty object has no leaves to vouch for
@@ -495,19 +547,6 @@ class ArgProvenanceAudit:
         # A list is data, in the order and with the membership it was read or
         # typed in. It has no leaf-wise second chance — see the class docstring.
         return False
-
-    @classmethod
-    def _collect(cls, value: object, into: set[str]) -> None:
-        """Record ``value`` and, recursively, everything reachable inside it."""
-
-        into.add(_ValueFingerprint.of(value))
-        if isinstance(value, Mapping):
-            for item in value.values():
-                cls._collect(item, into)
-            return
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                cls._collect(item, into)
 
 
 # ---------------------------------------------------------------------------
@@ -531,11 +570,12 @@ class WriteArgScope:
     were every one of them admissible — see the module docstring — so the rule
     here is about the SET of args, not about any value in it:
 
-    * **payload** — an arg an ``EDITED`` binding fills. The model names it
-      freely (mapping a column onto an arg name is exactly the naming job it is
-      here for) and cannot choose its value: composition takes ``change.new``.
-    * **scope** — an arg a ``ROW`` binding fills. The model does NOT name these
-      freely; the name must appear in :attr:`scope_args`.
+    * **payload** — an arg an ``EDITED`` binding fills, carrying ``change.new``.
+      The model does NOT name these freely either: the arg must be spelled
+      exactly as the column it takes its value from.
+    * **scope** — an arg a ``ROW`` binding fills, carrying the value as read.
+      The name must appear in :attr:`scope_args`, and the row field it reads
+      must be the identically-named one.
     * **nothing else.** A ``LITERAL`` fills neither lane, so it never composes.
 
     **Where the scope allow-list comes from, and why that source.** From the
@@ -544,9 +584,18 @@ class WriteArgScope:
     tenant key" actually has, and, decisively, it is authored by the connector
     rather than by the model: an ``ArgSourceKind.SCOPE`` the model declares for
     itself, or a bare cap, would both let it relabel ``assignee`` as scoping and
-    buy nothing. A required arg that an ``EDITED`` binding already fills is
-    subtracted, so the user's own edit wins the slot rather than being shadowed
-    by the value as read.
+    buy nothing.
+
+    **``required`` is a VOLUME bound now, not the safety mechanism.** It used to
+    have to answer *"is this arg safe to send unedited"*, and it cannot — an
+    ``id``-like-name regex is a guess about vendor naming, and subtracting every
+    arg that is also a surface column breaks the honest case where a connector
+    requires a field the surface renders. With ``StagedRow.sends`` accounting
+    for every outbound arg at the gate, ``required`` only has to answer *"how
+    many unedited args may ride along before the review surface is one nobody
+    reads"*. So :attr:`_Limits.MAX_SCOPE_ARGS` and the strict-subset test stay
+    exactly as they are, as a volume bound, and the safety comes from the
+    accounting.
 
     **A declaration only counts when it discriminates, and "discriminates" is
     a SIZE test, not only a subset one.** ``required`` is trusted only if the op
@@ -558,14 +607,17 @@ class WriteArgScope:
     column becomes "scoping". Such an op is refused
     (:attr:`_Messages.UNBOUNDED_OP`), as is one that declares no schema at all.
 
-    The size test is not redundant with the strict-subset one, and leaving it to
-    the post-subtraction cap was a hole. Adding ONE optional property to an
-    otherwise all-required schema satisfies "strict subset" — and the cap was
-    applied to ``required - payload``, so a five-required op with one edited
-    column left four scope args and passed. That reproduced the module
-    docstring's own five-field exploit verbatim. An op needing more than four
-    args to ADDRESS a record is already the case this module says it refuses, so
-    the cap belongs on ``required`` itself, before anything is subtracted.
+    Adding ONE optional property to an otherwise all-required schema satisfies
+    "strict subset", which is why the cap sits on ``required`` ITSELF. The old
+    code subtracted the payload args first and capped the remainder, so a
+    five-required op with one edited column left four scope args and passed —
+    the module docstring's own five-field exploit, verbatim. Worse, an answer
+    that bound every required key as an edit left ``required - payload`` EMPTY
+    and still reported ``bounded=True``, a write with no record-addressing
+    argument at all. The subtraction is deleted: :attr:`scope_args` is exactly
+    ``_declared_required`` and an edit may never name one of those args
+    (:attr:`_Messages.EDIT_INTO_RECORD_KEY`), which makes the two sets disjoint
+    by rule instead of by arithmetic.
 
     **Every arg the write carries must be one the op DECLARES.** ``properties``
     bounds the whole answer, both lanes. Nothing checked the payload lane's arg
@@ -576,6 +628,18 @@ class WriteArgScope:
     directions of that lie (a field shown but not sent, a field sent but not
     shown) are closed by requiring :attr:`declared_args` membership for every
     binding, and an op that declares no ``properties`` is refused outright.
+
+    **The identity rule, and why there is no alias.** An ``EDITED`` binding's
+    ``arg`` must equal its ``key``. A rename is exactly the channel three of the
+    four attacks used (``body → bcc``, ``subject → to``, ``priority →
+    description``), and there is nothing to weigh it against:
+    :class:`WriteOpCandidate` is captured from an MCP ``input_schema``, and JSON
+    Schema has no keyword a connector could author a column→arg alias in.
+    Inventing a MODEL-supplied alias would re-open the hole it closes. So the
+    rule is unconditional, and the honest consequence is stated in the module
+    docstring: a connector that names the same field differently in its read and
+    its write cannot be saved through this lane, and refuses
+    (:attr:`_Messages.ARG_NAME_MISMATCH`) rather than guessing.
 
     **The stated bound on nesting.** The model chooses the op and one flat arg
     name per value; it does not choose a value, and it no longer chooses a
@@ -590,10 +654,9 @@ class WriteArgScope:
     value, which may be user content.
     """
 
-    #: Args an ``EDITED`` binding fills — one per column the batch edited.
-    payload_args: frozenset[str]
-    #: Args a ``ROW`` binding may fill. Empty when the op's declaration is
-    #: unusable, which is a REFUSAL and never a licence to send anything.
+    #: Args a ``ROW`` binding may fill — the connector's own ``required`` set,
+    #: verbatim. Empty when the op's declaration is unusable, which is a REFUSAL
+    #: and never a licence to send anything.
     scope_args: frozenset[str]
     #: Every arg the op DECLARES (``input_schema.properties``). Bounds both
     #: lanes: an arg outside this set is one the connector never offered, so no
@@ -601,30 +664,29 @@ class WriteArgScope:
     #: properties, which refuses the whole answer.
     declared_args: frozenset[str]
     #: Whether the op's own declaration bounded this write at all — false for a
-    #: missing schema, an everything-is-required one, one that requires more
-    #: than :attr:`_Limits.MAX_SCOPE_ARGS` args, and one whose surviving scope
-    #: exceeds the same cap. Chooses the message only; both answers refuse.
+    #: missing schema, one that declares no ``required``, an
+    #: everything-is-required one, and one that requires more than
+    #: :attr:`_Limits.MAX_SCOPE_ARGS` args. A property of the OP alone: it no
+    #: longer depends on the shape of the model's answer.
     bounded: bool
 
     @classmethod
-    def for_op(
-        cls, *, answer: "WriteMappingAnswer", candidate: WriteOpCandidate
-    ) -> "WriteArgScope":
-        """Derive the two lanes for one answer against the op it chose."""
+    def for_op(cls, *, candidate: WriteOpCandidate) -> "WriteArgScope":
+        """Derive the two lanes from the op's own declaration.
 
-        payload = frozenset(
-            binding.arg
-            for binding in answer.args
-            if binding.source is ArgSourceKind.EDITED
-        )
+        Takes no answer. The old signature made ``bounded`` a function of what
+        the model happened to emit, which is how an op with no ``required`` at
+        all still staged an all-``EDITED`` answer: nothing ever entered the
+        branch that reads ``bounded``. Scope is now the op's property, and
+        :meth:`RowWriteComposer.compose` checks it before any row composes.
+        """
+
         declared = cls._declared_properties(candidate)
         required = cls._declared_required(candidate)
-        scope = frozenset(required - payload)
         return cls(
-            payload_args=payload,
-            scope_args=scope if len(scope) <= _Limits.MAX_SCOPE_ARGS else frozenset(),
+            scope_args=required,
             declared_args=declared,
-            bounded=bool(required) and len(scope) <= _Limits.MAX_SCOPE_ARGS,
+            bounded=bool(required),
         )
 
     def reject_out_of_scope(self, bindings: Sequence[ArgBinding]) -> None:
@@ -655,6 +717,7 @@ class WriteArgScope:
                     "undeclared_arg",
                 )
             if binding.source is ArgSourceKind.EDITED:
+                self._reject_edited(binding)
                 continue
             if binding.key != binding.arg:
                 # A scoping key is the record's own field, under the
@@ -677,6 +740,23 @@ class WriteArgScope:
                     ),
                     "out_of_scope_arg",
                 )
+
+    def _reject_edited(self, binding: ArgBinding) -> None:
+        """The two rules an ``EDITED`` binding answers to: identity, and lane.
+
+        Identity first, because *"these two names do not match up"* is the
+        diagnosis a reader can act on when both apply. The second rule is what
+        makes ``scope_args == required`` sound: an edit may never fill a slot
+        the connector declared as required-to-CALL, so the payload and scope
+        lanes are disjoint by rule rather than by subtraction.
+        """
+
+        if binding.arg != binding.key:
+            self._refuse(binding, _Messages.ARG_NAME_MISMATCH, "arg_name_mismatch")
+        if binding.arg in self.scope_args:
+            self._refuse(
+                binding, _Messages.EDIT_INTO_RECORD_KEY, "edit_into_record_key"
+            )
 
     @classmethod
     def _declared_required(cls, candidate: WriteOpCandidate) -> frozenset[str]:
@@ -733,10 +813,16 @@ class RowWriteComposer:
     """Turn one validated answer plus the batch into ``StagedRow``s, fail-closed.
 
     Pure and synchronous — the model call is the caller's job, so every rule
-    below is testable without a completion. Five rules, each of which rejects
+    below is testable without a completion. Seven rules, each of which rejects
     the WHOLE batch rather than dropping a row, because a partially mapped save
     is a save whose diff no longer describes what the user asked for:
 
+    0. **The OP is bounded.** :attr:`WriteArgScope.bounded` is read before any
+       row composes. It used to be read only inside the ``ROW``-binding branch,
+       so an op whose declaration this module had just called unusable still
+       staged a write whenever the model's answer happened to carry no ``ROW``
+       binding — the refusal was conditional on the answer's shape rather than
+       on the op. Now it is unconditional.
     1. **The edited columns and the bound columns are the SAME set.** A column
        the user changed and the answer never bound is a silently dropped edit —
        the one failure a WYSIWYG diff cannot show, since the row would stage
@@ -756,6 +842,18 @@ class RowWriteComposer:
        THIS write? Deliberately after the audit: both refuse an invented
        literal, and *"you did not enter this value"* is the more specific
        diagnosis than *"this field is out of scope"* when both apply.
+    6. **The record is addressed.** Every arg the connector declared it cannot
+       be called without is present in the composed ``target_args``, so a
+       partial answer cannot stage a write that addresses nothing.
+
+    **Every composed row carries its own account.** ``sends`` is built in the
+    same loop that builds ``target_args`` — one entry per arg, in the same
+    order, carrying the CONNECTOR's arg name, the column it came from, the value
+    as read and the value that will be sent. It is not a second display list
+    that a future producer could desynchronise: :class:`RowsetValidator` refuses
+    the row unless the two are an ordered bijection with identical values.
+    ``changes`` stays the user's own diff, verbatim, and is now a checked subset
+    view of ``sends`` rather than the whole of what a human sees.
 
     A binding for a column *this* row did not edit is still skipped rather than
     rejected: rule 1 has already proved the column is one the BATCH edited, and
@@ -778,7 +876,13 @@ class RowWriteComposer:
         """
 
         cls._require_exact_coverage(answer=answer, edits=edits)
-        scope = WriteArgScope.for_op(answer=answer, candidate=candidate)
+        scope = WriteArgScope.for_op(candidate=candidate)
+        if not scope.bounded:
+            # Rule 0 — a property of the OP, checked before any row composes.
+            _LOGGER.warning(
+                "%s unbounded_op op=%s: nothing staged", _MAPPER_PREFIX, candidate.name
+            )
+            raise WriteMappingRejected(_Messages.UNBOUNDED_OP)
         return tuple(cls._row(answer=answer, edit=edit, scope=scope) for edit in edits)
 
     @classmethod
@@ -815,6 +919,7 @@ class RowWriteComposer:
     ) -> StagedRow:
         by_column = {change.field: change for change in edit.changes}
         target_args: dict[str, JsonValue] = {}
+        sends: list[StagedArg] = []
         carried_edit = False
 
         for binding in answer.args:
@@ -823,15 +928,40 @@ class RowWriteComposer:
                 if change is None:
                     # This row did not edit that column — nothing to send for it.
                     continue
-                cls._reject_edit_into_record_key(binding=binding, edit=edit)
                 target_args[binding.arg] = change.new
+                sends.append(
+                    StagedArg(
+                        arg=binding.arg,
+                        origin=ArgOrigin.EDITED,
+                        column=binding.key,
+                        old=change.old,
+                        new=change.new,
+                    )
+                )
                 carried_edit = True
             elif binding.source is ArgSourceKind.ROW:
                 key = binding.key or ""
                 if key not in edit.row:
                     raise WriteMappingRejected(_Messages.UNKNOWN_ROW_FIELD)
                 target_args[binding.arg] = edit.row[key]
+                sends.append(
+                    StagedArg(
+                        arg=binding.arg,
+                        origin=ArgOrigin.CARRIED,
+                        column=key,
+                        old=edit.row[key],
+                        new=edit.row[key],
+                    )
+                )
             else:
+                # A LITERAL composes into ``target_args`` and deliberately gets
+                # NO ``sends`` entry. Both halves refuse it — the audit as "you
+                # did not enter this value" (the sharper diagnosis, so it runs
+                # first) and ``reject_out_of_scope`` as "the model typed this"
+                # — so no row carrying one is ever returned. Leaving it
+                # unaccounted means that even if both were somehow reordered
+                # away, ``RowsetValidator`` refuses the row for an arg with no
+                # disclosure rather than staging a model-authored value.
                 target_args[binding.arg] = binding.value
 
         if not carried_edit:
@@ -850,82 +980,42 @@ class RowWriteComposer:
             raise WriteMappingRejected(_Messages.INVENTED_VALUE)
 
         scope.reject_out_of_scope(answer.args)
+        cls._require_record_address(scope=scope, target_args=target_args, edit=edit)
 
         return StagedRow(
             row_key=edit.row_key,
             title=edit.title,
             target_args=target_args,
-            changes=cls._disclosed(edit=edit, target_args=target_args, scope=scope),
+            changes=edit.changes,
+            sends=tuple(sends),
         )
 
     @staticmethod
-    def _reject_edit_into_record_key(
-        *, binding: ArgBinding, edit: SurfaceRowEdit
+    def _require_record_address(
+        *,
+        scope: WriteArgScope,
+        target_args: Mapping[str, JsonValue],
+        edit: SurfaceRowEdit,
     ) -> None:
-        """Refuse an edit routed into a field the RECORD already has.
+        """Refuse a row that omits an arg the connector needs to find the record.
 
-        ``WriteArgScope`` bounds which args may be named; this bounds what an
-        edit may be named ONTO. Renaming a column to the connector's own arg
-        name is the mapper's job, so ``arg != key`` is ordinary — but when the
-        target arg is also a field of the row as read, the model is not renaming
-        a column, it is overwriting a *different* field of the record with the
-        value from this one. That is how ``issue_id`` came to be sent as the
-        user's new ``priority``, and how a subject edit could be dispatched as
-        the message ``body``. The row's own field names are the only signal
-        available here that says "this arg addresses something that already
-        exists", and it costs nothing: it is the payload the provenance audit
-        already reads.
+        Rule 6. ``scope.bounded`` says the op DECLARED which args address a
+        record; this says the composed row actually carries them. Without it a
+        partial answer — one that binds the edits and simply omits the id —
+        stages a write addressed at nothing, which a connector may well
+        interpret as a create.
         """
 
-        if binding.arg == binding.key or binding.arg not in edit.row:
+        missing = scope.scope_args - set(target_args)
+        if not missing:
             return
         _LOGGER.warning(
-            "%s edit_into_record_key arg=%s row_key=%s: nothing staged",
+            "%s missing_record_key args=%d row_key=%s: nothing staged",
             _MAPPER_PREFIX,
-            binding.arg,
+            len(missing),
             edit.row_key,
         )
-        raise WriteMappingRejected(_Messages.EDIT_INTO_RECORD_KEY)
-
-    @staticmethod
-    def _disclosed(
-        *,
-        edit: SurfaceRowEdit,
-        target_args: Mapping[str, JsonValue],
-        scope: WriteArgScope,
-    ) -> tuple[RowFieldChange, ...]:
-        """The user's diff, plus one entry per value they would NOT otherwise see.
-
-        ``target_args`` is *"the EXACT connector-op args the shared dispatcher
-        sends for THIS row, verbatim"* and is server-only: ``StageRowView``
-        deliberately never carries it, and the client ledger projection reads
-        ``changes`` alone. So the cell diff is the ONLY thing a human sees
-        before a write leaves the machine — and the scope lane put values in
-        ``target_args`` that appeared in no change at all. On a mail op whose
-        ``required`` set is ``[to, subject, body]``, editing one field
-        dispatched the recipient and the whole message body with a one-line
-        diff that named neither.
-
-        The fix is disclosure, not removal: those args are genuinely required to
-        address the record, so refusing them would make the op unwritable.
-        Each one is appended as an ``old == new`` entry — *this is also being
-        sent, unchanged* — so the object the user approves is the object that is
-        sent. Payload args are already disclosed by the user's own change for
-        that column, and are not repeated.
-
-        Bounded by construction: the scope lane carries at most
-        :attr:`_Limits.MAX_SCOPE_ARGS` args and
-        :class:`EditBatchValidator` caps a row's edits low enough that the sum
-        stays inside the staging engine's own per-row ceiling.
-        """
-
-        named = {change.field for change in edit.changes}
-        carried = tuple(
-            RowFieldChange(field=arg, old=value, new=value)
-            for arg, value in target_args.items()
-            if arg in scope.scope_args and arg not in named
-        )
-        return edit.changes + carried
+        raise WriteMappingRejected(_Messages.MISSING_RECORD_KEY)
 
 
 class EditBatchValidator:
@@ -989,15 +1079,19 @@ class WriteMappingPrompt:
         "1. Bind EVERY edited column to an argument, and bind NO other column. "
         "An unmapped column is a lost edit; a column nobody edited is a field "
         "the user never approved. Either refuses the whole answer.\n"
-        '2. Use source "row" ONLY for arguments the chosen operation lists in '
+        "2. An argument's name must be IDENTICAL to the column or row field it "
+        "takes its value from. You are choosing WHICH arguments to bind, not "
+        "what to call them: every binding has arg == key. A rename is refused.\n"
+        '3. Use source "row" ONLY for arguments the chosen operation lists in '
         'its schema\'s "required" — the id, and any key it needs to find the '
-        "record. Every other argument the operation offers is left out: a "
-        "field the user did not edit must not be sent back, because sending it "
-        "would overwrite whatever it holds now.\n"
-        "3. NEVER write a value. You are given names, not data, because the "
+        "record — and bind EVERY one of them that way. A required argument is "
+        "never a destination for an edit. Every other argument the operation "
+        "offers is left out: a field the user did not edit must not be sent "
+        "back, because sending it would overwrite whatever it holds now.\n"
+        "4. NEVER write a value. You are given names, not data, because the "
         "values belong to the user and to the connector. A literal is refused "
         "even when its value happens to be correct.\n"
-        "4. Answer with JSON only."
+        "5. Answer with JSON only."
     )
 
     #: Forced-structured-output schema. Mirrors :class:`WriteMappingAnswer`.

@@ -683,6 +683,10 @@ class StagedWriteFold:
                 title=title,
                 target_args=target_args,
                 changes=tuple(changes),
+                # Rebuilt whole or not at all: a partially-parsed account would
+                # under-disclose an arg that still dispatches, which is exactly
+                # the failure ``sends`` exists to make impossible.
+                sends=RowsetValidator.sends_of(raw.get(Keys.Field.SENDS)),
             )
         except Exception:  # noqa: BLE001 — a malformed row is skipped, never fatal.
             return None
@@ -1702,6 +1706,22 @@ class WriteStager:
                             Keys.Field.NEW: change.new,
                         }
                         for change in row.changes
+                    ],
+                    # The row's total account of ``target_args``. It rides the
+                    # ledger beside the args themselves so a replayed run is
+                    # reviewable on the same terms it was staged on — a row
+                    # whose account did not survive the round trip refuses at
+                    # ``RowsetValidator`` rather than becoming approvable with
+                    # fields nobody can see.
+                    Keys.Field.SENDS: [
+                        {
+                            Keys.Field.ARG: sent.arg,
+                            Keys.Field.ORIGIN: sent.origin.value,
+                            Keys.Field.COLUMN: sent.column,
+                            Keys.Field.OLD: sent.old,
+                            Keys.Field.NEW: sent.new,
+                        }
+                        for sent in row.sends
                     ],
                 }
                 for row in rows

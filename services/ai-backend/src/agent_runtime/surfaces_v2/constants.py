@@ -91,6 +91,14 @@ class Keys:
         FIELD = "field"
         OLD = "old"
         NEW = "new"
+        # The server-computed, ordered, TOTAL account of ``target_args`` a
+        # staged row carries. ``target_args`` is server-only and ``changes`` is
+        # a column-keyed display diff, so this is the half a human actually
+        # reads at the approval gate — see ``surfaces_v2.rowset.StagedArg``.
+        SENDS = "sends"
+        ARG = "arg"
+        ORIGIN = "origin"
+        COLUMN = "column"
         APPLY = "apply"
         ROW_RESULTS = "row_results"
         # ``row_results[].outcome`` reuses the existing ``OUTCOME`` key above.

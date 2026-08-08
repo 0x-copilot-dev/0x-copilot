@@ -55,7 +55,12 @@ from agent_runtime.capabilities.surfaces.write_mapping import (
     WriteOpCandidate,
     build_surface_write_mapper,
 )
-from agent_runtime.surfaces_v2.rowset import RowFieldChange
+from agent_runtime.surfaces_v2.rowset import (
+    ArgOrigin,
+    RowFieldChange,
+    RowsetValidator,
+    StagedArg,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -307,6 +312,7 @@ class TestValuesPassThroughVerbatim(WriteMappingFixtureMixin):
         answer = WriteMappingAnswer(
             op=_OP,
             args=(
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
                 ArgBinding(
                     arg="reviewers", source=ArgSourceKind.EDITED, key="reviewers"
                 ),
@@ -315,7 +321,7 @@ class TestValuesPassThroughVerbatim(WriteMappingFixtureMixin):
 
         rows = self.compose(answer, listy)
 
-        assert rows[0].target_args == {"reviewers": ["alice", "bob"]}
+        assert rows[0].target_args == {"id": "ISS-7", "reviewers": ["alice", "bob"]}
 
     def test_an_empty_list_the_user_actually_typed_lands_verbatim(self) -> None:
         # Clearing a multi-select IS a legitimate edit — ``labels: []`` is how a
@@ -329,12 +335,15 @@ class TestValuesPassThroughVerbatim(WriteMappingFixtureMixin):
         )
         answer = WriteMappingAnswer(
             op=_OP,
-            args=(ArgBinding(arg="labels", source=ArgSourceKind.EDITED, key="labels"),),
+            args=(
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+                ArgBinding(arg="labels", source=ArgSourceKind.EDITED, key="labels"),
+            ),
         )
 
         rows = self.compose(answer, cleared)
 
-        assert rows[0].target_args == {"labels": []}
+        assert rows[0].target_args == {"id": "ISS-8", "labels": []}
 
 
 # ---------------------------------------------------------------------------
@@ -794,10 +803,15 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
         )
         assert self.compose_rejects(answer, self.edit(), candidate=wide) == _UNBOUNDED
 
-    def test_a_required_arg_the_user_edited_is_payload_not_scope(self) -> None:
-        # ``priority`` is required AND edited. The user's own new value must win
-        # the slot — a ROW binding to it would send the value as READ and undo
-        # the edit while the diff still showed it.
+    def test_an_edit_into_a_required_arg_is_refused_not_shadow_resolved(self) -> None:
+        # ``priority`` is required AND edited. This USED to resolve in the
+        # user's favour: the required set minus the payload args became the
+        # scope, so the edit won the slot. That subtraction is what made
+        # ``bounded`` unsound — an answer that bound every required key as an
+        # edit left the scope EMPTY and still reported bounded, a write with no
+        # record-addressing argument at all. So the rule is now stated by NAME:
+        # an edit may never fill a slot the connector declared required-to-call,
+        # and the two lanes are disjoint by rule rather than by arithmetic.
         also_required = self.op(
             properties=("id", "priority", "title", "blocked", "team"),
             required=("id", "priority"),
@@ -811,9 +825,12 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
                 ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
             ),
         )
-        rows = self.compose(shadowed, self.edit(), candidate=also_required)
-        assert rows[0].target_args["priority"] == self.NEW_PRIORITY
+        assert (
+            self.compose_rejects(shadowed, self.edit(), candidate=also_required)
+            == _EDIT_INTO_KEY
+        )
 
+    def test_a_declared_but_unrequired_arg_is_out_of_scope(self) -> None:
         # ``team`` is DECLARED by the op and is not required, so the only rule
         # that can refuse it is the scope one — which is the point. (An arg the
         # op does not declare at all is refused one step earlier, as
@@ -821,10 +838,7 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
         stolen = self.answer(
             ArgBinding(arg="team", source=ArgSourceKind.ROW, key="team")
         )
-        assert (
-            self.compose_rejects(stolen, self.edit(), candidate=also_required)
-            == _OUT_OF_SCOPE
-        )
+        assert self.compose_rejects(stolen, self.edit()) == _OUT_OF_SCOPE
 
     def test_a_row_container_the_user_did_not_edit_is_out_of_scope(self) -> None:
         # Echoing the connector's own ``assignees`` list back is the concurrent-
@@ -855,8 +869,10 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
         )
 
     def test_scope_unit_reads_only_the_connectors_declaration(self) -> None:
+        # No answer is passed at all: scope is a property of the OP. Making it a
+        # function of what the model emitted is exactly how an unbounded op
+        # still staged a write whenever the answer carried no ROW binding.
         scope = WriteArgScope.for_op(
-            answer=self.answer(),
             candidate=self.op(
                 properties=("id", "assignee", "priority", "title", "blocked"),
                 required=("id",),
@@ -864,7 +880,9 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
         )
 
         assert scope.scope_args == frozenset({"id"})
-        assert scope.payload_args == frozenset({"priority", "title", "blocked"})
+        assert scope.declared_args == frozenset(
+            {"id", "assignee", "priority", "title", "blocked"}
+        )
         assert scope.bounded is True
 
 
@@ -1271,6 +1289,15 @@ _EDIT_INTO_KEY = (
     "The proposed write would put one of your edits into a field this "
     "operation uses to find the record. Nothing was staged."
 )
+_ARG_NAME_MISMATCH = (
+    "This connector names one of its fields differently in the operation that "
+    "would save it, so what you edited and what would be sent cannot be "
+    "matched up. Nothing was staged."
+)
+_MISSING_RECORD_KEY = (
+    "The proposed write does not carry the fields this operation needs to find "
+    "the record. Nothing was staged."
+)
 _DUPLICATE_FIELD = (
     "A row lists the same field twice, so only one of the two values would be "
     "sent. Nothing was staged."
@@ -1291,7 +1318,9 @@ class TestEveryArgIsOneTheOpDeclares(WriteMappingFixtureMixin):
     def test_an_edit_relocated_onto_another_declared_arg_is_refused(self) -> None:
         # ``team`` is declared by the op and is a field of the row as read, so
         # this is the model overwriting a DIFFERENT field of the record with the
-        # value from this one.
+        # value from this one. The refusal is now by NAME — the arg does not
+        # match the column it reads — rather than by the accident of whether
+        # this particular row happened to carry a field called ``team``.
         relocated = WriteMappingAnswer(
             op=_OP,
             args=(
@@ -1302,7 +1331,7 @@ class TestEveryArgIsOneTheOpDeclares(WriteMappingFixtureMixin):
             ),
         )
 
-        assert self.compose_rejects(relocated, self.edit()) == _EDIT_INTO_KEY
+        assert self.compose_rejects(relocated, self.edit()) == _ARG_NAME_MISMATCH
 
     def test_an_arg_the_op_never_declared_is_refused(self) -> None:
         invented_arg = WriteMappingAnswer(
@@ -1439,30 +1468,69 @@ class TestOneOptionalPropertyDoesNotBuyAScope(WriteMappingFixtureMixin):
 
 
 class TestEveryComposedArgIsDisclosed(WriteMappingFixtureMixin):
-    """``target_args`` is server-only, so the diff has to name what is sent.
+    """``target_args`` is server-only, so the row has to ACCOUNT for what is sent.
 
     ``StageRowView`` deliberately never carries ``target_args`` and the client
-    ledger projection reads ``changes`` alone, so a scope arg with no change
-    entry is a value dispatched with nobody's approval. On a mail op whose
-    ``required`` set is the message itself, that was the recipient and the whole
-    body riding a one-line subject diff.
+    ledger projection reads the row's display half alone, so an arg with no
+    counterpart there is a value dispatched with nobody's approval. On a mail op
+    whose ``required`` set is the message itself, that was the recipient and the
+    whole body riding a one-line subject diff.
+
+    The account is ``sends``, keyed by the CONNECTOR's arg name, ordered exactly
+    as ``target_args``. It replaced an earlier fix that appended ``old == new``
+    entries to ``changes``: that one accounted only for scope args, labelled
+    every entry with the COLUMN name (so a rename stayed invisible), and left
+    two independently-built lists for the next producer to desynchronise.
     """
 
-    def test_a_scoping_arg_rides_the_diff_as_an_unchanged_row(self) -> None:
+    def test_every_arg_the_write_sends_is_accounted_for_in_order(self) -> None:
         rows = self.compose(self.answer(), self.edit())
 
-        disclosed = [change for change in rows[0].changes if change.field == "id"]
-        assert disclosed == [RowFieldChange(field="id", old="ISS-1", new="ISS-1")]
+        assert [item.arg for item in rows[0].sends] == list(rows[0].target_args)
+        assert [item.new for item in rows[0].sends] == list(
+            rows[0].target_args.values()
+        )
 
-    def test_the_diff_names_every_arg_the_write_sends(self) -> None:
+    def test_a_carried_arg_is_named_with_its_value_as_read(self) -> None:
         rows = self.compose(self.answer(), self.edit())
 
-        assert set(rows[0].target_args) <= {change.field for change in rows[0].changes}
+        carried = [item for item in rows[0].sends if item.arg == "id"]
+        assert carried == [
+            StagedArg(
+                arg="id",
+                origin=ArgOrigin.CARRIED,
+                column="id",
+                old="ISS-1",
+                new="ISS-1",
+            )
+        ]
 
-    def test_the_users_own_edits_are_unchanged_and_come_first(self) -> None:
+    def test_an_edited_arg_carries_its_column_and_both_values(self) -> None:
         rows = self.compose(self.answer(), self.edit())
 
-        assert rows[0].changes[: len(self.edit().changes)] == self.edit().changes
+        edited = [item for item in rows[0].sends if item.arg == "priority"]
+        assert edited == [
+            StagedArg(
+                arg="priority",
+                origin=ArgOrigin.EDITED,
+                column="priority",
+                old=1,
+                new=self.NEW_PRIORITY,
+            )
+        ]
+
+    def test_the_users_own_diff_is_carried_verbatim(self) -> None:
+        rows = self.compose(self.answer(), self.edit())
+
+        assert rows[0].changes == self.edit().changes
+
+    def test_the_composed_row_survives_the_staging_engines_own_check(self) -> None:
+        # The composer and ``RowsetValidator`` are the two halves of one rule.
+        # A row this lane produces must be one the staging engine accepts, or
+        # the refusal arrives two layers down with no diagnosis attached.
+        rows = self.compose(self.answer(), self.edit())
+
+        RowsetValidator.validate(rows=tuple(rows), agent_holds=())
 
 
 class TestOneFieldOneChange(WriteMappingFixtureMixin):
@@ -1483,3 +1551,271 @@ class TestOneFieldOneChange(WriteMappingFixtureMixin):
             EditBatchValidator.validate([duplicated])
 
         assert caught.value.safe_message == _DUPLICATE_FIELD
+
+
+class TestTheArgNameIsForcedToIdentity(WriteMappingFixtureMixin):
+    """Three of the four attacks were a RENAME, so a rename is now refused.
+
+    ``body → bcc``, ``subject → to`` and ``priority → description`` are the same
+    move: the diff names the SOURCE column, the wire carries a different
+    destination, and nothing between them could see the difference. Coverage
+    constrained ``binding.key`` and nobody constrained ``binding.arg``.
+
+    There is deliberately no alias escape hatch. ``WriteOpCandidate`` is captured
+    from an MCP ``input_schema`` and JSON Schema has no keyword a connector could
+    author a column→arg map in, so any alias would have to come from the MODEL —
+    which is the hole, not the fix.
+    """
+
+    def relocated(self, *, arg: str, key: str) -> WriteMappingAnswer:
+        """The honest answer with exactly one binding's destination moved."""
+
+        return WriteMappingAnswer(
+            op=_OP,
+            args=tuple(
+                ArgBinding(arg=arg, source=binding.source, key=binding.key)
+                if binding.key == key
+                else binding
+                for binding in self.answer().args
+            ),
+        )
+
+    def test_an_edit_dispatched_under_a_different_declared_name_is_refused(
+        self,
+    ) -> None:
+        assert (
+            self.compose_rejects(
+                self.relocated(arg="reviewers", key="priority"), self.edit()
+            )
+            == _ARG_NAME_MISMATCH
+        )
+
+    def test_an_edit_dispatched_under_an_undeclared_name_is_refused(self) -> None:
+        # Refused as UNDECLARED, which is the more specific diagnosis: the
+        # connector never offered an arg by that name at all.
+        assert (
+            self.compose_rejects(
+                self.relocated(arg="totally_made_up_arg", key="priority"), self.edit()
+            )
+            == _UNDECLARED
+        )
+
+    def test_the_identity_rule_is_stated_in_the_prompt(self) -> None:
+        # Or the model burns a call per save learning it by rejection.
+        system = WriteMappingPrompt.SYSTEM
+
+        assert "IDENTICAL" in system
+        assert "arg == key" in system
+
+
+class TestAnEditMayNotFillARecordKey(WriteMappingFixtureMixin):
+    """The rule that makes ``scope_args == required`` sound.
+
+    ``required`` used to have the payload args subtracted from it, which had two
+    failures. A five-required op with one edited column left FOUR scope args and
+    passed the cap. And an answer that bound every required key as an edit left
+    the remainder EMPTY while still reporting ``bounded=True`` — a write with no
+    record-addressing argument at all, dispatched as ``{'issue_id': 'low'}``
+    where ``low`` was the cell value the user had just typed.
+    """
+
+    def send_class_op(self) -> WriteOpCandidate:
+        """A send/create-class op: every required arg IS the content."""
+
+        return self.op(
+            properties=("to", "cc", "subject", "body"),
+            required=("to", "subject", "body"),
+        )
+
+    def mail_edit(self) -> SurfaceRowEdit:
+        return SurfaceRowEdit(
+            row_key="m-1041",
+            title="Re: renewal",
+            row={
+                "to": "jordan@acme.example",
+                "cc": "",
+                "subject": "Re: renewal",
+                "body": "…model-authored prose…",
+            },
+            changes=(RowFieldChange(field="subject", old="Re: renewal", new="Re: x"),),
+        )
+
+    def test_the_worked_exploit_is_refused_before_anything_stages(self) -> None:
+        # The user edits ``subject`` on a drafted reply. ``send_reply`` requires
+        # [to, subject, body], so under the old rule ``subject`` became payload
+        # and ``to`` + the whole model-authored ``body`` rode along as "scope"
+        # with a one-line diff naming neither.
+        answer = WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="subject", source=ArgSourceKind.EDITED, key="subject"),
+                ArgBinding(arg="to", source=ArgSourceKind.ROW, key="to"),
+                ArgBinding(arg="body", source=ArgSourceKind.ROW, key="body"),
+            ),
+        )
+
+        with pytest.raises(WriteMappingRejected) as caught:
+            RowWriteComposer.compose(
+                answer=answer,
+                candidate=self.send_class_op(),
+                edits=(self.mail_edit(),),
+            )
+
+        assert caught.value.safe_message == _EDIT_INTO_KEY
+
+    def test_an_edit_that_captures_the_only_scoping_slot_is_refused(self) -> None:
+        # The extreme form: the ONLY required arg is filled from an edited cell,
+        # so ``required - payload`` was empty and ``bounded`` was still True.
+        narrow = self.op(properties=("id", "priority"), required=("id",))
+        captured = WriteMappingAnswer(
+            op=_OP,
+            args=(ArgBinding(arg="id", source=ArgSourceKind.EDITED, key="id"),),
+        )
+        edit = SurfaceRowEdit(
+            row_key="ISS-1",
+            title="Ship the thing",
+            row={"id": "ISS-1"},
+            changes=(RowFieldChange(field="id", old="ISS-1", new="low"),),
+        )
+
+        with pytest.raises(WriteMappingRejected) as caught:
+            RowWriteComposer.compose(answer=captured, candidate=narrow, edits=(edit,))
+
+        assert caught.value.safe_message == _EDIT_INTO_KEY
+
+
+class TestTheOpIsBoundedBeforeAnyRowComposes(WriteMappingFixtureMixin):
+    """Rule 0 — a refusal about the OP must not depend on the ANSWER's shape.
+
+    ``bounded`` was only ever read inside the ``ROW``-binding branch, so an op
+    the module had just declared unusable staged cleanly whenever the model
+    happened to emit no ROW binding at all.
+    """
+
+    def unbounded(self) -> WriteOpCandidate:
+        """A schema with properties and NO ``required`` key whatsoever."""
+
+        return WriteOpCandidate(
+            name=_OP,
+            input_schema={
+                "properties": {
+                    key: {"type": "string"}
+                    for key in ("id", "priority", "title", "blocked")
+                }
+            },
+        )
+
+    def all_edited_answer(self) -> WriteMappingAnswer:
+        return WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="title", source=ArgSourceKind.EDITED, key="title"),
+                ArgBinding(arg="blocked", source=ArgSourceKind.EDITED, key="blocked"),
+            ),
+        )
+
+    def test_an_answer_with_no_row_binding_no_longer_slips_past(self) -> None:
+        assert (
+            self.compose_rejects(
+                self.all_edited_answer(), self.edit(), candidate=self.unbounded()
+            )
+            == _UNBOUNDED
+        )
+
+    def test_scope_is_unbounded_for_that_op_whatever_the_answer(self) -> None:
+        assert WriteArgScope.for_op(candidate=self.unbounded()).bounded is False
+
+
+class TestTheRecordIsActuallyAddressed(WriteMappingFixtureMixin):
+    """Rule 6 — a partial answer must not stage a write addressed at nothing.
+
+    ``bounded`` says the op DECLARED which args find a record. This says the
+    composed row carries them. Without it an answer that binds the edits and
+    simply omits the id stages a write a connector may well read as a create.
+    """
+
+    def test_an_answer_omitting_the_required_key_is_refused(self) -> None:
+        no_id = WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="title", source=ArgSourceKind.EDITED, key="title"),
+                ArgBinding(arg="blocked", source=ArgSourceKind.EDITED, key="blocked"),
+            ),
+        )
+
+        assert self.compose_rejects(no_id, self.edit()) == _MISSING_RECORD_KEY
+
+
+class TestOneSourceOneBinding(WriteMappingFixtureMixin):
+    """The mirror of ``_args_are_distinct``: two args may not read one field."""
+
+    def test_two_bindings_reading_the_same_key_are_unrepresentable(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            WriteMappingAnswer(
+                op=_OP,
+                args=(
+                    ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+                    ArgBinding(arg="team", source=ArgSourceKind.ROW, key="id"),
+                ),
+            )
+
+        assert "reads one field twice" in str(caught.value)
+
+
+class TestProvenanceAdmitsOnlyWhatABindingCanReach(WriteMappingFixtureMixin):
+    """The row half of ``allowed`` is TOP-LEVEL, matching the ROW binding's reach.
+
+    A ROW binding may only read ``edit.row[arg]`` for a declared, required
+    ``arg`` — a top-level lookup — so walking the row to any depth admitted
+    values no binding could ever compose, and weakened the audit for nothing.
+    """
+
+    def nested_edit(self) -> SurfaceRowEdit:
+        return SurfaceRowEdit(
+            row_key="ISS-1",
+            title="Ship the thing",
+            row={"id": "ISS-1", "meta": {"token": "sk-live-xyz"}},
+            changes=(RowFieldChange(field="priority", old=1, new=2),),
+        )
+
+    def test_a_nested_leaf_is_no_longer_admissible(self) -> None:
+        audit = ArgProvenanceAudit.for_edit(self.nested_edit())
+
+        assert audit.offending_arg({"id": "sk-live-xyz"}) == "id"
+
+    def test_the_top_level_value_that_holds_it_still_is(self) -> None:
+        audit = ArgProvenanceAudit.for_edit(self.nested_edit())
+
+        assert audit.offending_arg({"meta": {"token": "sk-live-xyz"}}) is None
+
+
+class TestTheConnectorsProseCannotBeUnbounded(WriteMappingFixtureMixin):
+    """``description`` is interpolated verbatim into the mapping prompt.
+
+    It is the one member of a descriptor a hostile or compromised MCP server
+    writes freely, so an uncapped field is an unbounded attacker-authored string
+    on a prompt. The cap does NOT close the residual — such a server can still
+    describe a destructive op attractively and steer which op is picked — and
+    that is bounded by port narrowing and by the user reading every outbound arg
+    at the gate, not by anything in this field.
+    """
+
+    def test_an_over_long_description_is_refused_at_the_contract(self) -> None:
+        with pytest.raises(ValidationError):
+            WriteOpCandidate(name=_OP, description="x" * 2001)
+
+    def test_the_prompt_carries_the_description_verbatim(self) -> None:
+        rendered = WriteMappingPrompt.user(
+            connector="linear",
+            read_op="list_issues",
+            candidates=(WriteOpCandidate(name=_OP, description="Update one issue."),),
+            edited_columns=("priority",),
+            row_fields=("id",),
+        )
+
+        assert (
+            "Update one issue."
+            in json.loads(rendered)["candidate_write_operations"][0]["description"]
+        )

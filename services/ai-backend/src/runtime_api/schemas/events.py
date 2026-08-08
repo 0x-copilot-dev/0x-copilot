@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import ClassVar, Literal
 from uuid import uuid4
 
@@ -54,6 +55,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ViewTier,
     WorkLedgerVocabulary,
 )
+from agent_runtime.surfaces_v2.rowset import ArgOrigin
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -68,6 +70,11 @@ from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayloa
 # row titles, change field names / string values). Rendered UI text is treated
 # as plain, length-capped strings; the domain validator caps the source too.
 _ROWSET_TEXT_MAX = 200
+
+# The three ``StagedArg.origin`` values, validated as SHAPE (the string is one
+# of three) rather than cast. Derived from the domain enum so the projection
+# cannot drift from what the staging lane emits.
+_STAGED_ARG_ORIGINS = frozenset(item.value for item in ArgOrigin)
 
 # Host-folder grant ask — mirrors the producer's own bounds on
 # ``WorkspaceGrantRequest`` (capabilities/desktop/workspace_grant.py) so the
@@ -1950,7 +1957,50 @@ class RuntimeEventPresentationProjector:
                 for change in (cls._row_change(raw) for raw in changes)
                 if change is not None
             ]
+        sends = value.get(_LedgerKeys.Field.SENDS)
+        if isinstance(sends, (list, tuple)):
+            row[_LedgerKeys.Field.SENDS] = cls._staged_args(sends)
         return row
+
+    @classmethod
+    def _staged_args(cls, values: Sequence[object]) -> list[JsonObject]:
+        """Rebuild ``sends`` — the row's account of what it will send.
+
+        Whole or nothing. Every other member of this projection drops the
+        entries it cannot parse, which is right for a display diff and wrong
+        here: a partial account under-discloses an arg that still dispatches,
+        so an unparseable member empties the list and the client's own
+        fail-closed arm renders the row undecidable.
+        """
+
+        parsed: list[JsonObject] = []
+        for raw in values:
+            item = cls._staged_arg(raw)
+            if item is None:
+                return []
+            parsed.append(item)
+        return parsed
+
+    @classmethod
+    def _staged_arg(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{arg, origin, column, old, new}`` outbound-arg entry."""
+
+        if not isinstance(value, dict):
+            return None
+        arg = cls._text(value.get(_LedgerKeys.Field.ARG))
+        origin = cls._text(value.get(_LedgerKeys.Field.ORIGIN))
+        if arg is None or origin not in _STAGED_ARG_ORIGINS:
+            return None
+        column = value.get(_LedgerKeys.Field.COLUMN)
+        return {
+            _LedgerKeys.Field.ARG: arg[:_ROWSET_TEXT_MAX],
+            _LedgerKeys.Field.ORIGIN: origin,
+            _LedgerKeys.Field.COLUMN: (
+                column[:_ROWSET_TEXT_MAX] if isinstance(column, str) else None
+            ),
+            _LedgerKeys.Field.OLD: value.get(_LedgerKeys.Field.OLD),
+            _LedgerKeys.Field.NEW: value.get(_LedgerKeys.Field.NEW),
+        }
 
     @classmethod
     def _row_change(cls, value: object) -> JsonObject | None:

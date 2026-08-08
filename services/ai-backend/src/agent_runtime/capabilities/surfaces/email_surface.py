@@ -51,11 +51,20 @@ That is the same direction of travel the write lane takes (the model maps
 *fields*, never values): the vocabulary translation happens once, in the
 runtime, over the connector's own keys.
 
-**No value is invented.** A field the payload does not carry becomes the empty
-string, which the composer draws as an empty row. A ``Cc`` the user never saw is
-precisely the failure this surface must not have, so ``cc`` is read only from a
-cc-named key and is never back-filled from recipients, reply-to, or anything
-else.
+**No value is invented, and no value is HIDDEN.** A field the payload does not
+carry becomes the empty string, which the composer draws as an empty row. A
+``Cc`` the user never saw is precisely the failure this surface must not have,
+so ``cc`` is read only from a cc-named key and is never back-filled from
+recipients, reply-to, or anything else.
+
+The mirror of that rule is why the recipient reader REFUSES rather than
+summarises. This is the only screen on which a person reviews who a message is
+addressed to, and it is also a value source for the write lane — ``to`` is
+sourced from the row as rendered — so a recipient that does not survive onto the
+surface is a recipient that is both unreviewable and, if it does survive as a
+``+N more`` summary, undeliverable-as-shown. A draft this module cannot render
+whole gets no composer at all: a slot value that is present and unrenderable
+fails the match, including ``cc``.
 """
 
 from __future__ import annotations
@@ -92,6 +101,27 @@ class EmailDraftMatch:
     state: dict[str, str]
     spec: SurfaceSpec
     id_basis: object
+
+
+@dataclass(frozen=True)
+class _RecipientRead:
+    """One recipient slot as read: the text, or a REFUSAL to render it.
+
+    The two are not the same absence and collapsing them is the bug this type
+    exists to prevent. ``text=None`` means the document carried no recipient
+    under that name, which is ordinary for ``Cc``. ``refused=True`` means a
+    value WAS there and could not be shown whole — more addresses than the row
+    can hold, an object with no parseable address, a string carrying the
+    separator. A refusal must fail the match; only a genuine absence may become
+    the empty string.
+    """
+
+    text: str | None = None
+    refused: bool = False
+
+    @classmethod
+    def refusal(cls) -> "_RecipientRead":
+        return cls(refused=True)
 
 
 class _Alias:
@@ -166,13 +196,18 @@ class EmailDraftSurface:
         {"draft", "email", "message", "reply", "compose", "composed"}
     )
 
-    #: How many recipients are joined into the composer's single-line To/Cc row
-    #: before the rest are summarised. A list-valued recipients field is common
-    #: and unbounded; the composer row is one line.
+    #: How many recipients may be joined into the composer's single-line To/Cc
+    #: row. A REFUSAL threshold, not a truncation point: a list longer than this
+    #: fails the match, because the alternative is a ``+N more`` summary that
+    #: hides recipients from the only screen they are reviewed on — and that the
+    #: write lane would then dispatch verbatim as the To value.
     _MAX_RECIPIENTS: Final[int] = 8
 
     _NON_ALNUM: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9]+")
     _RECIPIENT_SEPARATOR: Final[str] = ", "
+    #: The character whose presence inside one address would make that address
+    #: read as two. Never admissible in a recipient.
+    _SEPARATOR_CHAR: Final[str] = ","
 
     # -- entry point ---------------------------------------------------------
 
@@ -262,19 +297,43 @@ class EmailDraftSurface:
         non-empty text. ``cc`` is optional and defaults to the empty string —
         it is the one slot that must never be inferred from anything but a
         cc-named key.
+
+        A recipient slot that is PRESENT and unrenderable fails the whole match,
+        including ``cc``. Defaulting a refused ``cc`` to ``""`` would be the
+        exact failure this surface exists to not have: a recipient the user
+        never saw on the one screen where recipients are reviewed.
         """
 
-        to = cls._first(document, _Alias.TO)
+        to = cls._recipient_slot(document, _Alias.TO)
+        cc = cls._recipient_slot(document, _Alias.CC)
+        if to.refused or cc.refused:
+            return None
         subject = cls._first(document, _Alias.SUBJECT)
         body = cls._first(document, _Alias.BODY)
-        if not to or not subject or not body:
+        if not to.text or not subject or not body:
             return None
         return {
-            _StateKey.TO: to,
-            _StateKey.CC: cls._first(document, _Alias.CC) or "",
+            _StateKey.TO: to.text,
+            _StateKey.CC: cc.text or "",
             _StateKey.SUBJECT: subject,
             _StateKey.BODY: body,
         }
+
+    @classmethod
+    def _recipient_slot(
+        cls, document: Mapping[str, object], aliases: frozenset[str]
+    ) -> _RecipientRead:
+        """Read one recipient slot, refusing rather than summarising."""
+
+        for key, value in document.items():
+            if not isinstance(key, str):
+                continue
+            if cls._normalized(key) not in aliases:
+                continue
+            read = cls._recipients(value)
+            if read.refused or read.text:
+                return read
+        return _RecipientRead()
 
     @classmethod
     def _first(
@@ -301,28 +360,91 @@ class EmailDraftSurface:
 
     @classmethod
     def _as_text(cls, value: object) -> str | None:
-        """Flatten a slot value to the single string the composer row draws.
+        """The TEXT slots (subject, body) as the single string the row draws.
 
-        Handles the three shapes a mail payload uses for a recipient: a bare
-        string, a list of them, and the ``{"name": …, "email": …}`` object form.
-        Anything else (a number, a nested document, ``None``) is not a slot
-        value and answers ``None``, which fails the match rather than printing
-        a repr into a To row.
+        Text only. It used to fall through to the recipient flatteners for a
+        mapping or a list, which was never meaningful for a subject or a body —
+        those two are the only slots that still reach here, since the recipient
+        slots read through :meth:`_recipients` — and it let a summary string
+        become a slot value. Anything that is not non-empty text answers
+        ``None``, which fails the match rather than printing a repr into the
+        composer.
+        """
+
+        return value.strip() or None if isinstance(value, str) else None
+
+    @classmethod
+    def _recipients(cls, value: object) -> _RecipientRead:
+        """Flatten one recipient slot value, or REFUSE to render it.
+
+        Three shapes are readable: a bare address string, a list of them, and
+        the ``{"name": …, "email": …}`` object form. Everything else — a number,
+        a nested document, an object with no parseable address — is a refusal,
+        not a ``None`` that lets an empty ``Cc`` stand in for a value that was
+        actually there.
+
+        **Nothing here summarises.** A list longer than
+        :attr:`_MAX_RECIPIENTS` used to render as ``r0…, r7… +4 more``, which is
+        two separate failures at once: four recipients were absent from the only
+        screen a human reviews them on, and — because ``to`` is a scope arg a
+        write sources from ``edit.row['to']`` — that literal summary string was
+        what a save would DISPATCH. Neither the real recipient set nor anything
+        the user could have typed. The cap is now a refusal threshold, the same
+        posture ``WriteOpSchemaDigest`` takes wherever truncating changes
+        meaning. The composer simply does not open over a draft it cannot show
+        whole; the durable fix is a list-valued ``EmailState`` the renderer can
+        elide with an expandable control, and that is a renderer change.
+
+        **The separator is not admissible inside an address.** ``_addresses_of``
+        joins with ``", "``, so a connector- or model-authored display name
+        containing a comma injected an extra recipient into a single To value.
+        Any recipient text carrying the separator character is refused.
         """
 
         if isinstance(value, str):
-            return value.strip() or None
+            text = value.strip()
+            if not text:
+                return _RecipientRead()
+            if cls._SEPARATOR_CHAR in text:
+                return _RecipientRead.refusal()
+            return _RecipientRead(text=text)
         if isinstance(value, Mapping):
-            return cls._address_of(value)
+            address = cls._address_of(value)
+            if address is None or cls._SEPARATOR_CHAR in address:
+                return _RecipientRead.refusal()
+            return _RecipientRead(text=address)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            return cls._addresses_of(value)
-        return None
+            return cls._recipient_list(value)
+        return _RecipientRead.refusal()
+
+    @classmethod
+    def _recipient_list(cls, values: Sequence[object]) -> _RecipientRead:
+        """A recipient list as one comma-joined row, or a refusal. Never a summary."""
+
+        if len(values) > cls._MAX_RECIPIENTS:
+            return _RecipientRead.refusal()
+        parts: list[str] = []
+        for item in values:
+            read = cls._recipients(item)
+            if read.refused:
+                return _RecipientRead.refusal()
+            if read.text:
+                parts.append(read.text)
+        if not parts:
+            return _RecipientRead()
+        return _RecipientRead(text=cls._RECIPIENT_SEPARATOR.join(parts))
 
     @classmethod
     def _address_of(cls, value: Mapping[str, object]) -> str | None:
-        """One recipient object as text: its address, else its display name."""
+        """One recipient object as text: its ADDRESS, and nothing else.
 
-        for key in ("email", "address", "emailaddress", "name", "displayname"):
+        The display-name fallback is gone. A slot that is not a parseable
+        address should fail the match rather than become one — a ``name`` is not
+        a recipient, and letting it stand in put connector-authored prose into a
+        field the write lane then dispatches as a To.
+        """
+
+        for key in ("email", "address", "emailaddress"):
             for raw_key, raw_value in value.items():
                 if not isinstance(raw_key, str):
                     continue
@@ -331,27 +453,6 @@ class EmailDraftSurface:
                 if isinstance(raw_value, str) and raw_value.strip():
                     return raw_value.strip()
         return None
-
-    @classmethod
-    def _addresses_of(cls, values: Sequence[object]) -> str | None:
-        """A recipient list as one comma-joined row, capped and then counted.
-
-        The cap is not cosmetic. The composer's To row is a single line and the
-        list is connector-supplied, so an unbounded join is an unbounded string
-        on a surface whose Send button must stay reachable — the same shrink
-        rule the write-gate header carries, applied at the producer.
-        """
-
-        parts = [text for text in (cls._as_text(item) for item in values) if text]
-        if not parts:
-            return None
-        if len(parts) <= cls._MAX_RECIPIENTS:
-            return cls._RECIPIENT_SEPARATOR.join(parts)
-        shown = parts[: cls._MAX_RECIPIENTS]
-        return (
-            f"{cls._RECIPIENT_SEPARATOR.join(shown)}"
-            f" +{len(parts) - cls._MAX_RECIPIENTS} more"
-        )
 
     @classmethod
     def _normalized(cls, key: str) -> str:

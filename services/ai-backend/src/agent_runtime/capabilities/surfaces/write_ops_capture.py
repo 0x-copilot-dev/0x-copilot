@@ -116,7 +116,20 @@ class WriteOpCandidate(RuntimeContract):
     """
 
     name: str = Field(min_length=1, max_length=_Limits.NAME_MAX)
-    description: str = ""
+    #: Capped on the CONTRACT, not only where this module builds one. The
+    #: description is interpolated verbatim into the mapping model's user prompt
+    #: (``WriteMappingPrompt.user``) and is the one member of a descriptor a
+    #: hostile or compromised MCP server writes freely, so an uncapped field was
+    #: an unbounded attacker-authored string on a prompt. The cap here is the
+    #: outer bound for any construction site; :attr:`_Limits.DESCRIPTION_MAX` is
+    #: the tighter one this module's own capture applies.
+    #:
+    #: The residual is stated honestly and is NOT closed by the cap: a
+    #: compromised server can still describe a destructive op attractively and
+    #: steer WHICH op the model picks. The bounds on that are
+    #: ``ConnectorWriteOpsPort`` narrowing and the fact that the user now reads
+    #: every outbound arg at the gate — not anything in this field.
+    description: str = Field(default="", max_length=2000)
     input_schema: JsonObject = Field(default_factory=dict)
 
 

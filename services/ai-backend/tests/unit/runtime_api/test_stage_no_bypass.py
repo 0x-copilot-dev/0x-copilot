@@ -338,12 +338,14 @@ class _RowsetHarness:
     def __init__(self) -> None:
         from agent_runtime.surfaces_v2.rowset import (  # noqa: PLC0415
             AgentHold,
+            ProposedRow,
             RowFieldChange,
-            StagedRow,
+            StagedRowAccounting,
         )
 
         self._AgentHold = AgentHold
-        self._StagedRow = StagedRow
+        self._ProposedRow = ProposedRow
+        self._Accounting = StagedRowAccounting
         self._RowFieldChange = RowFieldChange
         self.store = InMemoryRuntimeApiStore()
         self.queue_calls: list[dict] = []
@@ -390,11 +392,13 @@ class _RowsetHarness:
 
     async def stage(self, *, n: int, held: set[str]):
         rows = tuple(
-            self._StagedRow(
-                row_key=f"row{i}",
-                title=f"Issue {i}",
-                target_args={"id": f"row{i}"},
-                changes=(self._RowFieldChange(field="p", old=1, new=2),),
+            self._Accounting.for_proposed(
+                self._ProposedRow(
+                    row_key=f"row{i}",
+                    title=f"Issue {i}",
+                    target_args={"id": f"row{i}", "p": 2},
+                    changes=(self._RowFieldChange(field="p", old=1, new=2),),
+                )
             )
             for i in range(n)
         )

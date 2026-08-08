@@ -23,7 +23,13 @@ from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitRequest,
 )
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
-from agent_runtime.surfaces_v2.rowset import AgentHold, RowFieldChange, StagedRow
+from agent_runtime.surfaces_v2.rowset import (
+    AgentHold,
+    ProposedRow,
+    RowFieldChange,
+    StagedRow,
+    StagedRowAccounting,
+)
 from agent_runtime.surfaces_v2.staging import (
     StagedWriteFold,
     StagedWriteStatus,
@@ -94,12 +100,16 @@ class _DispatcherFactory:
 
 
 def _rows(n: int) -> tuple[StagedRow, ...]:
+    """Fully-accounted rows: every change is an arg, every arg is disclosed."""
+
     return tuple(
-        StagedRow(
-            row_key=f"row{i}",
-            title=f"Issue {i}",
-            target_args={"id": f"row{i}", "priority": i + 2},
-            changes=(RowFieldChange(field="priority", old=1, new=i + 2),),
+        StagedRowAccounting.for_proposed(
+            ProposedRow(
+                row_key=f"row{i}",
+                title=f"Issue {i}",
+                target_args={"id": f"row{i}", "priority": i + 2},
+                changes=(RowFieldChange(field="priority", old=1, new=i + 2),),
+            )
         )
         for i in range(n)
     )

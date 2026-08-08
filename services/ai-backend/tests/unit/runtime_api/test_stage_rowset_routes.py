@@ -17,7 +17,12 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.stage_ledger import RuntimeStageLedger
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.settings import RuntimeSettings
-from agent_runtime.surfaces_v2.rowset import AgentHold, RowFieldChange, StagedRow
+from agent_runtime.surfaces_v2.rowset import (
+    AgentHold,
+    ProposedRow,
+    RowFieldChange,
+    StagedRowAccounting,
+)
 from agent_runtime.surfaces_v2.staging import WriteStager
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -108,11 +113,13 @@ async def _stage_rowset(store, ports, holds) -> str:  # noqa: ANN001
         rollout_gate=legacy_staged_write_gate(),
     )
     rows = tuple(
-        StagedRow(
-            row_key=f"row{i}",
-            title=f"Issue {i}",
-            target_args={"id": f"row{i}", "priority": 2},
-            changes=(RowFieldChange(field="priority", old=1, new=2),),
+        StagedRowAccounting.for_proposed(
+            ProposedRow(
+                row_key=f"row{i}",
+                title=f"Issue {i}",
+                target_args={"id": f"row{i}", "priority": 2},
+                changes=(RowFieldChange(field="priority", old=1, new=2),),
+            )
         )
         for i in range(3)
     )

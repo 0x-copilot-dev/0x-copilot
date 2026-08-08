@@ -41,7 +41,32 @@ author, and the values they typed are the ones they are approving.
 That client-supplied ``row`` is a value source and never an *authorisation* to
 send a field: :class:`~.write_mapping.WriteArgScope` confines the composed args
 to the columns the diff shows plus the keys the CONNECTOR's own op schema
-requires, so padding ``row`` with extra fields widens nothing.
+requires.
+
+**"Padding ``row`` widens nothing" needed a stronger argument than it had.** The
+old claim was true of the arg NAME set and false of the value: a ``ROW`` binding
+could name a declared scope arg and fill it from ANY field of the posted row, so
+``issue_id ← row['parent_id']`` addressed a different record and
+``cc ← row['secret_recipient']`` sent a recipient the surface never rendered.
+Three things now hold it up, and none of them is a snapshot read on the save
+path:
+
+* a ``ROW`` binding is IDENTITY-mapped — it may only read ``edit.row[arg]`` for
+  an ``arg`` the connector declared required — so a padded field is unreachable
+  by name, not merely unusual;
+* :class:`~.write_mapping.ArgProvenanceAudit` admits only TOP-LEVEL row values,
+  matching what a binding can reach rather than walking to any depth; and
+* every composed arg, carried ones included, appears in ``StagedRow.sends`` and
+  is read at the approval gate — so a value taken from the row is displayed as
+  ``issue_id: PAR-1 (sending unchanged)`` rather than riding along invisibly.
+
+The audit's own remediation was to resolve the row from the server-held surface
+snapshot instead. That is deliberately NOT built: ``SurfaceSnapshot`` carries a
+``payload_ref`` and no hydrated content, so it would mean a blob read on the save
+path plus a new equality semantics for "the row as rendered" that nothing
+defines — to defend against a client that lies about its own record id, when the
+client here is the user, who is the author and not the adversary. Revisit it only
+if the threat model ever admits a hostile client.
 """
 
 from __future__ import annotations

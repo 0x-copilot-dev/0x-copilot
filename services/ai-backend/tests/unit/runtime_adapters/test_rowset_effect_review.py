@@ -34,6 +34,22 @@ _PAYLOAD = {
             "title": "Acme renewal",
             "target_args": {"id": "row-a", "priority": 2},
             "changes": [{"field": "priority", "old": 1, "new": 2}],
+            "sends": [
+                {
+                    "arg": "id",
+                    "origin": "proposed",
+                    "column": None,
+                    "old": None,
+                    "new": "row-a",
+                },
+                {
+                    "arg": "priority",
+                    "origin": "proposed",
+                    "column": "priority",
+                    "old": 1,
+                    "new": 2,
+                },
+            ],
         }
     ],
     "agent_holds": [],

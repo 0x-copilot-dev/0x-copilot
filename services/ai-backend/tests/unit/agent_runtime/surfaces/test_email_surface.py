@@ -191,11 +191,11 @@ class TestEmailDraftRecognition:
         assert match is not None
         assert match.state["cc"] == ""
 
-    def test_reads_a_recipient_object_and_caps_a_long_list(self) -> None:
+    def test_reads_a_recipient_object_by_its_address(self) -> None:
         match = EmailDraftSurface.match(
             {
                 "to": [{"name": "Jordan", "email": "jordan@acme.example"}],
-                "cc": [f"user{index}@acme.example" for index in range(12)],
+                "cc": [f"user{index}@acme.example" for index in range(8)],
                 "subject": "s",
                 "body": "b",
             }
@@ -203,8 +203,73 @@ class TestEmailDraftRecognition:
 
         assert match is not None
         assert match.state["to"] == "jordan@acme.example"
-        assert match.state["cc"].endswith("+4 more")
         assert match.state["cc"].count("@") == 8
+
+    def test_a_list_longer_than_the_cap_refuses_rather_than_summarising(self) -> None:
+        # It used to render ``user0@…, … user7@… +4 more``: four recipients
+        # absent from the ONE screen a human reviews them on, and — because the
+        # write lane sources ``cc`` from the row as rendered — that literal
+        # summary string was what a save would DISPATCH. Neither the real
+        # recipient set nor anything the user could have typed. No composer at
+        # all is the honest answer.
+        match = EmailDraftSurface.match(
+            {
+                "to": "jordan@acme.example",
+                "cc": [f"user{index}@acme.example" for index in range(12)],
+                "subject": "s",
+                "body": "b",
+            }
+        )
+
+        assert match is None
+
+    def test_a_display_name_never_stands_in_for_an_address(self) -> None:
+        # A ``name`` is not a recipient. Letting it stand in put connector-
+        # authored prose into a field the write lane dispatches as a To.
+        match = EmailDraftSurface.match(
+            {
+                "to": [{"name": "Jordan Reyes"}],
+                "subject": "s",
+                "body": "b",
+            }
+        )
+
+        assert match is None
+
+    def test_a_recipient_carrying_the_separator_is_refused(self) -> None:
+        # ``_addresses_of`` joins with ", ", so a display name containing a
+        # comma injected a second address into one To value — and the composer
+        # would have rendered and dispatched both.
+        match = EmailDraftSurface.match(
+            {
+                "to": [
+                    {
+                        "name": (
+                            "Jordan Reyes <jordan@acme.example>, mallory@evil.example"
+                        )
+                    }
+                ],
+                "subject": "s",
+                "body": "b",
+            }
+        )
+
+        assert match is None
+
+    def test_a_present_but_unreadable_cc_fails_the_match(self) -> None:
+        # The asymmetry that matters: an ABSENT cc is the empty string, a cc
+        # that is there and cannot be shown whole is a refusal. Defaulting the
+        # second to "" is a recipient the user never saw.
+        match = EmailDraftSurface.match(
+            {
+                "to": "jordan@acme.example",
+                "cc": {"team": "legal"},
+                "subject": "s",
+                "body": "b",
+            }
+        )
+
+        assert match is None
 
     def test_the_spec_binds_the_normalised_state(self) -> None:
         """The paths must resolve against the value actually shipped.

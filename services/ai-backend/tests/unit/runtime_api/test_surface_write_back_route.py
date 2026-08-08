@@ -342,24 +342,48 @@ class TestSaveStagesAndStops:
         row = body["rows"][0]
         assert "target_args" not in row
 
-    def test_every_arg_the_write_sends_is_visible_in_the_diff(
+    def test_every_arg_the_write_sends_reaches_the_wire_in_order(
         self, monkeypatch
     ) -> None:
-        """The scoping arg is DISCLOSED, because the diff is all a human sees.
+        """``sends`` is the human-visible half, and it is TOTAL.
 
         ``target_args`` is server-only by design (asserted above), so a value
-        composed into the write and absent from ``changes`` is a value nobody
-        approved. ``id`` is required by the op and was not edited, so it rides
-        as an ``old == new`` row: *also being sent, unchanged*.
+        composed into the write and absent from what the client renders is a
+        value nobody approved. Every arg appears here, keyed by the CONNECTOR's
+        own name, with the origin that says who authored it — the edited cell,
+        and the ``id`` the op requires, riding along unchanged.
         """
 
         bundle = _build(monkeypatch)
 
         body = bundle.client.post(_URL, headers=_headers(), json=_body()).json()
 
+        assert body["rows"][0]["sends"] == [
+            {
+                "arg": "id",
+                "origin": "carried",
+                "column": "id",
+                "old": "ISS-1",
+                "new": "ISS-1",
+            },
+            {
+                "arg": "priority",
+                "origin": "edited",
+                "column": "priority",
+                "old": 1,
+                "new": 3,
+            },
+        ]
+
+    def test_the_users_own_diff_is_carried_verbatim(self, monkeypatch) -> None:
+        # ``changes`` is now a strict subset view of ``sends`` — the cells the
+        # user touched, nothing appended.
+        bundle = _build(monkeypatch)
+
+        body = bundle.client.post(_URL, headers=_headers(), json=_body()).json()
+
         assert body["rows"][0]["changes"] == [
             {"field": "priority", "old": 1, "new": 3},
-            {"field": "id", "old": "ISS-1", "new": "ISS-1"},
         ]
 
     def test_the_staged_write_is_appliable_through_the_apply_route_only(

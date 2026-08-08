@@ -509,6 +509,33 @@ class TestTheCapturedSchemaActuallyBoundsTheWrite:
             ),
         )
 
+    def update_edit(self) -> SurfaceRowEdit:
+        """The same row read through an UPDATE-class op: an id, plus content."""
+
+        return SurfaceRowEdit(
+            row_key="m-1",
+            title="Re: renewal",
+            row={
+                "message_id": "m-1",
+                "to": "jordan@acme.example",
+                "subject": "Re: renewal",
+                "body": "as read",
+            },
+            changes=(RowFieldChange(field="subject", old="Re: renewal", new="Re: x"),),
+        )
+
+    def update_answer(self, *extra: ArgBinding) -> WriteMappingAnswer:
+        return WriteMappingAnswer(
+            op=_WRITE_OP,
+            args=(
+                ArgBinding(arg="subject", source=ArgSourceKind.EDITED, key="subject"),
+                ArgBinding(
+                    arg="message_id", source=ArgSourceKind.ROW, key="message_id"
+                ),
+                *extra,
+            ),
+        )
+
     def captured(self) -> WriteOpCandidate:
         """The op AS CAPTURED — digested, exactly as a save would read it back."""
 
@@ -516,47 +543,88 @@ class TestTheCapturedSchemaActuallyBoundsTheWrite:
             (WriteOpCandidate(name=_WRITE_OP, input_schema=_SEND_SCHEMA),)
         )[0]
 
+    def captured_update(self) -> WriteOpCandidate:
+        """An update-class op: ONE required arg, and it is not content."""
+
+        return CapturedWriteOps.bounded(
+            (
+                WriteOpCandidate(
+                    name=_WRITE_OP,
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string"},
+                            "to": {"type": "string"},
+                            "subject": {"type": "string"},
+                            "body": {"type": "string"},
+                        },
+                        "required": ["message_id"],
+                    },
+                ),
+            )
+        )[0]
+
     def compose(self, answer: WriteMappingAnswer):  # noqa: ANN201
         return RowWriteComposer.compose(
             answer=answer, candidate=self.captured(), edits=(self.edit(),)
         )
 
-    def test_the_digested_required_list_is_what_admits_a_scope_arg(self) -> None:
-        rows = self.compose(self.answer())
+    def test_a_send_class_op_whose_required_set_is_content_is_refused(self) -> None:
+        # THE worked exploit, and the reason this lane narrowed. ``send_reply``
+        # declares ``required = [to, subject, body]``: for a send-class op every
+        # required arg IS the message, so reading ``required`` as "the args that
+        # address a record" dispatched the recipient and the whole body under a
+        # one-line ``subject`` diff. The user edited ``subject``, which is one
+        # of those required args, so the save refuses before anything is staged.
+        with pytest.raises(WriteMappingRejected) as caught:
+            self.compose(self.answer())
 
-        assert rows[0].target_args == {
-            "subject": "Re: x",
-            "to": "jordan@acme.example",
-            "body": "as read",
-        }
+        assert caught.value.safe_message == (
+            "The proposed write would put one of your edits into a field this "
+            "operation uses to find the record. Nothing was staged."
+        )
 
-    def test_every_arg_sent_is_visible_in_the_approved_diff(self) -> None:
-        # ``target_args`` is server-only, so the diff is all a human sees. A
-        # recipient and a message body dispatched with a one-line subject diff
-        # is the failure this disclosure closes.
-        rows = self.compose(self.answer())
+    def test_an_update_class_op_still_dispatches(self) -> None:
+        # The lane is narrowed, not dark: an op whose required set is an id the
+        # user did not edit composes exactly two args.
+        rows = RowWriteComposer.compose(
+            answer=self.update_answer(),
+            candidate=self.captured_update(),
+            edits=(self.update_edit(),),
+        )
 
-        assert {change.field for change in rows[0].changes} == {
-            "subject",
-            "to",
-            "body",
-        }
+        assert rows[0].target_args == {"subject": "Re: x", "message_id": "m-1"}
+
+    def test_every_arg_sent_is_accounted_for_at_the_gate(self) -> None:
+        # ``target_args`` is server-only, so ``sends`` is all a human sees. Every
+        # arg appears, keyed by the CONNECTOR's own name, with its origin.
+        rows = RowWriteComposer.compose(
+            answer=self.update_answer(),
+            candidate=self.captured_update(),
+            edits=(self.update_edit(),),
+        )
+
+        assert [(item.arg, item.origin.value) for item in rows[0].sends] == [
+            ("subject", "edited"),
+            ("message_id", "carried"),
+        ]
+        assert [item.arg for item in rows[0].sends] == list(rows[0].target_args)
 
     def test_an_arg_the_captured_schema_does_not_declare_is_refused(self) -> None:
         # ``thread_id`` is a real field of the row as read, so provenance is
         # satisfied and the row reference resolves — the ONLY thing that can
         # refuse it is the captured schema, which never declared the arg.
-        edit = self.edit()
+        edit = self.update_edit()
         with_thread = edit.model_copy(update={"row": {**edit.row, "thread_id": "t-1"}})
 
         with pytest.raises(WriteMappingRejected) as caught:
             RowWriteComposer.compose(
-                answer=self.answer(
+                answer=self.update_answer(
                     ArgBinding(
                         arg="thread_id", source=ArgSourceKind.ROW, key="thread_id"
                     )
                 ),
-                candidate=self.captured(),
+                candidate=self.captured_update(),
                 edits=(with_thread,),
             )
 

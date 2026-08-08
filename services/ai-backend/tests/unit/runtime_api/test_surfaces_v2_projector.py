@@ -275,3 +275,87 @@ class TestActivityKindAndRedaction:
             payload={"v": 1, "call_id": "c1", "class": "unknown"}, metadata={}
         )
         assert state is not RuntimeEventRedactionState.OFFLOADED
+
+
+class TestStagedRowSendsProjection:
+    """``sends`` is the row's account of what it will dispatch — it must survive.
+
+    ``target_args`` is server-only and ``changes`` is a column-keyed cell diff,
+    so this is the ONLY complete description of the outbound write the client
+    ever receives. Two rules, and they pull in opposite directions from the rest
+    of this projector: unknown keys still drop, but an entry that does not parse
+    empties the WHOLE list rather than being skipped. A partial account
+    under-discloses an arg that still dispatches, and the row would look
+    reviewable.
+    """
+
+    def project(self, rows: list[object]) -> dict:
+        return P.payload_for_event(
+            event_type=RuntimeApiEventType.REVISION_ADDED,
+            payload={
+                "v": 1,
+                "stage_id": "stage_1",
+                "rev": 1,
+                "author": "agent",
+                "diff_ref": "diff://1",
+                "rowset": {"rows": rows},
+            },
+        )
+
+    def row(self, sends: list[object]) -> dict[str, object]:
+        return {
+            "row_key": "PAR-9",
+            "title": "Fix the login redirect",
+            "target_args": {"issue_id": "PAR-9", "priority": "low"},
+            "changes": [{"field": "priority", "old": "high", "new": "low"}],
+            "sends": sends,
+        }
+
+    def test_a_well_formed_account_reaches_the_client(self) -> None:
+        projected = self.project(
+            [
+                self.row(
+                    [
+                        {
+                            "arg": "issue_id",
+                            "origin": "carried",
+                            "column": "issue_id",
+                            "old": "PAR-9",
+                            "new": "PAR-9",
+                            "secret": "leak",
+                        }
+                    ]
+                )
+            ]
+        )
+
+        assert projected["rowset"]["rows"][0]["sends"] == [
+            {
+                "arg": "issue_id",
+                "origin": "carried",
+                "column": "issue_id",
+                "old": "PAR-9",
+                "new": "PAR-9",
+            }
+        ]
+
+    def test_an_unknown_origin_empties_the_whole_account(self) -> None:
+        projected = self.project(
+            [self.row([{"arg": "issue_id", "origin": "invented", "new": "PAR-9"}])]
+        )
+
+        assert projected["rowset"]["rows"][0]["sends"] == []
+
+    def test_one_unparseable_entry_empties_the_others_with_it(self) -> None:
+        projected = self.project(
+            [
+                self.row(
+                    [
+                        {"arg": "issue_id", "origin": "carried", "new": "PAR-9"},
+                        "not-an-object",
+                    ]
+                )
+            ]
+        )
+
+        assert projected["rowset"]["rows"][0]["sends"] == []
