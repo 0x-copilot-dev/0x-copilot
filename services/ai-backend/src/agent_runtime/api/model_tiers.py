@@ -125,7 +125,7 @@ class ModelSizeTierResolver:
     }
     #: Gateways resell other vendors' lines rather than shipping their own, so
     #: their ladder is the union of every known main line, ranked by cost.
-    GATEWAY_PROVIDERS: Final[frozenset[str]] = frozenset({"openrouter"})
+    GATEWAY_PROVIDERS: Final[frozenset[str]] = frozenset({"openrouter", "virtuals"})
     TIER_ORDER: Final[tuple[ModelTier, ...]] = ("small", "medium", "big")
 
     @classmethod

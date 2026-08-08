@@ -160,6 +160,11 @@ class _EnvFields:
     # OpenRouter (OpenAI-wire-compatible gateway) deployment fallback key.
     # Per-user BYOK keys are the primary path and take precedence.
     OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
+    # Virtuals compute (second OpenAI-wire gateway). DEV-ONLY convenience so
+    # `make dev` and the test suites can reach it without a keychain entry —
+    # the product path is a per-user BYOK key, which takes precedence. Named
+    # for the variable the key ships under.
+    VIRTUALS_ACP_KEY = "VIRTUALS_ACP_KEY"
     DEFAULT_REASONING_ENABLED = "RUNTIME_DEFAULT_REASONING_ENABLED"
     DEFAULT_REASONING_EFFORT = "RUNTIME_DEFAULT_REASONING_EFFORT"
     DEFAULT_REASONING_SUMMARY = "RUNTIME_DEFAULT_REASONING_SUMMARY"
@@ -469,6 +474,7 @@ class RuntimeSettings(BaseSettings):
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
     openrouter: ProviderSettings = Field(default_factory=ProviderSettings)
+    virtuals: ProviderSettings = Field(default_factory=ProviderSettings)
 
     @model_validator(mode="after")
     def _local_release_control_is_never_production(
@@ -545,6 +551,8 @@ class RuntimeSettings(BaseSettings):
             return self.gemini
         if provider == "openrouter":
             return self.openrouter
+        if provider == "virtuals":
+            return self.virtuals
         # Keyless local runtime (Ollama): no env credential. Return an empty
         # ProviderSettings so the credential gate's keyless branch handles it
         # rather than raising here.
@@ -575,6 +583,9 @@ class RuntimeSettings(BaseSettings):
             # it must NOT read OPENAI_API_KEY); exporting it here lets that
             # code read the deployment key from the environment.
             _EnvFields.OPENROUTER_API_KEY: settings.openrouter,
+            # Same rationale as OpenRouter: base_url is compute.virtuals.io,
+            # so the client must NOT fall back to OPENAI_API_KEY.
+            _EnvFields.VIRTUALS_ACP_KEY: settings.virtuals,
         }
         for key, provider in mapping.items():
             if provider.api_key is not None:
@@ -885,6 +896,7 @@ class RuntimeSettings(BaseSettings):
             anthropic=ProviderSettings(api_key=_o(v, E.ANTHROPIC_API_KEY)),
             gemini=ProviderSettings(api_key=_o(v, E.GOOGLE_API_KEY)),
             openrouter=ProviderSettings(api_key=_o(v, E.OPENROUTER_API_KEY)),
+            virtuals=ProviderSettings(api_key=_o(v, E.VIRTUALS_ACP_KEY)),
         )
 
     @classmethod

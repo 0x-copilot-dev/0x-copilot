@@ -7,11 +7,14 @@ model_provider="openai")``) with a **fixed** ``base_url`` and the OpenAI
 **Responses API disabled** — these gateways implement only
 ``/chat/completions``.
 
-Today the registry holds **OpenRouter** (BYOK gateway to 300+ models via
-``vendor/model`` slugs). Round 2 adds a local runtime entry (Ollama at
+The registry holds **OpenRouter** (BYOK gateway to 300+ models via
+``vendor/model`` slugs), a local runtime entry (Ollama at
 ``http://localhost:11434/v1``) — the download/VRAM UI is new, but the
 *execution* path is this same row, so a local model is just another
-model to the harness.
+model to the harness — and **Virtuals** compute
+(``https://compute.virtuals.io/v1``), a second multi-vendor gateway whose
+slugs are dash-joined (``moonshotai-kimi-k3``) rather than
+``vendor/model``.
 
 Why a registry rather than an ``if provider == "openrouter"`` branch:
 OpenRouter and a local Ollama server differ only in
@@ -112,6 +115,7 @@ class OpenAICompatibleProviders:
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     OLLAMA_BASE_URL = "http://localhost:11434/v1"
+    VIRTUALS_BASE_URL = "https://compute.virtuals.io/v1"
 
     _REGISTRY: Mapping[str, OpenAICompatibleEndpoint] = {
         "openrouter": OpenAICompatibleEndpoint(
@@ -135,6 +139,22 @@ class OpenAICompatibleProviders:
             base_url_env="OLLAMA_BASE_URL",
             api_key_env="",
             requires_api_key=False,
+        ),
+        # Virtuals compute — a multi-vendor gateway (Anthropic / OpenAI /
+        # Gemini / DeepSeek / Moonshot / Grok / GLM behind one key), so it is
+        # OpenRouter's structural twin and belongs here rather than on the
+        # per-user ``openai_compatible`` slug: the base_url is fixed, and the
+        # model catalog is public and enumerable (see VirtualsModelSource).
+        #
+        # No attribution headers — Virtuals publishes no app-ranking protocol.
+        # ``VIRTUALS_ACP_KEY`` matches the name the key ships under; it is the
+        # DEPLOYMENT-level fallback for local dev only. The product path is a
+        # per-user BYOK key from the desktop keychain, which overrides it.
+        "virtuals": OpenAICompatibleEndpoint(
+            provider="virtuals",
+            base_url=VIRTUALS_BASE_URL,
+            base_url_env="VIRTUALS_BASE_URL",
+            api_key_env="VIRTUALS_ACP_KEY",
         ),
     }
 

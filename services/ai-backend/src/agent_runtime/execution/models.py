@@ -63,6 +63,7 @@ class ModelConfigResolver:
         # with a fixed base_url (see execution/openai_compat.py).
         "openrouter": "openrouter",
         "ollama": "ollama",
+        "virtuals": "virtuals",
         # User-supplied custom OpenAI-compatible endpoint (BYOK decision D-2).
         # ``canonical_provider`` normalizes ``_``→``-``, so the incoming
         # ``openai_compatible`` slug arrives here as ``openai-compatible``; it
@@ -254,6 +255,40 @@ class ModelConfigResolver:
         "phi-4-reasoning",
     )
 
+    #: Vendor prefixes a gateway may DASH-join onto the model name.
+    #:
+    #: OpenRouter separates the vendor with ``/`` and Ollama tags with ``:``,
+    #: both stripped below — but Virtuals publishes ``openai-gpt-55`` and
+    #: ``anthropic-claude-opus-5``. Without this list the family predicates
+    #: would test the whole string, so ``openai-gpt-55`` fails the ``gpt-5``
+    #: check and EVERY frontier OpenAI model behind that gateway would run with
+    #: reasoning never requested — no thinking stream, and no error saying why.
+    _GATEWAY_VENDOR_PREFIXES: tuple[str, ...] = (
+        "anthropic-",
+        "deepseek-",
+        "e2ee-",
+        "google-",
+        "minimax-",
+        "moonshotai-",
+        "openai-",
+        "x-ai-",
+        "z-ai-",
+    )
+
+    @classmethod
+    def _strip_vendor_prefix(cls, bare: str) -> str:
+        """Drop one dash-joined vendor prefix; unchanged when none matches.
+
+        Never strips the whole string — ``minimax-minimax-m3`` keeps a name
+        after the prefix, and a bare vendor slug with nothing following it is
+        left alone rather than reduced to ``""``.
+        """
+
+        for prefix in cls._GATEWAY_VENDOR_PREFIXES:
+            if bare.startswith(prefix) and len(bare) > len(prefix):
+                return bare[len(prefix) :]
+        return bare
+
     @classmethod
     def _gateway_supports_reasoning(cls, model_name: str) -> bool:
         """Whether a gateway-hosted model is a reasoning model.
@@ -273,11 +308,34 @@ class ModelConfigResolver:
         bare = normalized.rsplit("/", 1)[-1].split(":", 1)[0]
         if "chat" in bare or "instruct" in bare:
             return False
-        if any(marker in bare for marker in cls._GATEWAY_REASONING_MARKERS):
+        # Test the raw name AND its vendor-stripped form. Testing both is purely
+        # ADDITIVE: every name that matched before still matches on the raw arm,
+        # so no existing gateway model changes verdict, while ``openai-gpt-55``
+        # now reaches the ``gpt-5`` predicate through the stripped arm.
+        candidates = (bare, cls._strip_vendor_prefix(bare))
+        if any(
+            marker in candidate
+            for candidate in candidates
+            for marker in cls._GATEWAY_REASONING_MARKERS
+        ):
             return True
         # A gateway can also front a native reasoning family verbatim
-        # (``openai/gpt-5.6``, ``anthropic/claude-sonnet-5``).
-        return cls._openai_supports_reasoning(bare)
+        # (``openai/gpt-5.6``, ``openai-gpt-55``).
+        return any(cls._openai_supports_reasoning(c) for c in candidates)
+
+    @classmethod
+    def model_supports_reasoning(cls, provider: str, model_name: str) -> bool:
+        """Public sibling of :meth:`_model_supports_reasoning`.
+
+        The model catalog stamps ``supports_reasoning`` on every row it
+        advertises, and that flag must agree with what the builder will actually
+        request — otherwise the picker offers a reasoning control for a model the
+        run path declines to ask reasoning from. Exposed for the same reason as
+        :meth:`supports_provider`: the catalog advertises only what the run path
+        can serve, and the run path is the authority on both.
+        """
+
+        return cls._model_supports_reasoning(provider, model_name)
 
     @classmethod
     def _model_supports_reasoning(cls, provider: str, model_name: str) -> bool:

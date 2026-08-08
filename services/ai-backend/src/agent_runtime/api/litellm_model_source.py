@@ -21,11 +21,14 @@ ordering is provider-then-id for deterministic output.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Final, Protocol, runtime_checkable
 
 from agent_runtime.execution.contracts import ModelReasoningEffort, RuntimeContract
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # LiteLLM returns cost as USD per single token; the picker shows USD per 1M
@@ -152,6 +155,42 @@ class CatalogModelSource(Protocol):
     """
 
     def records(self) -> tuple[CatalogModelRecord, ...]: ...
+
+
+class CompositeModelSource:
+    """Union several :class:`CatalogModelSource` s into one.
+
+    Distinct from a FALLBACK chain, and the difference matters. A fallback asks
+    the next source only when the previous one failed — right when two sources
+    describe the SAME catalog (models.dev and LiteLLM both describe the frontier
+    vendors, so serving both would double every row). A union asks all of them —
+    right when each source owns a catalog the others do not carry, which is the
+    case for a gateway like Virtuals.
+
+    Source order is preserved, and so is each source's internal order, because
+    :class:`~agent_runtime.api.model_catalog.ModelCatalog` de-duplicates by id
+    keeping the FIRST occurrence's position. Pass the richer source first.
+
+    A source that raises is skipped rather than allowed to empty the picker: one
+    upstream having a bad day must not take the whole catalog down with it.
+    """
+
+    def __init__(self, *sources: CatalogModelSource) -> None:
+        self._sources = sources
+
+    def records(self) -> tuple[CatalogModelRecord, ...]:
+        collected: list[CatalogModelRecord] = []
+        for source in self._sources:
+            try:
+                collected.extend(source.records())
+            except Exception as exc:  # noqa: BLE001 - one bad source must not
+                # empty the catalog; the others still serve.
+                _LOGGER.warning(
+                    "Catalog source %s failed; skipping it: %s",
+                    type(source).__name__,
+                    exc,
+                )
+        return tuple(collected)
 
 
 class LitellmModelSource:
@@ -361,6 +400,7 @@ class LitellmModelSource:
 __all__ = [
     "CatalogModelRecord",
     "CatalogModelSource",
+    "CompositeModelSource",
     "LitellmModelSource",
     "ModelDisplayName",
 ]
