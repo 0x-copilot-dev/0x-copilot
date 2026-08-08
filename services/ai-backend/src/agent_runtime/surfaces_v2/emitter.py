@@ -47,7 +47,7 @@ from __future__ import annotations
 __operation_boundary__ = "presentation"
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 
@@ -59,6 +59,10 @@ from agent_runtime.capabilities.surfaces.builtin import (
 )
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
+from agent_runtime.capabilities.surfaces.write_ops_capture import (
+    CapturedWriteOps,
+    WriteOpCandidate,
+)
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Titles, Values
 from agent_runtime.surfaces_v2.ledger_models import (
     CURRENT_LEDGER_WRITER,
@@ -325,6 +329,7 @@ class WorkLedgerEmitter:
         surface_uri: object,
         latency_ms: int | None,
         spec_rung: str | None = None,
+        write_ops: Sequence[object] = (),
     ) -> None:
         """Emit the read path for one executed MCP tool call.
 
@@ -342,6 +347,14 @@ class WorkLedgerEmitter:
         reports a present spec as ``registry``, which is what the builtin/store
         ladder actually resolves today; a caller that resolves a spec by
         inference must say so or the ledger will over-claim.
+
+        ``write_ops`` is the sibling WRITE ops of the connector this read came
+        from, captured by the caller at the one moment they were in hand — the
+        loaded session that served the read. It is passed IN for exactly the
+        ``source`` / ``spec_rung`` reason: this emitter holds no MCP client and
+        must never grow one to answer a question about a connector's ops. Empty
+        (the default) writes no ``write_ops`` member at all, which the
+        write-back lane reads as *"nothing was captured"* and refuses.
         """
 
         try:
@@ -380,6 +393,7 @@ class WorkLedgerEmitter:
                     tool_name=tool_name,
                     payload_ref=payload_ref,
                     spec_rung=spec_rung,
+                    write_ops=write_ops,
                 )
         except Exception:  # noqa: BLE001 - ledger emission never fails a tool call
             _LOGGER.warning(Messages.EMIT_RAISED, exc_info=True)
@@ -526,6 +540,7 @@ class WorkLedgerEmitter:
         tool_name: str,
         payload_ref: str,
         spec_rung: str | None = None,
+        write_ops: Sequence[object] = (),
     ) -> None:
         """Emit ``surface.created``, and the first ``view.derived`` if one is due.
 
@@ -602,6 +617,19 @@ class WorkLedgerEmitter:
         carried = _CarriedState.build(state, connector=connector, op=op)
         if carried is not None:
             created[_AdditiveField.STATE] = carried
+        # Written only when the caller captured something. An empty member and
+        # an absent one would both refuse a later save, but absence is the
+        # honest record: "this read captured no write ops", not "this connector
+        # was asked and offered none".
+        captured = CapturedWriteOps.to_payload(
+            [
+                candidate
+                for candidate in write_ops
+                if isinstance(candidate, WriteOpCandidate)
+            ]
+        )
+        if captured:
+            created[Keys.Field.WRITE_OPS] = captured
         await self._sign(
             LedgerEventType.SURFACE_CREATED.value, created, Messages.SURFACE_CREATED
         )

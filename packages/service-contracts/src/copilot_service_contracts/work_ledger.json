@@ -318,7 +318,7 @@
     },
     "surface.created": {
       "required": ["v", "surface_id", "kind", "source", "title", "payload_ref"],
-      "optional": ["state", "w"],
+      "optional": ["state", "write_ops", "w"],
       "enum_fields": { "kind": "surface_kind" }
     },
     "view.derived": {

@@ -33,6 +33,12 @@ class Keys:
         # spec rather than carrying one.
         SPEC = "spec"
         SPEC_REF = "spec_ref"
+        # The sibling WRITE ops the read's connector offered at the moment this
+        # surface was minted, captured so the connector write-back lane can be a
+        # lookup rather than a live MCP load on a save request. Additive to
+        # ``surface.created``; see
+        # ``agent_runtime.capabilities.surfaces.write_ops_capture``.
+        WRITE_OPS = "write_ops"
         GEN = "gen"
         MODEL = "model"
         # ``gen.ms`` — generation duration, populated by the B3 ViewDeriver

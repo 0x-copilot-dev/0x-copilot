@@ -72,6 +72,10 @@ class SurfaceLedgerOperationOutcomePresenter:
             # that was actually inferred from the payload's structure.
             spec_rung=envelope.spec_rung if envelope is not None else None,
             latency_ms=outcome.latency_ms,
+            # Captured by the caller while its connector session was loaded, and
+            # carried straight through: this presenter resolves nothing about a
+            # connector's ops, exactly as it resolves nothing about its name.
+            write_ops=outcome.write_ops,
         )
 
 

@@ -1523,7 +1523,36 @@ class RuntimeEventPresentationProjector:
         state = cls._surface_state(payload.get(_SurfaceStateFields.STATE))
         if state is not None:
             safe_payload[_SurfaceStateFields.STATE] = state
+        write_ops = cls._surface_write_ops(payload.get(_LedgerKeys.Field.WRITE_OPS))
+        if write_ops:
+            safe_payload[_LedgerKeys.Field.WRITE_OPS] = write_ops
         return safe_payload
+
+    @classmethod
+    def _surface_write_ops(cls, value: object) -> list[JsonObject]:
+        """Re-validate the captured connector write ops (see the docstring above).
+
+        This member is what makes the connector write-back lane possible at all:
+        the descriptors are captured when the READ runs and the save, in another
+        process, composes against them. It therefore has to cross this funnel —
+        an allow-list that does not name a key deletes it, and a deleted capture
+        is a Save that 503s forever, which is the exact failure this projection's
+        own docstring already records once.
+
+        It is rebuilt through :class:`CapturedWriteOps` rather than passed
+        through, for the same reason ``state`` is rebuilt member by member: a
+        trusted event type is not evidence of a well-formed payload, and this
+        value is a connector's own untrusted schema declaration. The codec keeps
+        arg names, arg types and ``required`` and drops every value-bearing
+        member, so nothing that reaches a client — or the mapping model — can
+        carry connector-authored data.
+        """
+
+        from agent_runtime.capabilities.surfaces.write_ops_capture import (  # noqa: PLC0415
+            CapturedWriteOps,
+        )
+
+        return CapturedWriteOps.to_payload(CapturedWriteOps.from_payload(value))
 
     @classmethod
     def _surface_state(cls, value: object) -> JsonObject | None:

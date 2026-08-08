@@ -547,7 +547,14 @@ class TestModelAuthoredValuesAreRefused(WriteMappingFixtureMixin):
             ),
         )
 
-        rows = self.compose(answer, identity_only, second)
+        rows = self.compose(
+            answer,
+            identity_only,
+            second,
+            # Every arg the answer names has to be one the op DECLARES, so the
+            # candidate has to declare the two columns this batch edits.
+            candidate=self.op(properties=("id", "owner", "other")),
+        )
 
         assert rows[0].target_args == {"id": "ISS-5", "owner": "b"}
         assert rows[1].target_args == {"id": "ISS-6", "other": 2}
@@ -807,8 +814,12 @@ class TestScopeIsDeclaredByTheConnectorNotTheModel(WriteMappingFixtureMixin):
         rows = self.compose(shadowed, self.edit(), candidate=also_required)
         assert rows[0].target_args["priority"] == self.NEW_PRIORITY
 
+        # ``team`` is DECLARED by the op and is not required, so the only rule
+        # that can refuse it is the scope one — which is the point. (An arg the
+        # op does not declare at all is refused one step earlier, as
+        # ``UNDECLARED_ARG``; see ``TestEveryArgIsOneTheOpDeclares``.)
         stolen = self.answer(
-            ArgBinding(arg="as_read", source=ArgSourceKind.ROW, key="priority")
+            ArgBinding(arg="team", source=ArgSourceKind.ROW, key="team")
         )
         assert (
             self.compose_rejects(stolen, self.edit(), candidate=also_required)
@@ -1245,3 +1256,230 @@ class TestBuilderRefusesToDegrade:
         mapper = build_surface_write_mapper(environ={}, completion=_Stub())
 
         assert isinstance(mapper, SurfaceWriteMapper)
+
+
+_UNDECLARED = (
+    "The proposed write would send a field this operation does not accept, so "
+    "what you approved and what would be sent are not the same write. Nothing "
+    "was staged."
+)
+_RELOCATED_ROW = (
+    "The proposed write would fill one of this record's identifying fields "
+    "from a different field of the record. Nothing was staged."
+)
+_EDIT_INTO_KEY = (
+    "The proposed write would put one of your edits into a field this "
+    "operation uses to find the record. Nothing was staged."
+)
+_DUPLICATE_FIELD = (
+    "A row lists the same field twice, so only one of the two values would be "
+    "sent. Nothing was staged."
+)
+
+
+class TestEveryArgIsOneTheOpDeclares(WriteMappingFixtureMixin):
+    """The payload lane's arg NAME was unbounded, in both directions.
+
+    Coverage proves a binding's ``key`` names a column the user edited. Nothing
+    proved anything about its ``arg`` — scope only ever inspected ``ROW``
+    bindings — so an edit displayed as ``body`` could be dispatched as ``bcc``,
+    and an argument the connector does not declare at all staged cleanly. The
+    diff then names a field that is not sent while the payload carries a field
+    the diff never names: both halves of the lie, from one binding.
+    """
+
+    def test_an_edit_relocated_onto_another_declared_arg_is_refused(self) -> None:
+        # ``team`` is declared by the op and is a field of the row as read, so
+        # this is the model overwriting a DIFFERENT field of the record with the
+        # value from this one.
+        relocated = WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+                ArgBinding(arg="team", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="title", source=ArgSourceKind.EDITED, key="title"),
+                ArgBinding(arg="blocked", source=ArgSourceKind.EDITED, key="blocked"),
+            ),
+        )
+
+        assert self.compose_rejects(relocated, self.edit()) == _EDIT_INTO_KEY
+
+    def test_an_arg_the_op_never_declared_is_refused(self) -> None:
+        invented_arg = WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+                ArgBinding(
+                    arg="webhook_url", source=ArgSourceKind.EDITED, key="priority"
+                ),
+                ArgBinding(arg="title", source=ArgSourceKind.EDITED, key="title"),
+                ArgBinding(arg="blocked", source=ArgSourceKind.EDITED, key="blocked"),
+            ),
+        )
+
+        assert self.compose_rejects(invented_arg, self.edit()) == _UNDECLARED
+
+    def test_an_op_declaring_no_properties_refuses_every_binding(self) -> None:
+        bare = WriteOpCandidate(name=_OP, input_schema={"required": ["id"]})
+
+        assert self.compose_rejects(self.answer(), self.edit(), candidate=bare) == (
+            _UNBOUNDED
+        )
+
+
+class TestAScopingKeyIsTheRecordsOwnField(WriteMappingFixtureMixin):
+    """A ``ROW`` binding's VALUE source was unbounded even once its NAME was.
+
+    Bounding ``binding.arg`` to the connector's ``required`` set left the model
+    free to choose WHICH row field fills it: ``id`` composed from
+    ``row['parent_id']`` sends the write to a different record than the one the
+    diff is titled after, and ``id`` composed from a field the surface never
+    rendered leaks a value nobody saw. Identity-mapping closes both.
+    """
+
+    def edit_with_parent(self) -> SurfaceRowEdit:
+        return SurfaceRowEdit(
+            row_key="ISS-1",
+            title="Ship the thing",
+            row={
+                "id": "ISS-1",
+                "parent_id": "ISS-9",
+                "_token": "sk-live-xyz",
+                "team": "core",
+                "priority": 1,
+            },
+            changes=(RowFieldChange(field="priority", old=1, new=3),),
+        )
+
+    def one_edit_answer(self, key: str) -> WriteMappingAnswer:
+        return WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key=key),
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+            ),
+        )
+
+    def test_a_scope_arg_filled_from_another_row_field_is_refused(self) -> None:
+        rejected = self.compose_rejects(
+            self.one_edit_answer("parent_id"), self.edit_with_parent()
+        )
+
+        assert rejected == _RELOCATED_ROW
+
+    def test_a_scope_arg_filled_from_a_field_the_surface_never_showed_is_refused(
+        self,
+    ) -> None:
+        rejected = self.compose_rejects(
+            self.one_edit_answer("_token"), self.edit_with_parent()
+        )
+
+        assert rejected == _RELOCATED_ROW
+
+    def test_the_identity_mapping_still_composes(self) -> None:
+        rows = self.compose(self.one_edit_answer("id"), self.edit_with_parent())
+
+        assert rows[0].target_args == {"id": "ISS-1", "priority": 3}
+
+
+class TestOneOptionalPropertyDoesNotBuyAScope(WriteMappingFixtureMixin):
+    """The strict-subset test alone was defeated by adding ONE optional property.
+
+    ``required < properties`` holds for a five-required schema with one spare
+    optional key, and the cap was applied AFTER subtracting the payload — so a
+    one-line diff left four "scoping" args and reproduced the module docstring's
+    own five-field exploit verbatim. The cap belongs on ``required`` itself.
+    """
+
+    def inflated(self) -> WriteOpCandidate:
+        return self.op(
+            properties=(
+                "id",
+                "priority",
+                "assignee",
+                "state",
+                "notes",
+                "idempotency_key",
+            ),
+            required=("id", "priority", "assignee", "state", "notes"),
+        )
+
+    def edit(self, *, row_key: str = "PAR-9") -> SurfaceRowEdit:  # noqa: ARG002
+        return SurfaceRowEdit(
+            row_key="PAR-9",
+            title="Parity run",
+            row={
+                "id": "PAR-9",
+                "priority": "high",
+                "assignee": "alice",
+                "state": "open",
+                "notes": "ship by friday",
+            },
+            changes=(RowFieldChange(field="priority", old="high", new="low"),),
+        )
+
+    def answer(self, *extra: ArgBinding) -> WriteMappingAnswer:  # noqa: ARG002
+        return WriteMappingAnswer(
+            op=_OP,
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+                ArgBinding(arg="assignee", source=ArgSourceKind.ROW, key="assignee"),
+                ArgBinding(arg="state", source=ArgSourceKind.ROW, key="state"),
+                ArgBinding(arg="notes", source=ArgSourceKind.ROW, key="notes"),
+            ),
+        )
+
+    def test_five_required_args_cannot_become_a_record_shaped_overwrite(self) -> None:
+        rejected = self.compose_rejects(
+            self.answer(), self.edit(), candidate=self.inflated()
+        )
+
+        assert rejected == _UNBOUNDED
+
+
+class TestEveryComposedArgIsDisclosed(WriteMappingFixtureMixin):
+    """``target_args`` is server-only, so the diff has to name what is sent.
+
+    ``StageRowView`` deliberately never carries ``target_args`` and the client
+    ledger projection reads ``changes`` alone, so a scope arg with no change
+    entry is a value dispatched with nobody's approval. On a mail op whose
+    ``required`` set is the message itself, that was the recipient and the whole
+    body riding a one-line subject diff.
+    """
+
+    def test_a_scoping_arg_rides_the_diff_as_an_unchanged_row(self) -> None:
+        rows = self.compose(self.answer(), self.edit())
+
+        disclosed = [change for change in rows[0].changes if change.field == "id"]
+        assert disclosed == [RowFieldChange(field="id", old="ISS-1", new="ISS-1")]
+
+    def test_the_diff_names_every_arg_the_write_sends(self) -> None:
+        rows = self.compose(self.answer(), self.edit())
+
+        assert set(rows[0].target_args) <= {change.field for change in rows[0].changes}
+
+    def test_the_users_own_edits_are_unchanged_and_come_first(self) -> None:
+        rows = self.compose(self.answer(), self.edit())
+
+        assert rows[0].changes[: len(self.edit().changes)] == self.edit().changes
+
+
+class TestOneFieldOneChange(WriteMappingFixtureMixin):
+    """Two changes on one field: the diff renders both, exactly one is sent."""
+
+    def test_a_duplicated_field_in_one_row_is_refused(self) -> None:
+        duplicated = SurfaceRowEdit(
+            row_key="ISS-1",
+            title="Ship the thing",
+            row={"id": "ISS-1"},
+            changes=(
+                RowFieldChange(field="priority", old=1, new=2),
+                RowFieldChange(field="priority", old=1, new=3),
+            ),
+        )
+
+        with pytest.raises(WriteMappingRejected) as caught:
+            EditBatchValidator.validate([duplicated])
+
+        assert caught.value.safe_message == _DUPLICATE_FIELD

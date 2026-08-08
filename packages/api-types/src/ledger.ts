@@ -466,6 +466,27 @@ export interface SurfaceCreatedPayload extends LedgerPayload {
    */
   payload_ref: string;
   state?: SurfaceCreatedState;
+  /**
+   * The sibling WRITE operations this surface's connector offered at the moment
+   * of the read, captured so a later Save can be composed against a real
+   * `input_schema` without the server loading an MCP client on the request path.
+   *
+   * Server-side write-path material: the client renders none of it. Each entry
+   * is a bounded digest — op name, capped description, and an `input_schema`
+   * reduced to argument names, argument types and the connector's own
+   * `required` list. Every value-bearing schema member (`default`, `enum`,
+   * `examples`, nested sub-schemas) is stripped before the record is written,
+   * so this can never carry connector-authored values.
+   *
+   * Absent on a surface whose connector exposes no write op, and on every run
+   * recorded before the field existed. Absence means "nothing was captured",
+   * and the write-back lane refuses rather than composing an unbounded write.
+   */
+  write_ops?: ReadonlyArray<{
+    name: string;
+    description: string;
+    input_schema: Record<string, unknown>;
+  }>;
 }
 
 export interface ViewDerivedPayload extends LedgerPayload {

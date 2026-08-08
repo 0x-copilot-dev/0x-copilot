@@ -42,6 +42,7 @@ from agent_runtime.capabilities.surfaces.write_mapping import (
     WriteMappingUnavailable,
     WriteOpCandidate,
 )
+from agent_runtime.capabilities.surfaces.write_ops_capture import CapturedWriteOps
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.constants import Keys, Values
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
@@ -99,13 +100,23 @@ class _FakeWriteOps:
         self._candidates = candidates
         self._error = error
         self.asked: list[dict[str, str]] = []
+        #: ``(captured_connector, captured_ops)`` per call — what the read-time
+        #: capture actually handed the port.
+        self.captured: list[tuple[str, tuple[WriteOpCandidate, ...]]] = []
 
     async def write_ops(
-        self, *, org_id: str, user_id: str, connector: str
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        connector: str,
+        captured: tuple[WriteOpCandidate, ...] = (),
+        captured_connector: str = "",
     ) -> tuple[WriteOpCandidate, ...]:
         self.asked.append(
             {"org_id": org_id, "user_id": user_id, "connector": connector}
         )
+        self.captured.append((captured_connector, tuple(captured)))
         if self._error is not None:
             raise self._error
         return self._candidates or ()
@@ -191,6 +202,12 @@ class WriteBackHarnessMixin:
             policy_resolver=_AllowAlwaysPolicy(),
         )
 
+    @staticmethod
+    def spy_queue() -> _SpyQueue:
+        """The commit queue that must stay empty on this lane."""
+
+        return _SpyQueue()
+
     async def seed_read_surface(
         self,
         store: InMemoryRuntimeApiStore,
@@ -198,26 +215,36 @@ class WriteBackHarnessMixin:
         surface_id: str = _SURFACE,
         connector: str = _CONNECTOR,
         op: str = _READ_OP,
+        write_ops: tuple[WriteOpCandidate, ...] = (),
     ) -> None:
-        """Emit the ``surface.created`` a connector READ leaves on the ledger."""
+        """Emit the ``surface.created`` a connector READ leaves on the ledger.
 
+        ``write_ops`` is what the read CAPTURED — the sibling write descriptors
+        its loaded session had in hand. Default empty, which is a surface minted
+        before the capture existed (or by a connector with no write op) and the
+        fail-closed case the lane has to keep refusing.
+        """
+
+        payload: dict = {
+            Keys.Field.V: Values.PAYLOAD_V,
+            Keys.Field.SURFACE_ID: surface_id,
+            Keys.Field.KIND: Values.KIND_TABLE,
+            Keys.Field.SOURCE: {
+                Keys.Field.CONNECTOR: connector,
+                Keys.Field.OP: op,
+            },
+            Keys.Field.TITLE: "Issues",
+            Keys.Field.PAYLOAD_REF: "call:abc",
+        }
+        if write_ops:
+            payload[Keys.Field.WRITE_OPS] = CapturedWriteOps.to_payload(write_ops)
         ledger = RuntimeStageLedger(
             event_producer=RuntimeEventProducer(persistence=store, event_store=store)
         )
         await ledger.emit(
             run=store.runs[_RUN],
             event_type_value=LedgerEventType.SURFACE_CREATED.value,
-            payload={
-                Keys.Field.V: Values.PAYLOAD_V,
-                Keys.Field.SURFACE_ID: surface_id,
-                Keys.Field.KIND: Values.KIND_TABLE,
-                Keys.Field.SOURCE: {
-                    Keys.Field.CONNECTOR: connector,
-                    Keys.Field.OP: op,
-                },
-                Keys.Field.TITLE: "Issues",
-                Keys.Field.PAYLOAD_REF: "call:abc",
-            },
+            payload=payload,
             summary=None,
         )
 

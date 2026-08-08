@@ -724,6 +724,27 @@ class SurfaceCreatedPayload(LedgerPayload):
     # arrives on its own event, because a surface may legitimately have no body
     # to draw, and because replay of a pre-PRD run carries none.
     state: dict[str, Any] | None = None
+    # The sibling WRITE ops this surface's connector offered at read time,
+    # captured so a later Save can be composed against a real `input_schema`
+    # without loading an MCP client on the request path
+    # (`capabilities.surfaces.write_ops_capture`).
+    #
+    # It rides `surface.created` for the same reason `state` does: the read that
+    # produced the surface is the one moment the descriptors were in hand, and a
+    # save arrives in a different process long afterwards. Each entry is the
+    # bounded `{name, description, input_schema}` digest — arg names, arg types
+    # and the connector's own `required` list, with every value-bearing schema
+    # member (`default` / `enum` / `examples` / nested sub-schemas) stripped, so
+    # nothing here can become a source of model-supplied values.
+    #
+    # Typed as plain mappings, not a v1 presentation model: `surfaces_v2` is the
+    # ledger vocabulary and must not depend on the write-mapping contracts. The
+    # value is re-validated on the way back in by `CapturedWriteOps.from_payload`.
+    #
+    # Optional: a surface from a connector with no write ops carries none, and
+    # so does every run recorded before this field existed. Absence means "no
+    # ops were captured" and the save refuses — never "send whatever you like".
+    write_ops: list[dict[str, Any]] | None = None
 
 
 class ViewDerivedPayload(LedgerPayload):

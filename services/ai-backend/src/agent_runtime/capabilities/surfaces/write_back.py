@@ -63,6 +63,10 @@ from agent_runtime.capabilities.surfaces.write_mapping import (
     build_surface_write_mapper,
     edited_columns_of,
 )
+from agent_runtime.capabilities.surfaces.write_ops_capture import (
+    CapturedSurfaceWriteOps,
+    CapturedWriteOpsProjection,
+)
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.constants import Titles, Values
 from agent_runtime.surfaces_v2.projection import SurfaceSnapshot, SurfaceStoreProjection
@@ -137,10 +141,33 @@ class ConnectorWriteOpsPort(Protocol):
     short step from holding the thing that calls them. The port is also where a
     deployment decides which ops are even proposable — filtering to writes, and
     to writes this user is permitted, belongs to the adapter, not here.
+
+    **The ops are supplied to the port, not fetched by it.** ``captured`` is
+    what the READ that produced this surface recorded — see
+    :mod:`.write_ops_capture` — and it is the reason this lane can exist at all.
+    The alternative shape, a port that goes and looks, has no source to look in:
+    the curated action catalogue carries ``READ|WRITE`` and no schema, op
+    descriptors are persisted nowhere else, and ``input_schema`` lives only on a
+    LIVE loaded server. Giving the port the ability to reach one would put MCP
+    client construction on an HTTP request path and a network hop between a user
+    pressing Save and anything happening.
+
+    So the default adapter is a lookup (:class:`~.write_ops_capture.CapturedConnectorWriteOps`)
+    and the port's remaining job is NARROWING: a deployment with real per-user
+    write permissions binds an adapter that drops the ops this user may not
+    propose. Returning fewer is always safe; returning MORE than was captured
+    means composing against a schema nobody recorded, and the lane treats an
+    empty answer as *"no write is proposable"* rather than as a licence.
     """
 
     async def write_ops(
-        self, *, org_id: str, user_id: str, connector: str
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        connector: str,
+        captured: Sequence[WriteOpCandidate],
+        captured_connector: str,
     ) -> Sequence[WriteOpCandidate]:
         """Return the connector's proposable write ops (may be empty)."""
         ...
@@ -242,11 +269,14 @@ class SurfaceWriteBackCoordinator:
         """
 
         run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
-        snapshot = await self._origin(
+        snapshot, captured = await self._origin(
             org_id=org_id, run_id=run_id, surface_id=surface_id
         )
         candidates = await self._candidates(
-            org_id=org_id, user_id=user_id, connector=snapshot.connector
+            org_id=org_id,
+            user_id=user_id,
+            connector=snapshot.connector,
+            captured=captured,
         )
         mapping = await self._map(
             run=run, snapshot=snapshot, candidates=candidates, edits=edits
@@ -317,7 +347,12 @@ class SurfaceWriteBackCoordinator:
         )
 
     async def _candidates(
-        self, *, org_id: str, user_id: str, connector: str
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        connector: str,
+        captured: CapturedSurfaceWriteOps | None,
     ) -> Sequence[WriteOpCandidate]:
         if self.write_ops is None:
             _LOGGER.warning(
@@ -326,7 +361,11 @@ class SurfaceWriteBackCoordinator:
             raise WriteOpsUnavailable()
         try:
             return await self.write_ops.write_ops(
-                org_id=org_id, user_id=user_id, connector=connector
+                org_id=org_id,
+                user_id=user_id,
+                connector=connector,
+                captured=captured.ops if captured is not None else (),
+                captured_connector=captured.connector if captured is not None else "",
             )
         except Exception as exc:  # noqa: BLE001 - never leak catalogue internals
             _LOGGER.warning(
@@ -339,12 +378,23 @@ class SurfaceWriteBackCoordinator:
 
     async def _origin(
         self, *, org_id: str, run_id: str, surface_id: str
-    ) -> SurfaceSnapshot:
-        """Fold the run's ledger and return THIS surface's connector + read op.
+    ) -> tuple[SurfaceSnapshot, CapturedSurfaceWriteOps | None]:
+        """Fold the run's ledger: THIS surface's connector + read op, and its ops.
 
         Server-side rather than client-declared: the connector a save writes to
         is decided by the surface the user was looking at, not by the body of
         the request. Flag off ⇒ no v2 surfaces exist ⇒ 404, nothing appended.
+
+        Both answers come out of ONE pass over the events. The captured write
+        ops were written onto the same ``surface.created`` row the origin is
+        folded from, so reading them costs this path nothing — no second query,
+        no MCP client, no network. Two folds rather than one projection because
+        the SurfaceStore fold is served verbatim by the surfaces endpoint and
+        connector op declarations have no business on that response.
+
+        ``None`` for the capture is not an error here: it is a surface whose
+        read recorded no write ops, and the refusal belongs one step later,
+        where the mapper says which connector had nothing to offer.
         """
 
         if not SurfacesV2Flag.enabled(self.environ):
@@ -352,14 +402,15 @@ class SurfaceWriteBackCoordinator:
         list_events = getattr(self.event_store, "list_events_after", None)
         if list_events is None:
             raise SurfaceNotFound()
-        events = await list_events(org_id=org_id, run_id=run_id, after_sequence=0)
+        events = list(await list_events(org_id=org_id, run_id=run_id, after_sequence=0))
         state = SurfaceStoreProjection.fold(run_id, events)
+        captured = CapturedWriteOpsProjection.fold(events)
         for snapshot in state.surfaces:
             if snapshot.surface_id != surface_id:
                 continue
             if not snapshot.connector or not snapshot.op:
                 raise SurfaceWriteBackError(_Messages.NOT_A_CONNECTOR_SURFACE)
-            return snapshot
+            return snapshot, captured.get(surface_id)
         raise SurfaceNotFound()
 
     async def _run_for_scope(self, *, org_id: str, user_id: str, run_id: str) -> object:

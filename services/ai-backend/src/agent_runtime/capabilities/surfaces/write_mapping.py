@@ -92,6 +92,7 @@ from agent_runtime.capabilities.surfaces.generator import (
     ShapingModelBuild,
     SpecCompletionPort,
 )
+from agent_runtime.capabilities.surfaces.write_ops_capture import WriteOpCandidate
 from agent_runtime.execution.contracts import JsonObject, JsonValue, RuntimeContract
 from agent_runtime.surfaces_v2.rowset import RowFieldChange, StagedRow
 from agent_runtime.surfaces_v2.shaping_policy import ShapingModelResolver
@@ -112,8 +113,13 @@ class _Limits:
 
     # == ``rowset._Limits.MAX_ROWS`` — the staging engine's own ceiling.
     MAX_EDITS = 200
-    # == ``rowset._Limits.MAX_CHANGES_PER_ROW``.
-    MAX_CHANGES_PER_ROW = 20
+    # ``rowset._Limits.MAX_CHANGES_PER_ROW`` (20) MINUS the scope args a row may
+    # additionally disclose. A composed row's ``changes`` is the user's own diff
+    # plus one entry per scoping arg (see ``RowWriteComposer._disclosed``), and
+    # that sum has to stay inside the staging engine's per-row ceiling — a save
+    # that passed here and was refused two layers down would be a refusal with
+    # no diagnosis attached to the thing the user actually did.
+    MAX_CHANGES_PER_ROW = 16
     # == ``rowset._Limits.FIELD_MAX`` — an arg name is the same kind of thing.
     NAME_MAX = 200
     # An op name is a tool name; the MCP descriptor caps its own at 200.
@@ -172,6 +178,23 @@ class _Messages:
         "This connector does not say which arguments identify a record, so "
         "this save cannot be limited to the fields you edited. Nothing was "
         "staged."
+    )
+    UNDECLARED_ARG = (
+        "The proposed write would send a field this operation does not accept, "
+        "so what you approved and what would be sent are not the same write. "
+        "Nothing was staged."
+    )
+    RELOCATED_ROW_FIELD = (
+        "The proposed write would fill one of this record's identifying fields "
+        "from a different field of the record. Nothing was staged."
+    )
+    EDIT_INTO_RECORD_KEY = (
+        "The proposed write would put one of your edits into a field this "
+        "operation uses to find the record. Nothing was staged."
+    )
+    DUPLICATE_FIELD = (
+        "A row lists the same field twice, so only one of the two values would "
+        "be sent. Nothing was staged."
     )
     MODEL_TYPED_VALUE = (
         "The proposed write types a value in directly instead of taking it "
@@ -254,17 +277,11 @@ class SurfaceRowEdit(RuntimeContract):
     changes: tuple[RowFieldChange, ...] = ()
 
 
-class WriteOpCandidate(RuntimeContract):
-    """One write op the model may choose, as the connector describes it.
-
-    Structurally a subset of ``McpToolDescriptor`` (same attribute names) so a
-    real descriptor drops in unchanged. Only ops a caller has already decided
-    are *writes* belong here — this module does not classify.
-    """
-
-    name: str = Field(min_length=1, max_length=_Limits.OP_MAX)
-    description: str = ""
-    input_schema: JsonObject = Field(default_factory=dict)
+# ``WriteOpCandidate`` is defined in :mod:`.write_ops_capture` and re-exported
+# here. The capture side has to speak this contract to write a descriptor onto
+# the ledger, and it must not drag the shaping model ladder in to do it — but a
+# second, structurally identical model would be exactly the twin that drifts.
+# One definition, imported by whichever side needs it.
 
 
 # ---------------------------------------------------------------------------
@@ -531,15 +548,34 @@ class WriteArgScope:
     subtracted, so the user's own edit wins the slot rather than being shadowed
     by the value as read.
 
-    **A declaration only counts when it discriminates.** ``required`` is trusted
-    only if the op also declares ``properties`` and requires a STRICT SUBSET of
-    them. A schema that marks every property required — the shape an MCP server
-    emits to satisfy strict function-calling — has said nothing about which args
-    address a record, and reading it as an allow-list would re-open the exact
-    hole: every unedited column becomes "scoping". Such an op is refused
+    **A declaration only counts when it discriminates, and "discriminates" is
+    a SIZE test, not only a subset one.** ``required`` is trusted only if the op
+    also declares ``properties``, requires a strict subset of them, AND requires
+    no more than :attr:`_Limits.MAX_SCOPE_ARGS` of them. A schema that marks
+    every property required — the shape an MCP server emits to satisfy strict
+    function-calling — has said nothing about which args address a record, and
+    reading it as an allow-list would re-open the exact hole: every unedited
+    column becomes "scoping". Such an op is refused
     (:attr:`_Messages.UNBOUNDED_OP`), as is one that declares no schema at all.
-    :attr:`_Limits.MAX_SCOPE_ARGS` caps what survives, so a wide required set
-    cannot become a wide write.
+
+    The size test is not redundant with the strict-subset one, and leaving it to
+    the post-subtraction cap was a hole. Adding ONE optional property to an
+    otherwise all-required schema satisfies "strict subset" — and the cap was
+    applied to ``required - payload``, so a five-required op with one edited
+    column left four scope args and passed. That reproduced the module
+    docstring's own five-field exploit verbatim. An op needing more than four
+    args to ADDRESS a record is already the case this module says it refuses, so
+    the cap belongs on ``required`` itself, before anything is subtracted.
+
+    **Every arg the write carries must be one the op DECLARES.** ``properties``
+    bounds the whole answer, both lanes. Nothing checked the payload lane's arg
+    names at all: coverage proved a binding's ``key`` named a column the user
+    edited, and scope only ever looked at ``ROW`` bindings — so an ``EDITED``
+    binding could name any arg it liked. The edit displayed as ``body`` was
+    dispatched as ``bcc``, and ``totally_made_up_arg`` staged cleanly. Both
+    directions of that lie (a field shown but not sent, a field sent but not
+    shown) are closed by requiring :attr:`declared_args` membership for every
+    binding, and an op that declares no ``properties`` is refused outright.
 
     **The stated bound on nesting.** The model chooses the op and one flat arg
     name per value; it does not choose a value, and it no longer chooses a
@@ -559,10 +595,15 @@ class WriteArgScope:
     #: Args a ``ROW`` binding may fill. Empty when the op's declaration is
     #: unusable, which is a REFUSAL and never a licence to send anything.
     scope_args: frozenset[str]
+    #: Every arg the op DECLARES (``input_schema.properties``). Bounds both
+    #: lanes: an arg outside this set is one the connector never offered, so no
+    #: binding of any source may name it. Empty when the op declares no
+    #: properties, which refuses the whole answer.
+    declared_args: frozenset[str]
     #: Whether the op's own declaration bounded this write at all — false for a
-    #: missing schema, an everything-is-required one, and one whose surviving
-    #: scope exceeds :attr:`_Limits.MAX_SCOPE_ARGS`. Chooses the message only;
-    #: both answers refuse.
+    #: missing schema, an everything-is-required one, one that requires more
+    #: than :attr:`_Limits.MAX_SCOPE_ARGS` args, and one whose surviving scope
+    #: exceeds the same cap. Chooses the message only; both answers refuse.
     bounded: bool
 
     @classmethod
@@ -576,22 +617,56 @@ class WriteArgScope:
             for binding in answer.args
             if binding.source is ArgSourceKind.EDITED
         )
+        declared = cls._declared_properties(candidate)
         required = cls._declared_required(candidate)
         scope = frozenset(required - payload)
         return cls(
             payload_args=payload,
             scope_args=scope if len(scope) <= _Limits.MAX_SCOPE_ARGS else frozenset(),
+            declared_args=declared,
             bounded=bool(required) and len(scope) <= _Limits.MAX_SCOPE_ARGS,
         )
 
     def reject_out_of_scope(self, bindings: Sequence[ArgBinding]) -> None:
-        """Raise on the first binding that fills neither lane, else return."""
+        """Raise on the first binding that fills neither lane, else return.
+
+        Every binding is checked against :attr:`declared_args` first, whatever
+        its source. The ``EDITED`` lane used to be skipped outright — coverage
+        had proved the binding's ``key`` was a column the user edited, and
+        nobody asked where its ``arg`` pointed — which is how a ``body`` edit
+        was dispatched as ``bcc``.
+        """
 
         for binding in bindings:
-            if binding.source is ArgSourceKind.EDITED:
-                continue
+            # Ordered most-specific-first, the rule the audit already follows:
+            # a literal is refused as "you did not type this value" even when it
+            # is also out of scope and also undeclared, because that is the
+            # diagnosis a reader can act on.
             if binding.source is ArgSourceKind.LITERAL:
                 self._refuse(binding, _Messages.MODEL_TYPED_VALUE, "literal_value")
+            if binding.arg not in self.declared_args:
+                self._refuse(
+                    binding,
+                    (
+                        _Messages.UNDECLARED_ARG
+                        if self.declared_args
+                        else _Messages.UNBOUNDED_OP
+                    ),
+                    "undeclared_arg",
+                )
+            if binding.source is ArgSourceKind.EDITED:
+                continue
+            if binding.key != binding.arg:
+                # A scoping key is the record's own field, under the
+                # connector's own name for it. Letting the model choose WHICH
+                # row field fills a declared scope arg left the value source
+                # unbounded even once the arg NAME was bounded: ``issue_id``
+                # was filled from ``row['parent_id']`` (the write lands on a
+                # different record than the row the diff is titled after) and
+                # from ``row['_internal_token']`` (a field the surface never
+                # rendered as a column). Identity-mapping closes both without
+                # needing to know which row fields were columns.
+                self._refuse(binding, _Messages.RELOCATED_ROW_FIELD, "relocated_row")
             if binding.arg not in self.scope_args:
                 self._refuse(
                     binding,
@@ -605,17 +680,29 @@ class WriteArgScope:
 
     @classmethod
     def _declared_required(cls, candidate: WriteOpCandidate) -> frozenset[str]:
-        """The op's required args, or EMPTY when its declaration says nothing."""
+        """The op's required args, or EMPTY when its declaration says nothing.
+
+        Three conditions, all of them the connector's own statement: it declares
+        ``properties``; it requires a STRICT SUBSET of them; and it requires no
+        more than :attr:`_Limits.MAX_SCOPE_ARGS` of them. The last is what an
+        inflated schema defeats otherwise — see the class docstring.
+        """
 
         schema = candidate.input_schema
         required = cls._names(schema.get(_SchemaKeys.REQUIRED))
-        declared = schema.get(_SchemaKeys.PROPERTIES)
-        properties = cls._names(
-            tuple(declared) if isinstance(declared, Mapping) else None
-        )
+        properties = cls._declared_properties(candidate)
         if not required or not properties or not required < properties:
             return frozenset()
+        if len(required) > _Limits.MAX_SCOPE_ARGS:
+            return frozenset()
         return required
+
+    @classmethod
+    def _declared_properties(cls, candidate: WriteOpCandidate) -> frozenset[str]:
+        """Every arg name the op declares, or EMPTY when it declares none."""
+
+        declared = candidate.input_schema.get(_SchemaKeys.PROPERTIES)
+        return cls._names(tuple(declared) if isinstance(declared, Mapping) else None)
 
     @staticmethod
     def _names(value: object) -> frozenset[str]:
@@ -736,6 +823,7 @@ class RowWriteComposer:
                 if change is None:
                     # This row did not edit that column — nothing to send for it.
                     continue
+                cls._reject_edit_into_record_key(binding=binding, edit=edit)
                 target_args[binding.arg] = change.new
                 carried_edit = True
             elif binding.source is ArgSourceKind.ROW:
@@ -767,8 +855,77 @@ class RowWriteComposer:
             row_key=edit.row_key,
             title=edit.title,
             target_args=target_args,
-            changes=edit.changes,
+            changes=cls._disclosed(edit=edit, target_args=target_args, scope=scope),
         )
+
+    @staticmethod
+    def _reject_edit_into_record_key(
+        *, binding: ArgBinding, edit: SurfaceRowEdit
+    ) -> None:
+        """Refuse an edit routed into a field the RECORD already has.
+
+        ``WriteArgScope`` bounds which args may be named; this bounds what an
+        edit may be named ONTO. Renaming a column to the connector's own arg
+        name is the mapper's job, so ``arg != key`` is ordinary — but when the
+        target arg is also a field of the row as read, the model is not renaming
+        a column, it is overwriting a *different* field of the record with the
+        value from this one. That is how ``issue_id`` came to be sent as the
+        user's new ``priority``, and how a subject edit could be dispatched as
+        the message ``body``. The row's own field names are the only signal
+        available here that says "this arg addresses something that already
+        exists", and it costs nothing: it is the payload the provenance audit
+        already reads.
+        """
+
+        if binding.arg == binding.key or binding.arg not in edit.row:
+            return
+        _LOGGER.warning(
+            "%s edit_into_record_key arg=%s row_key=%s: nothing staged",
+            _MAPPER_PREFIX,
+            binding.arg,
+            edit.row_key,
+        )
+        raise WriteMappingRejected(_Messages.EDIT_INTO_RECORD_KEY)
+
+    @staticmethod
+    def _disclosed(
+        *,
+        edit: SurfaceRowEdit,
+        target_args: Mapping[str, JsonValue],
+        scope: WriteArgScope,
+    ) -> tuple[RowFieldChange, ...]:
+        """The user's diff, plus one entry per value they would NOT otherwise see.
+
+        ``target_args`` is *"the EXACT connector-op args the shared dispatcher
+        sends for THIS row, verbatim"* and is server-only: ``StageRowView``
+        deliberately never carries it, and the client ledger projection reads
+        ``changes`` alone. So the cell diff is the ONLY thing a human sees
+        before a write leaves the machine — and the scope lane put values in
+        ``target_args`` that appeared in no change at all. On a mail op whose
+        ``required`` set is ``[to, subject, body]``, editing one field
+        dispatched the recipient and the whole message body with a one-line
+        diff that named neither.
+
+        The fix is disclosure, not removal: those args are genuinely required to
+        address the record, so refusing them would make the op unwritable.
+        Each one is appended as an ``old == new`` entry — *this is also being
+        sent, unchanged* — so the object the user approves is the object that is
+        sent. Payload args are already disclosed by the user's own change for
+        that column, and are not repeated.
+
+        Bounded by construction: the scope lane carries at most
+        :attr:`_Limits.MAX_SCOPE_ARGS` args and
+        :class:`EditBatchValidator` caps a row's edits low enough that the sum
+        stays inside the staging engine's own per-row ceiling.
+        """
+
+        named = {change.field for change in edit.changes}
+        carried = tuple(
+            RowFieldChange(field=arg, old=value, new=value)
+            for arg, value in target_args.items()
+            if arg in scope.scope_args and arg not in named
+        )
+        return edit.changes + carried
 
 
 class EditBatchValidator:
@@ -795,6 +952,13 @@ class EditBatchValidator:
                 raise WriteMappingRejected(_Messages.NO_CHANGES)
             if len(edit.changes) > _Limits.MAX_CHANGES_PER_ROW:
                 raise WriteMappingRejected(_Messages.TOO_MANY_CHANGES)
+            fields = {change.field for change in edit.changes}
+            if len(fields) != len(edit.changes):
+                # Composition assigns one arg per column, so a second change on
+                # the same field silently wins: the diff renders both values and
+                # exactly one is sent. Same failure ``_args_are_distinct``
+                # refuses on the answer side, arriving from the client instead.
+                raise WriteMappingRejected(_Messages.DUPLICATE_FIELD)
 
 
 # ---------------------------------------------------------------------------

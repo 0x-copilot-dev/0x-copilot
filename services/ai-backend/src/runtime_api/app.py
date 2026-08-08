@@ -1027,11 +1027,15 @@ class RuntimeApiAppFactory:
         The lane narrows its own copy at stage time (no commit queue, no
         allow-always policy), so sharing costs it no capability.
 
-        ``connector_write_ops`` is read off ``app.state`` and is legitimately
-        absent today — no deployment composes a write-op catalogue yet, so every
-        save 503s at the catalogue step with a message that says so. That is the
-        honest shape: the lane is wired end to end and names the one adapter it
-        is still waiting on, rather than being unreachable for want of a binding.
+        ``connector_write_ops`` defaults to
+        :class:`~agent_runtime.capabilities.surfaces.write_ops_capture.CapturedConnectorWriteOps`,
+        which resolves a save's candidate ops from what the READ that produced
+        the surface already recorded on the run's ledger. It performs no I/O and
+        holds no MCP client, so wiring it by default puts nothing on a request
+        path — and it is what makes a connector Save able to dispatch at all;
+        before it, every save 503'd at the catalogue step because no producer
+        existed. A deployment with real per-user write permissions overrides
+        ``app.state.connector_write_ops`` to narrow that set further.
 
         ``None`` (no ports, or no stager) means the route answers 503 instead of
         composing itself from whatever ``app.state`` happens to hold.
@@ -1039,6 +1043,9 @@ class RuntimeApiAppFactory:
 
         from agent_runtime.capabilities.surfaces.write_back import (
             SurfaceWriteBackCoordinator,
+        )
+        from agent_runtime.capabilities.surfaces.write_ops_capture import (
+            CapturedConnectorWriteOps,
         )
 
         ports = getattr(app.state, "runtime_ports", None)
@@ -1050,7 +1057,10 @@ class RuntimeApiAppFactory:
             event_store=ports.event_store,
             stager=stager,
             environ=os.environ,
-            write_ops=getattr(app.state, "connector_write_ops", None),
+            write_ops=(
+                getattr(app.state, "connector_write_ops", None)
+                or CapturedConnectorWriteOps()
+            ),
             user_policies=getattr(app.state, "runtime_user_policies_resolver", None),
         )
 

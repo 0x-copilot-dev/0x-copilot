@@ -86,9 +86,15 @@ def _body(*, run_id: str = _RUN) -> dict[str, object]:
 
 class _FakeWriteOps:
     async def write_ops(
-        self, *, org_id: str, user_id: str, connector: str
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        connector: str,
+        captured: tuple[WriteOpCandidate, ...] = (),
+        captured_connector: str = "",
     ) -> tuple[WriteOpCandidate, ...]:
-        del org_id, user_id, connector
+        del org_id, user_id, connector, captured, captured_connector
         # ``required`` is what ``WriteArgScope`` reads to let the ``id`` binding
         # through; an op that declares nothing refuses every save by design.
         return (
@@ -335,7 +341,26 @@ class TestSaveStagesAndStops:
 
         row = body["rows"][0]
         assert "target_args" not in row
-        assert row["changes"] == [{"field": "priority", "old": 1, "new": 3}]
+
+    def test_every_arg_the_write_sends_is_visible_in_the_diff(
+        self, monkeypatch
+    ) -> None:
+        """The scoping arg is DISCLOSED, because the diff is all a human sees.
+
+        ``target_args`` is server-only by design (asserted above), so a value
+        composed into the write and absent from ``changes`` is a value nobody
+        approved. ``id`` is required by the op and was not edited, so it rides
+        as an ``old == new`` row: *also being sent, unchanged*.
+        """
+
+        bundle = _build(monkeypatch)
+
+        body = bundle.client.post(_URL, headers=_headers(), json=_body()).json()
+
+        assert body["rows"][0]["changes"] == [
+            {"field": "priority", "old": 1, "new": 3},
+            {"field": "id", "old": "ISS-1", "new": "ISS-1"},
+        ]
 
     def test_the_staged_write_is_appliable_through_the_apply_route_only(
         self, monkeypatch
