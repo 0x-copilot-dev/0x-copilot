@@ -70,6 +70,16 @@ export interface FirstRunKeyProvider {
 // it is kept as DATA here, never wired to `--color-accent`.)
 export const FIRST_RUN_KEY_PROVIDERS: readonly FirstRunKeyProvider[] = [
   {
+    id: "virtuals",
+    label: "Virtuals",
+    meta: "60+ models",
+    dotColor: "#5ad1e8",
+    // No `keyPrefix` — the format is undocumented, so `checkFirstRunKeyFormat`
+    // falls through to its permissive length check rather than rejecting a key
+    // it cannot actually recognise.
+    placeholder: "paste your Virtuals key",
+  },
+  {
     id: "anthropic",
     label: "Anthropic",
     meta: "Claude Sonnet 4.5",
@@ -199,7 +209,7 @@ export const FIRST_RUN_COPY = {
   },
   key: {
     title: "Bring your own key",
-    meta: "Anthropic · OpenAI · OpenRouter",
+    meta: "Virtuals · Anthropic · OpenAI · OpenRouter",
     body: "Frontier models, ready in ~30 seconds. Keys stay in your OS keychain.",
     btn: "Add a key",
   },

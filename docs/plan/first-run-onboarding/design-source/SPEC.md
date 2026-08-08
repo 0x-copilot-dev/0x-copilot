@@ -20,7 +20,7 @@ State vars: `stage ∈ {choice, dl, ready}`, `engine ∈ {null, {kind:local}, {k
 
 - Gate H1 `First, give it a model.` · sub `The only required choice — switch anytime.`
 - Local card: `Download the local model` · meta `Qwen 3 4B · 5.6 GB · free forever` · body `Runs on this machine. Nothing you send ever leaves it.` · btn `Start download` · note `type your first prompt while it downloads`
-- Key card: `Bring your own key` · meta `Anthropic · OpenAI · OpenRouter` · body `Frontier models, ready in ~30 seconds. Keys stay in your OS keychain.` · btn `Add a key`
+- Key card: `Bring your own key` · meta `Virtuals · Anthropic · OpenAI · OpenRouter` · body `Frontier models, ready in ~30 seconds. Keys stay in your OS keychain.` · btn `Add a key`
 - KeyForm: input placeholder `sk-…  paste your API key` · note `stored in your OS keychain — never uploaded` · btn `Connect`
 - Trial hatch: `just exploring? hosted starter — 25 free runs, no key →`
 - Composer H1 `What should we run first?` · textarea placeholder `Tell it what you want in plain words — "watch my wallet", "draft the thread"…` · hint `⏎ send · ⇧⏎ line`
@@ -30,7 +30,7 @@ State vars: `stage ∈ {choice, dl, ready}`, `engine ∈ {null, {kind:local}, {k
 
 ## Data
 
-- BYO providers: `Anthropic → Claude Sonnet 4.5 (#d97757)`, `OpenAI → GPT-5.2 (#6aa88f)`, `OpenRouter → 200+ models (#9a7fd6)` (dot colors are swatches, not the app accent).
+- BYO providers: `Virtuals → 60+ models (#5ad1e8)`, `Anthropic → Claude Sonnet 4.5 (#d97757)`, `OpenAI → GPT-5.2 (#6aa88f)`, `OpenRouter → 200+ models (#9a7fd6)` (dot colors are swatches, not the app accent). Virtuals leads: it is a gateway to every other vendor on this list, so it is the one key that unblocks the most models. The `.prov` toggle therefore carries FOUR rows, not three.
 - Model popover groups: **Local** (`Qwen 3 4B` — states `5.6 GB · download from Settings` / `downloading · N%` / `on-device · ready`), **trial** (`Haiku starter · hosted · 25 free runs`), **Bring your own key** (3 providers → `add key →`).
 - Tools popover: `Web search` (built-in, toggle, default on) · connectors `Safe{Wallet}` (propose & sign transactions) / `Google Sheets` (read & write workbooks) / `GitHub` (repos, issues, PRs) — each 1-click, `connected` on select · `Custom MCP server` (paste a JSON config). Header meta `{n} on · none required`, group note `1-click connect · you approve first use`.
 - Attach popover: `Upload from computer` (any file up to 100 MB) · `Capture screenshot` · group `Project files appear here once you have a project`.

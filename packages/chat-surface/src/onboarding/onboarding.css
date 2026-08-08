@@ -248,6 +248,14 @@
 .fr-kf__prov {
   align-self: flex-start;
   max-width: 100%;
+  /* The toggle carries FOUR providers since Virtuals joined, and
+     `SegmentedControl` is an `inline-flex` row that does not wrap on its own —
+     so on a narrow window the last option used to spill past `max-width`
+     instead of reflowing. `flex-wrap` is NOT among the component's inline
+     styles, so this rule applies without needing `!important`.
+     `row-gap` keeps a wrapped second line off the first. */
+  flex-wrap: wrap;
+  row-gap: var(--space-xs);
 }
 
 /* Provider tri-toggle option = leading swatch dot + label. */

@@ -17,7 +17,9 @@
 // Validation split: the server 422s an unknown provider slug and 400s
 // an obviously-wrong key format (openai keys start `sk-`, anthropic
 // `sk-ant-`, openrouter `sk-or-`, google `AIza`; unknown-but-plausible
-// values of length >= 20 are accepted permissively). The frontend
+// values of length >= 20 are accepted permissively). `virtuals` publishes no
+// documented prefix, so it is exempt from the prefix gate entirely — asserting
+// one would risk 400ing a valid key with no override. The frontend
 // surfaces those errors verbatim rather than duplicating the rules
 // client-side.
 
@@ -27,6 +29,11 @@
  * `openrouter` is an OpenAI-wire-compatible gateway (300+ models via
  * `vendor/model` slugs); the runtime routes it through the OpenAI client
  * with a fixed base URL and the Responses API disabled.
+ *
+ * `virtuals` is the Virtuals compute gateway (compute.virtuals.io) — like
+ * `openrouter` it is a FIXED-endpoint, multi-vendor gateway, so it carries no
+ * `base_url`/`label` and the runtime routes it through the OpenAI client with a
+ * base URL it already knows.
  *
  * `openai_compatible` (decision D-2) is the ONE generic slug for a
  * user-supplied custom OpenAI-compatible endpoint: unlike the four native
@@ -39,6 +46,7 @@ export type ProviderKeyProvider =
   | "anthropic"
   | "google"
   | "openrouter"
+  | "virtuals"
   | "openai_compatible";
 
 /**

@@ -44,6 +44,7 @@ export const PROVIDER_BRAND_COLOR: Readonly<Record<string, string>> =
     anthropic: "#d97757",
     openai: "#6aa88f",
     openrouter: "#9a7fd6",
+    virtuals: "#5ad1e8",
     google: "#4285f4",
     ollama: "var(--color-text-strong)",
   });

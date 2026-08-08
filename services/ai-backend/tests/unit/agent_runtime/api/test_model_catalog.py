@@ -17,6 +17,7 @@ from pathlib import Path
 
 from agent_runtime.api.litellm_model_source import (
     CatalogModelRecord,
+    CompositeModelSource,
     LitellmModelSource,
     ModelDisplayName,
 )
@@ -74,6 +75,45 @@ class _FakeSource:
 
     def records(self) -> tuple[CatalogModelRecord, ...]:
         return self._records
+
+
+class _ExplodingSource:
+    """A source whose upstream is having a bad day."""
+
+    def records(self) -> tuple[CatalogModelRecord, ...]:
+        raise RuntimeError("upstream on fire")
+
+
+class TestCompositeModelSource:
+    """Union, not fallback — each source owns a catalog the others lack."""
+
+    @staticmethod
+    def _record(provider: str, model_id: str) -> CatalogModelRecord:
+        return CatalogModelRecord(
+            provider=provider, model_id=model_id, display_name=model_id
+        )
+
+    def test_unions_every_source_in_order(self) -> None:
+        first = _FakeSource((self._record("openai", "gpt-5.6"),))
+        second = _FakeSource((self._record("virtuals", "moonshotai-kimi-k3"),))
+
+        combined = CompositeModelSource(first, second).records()
+
+        # Order preserved: ModelCatalog de-dupes keeping the FIRST occurrence's
+        # position, so the richer source must be able to win by going first.
+        assert [r.model_id for r in combined] == ["gpt-5.6", "moonshotai-kimi-k3"]
+
+    def test_a_failing_source_does_not_empty_the_catalog(self) -> None:
+        """One upstream down must not take the whole picker with it."""
+
+        healthy = _FakeSource((self._record("openai", "gpt-5.6"),))
+
+        combined = CompositeModelSource(_ExplodingSource(), healthy).records()
+
+        assert [r.model_id for r in combined] == ["gpt-5.6"]
+
+    def test_no_sources_is_empty_not_an_error(self) -> None:
+        assert CompositeModelSource().records() == ()
 
 
 class TestModelDisplayName:

@@ -89,6 +89,7 @@ export function providerLabel(provider: string): string {
     gemini: "Google Gemini",
     google: "Google Gemini",
     openrouter: "OpenRouter",
+    virtuals: "Virtuals",
     groq: "Groq",
     xai: "xAI",
     ollama: "Local · Ollama",

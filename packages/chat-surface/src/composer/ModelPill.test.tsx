@@ -236,7 +236,14 @@ describe("ModelPill (v3)", () => {
     // With no navigation deep-link wired, the inline KeyForm is the fallback.
     expect(screen.getByTestId("first-run-keyform")).toBeInTheDocument();
 
-    // Type a well-formed Anthropic key (the default first provider) and connect.
+    // Virtuals is the default first provider now, so pick Anthropic before
+    // typing an Anthropic key — otherwise the key saves under the wrong slug.
+    fireEvent.click(
+      screen
+        .getByTestId("segmented-control")
+        .querySelector('[data-value="anthropic"]') as HTMLButtonElement,
+    );
+    // Type a well-formed Anthropic key and connect.
     fireEvent.change(screen.getByTestId("first-run-key-input"), {
       target: { value: "sk-ant-0123456789012345678901234" },
     });

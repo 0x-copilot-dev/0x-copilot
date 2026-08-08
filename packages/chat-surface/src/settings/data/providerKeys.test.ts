@@ -70,8 +70,12 @@ describe("checkProviderKeyFormat", () => {
 });
 
 describe("PROVIDER_CATALOG", () => {
-  it("carries the six DESIGN-SPEC §4 providers", () => {
+  it("carries the seven DESIGN-SPEC §4 providers, Virtuals first", () => {
+    // Virtuals leads: it is a gateway to every other vendor here, so it is the
+    // single key that unblocks the most models. Order is load-bearing — the
+    // Add-key surfaces and the FTUE toggle both default to the first row.
     expect(PROVIDER_CATALOG.map((entry) => entry.id)).toEqual([
+      "virtuals",
       "anthropic",
       "openai",
       "openrouter",

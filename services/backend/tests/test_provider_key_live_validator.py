@@ -14,6 +14,7 @@ pytest-asyncio): each test drives the async ``validate`` through
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 import httpx
@@ -33,6 +34,89 @@ def _probe(handler, provider: ProviderName):
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
     )
     return asyncio.run(validator.validate(provider=provider, api_key=_KEY))
+
+
+class TestVirtualsProbe:
+    """Virtuals is probed by COMPLETION, not by a model listing.
+
+    ``GET compute.virtuals.io/v1/models`` answers 200 with no credential, so a
+    listing probe would report "passed" for any string — the exact false-pass
+    the native provider exists to remove. Virtuals also exposes no
+    authenticated metadata endpoint (``/key``/``/credits``/``/me`` are 404), so
+    a one-token completion is the only verdictive call available.
+    """
+
+    def test_probes_chat_completions_by_post_with_bearer(self) -> None:
+        seen: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen["method"] = request.method
+            seen["url"] = str(request.url)
+            seen["auth"] = request.headers.get("Authorization")
+            return httpx.Response(200, json={"choices": [{"message": {}}]})
+
+        result = _probe(handler, ProviderName.VIRTUALS)
+
+        assert result.status is LiveCheckStatus.VALID
+        assert seen["method"] == "POST"
+        assert seen["url"] == "https://compute.virtuals.io/v1/chat/completions"
+        assert seen["auth"] == f"Bearer {_KEY}"
+
+    def test_probe_body_is_one_token_and_carries_no_user_content(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json={})
+
+        _probe(handler, ProviderName.VIRTUALS)
+
+        assert captured["max_tokens"] == 1
+        assert captured["model"]
+        # The probe must never carry anything a user typed.
+        assert captured["messages"] == [{"role": "user", "content": " "}]
+
+    def test_403_is_an_invalid_key(self) -> None:
+        # The live unauthenticated response shape from the gateway.
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                403,
+                json={
+                    "message": "Forbidden resource",
+                    "error": "Forbidden",
+                    "statusCode": 403,
+                },
+            )
+
+        assert _probe(handler, ProviderName.VIRTUALS).status is (
+            LiveCheckStatus.INVALID_KEY
+        )
+
+    @pytest.mark.parametrize("code", [400, 404])
+    def test_model_rejection_is_never_a_failure_verdict(self, code: int) -> None:
+        """A stale probe model must not read as a bad key.
+
+        The probe names a specific model, and Virtuals may retire it. A 400/404
+        means the gateway rejected that MODEL — the key already cleared the auth
+        guard to reach model routing — so the only honest verdict is
+        "couldn't check". Without this the day Virtuals retires the probe model
+        is the day every user is told their working key is invalid.
+        """
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(code, json={"error": "model not found"})
+
+        assert _probe(handler, ProviderName.VIRTUALS).status is (
+            LiveCheckStatus.PROVIDER_UNREACHABLE
+        )
+
+    def test_reports_no_model_ids(self) -> None:
+        """The probe response is a completion, not a listing."""
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"data": [{"id": "leaked-model"}]})
+
+        assert _probe(handler, ProviderName.VIRTUALS).model_ids == ()
 
 
 class TestVerdicts:

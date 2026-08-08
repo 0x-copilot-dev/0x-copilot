@@ -38,13 +38,22 @@ function input(): HTMLInputElement {
   return screen.getByTestId("first-run-key-input") as HTMLInputElement;
 }
 
+/** Click a provider in the toggle. Switching also wipes any typed key. */
+function selectProvider(id: string): void {
+  fireEvent.click(
+    screen
+      .getByTestId("segmented-control")
+      .querySelector(`[data-value="${id}"]`) as HTMLButtonElement,
+  );
+}
+
 describe("<KeyForm>", () => {
-  it("defaults to Anthropic with an sk-ant placeholder and a masked input", () => {
+  it("defaults to Virtuals with the generic placeholder and a masked input", () => {
     render(<KeyForm port={makePort(okSave())} onConnected={() => undefined} />);
-    // Tri-toggle default = first provider (Anthropic).
+    // Toggle default = first provider, which is Virtuals (the gateway row).
     const group = screen.getByTestId("segmented-control");
     expect(group.querySelector('[aria-checked="true"]')?.textContent).toContain(
-      "Anthropic",
+      "Virtuals",
     );
     expect(input().placeholder).toBe("sk-…  paste your API key");
     // Never a text field that reveals the key.
@@ -72,6 +81,8 @@ describe("<KeyForm>", () => {
       <KeyForm port={makePort(save)} onConnected={(r) => (connected = r)} />,
     );
 
+    // Virtuals is the default row; this case is about Anthropic's round-trip.
+    selectProvider("anthropic");
     fireEvent.change(input(), { target: { value: ANTHROPIC_KEY } });
     fireEvent.click(screen.getByTestId("first-run-key-connect"));
 
@@ -108,7 +119,10 @@ describe("<KeyForm>", () => {
   it("rejects a malformed key client-side before any save", () => {
     const save = okSave();
     render(<KeyForm port={makePort(save)} onConnected={() => undefined} />);
-    // Wrong prefix for Anthropic.
+    // Anthropic declares a keyPrefix, so it is the row that CAN reject on
+    // format. Virtuals (the default) publishes no documented prefix and is
+    // deliberately length-only, so it would accept this string.
+    selectProvider("anthropic");
     fireEvent.change(input(), {
       target: { value: "not-an-anthropic-key-xxxx" },
     });
@@ -148,6 +162,7 @@ describe("<KeyForm>", () => {
       screen.getByTestId("segmented-control").querySelectorAll(".fr-kf__dot"),
     ) as HTMLElement[];
     expect(dots.map((d) => d.getAttribute("data-swatch"))).toEqual([
+      "#5ad1e8",
       "#d97757",
       "#6aa88f",
       "#9a7fd6",
