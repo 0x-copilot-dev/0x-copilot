@@ -49,11 +49,13 @@ from agent_runtime.surfaces_v2.rowset import (
     AgentHold,
     RowCounts,
     RowFieldChange,
+    RowSendPlan,
     RowState,
     RowStance,
     RowsetValidationError,
     RowsetValidator,
     StagedRow,
+    UnaccountedRow,
 )
 from agent_runtime.surfaces_v2.stage_rollout import StagedWriteRolloutGate
 
@@ -221,6 +223,30 @@ class InvalidRowset(StagedWriteError):
     safe_message = "The proposed row-set is invalid."
 
 
+class RowsetUnaccounted(StagedWriteError):
+    """A decided row can no longer prove what it would send (409; nothing sends).
+
+    The accounting rule runs when a row-set is STAGED. It has to run again here
+    because the fold rebuilds every row from an untrusted ledger payload and
+    ``RowsetValidator.sends_of`` is deliberately all-or-nothing: a row staged
+    before the rule existed, or one whose account did not survive the round
+    trip, comes back with an EMPTY account and would otherwise be approvable and
+    dispatchable disclosing nothing at all.
+
+    Raised — never a skip. An unaccounted row refuses the whole approve or apply
+    rather than dropping itself out of the batch, because a batch that silently
+    shrinks turns the action the user took into a different one. Holding the row
+    stays available and is the way forward: a hold only removes rows from the
+    outbound set.
+
+    The instance message names the row and the rule it failed
+    (:meth:`UnaccountedRow.message`).
+    """
+
+    code = "rowset_unaccounted"
+    safe_message = "A staged row can no longer account for what it would send."
+
+
 class StageRolloutDenied(StagedWriteError):
     """The persisted-run cohort is not admitted to mutate or send a stage."""
 
@@ -345,6 +371,28 @@ class StagedWriteState(RuntimeContract):
             if row.row_key == row_key:
                 return row
         return None
+
+    def row_send_plan(self, row_keys: Sequence[str]) -> RowSendPlan:
+        """Resolve ``row_keys`` to staged content, or to the refusal that stops it.
+
+        The ONE place the accounting rule is re-established after staging. Every
+        later step that acts on rows folded out of the ledger — approving them,
+        authorizing an apply, dispatching — asks this and refuses the whole
+        action on a populated ``refusal``. Two ways to be unaccounted, both
+        fail-closed: the fold has no content for the key at all, or the content
+        it has no longer satisfies :class:`RowsetValidator`.
+        """
+
+        resolved: list[StagedRow] = []
+        for row_key in row_keys:
+            row = self.staged_row(row_key)
+            if row is None:
+                return RowSendPlan(refusal=UnaccountedRow.for_missing_content(row_key))
+            resolved.append(row)
+        refusal = RowsetValidator.first_unaccounted(tuple(resolved))
+        if refusal is not None:
+            return RowSendPlan(refusal=refusal)
+        return RowSendPlan(rows=tuple(resolved))
 
     def latest_revision(self) -> RevisionSummary | None:
         """Return the highest-``rev`` revision summary, or ``None`` when empty."""
@@ -1253,6 +1301,12 @@ class WriteStager:
         key exists. A ``rev``-scoped approve/hold on a row-set is a 422
         (:class:`UnsupportedDecision`); a decided/frozen stage is a 409
         (:class:`StageFrozen`); an unknown key is a 404 (:class:`UnknownRowKey`).
+
+        An APPROVE additionally re-establishes each named row's account and is a
+        409 (:class:`RowsetUnaccounted`) when one cannot be proved — a row nobody
+        can see the whole of must not become approved. A HOLD is deliberately
+        exempt: it only ever takes rows OUT of the outbound set, so it is the
+        remedy for an unaccounted row rather than a way to smuggle one through.
         """
 
         keys_t = tuple(dict.fromkeys(row_keys))  # de-dupe, keep order
@@ -1271,6 +1325,10 @@ class WriteStager:
         known = {row.row_key for row in state.rows or ()}
         if any(key not in known for key in keys_t):
             raise UnknownRowKey()
+        if decision == Values.DECISION_APPROVE:
+            refusal = state.row_send_plan(keys_t).refusal
+            if refusal is not None:
+                raise RowsetUnaccounted(refusal.message())
 
         emitted = await self.ledger.emit(
             run=run,
@@ -1303,7 +1361,10 @@ class WriteStager:
         fresh stage, or all currently failed rows for a partial-recovery stage.
         A mismatched set is a 409 (:class:`ApplySetMismatch`); a duplicate apply
         of the same rev+set while pending/applied is idempotent (200, no event,
-        no enqueue). Held or already-applied rows can never enter a retry set.
+        no enqueue). Held or already-applied rows can never enter a retry set,
+        and a row that can no longer account for what it would send refuses the
+        whole apply with a 409 (:class:`RowsetUnaccounted`) — nothing is emitted
+        and nothing is enqueued.
         """
 
         requested = frozenset(row_keys)
@@ -1347,6 +1408,12 @@ class WriteStager:
             # WYSIWYG: fresh apply uses every current will-apply row; recovery
             # uses every and only failed row. Applied and held rows stay inert.
             raise ApplySetMismatch()
+        # The apply decision is what authorizes execution, so the accounting
+        # rule is re-established BEFORE it is written: an unaccounted row must
+        # never reach the ledger as approved-to-send.
+        refusal = state.row_send_plan(ordered).refusal
+        if refusal is not None:
+            raise RowsetUnaccounted(refusal.message())
 
         emitted = await self.ledger.emit(
             run=run,
@@ -1795,6 +1862,7 @@ __all__ = [
     "InvalidRowset",
     "MalformedDecision",
     "RevisionSummary",
+    "RowsetUnaccounted",
     "StageCommitQueuePort",
     "StageForbidden",
     "StageFrozen",

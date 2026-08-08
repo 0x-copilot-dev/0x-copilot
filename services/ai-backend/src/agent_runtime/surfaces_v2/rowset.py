@@ -37,10 +37,40 @@ Every staging lane already passes through :meth:`RowsetValidator.validate`
 ``runtime_adapters/rowset_effect_review.py``), so the accounting rule lives
 there and nowhere else.
 
+**Staging is the FIRST moment the rule runs, not the last.** The fold rebuilds
+every row from an untrusted ledger payload (``StagedWriteFold._staged_row_of``),
+and :meth:`RowsetValidator.sends_of` is deliberately all-or-nothing — a payload
+whose ``sends`` key is absent or unparseable yields ``()``. So a row that was
+staged before this contract existed, or one whose account did not survive the
+round trip, comes back with NO account at all. Re-establishing it is therefore a
+precondition of every later step that acts on the row, and
+:meth:`RowsetValidator.first_unaccounted` is the one entry point those steps use:
+``WriteStager.record_row_decision`` (a row may not be APPROVED unaccounted),
+``WriteStager.apply_rows`` (an apply may not be authorized unaccounted), and
+``RuntimeStageCommitHandler._handle_rowset`` (the last point before dispatch).
+An unaccounted row **refuses the whole action** — it is never skipped so the
+siblings can proceed, because a silently-shrunk batch means the action the user
+took ("apply these N rows") quietly became a different one, and because refusing
+loudly is what makes tampering visible. Holding a row stays available: a hold
+only ever removes a row from the outbound set, so it is the remedy, not a risk.
+
 **Migration is deliberately fail-closed.** A proposal persisted before this
 change carries no ``sends``, so the validator refuses it and an in-flight staged
 write becomes unapprovable. A write proposed under the old accounting should not
 be approvable under the new one; that is the correct answer, not a bug.
+
+**What ``old`` is, and what it is not.** ``StagedArg.old`` / ``RowFieldChange.old``
+are the "Currently" column a reviewer reads. Nothing in this module verifies
+them against the record: this validator is pure and total over ONE payload — it
+holds no store, no surface snapshot and no connector handle, and neither
+producer re-reads the record at this point (the agent lane's tool owns no MCP
+client by construction, and the write-back lane composes ``old`` and ``new``
+from the same submitted surface payload). So the ``old`` halves are checked for
+AGREEMENT with each other, not for truth, and the per-arg :class:`ArgOrigin` is
+what carries the provenance honestly — an ``old`` on a ``proposed`` arg is the
+agent's claim about the record, and says so. The one ``old`` rule with real
+teeth is A6: an arg labelled ``carried`` claims it is sending the record's own
+value back unchanged, which is falsifiable against its own ``new``.
 """
 
 from __future__ import annotations
@@ -105,7 +135,14 @@ class RowFieldChange(RuntimeContract):
 
 
 class ArgOrigin(StrEnum):
-    """Who authored the value one outbound arg carries."""
+    """Who authored the value one outbound arg carries.
+
+    This is also the provenance of the arg's ``old`` half — the "Currently"
+    value a reviewer reads — and it is the ONLY provenance signal on the wire,
+    because no lane re-reads the record at validation time (see the module
+    docstring). ``proposed`` means both halves are the agent's claim; a client
+    that renders ``old`` as fact on a ``proposed`` arg is overstating it.
+    """
 
     #: The user typed this value into a cell in THIS row.
     EDITED = "edited"
@@ -113,6 +150,17 @@ class ArgOrigin(StrEnum):
     CARRIED = "carried"
     #: The agent authored this value (agent-staged lane only).
     PROPOSED = "proposed"
+
+    @property
+    def claims_unchanged(self) -> bool:
+        """Whether this origin asserts ``old`` and ``new`` are the same value.
+
+        Only ``carried`` does — it means "read from this record and sent back
+        unchanged", which A6 checks. The other two make no such claim, and no
+        rule in this module can check their ``old`` against anything.
+        """
+
+        return self is ArgOrigin.CARRIED
 
 
 class StagedArg(RuntimeContract):
@@ -128,7 +176,9 @@ class StagedArg(RuntimeContract):
     origin: ArgOrigin
     #: The surface column / row field the value came from; ``None`` when none.
     column: str | None = Field(default=None, max_length=_Limits.FIELD_MAX)
-    #: Value as read (``None`` = absent).
+    #: The value the producer says this field currently holds (``None`` =
+    #: absent). NOT re-read from the record here — read :attr:`origin` for whose
+    #: claim it is, and the module docstring for why no rule can verify it.
     old: JsonValue | None = None
     #: The value that will be sent — identical to ``target_args[arg]``.
     new: JsonValue | None = None
@@ -224,6 +274,13 @@ class _Messages:
     exactly the drift this module exists to remove.
     """
 
+    #: Every per-row accounting refusal ends with this clause, and
+    #: :meth:`UnaccountedRow.message` strips it to re-tense the SAME sentence for
+    #: the decision / dispatch boundary, where the row was already staged and
+    #: what did not happen is the send. One definition, so the two cannot drift.
+    NOTHING_STAGED = " Nothing was staged."
+    NOTHING_SENT = " Nothing was sent."
+
     EMPTY = "A row-set must contain at least one row."
     TOO_MANY_ROWS = "The row-set exceeds the maximum row count."
     TOO_MANY_CHANGES = "A row exceeds the maximum number of field changes."
@@ -232,26 +289,40 @@ class _Messages:
     DUPLICATE_HOLD = "Each row may be pre-held at most once."
     DUPLICATE_FIELD = (
         "A row lists the same field twice, so only one of the two values would "
-        "be sent. Nothing was staged."
+        "be sent." + NOTHING_STAGED
     )
-    NO_TARGET_ARGS = "A staged row would send no field at all. Nothing was staged."
+    NO_TARGET_ARGS = "A staged row would send no field at all." + NOTHING_STAGED
     TOO_MANY_SENDS = "A row exceeds the maximum number of outbound fields."
     UNACCOUNTED_ARGS = (
         "A staged row does not disclose every field it would send, so what you "
-        "would approve and what would be sent are not the same write. Nothing "
-        "was staged."
+        "would approve and what would be sent are not the same write." + NOTHING_STAGED
     )
     ARG_VALUE_MISMATCH = (
-        "A staged row would send a value different from the one it discloses. "
-        "Nothing was staged."
+        "A staged row would send a value different from the one it discloses."
+        + NOTHING_STAGED
     )
     UNSHOWN_CHANGE = (
-        "A staged row lists a change for a field it would not send. Nothing was staged."
+        "A staged row lists a change for a field it would not send." + NOTHING_STAGED
     )
     CHANGE_VALUE_MISMATCH = (
-        "A staged row's diff does not match the field it would send. Nothing "
-        "was staged."
+        "A staged row's diff does not match the field it would send." + NOTHING_STAGED
     )
+    CHANGE_OLD_MISMATCH = (
+        "A staged row's diff and its account disagree about the value a field "
+        "currently holds, so the change on screen is not the size of the change "
+        "that would be made." + NOTHING_STAGED
+    )
+    CARRIED_ARG_CHANGED = (
+        "A staged row shows a field as carried through unchanged but would send "
+        "a value different from the one it read." + NOTHING_STAGED
+    )
+    ROW_CONTENT_MISSING = (
+        "A decided row has no staged content left, so what it would send cannot "
+        "be established at all." + NOTHING_STAGED
+    )
+    #: The frame :meth:`UnaccountedRow.message` composes. It names the row and
+    #: carries the rule's own sentence, so the reader is told which row and why.
+    ROW_REFUSAL = 'Row "{row_key}" cannot be applied. {clause}' + NOTHING_SENT
 
 
 class RowsetValidationError(Exception):
@@ -264,6 +335,51 @@ class RowsetValidationError(Exception):
         super().__init__(message or self.safe_message)
         if message is not None:
             self.safe_message = message
+
+
+class UnaccountedRow(RuntimeContract):
+    """The first row of a decided set whose account could not be re-established.
+
+    Returned rather than raised because the three call sites need it in three
+    shapes: the stager turns it into a typed 409, and the commit handler turns
+    it into a ``write.applied{failed}`` the user can read. Both go through
+    :meth:`message`, so a reviewer is told WHICH row and WHY in one sentence.
+    """
+
+    row_key: str = Field(min_length=1, max_length=_Limits.ROW_KEY_MAX)
+    #: The validator's own safe message for the rule this row failed.
+    reason: str = Field(min_length=1)
+
+    @classmethod
+    def for_missing_content(cls, row_key: str) -> UnaccountedRow:
+        """A decided row whose staged content is gone from the folded stage."""
+
+        return cls(
+            row_key=row_key[: _Limits.ROW_KEY_MAX],
+            reason=_Messages.ROW_CONTENT_MISSING,
+        )
+
+    def message(self) -> str:
+        """The safe public sentence: which row, why, and that nothing was sent."""
+
+        return _Messages.ROW_REFUSAL.format(
+            row_key=self.row_key,
+            clause=self.reason.removesuffix(_Messages.NOTHING_STAGED),
+        )
+
+
+class RowSendPlan(RuntimeContract):
+    """What one decided set of row keys is allowed to touch — rows, or a refusal.
+
+    Exactly one half is populated. ``rows`` carries the staged content for
+    EVERY named key, in the order they were named, and only when every one of
+    them still proves what it would send; otherwise ``refusal`` names the first
+    that does not and ``rows`` is empty. There is no third state, which is the
+    point: a caller cannot end up iterating a silently-shortened batch.
+    """
+
+    rows: tuple[StagedRow, ...] = ()
+    refusal: UnaccountedRow | None = None
 
 
 class StagedRowAccounting:
@@ -305,6 +421,9 @@ class StagedRowAccounting:
                     arg=arg,
                     origin=ArgOrigin.PROPOSED,
                     column=change.field if change is not None else None,
+                    # The model's claim about the record, copied — this lane
+                    # reads nothing, so ``origin=proposed`` is the whole
+                    # provenance of this value and the only honest label for it.
                     old=change.old if change is not None else None,
                     new=value,
                 )
@@ -332,13 +451,29 @@ class RowsetValidator:
     * **A2 value identity** — every ``s.new`` fingerprints identically to
       ``target_args[s.arg]``. Type-tagged, so ``True`` never passes for ``1``.
     * **A3 no unshown change** — every ``changes`` field is an arg the row
-      sends, its ``new`` is the value that arg carries, and its ``old`` is the
-      value that arg was read as. A ``changes`` entry naming a field no arg
-      carries is a REFUSAL, never a silently dropped display line.
+      sends and its ``new`` is the value that arg carries. A ``changes`` entry
+      naming a field no arg carries is a REFUSAL, never a silently dropped
+      display line.
     * **A4 uniqueness** — ``changes`` is field-unique and ``sends`` is
       arg-unique. A repeated field renders twice and sends once.
     * **A5 non-vacuous** — ``target_args`` is non-empty and within
       :attr:`_Limits.MAX_SENDS_PER_ROW`.
+    * **A6 carried means unchanged** — an arg whose ``origin`` claims it is
+      sending the record's own value back untouched must carry the same value
+      in ``old`` and ``new``. This is the one rule about ``old`` that is
+      falsifiable here, and it closes a real disguise: label the hostile arg
+      ``carried`` and a UI that renders carried args as inert hides an
+      overwrite in plain sight.
+    * **A7 the two halves agree about ``old``** — a row's ``changes`` and its
+      ``sends`` must report the same prior value for a field. This is an
+      INTEGRITY check between two independently-parsed halves of one payload
+      (which is exactly what the fold produces on replay), **not** verification
+      of ``old`` against the record: no lane re-reads the record here, and on
+      the agent lane :meth:`StagedRowAccounting.for_proposed` copies one half
+      from the other, so A7 cannot fail on a freshly-derived agent row by
+      construction. It fails on a hand-composed row and on a tampered ledger
+      payload, which are the shapes it exists for. See the module docstring for
+      why no stronger claim about ``old`` is available at this layer.
 
     Raises :class:`RowsetValidationError` with a safe message on any violation —
     the caller emits NO ledger event on failure.
@@ -374,6 +509,34 @@ class RowsetValidator:
             held_seen.add(hold.row_key)
 
     @classmethod
+    def assert_accounted(cls, row: StagedRow) -> None:
+        """Re-establish ONE already-staged row's account, or raise.
+
+        The public entry point for the later moments — a decision, an apply
+        authorization, the last step before dispatch — which each hold one row
+        rebuilt from the ledger rather than a whole proposed set. Same rules,
+        same messages, one definition.
+        """
+
+        cls._assert_accounted(row)
+
+    @classmethod
+    def first_unaccounted(cls, rows: Sequence[StagedRow]) -> UnaccountedRow | None:
+        """Return the FIRST row that cannot prove what it would send, else ``None``.
+
+        Total, in row order, and it stops at the first failure: the caller
+        refuses the whole action anyway, and naming one row and one reason is
+        what a reviewer can act on.
+        """
+
+        for row in rows:
+            try:
+                cls._assert_accounted(row)
+            except RowsetValidationError as exc:
+                return UnaccountedRow(row_key=row.row_key, reason=exc.safe_message)
+        return None
+
+    @classmethod
     def _assert_accounted(cls, row: StagedRow) -> None:
         """Refuse a row whose displayed account is not its outbound args."""
 
@@ -383,16 +546,20 @@ class RowsetValidator:
             raise RowsetValidationError(_Messages.TOO_MANY_SENDS)
         if [item.arg for item in row.sends] != list(row.target_args):  # A1 + A4
             raise RowsetValidationError(_Messages.UNACCOUNTED_ARGS)
-        for item in row.sends:  # A2
-            if ValueFingerprint.of(item.new) != ValueFingerprint.of(
+        for item in row.sends:
+            if ValueFingerprint.of(item.new) != ValueFingerprint.of(  # A2
                 row.target_args[item.arg]
             ):
                 raise RowsetValidationError(_Messages.ARG_VALUE_MISMATCH)
+            if item.origin.claims_unchanged and ValueFingerprint.of(  # A6
+                item.old
+            ) != ValueFingerprint.of(item.new):
+                raise RowsetValidationError(_Messages.CARRIED_ARG_CHANGED)
         cls._assert_changes_shown(row)
 
     @classmethod
     def _assert_changes_shown(cls, row: StagedRow) -> None:
-        """A3 + A4 over ``changes``: field-unique, and a subset view of ``sends``."""
+        """A3 + A4 + A7 over ``changes``: field-unique, a checked subset of ``sends``."""
 
         by_arg = {item.arg: item for item in row.sends}
         fields = {change.field for change in row.changes}
@@ -402,10 +569,14 @@ class RowsetValidator:
             sent = by_arg.get(change.field)
             if sent is None:  # A3
                 raise RowsetValidationError(_Messages.UNSHOWN_CHANGE)
-            if ValueFingerprint.of(change.new) != ValueFingerprint.of(
+            if ValueFingerprint.of(change.new) != ValueFingerprint.of(  # A3
                 row.target_args[change.field]
-            ) or ValueFingerprint.of(change.old) != ValueFingerprint.of(sent.old):
+            ):
                 raise RowsetValidationError(_Messages.CHANGE_VALUE_MISMATCH)
+            # A7 — the two halves must AGREE about ``old``. Read as integrity,
+            # never as verification: see the rule's entry in the class docstring.
+            if ValueFingerprint.of(change.old) != ValueFingerprint.of(sent.old):
+                raise RowsetValidationError(_Messages.CHANGE_OLD_MISMATCH)
 
     @classmethod
     def sends_of(cls, raw: object) -> tuple[StagedArg, ...]:
@@ -435,6 +606,7 @@ __all__ = [
     "ProposedRow",
     "RowCounts",
     "RowFieldChange",
+    "RowSendPlan",
     "RowState",
     "RowStance",
     "RowsetValidationError",
@@ -442,5 +614,6 @@ __all__ = [
     "StagedArg",
     "StagedRow",
     "StagedRowAccounting",
+    "UnaccountedRow",
     "ValueFingerprint",
 ]

@@ -34,6 +34,22 @@ LOOKUP, with no MCP loading on the write path and no new network hop.
   write, because ``input_schema.required`` is the only non-model source the
   scope guard has — no schema means no bound at all.
 
+**What this capture does NOT carry, and why it cannot yet.** It records which
+args an op has and which it cannot be called without — never what the op *does*.
+There is no verb here because there is no verb to capture: the source pairs this
+module is built from are a ``CapabilityDescriptor`` whose ``Action`` axis is
+``READ | WRITE`` and a curated ``ActionCatalog`` whose ``CatalogActionKind`` is
+``read | write | destructive``, and the MCP descriptor behind them publishes only
+``annotations.readOnlyHint`` (MCP is explicit that a server's annotations are
+hints, and a client must not make a security decision on one from an untrusted
+server). None of those separates *create* from *update*. Adding an
+``effect``-style member here that only the MODEL could fill would hand the thing
+being bounded the authority to declare its own bound, so it is deliberately
+absent. Until a connector- or catalogue-authored declaration exists,
+:class:`~.write_mapping.RecordAddressAudit` bounds the verb WITHOUT one, from the
+identity of the row the user edited — see its docstring for the full survey and
+for the class of save that consequently refuses.
+
 **Why the ledger and not a store.** The read runs in ``runtime_worker``; the save
 arrives in ``runtime_api``, minutes or hours later, in a different process. The
 run's event log is the durable cross-process channel both already share, and

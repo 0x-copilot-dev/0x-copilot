@@ -254,3 +254,58 @@ class TestRowsetRoutes:
         )
         assert res.status_code in (404, 409)
         assert b.store.stage_commit_commands == []
+
+
+class TestUnaccountedRowOverHttp:
+    """A stored row that can no longer prove what it would send is a 409.
+
+    Not a 500 (an unmapped domain error's fate) and not a 422: the request is
+    fine, the stage is not, and the answer is "review again". The detail names
+    the row so the reviewer can hold exactly that one.
+    """
+
+    @staticmethod
+    def _strip_sends(store, row_key: str) -> None:  # noqa: ANN001
+        for event in store.events_by_run[_RUN]:
+            rowset = event.payload.get("rowset")
+            if not isinstance(rowset, dict):
+                continue
+            for row in rowset.get("rows", []):
+                if row.get("row_key") == row_key:
+                    row.pop("sends", None)
+
+    def test_apply_409_names_the_row_and_enqueues_nothing(self, monkeypatch) -> None:
+        b = _build_client(monkeypatch, flag_on=True)
+        stage_id = b.stage_rowset()
+        self._strip_sends(b.store, "row1")
+
+        res = b.client.post(
+            _url(stage_id, "/apply"),
+            headers=_headers(),
+            json={"rev": 1, "row_keys": ["row0", "row1", "row2"]},
+        )
+
+        assert res.status_code == 409
+        assert 'Row "row1"' in res.json()["detail"]
+        assert b.store.stage_commit_commands == []
+
+    def test_approve_409_and_hold_still_works(self, monkeypatch) -> None:
+        b = _build_client(monkeypatch, flag_on=True)
+        stage_id = b.stage_rowset()
+        self._strip_sends(b.store, "row1")
+
+        refused = b.client.post(
+            _url(stage_id, "/decisions"),
+            headers=_headers(),
+            json={"decision": "approve", "row_keys": ["row1"]},
+        )
+        assert refused.status_code == 409
+
+        # The remedy stays open: holding only ever removes rows from the send.
+        held = b.client.post(
+            _url(stage_id, "/decisions"),
+            headers=_headers(),
+            json={"decision": "hold", "row_keys": ["row1"]},
+        )
+        assert held.status_code == 200
+        assert held.json()["row_counts"]["held"] == 1

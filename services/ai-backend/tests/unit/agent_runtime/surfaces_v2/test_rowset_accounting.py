@@ -33,6 +33,7 @@ from agent_runtime.surfaces_v2.rowset import (
     StagedArg,
     StagedRow,
     StagedRowAccounting,
+    UnaccountedRow,
     ValueFingerprint,
 )
 
@@ -50,6 +51,15 @@ _UNSHOWN_CHANGE = (
 )
 _CHANGE_VALUE_MISMATCH = (
     "A staged row's diff does not match the field it would send. Nothing was staged."
+)
+_CHANGE_OLD_MISMATCH = (
+    "A staged row's diff and its account disagree about the value a field "
+    "currently holds, so the change on screen is not the size of the change "
+    "that would be made. Nothing was staged."
+)
+_CARRIED_ARG_CHANGED = (
+    "A staged row shows a field as carried through unchanged but would send a "
+    "value different from the one it read. Nothing was staged."
 )
 _DUPLICATE_FIELD = (
     "A row lists the same field twice, so only one of the two values would be "
@@ -203,8 +213,10 @@ class TestA2TheDisclosedValueIsTheSentValue(RowsetAccountingFixtureMixin):
             target_args={"issue_id": "PAR-9", "estimate": 1},
             changes=(),
             sends=(
-                StagedArg(arg="issue_id", origin=ArgOrigin.CARRIED, new="PAR-9"),
-                StagedArg(arg="estimate", origin=ArgOrigin.CARRIED, new=True),
+                StagedArg(
+                    arg="issue_id", origin=ArgOrigin.CARRIED, old="PAR-9", new="PAR-9"
+                ),
+                StagedArg(arg="estimate", origin=ArgOrigin.CARRIED, old=True, new=True),
             ),
         )
 
@@ -243,14 +255,106 @@ class TestA3NoChangeGoesUnsent(RowsetAccountingFixtureMixin):
 
         assert self.refuses(row) == _CHANGE_VALUE_MISMATCH
 
-    def test_a_change_whose_old_value_is_not_what_was_read_is_refused(self) -> None:
-        # The ``old`` half matters as much: a diff that misreports the prior
-        # value misrepresents the SIZE of the change being approved.
+
+class TestA6CarriedMeansUnchanged(RowsetAccountingFixtureMixin):
+    """The one rule about ``old`` that is falsifiable at this layer.
+
+    ``origin: carried`` is a CLAIM — "read from this record and sent back
+    unchanged" — and a UI that renders carried args as inert is entitled to
+    believe it. So it is checked against the arg's own ``new``: an arg that
+    claims to be carrying a value through while sending a different one is an
+    overwrite wearing the costume of a no-op.
+    """
+
+    def test_a_carried_arg_that_changes_the_value_is_refused(self) -> None:
+        row = self.row(
+            target_args={"issue_id": "PAR-9", "priority": "low"},
+            changes=(),
+            sends=(
+                StagedArg(
+                    arg="issue_id",
+                    origin=ArgOrigin.CARRIED,
+                    column="issue_id",
+                    old="PAR-9",
+                    new="PAR-9",
+                ),
+                # The disguise: a real overwrite of ``priority`` labelled as
+                # untouched, so the reviewer's eye slides off it.
+                StagedArg(
+                    arg="priority",
+                    origin=ArgOrigin.CARRIED,
+                    column="priority",
+                    old="high",
+                    new="low",
+                ),
+            ),
+        )
+
+        assert self.refuses(row) == _CARRIED_ARG_CHANGED
+
+    def test_a_carried_arg_with_no_prior_value_is_refused(self) -> None:
+        # ``old`` left absent is not "unknown, allow it" — an arg that cannot
+        # say what it read cannot claim it is sending that value back.
+        row = self.row(
+            target_args={"issue_id": "PAR-9"},
+            changes=(),
+            sends=(StagedArg(arg="issue_id", origin=ArgOrigin.CARRIED, new="PAR-9"),),
+        )
+
+        assert self.refuses(row) == _CARRIED_ARG_CHANGED
+
+    def test_only_carried_claims_unchanged(self) -> None:
+        # An edited or proposed arg makes no such claim, so no rule here reads
+        # its ``old`` — which is exactly why ``origin`` is the provenance the
+        # wire carries.
+        assert ArgOrigin.CARRIED.claims_unchanged is True
+        assert ArgOrigin.EDITED.claims_unchanged is False
+        assert ArgOrigin.PROPOSED.claims_unchanged is False
+
+    def test_an_edited_arg_may_change_the_value(self) -> None:
+        RowsetValidator.validate(rows=(self.row(),), agent_holds=())
+
+
+class TestA7TheTwoHalvesAgreeAboutOld(RowsetAccountingFixtureMixin):
+    """``changes`` and ``sends`` must report the same prior value — INTEGRITY only.
+
+    Read what this rule is honestly. It compares two halves of ONE payload; it
+    does NOT verify ``old`` against the record, because nothing at this layer
+    can: the validator is pure, holds no store and no connector handle, and
+    neither producer re-reads the record here. On the agent lane
+    ``StagedRowAccounting.for_proposed`` copies one half from the other, so the
+    rule cannot fail on a freshly-derived row — the test below pins that fact
+    rather than hiding it. Where it DOES fire is the shape it exists for: a row
+    whose two halves were composed independently, which is precisely what the
+    fold rebuilds from a ledger payload on replay.
+    """
+
+    def test_two_halves_that_disagree_about_the_prior_value_are_refused(self) -> None:
+        # A diff that misreports the prior value misrepresents the SIZE of the
+        # change being approved: "none → low" reads as filling in a blank,
+        # "high → low" reads as a downgrade.
         row = self.row(
             changes=(RowFieldChange(field="priority", old="none", new="low"),)
         )
 
-        assert self.refuses(row) == _CHANGE_VALUE_MISMATCH
+        assert self.refuses(row) == _CHANGE_OLD_MISMATCH
+
+    def test_the_rule_cannot_fire_on_a_derived_agent_row(self) -> None:
+        # Stated, not assumed. ``for_proposed`` sets ``sends[].old`` FROM
+        # ``changes[].old``, so the two halves are the same model claim and
+        # agreement is structural. The reviewer's "Currently" column on this
+        # lane is the agent's assertion about the record, and ``origin`` is
+        # what says so.
+        derived = self.derives(
+            row_key="PAR-9",
+            title="Fix the login redirect",
+            target_args={"priority": "low"},
+            changes=(RowFieldChange(field="priority", old="fabricated", new="low"),),
+        )
+
+        RowsetValidator.validate(rows=(derived,), agent_holds=())
+        assert derived.sends[0].old == "fabricated"
+        assert derived.sends[0].origin is ArgOrigin.PROPOSED
 
 
 class TestA4AndA5ShapeRules(RowsetAccountingFixtureMixin):
@@ -368,6 +472,58 @@ class TestTheAgentLanesAccountIsDerivedNotAuthored(RowsetAccountingFixtureMixin)
             )
             == _CHANGE_VALUE_MISMATCH
         )
+
+
+class TestTheSameRuleIsReusableAfterStaging(RowsetAccountingFixtureMixin):
+    """``first_unaccounted`` is how the later gates ask the SAME question.
+
+    Staging validates a whole proposed set. A decision, an apply authorization
+    and the dispatch handler each hold rows folded back out of the ledger, and
+    they must not re-implement the rule to check them — one definition, one
+    vocabulary of refusals, and an answer shaped so the caller can name the row.
+    """
+
+    def test_an_accounted_set_has_no_first_unaccounted(self) -> None:
+        assert RowsetValidator.first_unaccounted((self.row(), self.row())) is None
+
+    def test_it_names_the_first_offender_in_row_order(self) -> None:
+        good = self.row()
+        bad = self.row(row_key="PAR-1", sends=())
+        worse = self.row(row_key="PAR-2", sends=())
+
+        found = RowsetValidator.first_unaccounted((good, bad, worse))
+
+        assert found is not None
+        assert found.row_key == "PAR-1"
+        assert found.reason == _UNACCOUNTED
+
+    def test_the_message_re_tenses_the_rule_for_the_dispatch_boundary(self) -> None:
+        # The row WAS staged by the time these gates run, so "Nothing was
+        # staged." would be false. The clause is one definition either way —
+        # the suffix is stripped and replaced, never restated.
+        found = RowsetValidator.first_unaccounted(
+            (self.row(row_key="PAR-7", sends=()),)
+        )
+
+        assert found is not None
+        message = found.message()
+        assert message.startswith('Row "PAR-7" cannot be applied.')
+        assert "Nothing was staged." not in message
+        assert message.endswith("Nothing was sent.")
+        assert "does not disclose every field it would send" in message
+
+    def test_a_row_with_no_staged_content_gets_its_own_reason(self) -> None:
+        missing = UnaccountedRow.for_missing_content("PAR-4")
+
+        assert 'Row "PAR-4"' in missing.message()
+        assert "no staged content left" in missing.message()
+
+    def test_assert_accounted_is_the_single_row_entry_point(self) -> None:
+        RowsetValidator.assert_accounted(self.row())
+        with pytest.raises(RowsetValidationError) as caught:
+            RowsetValidator.assert_accounted(self.row(sends=()))
+
+        assert caught.value.safe_message == _UNACCOUNTED
 
 
 class TestAnUntrustedLedgerAccountIsRebuiltWholeOrNotAtAll:

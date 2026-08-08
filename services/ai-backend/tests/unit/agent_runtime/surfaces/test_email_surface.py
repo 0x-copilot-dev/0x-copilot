@@ -256,6 +256,91 @@ class TestEmailDraftRecognition:
 
         assert match is None
 
+    def test_a_bare_recipient_string_carrying_the_separator_is_refused(self) -> None:
+        """The string branch's own guard, which the object case never reaches.
+
+        ``{"to": "jordan@…, mallory@…"}`` is the cheapest smuggle there is: no
+        object, no list, no display name — one string that the composer draws as
+        one To row and that the write lane then dispatches verbatim, delivering
+        to a second address the reviewer read as part of the first. Deleting the
+        guard in :meth:`_recipients`' ``isinstance(value, str)`` branch leaves
+        every other separator test green, because they all refuse for a
+        different reason (an unparseable address).
+        """
+
+        assert (
+            EmailDraftSurface.match(
+                {
+                    "to": "jordan@acme.example, mallory@evil.example",
+                    "subject": "s",
+                    "body": "b",
+                }
+            )
+            is None
+        )
+
+    def test_a_recipient_objects_address_carrying_the_separator_is_refused(
+        self,
+    ) -> None:
+        """The mapping branch refuses on the ADDRESS, not only on its absence.
+
+        Its sibling test smuggles through a ``name`` with no ``email``, so
+        ``_address_of`` answers ``None`` and the refusal is already earned by
+        the ``address is None`` half of the guard. This one supplies a perfectly
+        parseable ``email`` whose VALUE carries the separator — the only payload
+        that exercises the second half. A well-formed object is also the shape a
+        real mail connector emits, so this is the realistic version of the
+        attack, not the exotic one.
+        """
+
+        assert (
+            EmailDraftSurface.match(
+                {
+                    "to": [
+                        {
+                            "name": "Jordan Reyes",
+                            "email": "jordan@acme.example, mallory@evil.example",
+                        }
+                    ],
+                    "subject": "s",
+                    "body": "b",
+                }
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "cc"),
+        [
+            ("a bare scalar", 42),
+            ("a scalar inside the list", ["legal@acme.example", 42]),
+        ],
+    )
+    def test_a_recipient_of_an_unreadable_TYPE_is_refused_not_dropped(
+        self, name: str, cc: object
+    ) -> None:
+        """:meth:`_recipients`' final fall-through must REFUSE, not read empty.
+
+        The two absences are not the same, and this is the branch where
+        collapsing them is silent. Answering a bare ``_RecipientRead()`` for a
+        value of an unreadable type says "the document carried no cc", so ``cc``
+        defaults to ``""`` and the composer opens over a draft whose Cc the user
+        is told is empty when it was not — and in the list form, the readable
+        recipients still render, so the row looks complete while one addressee
+        has been dropped out of it. Both then flow to the write lane as the Cc
+        the reviewer approved.
+
+        Neither case reaches the mapping branch, which is why the existing
+        ``{"team": "legal"}`` test leaves this one uncovered.
+        """
+
+        assert (
+            EmailDraftSurface.match(
+                {"to": "jordan@acme.example", "cc": cc, "subject": "s", "body": "b"}
+            )
+            is None
+        ), name
+
     def test_a_present_but_unreadable_cc_fails_the_match(self) -> None:
         # The asymmetry that matters: an ABSENT cc is the empty string, a cc
         # that is there and cannot be shown whole is a refusal. Defaulting the

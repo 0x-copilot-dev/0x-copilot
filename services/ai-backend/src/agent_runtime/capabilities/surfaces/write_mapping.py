@@ -68,13 +68,28 @@ rules close it together:
   TOTAL account of ``target_args`` that ``RowsetValidator`` refuses the row
   without.
 
+**Bounding the arg set never bounded the VERB, and that was its own hole.** The
+rules above all ask *which fields* and *whose values*; none of them asks what the
+operation DOES. A ``create_issue`` requiring ``[team_id, title]`` satisfies every
+one of them from a one-field edit gesture — identity-mapped, in scope, provenance
+-clean, fully accounted — and stands up a NEW record from a user who was editing
+an existing one. The op name is a guess about vendor naming and the description is
+attacker-writable prose, so the bound cannot come from either, and nothing in the
+captured descriptor declares a verb (see :class:`RecordAddressAudit` for the
+survey). What settles it instead is the record's own identity: an update carries
+the address of an existing record and a create cannot, so the chosen op must
+declare, among the args it REQUIRES, the field the row carries its identity in.
+
 **What this lane will and will not write, stated plainly.** It dispatches an
 update-class op whose write arg names match the read's field names, declaring a
-small ``required`` set none of whose members the user edited. It refuses, with a
+small ``required`` set none of whose members the user edited, at least one of
+which is the identifier of the row the user was looking at. It refuses, with a
 constant message the client renders verbatim, an op that renames a field between
 its read and its write, an op whose ``required`` set is content the user is
-editing (a send/create-class op), an op whose declaration bounds nothing, and an
-answer that omits a required key. The email compose gesture is in the refused
+editing (a send/create-class op), an op whose declaration bounds nothing, an
+answer that omits a required key, an op that does not take the edited row's own
+identifier, and a surface whose rows carry no identifier at all. The email
+compose gesture is in the refused
 column today: ``send_reply``'s declaration does not separate the args that
 ADDRESS a record from the args the user edits, and this module has no other
 source for that distinction. That is the fail-closed rule working, not a bug —
@@ -231,6 +246,16 @@ class _Messages:
     MISSING_RECORD_KEY = (
         "The proposed write does not carry the fields this operation needs to "
         "find the record. Nothing was staged."
+    )
+    UNADDRESSED_RECORD = (
+        "The proposed operation does not take the identifier of the record you "
+        "edited, so it would act on a different record — or bring a new one "
+        "into being — rather than update this one. Nothing was staged."
+    )
+    UNIDENTIFIED_ROW = (
+        "This row carries no identifier from the connector, so a save cannot "
+        "show that it would change this record rather than create another one. "
+        "Nothing was staged."
     )
     DUPLICATE_SOURCE = (
         "The proposed write mapping reads one field twice, so two arguments "
@@ -805,6 +830,137 @@ class WriteArgScope:
 
 
 # ---------------------------------------------------------------------------
+# The verb bound — WHICH record the write acts on
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RecordAddressAudit:
+    """The op must act on the record the READ returned, not bring a new one into being.
+
+    Every other rule in this module bounds the arg SET and the VALUES in it, and
+    not one of them asks what the operation *does*. A ``create_issue`` whose
+    schema happens to line up satisfies all of them at once::
+
+        GESTURE    priority: 'high' -> 'low'   (on the row PAR-9)
+        OP CHOSEN  create_issue(team_id, title, priority, description)
+                   required = [team_id, title]
+        SENT       team_id='TEAM-1'  title='Fix the login redirect'
+                   priority='low'
+
+    ``arg == key`` holds for every binding, ``required`` is a strict two-member
+    subset of ``properties`` so the op is "bounded", every value is provenance-
+    clean, and ``sends`` is a complete ordered account of all three. The user
+    edited one field of a record they were looking at, and a NEW record is
+    created. The approved object and the sent object are both real and are not
+    the same object, because they are not even the same RECORD.
+
+    **The signal this rule does NOT use, and why.** The op's NAME
+    (``create_*`` / ``add_*`` / ``new_*``) is a guess about vendor naming, and
+    its ``description`` is connector-authored prose that reaches the mapping
+    prompt — the one field of a descriptor a hostile server writes freely. Both
+    are the shape of heuristic the four earlier attackers walked straight
+    through. There is also no DECLARED verb to read: the curated
+    ``ActionCatalog`` classifies ``read | write | destructive``, an MCP
+    descriptor carries only ``annotations.readOnlyHint`` (and the MCP spec is
+    explicit that annotations from an untrusted server are hints, never a
+    security input), and :class:`~.write_ops_capture.WriteOpSchemaDigest`
+    deliberately keeps names, types and ``required`` and nothing else. So
+    ``write_ops_capture`` has nothing create-vs-update to capture today, and
+    inventing an ``ArgSourceKind``-style verb for the MODEL to declare would put
+    the answer back in the hands of the thing being bounded.
+
+    **What IS available is the record's own identity, and it settles the
+    question without naming a verb at all.** A write that UPDATES an existing
+    record must carry that record's address; a write that CREATES one cannot,
+    because the identity does not exist until the connector assigns it. So:
+
+    * :attr:`identity_fields` are the row fields whose value IS this row's
+      ``row_key`` — the surface's own answer to *"which record is this row"*,
+      re-derived here from ``edit.row`` rather than believed, so a ``row_key``
+      that matches nothing the read returned is refused
+      (:attr:`_Messages.UNIDENTIFIED_ROW`) instead of authorising anything; and
+    * the chosen op must list at least one of those fields in its own
+      ``required`` set — :attr:`WriteArgScope.scope_args` — so the record's
+      address is an argument the CONNECTOR says it cannot be called without.
+
+    Both halves are outside the model's reach. ``row_key`` and ``row`` come from
+    the client, which is the user — the author of the edit, and not the
+    adversary this module defends against (see :mod:`.write_back`) — and the
+    identity is cross-checked against the row as read, so a client cannot name a
+    key the connector never returned. ``required`` is the connector's. The model
+    chooses only WHICH op, and the ops that pass are the ones whose declared
+    addressing set contains the id of the row in front of the user.
+
+    **The class that refuses, stated honestly.** A surface whose rows carry no
+    identifier — ``row_key`` fell back to the renderer's positional
+    ``row-<index>``, or the read returned unkeyed records — cannot be saved
+    through this lane at all, because nothing distinguishes updating that record
+    from creating another. So does a genuine update op that addresses records by
+    a key the read did not return under the same name. Both refuse loudly rather
+    than composing a write whose verb nobody established, and the durable fix
+    for the second is the same one the aliasing rule waits on: a connector- or
+    catalogue-authored declaration, captured beside ``input_schema`` at read
+    time. Never a name regex.
+
+    Total and pure. Rejections carry field COUNTS and the row key already in the
+    staged title — never a value, which may be user content.
+    """
+
+    #: Row fields whose value is this row's ``row_key``, as the READ returned
+    #: it. Empty when the surface identified the row by position rather than by
+    #: a value, or when the posted key matches no field of the posted row.
+    identity_fields: frozenset[str]
+
+    @classmethod
+    def for_edit(cls, edit: SurfaceRowEdit) -> "RecordAddressAudit":
+        """Re-derive the row's identity fields from the row as read."""
+
+        return cls(
+            identity_fields=frozenset(
+                name
+                for name, value in edit.row.items()
+                if cls._is_record_key(value, edit.row_key)
+            )
+        )
+
+    def reject_unaddressed(self, *, scope: WriteArgScope, edit: SurfaceRowEdit) -> None:
+        """Raise unless the op addresses THIS row's record, else return."""
+
+        if not self.identity_fields:
+            self._refuse(_Messages.UNIDENTIFIED_ROW, "unidentified_row", edit)
+        if not (self.identity_fields & scope.scope_args):
+            self._refuse(_Messages.UNADDRESSED_RECORD, "unaddressed_record", edit)
+
+    @staticmethod
+    def _is_record_key(value: object, row_key: str) -> bool:
+        """Is this read value the row's key?
+
+        Narrow on purpose. A record id is a string or an integer; the renderer
+        that derives ``row_key`` accepts exactly those two and stringifies the
+        integer, so the comparison mirrors it. ``bool`` is excluded ahead of
+        ``int`` because it is a subclass of it and ``str(True)`` is not an
+        identifier. Everything else — floats, containers, ``None`` — is not a
+        key, and a surface keyed by one refuses rather than matching loosely.
+        """
+
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, str):
+            return value == row_key
+        if isinstance(value, int):
+            return str(value) == row_key
+        return False
+
+    @staticmethod
+    def _refuse(message: str, reason: str, edit: SurfaceRowEdit) -> NoReturn:
+        _LOGGER.warning(
+            "%s %s row_key=%s: nothing staged", _MAPPER_PREFIX, reason, edit.row_key
+        )
+        raise WriteMappingRejected(message)
+
+
+# ---------------------------------------------------------------------------
 # Composition — answer + edits ⇒ StagedRows
 # ---------------------------------------------------------------------------
 
@@ -813,7 +969,7 @@ class RowWriteComposer:
     """Turn one validated answer plus the batch into ``StagedRow``s, fail-closed.
 
     Pure and synchronous — the model call is the caller's job, so every rule
-    below is testable without a completion. Seven rules, each of which rejects
+    below is testable without a completion. Eight rules, each of which rejects
     the WHOLE batch rather than dropping a row, because a partially mapped save
     is a save whose diff no longer describes what the user asked for:
 
@@ -845,6 +1001,13 @@ class RowWriteComposer:
     6. **The record is addressed.** Every arg the connector declared it cannot
        be called without is present in the composed ``target_args``, so a
        partial answer cannot stage a write that addresses nothing.
+    7. **The record addressed is THIS one.** :class:`RecordAddressAudit` — the
+       op's own ``required`` set must contain the field the row carries its
+       identity in. Rules 0–6 bound the arg set and the values in it and none of
+       them asks what the operation DOES, so a ``create_*`` op whose schema
+       lines up satisfied every one of them and stood up a new record from an
+       edit gesture. Last in the order because every earlier rule owns a sharper
+       diagnosis for the case it catches.
 
     **Every composed row carries its own account.** ``sends`` is built in the
     same loop that builds ``target_args`` — one entry per arg, in the same
@@ -981,6 +1144,10 @@ class RowWriteComposer:
 
         scope.reject_out_of_scope(answer.args)
         cls._require_record_address(scope=scope, target_args=target_args, edit=edit)
+        # Rule 7, last: every earlier rule has a sharper diagnosis for the case
+        # it owns, and this one answers the question none of them ask — WHICH
+        # record the composed write acts on.
+        RecordAddressAudit.for_edit(edit).reject_unaddressed(scope=scope, edit=edit)
 
         return StagedRow(
             row_key=edit.row_key,
@@ -1076,6 +1243,11 @@ class WriteMappingPrompt:
         '  - {"arg": "<name>", "source": "row", "key": "<row field as read>"}\n'
         "\n"
         "Rules:\n"
+        "0. Choose an operation that UPDATES the record the row was read from. "
+        "The user edited cells of a record that already exists, so the "
+        'operation\'s schema must list, among its "required" arguments, the '
+        "field the row carries its identifier in. An operation that brings a "
+        "new record into being is refused however well its arguments line up.\n"
         "1. Bind EVERY edited column to an argument, and bind NO other column. "
         "An unmapped column is a lost edit; a column nobody edited is a field "
         "the user never approved. Either refuses the whole answer.\n"
@@ -1335,6 +1507,7 @@ __all__ = [
     "ArgProvenanceAudit",
     "ArgSourceKind",
     "EditBatchValidator",
+    "RecordAddressAudit",
     "RowWriteComposer",
     "SurfaceRowEdit",
     "SurfaceWriteMapper",

@@ -42,6 +42,7 @@ from agent_runtime.capabilities.surfaces.write_mapping import (
     ArgProvenanceAudit,
     ArgSourceKind,
     EditBatchValidator,
+    RecordAddressAudit,
     RowWriteComposer,
     SurfaceRowEdit,
     SurfaceWriteMapper,
@@ -1819,3 +1820,269 @@ class TestTheConnectorsProseCannotBeUnbounded(WriteMappingFixtureMixin):
             "Update one issue."
             in json.loads(rendered)["candidate_write_operations"][0]["description"]
         )
+
+
+_UNADDRESSED_RECORD = (
+    "The proposed operation does not take the identifier of the record you "
+    "edited, so it would act on a different record — or bring a new one into "
+    "being — rather than update this one. Nothing was staged."
+)
+_UNIDENTIFIED_ROW = (
+    "This row carries no identifier from the connector, so a save cannot show "
+    "that it would change this record rather than create another one. Nothing "
+    "was staged."
+)
+
+
+class TestTheOpVerbIsBounded:
+    """The residual every arg-set rule left open: a CREATE from an edit gesture.
+
+    The user's gesture is *"change one field of the row I am looking at"*. The
+    model answers with ``create_issue``, and every rule this module had passes —
+    ``arg == key`` holds for all three bindings, ``required`` is a strict
+    two-member subset of ``properties`` so the op is "bounded", every value came
+    off the row or the diff so the audit admits it, and ``sends`` accounts for
+    all of it in order. None of those rules asks what the operation DOES, so a
+    NEW record is stood up from an edit to an existing one and the object
+    approved is not even the same RECORD as the object sent.
+
+    The bound is not the op's NAME and not its description — both are the shape
+    of heuristic the earlier attackers walked through, and the second is
+    attacker-writable prose. It is the record's identity: an update carries the
+    address of a record that exists, a create cannot, so the op must REQUIRE the
+    field the row carries its identity in.
+    """
+
+    # Verbatim from the probe.
+    CREATE_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "team_id": {},
+            "title": {},
+            "priority": {},
+            "description": {},
+        },
+        "required": ["team_id", "title"],
+    }
+    ROW = {
+        "team_id": "TEAM-1",
+        "title": "Fix the login redirect",
+        "priority": "high",
+        "description": "Repro steps live in the ticket thread.",
+    }
+
+    @staticmethod
+    def op(*, name: str, properties: tuple[str, ...], required: tuple[str, ...]):
+        return WriteOpCandidate(
+            name=name,
+            description="Does something to an issue.",
+            input_schema={
+                "type": "object",
+                "properties": {key: {"type": "string"} for key in properties},
+                "required": list(required),
+            },
+        )
+
+    def create_op(self) -> WriteOpCandidate:
+        return WriteOpCandidate(
+            name="create_issue",
+            description="Create an issue.",
+            input_schema=dict(self.CREATE_SCHEMA),
+        )
+
+    def edit(self, *, row: dict | None = None, row_key: str = "PAR-9"):
+        return SurfaceRowEdit(
+            row_key=row_key,
+            title="Fix the login redirect",
+            row=dict(self.ROW) if row is None else row,
+            changes=(RowFieldChange(field="priority", old="high", new="low"),),
+        )
+
+    @staticmethod
+    def create_answer() -> WriteMappingAnswer:
+        """The answer the probe produced: identity-mapped, in scope, accounted."""
+
+        return WriteMappingAnswer(
+            op="create_issue",
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="team_id", source=ArgSourceKind.ROW, key="team_id"),
+                ArgBinding(arg="title", source=ArgSourceKind.ROW, key="title"),
+            ),
+        )
+
+    @staticmethod
+    def rejects(answer, candidate, edit) -> str:
+        with pytest.raises(WriteMappingRejected) as caught:
+            RowWriteComposer.compose(answer=answer, candidate=candidate, edits=(edit,))
+        return caught.value.safe_message
+
+    # -- the probe, exactly as it landed --------------------------------------
+
+    def test_the_probes_create_from_an_edit_gesture_is_refused(self) -> None:
+        rejected = self.rejects(self.create_answer(), self.create_op(), self.edit())
+
+        # The probe's row carries no field holding its own key, so the refusal
+        # is the earlier of the two: nothing here identifies the record at all.
+        assert rejected == _UNIDENTIFIED_ROW
+
+    def test_a_create_is_refused_even_when_the_row_IS_identified(self) -> None:
+        # The sharper form. Give the row a real id, so the only thing wrong is
+        # that ``create_issue`` does not take it — which is precisely the
+        # difference between updating this record and standing up another.
+        identified = self.edit(row={**self.ROW, "id": "PAR-9"})
+
+        rejected = self.rejects(self.create_answer(), self.create_op(), identified)
+
+        assert rejected == _UNADDRESSED_RECORD
+
+    def test_the_honest_update_of_the_same_row_still_stages(self) -> None:
+        # Or the rule is a refusal of everything rather than a bound on the verb.
+        update = self.op(
+            name="update_issue",
+            properties=("id", "team_id", "title", "priority", "description"),
+            required=("id",),
+        )
+        answer = WriteMappingAnswer(
+            op="update_issue",
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+            ),
+        )
+
+        rows = RowWriteComposer.compose(
+            answer=answer,
+            candidate=update,
+            edits=(self.edit(row={**self.ROW, "id": "PAR-9"}),),
+        )
+
+        assert rows[0].target_args == {"priority": "low", "id": "PAR-9"}
+
+    # -- the signal is the identity, NOT the op's name -------------------------
+
+    def test_an_op_named_create_that_requires_the_id_is_not_refused_for_its_name(
+        self,
+    ) -> None:
+        # An upsert. A ``create_*`` regex would refuse it; the identity rule
+        # does not, because it takes the address of the record in front of the
+        # user and therefore acts on THAT record.
+        upsert = self.op(
+            name="create_issue",
+            properties=("id", "priority", "description"),
+            required=("id",),
+        )
+        answer = WriteMappingAnswer(
+            op="create_issue",
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+            ),
+        )
+
+        rows = RowWriteComposer.compose(
+            answer=answer,
+            candidate=upsert,
+            edits=(self.edit(row={**self.ROW, "id": "PAR-9"}),),
+        )
+
+        assert rows[0].target_args["id"] == "PAR-9"
+
+    def test_an_op_named_update_that_takes_no_identifier_is_still_refused(self) -> None:
+        # The mirror. The name says update and the declaration says otherwise;
+        # only the declaration is a connector fact this module can act on.
+        misnamed = WriteOpCandidate(
+            name="update_issue",
+            description="Update an issue.",
+            input_schema=dict(self.CREATE_SCHEMA),
+        )
+        answer = WriteMappingAnswer(
+            op="update_issue",
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="team_id", source=ArgSourceKind.ROW, key="team_id"),
+                ArgBinding(arg="title", source=ArgSourceKind.ROW, key="title"),
+            ),
+        )
+
+        rejected = self.rejects(
+            answer, misnamed, self.edit(row={**self.ROW, "id": "PAR-9"})
+        )
+
+        assert rejected == _UNADDRESSED_RECORD
+
+    # -- the class that refuses, named ----------------------------------------
+
+    def test_a_positionally_keyed_surface_cannot_be_saved_at_all(self) -> None:
+        # ``rowKeyFor`` falls back to ``row-<index>`` when the read returned no
+        # id-ish field. Nothing then distinguishes updating that record from
+        # creating another, so the whole lane refuses rather than guessing.
+        update = self.op(
+            name="update_issue",
+            properties=("id", "priority"),
+            required=("id",),
+        )
+        answer = WriteMappingAnswer(
+            op="update_issue",
+            args=(
+                ArgBinding(arg="priority", source=ArgSourceKind.EDITED, key="priority"),
+                ArgBinding(arg="id", source=ArgSourceKind.ROW, key="id"),
+            ),
+        )
+        positional = self.edit(row={**self.ROW, "id": "PAR-9"}, row_key="row-3")
+
+        assert self.rejects(answer, update, positional) == _UNIDENTIFIED_ROW
+
+
+class TestRowIdentityIsRederivedFromTheRead:
+    """``row_key`` is checked against the row, never believed on its own.
+
+    The client is the user and not the adversary here, but the identity is
+    still cross-checked against ``edit.row`` so a posted key that names nothing
+    the connector returned can never become an authorisation to write.
+    """
+
+    @staticmethod
+    def audit(*, row_key: str, row: dict) -> RecordAddressAudit:
+        return RecordAddressAudit.for_edit(
+            SurfaceRowEdit(
+                row_key=row_key,
+                title="t",
+                row=row,
+                changes=(RowFieldChange(field="priority", old=1, new=2),),
+            )
+        )
+
+    def test_the_field_holding_the_key_is_the_identity_field(self) -> None:
+        found = self.audit(row_key="PAR-9", row={"id": "PAR-9", "team": "core"})
+
+        assert found.identity_fields == frozenset({"id"})
+
+    def test_an_integer_id_matches_its_stringified_key(self) -> None:
+        # ``rowKeyFor`` stringifies a finite number, so the comparison mirrors
+        # it — otherwise a GitHub-ish ``number: 128`` surface refuses wrongly.
+        found = self.audit(row_key="128", row={"number": 128, "title": "x"})
+
+        assert found.identity_fields == frozenset({"number"})
+
+    def test_a_bool_is_never_an_identifier(self) -> None:
+        # ``bool`` is a subclass of ``int`` and ``str(True) == "True"``.
+        found = self.audit(row_key="True", row={"blocked": True})
+
+        assert found.identity_fields == frozenset()
+
+    def test_a_key_matching_no_read_value_identifies_nothing(self) -> None:
+        found = self.audit(row_key="PAR-9", row={"team_id": "TEAM-1", "title": "x"})
+
+        assert found.identity_fields == frozenset()
+
+    def test_a_nested_value_is_not_reachable_as_an_identity(self) -> None:
+        # A ROW binding reads ``edit.row[arg]`` — a top-level lookup — so a
+        # nested match is not an address any binding could carry.
+        found = self.audit(row_key="PAR-9", row={"meta": {"id": "PAR-9"}})
+
+        assert found.identity_fields == frozenset()
+
+    def test_the_verb_rule_is_stated_in_the_prompt(self) -> None:
+        # Or the model burns a call per save learning it by rejection.
+        assert "UPDATES the record" in WriteMappingPrompt.SYSTEM

@@ -181,6 +181,11 @@ class Values:
     FAILURE_PRECONDITION_DRIFT = "precondition_drift"
     FAILURE_CONNECTOR_ERROR = "connector_error"
     FAILURE_ATTEMPT_INDETERMINATE = "attempt_indeterminate"
+    # A commanded row could not re-establish its account of what it would send,
+    # so the commit handler dispatched NOTHING. Distinct from
+    # ``precondition_drift`` (the target moved) because nothing moved: the row
+    # is simply not provable, and the remedy is to hold it and re-apply.
+    FAILURE_ROWSET_UNACCOUNTED = "rowset_unaccounted"
     # ``decided_by.actor`` is pinned to the constant ``"user"`` here (SDR §5).
     DECIDED_BY_ACTOR_USER = "user"
     # ``connector_receipt_ref`` scheme (PRD-D2, NEW): resolves to the persisted
