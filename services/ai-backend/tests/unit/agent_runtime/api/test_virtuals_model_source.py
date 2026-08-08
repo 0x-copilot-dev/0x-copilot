@@ -75,10 +75,9 @@ class TestFamilyDerivation(VirtualsPayloadMixin):
             ("openai-gpt-56-terra", "gpt-terra"),
             ("openai-gpt-54-mini", "gpt-mini"),
             ("google-gemini-3-5-flash-lite", "gemini-flash-lite"),
-            # `preview` is a qualifier, not part of the line — without dropping
-            # it this would be `gemini-pro-preview` and miss the ladder.
-            ("google-gemini-3-1-pro-preview", "gemini-pro"),
-            # `fast` likewise: a variant of opus, not its own line.
+            # `preview` STAYS in the family, on purpose — see the ladder test.
+            ("google-gemini-3-1-pro-preview", "gemini-pro-preview"),
+            # `fast` is a release qualifier: a variant of opus, not its own line.
             ("anthropic-claude-opus-4-6-fast", "claude-opus"),
             # Alphanumeric version markers are versions (k3, v4, m3).
             ("moonshotai-kimi-k3", "kimi"),
@@ -91,6 +90,28 @@ class TestFamilyDerivation(VirtualsPayloadMixin):
     )
     def test_derives_the_product_line(self, model_id: str, expected: str) -> None:
         assert VirtualsCatalogPolicy.family(model_id) == expected
+
+    def test_preview_models_stay_selectable_but_off_the_ladder(self) -> None:
+        """A preview SKU must never become an auto-selected default.
+
+        Keeping `preview` in the family is what does it: `gemini-pro-preview`
+        matches no declared main line, so the ladder skips it while the catalog
+        still carries it. Stripping the token made a preview model the default
+        medium rung for every Virtuals user.
+        """
+
+        records = VirtualsCatalogParser.parse(
+            self.payload(
+                self.row("google-gemini-3-1-pro-preview", output_cost=15),
+                self.row("anthropic-claude-sonnet-5", output_cost=15),
+                self.row("google-gemini-3-5-flash-lite", output_cost=3.125),
+            )
+        )
+        ladder = ModelSizeTierResolver.ladder(records, provider="virtuals")
+
+        assert "google-gemini-3-1-pro-preview" not in {r.model_id for r in ladder}
+        # …but it is still a record the picker can list.
+        assert "google-gemini-3-1-pro-preview" in {r.model_id for r in records}
 
     def test_known_families_reach_the_tier_ladder(self) -> None:
         """The point of the family mapping: frontier rows become ladder rungs."""

@@ -81,13 +81,18 @@ class VirtualsCatalogPolicy:
         "z-ai",
     )
 
-    #: Tokens that qualify a release rather than name the product line. Dropped
-    #: when deriving the family so ``gemini-3-1-pro-preview`` and
-    #: ``claude-opus-4-6-fast`` land on ``gemini-pro`` / ``claude-opus`` — the
-    #: families :class:`ModelSizeTierResolver` already knows.
-    QUALIFIERS: Final[frozenset[str]] = frozenset(
-        {"preview", "fast", "api", "latest", "exp"}
-    )
+    #: Tokens that qualify a RELEASE rather than name the product line. Dropped
+    #: when deriving the family, so ``claude-opus-4-6-fast`` lands on
+    #: ``claude-opus`` — a family :class:`ModelSizeTierResolver` knows — and can
+    #: take a ladder rung, where the cost tiebreak prefers the plain variant.
+    #:
+    #: ``preview``/``exp`` are deliberately NOT here. Leaving them in the family
+    #: is what keeps a preview SKU off the ladder: ``gemini-3-1-pro-preview``
+    #: resolves to ``gemini-pro-preview``, which matches no declared main line,
+    #: so it stays fully selectable in Settings but can never be auto-selected
+    #: as a workspace default. Stripping them made a preview model the composer's
+    #: default medium rung for every Virtuals user.
+    QUALIFIERS: Final[frozenset[str]] = frozenset({"fast", "api", "latest"})
 
     #: A token carrying any digit is a version marker (``5``, ``56``, ``k3``,
     #: ``v4``, ``m3``), never part of the product line.

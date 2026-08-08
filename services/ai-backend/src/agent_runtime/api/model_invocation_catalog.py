@@ -51,6 +51,14 @@ _DEFAULT_CREDENTIAL_MODES: Mapping[str, frozenset[ModelCredentialMode]] = {
     "anthropic": frozenset({ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}),
     "gemini": frozenset({ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}),
     "openrouter": frozenset({ModelCredentialMode.BYOK}),
+    # Virtuals declares BOTH because both are wired: a per-user BYOK key is the
+    # product path, and ``VIRTUALS_ACP_KEY`` is the deployment fallback that
+    # lets `make dev` and the test suites reach the gateway without a keychain.
+    # Availability is the INTERSECTION of what is actually present with what is
+    # declared here, so omitting DEPLOYMENT would not make the env key
+    # unsupported — it would make it silently unusable, excluding every Virtuals
+    # model as CREDENTIAL_UNAVAILABLE on a machine that has the key set.
+    "virtuals": frozenset({ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}),
     "ollama": frozenset({ModelCredentialMode.KEYLESS}),
     CUSTOM_OPENAI_COMPATIBLE_PROVIDER: frozenset({ModelCredentialMode.BYOK}),
 }
