@@ -4909,17 +4909,39 @@ const RUN_COCKPIT_SCOPE_CSS = `
     flex-direction: row !important;
     gap: normal !important;
   }
-
-  .run-destination[data-mode="focus"][data-run-status="streaming"]
-    [data-testid^="tc-chat-message-"]:has(.reasoning-markdown) {
-      border-color: var(--color-text-muted) !important;
-      color: var(--color-text-muted) !important;
-      display: block !important;
-      font-size: 11.5px !important;
-    }
 `;
 
-function RunCockpitScopeStyles(): ReactElement {
+/*
+ * DELETED: the `[data-mode="focus"][data-run-status="streaming"]
+ * [data-testid^="tc-chat-message-"]:has(.reasoning-markdown)` rule.
+ *
+ * It was written when reasoning rendered as bare prose in the transcript and
+ * had to be quieted from outside. `ThinkingBlock` now owns reasoning's
+ * typography — label, muted body, size — so the rule was a SECOND authority on
+ * it, and the two disagreed:
+ *
+ * - `font-size: 11.5px !important` gave reasoning a fifth off-ladder size, and
+ *   applied it only while streaming in Focus — so a thought RESIZED under the
+ *   reader the moment its run settled;
+ * - `display: block !important` beat the flex column on `messageItemStyle`,
+ *   which is where the gap between a thought and the answer below it comes
+ *   from — so in exactly the mode+state this rule matched, the answer went back
+ *   to being glued to the thinking row.
+ *
+ * The scope block above is for the cockpit's LAYOUT GEOMETRY over the
+ * primitives' inline defaults, which is a real job. Restyling a primitive's
+ * interior from out here is not: if reasoning needs to look different, that
+ * belongs in the component that draws it.
+ */
+
+/**
+ * Exported for the design-parity harness, which renders `TcChat` on its own and
+ * would otherwise measure it WITHOUT the `!important` layer the real cockpit
+ * puts over it — i.e. would prove a type scale the product does not actually
+ * draw. Deliberately not on the package barrel: hosts mount `RunDestination`,
+ * which renders this itself.
+ */
+export function RunCockpitScopeStyles(): ReactElement {
   return (
     <style data-testid="run-cockpit-scope-styles">
       {RUN_COCKPIT_SCOPE_CSS}
