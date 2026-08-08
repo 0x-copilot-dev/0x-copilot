@@ -118,6 +118,10 @@ export {
   projectSourcesV2,
   type SourcesProjectionEventLike,
 } from "./projections/sourcesV2";
+// The single conversation-title heuristic. Both hosts had their own and they
+// had drifted (44 chars + "..." vs 60 chars + nothing, the latter commented as
+// matching the former); `ai-backend` mirrors these rules server-side.
+export { conversationTitleFromPrompt } from "./projections/conversationTitle";
 // === end PRD-03 ===
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";

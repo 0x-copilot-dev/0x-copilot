@@ -143,6 +143,56 @@ class TestConversationCardEvents(FastApiRuntimeApiTestMixin):
         # `run_queued` is on every run's ledger and is NOT a card frame.
         assert RuntimeApiEventType.RUN_QUEUED.value not in kinds
 
+    async def test_carries_citation_made_so_cross_turn_ordinals_resolve(self) -> None:
+        """`[[N]]` is conversation-scoped; this endpoint is how the client learns it.
+
+        The ordinal allocator numbers per CONVERSATION, so turn 2's prose cites
+        turn 1's tool call. The client builds its link registry from the bound
+        run's stream, which cannot contain that binding — so without this frame
+        the chip renders a bare "?" over prose the server resolved correctly
+        (observed live: `resolver.match ordinal=1 tool_call_id='call_x'` with no
+        `unbound_ordinal` warning, and a "?" on screen).
+        """
+        client, store = self.create_client()
+        conversation = await self.create_conversation(client)
+        run = await self.create_run(client, conversation["conversation_id"])
+        await store.append_event(
+            RuntimeEventDraft(
+                org_id=self.Values.ORG_ID,
+                run_id=run["run_id"],
+                conversation_id=conversation["conversation_id"],
+                event_type=RuntimeApiEventType.CITATION_MADE,
+                source="runtime",
+                trace_id=f"trace-{run['run_id']}-cite",
+                payload={
+                    "link": {
+                        "conversation_ordinal": 1,
+                        "message_id": "msg-1",
+                        "prose_offset": 0,
+                        "prose_length": 5,
+                        "source_tool_call_id": "call_x",
+                    }
+                },
+            )
+        )
+
+        response = client.get(
+            f"/v1/agent/conversations/{conversation['conversation_id']}/card-events",
+            params=self._scope(),
+        )
+
+        events = response.json()["events"]
+        cites = [
+            event
+            for event in events
+            if event["event_type"] == RuntimeApiEventType.CITATION_MADE.value
+        ]
+        assert len(cites) == 1
+        # The binding itself has to survive the trip, not just the frame type —
+        # an empty `source_tool_call_id` is exactly what renders as "?".
+        assert cites[0]["payload"]["link"]["source_tool_call_id"] == "call_x"
+        assert cites[0]["payload"]["link"]["conversation_ordinal"] == 1
+
     async def test_a_conversation_with_no_tool_calls_is_empty_not_absent(self) -> None:
         """A turn that ran no tools is a real answer, not a truncation.
 

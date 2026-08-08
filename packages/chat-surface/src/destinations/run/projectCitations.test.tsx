@@ -136,6 +136,67 @@ describe("projectCitations", () => {
     expect(p.linksByRun.get("run-1")).toBeDefined();
   });
 
+  // `[[N]]` is allocated per CONVERSATION, so turn 2's prose routinely cites
+  // turn 1's tool call — a binding the bound run's stream cannot contain. Built
+  // from `events` alone, every such chip resolved to nothing and rendered "?"
+  // over correct prose, while the server had logged a successful match for it.
+  describe("cross-turn ordinals (the `?` chip)", () => {
+    it("resolves an ordinal bound in an EARLIER run from the card history", () => {
+      const archived = [
+        envelope({
+          event_type: "citation_made",
+          run_id: "run-0",
+          payload: {
+            link: link({
+              conversation_ordinal: 1,
+              source_tool_call_id: "call_x",
+            }),
+          },
+        }),
+      ];
+      const live = [citationMade(link({ conversation_ordinal: 3 }))];
+
+      // Without the history the earlier turn's ordinal is simply absent — this
+      // is the bug, asserted directly so a regression cannot pass silently.
+      expect(projectCitations(live).linksByRun.get("run-0")).toBeUndefined();
+
+      const p = projectCitations(live, archived);
+      expect(p.linksByRun.get("run-0")).toBeDefined();
+      expect(p.linksByRun.get("run-1")).toBeDefined();
+    });
+
+    it("keeps sources and the active run scoped to the BOUND run", () => {
+      // Only the link registry widens. Folding history into these would make a
+      // finished turn's sources reappear under the live one.
+      const archived = [
+        envelope({
+          event_type: "source_ingested",
+          run_id: "run-0",
+          payload: { citation: citation({ citation_id: "c-old" }) },
+        }),
+      ];
+      const p = projectCitations([sourceIngested(citation())], archived);
+      expect(p.citations.has("c-old")).toBe(false);
+      expect(p.byRun.has("run-0")).toBe(false);
+      expect(p.activeRunId).toBe("run-1");
+    });
+
+    it("projects history alone when no run is bound yet", () => {
+      // A reopened conversation renders its transcript before any run binds;
+      // the chips in it must still resolve.
+      const archived = [
+        envelope({
+          event_type: "citation_made",
+          run_id: "run-0",
+          payload: { link: link({ conversation_ordinal: 1 }) },
+        }),
+      ];
+      const p = projectCitations([], archived);
+      expect(p.linksByRun.get("run-0")).toBeDefined();
+      expect(p.activeRunId).toBeNull();
+    });
+  });
+
   it("marks a run terminal on final_response and clears the active run", () => {
     const p = projectCitations([
       sourceIngested(citation()),

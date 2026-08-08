@@ -12,6 +12,7 @@
 // identity. Mirrors the desktop wire shapes verified there.
 
 import type { Transport } from "@0x-copilot/chat-transport";
+import { conversationTitleFromPrompt } from "@0x-copilot/chat-surface";
 import type {
   FirstRunCreateRunInput,
   FirstRunLaunchResult,
@@ -28,10 +29,14 @@ interface CreateRunResponseLite {
 
 /** First-run conversation title, derived from the composed prompt (SPEC: a
  *  meaningful chat name). Falls back to a neutral label for an attachment-only
- *  send. Truncated to 60 chars (matches the web `titleFromPrompt` heuristic). */
+ *  send.
+ *
+ *  The local `slice(0, 60)` this replaced cut mid-word and appended nothing —
+ *  it is what put "…to find the official Py" in the window header — and its
+ *  comment claimed it matched the web heuristic, which cut at 44 with "...".
+ *  One shared derivation now, mirrored server-side. */
 function firstRunTitle(userInput: string): string {
-  const trimmed = userInput.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, 60) : "First run";
+  return conversationTitleFromPrompt(userInput, "First run");
 }
 
 /**

@@ -130,13 +130,32 @@ function sealedCitationsFromPayload(payload: unknown): CitationSourceRef[] {
 }
 
 /**
- * Project the run stream into the `CitationsProvider` inputs. Pure over `events`
- * (referentially stable for an unchanged array via the caller's `useMemo`).
+ * Project the run stream into the `CitationsProvider` inputs. Pure over its
+ * inputs (referentially stable for unchanged arrays via the caller's `useMemo`).
+ *
+ * `archivedFrames` is the conversation's card history — every run's frames, not
+ * just the bound one. It feeds ONLY the ordinal link registry, and it is what
+ * makes a citation written in an earlier turn resolve at all.
+ *
+ * ORDINALS ARE CONVERSATION-SCOPED; THIS PROJECTION WAS RUN-SCOPED.
+ * `[[N]]` is allocated per conversation (`ConversationOrdinalAllocator`), so the
+ * second turn's prose routinely cites a tool call from the first. The registry
+ * was built from `events` alone — the bound run — so `useOrdinalCitation`'s
+ * "scan every run" fallback had exactly one run to scan and every cross-turn
+ * citation rendered as a muted "?" over correct prose. Seen live in the desktop
+ * app: one resolved chip and one "?" in the same answer, while the server's
+ * resolver had logged a successful `resolver.match` for BOTH.
+ *
+ * Only `linksByRun` widens. `byRun` / `citations` / `activeRunId` stay derived
+ * from `events`, because they answer "what is THIS run citing" — the Sources
+ * strip and the `sealedOnly` gate read them, and folding history into those
+ * would make a finished turn's sources reappear under the live one.
  */
 export function projectCitations(
   events: readonly RuntimeEventEnvelope[],
+  archivedFrames: readonly RuntimeEventEnvelope[] = [],
 ): CitationProjection {
-  if (events.length === 0) {
+  if (events.length === 0 && archivedFrames.length === 0) {
     return EMPTY_PROJECTION;
   }
 
@@ -157,7 +176,12 @@ export function projectCitations(
     }
   }
 
-  const linksByRun = buildCitationLinkRegistry(events);
+  // Archive first so the LIVE frame wins on any id the two share — the bound
+  // run is the fresher account of itself, and the card-history endpoint may
+  // return the same run while it is still streaming.
+  const linksByRun = buildCitationLinkRegistry(
+    archivedFrames.length === 0 ? events : [...archivedFrames, ...events],
+  );
   // The active run is the last streamed run while it is still open; once it seals
   // we hand `null` so `useOrdinalCitation` scans every run (the completed-message
   // case). The flat `[c<id>]` map stays keyed on the last run either way, so a
