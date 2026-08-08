@@ -14,7 +14,7 @@
     "check:playwright-version": "node tools/check-playwright-version.mjs"
   },
   "devDependencies": {
-    "playwright": "1.62.0"
+    "playwright": "1.62.1"
   },
   "overrides": {
     "playwright": "$playwright",
