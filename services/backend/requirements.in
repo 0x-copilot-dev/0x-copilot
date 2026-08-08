@@ -22,7 +22,7 @@ yoyo-migrations==9.0.0
 argon2-cffi==25.1.0
 pyjwt[crypto]==2.13.0
 pyotp==2.10.0
-webauthn==2.7.1
+webauthn==3.0.0
 # SAML 2.0 SSO (A5). Wraps OneLogin's python3-saml. Requires xmlsec1 system
 # library (apt: libxmlsec1-dev libxmlsec1-openssl; brew: libxmlsec1). The
 # OneLoginSamlVerifier imports python3-saml lazily so test runs that use
