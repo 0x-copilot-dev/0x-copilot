@@ -1,7 +1,7 @@
 # Top-level runtime + test deps for services/backend. Regenerate lock:
 #   cd services/backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
 cryptography==50.0.0
-fastapi==0.139.2
+fastapi==0.141.1
 # PR 8.3 — UploadFile / multipart parsing on the avatar route.
 python-multipart==0.0.32
 httpx==0.28.1
@@ -10,7 +10,7 @@ psycopg_pool==3.3.1
 pydantic==2.13.4
 python-dotenv==1.2.2
 PyYAML==6.0.3
-uvicorn==0.51.0
+uvicorn==0.52.1
 pytest==9.1.1
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
