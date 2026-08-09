@@ -21,6 +21,25 @@
 # allowlist the flag NAMESPACE (a value pattern), never a file or directory, so
 # a real secret in the same files is still caught.
 #
+# `services/backend/migrations/MANIFEST.lock` lines are `<id> sha256=<64 hex>`
+# CONTENT DIGESTS written by `tools/check_migration_manifest.py`, and a fresh
+# 64-char hash trips `generic-api-key` on entropy alone. gitleaks-action scans
+# only a PR's NEW commits, so this was latent rather than absent: two existing
+# manifest lines already match, they simply predate every scanned range. Every
+# migration added from here would red `lint-and-secrets` on its own checksum.
+#
+# Allowlisted as a LINE SHAPE, not as a path: the regex requires the
+# `NNNN_name sha256=` prefix, so a bare secret pasted into that same file is
+# still caught. That context lives in the MATCH, not in the secret (which is
+# just the hash), which is why this block now sets `regexTarget = "match"`.
+#
+# That target applies to every regex here, so it also widens the four fixtures
+# below from "the secret" to "the whole finding". Verified to change nothing:
+# scanning services/backend/tests + services/ai-backend/tests +
+# packages/chat-surface/src before and after suppresses exactly the four
+# MANIFEST.lock digest lines and adds no other suppression. It cannot narrow
+# anything either — a match always contains its own secret.
+#
 # `gAAAAABmZm9vYmFy…` is `McpCatalogMixin.CatalogValues.SECRET_CANARY` — a FAKE
 # Fernet ciphertext (its plaintext decodes to "foobarsupersecrettoken"). It is
 # the negative control for the MCP filesystem catalog: the tests plant it in a
@@ -34,6 +53,7 @@ useDefault = true
 
 [allowlist]
 description = "Known non-secret test fixtures"
+regexTarget = "match"
 regexes = [
   '''test-vault-secret-32-chars-min-length-yes''',
   '''enterprise\.flags\.[a-z0-9._-]+''',
@@ -43,4 +63,5 @@ regexes = [
   # rule matches by entropy. Not a secret — allowlist the identifier.
   '''SURFACES_V2_FLAG_KEY''',
   '''gAAAAABmZm9vYmFyc3VwZXJzZWNyZXR0b2tlbg''',
+  '''\d{4}_[a-z0-9_]+ sha256=[a-f0-9]{64}''',
 ]
