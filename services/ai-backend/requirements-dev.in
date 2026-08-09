@@ -28,4 +28,14 @@ pytest-asyncio==1.4.0
 # suite" — tests/unit/agent_runtime/capabilities/interpreter/test_registration.py),
 # so tests need the wheel: without it 30 tests fail on build_monty_interpreter
 # returning None.
+#
+# HELD at 0.0.18. 0.0.19 replaces the in-process `Monty(code).start(...)` /
+# `FunctionSnapshot.resume` model that monty_adapter.py is built on with a
+# subprocess worker pool: `Monty` is now a context manager whose only method is
+# `checkout`, and code reaches the interpreter through `MontySession.feed_start`
+# / `feed_run` instead of the constructor. Porting the adapter to that lifecycle
+# is a design change to a flag-off capability, not a dependency bump, so it is
+# tracked separately. tools/desktop-runtime/features/monty-requirements.txt
+# pins 0.0.18 too — both move together or the desktop opt-in installs a wheel
+# the adapter cannot drive.
 pydantic-monty==0.0.18
