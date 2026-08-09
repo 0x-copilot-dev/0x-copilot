@@ -171,6 +171,41 @@ describe("<KeyForm>", () => {
     );
   });
 
+  it("renders a backend reason code as a sentence, never the raw code", async () => {
+    // The shipped bug: the facade's 400 `detail` IS the reason code, the host
+    // lifts it into `Error.message`, and the alert printed it verbatim — this
+    // exact string was screenshotted on the packaged desktop app.
+    const save = vi.fn(() =>
+      Promise.reject(new Error("api_key_rejected_by_provider")),
+    );
+    render(<KeyForm port={makePort(save)} onConnected={() => undefined} />);
+
+    enterKey(ANTHROPIC_KEY);
+    fireEvent.click(connectBtn());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).not.toContain("api_key_rejected_by_provider");
+    expect(alert.textContent).toContain("Anthropic rejected that key");
+  });
+
+  it("names the provider a mismatched key actually belongs to", async () => {
+    // Reachable exactly when the user overrides the inference: the key infers
+    // as OpenAI, they store it under Virtuals, and only the server objects.
+    const save = vi.fn(() =>
+      Promise.reject(new Error("api_key_provider_mismatch")),
+    );
+    render(<KeyForm port={makePort(save)} onConnected={() => undefined} />);
+
+    enterKey(OPENAI_KEY);
+    fireEvent.click(screen.getByTestId("first-run-key-change"));
+    fireEvent.click(screen.getByTestId("first-run-key-pick-virtuals"));
+    fireEvent.click(connectBtn());
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("belongs to OpenAI");
+    expect(alert.textContent).toContain("paste your Virtuals key");
+  });
+
   it("lets the user override a WRONG inference without retyping", async () => {
     const save = okSave();
     render(<KeyForm port={makePort(save)} onConnected={() => undefined} />);

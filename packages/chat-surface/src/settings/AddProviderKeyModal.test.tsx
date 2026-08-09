@@ -141,6 +141,62 @@ describe("<AddProviderKeyModal>", () => {
     expect(await screen.findByTestId("add-key-model")).toBeInTheDocument();
   });
 
+  it("renders a backend reason code as a sentence, never the raw code", async () => {
+    // Same bug as the first-run KeyForm: the 400 `detail` IS the reason code,
+    // the host lifts it into `Error.message`, `add-key-error` printed it raw.
+    const onSubmit = vi
+      .fn<(s: { apiKey: string; model: string }) => Promise<void>>()
+      .mockRejectedValue(new Error("api_key_rejected_by_provider"));
+
+    render(
+      <AddProviderKeyModal
+        open
+        provider={OPENAI}
+        onClose={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    typeKey();
+    fireEvent.click(screen.getByTestId("add-key-continue"));
+    fireEvent.click(await screen.findByTestId("add-key-submit"));
+
+    const alert = await screen.findByTestId("add-key-error");
+    expect(alert).not.toHaveTextContent("api_key_rejected_by_provider");
+    expect(alert).toHaveTextContent("OpenAI rejected that key");
+  });
+
+  it("maps a reason code thrown by the validate probe too", async () => {
+    // `_require_custom_base_url` 400s from the /validate route as well, so the
+    // step-2 catch needs the same mapping as the step-3 store.
+    const onValidate = vi
+      .fn()
+      .mockRejectedValue(new Error("base_url_rejected:blocked_address"));
+
+    render(
+      <AddProviderKeyModal
+        open
+        provider={CUSTOM_ENDPOINT_ENTRY}
+        onClose={() => undefined}
+        onValidate={onValidate}
+        onSubmit={() => Promise.resolve()}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("add-key-base-url"), {
+      target: { value: "http://169.254.169.254/v1" },
+    });
+    fireEvent.change(screen.getByTestId("add-key-label"), {
+      target: { value: "My vLLM" },
+    });
+    typeKey();
+    fireEvent.click(screen.getByTestId("add-key-continue"));
+
+    const alert = await screen.findByTestId("add-key-error");
+    expect(alert).not.toHaveTextContent("blocked_address");
+    expect(alert).toHaveTextContent("private or internal address");
+  });
+
   it("keeps the flow open with an alert when the store rejects", async () => {
     const onSubmit = vi
       .fn<(s: { apiKey: string; model: string }) => Promise<void>>()

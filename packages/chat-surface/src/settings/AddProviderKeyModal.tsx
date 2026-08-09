@@ -33,6 +33,8 @@ import { Button, Field, Select, TextInput } from "@0x-copilot/design-system";
 import { Modal, StepDots } from "./Modal";
 import {
   checkProviderKeyFormat,
+  describeProviderKeyError,
+  detectProviderFromKey,
   type ProviderCatalogEntry,
   type ProviderKeyValidation,
 } from "./data/providerKeys";
@@ -80,12 +82,6 @@ export interface AddProviderKeyModalProps {
 }
 
 type Step = 1 | 2 | 3;
-
-function toMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err) return err;
-  return fallback;
-}
 
 const bodyBlockStyle: CSSProperties = {
   display: "flex",
@@ -165,6 +161,20 @@ export function AddProviderKeyModal({
     setSubmitting(false);
   }, [open, provider, initialBaseUrl, initialLabel]);
 
+  // Both async seams reject with the backend's machine-readable reason code as
+  // the message (`api_key_rejected_by_provider`, `base_url_rejected:…`), which
+  // this modal used to render verbatim. `describeProviderKeyError` is the one
+  // map from code → sentence, shared with the first-run `KeyForm`; an unmapped
+  // code still shows verbatim. Only a provider SLUG is passed on, never the key.
+  const describeError = useCallback(
+    (err: unknown, fallback: string): string =>
+      describeProviderKeyError(err, fallback, {
+        providerLabel: provider.label,
+        detectedProvider: detectProviderFromKey(apiKey),
+      }),
+    [provider.label, apiKey],
+  );
+
   const runValidate = useCallback(
     async (candidate: string) => {
       setError(null);
@@ -178,7 +188,15 @@ export function AddProviderKeyModal({
           : checkProviderKeyFormat(provider, candidate);
         if (!result.ok) {
           setStep(1);
-          setError(result.error ?? "That key could not be validated.");
+          // `ProviderKeyValidation.error` is contractually human-readable, so
+          // this normally passes straight through (an unmapped string is
+          // returned unchanged) — it is here so a host-injected `validate`
+          // that forwards a raw code still lands on the shared sentence.
+          setError(
+            result.error !== undefined
+              ? describeError(result.error, "That key could not be validated.")
+              : "That key could not be validated.",
+          );
           return;
         }
         const nextModels =
@@ -190,10 +208,10 @@ export function AddProviderKeyModal({
         setStep(3);
       } catch (err: unknown) {
         setStep(1);
-        setError(toMessage(err, "Could not validate the key. Try again."));
+        setError(describeError(err, "Could not validate the key. Try again."));
       }
     },
-    [onValidate, provider, isCustom, baseUrl],
+    [onValidate, provider, isCustom, baseUrl, describeError],
   );
 
   // A custom endpoint needs its Base URL + Label before the key can be checked.
@@ -226,10 +244,20 @@ export function AddProviderKeyModal({
         onClose();
       })
       .catch((err: unknown) => {
-        setError(toMessage(err, "Could not save the key."));
+        setError(describeError(err, "Could not save the key."));
         setSubmitting(false);
       });
-  }, [apiKey, model, baseUrl, label, isCustom, onSubmit, onClose, submitting]);
+  }, [
+    apiKey,
+    model,
+    baseUrl,
+    label,
+    isCustom,
+    onSubmit,
+    onClose,
+    submitting,
+    describeError,
+  ]);
 
   // The default-model pick is optional for a custom endpoint (the gateway may
   // define its own default); native providers still require a selection.

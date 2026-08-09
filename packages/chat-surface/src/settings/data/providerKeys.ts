@@ -281,6 +281,154 @@ export function detectProviderFromKey(apiKey: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Error copy — the ONE place a backend reason code becomes a sentence.
+// ---------------------------------------------------------------------------
+//
+// The provider-keys routes answer a rejected key with a machine-readable reason
+// code and nothing else: `HTTPException(400, "api_key_rejected_by_provider")`,
+// because the detail field must never carry key material, a URL, a host, or a
+// resolved IP (see services/backend/src/backend_app/provider_keys/
+// {routes,service}.py and ssrf_guard.py). FastAPI serialises that as
+// `{"detail": "<code>"}`, every host's HTTP layer lifts `detail` into
+// `Error.message`, and both add-key surfaces rendered `err.message` verbatim —
+// so a mistyped key told the user, literally, `api_key_rejected_by_provider`.
+//
+// Translating a code is therefore CLIENT work, and it belongs here rather than
+// in either surface: `KeyForm` (the first-run gate and the composer's ModelPill)
+// and `AddProviderKeyModal` (Settings) hit the same routes and must not drift
+// into two vocabularies for one backend.
+//
+// Unmapped codes fall through to the raw string ON PURPOSE. A code added
+// backend-side then degrades to exactly today's behaviour — ugly but truthful
+// and greppable — rather than to a wrong sentence or an empty alert.
+
+/**
+ * Display context for {@link providerKeyErrorMessage}.
+ *
+ * Deliberately NOT the api key: no edit to the copy table can then interpolate
+ * key material into something rendered on screen. `detectedProvider` is the
+ * slug {@link detectProviderFromKey} returns, which this module resolves to a
+ * label itself.
+ */
+export interface ProviderKeyErrorContext {
+  /** Label of the provider the key is being stored under, e.g. "OpenAI". */
+  readonly providerLabel?: string;
+  /** Slug the pasted key's prefix points at — pass `detectProviderFromKey(key)`. */
+  readonly detectedProvider?: string | null;
+}
+
+/** The detected provider's label, unless it is the one already selected. */
+function otherProviderLabel(context: ProviderKeyErrorContext): string | null {
+  const slug = context.detectedProvider;
+  if (slug === undefined || slug === null || slug === "") return null;
+  const label = providerCatalogEntry(slug)?.label;
+  // Detected === selected would read "belongs to OpenAI … paste your OpenAI
+  // key", which is nonsense the reader cannot act on.
+  if (label === undefined || label === context.providerLabel) return null;
+  return label;
+}
+
+// Keyed by the EXACT `detail` string the backend raises. `base_url_rejected`
+// arrives suffixed with an `SsrfBlockReason` value, so each of the six is its
+// own key — an unknown seventh falls through to the raw code, which is the
+// documented degradation.
+const PROVIDER_KEY_ERROR_COPY: Readonly<
+  Record<string, (context: ProviderKeyErrorContext) => string>
+> = {
+  // routes.py — PUT, after the live provider probe came back INVALID_KEY.
+  api_key_rejected_by_provider: ({ providerLabel }) =>
+    providerLabel !== undefined && providerLabel !== ""
+      ? `${providerLabel} rejected that key. Check you copied the whole value, and that the key is still active.`
+      : "The provider rejected that key. Check you copied the whole value, and that the key is still active.",
+
+  // service.py — validate_api_key_format, before anything leaves the process.
+  api_key_too_short: () =>
+    "That key looks too short. Check you pasted the whole value.",
+  api_key_too_long: () =>
+    "That key looks too long. Paste just the key, with nothing around it.",
+  api_key_contains_whitespace: () =>
+    "That key has a space or line break in it. Paste it again on its own.",
+  // Phrased without an article so it reads correctly for every label
+  // ("Google AI", "Groq", "Virtuals"), and without naming a UI affordance so it
+  // fits the first-run form and the Settings per-provider row alike.
+  api_key_provider_mismatch: (context) => {
+    const selected =
+      context.providerLabel !== undefined && context.providerLabel !== ""
+        ? context.providerLabel
+        : null;
+    const detected = otherProviderLabel(context);
+    if (detected !== null && selected !== null) {
+      return `That key looks like it belongs to ${detected}. Add it under ${detected}, or paste your ${selected} key here.`;
+    }
+    if (selected !== null) {
+      return `That key carries another provider's prefix. Add it under the provider it belongs to, or paste your ${selected} key here.`;
+    }
+    return "That key looks like it belongs to a different provider. Add it under that provider, or paste a key for this one.";
+  },
+
+  // routes.py — _require_custom_base_url, the decision D-2 custom endpoint.
+  base_url_required: () =>
+    "Enter the Base URL of your OpenAI-compatible endpoint.",
+  custom_endpoint_unavailable: () =>
+    "Custom endpoints are not available in this build. Choose one of the listed providers instead.",
+
+  // ssrf_guard.py — SsrfBlockReason, one entry per value.
+  "base_url_rejected:unsupported_scheme": () =>
+    "That Base URL uses an address type we cannot call. Use an https:// address.",
+  "base_url_rejected:https_required": () =>
+    "That Base URL must start with https://.",
+  "base_url_rejected:credentials_in_url": () =>
+    "Take the username and password out of that Base URL — put the token in the API key field instead.",
+  "base_url_rejected:missing_host": () =>
+    "That Base URL has no host. Use the full address, e.g. https://my-host/v1.",
+  "base_url_rejected:blocked_address": () =>
+    "That Base URL points at a private or internal address, which is not allowed.",
+  "base_url_rejected:unresolvable_host": () =>
+    "That Base URL's host could not be found. Check it for typos.",
+};
+
+/**
+ * Turn a backend provider-keys reason code into a sentence saying what
+ * happened and what to do. An unrecognised code is returned unchanged — see
+ * the section note above for why that degradation is deliberate.
+ */
+export function providerKeyErrorMessage(
+  code: string,
+  context: ProviderKeyErrorContext = {},
+): string {
+  const trimmed = code.trim();
+  const copy = Object.prototype.hasOwnProperty.call(
+    PROVIDER_KEY_ERROR_COPY,
+    trimmed,
+  )
+    ? PROVIDER_KEY_ERROR_COPY[trimmed]
+    : undefined;
+  return copy !== undefined ? copy(context) : trimmed;
+}
+
+/**
+ * The add-key surfaces' rejection handler: pull the message off a thrown
+ * value, map it through {@link providerKeyErrorMessage}, and fall back to
+ * `fallback` only when the throw carried no message at all.
+ *
+ * Non-code messages (a proxy timeout, "Failed to fetch") pass through
+ * unchanged, exactly as before this mapping existed.
+ */
+export function describeProviderKeyError(
+  err: unknown,
+  fallback: string,
+  context: ProviderKeyErrorContext = {},
+): string {
+  if (err instanceof Error && err.message) {
+    return providerKeyErrorMessage(err.message, context);
+  }
+  if (typeof err === "string" && err) {
+    return providerKeyErrorMessage(err, context);
+  }
+  return fallback;
+}
+
+// ---------------------------------------------------------------------------
 // Port — the host-callback seam the page depends on.
 // ---------------------------------------------------------------------------
 
@@ -426,10 +574,15 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
         };
       }
       if (res.valid === false) {
+        // Same condition the PUT reports as `api_key_rejected_by_provider`,
+        // just reached through the probe route instead — so it must say the
+        // same words. Two sentences for one rejection is the drift the copy
+        // table above exists to prevent.
         return {
           ok: false,
-          error:
-            "That key was rejected by the provider — check you pasted the whole value.",
+          error: providerKeyErrorMessage("api_key_rejected_by_provider", {
+            providerLabel: providerCatalogEntry(provider)?.label,
+          }),
         };
       }
       // provider_unreachable: verify skipped, not failed. Continue with the
