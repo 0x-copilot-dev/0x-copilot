@@ -89,6 +89,24 @@ updates:
       - dependency-name: marshmallow
         update-types:
           - version-update:semver-major
+      # pydantic-monty is held at 0.0.18. 0.0.19 is not a version bump: it
+      # replaces the in-process `Monty(code).start(...)` /
+      # `FunctionSnapshot.resume` model that
+      # agent_runtime/capabilities/interpreter/monty_adapter.py is built on
+      # with a subprocess worker pool — `Monty` becomes a context manager
+      # whose only method is `checkout`, and code reaches the interpreter
+      # through `MontySession.feed_start` / `feed_run`. Porting the adapter
+      # to that lifecycle is a design change to a capability that is gated
+      # off by default (`runtime_enable_monty` defaults False), and
+      # tools/desktop-runtime/features/monty-requirements.txt has to move in
+      # the same commit or the desktop opt-in installs a wheel the adapter
+      # cannot drive.
+      #
+      # Ignored rather than pinned-with-a-comment because dependabot
+      # proposed 0.0.19 twice (#589, #600), the second time straight past a
+      # HELD comment sitting on the line above the pin. Drop this entry as
+      # part of the adapter port, not before.
+      - dependency-name: pydantic-monty
     reviewers:
       - 0x-copilot/ai-runtime-owners
       - 0x-copilot/security-reviewers
