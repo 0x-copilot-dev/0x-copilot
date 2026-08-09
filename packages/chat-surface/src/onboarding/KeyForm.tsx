@@ -45,6 +45,7 @@ import {
 import { TextInput } from "@0x-copilot/design-system";
 
 import {
+  describeProviderKeyError,
   detectProviderFromKey,
   MIN_PLAUSIBLE_KEY_LENGTH,
   type ProviderKeysPort,
@@ -95,12 +96,6 @@ export interface KeyFormProps {
 }
 
 const DEFAULT_SETTLE_DELAY_MS = 400;
-
-function toMessage(err: unknown, fallback: string): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === "string" && err) return err;
-  return fallback;
-}
 
 /**
  * Last four characters only, the same shape the server's `key_hint` uses. The
@@ -197,10 +192,22 @@ export function KeyForm({
       })
       .catch((err: unknown) => {
         if (!aliveRef.current) return;
-        setError(toMessage(err, "Could not connect that key. Try again."));
+        // The rejection carries the backend's machine-readable reason code as
+        // its message; `describeProviderKeyError` is the single place that
+        // turns one into a sentence (an unmapped code still shows verbatim).
+        // `detected` matters when the user overrode the inferred provider —
+        // the server then reports `api_key_provider_mismatch`, and the copy can
+        // name the provider the key actually belongs to.
+        setError(
+          describeProviderKeyError(
+            err,
+            "Could not connect that key. Try again.",
+            { providerLabel: provider.label, detectedProvider: detected },
+          ),
+        );
         setConnecting(false);
       });
-  }, [apiKey, connecting, formatCheck, onConnected, port, provider]);
+  }, [apiKey, connecting, detected, formatCheck, onConnected, port, provider]);
 
   const inputPlaceholder = placeholder ?? FIRST_RUN_COPY.keyForm.placeholder;
   const listOpen = picking || unknown;
