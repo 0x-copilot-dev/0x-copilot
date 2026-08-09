@@ -20,7 +20,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "electron": "42.1.0",
+    "electron": "43.3.0",
     "playwright": "1.62.0"
   },
   "scripts": {
