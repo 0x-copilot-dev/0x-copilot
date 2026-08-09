@@ -37,7 +37,7 @@
     "@0x-copilot/design-system": "0.1.0",
     "@0x-copilot/surface-renderers": "0.1.0",
     "electron-updater": "^6.6.2",
-    "react": "19.2.7",
+    "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "3.25.76",
     "@testing-library/jest-dom": "7.0.0",
