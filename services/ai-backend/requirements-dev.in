@@ -38,4 +38,4 @@ pytest-asyncio==1.4.0
 # tracked separately. tools/desktop-runtime/features/monty-requirements.txt
 # pins 0.0.18 too — both move together or the desktop opt-in installs a wheel
 # the adapter cannot drive.
-pydantic-monty==0.0.18
+pydantic-monty==0.0.19

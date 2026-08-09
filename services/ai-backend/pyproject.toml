@@ -13,7 +13,7 @@ dependencies = [
   "fastapi==0.141.1",
   "langchain==1.3.14",
   "langchain-openai==1.4.1",
-  "langchain-anthropic==1.5.3",
+  "langchain-anthropic==1.5.4",
   "langchain-google-genai==4.3.2",
   "litellm==1.95.0",
   "langgraph==1.2.10",
@@ -52,7 +52,7 @@ monty = [
   # separately only after the user enables Code Mode.
   # Held at 0.0.18 — 0.0.19 moves to a subprocess worker pool that
   # monty_adapter.py cannot drive yet. See requirements-dev.in.
-  "pydantic-monty==0.0.18",
+  "pydantic-monty==0.0.19",
 ]
 dev = [
   "pytest==9.1.1",
