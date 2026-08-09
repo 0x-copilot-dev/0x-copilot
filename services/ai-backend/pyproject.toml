@@ -50,7 +50,9 @@ dependencies = [
 monty = [
   # AC6 embedded Python-subset interpreter. Desktop installs this feature
   # separately only after the user enables Code Mode.
-  "pydantic-monty==0.0.19",
+  # Held at 0.0.18 — 0.0.19 moves to a subprocess worker pool that
+  # monty_adapter.py cannot drive yet. See requirements-dev.in.
+  "pydantic-monty==0.0.18",
 ]
 dev = [
   "pytest==9.1.1",

@@ -5,9 +5,9 @@
   "variant_id": "active_path_baseline_v1",
   "redaction_policy_revision": "baseline-redaction-v1",
   "harness_revisions": {
-    "deepagents": "0.7.1",
+    "deepagents": "0.7.4",
     "langchain": "1.3.14",
-    "langgraph": "1.2.9"
+    "langgraph": "1.2.10"
   },
   "traces": [
     {
@@ -743,5 +743,5 @@
       "trace_digest": "89d167677aecc627cb62d7683c9408ba8320c2a500334201136978072334f50a"
     }
   ],
-  "catalog_digest": "d6d4c33e694ce376ea8a289ac7917ed2e4d846b5a9b8e8a1f09f506e5f35cc95"
+  "catalog_digest": "8520cd7b2e1105d9cabf0cedb1da7c64417611feffa4218c6946ccff300eaf07"
 }
