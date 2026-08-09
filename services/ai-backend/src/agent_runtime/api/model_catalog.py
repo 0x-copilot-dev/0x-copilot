@@ -47,11 +47,13 @@ from collections.abc import Sequence
 from agent_runtime.api.litellm_model_source import (
     CatalogModelRecord,
     CatalogModelSource,
+    CompositeModelSource,
     LitellmModelSource,
     ModelDisplayName,
 )
 from agent_runtime.api.model_tiers import ModelSizeTierResolver, ModelTier
 from agent_runtime.api.models_dev_source import ModelsDevModelSource
+from agent_runtime.api.virtuals_model_source import VirtualsModelSource
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import ModelCatalogItem
@@ -166,7 +168,16 @@ class ModelCatalog:
                 # models.dev primary (release dates, product families, curated
                 # display names), LiteLLM as the offline fallback. The source
                 # itself owns that failover — see ModelsDevModelSource.
-                cls._source = ModelsDevModelSource(fallback=LitellmModelSource())
+                #
+                # Virtuals is UNIONED rather than chained: it is not a rival
+                # description of the same catalog, it is a different catalog —
+                # ~60 gateway-hosted models neither models.dev nor LiteLLM
+                # carries. A fallback chain would hide it whenever the primary
+                # is healthy, which is always.
+                cls._source = CompositeModelSource(
+                    ModelsDevModelSource(fallback=LitellmModelSource()),
+                    VirtualsModelSource(),
+                )
             return cls._source
 
     @classmethod

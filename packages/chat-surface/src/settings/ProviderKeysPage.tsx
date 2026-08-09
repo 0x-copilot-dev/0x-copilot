@@ -133,6 +133,9 @@ const PROVIDER_BRAND: Readonly<
   openai: { bg: "#10a37f", fg: "#ffffff", text: "O" },
   anthropic: { bg: "#d97757", fg: "#ffffff", text: "A" },
   openrouter: { bg: "#6467f2", fg: "#ffffff", text: "OR" },
+  // Dark ink on the cyan, not white: #5ad1e8 is a light hue and white-on-cyan
+  // fails contrast at this tile size, unlike the four darker brand grounds.
+  virtuals: { bg: "#5ad1e8", fg: "#0b0b0e", text: "V" },
 };
 
 // Google's canonical 4-colour "G" (same paths the sign-in button uses).

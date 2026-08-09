@@ -138,13 +138,15 @@ def staged_runtime_dir(
 def load_env_key(provider: str) -> str:
     """Read a provider key from services/ai-backend/.env. Never prints it.
 
-    provider: "openai" | "anthropic" | "openrouter" | "google"
+    provider: "openai" | "anthropic" | "openrouter" | "google" | "virtuals"
     """
     var = {
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
         "google": "GOOGLE_API_KEY",
+        # Named for the variable the Virtuals key ships under.
+        "virtuals": "VIRTUALS_ACP_KEY",
     }[provider]
     if not DOTENV.exists():
         raise SystemExit(f"{DOTENV} not found — cannot load {var}")
@@ -594,20 +596,35 @@ class DriverSession:
         self.click("[data-testid=sign-in-button]")
 
     def ftue_add_key(self, provider: str, key: str) -> None:
-        """FTUE gate → "Add a key" → pick provider → paste → Connect. Never logs the key."""
-        label = {
-            "anthropic": "Anthropic",
-            "openai": "OpenAI",
-            "openrouter": "OpenRouter",
-        }[provider]
+        """FTUE gate → "Add a key" → paste → Connect. Never logs the key.
+
+        There is no provider toggle any more: the form infers the provider from
+        the key. We still take the expected `provider` so a journey states which
+        one it MEANT, and we assert the form agreed — a silent mis-inference
+        would otherwise store the key under the wrong slug and the journey would
+        blame the model catalog. When nothing was inferred the fallback picker
+        is open, so we choose there.
+        """
         assert self.wait_for("[data-testid=first-run-add-key]"), (
             "FTUE key card never appeared"
         )
         self.click("[data-testid=first-run-add-key]")
         assert self.wait_for("[data-testid=first-run-keyform]")
-        self.click(f'[role=radio]:has-text("{label}")')
-        time.sleep(0.3)
         self.fill("[data-testid=first-run-key-input]", key)  # value never printed
+        # Blur takes the verdict without waiting out the idle debounce.
+        self.press("[data-testid=first-run-key-input]", "Tab")
+        assert self.wait_for("[data-testid=first-run-key-resolved]", 10), (
+            "the key never resolved to a provider row"
+        )
+        if self.present("[data-testid=first-run-key-picker]"):
+            self.click(f"[data-testid=first-run-key-pick-{provider}]")
+        settled = self.evaluate(
+            "(document.querySelector('[data-testid=first-run-key-resolved]')"
+            "||{}).getAttribute?.('data-provider')"
+        )
+        assert settled == provider, (
+            f"key resolved to {settled!r}, expected {provider!r}"
+        )
         self.click("[data-testid=first-run-key-connect]")
         assert self.wait_for("[data-testid=first-run-composer]", 60), (
             "key connect did not reveal the composer"

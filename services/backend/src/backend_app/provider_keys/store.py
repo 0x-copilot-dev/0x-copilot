@@ -32,7 +32,7 @@ def _now() -> datetime:
 class ProviderName(StrEnum):
     """Closed set of providers the runtime supports — wire-aligned with
     the CHECK constraint in migrations 0034 (openai/anthropic/google),
-    0036 (openrouter) and 0045 (openai_compatible).
+    0036 (openrouter), 0045 (openai_compatible) and 0052 (virtuals).
 
     ``OPENAI_COMPATIBLE`` (decision D-2) is the ONE generic member backing the
     "any OpenAI-compatible endpoint" custom add-flow: a single per-user endpoint
@@ -44,6 +44,10 @@ class ProviderName(StrEnum):
     GOOGLE = "google"
     OPENROUTER = "openrouter"
     OPENAI_COMPATIBLE = "openai_compatible"
+    #: Virtuals compute — a second fixed-endpoint gateway. Unlike
+    #: ``OPENAI_COMPATIBLE`` its base_url is known to the runtime, so it never
+    #: populates the ``base_url``/``label`` columns.
+    VIRTUALS = "virtuals"
 
 
 class ProviderApiKeyRecord(BaseModel):

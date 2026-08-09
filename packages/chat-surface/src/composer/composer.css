@@ -1355,23 +1355,172 @@
   width: 100%;
 }
 
-.fr-kf__prov {
-  align-self: flex-start;
-  max-width: 100%;
-}
-
-.fr-kf__opt {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
 .fr-kf__dot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   /* background supplied inline from FirstRunKeyProvider.dotColor. */
+}
+
+/* KeyForm's settled row + fallback picker. DUPLICATED from onboarding.css on
+   purpose: ModelPill mounts the same KeyForm inline, and a host may load
+   composer.css without onboarding.css — a rule that lives in only one of the
+   two renders the composer's add-key flow unstyled. Change both together. */
+/* The settled row — what the input becomes once the provider is known. It is
+   the same height as the input it replaces, so resolving a key does not make
+   the card jump. */
+.fr-kf__resolved {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 36px;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
+  background: color-mix(in srgb, var(--color-success) 8%, transparent);
+}
+
+/* Nothing matched: neutral, not alarming — the user has done nothing wrong. */
+.fr-kf__resolved--unknown {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
+}
+
+.fr-kf__who {
+  font-weight: 600;
+  flex: none;
+}
+
+/* The masked key gives way first. It is the only unbounded string in the row,
+   and the controls either side of it must never be what gets clipped. */
+.fr-kf__masked {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-text-subtle);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.fr-kf__link {
+  flex: none;
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Anchors the picker so it can OVERLAY the card instead of growing it. */
+.fr-kf__field {
+  position: relative;
+}
+
+/* The fallback provider list. Vertical, so a fifth provider costs a row rather
+   than another wrap — the failure mode the tri-toggle had.
+   ABSOLUTE, not in flow: rendered in flow it added its own height to the card,
+   and `.fr-gate`'s `align-items: stretch` grew the sibling local-model card to
+   match — so pasting an unrecognised key reflowed the whole gate and opened a
+   void beside it. A menu overlays; only a menu that is not a menu pushes. */
+.fr-kf__picker {
+  position: absolute;
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  /* Deliberately light. This is a short inline list, not a modal: the hairline
+     border and the app's SUBTLE popover lift (`.ui-card` / `.ui-artifact-surface`
+     use the same one) are enough to lift four rows off the card. The heavier
+     `--color-border-strong` + `--shadow-md` combination read as a dialog and
+     made a two-second correction feel like a decision point. */
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  /* Opaque: it sits over the card, so a transparent list would read the card's
+     own text through its rows. */
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-subtle);
+  padding: var(--space-xs);
+  gap: 1px;
+  overflow: hidden;
+}
+
+/* The question heads the list that answers it, so the menu can overlay without
+   covering the reason it opened. */
+/* A label, not a banner — no divider, and the type steps down so it reads as
+   the list's caption rather than a second heading. */
+.fr-kf__picker-head {
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm) 3px;
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-danger);
+}
+
+/* No dividers. A rule between every row was the single biggest contributor to
+   the boxed-in look; with four rows the separation reads fine from the row
+   rhythm alone, and hover/selection carry the rest. */
+.fr-kf__pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 5px var(--space-sm); /* design-exact; tighter than the space ladder */
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-sm); /* 13px */
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fr-kf__pick:hover {
+  background: var(--color-surface-muted);
+}
+
+.fr-kf__pick--on {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.fr-kf__pick-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The prefix hint is why a row is the right answer — it must not be the thing
+   that pushes the label out of view. */
+.fr-kf__pick-hint {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs); /* 12.5px */
+  color: var(--color-text-subtle);
+}
+
+/* Provider tri-toggle option = leading swatch dot + label. */
+.fr-kf__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  /* background supplied inline from FirstRunKeyProvider.dotColor (SPEC §Data). */
 }
 
 .fr-kf__input {

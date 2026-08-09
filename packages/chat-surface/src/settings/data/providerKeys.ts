@@ -79,6 +79,23 @@ export interface ProviderCatalogEntry {
 // model a fresh key should open on, not the flagship.
 export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   {
+    id: "virtuals",
+    label: "Virtuals",
+    // No documented key prefix, so no `keyPrefix`: the client check stays
+    // length-only and the backend exempts this slug from its prefix gate too.
+    // Asserting a format we don't know would reject valid keys.
+    placeholder: "paste your Virtuals key",
+    contractBacked: true,
+    // A gateway, so — like OpenRouter — one strong model per major vendor
+    // rather than a size ladder. Everyday model first: this list seeds the
+    // key's `default_model`, so it must not lead with the flagship.
+    models: [
+      "anthropic-claude-sonnet-5",
+      "openai-gpt-56-luna",
+      "moonshotai-kimi-k3",
+    ],
+  },
+  {
     id: "anthropic",
     label: "Anthropic",
     placeholder: "sk-ant-…",
@@ -210,6 +227,57 @@ export function checkProviderKeyFormat(
     };
   }
   return { ok: true, models: entry.models };
+}
+
+// ---------------------------------------------------------------------------
+// Provider inference — which provider does a pasted key belong to?
+// ---------------------------------------------------------------------------
+
+/**
+ * Key prefixes, LONGEST FIRST. Order is load-bearing, not cosmetic: `sk-` is a
+ * prefix of both `sk-ant-` and `sk-or-`, so a shortest-first walk would call
+ * every Anthropic and OpenRouter key an OpenAI one.
+ *
+ * Mirrors `_KNOWN_PREFIXES` in
+ * services/backend/src/backend_app/provider_keys/service.py. The server is the
+ * authority — this copy exists so the UI can show a verdict before the round
+ * trip, and the two must be changed together.
+ *
+ * `acp-` (Virtuals) is not published in Virtuals' documentation. It is good
+ * enough to INFER a provider from a key and deliberately not used to reject
+ * one: a Virtuals key of some other shape falls through to
+ * {@link detectProviderFromKey} returning `null`, which the UI turns into a
+ * "choose a provider" step rather than an error.
+ */
+export const PROVIDER_KEY_PREFIXES: readonly (readonly [string, string])[] = [
+  ["anthropic", "sk-ant-"],
+  ["openrouter", "sk-or-"],
+  ["openai", "sk-"],
+  ["google", "AIza"],
+  ["virtuals", "acp-"],
+];
+
+/** Below this, a key is treated as still being typed rather than unrecognised. */
+export const MIN_PLAUSIBLE_KEY_LENGTH = 20;
+
+/**
+ * The provider slug a key most likely belongs to, or `null` when nothing
+ * matches.
+ *
+ * Pure and synchronous — it reads a prefix, never the network. `null` is a
+ * legitimate answer, not a failure: it means "ask the user", which is exactly
+ * what the first-run form does with it.
+ *
+ * Callers must NOT run this per keystroke. `sk-` matches before `sk-ant-` is
+ * fully typed, so a live verdict flips from OpenAI to Anthropic under the
+ * cursor. Resolve on paste, on blur, or behind a debounce.
+ */
+export function detectProviderFromKey(apiKey: string): string | null {
+  const trimmed = apiKey.trim();
+  for (const [provider, prefix] of PROVIDER_KEY_PREFIXES) {
+    if (trimmed.startsWith(prefix)) return provider;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

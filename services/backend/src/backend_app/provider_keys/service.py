@@ -41,11 +41,18 @@ _HINT_CHARS = 4
 # Ordered longest-prefix-first so ``sk-ant-`` and ``sk-or-`` win over the
 # bare ``sk-`` (OpenAI) when detecting which provider a pasted key most
 # likely belongs to. OpenRouter keys are ``sk-or-v1-…``.
+#
+# ``acp-`` (Virtuals) is here for DETECTION only — see ``_PREFIX_EXEMPT``. The
+# two concerns are deliberately decoupled: knowing that an ``acp-`` key is a
+# Virtuals key is useful, but asserting that every Virtuals key starts with
+# ``acp-`` would 400 any that does not, and that prefix is not published in
+# Virtuals' documentation. Detection may guess; rejection may not.
 _KNOWN_PREFIXES: tuple[tuple[ProviderName, str], ...] = (
     (ProviderName.ANTHROPIC, "sk-ant-"),
     (ProviderName.OPENROUTER, "sk-or-"),
     (ProviderName.OPENAI, "sk-"),
     (ProviderName.GOOGLE, "AIza"),
+    (ProviderName.VIRTUALS, "acp-"),
 )
 
 
@@ -238,15 +245,38 @@ def validate_api_key_format(*, provider: ProviderName, api_key: str) -> str:
         raise ProviderKeyFormatError("api_key_too_long")
     if any(ch.isspace() for ch in cleaned):
         raise ProviderKeyFormatError("api_key_contains_whitespace")
-    # A custom OpenAI-compatible endpoint (decision D-2) legitimately accepts a
-    # key carrying any vendor's prefix — a self-hosted gateway commonly issues
-    # ``sk-…`` tokens — so the prefix-mismatch gate is skipped for it. The
-    # length/whitespace bounds above still apply.
-    if provider is not ProviderName.OPENAI_COMPATIBLE:
+    # Gateways legitimately accept a key carrying any vendor's prefix — a
+    # self-hosted endpoint commonly issues ``sk-…`` tokens — so the
+    # prefix-mismatch gate is skipped for them. The length/whitespace bounds
+    # above still apply.
+    #
+    # Virtuals is exempt for a sharper reason: its key format is not documented,
+    # so a guess here is a guess about a value we would REJECT. If a Virtuals key
+    # happens to start ``sk-``, ``_detect_provider`` would call it an OpenAI key
+    # and 400 a perfectly valid credential with no way for the user to override.
+    # Failing open on format is right when the authoritative check — the live
+    # probe against /chat/completions — is one step away.
+    if provider not in _PREFIX_EXEMPT:
         detected = _detect_provider(cleaned)
         if detected is not None and detected != provider:
             raise ProviderKeyFormatError("api_key_provider_mismatch")
     return cleaned
+
+
+#: Providers whose key format we cannot ASSERT, so the prefix-mismatch gate is
+#: skipped for them. Membership means "unknown format", never "unvalidated" —
+#: every other bound still applies and the live probe remains the authority.
+#:
+#: Virtuals appears in ``_KNOWN_PREFIXES`` *and* here, which is not a
+#: contradiction: ``acp-`` is good enough to infer a provider FROM a key, and
+#: not good enough to reject a key for lacking it. Concretely — an ``acp-`` key
+#: submitted as Anthropic is still rejected (the detected provider disagrees
+#: with the requested one), while a Virtuals key with some other shape is
+#: accepted and left to the live probe. Drop Virtuals from this set only once
+#: the prefix is confirmed for every key the gateway issues.
+_PREFIX_EXEMPT: frozenset[ProviderName] = frozenset(
+    {ProviderName.OPENAI_COMPATIBLE, ProviderName.VIRTUALS}
+)
 
 
 def _detect_provider(api_key: str) -> ProviderName | None:

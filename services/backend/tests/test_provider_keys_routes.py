@@ -181,6 +181,34 @@ class TestPutProviderKey:
         assert response.status_code == 400
         assert response.json()["detail"] == "api_key_provider_mismatch"
 
+    def test_acp_key_sent_as_another_provider_is_400(self) -> None:
+        """`acp-` identifies Virtuals well enough to catch a misfiled key."""
+
+        client, _i, _p = _client()
+        response = client.put(
+            "/v1/settings/provider-keys/anthropic",
+            params=_params(),
+            json={"api_key": "acp-plausible-length-key-000000000"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "api_key_provider_mismatch"
+
+    def test_virtuals_accepts_a_key_without_the_acp_prefix(self) -> None:
+        """…and NOT well enough to reject one for lacking it.
+
+        `acp-` is not published in Virtuals' documentation. Detection may guess;
+        rejection may not — otherwise a valid key of another shape is 400ed with
+        no way for the user to override. The live probe remains the authority.
+        """
+
+        client, _i, _p = _client()
+        response = client.put(
+            "/v1/settings/provider-keys/virtuals",
+            params=_params(),
+            json={"api_key": "vp-live-some-other-shape-00000000"},
+        )
+        assert response.status_code == 200
+
     def test_too_short_key_is_400(self) -> None:
         client, _i, _p = _client()
         response = client.put(

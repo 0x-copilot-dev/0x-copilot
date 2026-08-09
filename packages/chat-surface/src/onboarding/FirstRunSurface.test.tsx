@@ -471,8 +471,15 @@ describe("<FirstRunSurface>", () => {
 
   it("renders no raw hex in the surface except provider dot swatches", () => {
     renderSurface();
-    // Reveal the KeyForm so the swatches are in the DOM.
+    // Reveal the KeyForm, then resolve a key — the swatches only exist once a
+    // provider is known. There is no provider toggle any more, so revealing the
+    // form alone leaves the surface with zero dots and this test would pass
+    // over an empty set.
     fireEvent.click(screen.getByTestId("first-run-add-key"));
+    fireEvent.change(screen.getByTestId("first-run-key-input"), {
+      target: { value: "sk-ant-unit-test-placeholder-not-real" },
+    });
+    fireEvent.blur(screen.getByTestId("first-run-key-input"));
     const root = screen.getByTestId("first-run-surface");
     const swatches = new Set(
       Array.from(root.querySelectorAll("[data-swatch]")).map(

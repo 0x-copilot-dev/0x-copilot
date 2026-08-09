@@ -38,6 +38,7 @@ tools/desktop-journeys/
   first_run.py               shell_and_projects.py     workspace_consent.py
   transcript_rendering.py    artifacts_and_surfaces.py workspace_bypass.py
   composer_and_budgets.py    mcp_connected.py          installed_payload.py
+  virtuals_provider.py
 ```
 
 **Nine journeys, not sixty-four scripts.** One supervised boot costs initdb +
@@ -61,6 +62,7 @@ prints; the exit code is only its aggregate.
 | `artifacts_and_surfaces.py` | Studio artifacts, the canvas, identity colour, the inference floor |
 | `mcp_connected.py`          | everything needing a REAL connected MCP server (reuse profile)     |
 | `installed_payload.py`      | the shipped npm artifact and the G3-G10 release matrix             |
+| `virtuals_provider.py`      | Virtuals as a native provider — **needs no key** (see below)       |
 
 Two `installed-payload` journeys are still standalone and unfolded:
 `generative-workflows/g1_markdown_lifecycle.py` and `g2_csv_lifecycle.py`. See
@@ -156,6 +158,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 The value is passed straight into the app's keychain field and is **never printed,
 logged, or committed** — only lengths / HTTP statuses ever surface. `.env` is
 git-ignored.
+
+> **`virtuals_provider.py` is the exception, deliberately.** Its central claim is
+> that a WRONG key is rejected, so it supplies its own bad one and needs nothing
+> from `.env` — it is the only BYOK-shaped journey that runs on a machine with no
+> keys at all. It exists because Virtuals' `/v1/models` answers 200 with no
+> credential, so a listing-based probe would report "connected" for a typo; the
+> journey fails if that false-pass ever returns.
 
 > A **fresh install has no keys** — the app starts at the sign-in gate with nothing
 > configured, and the user adds a key during first-run. The BYOK journeys reproduce

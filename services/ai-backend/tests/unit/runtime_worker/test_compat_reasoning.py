@@ -111,6 +111,54 @@ class TestCapabilityGate:
             "anthropic", "claude-sonnet-5"
         )
 
+    def test_dash_joined_vendor_prefixes_still_reach_the_family(self) -> None:
+        """Virtuals names models ``openai-gpt-55``, not ``openai/gpt-5.6``.
+
+        The prefix strip handled ``/`` (OpenRouter) and ``:`` (Ollama) only, so
+        the whole string was tested against the ``gpt-5`` family and every
+        frontier OpenAI model behind that gateway silently ran with reasoning
+        never requested — no thinking stream, and no error explaining it.
+        """
+
+        for name in (
+            "openai-gpt-55",
+            "openai-gpt-56-terra",
+            "openai-gpt-54-pro",
+            "deepseek-deepseek-r1",
+            "minimax-minimax-m3",
+        ):
+            assert ModelConfigResolver._gateway_supports_reasoning(name), name
+
+    def test_stripping_never_promotes_a_non_reasoning_model(self) -> None:
+        # The strip is additive, not a blanket yes: a dash-joined vendor on a
+        # non-reasoning line stays excluded.
+        for name in (
+            "openai-gpt-4o",
+            "z-ai-glm-4-7-flash",
+            "x-ai-grok-build-0-1",
+            "moonshotai-kimi-k2-5",
+        ):
+            assert not ModelConfigResolver._gateway_supports_reasoning(name), name
+
+    def test_a_bare_vendor_slug_is_not_stripped_to_nothing(self) -> None:
+        # `_strip_vendor_prefix` must leave a name behind; reducing "openai-"
+        # to "" would make the family predicates test an empty string.
+        assert ModelConfigResolver._strip_vendor_prefix("openai-") == "openai-"
+
+    def test_public_capability_gate_matches_the_private_one(self) -> None:
+        # The catalog stamps `supports_reasoning` through the public sibling; if
+        # the two disagreed the picker would offer a reasoning control for a
+        # model the run path declines to ask reasoning from.
+        for provider, name in (
+            ("virtuals", "openai-gpt-55"),
+            ("virtuals", "z-ai-glm-4-7-flash"),
+            ("openai", "gpt-5.6"),
+            ("anthropic", "claude-sonnet-5"),
+        ):
+            assert ModelConfigResolver.model_supports_reasoning(
+                provider, name
+            ) is ModelConfigResolver._model_supports_reasoning(provider, name)
+
 
 class TestRecognisingReasoning:
     def test_openrouter_reasoning_field_on_the_delta(self) -> None:

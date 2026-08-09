@@ -29,15 +29,9 @@ desktop keeps working forever on the last good snapshot.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-import tempfile
-import threading
-import time
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any, Final
 
 from agent_runtime.api.litellm_model_source import (
@@ -45,133 +39,34 @@ from agent_runtime.api.litellm_model_source import (
     CatalogModelSource,
     LitellmModelSource,
 )
+from agent_runtime.api.json_snapshot_cache import (
+    JsonSnapshotCache,
+    JsonSnapshotFetcher,
+)
 from agent_runtime.execution.contracts import ModelReasoningEffort
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class ModelsDevCatalogCache:
+class ModelsDevCatalogCache(JsonSnapshotCache):
     """On-disk snapshot of ``models.dev/api.json`` with a background refresh.
 
-    The cache file is the only thing :meth:`ModelsDevModelSource.records` reads,
-    so a slow or dead network can never delay a catalog request. Refreshes run on
-    a daemon thread; failures are logged once at debug level and retried no more
-    often than :attr:`RETRY_INTERVAL_SECONDS`.
+    All behaviour lives in :class:`JsonSnapshotCache`; this subclass only names
+    the upstream. The cache file is the only thing
+    :meth:`ModelsDevModelSource.records` reads, so a slow or dead network can
+    never delay a catalog request.
     """
 
     URL: Final[str] = "https://models.dev/api.json"
-    #: Serve a snapshot older than this only while a refresh is in flight.
-    TTL_SECONDS: Final[float] = 24 * 60 * 60
-    #: Floor between refresh attempts, so a hard-offline host retries calmly.
-    RETRY_INTERVAL_SECONDS: Final[float] = 10 * 60
-    TIMEOUT_SECONDS: Final[float] = 10.0
-    #: Env override for the snapshot location; otherwise derived (see _default_path).
+    LABEL: Final[str] = "models.dev"
+    #: Env override for the snapshot location; otherwise derived.
     PATH_ENV: Final[str] = "RUNTIME_MODEL_CATALOG_CACHE"
-    FILE_STORE_ROOT_ENV: Final[str] = "RUNTIME_FILE_STORE_ROOT"
     FILENAME: Final[str] = "models-dev-catalog.json"
 
-    def __init__(
-        self,
-        *,
-        path: Path | None = None,
-        ttl_seconds: float | None = None,
-        fetcher: "ModelsDevFetcher | None" = None,
-    ) -> None:
-        self._path = path if path is not None else self._default_path()
-        self._ttl = self.TTL_SECONDS if ttl_seconds is None else ttl_seconds
-        self._fetcher = fetcher if fetcher is not None else ModelsDevFetcher()
-        self._lock = threading.Lock()
-        self._refreshing = False
-        self._last_attempt: float | None = None
 
-    @classmethod
-    def _default_path(cls) -> Path:
-        """Snapshot location: explicit env > the run store root > the temp dir."""
-
-        override = (os.environ.get(cls.PATH_ENV) or "").strip()
-        if override:
-            return Path(override)
-        store_root = (os.environ.get(cls.FILE_STORE_ROOT_ENV) or "").strip()
-        base = Path(store_root) if store_root else Path(tempfile.gettempdir())
-        return base / cls.FILENAME
-
-    def payload(self) -> Mapping[str, Any] | None:
-        """Return the cached snapshot, scheduling a refresh when stale/absent.
-
-        Deliberately returns a *stale* snapshot rather than nothing: an outdated
-        model list beats collapsing to the LiteLLM fallback mid-session.
-        """
-
-        snapshot, age = self._read()
-        if snapshot is None or age is None or age > self._ttl:
-            self._schedule_refresh()
-        return snapshot
-
-    def _read(self) -> tuple[Mapping[str, Any] | None, float | None]:
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-            age = time.time() - self._path.stat().st_mtime
-        except OSError:
-            return None, None
-        try:
-            parsed = json.loads(raw)
-        except ValueError:
-            return None, None
-        return (parsed, age) if isinstance(parsed, Mapping) else (None, None)
-
-    def _schedule_refresh(self) -> None:
-        now = time.time()
-        with self._lock:
-            if self._refreshing:
-                return
-            if (
-                self._last_attempt is not None
-                and now - self._last_attempt < self.RETRY_INTERVAL_SECONDS
-            ):
-                return
-            self._refreshing = True
-            self._last_attempt = now
-        threading.Thread(
-            target=self._refresh, name="models-dev-catalog-refresh", daemon=True
-        ).start()
-
-    def _refresh(self) -> None:
-        try:
-            payload = self._fetcher.fetch(self.URL, timeout=self.TIMEOUT_SECONDS)
-            if payload is not None:
-                self._write(payload)
-        finally:
-            with self._lock:
-                self._refreshing = False
-
-    def _write(self, payload: Mapping[str, Any]) -> None:
-        """Atomically replace the snapshot so a torn write can't poison reads."""
-
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload), encoding="utf-8")
-            tmp.replace(self._path)
-        except OSError as exc:  # pragma: no cover - disk-shape dependent
-            _LOGGER.debug("models.dev cache write failed: %s", exc)
-
-
-class ModelsDevFetcher:
-    """The single network hop. Isolated so tests can substitute it wholesale."""
-
-    def fetch(self, url: str, *, timeout: float) -> Mapping[str, Any] | None:
-        """GET the catalog. Returns ``None`` on any failure — never raises."""
-
-        try:
-            import httpx  # noqa: PLC0415 — lazy: keeps httpx off the import graph
-
-            response = httpx.get(url, timeout=timeout, follow_redirects=True)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception as exc:  # noqa: BLE001 - fail-soft by contract
-            _LOGGER.debug("models.dev fetch failed: %s", exc)
-            return None
-        return payload if isinstance(payload, Mapping) else None
+#: Back-compat alias — the fetcher was models.dev-specific before Virtuals
+#: needed the same machinery. Kept so existing construction sites read the same.
+ModelsDevFetcher = JsonSnapshotFetcher
 
 
 class ModelsDevCatalogPolicy:

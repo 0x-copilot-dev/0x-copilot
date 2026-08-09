@@ -236,10 +236,13 @@ describe("ModelPill (v3)", () => {
     // With no navigation deep-link wired, the inline KeyForm is the fallback.
     expect(screen.getByTestId("first-run-keyform")).toBeInTheDocument();
 
-    // Type a well-formed Anthropic key (the default first provider) and connect.
+    // No provider toggle any more — the form infers Anthropic from `sk-ant-`.
+    // Blur takes the verdict (the form deliberately does not resolve per
+    // keystroke; see KeyForm).
     fireEvent.change(screen.getByTestId("first-run-key-input"), {
       target: { value: "sk-ant-0123456789012345678901234" },
     });
+    fireEvent.blur(screen.getByTestId("first-run-key-input"));
     fireEvent.click(screen.getByTestId("first-run-key-connect"));
 
     await waitFor(() =>

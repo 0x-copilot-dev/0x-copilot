@@ -24,12 +24,15 @@ export type ModelPillModel = PickerCatalogModel;
 // The BYOK provider rows offered by the inline add-key sub-view (contract §1).
 // Derived from the shared `PROVIDER_CATALOG` so the composer and Settings never
 // drift: only contract-backed, shippable providers (no coming-soon, no custom
-// endpoint). `dotColor`/`meta` are the KeyForm tri-toggle's presentation data —
-// swatches are the FTUE hexes (SPEC §Data) with a token fallback.
+// endpoint). `dotColor`/`meta` are presentation data for KeyForm's FALLBACK
+// picker — the list shown only when a pasted key matches no known prefix; the
+// tri-toggle it used to feed is gone. Swatches are the FTUE hexes (SPEC §Data)
+// with a token fallback.
 const KEY_PROVIDER_DOT: Record<string, string> = {
   anthropic: "#d97757",
   openai: "#6aa88f",
   openrouter: "#9a7fd6",
+  virtuals: "#5ad1e8",
   google: "#4285f4",
 };
 
@@ -45,6 +48,8 @@ const MODEL_PILL_KEY_PROVIDERS: readonly FirstRunKeyProvider[] =
     meta: entry.models[0] ?? "",
     dotColor: KEY_PROVIDER_DOT[entry.id] ?? "var(--color-text-muted)",
     placeholder: entry.placeholder,
+    // Carried through so KeyForm's fallback picker can show each row's prefix —
+    // that hint is what explains WHY a pasted key matched nothing.
     keyPrefix: entry.keyPrefix,
   }));
 
