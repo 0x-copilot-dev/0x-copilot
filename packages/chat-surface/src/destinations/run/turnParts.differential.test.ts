@@ -9,17 +9,17 @@
 // through, and halfway through is exactly what a streaming user looks at.
 //
 // Mirrors the `canvasLifecycle` differential (PRD-B3), including its runner
-// contract and its cwd assumption.
-
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+// contract and its path resolution (`test/repoPaths.testutil`).
 
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import corpus from "../../../../service-contracts/src/copilot_service_contracts/turn_parts_corpus.json";
+import {
+  PYTHON_CORPUS_TIMEOUT_MS,
+  runPythonCorpus,
+} from "../../test/repoPaths.testutil";
 
 import { projectChatMessages } from "./chatProjection";
 
@@ -40,15 +40,10 @@ type CorpusCase = {
   readonly events: readonly CorpusEvent[];
 };
 
-// npm runs a workspace script with the package directory as cwd. Unlike
-// `import.meta.url`, this remains a real filesystem path under Vitest's module
-// virtualization.
-const root = resolve(process.cwd(), "../..");
-const pythonRunner = resolve(
-  root,
-  "services/ai-backend/tests/unit/agent_runtime/presentation/turn_parts_corpus_runner.py",
-);
-const workspacePython = resolve(root, "services/ai-backend/.venv/bin/python");
+// Repo-root-relative; `runPythonCorpus` resolves the root from the test tree's
+// own location, so this works from a main checkout and from a git worktree.
+const PYTHON_RUNNER =
+  "services/ai-backend/tests/unit/agent_runtime/presentation/turn_parts_corpus_runner.py";
 
 // Must match the Python runner's synthetic clock exactly — the corpus carries
 // no timestamps, so a differential over derived time only means something when
@@ -110,21 +105,20 @@ function projectCorpus() {
 }
 
 function pythonCorpusProjection() {
-  const python = process.env.PYTHON ?? workspacePython;
-  if (!existsSync(python)) {
-    throw new Error(
-      `Turn parts differential test requires the ai-backend venv at ${python}`,
-    );
-  }
-  return JSON.parse(
-    execFileSync(python, [pythonRunner], { cwd: root, encoding: "utf8" }),
-  ) as ReturnType<typeof projectCorpus>;
+  return runPythonCorpus<ReturnType<typeof projectCorpus>>(
+    PYTHON_RUNNER,
+    "Turn parts differential test",
+  );
 }
 
 describe("assistant turn parts — TS/Python differential", () => {
-  it("matches the Python fold for every shared corpus prefix", () => {
-    expect(projectCorpus()).toEqual(pythonCorpusProjection());
-  });
+  it(
+    "matches the Python fold for every shared corpus prefix",
+    () => {
+      expect(projectCorpus()).toEqual(pythonCorpusProjection());
+    },
+    PYTHON_CORPUS_TIMEOUT_MS,
+  );
 
   // A corpus that stops covering the defect is worse than no corpus — it reads
   // as proof while asserting nothing. These pin the cases that matter.

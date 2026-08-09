@@ -1,12 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import corpus from "../../../../service-contracts/src/copilot_service_contracts/canvas_lifecycle_corpus.json";
+import {
+  PYTHON_CORPUS_TIMEOUT_MS,
+  runPythonCorpus,
+} from "../../test/repoPaths.testutil";
 
 import { projectCanvasLifecycle } from "./canvasLifecycle";
 
@@ -21,15 +21,10 @@ type CorpusCase = {
   readonly events: readonly CorpusEvent[];
 };
 
-// npm runs a workspace script with the package directory as cwd. Unlike
-// `import.meta.url`, this remains a real filesystem path under Vitest's module
-// virtualization.
-const root = resolve(process.cwd(), "../..");
-const pythonRunner = resolve(
-  root,
-  "services/ai-backend/tests/unit/agent_runtime/presentation/lifecycle_corpus_runner.py",
-);
-const workspacePython = resolve(root, "services/ai-backend/.venv/bin/python");
+// Repo-root-relative; `runPythonCorpus` resolves the root from the test tree's
+// own location, so this works from a main checkout and from a git worktree.
+const PYTHON_RUNNER =
+  "services/ai-backend/tests/unit/agent_runtime/presentation/lifecycle_corpus_runner.py";
 
 function corpusEvents(events: readonly CorpusEvent[]): RuntimeEventEnvelope[] {
   return events.map((entry, index) =>
@@ -71,15 +66,10 @@ function projectCorpus() {
 }
 
 function pythonCorpusProjection() {
-  const python = process.env.PYTHON ?? workspacePython;
-  if (!existsSync(python)) {
-    throw new Error(
-      `Canvas lifecycle differential test requires the ai-backend venv at ${python}`,
-    );
-  }
-  return JSON.parse(
-    execFileSync(python, [pythonRunner], { cwd: root, encoding: "utf8" }),
-  ) as ReturnType<typeof projectCorpus>;
+  return runPythonCorpus<ReturnType<typeof projectCorpus>>(
+    PYTHON_RUNNER,
+    "Canvas lifecycle differential test",
+  );
 }
 
 describe("projectCanvasLifecycle (PRD-B3)", () => {
@@ -216,10 +206,14 @@ describe("projectCanvasLifecycle (PRD-B3)", () => {
     expect(projection.terminalStatus).toBe("failed");
   });
 
-  it("differentially matches the Python fold for every shared corpus prefix", () => {
-    // This is deliberately not a checked-in expected projection. The Python
-    // projection is executed now, over the same raw event corpus, so a
-    // semantic drift in either implementation fails with the exact prefix.
-    expect(projectCorpus()).toEqual(pythonCorpusProjection());
-  });
+  it(
+    "differentially matches the Python fold for every shared corpus prefix",
+    () => {
+      // This is deliberately not a checked-in expected projection. The Python
+      // projection is executed now, over the same raw event corpus, so a
+      // semantic drift in either implementation fails with the exact prefix.
+      expect(projectCorpus()).toEqual(pythonCorpusProjection());
+    },
+    PYTHON_CORPUS_TIMEOUT_MS,
+  );
 });
