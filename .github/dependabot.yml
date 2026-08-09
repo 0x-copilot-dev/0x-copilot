@@ -107,11 +107,24 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
-    groups:
-      npm-minor-patch:
-        update-types:
-          - minor
-          - patch
+    # DELIBERATELY UNGROUPED. A grouped npm update rewrites package-lock.json
+    # in one full re-resolve; a single-package update edits it surgically.
+    # That difference is not cosmetic here, because this lockfile cannot be
+    # re-resolved back into its current shape:
+    #
+    #   * `@typescript-eslint/parser` declares peer `typescript >=4.8.4 <6.1.0`
+    #     and the workspace is on typescript 7, so any resolve needs
+    #     `--legacy-peer-deps`. `npm ci` never re-resolves peers, which is the
+    #     only reason CI is green on the committed lock.
+    #   * The committed lock keeps apps/website's `@img/sharp-*` binaries
+    #     nested under apps/website. Every current npm hoists them to the root
+    #     instead, which leaves them extraneous and makes website's pinned
+    #     react-dom invalid — `npm ls` then exits ELSPROBLEMS and the SBOM step
+    #     fails with it.
+    #
+    # PR #585 was exactly that: 23 valid bumps that could not land, while the
+    # single-package PRs beside it (#586, #587, #588) merged untouched. Restore
+    # grouping only once the lock is reproducible from package.json.
     ignore:
       # zod 4 is a breaking major, deferred deliberately: zod is pinned in
       # lockstep across the chat-transport and desktop surfaces, so it must
