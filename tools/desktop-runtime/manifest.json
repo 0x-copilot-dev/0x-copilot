@@ -4,7 +4,7 @@
   "browser": {
     "$comment": "Playwright's npm integrity pins the driver; stage.mjs installs this exact Chromium revision into the runtime and Electron main independently verifies this manifest plus the launched browser version before exposing the broker.",
     "distribution": "playwright-chromium",
-    "playwright_version": "1.62.0",
+    "playwright_version": "1.62.1",
     "chromium_revision": "1234",
     "chromium_version": "151.0.7922.34"
   },

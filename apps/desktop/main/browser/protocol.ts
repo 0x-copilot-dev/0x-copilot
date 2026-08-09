@@ -25,12 +25,16 @@ export const DESKTOP_BROWSER_SERVER_NAME = "desktop_browser";
 export const BROWSER_BROKER_AUDIENCE = "desktop-browser-broker";
 
 /**
- * Browser build shipped with the pinned root Playwright 1.62.0 dependency.
+ * Browser build shipped with the pinned root Playwright 1.62.1 dependency.
  * The worker independently reports the launched binary's version and Electron
  * main refuses to expose the broker when it does not match this value.
+ *
+ * Chromium is unchanged across 1.62.0 -> 1.62.1: both resolve chromium
+ * revision 1234 / 151.0.7922.34 in playwright-core's browsers.json, so the
+ * staged browser payload does not move with this bump.
  */
 export const PINNED_CHROMIUM_VERSION = "151.0.7922.34";
-export const PINNED_PLAYWRIGHT_VERSION = "1.62.0";
+export const PINNED_PLAYWRIGHT_VERSION = "1.62.1";
 
 export const BrowserProfileMode = {
   Ephemeral: "ephemeral",
