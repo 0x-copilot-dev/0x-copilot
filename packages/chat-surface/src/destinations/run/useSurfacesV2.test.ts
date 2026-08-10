@@ -190,4 +190,105 @@ describe("useSurfacesV2", () => {
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.stateFor("s1")).toBeUndefined();
   });
+
+  // A second turn binds a NEW run while the previous run's hydration is still
+  // in flight. `sequence_no` is monotonic PER RUN (see the streaming model), so
+  // the new run restarts low while the old one ended high — which is exactly
+  // what made this silent: the stale response's seq was recorded as though it
+  // were the new run's, and every one of the new run's smaller seqs then read
+  // as "already fetched".
+  //
+  // Found live by `tools/desktop-journeys/artifacts_and_surfaces.py` AS-10: the
+  // turn-1 mailbox table hydrated and the turn-2 `email://` composer drew four
+  // empty rows over a payload the surfaces endpoint was serving correctly.
+  it("hydrates the NEW run when the previous run's request was in flight", async () => {
+    const box: { resolveFirst: ((r: RunSurfacesResponse) => void) | null } = {
+      resolveFirst: null,
+    };
+    const paths: string[] = [];
+    const transport = makeTransport(
+      () =>
+        new Promise<RunSurfacesResponse>((resolve) => {
+          if (paths.length === 1) {
+            // r1's request: held open across the run switch.
+            box.resolveFirst = resolve;
+            return;
+          }
+          resolve({
+            run_id: "r2",
+            surfaces: [
+              snapshot("email://mailbox/draft_reply/draft-m-1041", {
+                state: { data: { to: "jordan.reyes@acme.example" } },
+              }),
+            ],
+            latest_sequence_no: 3,
+          });
+        }),
+      (path) => paths.push(path),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ runId, seq }: { runId: string; seq: number }) =>
+        useSurfacesV2(transport, runId, seq, true),
+      { initialProps: { runId: "r1", seq: 40 } },
+    );
+    await waitFor(() => expect(paths).toHaveLength(1));
+
+    // Turn 2: a new run binds, its per-run seq starting well below r1's.
+    rerender({ runId: "r2", seq: 3 });
+    // r1's response lands after the switch — it must not be mistaken for r2's.
+    box.resolveFirst?.({ run_id: "r1", surfaces: [], latest_sequence_no: 40 });
+
+    await waitFor(() =>
+      expect(
+        result.current.stateFor("email://mailbox/draft_reply/draft-m-1041"),
+      ).toEqual({ data: { to: "jordan.reyes@acme.example" } }),
+    );
+    expect(paths.some((path) => path.includes("/runs/r2/surfaces"))).toBe(true);
+  });
+
+  // The measured live shape (journeys AS-10, desktop): turn 1's run reached
+  // sequence_no 100; turn 2's run wrote its `surface.created` at 12. The run
+  // switch is visible here one render before the ledger is, so the effect sees
+  // the OUTGOING run's seq, fetches an empty new run, and banks 100 as
+  // "fetched" — after which nothing the new run emits can ever exceed it.
+  it("re-fetches when the new run's ledger seq restarts BELOW the old run's", async () => {
+    const paths: string[] = [];
+    let surfaces: SurfaceSnapshot[] = [];
+    const transport = makeTransport(
+      () => ({
+        run_id: "r2",
+        surfaces,
+        latest_sequence_no: 12,
+      }),
+      (path) => paths.push(path),
+    );
+
+    const { result, rerender } = renderHook(
+      ({ runId, seq }: { runId: string; seq: number }) =>
+        useSurfacesV2(transport, runId, seq, true),
+      { initialProps: { runId: "r1", seq: 100 } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    // Turn 2 binds. The ledger still reads the OLD run's 100 for one render.
+    rerender({ runId: "r2", seq: 100 });
+    await waitFor(() =>
+      expect(paths.filter((p) => p.includes("/runs/r2/"))).toHaveLength(1),
+    );
+
+    // Now the new run's own events land — its counter starts far below 100.
+    surfaces = [
+      snapshot("email://mailbox/draft_reply/draft-m-1041", {
+        state: { data: { subject: "Re: Renewal terms" } },
+      }),
+    ];
+    rerender({ runId: "r2", seq: 12 });
+
+    await waitFor(() =>
+      expect(
+        result.current.stateFor("email://mailbox/draft_reply/draft-m-1041"),
+      ).toEqual({ data: { subject: "Re: Renewal terms" } }),
+    );
+  });
 });
