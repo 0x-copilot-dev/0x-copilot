@@ -99,6 +99,21 @@ export interface ModelPillProps {
    */
   onManageModels?: () => void;
   /**
+   * Offer every CONFIGURED model, not just the curated short list.
+   *
+   * The composer normally shows the 6-9 model list `ModelEnablementResolver`
+   * derives, because the full catalog lives one click away in Settings →
+   * Models. First run has no such click: the FTUE gate renders outside the
+   * shell, so Settings does not exist yet, and a curated list there is a dead
+   * end — the user has a key for a model, the picker will not offer it, and
+   * nothing on screen leads anywhere.
+   *
+   * Unconfigured rows are still listed (they read `needs key` and are how a
+   * user learns the model exists); this only stops curation from hiding a
+   * model the user can already run.
+   */
+  showAllConfigured?: boolean;
+  /**
    * Fallback surface for hosts that do not provide `onAddProviderKey`: opens an
    * inline `<KeyForm>` sub-view inside this popover and saves through the port.
    * Navigation deliberately wins when both are present, keeping Settings as the
@@ -196,6 +211,7 @@ export function ModelPill({
   onAddProviderKey,
   onGetLocalModels,
   onManageModels,
+  showAllConfigured,
   providerKeysPort,
   onProviderKeyAdded,
   localModelSizes,
@@ -217,9 +233,18 @@ export function ModelPill({
 
   // Only enabled models are offered (undefined `enabled` = legacy/curated-in);
   // the current selection is always kept visible even if curated out.
+  //
+  // `showAllConfigured` additionally admits any model the user holds a key for,
+  // whatever the curation says — see the prop doc for why first run needs it.
   const visible = useMemo(
-    () => models.filter((m) => m.enabled !== false || m.id === value),
-    [models, value],
+    () =>
+      models.filter(
+        (m) =>
+          m.enabled !== false ||
+          m.id === value ||
+          (showAllConfigured && m.configured === true),
+      ),
+    [models, value, showAllConfigured],
   );
   // Models you can actually run come FIRST. The catalog's own order puts
   // unconfigured rows wherever the upstream listing happened to put them, and
