@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.2.1 - 2026-08-10
+
+### Features
+
+- **chat-surface:** infer the provider from the pasted key, drop the toggle ([`0f69e427`](https://github.com/0x-copilot-dev/0x-copilot/commit/0f69e427bfdd1d00e3d127d30b9b4ff0e6e9c10c))
+- **chat-surface:** surface Virtuals in Settings, the picker and first-run ([`e8ac3ce0`](https://github.com/0x-copilot-dev/0x-copilot/commit/e8ac3ce0c46f834d5b495643447fb429018a1a6d))
+- **backend:** store and live-check Virtuals provider keys ([`efea90a0`](https://github.com/0x-copilot-dev/0x-copilot/commit/efea90a0e048e6f385cba5734412a657606085af))
+- **ai-backend:** route Virtuals compute as a native OpenAI-wire provider ([`ae32b589`](https://github.com/0x-copilot-dev/0x-copilot/commit/ae32b5894e61f2f8a127a18dee707433baa5c295))
+- **conversations:** name a conversation after the message that opened it ([`65fec234`](https://github.com/0x-copilot-dev/0x-copilot/commit/65fec23485ae582ef98790d1c1dc6fcf1d2a5359))
+- **surfaces:** ConnectorWriteOpsPort by capturing write ops at read time ([`bfa1f999`](https://github.com/0x-copilot-dev/0x-copilot/commit/bfa1f999db967e195af787bdf2ec99e3e65208fd))
+- **surfaces:** connector write-back lane — model maps fields, never values ([`4dfec7e7`](https://github.com/0x-copilot-dev/0x-copilot/commit/4dfec7e72b62ee24dd73844759d66020888c5c88))
+- **surfaces:** connector write-back lane — model maps fields, never values ([`5ba0fcdb`](https://github.com/0x-copilot-dev/0x-copilot/commit/5ba0fcdba603ad933c59b25dc1e5f7853ce8557d))
+- **artifacts:** structural edits — rows, columns, blocks — as span operations ([`2e828935`](https://github.com/0x-copilot-dev/0x-copilot/commit/2e8289357a32c75cf2113d53968617f734bfc5eb))
+- **artifacts:** edit the surface in place, and delete the raw-markdown textarea ([`f7d9021f`](https://github.com/0x-copilot-dev/0x-copilot/commit/f7d9021fda2cae05e5b81c8d505e3bcb7e12105f))
+- **surfaces:** wire model shaping onto the read path, and stop the projector discarding decoded payloads ([`e214edf8`](https://github.com/0x-copilot-dev/0x-copilot/commit/e214edf8d4904fae4bd0363b8114a9b661c04488))
+- **composer:** the filing zone is pre-first-message only ([`35e421f1`](https://github.com/0x-copilot-dev/0x-copilot/commit/35e421f17819044859b58c45d4514b9022c1778a))
+
+### Bug Fixes
+
+- **ai-backend:** keep the reasoning a gateway sends instead of dropping it ([`f0dba0d2`](https://github.com/0x-copilot-dev/0x-copilot/commit/f0dba0d2971770af4fdb0aa6b8d1be12ea1c82b0))
+- **composer:** usable models first, and a route to Settings → Models ([`07cb1b4e`](https://github.com/0x-copilot-dev/0x-copilot/commit/07cb1b4e636dbbe9776d37b47af522761cbd64cf))
+- **run:** Focus opens without the Run-details column ([`e306c084`](https://github.com/0x-copilot-dev/0x-copilot/commit/e306c0841e780a1c5bfc19a752c40e3144d3c378))
+- **deps:** drop the libc constraints npm 10 cannot read ([`46359f02`](https://github.com/0x-copilot-dev/0x-copilot/commit/46359f028aaed0abc935d2a76ac9463168bad2f5))
+- **deps:** drop website's vestigial nested react tree ([`33acfb5b`](https://github.com/0x-copilot-dev/0x-copilot/commit/33acfb5b060b5010e64f004f6bd268f23242eaa4))
+- **deps:** pull website's nested @types/react-dom up with the rest ([`75f6c55e`](https://github.com/0x-copilot-dev/0x-copilot/commit/75f6c55e74ab7def1f41969642dee8101ac7a3d6))
+- **deps:** move react with react-dom, and the types pair with it ([`7a1f2e5c`](https://github.com/0x-copilot-dev/0x-copilot/commit/7a1f2e5cbc885c64e498b88c51846aea0fa260e9))
+- **chat-surface:** show a sentence, not a reason code, when an add-key save fails ([`73fe60dc`](https://github.com/0x-copilot-dev/0x-copilot/commit/73fe60dcfce470b09a135815cb4cea3b86b23254))
+- **chat-surface:** resolve the repo root from the test tree, not cwd ([`832e0290`](https://github.com/0x-copilot-dev/0x-copilot/commit/832e029099323161edcf5426feaab0612cc82d49))
+- **backend:** any 2xx proves a key, not 200 — Virtuals answers 201 ([`c0ffa2b7`](https://github.com/0x-copilot-dev/0x-copilot/commit/c0ffa2b716372c65292e958271bf9f419cb51bf9))
+- **chat-surface:** the provider picker overlays, it does not grow the card ([`e9307c2f`](https://github.com/0x-copilot-dev/0x-copilot/commit/e9307c2f1f6071a06729b3d73adb605d020071b0))
+- **ai-backend:** complete the Virtuals wiring the run path actually needs ([`607b77f5`](https://github.com/0x-copilot-dev/0x-copilot/commit/607b77f572ebfe87284ddec9a56064a5defffde7))
+- **run:** resolve cross-turn citations, and stop the empty canvas starving the chat ([`92288251`](https://github.com/0x-copilot-dev/0x-copilot/commit/9228825106d24b13039a61b313baecee522f1be9))
+- **chat-surface:** fold a thought's tool calls into it, and step the type scale down ([`a5455883`](https://github.com/0x-copilot-dev/0x-copilot/commit/a54558830ee744ddb648b7dede70d43bdd217be8))
+- **review:** stop the disclosure being clipped off screen ([`1f923367`](https://github.com/0x-copilot-dev/0x-copilot/commit/1f92336752d9a4e0acddebaed40bac413f9bde3b))
+- **surfaces:** enforce the account where the write actually leaves ([`305e04af`](https://github.com/0x-copilot-dev/0x-copilot/commit/305e04af7ab795611d7dd1443ca202dce8534ebd))
+- **review:** show every argument a staged write will send ([`b2391e39`](https://github.com/0x-copilot-dev/0x-copilot/commit/b2391e39d622ca29bddb57cfc37cdeccb5328ef4))
+- **surfaces:** account for every arg a write will send ([`f5452cb4`](https://github.com/0x-copilot-dev/0x-copilot/commit/f5452cb4f91c2db739b7c9693713e2a9ea9b8a3d))
+- **artifacts:** make parseBlocks agree with the renderer it feeds ([`8183b831`](https://github.com/0x-copilot-dev/0x-copilot/commit/8183b831daa62214d15aea909259206f3a21b265))
+- **deps:** bump the two CVE pins surgically instead of via npm audit fix ([`c2582b6d`](https://github.com/0x-copilot-dev/0x-copilot/commit/c2582b6db9c1f4c348b69e8c6d9fc65eafc0311d))
+- **deps:** clear the two CVE gates blocking CI ([`3eb4400b`](https://github.com/0x-copilot-dev/0x-copilot/commit/3eb4400b45453fd133cc9588603a9f95c3d0e1bb))
+- **artifacts:** every block is editable, and an empty heading survives being edited ([`d87b58d8`](https://github.com/0x-copilot-dev/0x-copilot/commit/d87b58d802a300c5f797c70e9d1bddf18aea33f5))
+- **desktop-journeys:** shell-and-projects was testing a window that cannot exist ([`02315086`](https://github.com/0x-copilot-dev/0x-copilot/commit/02315086cf90e44cd470295942383f163ef55fce))
+- **tools:** re-probe the dark-cap name blindness with a flag that still exists ([`cd10c434`](https://github.com/0x-copilot-dev/0x-copilot/commit/cd10c434502d81edb0542b574958f64106649712))
+- **thread-canvas:** anchor a tool card to the run that produced it ([`20146ff8`](https://github.com/0x-copilot-dev/0x-copilot/commit/20146ff895ba18e3308acf005ae62a99f68808ab))
+- **surfaces:** parse the MCP text envelope, so a correct spec finds its rows ([`e5a6dc12`](https://github.com/0x-copilot-dev/0x-copilot/commit/e5a6dc12162266ef8a20a9c27c8478a42d770f83))
+
+### Performance
+
+- **run:** one request for a conversation's card history, not 2N replays ([`79206576`](https://github.com/0x-copilot-dev/0x-copilot/commit/7920657685e6c28c954efdb0d0cfd22bf9eb6712))
+
+### Maintenance
+
+- **journeys:** a gateway model's reasoning must reach the transcript ([`efd5d4b1`](https://github.com/0x-copilot-dev/0x-copilot/commit/efd5d4b1d9ac23ee0c8df4344bce90b298e9771a))
+- **deps:** stop proposing pydantic-monty 0.0.19 ([`db7c95ae`](https://github.com/0x-copilot-dev/0x-copilot/commit/db7c95ae2241588ddac0b8b388d7d1ace83eeed8))
+- **ai-backend:** take the three bumps, hold Monty at 0.0.18 again ([`8ed76278`](https://github.com/0x-copilot-dev/0x-copilot/commit/8ed7627876f693bc61dea258f776107d0d505938))
+- **deps:** stop grouping npm updates ([`f7fc94c1`](https://github.com/0x-copilot-dev/0x-copilot/commit/f7fc94c1c3ecb64e09c7360b71c03c7efdc4fb17))
+- **facade:** recompile the lock dependabot leaves stale ([`066789ff`](https://github.com/0x-copilot-dev/0x-copilot/commit/066789ff5d946e5dcdbdb257d6278ce4fe1525b2))
+- **backend:** recompile the lock dependabot leaves stale ([`55b41582`](https://github.com/0x-copilot-dev/0x-copilot/commit/55b4158225977683e84678f3ba09864807db6c8e))
+- **ai-backend:** accept the reviewed framework bump, hold Monty back ([`2c7934fc`](https://github.com/0x-copilot-dev/0x-copilot/commit/2c7934fc126787ee5c0e6bda0baa4e18fb126bc5))
+- allowlist migration-manifest digests in the secret scan ([`b70ba386`](https://github.com/0x-copilot-dev/0x-copilot/commit/b70ba38604d32c50097c62237c392e9ed41b59d2))
+- **chat-surface:** the provider picker is a list, not a dialog ([`fdbadcbf`](https://github.com/0x-copilot-dev/0x-copilot/commit/fdbadcbf753fee04e52bce85b4827428d9a2b242))
+- **desktop-journeys:** live journey for Virtuals, and two fixes it found ([`f08bba20`](https://github.com/0x-copilot-dev/0x-copilot/commit/f08bba20f2bbd73f912c8c3befdcad1a726a42db))
+- **tools:** live check for the Virtuals key ([`9cf044ad`](https://github.com/0x-copilot-dev/0x-copilot/commit/9cf044ad8c700d150daf997564d75e125cb98e79))
+- **deps:** point dependabot at dev, not main ([`e140dfdc`](https://github.com/0x-copilot-dev/0x-copilot/commit/e140dfdc33be0a16a8855217f0f32f18f8cc05e1))
+- **surfaces:** record what the hardening closed and what it did not ([`7a232a88`](https://github.com/0x-copilot-dev/0x-copilot/commit/7a232a885bdfd0048368b46898fae1d885b7fb7c))
+- **surfaces:** record the write-lane adversarial pass ([`6942d801`](https://github.com/0x-copilot-dev/0x-copilot/commit/6942d8011737cdc131205ed88a81300624e1bf0d))
+- **journeys:** re-home the 8-shape surface-shaping matrix as AS-9 ([`e8d56643`](https://github.com/0x-copilot-dev/0x-copilot/commit/e8d56643655a76c2477c7120c9025f4e1fa1c03e))
+- **surfaces:** make the shaping-credential degrade test hermetic ([`8e2f3d90`](https://github.com/0x-copilot-dev/0x-copilot/commit/8e2f3d901902a06d9a3f670424deb4ae17458a76))
+- **generative-ui:** mock the quiet block chrome and a local email compose surface ([`7ed20c0b`](https://github.com/0x-copilot-dev/0x-copilot/commit/7ed20c0b2f1b8558e382f1aa6836928989d7e91c))
+- **cli:** prettier-format the generated 0.2.0 changelog entry ([`1c46929c`](https://github.com/0x-copilot-dev/0x-copilot/commit/1c46929cd0f7ef7127e9d935d179bf31c3d0b9f3))
+- **ai-backend:** delete 35 adjudicated orphan modules (12,340 LOC) ([`e5f8ef2b`](https://github.com/0x-copilot-dev/0x-copilot/commit/e5f8ef2b46031882018ee0bfd178e4aee7224bf4))
+- **audit:** verify the receipt/audit-export slice — wire it, do not delete it ([`3c6f7822`](https://github.com/0x-copilot-dev/0x-copilot/commit/3c6f7822d079e28ee8e922ad2d012a08dbf727d3))
+
+[Full changelog](https://github.com/0x-copilot-dev/0x-copilot/compare/cli-v0.2.0...cli-v0.2.1)
+
 ## 0.2.0 - 2026-08-06
 
 ### Breaking Changes
