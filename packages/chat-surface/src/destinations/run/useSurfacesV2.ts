@@ -72,11 +72,20 @@ export function useSurfacesV2(
 
   // Hook-lifetime refs (survive effect re-runs, unlike a per-effect closure):
   //   mounted        — false after unmount; gates every setState.
-  //   inFlight       — a request is currently outstanding.
+  //   inFlightRun    — the run a request is currently outstanding FOR, or null.
   //   requestedSeq   — the highest seq that has asked to be hydrated.
   //   fetchedSeq     — the seq the last COMPLETED fetch resolved for.
+  //
+  // `inFlightRun` holds a run id rather than a boolean, and `fetchedSeq` is
+  // written only by a response that still belongs to the bound run. Both halves
+  // exist for the same reason: `sequence_no` is monotonic PER RUN (the
+  // streaming model), so a seq from run A means nothing about run B. A plain
+  // boolean made a second turn silently unhydratable — the new run's request
+  // was suppressed because the OLD run's was still outstanding, and the old
+  // response then recorded its (much higher) seq as if it were the new run's,
+  // so every subsequent `requested > fetched` test read false forever.
   const mountedRef = useRef(true);
-  const inFlightRef = useRef(false);
+  const inFlightRunRef = useRef<string | null>(null);
   const requestedSeqRef = useRef(0);
   const fetchedSeqRef = useRef(0);
   const runIdRef = useRef<string | null>(runId);
@@ -101,13 +110,31 @@ export function useSurfacesV2(
     if (!enabled || runId === null || lastLedgerSeq <= 0) {
       return;
     }
+    // `sequence_no` is monotonic WITHIN a run, so a ledger seq that went
+    // BACKWARDS is proof we are now reading a different run's counter — the
+    // previous run's numbers are not comparable to this one's and must not
+    // stand as progress already made.
+    //
+    // The run-switch reset above is not enough on its own. The switch is
+    // observed here one render before the ledger catches up, so this effect can
+    // still see the OUTGOING run's `lastLedgerSeq`; seeding `requested` from it
+    // fires a fetch that legitimately returns nothing (the new run has produced
+    // no surface yet) and then records that foreign, much larger seq as
+    // `fetched`. Every real event of the new run counts from its own origin, so
+    // `requested > fetched` is false forever and the surface never hydrates —
+    // a second-turn `email://` composer drawing four empty rows over a payload
+    // the endpoint was serving correctly (journeys AS-10).
+    if (lastLedgerSeq < fetchedSeqRef.current) {
+      fetchedSeqRef.current = 0;
+      requestedSeqRef.current = 0;
+    }
     requestedSeqRef.current = Math.max(requestedSeqRef.current, lastLedgerSeq);
 
     const runFetch = (): void => {
       // Nothing newer than what we've already fetched → stop.
       if (requestedSeqRef.current <= fetchedSeqRef.current) return;
       const targetSeq = requestedSeqRef.current;
-      inFlightRef.current = true;
+      inFlightRunRef.current = runId;
       if (mountedRef.current) setStatus("loading");
       void transport
         .request<RunSurfacesResponse>({
@@ -115,8 +142,11 @@ export function useSurfacesV2(
           path: `/v1/agent/runs/${runId}/surfaces`,
         })
         .then((res) => {
-          fetchedSeqRef.current = targetSeq;
+          // Ordered deliberately: a response for a run we have already left
+          // must not record its seq, because the bound run counts from its own
+          // origin and would read that number as progress it never made.
           if (!mountedRef.current || runIdRef.current !== runId) return;
+          fetchedSeqRef.current = targetSeq;
           const next = new Map<SurfaceId, SurfacePayload>();
           for (const snapshot of res.surfaces ?? []) {
             const payload = snapshotToPayload(snapshot);
@@ -133,14 +163,18 @@ export function useSurfacesV2(
           // Fail soft — tabs still render from the event fold; the surface
           // column shows its tier-3 state. Mark the seq ATTEMPTED so `finally`
           // does not re-fire it (no retry storm); a later seq advance
-          // (`requestedSeq > fetchedSeq`) retries. PRD-B1 §3.
-          fetchedSeqRef.current = targetSeq;
+          // (`requestedSeq > fetchedSeq`) retries. PRD-B1 §3. Scoped to the
+          // bound run for the same reason the success path is.
           if (mountedRef.current && runIdRef.current === runId) {
+            fetchedSeqRef.current = targetSeq;
             setStatus("error");
           }
         })
         .finally(() => {
-          inFlightRef.current = false;
+          // Only the run that claimed the slot may release it: a stale
+          // response settling after the switch must not clear the flag the
+          // NEW run's request is holding.
+          if (inFlightRunRef.current === runId) inFlightRunRef.current = null;
           // A newer seq arrived while this was in flight → exactly one
           // coalesced follow-up (guarded by the requested>fetched check).
           if (mountedRef.current && runIdRef.current === runId) {
@@ -149,9 +183,11 @@ export function useSurfacesV2(
         });
     };
 
-    // One request at a time; a mid-flight advance is picked up by the
-    // in-flight request's `finally` (coalescing).
-    if (!inFlightRef.current) {
+    // One request at a time PER RUN; a mid-flight advance is picked up by the
+    // in-flight request's `finally` (coalescing). A request still outstanding
+    // for a run we have left does not hold this run's slot — its `finally`
+    // fires under the old run's guard and would never start this one.
+    if (inFlightRunRef.current !== runId) {
       runFetch();
     }
   }, [transport, runId, lastLedgerSeq, enabled]);
