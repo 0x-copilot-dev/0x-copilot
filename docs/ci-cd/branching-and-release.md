@@ -16,6 +16,24 @@ feature branch ──PR──▶ dev ──promote-to-main.yml──▶ main ─
   version-bump commit `release-cli.yml` writes.
 - **npm** is published only from `main`, by manual dispatch.
 
+> **Pull a stale checkout before you judge anything in it.** A working tree that
+> has not been pulled in days is not merely behind — it makes **deletions look
+> like additions**. Diff it against a newer `dev` and every file deleted in the
+> meantime shows up as a file that "exists on no branch", which is the same
+> signature as genuinely new work.
+>
+> This cost most of a day on 2026-08-10: a tree last pulled on 08-06 resurfaced
+> all 35 modules deleted that day by `e5f8ef2b`, and they read as 12k LOC of
+> recovered feature work — tests and all — until the blob hashes showed all 63
+> files byte-identical to the versions that had been deleted on purpose. The
+> tell, applied to any one file:
+>
+> ```bash
+> git log --diff-filter=AD --follow -- <path>   # an A directly above a D = resurrection
+> ```
+>
+> See `docs/audit/ai-backend-smells/PENDING-WIRINGS.md` §Re-adjudicated.
+
 ## Who can merge
 
 Merging requires write access. Write is granted to exactly two collaborators:
@@ -162,6 +180,34 @@ Publish precedes tagging on purpose: tagging first leaves a tag pointing at a
 version that does not exist on the registry if the publish then fails. Step 8
 matters because the release commit lands on `main`, leaving it one commit ahead
 of `dev`; without the back-merge the next fast-forward promotion is rejected.
+
+> **Step 8 currently fails, and the run goes red after a successful publish.**
+> The workflow pushes the release commit straight to `dev`, which the ruleset
+> refuses:
+>
+> ```
+> remote: error: GH013: Repository rule violations found for refs/heads/dev.
+> remote: - Changes must be made through a pull request.
+> ```
+>
+> Observed on `v0.2.1` (2026-08-10). **npm, `main`, the tag and the GitHub Release
+> were all correct** — only the housekeeping failed, so a red run here does not
+> mean a failed release. Check npm before re-dispatching: re-running a publish
+> that already succeeded is refused by step 3 anyway.
+>
+> The consequence is the one this section warns about: `main` is left one commit
+> ahead and **stops being an ancestor of `dev`**, so the next promotion is blocked
+> with no obvious cause. Until the workflow opens a PR (or gains a ruleset bypass),
+> finish a release by hand:
+>
+> ```bash
+> git checkout -b chore/back-merge-cli-v<version> origin/dev
+> git merge origin/main && git push -u origin HEAD
+> gh pr create --base dev --title "chore: back-merge the cli v<version> release commit"
+> ```
+>
+> That PR needs `--admin` to merge: the release commit carries `[skip ci]`, so it
+> has **zero** check runs and the four required checks can never appear on it.
 
 ### Where the changelog goes
 
