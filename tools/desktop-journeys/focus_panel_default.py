@@ -14,11 +14,12 @@ undone is a worse bug than the one being fixed.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from _lib import DriverSession, load_env_key
 
-PROVIDER = "anthropic"
+PROVIDER = os.environ.get("JOURNEY_PROVIDER", "virtuals")
 PROMPT = "Reply with exactly: ok"
 
 JS_RAIL = """

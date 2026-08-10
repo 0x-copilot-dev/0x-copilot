@@ -54,6 +54,7 @@ from uuid import uuid4
 
 
 from _lib import (  # noqa: E402
+    BYOK_PROVIDER_CHAIN,
     INSTALLED_PAYLOAD_TARGET,
     EXIT_BLOCKED,
     DriverSession,
@@ -362,17 +363,21 @@ def _live_provider(journey_id: str) -> tuple[str, str]:
         .strip()
         .lower()
     )
-    if requested not in {"auto", "openai", "anthropic"}:
+    # Same order as `_lib.BYOK_PROVIDER_CHAIN`, and imported from it rather than
+    # restated: two resolvers that disagree about the default provider is how a
+    # matrix pass silently exercises a different gateway than the journeys do.
+    if requested not in {"auto", *BYOK_PROVIDER_CHAIN}:
         raise AssertionError(
-            f"{journey_id}_PROVIDER/GENUI_PROVIDER must be auto, openai, or anthropic"
+            f"{journey_id}_PROVIDER/GENUI_PROVIDER must be auto or one of "
+            f"{', '.join(BYOK_PROVIDER_CHAIN)}"
         )
-    candidates = (requested,) if requested != "auto" else ("openai", "anthropic")
+    candidates = (requested,) if requested != "auto" else BYOK_PROVIDER_CHAIN
     for provider in candidates:
         try:
             return provider, load_env_key(provider)
         except SystemExit:
             continue
-    label = requested if requested != "auto" else "OpenAI or Anthropic"
+    label = requested if requested != "auto" else " or ".join(BYOK_PROVIDER_CHAIN)
     raise JourneyBlocked(
         f"no local {label} BYOK value is available through load_env_key"
     )

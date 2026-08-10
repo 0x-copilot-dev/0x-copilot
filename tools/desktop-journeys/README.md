@@ -153,9 +153,31 @@ Journeys that add a BYOK key read it from **`services/ai-backend/.env`** via
 
 ```
 # services/ai-backend/.env
+VIRTUALS_ACP_KEY=...        # the default journey provider
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+**Virtuals is the default provider** — `byok_provider()` resolves
+`BYOK_PROVIDER_CHAIN = ("virtuals", "openai", "anthropic")` in order and takes the
+first with a key present, so a machine without a Virtuals key still runs the suite
+on OpenAI or Anthropic rather than skipping. Override with `JOURNEY_PROVIDER`:
+
+```bash
+JOURNEY_PROVIDER=anthropic python3 tools/desktop-journeys/transcript_rendering.py
+```
+
+Virtuals leads because it is the gateway the product is sold through, and the only
+provider whose path has failed _silently_: `ChatOpenAI` neither extracts nor
+preserves the non-standard `reasoning_content` Virtuals streams, so the runtime
+billed reasoning tokens it could never display and nothing raised. A first-party
+OpenAI or Anthropic key cannot exercise that class of bug at all.
+
+Defaulting to Virtuals also puts a known race on the common path, so `ftue_add_key`
+now waits it out for every Virtuals journey (`wait_for_virtuals_catalog`): the
+catalog snapshot must land **before** the key is saved, because the FTUE refetches
+exactly once afterwards and a driver that pastes a key ~2s after boot beats the
+snapshot, caches a Virtuals-free catalog, and never asks again.
 
 The value is passed straight into the app's keychain field and is **never printed,
 logged, or committed** — only lengths / HTTP statuses ever surface. `.env` is
