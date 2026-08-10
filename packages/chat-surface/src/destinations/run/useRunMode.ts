@@ -99,22 +99,50 @@ export function writeRunMode(
 }
 
 /**
- * Default Focus Run-details panel state when nothing is persisted: EXPANDED
- * (the design's default — the panel opens with the run).
+ * Default Focus Run-details panel state when nothing is persisted: COLLAPSED.
+ * Focus exists to hand the canvas to the chat, so entering it with the
+ * Run-details column already open contradicts the mode the reader just asked
+ * for. Studio is where the workspace is on by default (see the Studio constant
+ * below) — that is the whole difference between the two modes.
+ *
+ * Only the *unset* default moved. An explicit `"0"` still reads as expanded, so
+ * a reader who opened the panel keeps it open on their next visit.
  */
-export const DEFAULT_RUN_FOCUS_PANEL_COLLAPSED = false;
+export const DEFAULT_RUN_FOCUS_PANEL_COLLAPSED = true;
 
 /**
- * Read the persisted Focus Run-details collapse flag. Only the literal `"1"`
- * resolves to collapsed; everything else — `"0"`, `null`, and any
- * unrecognised value — resolves to the default (expanded). "Unknown ⇒
- * default" so a value written by a newer client degrades safely.
+ * Resolve a persisted collapse flag against its mode's default.
+ *
+ * `"1"` is collapsed and `"0"` is expanded; ANYTHING else — `null`, a legacy
+ * value, a value written by a newer client — falls back to `defaultCollapsed`.
+ * That "unknown ⇒ default" shape is what lets the default differ per rail
+ * without either one having to enumerate the other's values.
+ */
+function resolveCollapsed(
+  raw: string | null,
+  defaultCollapsed: boolean,
+): boolean {
+  if (raw === "1") {
+    return true;
+  }
+  if (raw === "0") {
+    return false;
+  }
+  return defaultCollapsed;
+}
+
+/**
+ * Read the persisted Focus Run-details collapse flag, defaulting to
+ * {@link DEFAULT_RUN_FOCUS_PANEL_COLLAPSED} when nothing is persisted.
  */
 export function readRunFocusPanelCollapsed(
   store: KeyValueStore,
   conversationId: ConversationId,
 ): boolean {
-  return store.get(runFocusPanelCollapsedKey(conversationId)) === "1";
+  return resolveCollapsed(
+    store.get(runFocusPanelCollapsedKey(conversationId)),
+    DEFAULT_RUN_FOCUS_PANEL_COLLAPSED,
+  );
 }
 
 /** Persist the Focus Run-details collapse flag for a conversation. */
@@ -134,14 +162,17 @@ export function writeRunFocusPanelCollapsed(
 export const DEFAULT_RUN_STUDIO_RAIL_COLLAPSED = false;
 
 /**
- * Read the persisted Studio workspace-rail collapse flag. Same "only `"1"` is
- * collapsed, unknown ⇒ default (expanded)" shape as the Focus flag above.
+ * Read the persisted Studio workspace-rail collapse flag, defaulting to
+ * {@link DEFAULT_RUN_STUDIO_RAIL_COLLAPSED} when nothing is persisted.
  */
 export function readRunStudioRailCollapsed(
   store: KeyValueStore,
   conversationId: ConversationId,
 ): boolean {
-  return store.get(runStudioRailCollapsedKey(conversationId)) === "1";
+  return resolveCollapsed(
+    store.get(runStudioRailCollapsedKey(conversationId)),
+    DEFAULT_RUN_STUDIO_RAIL_COLLAPSED,
+  );
 }
 
 /** Persist the Studio workspace-rail collapse flag for a conversation. */
@@ -307,15 +338,18 @@ export interface UseRunPanelCollapsedResult {
  * differ only in which key they own, and a second copy of this body is exactly
  * how the two would drift.
  */
-function useCollapseFlag(key: string): UseRunPanelCollapsedResult {
+function useCollapseFlag(
+  key: string,
+  defaultCollapsed: boolean,
+): UseRunPanelCollapsedResult {
   const store = useKeyValueStore();
-  const [collapsed, setCollapsedState] = useState<boolean>(
-    () => store.get(key) === "1",
+  const [collapsed, setCollapsedState] = useState<boolean>(() =>
+    resolveCollapsed(store.get(key), defaultCollapsed),
   );
 
   useEffect(() => {
-    setCollapsedState(store.get(key) === "1");
-  }, [store, key]);
+    setCollapsedState(resolveCollapsed(store.get(key), defaultCollapsed));
+  }, [store, key, defaultCollapsed]);
 
   const setCollapsed = useCallback(
     (next: boolean): void => {
@@ -345,7 +379,10 @@ function useCollapseFlag(key: string): UseRunPanelCollapsedResult {
 export function useRunPanelCollapsed({
   conversationId,
 }: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
-  return useCollapseFlag(runFocusPanelCollapsedKey(conversationId));
+  return useCollapseFlag(
+    runFocusPanelCollapsedKey(conversationId),
+    DEFAULT_RUN_FOCUS_PANEL_COLLAPSED,
+  );
 }
 
 /**
@@ -357,5 +394,8 @@ export function useRunPanelCollapsed({
 export function useRunStudioRailCollapsed({
   conversationId,
 }: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
-  return useCollapseFlag(runStudioRailCollapsedKey(conversationId));
+  return useCollapseFlag(
+    runStudioRailCollapsedKey(conversationId),
+    DEFAULT_RUN_STUDIO_RAIL_COLLAPSED,
+  );
 }

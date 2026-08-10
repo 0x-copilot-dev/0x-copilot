@@ -9,6 +9,8 @@ import type { ConversationId } from "@0x-copilot/api-types";
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import {
+  DEFAULT_RUN_FOCUS_PANEL_COLLAPSED,
+  DEFAULT_RUN_STUDIO_RAIL_COLLAPSED,
   readRunFocusPanelCollapsed,
   readRunMode,
   readRunStudioRailCollapsed,
@@ -299,11 +301,13 @@ function renderPanelCollapsed(
 }
 
 describe("readRunFocusPanelCollapsed / persistence helpers", () => {
-  it("defaults to expanded (false) when nothing is persisted", () => {
-    expect(readRunFocusPanelCollapsed(makeStore(), CONV)).toBe(false);
+  // Focus hands the canvas to the chat, so it opens with the Run-details
+  // column folded. This is the one place the two rails disagree.
+  it("defaults to COLLAPSED (true) when nothing is persisted", () => {
+    expect(readRunFocusPanelCollapsed(makeStore(), CONV)).toBe(true);
   });
 
-  it('reads only the literal "1" as collapsed', () => {
+  it('honours an explicit "0" so a reader who opened the panel keeps it', () => {
     const key = runFocusPanelCollapsedKey(CONV);
     expect(readRunFocusPanelCollapsed(makeStore({ [key]: "1" }), CONV)).toBe(
       true,
@@ -311,8 +315,9 @@ describe("readRunFocusPanelCollapsed / persistence helpers", () => {
     expect(readRunFocusPanelCollapsed(makeStore({ [key]: "0" }), CONV)).toBe(
       false,
     );
+    // Unrecognised ⇒ the mode's default, which for Focus is collapsed.
     expect(readRunFocusPanelCollapsed(makeStore({ [key]: "yes" }), CONV)).toBe(
-      false,
+      true,
     );
   });
 
@@ -343,16 +348,29 @@ describe("useRunPanelCollapsed", () => {
   it("toggles collapsed↔expanded and persists", () => {
     const store = makeStore();
     const { result } = renderPanelCollapsed(store);
-    act(() => result.current.toggle());
+    // Focus starts collapsed, so the first toggle OPENS the panel.
     expect(result.current.collapsed).toBe(true);
     act(() => result.current.toggle());
     expect(result.current.collapsed).toBe(false);
     expect(store.get(runFocusPanelCollapsedKey(CONV))).toBe("0");
+    act(() => result.current.toggle());
+    expect(result.current.collapsed).toBe(true);
+    expect(store.get(runFocusPanelCollapsedKey(CONV))).toBe("1");
+  });
+
+  it("opens by default, and stays open once the reader opened it", () => {
+    const store = makeStore();
+    expect(renderPanelCollapsed(store).result.current.collapsed).toBe(true);
+    writeRunFocusPanelCollapsed(store, CONV, false);
+    expect(renderPanelCollapsed(store).result.current.collapsed).toBe(false);
   });
 
   it("re-hydrates when the conversation changes (per-conversation state)", () => {
     const other = "conv-2" as ConversationId;
-    const store = makeStore({ [runFocusPanelCollapsedKey(other)]: "1" });
+    const store = makeStore({
+      [runFocusPanelCollapsedKey(CONV)]: "0",
+      [runFocusPanelCollapsedKey(other)]: "1",
+    });
     const { result, rerender } = renderHook(
       ({ id }: { id: ConversationId }) =>
         useRunPanelCollapsed({ conversationId: id }),
@@ -409,11 +427,35 @@ describe("readRunStudioRailCollapsed / persistence helpers", () => {
     expect(runStudioRailCollapsedKey(CONV)).not.toBe(
       runFocusPanelCollapsedKey(CONV),
     );
+    // Write BOTH to explicit, opposite values. Asserting against a default
+    // would not prove isolation now that the two rails default differently —
+    // the read could be returning its own default rather than the value the
+    // other rail wrote.
     const store = makeStore();
     writeRunStudioRailCollapsed(store, CONV, true);
-    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(false);
     writeRunFocusPanelCollapsed(store, CONV, false);
     expect(readRunStudioRailCollapsed(store, CONV)).toBe(true);
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(false);
+
+    // …and back the other way, so neither key is merely being ignored.
+    writeRunStudioRailCollapsed(store, CONV, false);
+    writeRunFocusPanelCollapsed(store, CONV, true);
+    expect(readRunStudioRailCollapsed(store, CONV)).toBe(false);
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(true);
+  });
+
+  // The defaults themselves are the contract the Run cockpit reads: Studio
+  // opens with its workspace, Focus opens without it.
+  it("defaults differ per rail, on the same empty store", () => {
+    const store = makeStore();
+    expect(readRunStudioRailCollapsed(store, CONV)).toBe(
+      DEFAULT_RUN_STUDIO_RAIL_COLLAPSED,
+    );
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(
+      DEFAULT_RUN_FOCUS_PANEL_COLLAPSED,
+    );
+    expect(DEFAULT_RUN_STUDIO_RAIL_COLLAPSED).toBe(false);
+    expect(DEFAULT_RUN_FOCUS_PANEL_COLLAPSED).toBe(true);
   });
 });
 
