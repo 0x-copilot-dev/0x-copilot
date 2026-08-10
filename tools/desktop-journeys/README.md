@@ -38,7 +38,7 @@ tools/desktop-journeys/
   first_run.py               shell_and_projects.py     workspace_consent.py
   transcript_rendering.py    artifacts_and_surfaces.py workspace_bypass.py
   composer_and_budgets.py    mcp_connected.py          installed_payload.py
-  virtuals_provider.py
+  virtuals_provider.py       virtuals_thinking.py      focus_panel_default.py
 ```
 
 **Nine journeys, not sixty-four scripts.** One supervised boot costs initdb +
@@ -63,6 +63,8 @@ prints; the exit code is only its aggregate.
 | `mcp_connected.py`          | everything needing a REAL connected MCP server (reuse profile)     |
 | `installed_payload.py`      | the shipped npm artifact and the G3-G10 release matrix             |
 | `virtuals_provider.py`      | Virtuals as a native provider — **needs no key** (see below)       |
+| `virtuals_thinking.py`      | a gateway model's reasoning survives to the transcript (Kimi K3)   |
+| `focus_panel_default.py`    | Focus opens with the Run-details column folded, and still opens    |
 
 Two `installed-payload` journeys are still standalone and unfolded:
 `generative-workflows/g1_markdown_lifecycle.py` and `g2_csv_lifecycle.py`. See

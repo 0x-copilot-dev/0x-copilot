@@ -88,6 +88,32 @@ export interface ModelPillProps {
   /** Footer deep-link → Settings → Local models (v3 "Get local models →"). */
   onGetLocalModels?: () => void;
   /**
+   * Header affordance → Settings → **Models** (the curation surface).
+   *
+   * Distinct from {@link onAddProviderKey}, which both hosts point at Settings →
+   * *Provider keys*. That left no route at all from the composer to the place
+   * models are ENABLED, so a user whose model is absent from the curated short
+   * list had nowhere to go from here — worst during first-run, when the short
+   * list is all they have ever seen. Omitted by hosts that have no such surface;
+   * the header then renders its plain scope meta as before.
+   */
+  onManageModels?: () => void;
+  /**
+   * Offer every CONFIGURED model, not just the curated short list.
+   *
+   * The composer normally shows the 6-9 model list `ModelEnablementResolver`
+   * derives, because the full catalog lives one click away in Settings →
+   * Models. First run has no such click: the FTUE gate renders outside the
+   * shell, so Settings does not exist yet, and a curated list there is a dead
+   * end — the user has a key for a model, the picker will not offer it, and
+   * nothing on screen leads anywhere.
+   *
+   * Unconfigured rows are still listed (they read `needs key` and are how a
+   * user learns the model exists); this only stops curation from hiding a
+   * model the user can already run.
+   */
+  showAllConfigured?: boolean;
+  /**
    * Fallback surface for hosts that do not provide `onAddProviderKey`: opens an
    * inline `<KeyForm>` sub-view inside this popover and saves through the port.
    * Navigation deliberately wins when both are present, keeping Settings as the
@@ -184,6 +210,8 @@ export function ModelPill({
   onAddCustom,
   onAddProviderKey,
   onGetLocalModels,
+  onManageModels,
+  showAllConfigured,
   providerKeysPort,
   onProviderKeyAdded,
   localModelSizes,
@@ -205,11 +233,40 @@ export function ModelPill({
 
   // Only enabled models are offered (undefined `enabled` = legacy/curated-in);
   // the current selection is always kept visible even if curated out.
+  //
+  // `showAllConfigured` additionally admits any model the user holds a key for,
+  // whatever the curation says — see the prop doc for why first run needs it.
   const visible = useMemo(
-    () => models.filter((m) => m.enabled !== false || m.id === value),
-    [models, value],
+    () =>
+      models.filter(
+        (m) =>
+          m.enabled !== false ||
+          m.id === value ||
+          (showAllConfigured && m.configured === true),
+      ),
+    [models, value, showAllConfigured],
   );
-  const cloud = useMemo(() => visible.filter((m) => !isLocal(m)), [visible]);
+  // Models you can actually run come FIRST. The catalog's own order puts
+  // unconfigured rows wherever the upstream listing happened to put them, and
+  // with a single provider keyed that meant four `needs key` rows sat above the
+  // one usable model — under a heading that says "Your keys" — with the only
+  // selectable row pushed below the 264px scroll cap. A picker whose visible
+  // rows are all unselectable reads as a broken picker.
+  //
+  // `sort` is STABLE in every engine this ships on, so within each half the
+  // catalog's own ordering (the tier ladder's small/medium/big spread) is
+  // preserved exactly; only the configured/unconfigured split is imposed.
+  const cloud = useMemo(
+    () =>
+      visible
+        .filter((m) => !isLocal(m))
+        .slice()
+        .sort(
+          (a, b) =>
+            Number(b.configured ?? false) - Number(a.configured ?? false),
+        ),
+    [visible],
+  );
   const local = useMemo(() => visible.filter(isLocal), [visible]);
 
   const commit = (modelId: string): void => {
@@ -304,10 +361,31 @@ export function ModelPill({
 
   const renderMenuBody = (): ReactElement => (
     <>
-      {/* Design `.pop__h` — the popover says what it is, and the meta says what
-          the choice scopes to ("this chat", not a global default). */}
+      {/* Design `.pop__h`. The meta slot carried the word "this chat" — true,
+          but the scope is already implied by a per-chat pill, and the slot was
+          the only free affordance in a popover that had no route to the surface
+          where models are enabled. It now holds that route when the host offers
+          one, and falls back to the scope wording when it does not. */}
       <div className="ui-pop__h">
-        Model <span className="ui-pop__h-meta">this chat</span>
+        Model{" "}
+        {onManageModels !== undefined ? (
+          <button
+            type="button"
+            className="ui-pop__h-meta atlas-model-pill__manage"
+            data-testid="model-pill-manage"
+            aria-label="Manage models in Settings"
+            title="Manage models in Settings"
+            onClick={() => {
+              closeMenu();
+              onManageModels();
+            }}
+          >
+            <Icon name="gear" />
+            <span>Manage</span>
+          </button>
+        ) : (
+          <span className="ui-pop__h-meta">this chat</span>
+        )}
       </div>
       {/* Design `.pop__list` — the ONLY scroll region. The frame is
           `overflow: hidden`, so a long catalog scrolls inside the list at

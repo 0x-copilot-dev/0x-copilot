@@ -75,6 +75,8 @@ export interface RunComposerProps {
    * navigation; omitted ⇒ the link is not rendered.
    */
   readonly onGetLocalModels?: () => void;
+  /** Model popover header "Manage" -> Settings -> Models (the curation surface). */
+  readonly onManageModels?: () => void;
   /**
    * MCP connector surface for the composer's Tools pill. When provided, it
    * supplies web-search, connected rows, one-click connect, and Custom MCP.
@@ -139,6 +141,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     onOpenSkillsSettings,
     onOpenModelSettings,
     onGetLocalModels,
+    onManageModels,
     connectorsPort,
     providerKeysPort,
     catalogRefreshKey,
@@ -382,6 +385,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // Model popover footer → Settings → Local models. Same deep-link idiom
         // as the provider-keys CTA, just the other half of the picker.
         onGetLocalModels={onGetLocalModels}
+        onManageModels={onManageModels}
         models={models}
         selectedModel={selectedModel}
         onModelChange={handleModelChange}

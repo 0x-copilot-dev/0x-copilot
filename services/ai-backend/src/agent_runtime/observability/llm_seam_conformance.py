@@ -78,7 +78,21 @@ def llm_seam_violations(source_root: Path) -> tuple[str, ...]:
                     seam="canonical runtime factory",
                 )
             )
-        violations.extend(_provider_import_violations(tree, relative))
+        # The canonical funnel is the ONE file allowed to name a provider client
+        # directly. It already had to: `ChatOpenAI` targets the official OpenAI
+        # specification and documents that it neither extracts nor preserves a
+        # third-party gateway's `reasoning_content`, pointing instead at
+        # provider-specific subclasses. There is no `ChatVirtuals`, so the funnel
+        # declares one — and a subclass cannot be written without importing the
+        # base.
+        #
+        # This matches the sibling CI guard, which has allowlisted this exact
+        # path all along (`tools/check_llm_provider_imports.py`): the two gates
+        # disagreed, and this is the one that was stricter than the rule it
+        # describes. The invariant that matters — every provider client is
+        # constructed in one reviewed file — is unchanged.
+        if relative != CANONICAL_MODEL_FUNNEL.as_posix():
+            violations.extend(_provider_import_violations(tree, relative))
     return tuple(sorted(violations))
 
 

@@ -217,6 +217,19 @@ export interface AssistantComposerProps {
    */
   onGetLocalModels?: () => void;
   /**
+   * Header affordance on the model picker → Settings → Models. Forwarded
+   * verbatim to <ModelPill>; see its prop doc for why this is distinct from
+   * `onAddProviderKey` (which both hosts point at Provider keys, leaving no
+   * route to the surface where models are enabled).
+   */
+  onManageModels?: () => void;
+  /**
+   * Offer every configured model rather than the curated short list. Forwarded
+   * verbatim to <ModelPill>; first run sets it because it has no Settings
+   * surface to reach the full catalog from.
+   */
+  showAllConfigured?: boolean;
+  /**
    * On-disk byte sizes of installed LOCAL models, keyed by name/id — the host
    * binder's join of `GET /v1/local-models` onto the model catalog. Forwarded
    * verbatim to {@link ModelPill}, where it turns a local row's sub-line into
@@ -335,6 +348,8 @@ export const AssistantComposer = forwardRef<
     providerKeysPort,
     onProviderKeyAdded,
     onGetLocalModels,
+    onManageModels,
+    showAllConfigured,
     localModelSizes,
     depth,
     onDepthChange,
@@ -687,6 +702,8 @@ export const AssistantComposer = forwardRef<
                 providerKeysPort={providerKeysPort}
                 onProviderKeyAdded={onProviderKeyAdded}
                 onGetLocalModels={onGetLocalModels}
+                onManageModels={onManageModels}
+                showAllConfigured={showAllConfigured}
                 localModelSizes={localModelSizes}
               />
             ) : null}

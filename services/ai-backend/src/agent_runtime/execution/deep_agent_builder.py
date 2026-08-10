@@ -11,6 +11,9 @@ from typing import Final, Protocol, runtime_checkable
 from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
 from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
+from langchain_openai import (
+    ChatOpenAI,
+)  # allow-direct-llm-import: the reasoning-preserving subclass below must extend the real client
 from langchain.embeddings import init_embeddings
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
@@ -426,6 +429,65 @@ def runtime_checkpointer(checkpointer: object | None = None) -> object:
     return _runtime_checkpointer
 
 
+#: Gateways whose reasoning arrives as a peer of ``content`` on the delta
+#: rather than as a typed content block — the shape ``ChatOpenAI`` discards and
+#: ``StreamMessageParser.compat_reasoning_delta`` was written to read. Ollama is
+#: deliberately absent: local models emit inline ``<think>`` tags instead, which
+#: ``think_scrubber`` already handles.
+_SIBLING_FIELD_REASONING_GATEWAYS: Final[frozenset[str]] = frozenset(
+    {"virtuals", "openrouter"}
+)
+
+
+class _ReasoningPreservingChatOpenAI(ChatOpenAI):
+    """``ChatOpenAI`` that keeps a gateway's reasoning text instead of dropping it.
+
+    ``ChatOpenAI`` targets the official OpenAI specification and says so in its
+    own module docstring: *"Non-standard response fields added by third-party
+    providers (e.g. ``reasoning_content``, ``reasoning_details``) are not
+    extracted or preserved"*, with a pointer to provider-specific subclasses.
+    There is no ``ChatVirtuals``, so this is that subclass.
+
+    The consequence without it is expensive and silent. Virtuals streams Kimi
+    K3's chain of thought on ``delta.reasoning_content`` — 27 of 43 chunks on a
+    measured run — and bills it (``usage.completion_tokens_details
+    .reasoning_tokens``: 212). LangChain dropped the text and kept only the
+    count, so the user paid for reasoning that could never be shown, and
+    ``StreamMessageParser.compat_reasoning_delta`` — written for exactly this
+    sibling-field shape — was unreachable code for every gateway routed through
+    ``ChatOpenAI``, OpenRouter included.
+
+    The override re-attaches the field onto ``additional_kwargs``, which is one
+    of the three places ``compat_reasoning_delta`` already looks, so nothing
+    downstream of the client needs to change.
+    """
+
+    def _convert_chunk_to_generation_chunk(
+        self,
+        chunk: dict,
+        default_chunk_class: type,
+        base_generation_info: dict | None,
+    ) -> object | None:
+        generation = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        if generation is None:
+            return None
+        choices = chunk.get("choices") or chunk.get("chunk", {}).get("choices") or []
+        if not choices:
+            return generation
+        delta = choices[0].get("delta") or {}
+        # DeepSeek/Virtuals ship ``reasoning_content``; OpenRouter ships
+        # ``reasoning``. First non-empty wins so a gateway supplying both never
+        # double-counts — the same precedence compat_reasoning_delta applies.
+        for reasoning_key in ("reasoning_content", "reasoning"):
+            value = delta.get(reasoning_key)
+            if isinstance(value, str) and value:
+                generation.message.additional_kwargs[reasoning_key] = value
+                break
+        return generation
+
+
 def build_chat_model(
     model_config: ModelConfig,
     *,
@@ -534,6 +596,17 @@ def build_chat_model(
             "Custom OpenAI-compatible endpoint is missing its base URL. "
             "Re-add it in Settings -> Provider keys.",
             retryable=False,
+        )
+
+    # Only the gateways that actually ship reasoning as a SIBLING FIELD are
+    # built from the preserving subclass. Ollama and custom endpoints keep the
+    # canonical ``init_chat_model`` path: they carry no `reasoning_content`, so
+    # routing them here would change their construction seam for no gain — and
+    # the construction seam is exactly what `llm_seam_conformance` pins.
+    if model_config.provider in _SIBLING_FIELD_REASONING_GATEWAYS:
+        return _ReasoningPreservingChatOpenAI(
+            model=model_config.model_name,
+            **kwargs,  # type: ignore[arg-type]
         )
 
     return init_chat_model(

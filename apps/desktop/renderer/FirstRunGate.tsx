@@ -557,6 +557,11 @@ export function FirstRunSurfaceMount({
           // precisely so a new composer prop reaches first run for free — that
           // only works if the host actually passes it.
           projectFilingSlot={projectFilingSlot}
+          // First run offers every model the user holds a key for, not the
+          // curated short list. There is no Settings surface out here to reach
+          // the full catalog from, so a curated picker is a dead end: the user
+          // has a key for the model and the picker simply will not show it.
+          showAllConfigured
           disabled={launchPhase === "starting"}
         />
       );

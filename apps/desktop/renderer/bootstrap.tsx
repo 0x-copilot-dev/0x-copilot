@@ -473,6 +473,13 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // Model popover footer "Get local models →" → Settings → Local
             // models. Same deep-link the ⌘K `download-local-model` action uses.
             onOpenLocalModelSettings={() => handleOpenSettings("local-models")}
+            // Model popover header "Manage" → Settings → MODELS, the curation
+            // surface. Deliberately a different slug from
+            // `onOpenModelSettings` above: that one lands on Provider keys, so
+            // until now nothing in the composer reached the place a model is
+            // ENABLED. A user whose model is absent from the curated short list
+            // had no route out of the picker — worst at first run.
+            onManageModels={() => handleOpenSettings("models")}
             // Run composer connections view → the Tools surface (MCP + non-MCP);
             // skills link → the Skills surface (slug `tools`).
             onOpenConnectors={() => handleNavigate("connectors")}

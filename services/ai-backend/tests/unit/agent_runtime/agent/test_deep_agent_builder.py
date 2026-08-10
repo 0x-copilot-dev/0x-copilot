@@ -891,6 +891,17 @@ def test_deep_agent_builder_routes_openrouter_to_chat_completions(
         builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
     )
     monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+    # OpenRouter is one of the two gateways whose reasoning arrives as a sibling
+    # field, so the builder constructs the preserving ChatOpenAI subclass rather
+    # than going through `init_chat_model`. Capture THAT call — the kwargs this
+    # test pins (base_url, chat-completions, injected key, no Responses-API
+    # leakage) are the same either way, and watching the wrong constructor is
+    # how this test would silently stop asserting anything.
+    monkeypatch.setattr(
+        builder_module,
+        "_ReasoningPreservingChatOpenAI",
+        lambda model, **kwargs: chat_models(model, model_provider="openai", **kwargs),
+    )
 
     build_deep_agent(
         DeepAgentBuildRequest(
