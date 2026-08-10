@@ -2078,7 +2078,14 @@ class RuntimeRunHandler:
         if not self._artifact_publication_enabled(run):
             return None
         return ReviseArtifactTool(
-            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),
+            # The gateway's presentation context deliberately withholds the
+            # artifact service from execution, so the read that re-bases a lost
+            # compare-and-append is injected here rather than traversed out of
+            # a context. Without it the tool still refuses the write safely —
+            # it just hands the retry back to the model, which is the coin flip
+            # this wiring exists to remove.
+            content_reader=self.artifact_service,
         )
 
     async def _process_model_artifact_content(

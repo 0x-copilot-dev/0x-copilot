@@ -916,12 +916,25 @@ def runs_for_conversation(session: DriverSession, conversation_id: str) -> list[
     return runs
 
 
-def wait_for_conversation_id(session: DriverSession, timeout_s: int = 60) -> str:
-    """Wait until the first composer submission binds the new conversation.
+def wait_for_conversation_id(
+    session: DriverSession, timeout_s: int = 60, excluding: str | None = None
+) -> str:
+    """Wait until the composer submission binds the new conversation.
 
     A fresh profile intentionally has no conversation route before the user
     sends their first message; the UI creates and selects that conversation as
     one atomic submission flow.
+
+    ``excluding`` is REQUIRED for any send that follows a "New chat", and the
+    reason is a real defect this helper walked into. `openNewRun`
+    (`apps/desktop/renderer/bootstrap.tsx`) clears the bound conversation in
+    React state but does NOT navigate — only `onConversationCreated` does — so
+    the hash still reads `#/convo/<the conversation you just left>` until the
+    send lazily creates the next one. Polling the raw hash therefore returns
+    the PREVIOUS conversation whenever the read wins that race, and the caller
+    then asserts against a run that finished minutes ago. Naming the outgoing
+    id turns "a conversation is bound" into "a NEW conversation is bound",
+    which is what every caller after a `new_chat` actually means.
     """
 
     deadline = time.time() + timeout_s
@@ -929,11 +942,16 @@ def wait_for_conversation_id(session: DriverSession, timeout_s: int = 60) -> str
     while time.time() < deadline:
         last_route = str(session.evaluate("window.location.hash") or "")
         match = re.fullmatch(r"#/convo/([^/?#]+)(?:[?#].*)?", last_route)
-        if match is not None:
+        if match is not None and match.group(1) != excluding:
             return match.group(1)
         time.sleep(0.25)
     raise AssertionError(
         f"the prompt did not bind a conversation route; got {last_route!r}"
+        + (
+            f" (still the conversation {excluding!r} it was told to leave)"
+            if excluding
+            else ""
+        )
     )
 
 

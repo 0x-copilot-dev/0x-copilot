@@ -79,9 +79,16 @@ def log(line: str) -> None:
     print(f"  {line}", flush=True)
 
 
-def new_chat(s: DriverSession) -> None:
-    """Leave the current conversation for a clean one."""
+def new_chat(s: DriverSession) -> str | None:
+    """Leave the current conversation for a clean one, and say which one.
 
+    The returned id is the conversation being left, and it matters: the app
+    does not clear the route on "New chat", so a caller that sends next MUST
+    pass it to `wait_for_conversation_id(excluding=...)` or it can bind the
+    conversation it just walked out of. See that helper for the full account.
+    """
+
+    left = current_conversation_id(s)
     s.open_destination("Chats")
     assert s.wait_for("[data-testid=chats-new-chat]", 30), "Chats has no New chat"
     s.click("[data-testid=chats-new-chat]")
@@ -89,6 +96,16 @@ def new_chat(s: DriverSession) -> None:
         "New chat did not open the empty cockpit"
     )
     time.sleep(1)
+    return left
+
+
+def current_conversation_id(s: DriverSession) -> str | None:
+    """The conversation the route names right now, or ``None`` if unbound."""
+
+    match = re.fullmatch(
+        r"#/convo/([^/?#]+)(?:[?#].*)?", str(s.evaluate("window.location.hash") or "")
+    )
+    return match.group(1) if match is not None else None
 
 
 PLAIN_PROMPT = (
@@ -1800,8 +1817,11 @@ class MailboxJourney:
     decline is the measurement; a screenshot of a button is not.
     """
 
-    def __init__(self, session: DriverSession) -> None:
+    def __init__(self, session: DriverSession, *, left: str | None = None) -> None:
         self.session = session
+        #: The conversation the caller's `new_chat` walked out of — see
+        #: `wait_for_conversation_id` for why binding it again is possible.
+        self.left = left
         self.findings: list[str] = []
 
     # -- helpers ---------------------------------------------------------
@@ -2003,7 +2023,7 @@ class MailboxJourney:
         print(f"[mailbox] registered loopback connector: {server_id}")
 
         self.a_read_draws_a_table()
-        conversation_id = wait_for_conversation_id(s)
+        conversation_id = wait_for_conversation_id(s, excluding=self.left)
         self.a_compose_draws_the_email_surface()
         self.a_send_parks_at_the_write_gate(conversation_id)
 
@@ -2075,9 +2095,9 @@ def as2_publish_a_dataset(s: DriverSession) -> None:
     stages no filesystem effect, and writes no local file.
     """
 
-    new_chat(s)
+    left = new_chat(s)
     s.send(CREATE_PROMPT)
-    conversation_id = wait_for_conversation_id(s)
+    conversation_id = wait_for_conversation_id(s, excluding=left)
     run_id = wait_for_new_run(s, conversation_id, 0)
     wait_for_terminal_run(s, run_id)
 
@@ -2160,14 +2180,20 @@ def as5_the_canvas_survives_a_chat_only_follow_up(s: DriverSession) -> None:
 
 
 def as6_artifact_edit_regressions(s: DriverSession) -> None:
-    """DEPENDS ON AS-2. Two defects reported from live use, reproduced.
+    """DEPENDS ON AS-2. Defects reported from live use, reproduced.
 
     BUG 1 — "Save patched revision" returned 409 and the surface claimed a
     newer revision existed, on a run that had already gone terminal.
     BUG 2 — asking for another row minted a SECOND dataset artifact instead of
     revising the one on screen.
+    RECOVERY — the hand edit BUG 1 saves is precisely what makes the agent's
+    parent revision stale, so BUG 2's fix is only half an answer: the revise
+    then has to land on top of the user's newer revision. That half failed
+    INTERMITTENTLY on live boots — same prompt, one run re-read and retried,
+    another reported a dead end and left the request undone — so it is asserted
+    under its own name rather than inside BUG 2, which never regressed.
 
-    Both were fixed on unit-test evidence alone; this asserts the FACADE TRUTH,
+    All were fixed on unit-test evidence alone; this asserts the FACADE TRUTH,
     not the DOM's opinion.
     """
 
@@ -2215,9 +2241,20 @@ def as6_artifact_edit_regressions(s: DriverSession) -> None:
         f"BUG 2 REGRESSED: adding a row minted a second dataset artifact "
         f"({sorted(extra)}) instead of revising"
     )
+    # RECOVERY — a separate claim from BUG 2, and separately named, because the
+    # two fail for opposite reasons: BUG 2 is the agent writing a NEW artifact,
+    # this is the agent writing NOTHING. Reporting a stale-revision surrender as
+    # "BUG 2 REGRESSED" sends the reader hunting for a duplicate that is not
+    # there. The revise is stale by construction — the cell edit above minted
+    # r2 while the agent still holds r1 — so this is the ordinary loop, not a
+    # contrived race.
     revised = wait_for_revision(s, artifact.artifact_id, revision + 1)
     assert revised > revision, (
-        f"BUG 2 REGRESSED: the artifact did not gain a revision (still r{revised})"
+        f"REVISION CONFLICT NOT RECOVERED: 'add a row' left the artifact at "
+        f"r{revised}. No second artifact was minted, so BUG 2 is intact — the "
+        f"revise lost the compare-and-append against the hand edit that made "
+        f"r{revision} and the change was never re-applied on top of it, so the "
+        f"user's request silently did nothing."
     )
     s.shot("after-add-row")
 
@@ -2284,14 +2321,14 @@ def as8_switching_finished_artifacts_raises_no_alert(s: DriverSession) -> None:
     window read zero and proved nothing.
     """
 
-    new_chat(s)
+    left = new_chat(s)
     recorder = install_ipc_recorder(s)
     assert recorder == "installed", (
         f"could not install the IPC recorder ({recorder!r}); the run would "
         "produce an unfalsifiable result"
     )
     s.send(FOLLOW_LIVE_CREATE_PROMPT)
-    conversation_id = wait_for_conversation_id(s)
+    conversation_id = wait_for_conversation_id(s, excluding=left)
     run_id = wait_for_new_run(s, conversation_id, 0)
     wait_for_terminal_run(s, run_id)
 
@@ -2399,8 +2436,7 @@ def as10_the_local_mailbox_and_its_email_surface(s: DriverSession) -> None:
             f"no mailbox MCP server on {MAILBOX_URL} — start "
             "tools/desktop-journeys/local-mailbox/fixture_mcp.py",
         )
-    new_chat(s)
-    MailboxJourney(s).run()
+    MailboxJourney(s, left=new_chat(s)).run()
 
 
 def main() -> int:

@@ -1078,7 +1078,11 @@ class RuntimeApprovalHandler:
         if not self._artifact_publication_enabled(run):
             return None
         return ReviseArtifactTool(
-            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),
+            # Injected for the same reason as the run handler's copy: a resumed
+            # run must recover a lost compare-and-append identically, or the
+            # behaviour would differ either side of an approval.
+            content_reader=self.artifact_service,
         )
 
     async def _process_model_artifact_content(
