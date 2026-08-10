@@ -29,15 +29,10 @@ from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
 from agent_runtime.capabilities.surfaces import (
-    ShapingCredentials,
     SurfaceGenerationScheduler,
     SurfaceSpecStorePort,
     build_surface_generation_scheduler,
     build_surface_spec_store,
-)
-from agent_runtime.capabilities.surfaces.shape_request import (
-    ReadPathShaper,
-    build_read_path_shaper,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import (
@@ -518,38 +513,14 @@ class RuntimeRunHandler:
             if citation_resolver is not None
             else None
         )
-        # The shaping subsystem's credential, read ONCE off the same hydrated
-        # context the run's own chat model is built from (``factory.py`` composes
-        # workspace + user-policy kwargs from these very fields). Both shaping
-        # builders below take it: the shaping model is a second outbound call on
-        # the run's provider, and on a packaged BYOK install the process env
-        # holds no key at all — a builder called without this constructs a model
-        # with no credential, fails, and turns its rung off for every run.
-        # One producer, two consumers: a second lookup is how one of them goes
-        # stale without anyone noticing.
-        shaping_credentials = ShapingCredentials.from_runtime_context(hydrated_context)
         # Generative-UI (PRD-07): a run-scoped spec-generation scheduler, bound
         # only when ``SURFACE_SPEC_MODEL`` is set. On a projector ladder miss the
         # tool layer reaches it via the ContextVar and fires a fire-and-forget
         # generation; ``surface_spec_generated`` then upgrades the surface.
-        surface_scheduler = self._build_surface_generation_scheduler(
-            run, credentials=shaping_credentials
-        )
+        surface_scheduler = self._build_surface_generation_scheduler(run)
         surface_scheduler_token = (
             SurfaceGenerationScheduler.bind_for_run(surface_scheduler)
             if surface_scheduler is not None
-            else None
-        )
-        # Rung 5 of the same ladder: the SHAPING question, for a payload the
-        # deterministic rungs could not bind at all (an array at the root, prose,
-        # a CSV block). Bound beside the refinement scheduler and gated by the
-        # same resolver, so a run with no shaping model gets neither.
-        surface_shaper = self._build_read_path_shaper(
-            run, credentials=shaping_credentials
-        )
-        surface_shaper_token = (
-            ReadPathShaper.bind_for_run(surface_shaper)
-            if surface_shaper is not None
             else None
         )
         # Generative Surfaces v2 (PRD-A3 D4): a run-scoped Work Ledger emitter,
@@ -974,8 +945,6 @@ class RuntimeRunHandler:
                 WorkLedgerEmitter.unbind(work_ledger_emitter_token)
             if surface_scheduler_token is not None:
                 SurfaceGenerationScheduler.unbind(surface_scheduler_token)
-            if surface_shaper_token is not None:
-                ReadPathShaper.unbind(surface_shaper_token)
             if resolver_token is not None:
                 CitationResolver.unbind(resolver_token)
             if allocator_token is not None:
@@ -2741,7 +2710,7 @@ class RuntimeRunHandler:
         )
 
     def _build_surface_generation_scheduler(
-        self, run: RunRecord, *, credentials: ShapingCredentials
+        self, run: RunRecord
     ) -> SurfaceGenerationScheduler | None:
         """Build a run-scoped surface-spec generation scheduler, or ``None``.
 
@@ -2753,11 +2722,6 @@ class RuntimeRunHandler:
         The emit callback ships ``surface_spec_generated`` back onto the same
         event producer every other emission uses, so the FE upgrades the surface
         in place.
-
-        ``credentials`` is required, not optional: the refinement model is a
-        second outbound call on the run's provider and ``extra_kwargs`` is the
-        only channel a BYOK key travels on. Omitting it built the model with no
-        credential on every packaged install, which is how refinement was dark.
         """
 
         import os  # noqa: PLC0415 - local to keep the module import surface small
@@ -2816,7 +2780,6 @@ class RuntimeRunHandler:
                 # PRD-B3 shaping-on default: the run's provider drives the cheapest
                 # shaping model when SURFACE_SPEC_MODEL is unset and SURFACES_V2 is on.
                 run_provider=run.model_provider,
-                credentials=credentials,
             )
         except Exception:  # noqa: BLE001
             # PRD-E3: with SURFACES_V2 default-on, this build now runs for every
@@ -2826,53 +2789,6 @@ class RuntimeRunHandler:
             # ladder) rather than crash the run.
             logging.getLogger(__name__).warning(
                 "[surfaces] run.generation_scheduler_unavailable run=%s",
-                run.run_id,
-                exc_info=True,
-            )
-            return None
-
-    def _build_read_path_shaper(
-        self, run: RunRecord, *, credentials: ShapingCredentials
-    ) -> ReadPathShaper | None:
-        """Build a run-scoped read-path shaper (ladder rung 5), or ``None``.
-
-        Same gate as the refinement scheduler (``ShapingModelResolver``), the
-        same required ``credentials`` (see that method), and the same fail-soft
-        posture: constructing the shaping chat model can raise (no resolvable
-        provider key), and a display-only rung must degrade to "off" rather than
-        crash the run. Metered as ``view_shaping``, like every other shaping
-        call, so one purpose covers the whole subsystem's spend.
-        """
-
-        import os  # noqa: PLC0415 - local to keep the module import surface small
-
-        async def _emit_usage(payload: Mapping[str, object]) -> None:
-            await self.event_producer.append_api_event(
-                run=run,
-                source=StreamEventSource.MODEL,
-                event_type=RuntimeApiEventType.USAGE_RECORDED,
-                payload=dict(payload),
-            )
-
-        try:
-            return build_read_path_shaper(
-                environ=os.environ,
-                run_provider=run.model_provider,
-                credentials=credentials,
-                usage_meter=MeteredModelInvocation(
-                    meter=UsageMeter(
-                        recorder=self.usage_recorder,
-                        emit_event=_emit_usage,
-                        surfaces_v2=self.settings.execution.surfaces_v2,
-                        attribution_edge_store=self.persistence,
-                    ),
-                    run=run,
-                    purpose=Purpose.VIEW_SHAPING,
-                ),
-            )
-        except Exception:  # noqa: BLE001
-            logging.getLogger(__name__).warning(
-                "[surfaces] run.read_path_shaper_unavailable run=%s",
                 run.run_id,
                 exc_info=True,
             )

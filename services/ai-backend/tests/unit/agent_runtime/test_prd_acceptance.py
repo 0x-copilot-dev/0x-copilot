@@ -45,8 +45,11 @@ from agent_runtime.delegation.subagents import (
     SubagentHandoffBuilder,
 )
 from agent_runtime.capabilities.tools import (
+    DynamicToolRegistry,
     LoadedToolSpec,
     ToolCard,
+    ToolLoadRequest,
+    ToolLoader,
     ToolPermissionPolicy,
     ToolRiskLevel,
     ToolSideEffect,
@@ -62,15 +65,6 @@ class FakeToolSpecProvider:
 
     def list_tool_cards(self) -> Sequence[ToolCard]:
         return self.cards
-
-    # The runtime's tool_registry port: the factory reads exactly this
-    # (`execution/ports.py`) and does NOT filter, so the registry owes it only
-    # the cards this context may see. Production supplies the port from
-    # `runtime_worker/dependencies.py`; the deleted `DynamicToolRegistry` was a
-    # second, unwired implementation whose scope check this mirrors.
-    def list_available_tools(self, context: object) -> Sequence[ToolCard]:
-        granted = getattr(context, "permission_scopes", set())
-        return tuple(card for card in self.cards if card.required_scopes <= granted)
 
     def load_tool_spec(self, name: str) -> LoadedToolSpec:
         self.loaded_names.append(name)
@@ -198,6 +192,7 @@ Use this only when source-backed research is needed.
         ),
         specs={"doc_search": tool_spec},
     )
+    tool_registry = DynamicToolRegistry(providers=(tool_provider,))
 
     mcp_tool = McpToolDescriptor(
         name="drive_search",
@@ -260,7 +255,7 @@ Use this only when source-backed research is needed.
     harness = await acreate_agent_runtime(
         context=context,
         dependencies=RuntimeDependencies(
-            tool_registry=tool_provider,
+            tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_source_config=skill_config,
             memory_backend_factory=ScopedMemoryBackendFactory(),
@@ -282,6 +277,13 @@ Use this only when source-backed research is needed.
     discovered_skills = SkillSourceRegistry.discover_configured_skills(skill_config)
     assert tuple(skill.manifest.name for skill in discovered_skills) == ("research",)
     assert harness.skill_directories == (str(skill_root.resolve(strict=False)),)
+
+    tool_result = ToolLoader(tool_registry).load_tool(
+        ToolLoadRequest(tool_name="doc_search", runtime_context=context)
+    )
+    assert tool_result.succeeded
+    assert tool_result.loaded_spec == tool_spec
+    assert tool_provider.loaded_names == ["doc_search"]
 
     mcp_result = await McpLoader(mcp_registry).load_server(
         McpLoadRequest(server_name="drive_mcp", runtime_context=context)

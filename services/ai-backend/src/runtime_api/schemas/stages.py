@@ -24,7 +24,6 @@ from agent_runtime.surfaces_v2.staging import StagedWriteState
 
 __all__ = [
     "StageApplyRequest",
-    "StageArgView",
     "StageAuthorshipSpanView",
     "StageDecisionRequest",
     "StageDecisionView",
@@ -139,37 +138,11 @@ class StageRowChangeView(BaseModel):
     new: object | None = None
 
 
-class StageArgView(BaseModel):
-    """One outbound connector arg on the wire, keyed by the CONNECTOR's name.
-
-    ``origin`` says who authored the value: ``edited`` (the user typed it into a
-    cell in this row), ``carried`` (read from this record and sent back
-    unchanged) or ``proposed`` (the agent authored it, agent-staged lane only).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    arg: str
-    origin: Literal["edited", "carried", "proposed"]
-    column: str | None = None
-    old: object | None = None
-    new: object | None = None
-
-
 class StageRowView(BaseModel):
-    """One staged row on the wire: content (title/diffs/sends) + folded state.
+    """One staged row on the wire: content (title/diffs) + folded state.
 
-    ``target_args`` stays server-only and is deliberately NOT added here — the
-    client renders from ``sends`` and re-sends only ``row_key`` on apply
-    (WYSIWYG). ``sends`` is the human-visible half and it is complete by
-    construction: the domain refuses to stage a row whose ``sends`` is not an
-    ordered bijection over ``target_args`` with identical values, so what this
-    view shows IS what the dispatcher sends.
-
-    ``changes`` is the user's own cell diff and is now a strict subset view of
-    ``sends`` rather than the whole of what a human sees. A row that shows only
-    ``changes`` is a row that hides every field the user did not edit — which is
-    how a model-authored email body once shipped under a one-line ``cc`` diff.
+    ``target_args`` is server-only (never surfaced) — the client renders diffs
+    from ``changes`` and re-sends only ``row_key`` on apply (WYSIWYG).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -177,7 +150,6 @@ class StageRowView(BaseModel):
     row_key: str
     title: str
     changes: tuple[StageRowChangeView, ...]
-    sends: tuple[StageArgView, ...]
     stance: str
     agent_hold_reason: str | None = None
     decided_by: str | None = None
@@ -274,10 +246,6 @@ class StagedWriteView(BaseModel):
             content = by_key.get(row.row_key)
             title = content.title if content is not None else row.row_key
             changes = content.changes if content is not None else ()
-            # ``content is None`` is a row with no staged content at all, which
-            # is already undecidable — an EMPTY account is the honest answer and
-            # the client's own fail-closed arm renders it as such.
-            sends = content.sends if content is not None else ()
             views.append(
                 StageRowView(
                     row_key=row.row_key,
@@ -287,16 +255,6 @@ class StagedWriteView(BaseModel):
                             field=change.field, old=change.old, new=change.new
                         )
                         for change in changes
-                    ),
-                    sends=tuple(
-                        StageArgView(
-                            arg=sent.arg,
-                            origin=sent.origin.value,
-                            column=sent.column,
-                            old=sent.old,
-                            new=sent.new,
-                        )
-                        for sent in sends
                     ),
                     stance=row.stance.value,
                     agent_hold_reason=row.agent_hold_reason,

@@ -227,16 +227,6 @@ export interface ThreadCanvasProps {
    */
   readonly focusCards?: ReactNode;
   /**
-   * The Studio canvas has nothing to present and never will for this run —
-   * `chat_only` / `complete_empty`, i.e. the run is terminal and produced no
-   * subject. Swaps which Studio column takes the slack; see `gridStyleFor`.
-   *
-   * Deliberately a boolean and not the `CanvasLifecycleState` itself: the
-   * canvas' lifecycle is the cockpit's business, and the only thing the layout
-   * needs to know is whether a surface is coming.
-   */
-  readonly canvasEmpty?: boolean;
-  /**
    * Focus mode is already surfacing this run's subjects inside the transcript
    * (the inline artifact cards), so the tab strip would be a second, duplicate
    * affordance for the same things. Studio is unaffected — it has no transcript
@@ -312,7 +302,6 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     hasInlineSubjects = false,
     rightRail,
     focusCards,
-    canvasEmpty = false,
     showModeSwitcher = true,
     railWidth = DEFAULT_RAIL_WIDTH,
     onRailWidthChange,
@@ -527,7 +516,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
         projection.surface.hasActiveSurfaces ? "true" : "false"
       }
       style={{
-        ...gridStyleFor(mode, gridRailWidthPx, showTabs, canvasEmpty),
+        ...gridStyleFor(mode, gridRailWidthPx, showTabs),
         // Kill the 300ms grid-template animation during an active drag so the
         // rail tracks the pointer 1:1 (the animation is for mode switches).
         ...(dragWidth !== null ? { transition: "none" } : null),
@@ -788,7 +777,6 @@ function gridStyleFor(
   mode: ThreadMode,
   railWidthPx: number,
   showTabs: boolean,
-  canvasEmpty = false,
 ): CSSProperties {
   // Grid template adapts presentationally. Mode switch is a template
   // change, NOT a remount (PRD §3.3 — animation: 300ms grid-template
@@ -796,33 +784,17 @@ function gridStyleFor(
   if (mode === "studio") {
     // A 1px `handle` column between surface and chat carries the drag divider;
     // the rail (chat column) width is user-controlled (`railWidthPx`).
-    //
-    // WHICH COLUMN GETS THE SLACK IS A FUNCTION OF WHETHER THERE IS A SURFACE.
-    // The surface normally takes `1fr` because it holds the artifact being
-    // reviewed. When the canvas is terminally empty it holds three lines of
-    // status copy — and it was still taking the slack: measured in the live
-    // desktop app at 1200px, the chat column got 368px (31%) while ~830px
-    // rendered "Answered in chat · No artifact was created", with six tool-card
-    // titles ellipsized in the cramped column next to it.
-    //
-    // So the fixed width follows the CONTENT rather than the column: the status
-    // panel is what gets a fixed column, and the transcript takes the slack.
-    // Studio keeps both columns either way — the canvas still reports honestly,
-    // it just stops outranking the only thing on screen with content in it.
-    const columns = canvasEmpty
-      ? `${EMPTY_CANVAS_WIDTH}px 1px minmax(0, 1fr)`
-      : `minmax(0, 1fr) 1px ${railWidthPx}px`;
     return showTabs
       ? {
           ...baseGridStyle,
-          gridTemplateColumns: columns,
+          gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
           gridTemplateRows: "auto auto 1fr auto auto",
           gridTemplateAreas:
             '"switcher switcher switcher" "tabs tabs tabs" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
         }
       : {
           ...baseGridStyle,
-          gridTemplateColumns: columns,
+          gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
           gridTemplateRows: "auto 1fr auto auto",
           gridTemplateAreas:
             '"switcher switcher switcher" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
@@ -846,11 +818,6 @@ function gridStyleFor(
         gridTemplateAreas: '"switcher" "chat" "mini"',
       };
 }
-
-/** Width of the canvas column when it holds status copy rather than a surface.
- *  Wide enough for `CanvasLifecyclePanel`'s three lines without wrapping the
- *  title, narrow enough that the transcript gets the rest. */
-const EMPTY_CANVAS_WIDTH = 300;
 
 const baseGridStyle: CSSProperties = {
   display: "grid",

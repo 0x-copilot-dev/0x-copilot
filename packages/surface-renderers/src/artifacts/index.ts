@@ -80,44 +80,6 @@ export {
   type DatasetRevisionChange,
 } from "./DatasetRevisionDiff";
 export { DocumentArtifactRenderer } from "./DocumentArtifactRenderer";
-// Phase 1 of the editable surface: the document renders as editable BLOCKS
-// whenever the host attached `documentEditor`, and the raw-markdown textarea
-// that used to sit under it is gone. `EditableDocument` is exported for hosts
-// and tests that mount it directly; the renderer mounts it itself, so wiring is
-// the capability object and nothing else.
-export {
-  EditableDocument,
-  type EditableDocumentProps,
-} from "./EditableDocument";
-export {
-  addressableCells,
-  commitEdit,
-  documentEditFor,
-  documentEditsFor,
-  nextCellTarget,
-  originalValue,
-  revertEdit,
-  targetKey,
-  type EditTarget,
-  type PendingEdit,
-  type PendingEdits,
-} from "./documentEdits";
-// The structural half of the same layer: the operations that change WHICH
-// spans a document has, and the staging that lets one of them be pending
-// alongside a cell edit without the two becoming an overlapping batch.
-export {
-  remapTarget,
-  stageStructural,
-  structuralEditsFor,
-  type NewBlockTemplate,
-  type StagedDocument,
-  type StructuralOp,
-} from "./structuralEdits";
 export { FileArtifactRenderer } from "./FileArtifactRenderer";
 export { RawArtifactFallback } from "./RawArtifactFallback";
-export {
-  hostEditorActions,
-  type ArtifactEditorActions,
-  type ArtifactRenderState,
-  type ArtifactRevisionSaveOutcome,
-} from "./model";
+export type { ArtifactRenderState } from "./model";

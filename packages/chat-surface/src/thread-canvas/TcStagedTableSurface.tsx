@@ -24,23 +24,14 @@ import type {
   RowsetReviewRow,
 } from "./rowsetReviewModel";
 
-// "Sending", not "Change": the column lists every argument the row will send,
-// including the ones the user never touched. A column called Change would be a
-// promise the contents deliberately break.
 const REVIEW_COLUMNS = [
   "Decide",
   "Item",
-  "Currently",
-  "Sending",
+  "Previous",
+  "Change",
   "Review note",
   "Status",
 ] as const;
-
-/** Copy for a row whose outbound arguments were not disclosed. The server
- *  refuses to stage such a row; this is the second arm, so a run replayed from
- *  an older ledger cannot be approved through this surface either. */
-const UNACCOUNTED_NOTE =
-  "Cannot be reviewed — this row's outbound fields were not disclosed.";
 
 export interface TcStagedTableSurfaceProps {
   readonly model: RowsetReviewModel;
@@ -145,25 +136,7 @@ function DecisionControls({
 function ReviewNote({ row }: { readonly row: RowsetReviewRow }): ReactElement {
   return (
     <div className="tc-review-table__note" role="cell">
-      {row.unaccounted ? (
-        <div data-testid="tc-table-row-unaccounted">
-          <svg
-            viewBox="0 0 24 24"
-            width="10"
-            height="10"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.7"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 3l10 17H2z" />
-            <path d="M12 9v5M12 17.5v.5" />
-          </svg>
-          {UNACCOUNTED_NOTE}
-        </div>
-      ) : row.agentHoldReason !== null && row.agentHoldReason !== "" ? (
+      {row.agentHoldReason !== null && row.agentHoldReason !== "" ? (
         <div data-testid="tc-table-row-reason">
           <svg
             viewBox="0 0 24 24"
@@ -205,12 +178,9 @@ function ReviewRow({
     <div
       className={`tc-review-table__row${
         row.decision === "held" ? " tc-review-table__row--held" : ""
-      }${row.outcome === "failed" ? " tc-review-table__row--failed" : ""}${
-        row.unaccounted ? " tc-review-table__row--unaccounted" : ""
-      }`}
+      }${row.outcome === "failed" ? " tc-review-table__row--failed" : ""}`}
       data-testid="tc-table-row"
       data-row-key={row.rowKey}
-      data-unaccounted={row.unaccounted ? "true" : undefined}
       role="row"
     >
       <DecisionControls model={model} row={row} onRowDecision={onRowDecision} />

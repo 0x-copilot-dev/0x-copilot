@@ -7,7 +7,6 @@ import { emailAdapter } from "./EmailRenderer";
 
 export {
   emailAdapter,
-  emailStateFrom,
   type EmailDiff,
   type EmailDiffPending,
   type EmailState,

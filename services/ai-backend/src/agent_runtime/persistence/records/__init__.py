@@ -9,6 +9,8 @@ from agent_runtime.persistence.records.approval_batches import (
     BatchOutcomeStatus,
     BatchTransitionOutcome,
 )
+from agent_runtime.persistence.records.approvals import PersistenceApprovalRequestRecord
+from agent_runtime.persistence.records.audit import AuditLogRecord
 from agent_runtime.persistence.records.budgets import (
     BudgetEnforcement,
     BudgetPeriod,
@@ -63,6 +65,10 @@ from agent_runtime.persistence.records.shares import (
     ShareRecord,
     ShareViewAccess,
 )
+from agent_runtime.persistence.records.subagents import (
+    AsyncTaskRecord,
+    SubagentResultRecord,
+)
 from agent_runtime.persistence.records.telemetry import (
     CapabilitySnapshotRecord,
     CompressionEventRecord,
@@ -101,9 +107,13 @@ from agent_runtime.persistence.records.workspace_feeds import (
 PERSISTENCE_TABLE_RECORDS = (
     OutboxEventRecord,
     ConsumerCursorRecord,
+    AsyncTaskRecord,
+    SubagentResultRecord,
     ToolInvocationRecord,
+    PersistenceApprovalRequestRecord,
     CompressionEventRecord,
     CapabilitySnapshotRecord,
+    AuditLogRecord,
     CitationRecord,
     DraftRecord,
     ToolOrdinalBindingRecord,
@@ -123,6 +133,8 @@ __all__ = [
     "RuntimeWorkerClaim",
     "RuntimeWorkerResult",
     "ConsumerCursorRecord",
+    "AsyncTaskRecord",
+    "SubagentResultRecord",
     "ToolInvocationRecord",
     "ApprovalBatchItemRecord",
     "ApprovalBatchRecord",
@@ -131,6 +143,7 @@ __all__ = [
     "BatchItemDecision",
     "BatchOutcomeStatus",
     "BatchTransitionOutcome",
+    "PersistenceApprovalRequestRecord",
     "CompressionEventRecord",
     "CapabilitySnapshotRecord",
     "ModelPricingRecord",
@@ -146,6 +159,7 @@ __all__ = [
     "UsageDailyPurposeRow",
     "UsageDailySubagentRow",
     "UsageDailyUserRow",
+    "AuditLogRecord",
     "CitationRecord",
     "DraftPath",
     "DraftEffectSupersession",

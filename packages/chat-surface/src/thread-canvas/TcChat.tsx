@@ -74,11 +74,7 @@ import { ToolRunGroup } from "../activity/ToolRunGroup";
 // PRD-03 FR-3.10 — reuse the formatter that already exists rather than adding a
 // third. PRD-07 renames/consolidates it; this call site moves with it.
 import { formatSubagentDuration } from "../subagents/labels";
-import {
-  groupActivityStream,
-  summariseGroup,
-  type GroupSummary,
-} from "./groupActivity";
+import { groupActivityStream, summariseGroup } from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
@@ -1476,38 +1472,11 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       return renderToolCard(item.toolCall, mode, toolCallCitations, parked);
     }
     if (item.kind === "part") {
-      // The absorbed cards are rendered HERE, not inside `renderPart`, because
-      // this is the only scope holding what a card needs to draw itself
-      // (mode, citations, parked, the subagent activity map). The thinking
-      // block frames them; it never learns about any of that.
-      const absorbed = item.activity ?? [];
       return renderMessagePartItem(
         item.message,
         item.part,
         item.index,
         markdownComponents,
-        absorbed.length === 0
-          ? undefined
-          : {
-              cards: absorbed.map((a) =>
-                a.kind === "tool"
-                  ? renderToolCard(a.toolCall, mode, toolCallCitations, parked)
-                  : renderFleetCard(a.fleet, subagentActivitiesByTask),
-              ),
-              summary: summariseGroup(
-                absorbed.map((a) =>
-                  a.kind === "tool"
-                    ? {
-                        status: a.toolCall.status,
-                        createdAtMs: a.toolCall.createdAtMs,
-                        durationMs: a.toolCall.durationMs,
-                      }
-                    : { createdAtMs: a.fleet.createdAtMs },
-                ),
-                runFailed,
-              ),
-              total: absorbed.length,
-            },
       );
     }
     if (item.kind === "approval") {
@@ -1636,7 +1605,6 @@ function renderPart(
   role: TcChatMessage["role"],
   key: number | string,
   markdownComponents?: MarkdownTextProps["components"],
-  activity?: ThoughtActivity,
 ): ReactNode {
   const status: MessagePartStatus = part.status ?? { type: "complete" };
   if (part.type === "reasoning") {
@@ -1655,21 +1623,8 @@ function renderPart(
         text={part.text}
         running={status.type === "running"}
         elapsedSeconds={elapsed}
-        {...(activity === undefined
-          ? {}
-          : {
-              activity: activity.cards,
-              stepCount: activity.total,
-              failedCount: activity.summary.retried,
-              activityRunning: activity.summary.state === "running",
-            })}
       >
-        {/* Omitted rather than rendered empty: a reasoning span that has
-            produced no prose yet still carries its tool cards, and an empty
-            markdown block above them adds a stray gap inside the body. */}
-        {part.text.trim() === "" ? null : (
-          <Reasoning type="reasoning" text={part.text} status={status} />
-        )}
+        <Reasoning type="reasoning" text={part.text} status={status} />
       </ThinkingBlock>
     );
   }
@@ -1721,7 +1676,6 @@ function renderMessagePartItem(
   part: TcChatMessagePart,
   index: number,
   markdownComponents?: MarkdownTextProps["components"],
-  activity?: ThoughtActivity,
 ): ReactNode {
   return (
     <li
@@ -1732,18 +1686,9 @@ function renderMessagePartItem(
       data-part-type={part.type}
       data-part-seq={typeof part.seq === "number" ? part.seq : undefined}
     >
-      {renderPart(part, m.role, index, markdownComponents, activity)}
+      {renderPart(part, m.role, index, markdownComponents)}
     </li>
   );
-}
-
-/** The already-rendered work folded into one reasoning span, plus the counts
- *  its header states. Assembled by `renderItem`, which owns the card
- *  renderers; consumed only by `renderPart`. */
-interface ThoughtActivity {
-  readonly cards: readonly ReactNode[];
-  readonly summary: GroupSummary;
-  readonly total: number;
 }
 
 // PR-3.8 — reuse the hoisted `SubagentFleetCard` (Phase 1D) with the projected
@@ -1805,12 +1750,6 @@ function renderToolCard(
   );
 }
 
-/** Activity that can be folded into a reasoning span — the same two kinds
- *  `groupActivityStream` will group, and deliberately no others. */
-type ActivityItem =
-  | { readonly kind: "fleet"; readonly fleet: FleetProjection }
-  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry };
-
 type StreamItem =
   | { readonly kind: "message"; readonly message: TcChatMessage }
   | {
@@ -1818,13 +1757,9 @@ type StreamItem =
       readonly message: TcChatMessage;
       readonly part: TcChatMessagePart;
       readonly index: number;
-      /**
-       * Tool / fleet cards that ran INSIDE this reasoning span — populated by
-       * `absorbThoughtActivity`, empty for every other part.
-       */
-      readonly activity?: readonly ActivityItem[];
     }
-  | ActivityItem
+  | { readonly kind: "fleet"; readonly fleet: FleetProjection }
+  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry }
   | { readonly kind: "approval"; readonly approval: TcChatApproval }
   | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry };
 
@@ -1888,67 +1823,15 @@ function mergeStream(
   const anchored: AnchoredItem[] = [];
   const out: StreamItem[] = [];
 
-  // CARDS BELONG TO A RUN, NOT TO THE TRANSCRIPT.
-  //
-  // `sequenceNo` is an offset, not an address: every run numbers its events
-  // from 0, so run A's seq 3 and run B's seq 3 are different moments that sort
-  // as the same one. Merging every card into one seq order on that basis put
-  // EVERY run's cards into the active run's block — turn t-1 rendered bare
-  // while turn t collected the pile, growing each turn. The message side has
-  // always guarded against exactly this (`message.run_id === runId` below); the
-  // cards were simply never given the identity to be guarded by.
-  //
-  // So a card from a settled run is flushed with ITS OWN turn, in message
-  // order, and only the active run's cards take part in the seq interleave.
-  // A card whose `runId` is null cannot be placed — it is treated as the active
-  // run's, which is what the whole stream was assumed to be before this.
-  const settledCards = new Map<string, AnchoredItem[]>();
-  const cardRun = (id: string | null): string | null =>
-    id === null || id === runId ? null : id;
-  const stash = (id: string, entry: AnchoredItem): void => {
-    const bucket = settledCards.get(id);
-    if (bucket === undefined) settledCards.set(id, [entry]);
-    else bucket.push(entry);
-  };
-  let pendingRun: string | null = null;
-  const flushRun = (id: string | null | undefined): void => {
-    if (id == null) return;
-    const bucket = settledCards.get(id);
-    if (bucket === undefined) return;
-    settledCards.delete(id);
-    bucket.sort((a, b) => a.seq - b.seq);
-    for (const entry of bucket) out.push(entry.item);
-  };
-
-  // Partitioned BEFORE the walk below, because that walk is what drains the
-  // buckets — populating them afterwards left every settled card to fall
-  // through to the tail, which is the bug this function exists to fix.
-  for (const toolCall of toolCalls) {
-    const entry: AnchoredItem = {
-      seq: cardSeq(toolCall.sequenceNo),
-      item: { kind: "tool", toolCall },
-    };
-    const settled = cardRun(toolCall.runId);
-    if (settled !== null) stash(settled, entry);
-    else anchored.push(entry);
-  }
-
   for (const message of messages) {
     const seqBearing =
       runId !== null &&
       message.run_id === runId &&
       message.parts.some((part) => typeof part.seq === "number");
     if (!seqBearing) {
-      // Flushed when the run CHANGES, not when it first appears: a turn is
-      // `user → assistant`, and the cards belong after the answer they were
-      // produced for, not between the question and it.
-      if (message.run_id !== pendingRun) flushRun(pendingRun);
-      pendingRun = message.run_id ?? null;
       out.push({ kind: "message", message });
       continue;
     }
-    if (message.run_id !== pendingRun) flushRun(pendingRun);
-    pendingRun = message.run_id ?? null;
     message.parts.forEach((part, index) => {
       anchored.push({
         seq: typeof part.seq === "number" ? part.seq : Number.MAX_SAFE_INTEGER,
@@ -1963,6 +1846,12 @@ function mergeStream(
     anchored.push({
       seq: cardSeq(fleet.sequenceNo),
       item: { kind: "fleet", fleet },
+    });
+  }
+  for (const toolCall of toolCalls) {
+    anchored.push({
+      seq: cardSeq(toolCall.sequenceNo),
+      item: { kind: "tool", toolCall },
     });
   }
   for (const approval of approvals) {
@@ -1987,67 +1876,9 @@ function mergeStream(
     });
   }
 
-  // A settled run with no message in this transcript (a turn still loading, or
-  // one whose message failed to fetch) would otherwise have its cards silently
-  // dropped. They go before the active block, which is where their run ran.
-  flushRun(pendingRun);
-  for (const id of [...settledCards.keys()]) {
-    flushRun(id);
-  }
   anchored.sort((a, b) => a.seq - b.seq);
-  for (const item of absorbThoughtActivity(anchored.map((e) => e.item))) {
-    out.push(item);
-  }
-  return out;
-}
-
-/**
- * Fold the work the model did WHILE thinking into the thought itself.
- *
- * A turn is `reasoning → tools → text`, and the three used to render as three
- * peers: a "Thought for 6s" disclosure, then a "Worked for 140ms · 2 steps"
- * disclosure, then the answer — two collapsed rows, in two different visual
- * languages, saying one thing between them. The tool calls are not a sibling of
- * the thought; they are what the thought DID.
- *
- * Absorbs only the run of tool/fleet items IMMEDIATELY following a reasoning
- * part, which is what makes this a description of the model's behaviour rather
- * than a bucket. `reasoning → text → tool` — thought, spoke, then acted — stops
- * at the text, and that tool stays a peer, because it happened after the
- * thought ended.
- *
- * Two kinds are deliberately NOT absorbable:
- * - **approvals**, for the reason the group predicate already documents — an
- *   approval buried inside a collapsed row hides a parked run's only way out;
- * - **artifacts**, which are the run's output, not its working.
- *
- * Operates on the ACTIVE run's sorted items only. Cards flushed from settled
- * runs are already in `out` by the time this runs, and they must stay peers:
- * their seq numbers index a different run's event space, so "immediately
- * following" is not a statement about them.
- */
-function absorbThoughtActivity(
-  items: readonly StreamItem[],
-): readonly StreamItem[] {
-  const isActivity = (item: StreamItem): item is ActivityItem =>
-    item.kind === "tool" || item.kind === "fleet";
-  const out: StreamItem[] = [];
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
-    if (item.kind !== "part" || item.part.type !== "reasoning") {
-      out.push(item);
-      continue;
-    }
-    let j = i + 1;
-    const activity: ActivityItem[] = [];
-    while (j < items.length) {
-      const next = items[j];
-      if (!isActivity(next)) break;
-      activity.push(next);
-      j += 1;
-    }
-    out.push(activity.length === 0 ? item : { ...item, activity });
-    i = j - 1;
+  for (const entry of anchored) {
+    out.push(entry.item);
   }
   return out;
 }
@@ -2227,23 +2058,6 @@ const messageItemStyle = (role: TcChatMessage["role"]): CSSProperties => ({
   color: PALETTE.textHi,
   alignSelf: role === "user" ? "flex-end" : "stretch",
   maxWidth: role === "user" ? "88%" : "100%",
-  // THE QUESTION AND THE ANSWER ARE THE SAME SIZE — and now they finally look
-  // it. Both inherit the container's 13px, but the bubble was leaving
-  // `line-height` at the UA `normal` (~1.2) while `.assistant-markdown` sets
-  // 1.58, so identical type sat in a 15px line box on one side and a 20.5px
-  // box on the other. Tight leading reads as bigger, loose leading as smaller;
-  // measured they matched, and every reader saw the user's words as the larger
-  // of the two. Matching the leading is what makes the measurement true.
-  lineHeight: 1.58,
-  // Parts of ONE turn — a thought and the answer under it — are siblings in
-  // this item. Without a gap they butt together, which is what glued the
-  // answer to the bottom of the thinking row. Matches `ulStyle`'s gap so the
-  // boundary is the same 12px whether the turn's parts were seq-split into
-  // their own items or not.
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  alignItems: "stretch",
 });
 
 // PR-3.8 — the fleet card carries its own chrome (`.aui-fleet-card`), so the

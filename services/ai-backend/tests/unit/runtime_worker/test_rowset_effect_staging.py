@@ -11,11 +11,6 @@ from agent_runtime.capabilities.operations.context import (
     VerifiedOperationIdentity,
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
-from agent_runtime.surfaces_v2.rowset import (
-    AgentHold,
-    ProposedRow,
-    StagedRowAccounting,
-)
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     RowSetEffectProposal,
     StageRowsetWriteTool,
@@ -69,30 +64,6 @@ _INPUT = {
     "rows": _ROWS,
     "agent_holds": [{"row_key": "iss-2", "reason": "recent reply"}],
 }
-
-
-def _staged_proposal(**overrides: object) -> RowSetEffectProposal:
-    """``_INPUT`` as the tool forms it: rows carry a SERVER-derived ``sends``.
-
-    The model authors ``ProposedRow`` (no ``sends``); the tool derives the
-    account before any proposal exists, so the canonical bytes — and therefore
-    the digest the approval is pinned to — always cover it.
-    """
-
-    return RowSetEffectProposal(
-        target_connector=str(_INPUT["target_connector"]),
-        target_op=str(_INPUT["target_op"]),
-        title=str(_INPUT["title"]),
-        rows=tuple(
-            StagedRowAccounting.for_proposed(ProposedRow.model_validate(row))
-            for row in _ROWS
-        ),
-        agent_holds=tuple(
-            AgentHold.model_validate(hold)
-            for hold in _INPUT["agent_holds"]  # type: ignore[union-attr]
-        ),
-        **overrides,  # type: ignore[arg-type]
-    )
 
 
 @pytest.fixture
@@ -302,8 +273,12 @@ async def test_enforce_assembly_stages_real_a4_rowset_and_never_dispatches() -> 
         ref=staged.payload["proposal_content_ref"],
         digest=staged.payload["proposal_digest"],
     )
-    assert body == canonical_json_bytes(_staged_proposal().model_dump(mode="json"))
-    assert json.loads(body) == _staged_proposal().model_dump(mode="json")
+    assert body == canonical_json_bytes(
+        RowSetEffectProposal.model_validate(_INPUT).model_dump(mode="json")
+    )
+    assert json.loads(body) == RowSetEffectProposal.model_validate(_INPUT).model_dump(
+        mode="json"
+    )
     assert store.effect_commit_commands == []
 
 
@@ -369,7 +344,7 @@ async def test_enforce_rejects_tampered_canonical_body_before_stage() -> None:
     content_ref = OperationArgsRefCodec.format(operation_id)
     tampered = canonical_json_bytes(
         {
-            **_staged_proposal().model_dump(mode="json"),
+            **RowSetEffectProposal.model_validate(_INPUT).model_dump(mode="json"),
             "target_op": "delete_issue",
         }
     )
@@ -388,7 +363,7 @@ async def test_enforce_rejects_tampered_canonical_body_before_stage() -> None:
         )
         with pytest.raises(StagedWriteError, match="content changed"):
             await port.stage_row_set(
-                proposal=_staged_proposal(),
+                proposal=RowSetEffectProposal.model_validate(_INPUT),
                 operation_id=operation_id,
             )
     finally:

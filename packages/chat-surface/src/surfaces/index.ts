@@ -22,20 +22,6 @@ export {
   type SurfaceRegistryProviderProps,
 } from "./SurfaceRegistryContext";
 export type { PendingDiff, SurfaceRendererProps } from "./types";
-// Editable surface, connector half. `ConnectorSurfaceEditorActions` is the ONLY
-// thing a host wires to make a connector-read surface editable — a
-// `{disabled, surfaceId, saveEdits}` object it builds around its own Transport.
-// Editability is never on the wire and never on a `SurfaceSpec`; a surface the
-// host did not open renders read-only.
-export {
-  attachConnectorEditor,
-  CONNECTOR_EDITOR_FIELD,
-  createConnectorSurfaceEditor,
-  surfaceWriteBackPath,
-  type ConnectorSurfaceEditorActions,
-  type ConnectorSurfaceEditorConfig,
-  type ConnectorWriteBackResult,
-} from "./connectorWriteBack";
 export {
   isSurfaceHue,
   resolveSurfaceHue,

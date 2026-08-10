@@ -27,7 +27,6 @@ from agent_runtime.surfaces_v2.staging import (
     EditConflict,
     InvalidRowset,
     MalformedDecision,
-    RowsetUnaccounted,
     StageForbidden,
     StageFrozen,
     StageNotFound,
@@ -58,11 +57,6 @@ _ERROR_STATUS: dict[type[StagedWriteError], int] = {
     StageFrozen: http_status.HTTP_409_CONFLICT,
     EditConflict: http_status.HTTP_409_CONFLICT,
     ApplySetMismatch: http_status.HTTP_409_CONFLICT,
-    # The request is well-formed; the STORED row can no longer prove what it
-    # would send. 409 rather than 422 for the same reason ``ApplySetMismatch``
-    # is: the answer is "review again", not "fix your payload". The detail names
-    # the row and the rule, so the reviewer can hold exactly that row.
-    RowsetUnaccounted: http_status.HTTP_409_CONFLICT,
     UnsupportedDecision: http_status.HTTP_422_UNPROCESSABLE_ENTITY,
     MalformedDecision: http_status.HTTP_422_UNPROCESSABLE_ENTITY,
     InvalidRowset: http_status.HTTP_422_UNPROCESSABLE_ENTITY,

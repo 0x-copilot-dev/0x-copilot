@@ -22,6 +22,10 @@ from agent_runtime.api.presentation import PresentationGenerator
 from agent_runtime.capabilities.workspace.deep_backend import (
     WorkspaceTombstoneBackend,
 )
+from agent_runtime.presentation.lifecycle import (
+    CanvasLifecycleProjection,
+    CanvasLifecycleState,
+)
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_worker.stream_tools import StreamMessageProcessor
 
@@ -49,6 +53,22 @@ class DeclinedCapabilityRunMixin:
             }
         )
 
+    @staticmethod
+    def _recovered_run(payload: dict[str, object]) -> CanvasLifecycleProjection:
+        # The screenshot's run: the step is declined, the agent explains, done.
+        return CanvasLifecycleProjection.fold(
+            [
+                {"sequence_no": 1, "event_type": "tool_call_started", "payload": {}},
+                {"sequence_no": 2, "event_type": "tool_result", "payload": payload},
+                {"sequence_no": 3, "event_type": "final_response", "payload": {}},
+                {
+                    "sequence_no": 4,
+                    "event_type": "run_completed",
+                    "payload": {"status": "completed"},
+                },
+            ]
+        )
+
 
 class TestDeclinedCapabilityNeverBecomesAFailure(DeclinedCapabilityRunMixin):
     def test_both_middleware_renderings_classify_as_unavailable(self) -> None:
@@ -73,3 +93,10 @@ class TestDeclinedCapabilityNeverBecomesAFailure(DeclinedCapabilityRunMixin):
         assert card["retryable"] is False
         # The backend's own sentence survives to the user verbatim.
         assert "Create an artifact or download instead" in str(card["summary"])
+
+    def test_the_canvas_says_answered_in_chat_with_no_alarm(self) -> None:
+        projection = self._recovered_run(self._tool_result_payload(prefixed=True))
+
+        assert projection.lifecycle is CanvasLifecycleState.CHAT_ONLY
+        # No failure text at all — there was no failure.
+        assert projection.failure is None

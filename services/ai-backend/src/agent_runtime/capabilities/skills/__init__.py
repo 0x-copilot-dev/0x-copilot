@@ -9,6 +9,11 @@ from agent_runtime.capabilities.skills.manifest import (
     SkillManifestReader,
     SkillManifestError,
 )
+from agent_runtime.capabilities.skills.policy import (
+    SkillAccessEvaluator,
+    SkillAccessPolicy,
+    SkillAgentType,
+)
 from agent_runtime.capabilities.skills.sources import (
     ConfiguredSkill,
     SkillSource,
@@ -21,6 +26,9 @@ __all__ = [
     "ConfiguredSkill",
     "MAX_SKILL_DESCRIPTION_LENGTH",
     "MAX_SKILL_FILE_BYTES",
+    "SkillAccessPolicy",
+    "SkillAccessEvaluator",
+    "SkillAgentType",
     "SkillErrorCode",
     "SkillManifest",
     "SkillManifestError",

@@ -372,16 +372,6 @@ class RuntimeApiAppFactory:
         # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
         # with the DraftService propose seam.
         app.state.stage_service = cls.default_stage_service(app)
-        # Connector write-back — Save on an edited surface. Composed HERE rather
-        # than lazily in its route, so "is this deployment able to stage a
-        # connector save?" is answered once, at boot, by the composition root
-        # that owns every other seam it needs. It must follow ``stage_service``:
-        # it stages through that service's ``WriteStager`` (narrowed to hold no
-        # commit queue), and the shared stager is the reason the single door to
-        # execution stays ``POST /v1/agent/stages/{stage_id}/apply``.
-        app.state.surface_write_back_coordinator = (
-            cls.default_surface_write_back_coordinator(app)
-        )
         # C3 — the workspace-only A4 decision receipt is composed separately
         # from legacy staged writes.  It receives no executor or host path;
         # approval still enqueues a body-free A5 command only.
@@ -1016,53 +1006,6 @@ class RuntimeApiAppFactory:
         if ports is None or stager is None:
             return None
         return StageService(stager=stager, persistence=ports.persistence)
-
-    @classmethod
-    def default_surface_write_back_coordinator(cls, app):  # type: ignore[no-untyped-def]
-        """Wire the connector write-back lane, or return ``None``.
-
-        Reuses the ``StageService``'s stager rather than building a second one:
-        the write-back lane stages into the SAME ledger the apply route reads,
-        and a private stager would be a second staging authority over one run.
-        The lane narrows its own copy at stage time (no commit queue, no
-        allow-always policy), so sharing costs it no capability.
-
-        ``connector_write_ops`` defaults to
-        :class:`~agent_runtime.capabilities.surfaces.write_ops_capture.CapturedConnectorWriteOps`,
-        which resolves a save's candidate ops from what the READ that produced
-        the surface already recorded on the run's ledger. It performs no I/O and
-        holds no MCP client, so wiring it by default puts nothing on a request
-        path — and it is what makes a connector Save able to dispatch at all;
-        before it, every save 503'd at the catalogue step because no producer
-        existed. A deployment with real per-user write permissions overrides
-        ``app.state.connector_write_ops`` to narrow that set further.
-
-        ``None`` (no ports, or no stager) means the route answers 503 instead of
-        composing itself from whatever ``app.state`` happens to hold.
-        """
-
-        from agent_runtime.capabilities.surfaces.write_back import (
-            SurfaceWriteBackCoordinator,
-        )
-        from agent_runtime.capabilities.surfaces.write_ops_capture import (
-            CapturedConnectorWriteOps,
-        )
-
-        ports = getattr(app.state, "runtime_ports", None)
-        stager = getattr(getattr(app.state, "stage_service", None), "stager", None)
-        if ports is None or stager is None:
-            return None
-        return SurfaceWriteBackCoordinator(
-            persistence=ports.persistence,
-            event_store=ports.event_store,
-            stager=stager,
-            environ=os.environ,
-            write_ops=(
-                getattr(app.state, "connector_write_ops", None)
-                or CapturedConnectorWriteOps()
-            ),
-            user_policies=getattr(app.state, "runtime_user_policies_resolver", None),
-        )
 
     @classmethod
     def default_effect_stage_decision_service(cls, app):  # type: ignore[no-untyped-def]

@@ -131,24 +131,6 @@ export interface DiffValueProps {
   readonly side: "before" | "after";
 }
 
-/** What the reviewer is told about each value's author. `carried` and
- *  `proposed` are the two the old diff-only review never printed at all. */
-const ORIGIN_NOTE: Readonly<Record<DiffValueModel["origin"], string>> = {
-  edited: "you edited",
-  carried: "sending unchanged",
-  proposed: "agent wrote",
-};
-
-/**
- * The outbound side of a staged row.
- *
- * `diffs` is the row's COMPLETE outbound account — one entry per connector
- * argument, in wire order — not the subset the user touched. Every entry is
- * rendered: dropping the unedited ones is what let a recipient, a subject and a
- * model-authored body ship under a one-line "cc changed" review. Each value
- * carries who authored it, so "unchanged" and "the agent wrote this" are never
- * the same line.
- */
 export function DiffValue({ diffs, side }: DiffValueProps): ReactElement {
   if (side === "before") {
     return (
@@ -158,7 +140,7 @@ export function DiffValue({ diffs, side }: DiffValueProps): ReactElement {
         role="cell"
       >
         {diffs.map((diff, index) => (
-          <span key={`before-${diff.field}-${index}`} data-origin={diff.origin}>
+          <span key={`before-${diff.field}-${index}`}>
             {reviewValue(diff.before)}
           </span>
         ))}
@@ -172,12 +154,7 @@ export function DiffValue({ diffs, side }: DiffValueProps): ReactElement {
       role="cell"
     >
       {diffs.map((diff, index) => (
-        <span
-          key={`after-${diff.field}-${index}`}
-          data-origin={diff.origin}
-          data-testid="tc-table-row-send"
-          data-arg={diff.field}
-        >
+        <span key={`after-${diff.field}-${index}`}>
           <small>{diff.field}</small>
           <span
             className="tc-review-table__change-value"
@@ -185,12 +162,6 @@ export function DiffValue({ diffs, side }: DiffValueProps): ReactElement {
           >
             {reviewValue(diff.after)}
           </span>
-          <small
-            className="tc-review-table__send-origin"
-            data-testid="tc-table-row-send-origin"
-          >
-            {ORIGIN_NOTE[diff.origin]}
-          </small>
         </span>
       ))}
     </div>

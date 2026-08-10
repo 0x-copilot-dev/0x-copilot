@@ -47,13 +47,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     OperationOutcome,
 )
 from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec, ProposalUriCodec
-from agent_runtime.surfaces_v2.rowset import (
-    AgentHold,
-    ProposedRow,
-    RowsetValidationError,
-    StagedRow,
-    StagedRowAccounting,
-)
+from agent_runtime.surfaces_v2.rowset import AgentHold, StagedRow
 from agent_runtime.surfaces_v2.staging import StagedWriteError, WriteStager
 from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 
@@ -109,23 +103,16 @@ def reviewed_rowset_target(
 class StageRowsetWriteInput(RuntimeContract):
     """Input contract for ``stage_rowset_write``.
 
-    ``rows`` is :class:`ProposedRow`, NOT :class:`StagedRow`. The difference is
-    the whole security property of this lane: a ``StagedRow`` carries ``sends``,
-    the account of what the row will dispatch, and the MODEL must not be able to
-    author that — an account the proposer writes is an account that can lie. The
-    contract is ``extra="forbid"``, so a model that emits ``sends`` gets a
-    ``ValidationError`` and the call is refused as MALFORMED; the account is
-    derived server-side from ``target_args`` by
-    :meth:`StagedRowAccounting.for_proposed`.
-
-    ``agent_holds`` reuses the ``rowset.py`` contract verbatim. Tool input stays
-    untrusted until :class:`RowsetValidator` runs in the stager.
+    ``rows`` / ``agent_holds`` reuse the ``rowset.py`` contracts verbatim — they
+    already validate every field (row_key / title / target_args / changes;
+    row_key / reason). No separate ``*Input`` mirror types are introduced. Tool
+    input stays untrusted until :class:`RowsetValidator` runs in the stager.
     """
 
     target_connector: str = Field(min_length=1, max_length=_Limits.CONNECTOR_MAX)
     target_op: str = Field(min_length=1, max_length=_Limits.OP_MAX)
     title: str = Field(min_length=1, max_length=_Limits.TITLE_MAX)
-    rows: tuple[ProposedRow, ...]
+    rows: tuple[StagedRow, ...]
     agent_holds: tuple[AgentHold, ...] = ()
 
 
@@ -236,18 +223,11 @@ class StageRowsetWriteTool:
         except ValidationError:
             return {"ok": False, "message": _Messages.MALFORMED}
 
-        try:
-            rows = self._accounted(parsed.rows)
-        except RowsetValidationError as exc:
-            # The proposed diff and the proposed args describe different writes.
-            # Typed, safe, and NOTHING was staged — the run keeps going.
-            return {"ok": False, "message": exc.safe_message}
-
         proposal = RowSetEffectProposal(
             target_connector=parsed.target_connector,
             target_op=parsed.target_op,
             title=parsed.title,
-            rows=rows,
+            rows=parsed.rows,
             agent_holds=parsed.agent_holds,
         )
         try:
@@ -278,29 +258,6 @@ class StageRowsetWriteTool:
         if isinstance(raw_input, StageRowsetWriteInput):
             return raw_input
         return StageRowsetWriteInput.model_validate(raw_input)
-
-    @staticmethod
-    def _accounted(rows: tuple[ProposedRow, ...]) -> tuple[StagedRow, ...]:
-        """Derive each row's outbound account SERVER-SIDE, or refuse the call.
-
-        The audit's remediation for this lane was to fetch the target op's
-        descriptor and enforce the write-mapping scope rules against its
-        ``input_schema``. That is deliberately NOT what this does: the tool
-        holds no MCP client by construction, ``input_schema`` exists only on a
-        live loaded server, and reaching one would put client construction and a
-        network hop inside the graph loop — the exact design both this module
-        and ``write_back`` defend.
-
-        The accounting gives the same property without either. A row whose
-        ``changes`` names a field its ``target_args`` does not carry, or whose
-        diff shows a value different from the one an arg carries, is refused;
-        every remaining arg appears in ``sends`` and is read at the gate. So the
-        four-field overwrite that used to stage under a one-line ``priority``
-        diff now stages showing all four args and no ``priority`` line at all —
-        the diff and the wire describe the same write, which is the property.
-        """
-
-        return tuple(StagedRowAccounting.for_proposed(row) for row in rows)
 
     async def _stage(self, proposal: RowSetEffectProposal) -> RowSetProposalReceipt:
         """Stage through the authoritative gateway in enforce mode only."""

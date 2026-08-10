@@ -604,29 +604,6 @@ def create_app(
             identity=identity,
         )
 
-    @app.get("/v1/agent/conversations/{conversation_id}/card-events")
-    async def get_conversation_card_events(
-        request: Request,
-        conversation_id: str,
-        run_limit: int = Query(50, ge=1, le=200),
-    ) -> dict[str, object]:
-        """Card-bearing frames across the conversation's runs.
-
-        A settled turn's tool cards live only in its run's event stream, which
-        the client drops when it rebinds — so a completed turn rendered bare.
-        This returns the frames the client's EXISTING fold rebuilds them from;
-        no second projection exists on either side of the wire.
-        """
-        identity = FacadeAuthenticator.authenticate_request(request)
-        return await forward_json(
-            app,
-            "GET",
-            f"/v1/agent/conversations/{conversation_id}/card-events",
-            target="ai_backend",
-            params=identity.scoped_params({"run_limit": run_limit}),
-            identity=identity,
-        )
-
     @app.get("/v1/agent/conversations/{conversation_id}/canvas")
     async def get_conversation_canvas(
         request: Request,

@@ -31,7 +31,6 @@ from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
     RefinementBase,
     ShapingCredentials,
-    ShapingModelBuild,
     SpecAuthoringSkill,
     SpecCompletionResult,
     SurfaceGenerationScheduler,
@@ -472,32 +471,6 @@ class TestNoCredentialStillRenders(_PipelineMixin):
         assert envelope.spec_rung is SurfaceSpecRung.INFERRED
         assert envelope.state.spec is not None
 
-    def test_the_degrade_line_names_the_failure_class_not_just_the_model(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        # The line used to carry the model id alone, and it read as a bad model
-        # id when the cause was a credential that never reached the builder —
-        # a wrong diagnosis that cost real time. It must name the CLASS.
-        async def _emit(payload: Mapping[str, object]) -> None:  # pragma: no cover
-            return None
-
-        with caplog.at_level(logging.WARNING):
-            build_surface_generation_scheduler(
-                store=InMemorySurfaceSpecStore(),
-                emit=_emit,
-                environ={"SURFACE_SPEC_MODEL": "openai:gpt-5.4-mini"},
-            )
-
-        line = next(
-            record.getMessage()
-            for record in caplog.records
-            if "shaping_model_unavailable" in record.getMessage()
-        )
-        assert f"reason={ShapingModelBuild.NO_RUN_CREDENTIAL}" in line
-        # The exception TYPE separates it from a broken model without
-        # ``exc_info`` and without the kwargs.
-        assert "error=" in line and "error=none" not in line
-
     def test_the_floor_renders_with_no_scheduler_at_all(self) -> None:
         # The honest desktop shape: SURFACES_V2 on, no BYOK provider ⇒ no
         # shaping model resolves ⇒ no scheduler. The surface is unaffected.
@@ -642,132 +615,6 @@ class TestByokCredentialThreading(_CredentialMixin):
         assert credentials.provider_keys == {}
         assert credentials.user_policies_json is None
         assert credentials.model_kwargs_for("anthropic:claude-haiku-4-5") == {}
-
-
-class TestTheDegradeIsDiagnosableWithoutLeakingTheKey:
-    """``ShapingModelBuild`` separates the three ways shaping can be off.
-
-    The subsystem is display-only, so every one of these is a soft degrade — the
-    question is never "did it fail" but "which failure is this", and the old
-    line answered neither. The classification must come from facts already in
-    hand, and the log must stay free of kwargs and key material.
-    """
-
-    class ExplodingFactory:
-        """A model factory that fails the way a keyless provider client does."""
-
-        def __init__(self, exc: Exception) -> None:
-            self._exc = exc
-
-        def __call__(
-            self, model_id: str, *, extra_kwargs: Mapping[str, object] | None = None
-        ) -> object:
-            raise self._exc
-
-    @staticmethod
-    def _patch_factory(monkeypatch: pytest.MonkeyPatch, factory: object) -> None:
-        monkeypatch.setattr(
-            "agent_runtime.execution.deep_agent_builder.build_chat_model_from_id",
-            factory,
-        )
-
-    def test_an_unroutable_model_id_is_an_unknown_provider(self) -> None:
-        # ``SurfaceModelConfigFactory`` cannot infer a provider from this, and
-        # that is a configuration error, not a missing key.
-        build = ShapingModelBuild.attempt(
-            model_id="totally-made-up-model", credentials=None
-        )
-
-        assert not build.ok
-        assert build.reason == ShapingModelBuild.UNKNOWN_PROVIDER
-
-    def test_a_failure_with_no_key_supplied_reads_as_no_run_credential(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._patch_factory(
-            monkeypatch, self.ExplodingFactory(RuntimeError("api_key must be set"))
-        )
-
-        build = ShapingModelBuild.attempt(
-            model_id="openai:gpt-5.4-mini", credentials=None
-        )
-
-        assert not build.ok
-        assert build.reason == ShapingModelBuild.NO_RUN_CREDENTIAL
-        assert build.error == "RuntimeError"
-
-    def test_a_failure_with_a_key_supplied_reads_as_unconstructible(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Same exception, opposite diagnosis: a key WAS handed over, so the
-        # operator's next move is the model or the client, not the key.
-        self._patch_factory(
-            monkeypatch, self.ExplodingFactory(ImportError("no provider package"))
-        )
-
-        build = ShapingModelBuild.attempt(
-            model_id="openai:gpt-5.4-mini",
-            credentials=ShapingCredentials(provider_keys={"openai": "sk-openai"}),
-        )
-
-        assert not build.ok
-        assert build.reason == ShapingModelBuild.MODEL_UNCONSTRUCTIBLE
-        assert build.error == "ImportError"
-
-    def test_an_unhonourable_region_pin_is_its_own_class(self) -> None:
-        # Raised while COMPOSING the kwargs, before construction: the user
-        # pinned a data-residency region this deployment has no mapping for.
-        build = ShapingModelBuild.attempt(
-            model_id="openai:gpt-5.4-mini",
-            credentials=ShapingCredentials(
-                provider_keys={"openai": "sk-openai"},
-                user_policies_json={"privacy": {"region": "no-such-region"}},
-            ),
-        )
-
-        assert not build.ok
-        assert build.reason == ShapingModelBuild.REGION_UNAVAILABLE
-        assert build.error == "RegionUnavailableError"
-
-    def test_describe_carries_no_kwargs_and_no_key(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # The whole reason the line logged the model id and nothing else. The
-        # exception MESSAGE is dropped too — a provider client can echo request
-        # material into it; only its type name survives.
-        secret = "sk-openai-should-never-be-logged"
-        self._patch_factory(
-            monkeypatch, self.ExplodingFactory(RuntimeError(f"bad key {secret}"))
-        )
-
-        build = ShapingModelBuild.attempt(
-            model_id="openai:gpt-5.4-mini",
-            credentials=ShapingCredentials(provider_keys={"openai": secret}),
-        )
-
-        described = build.describe()
-        assert secret not in described
-        assert "api_key" not in described
-        assert "bad key" not in described
-        assert described == "reason=model_unconstructible error=RuntimeError"
-
-    def test_a_successful_build_carries_the_model_and_no_reason(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        sentinel = object()
-        self._patch_factory(
-            monkeypatch,
-            lambda model_id, *, extra_kwargs=None: sentinel,
-        )
-
-        build = ShapingModelBuild.attempt(
-            model_id="openai:gpt-5.4-mini",
-            credentials=ShapingCredentials(provider_keys={"openai": "sk-openai"}),
-        )
-
-        assert build.ok
-        assert build.model is sentinel
-        assert build.reason is None
 
 
 class TestSkillTeachesRefinement:

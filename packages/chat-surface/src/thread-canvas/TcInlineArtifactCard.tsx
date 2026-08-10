@@ -113,9 +113,9 @@ export function TcInlineArtifactCard(
             )}
           </div>
           {/* The real thing: same surface, same renderer registry, same
-              in-place block editor — so "editable exactly as Studio is" costs
-              no new save path. `idPrefix` scopes the editor's field names,
-              because inline there can be two expanded artifacts on one page. */}
+              `ArtifactEditor` — so "editable exactly as Studio is" costs no new
+              save path. `idPrefix` scopes its DOM id, because inline there can
+              be two expanded editors on one page. */}
           <ArtifactSurface
             uri={artifact.uri}
             transport={transport}

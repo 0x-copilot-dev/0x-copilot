@@ -403,19 +403,13 @@
   width: max(100%, 760px);
 }
 
-/* Column weights follow what a reviewer has to READ, not what is easiest to
-   lay out. "Sending" is the row's complete outbound payload — the thing the
-   approval is actually about — so it takes the widest track. It used to take
-   0.72fr while "Review note", which carries a fixed short status phrase, took
-   1.62fr: the safety-critical column was the narrowest thing on the row, which
-   is what made every value wrap or spill. */
 .tc-review-table__columns,
 .tc-review-table__row {
   display: grid;
   gap: 10px;
   grid-template-columns:
-    70px minmax(0, 1.15fr) minmax(0, 0.85fr) minmax(0, 2.15fr)
-    minmax(0, 0.85fr) 100px;
+    70px minmax(0, 1.5fr) minmax(0, 0.55fr) minmax(0, 0.72fr)
+    minmax(0, 1.62fr) 100px;
 }
 
 .tc-review-table__columns {
@@ -439,11 +433,8 @@
   text-align: right;
 }
 
-/* Top-aligned, not centred: now that the Sending cell wraps to whatever height
-   its disclosure needs, centring floated the decision controls into the middle
-   of a tall row, far from the first argument they decide on. */
 .tc-review-table__row {
-  align-items: start;
+  align-items: center;
   border-bottom: 1px solid var(--color-border);
   padding: 10px 16px;
 }
@@ -454,12 +445,6 @@
 
 .tc-review-table__row--failed {
   min-height: 57px;
-}
-
-/* A row whose outbound arguments were never disclosed. It reads as inert
-   because it is: no decision control on it is enabled. */
-.tc-review-table__row--unaccounted {
-  background: color-mix(in srgb, var(--color-danger) 4%, transparent);
 }
 
 .tc-review-table__decisions {
@@ -521,122 +506,49 @@
   font-size: var(--font-size-mono-9-5);
 }
 
-/* The BEFORE side wrapped already, but only at spaces — and its values are
-   addresses, ids and urls, which have none. So it spilled its track for the
-   same reason the AFTER side clipped, and a reviewer comparing the two was
-   reading a partial "currently" against a partial "sending". */
 .tc-review-table__old {
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-/* Only a value the user REPLACED is struck through. An argument that rides
-   along unchanged shows its current value plainly — striking it would read as
-   "this is being removed" about the one class of value that is not. */
-.tc-review-table__old > span[data-origin="edited"] {
   text-decoration: line-through;
 }
 
-/* THE REVIEW NEVER CLIPS WHAT IT IS DISCLOSING.
- *
- * This cell is the row's complete outbound account. It used to be a nowrap
- * flex line inside `overflow: hidden`, which cut every value at the cell's
- * right edge — and painted no ellipsis, because `text-overflow` applies to a
- * block container, never to a flex container's items. So a truncated value was
- * indistinguishable from a short one. The clip is from the END, and recipient
- * lists are comma-joined, so an address appended to `to` landed exactly where
- * the renderer cut: a reviewer approving `dana@acme.example, jor` could not see
- * `mallory@evil.example`.
- *
- * The rule now is that nothing here is shortened at all. Values wrap, the cell
- * grows, and the surface's one scroll owner (`.tc-review-table__viewport`)
- * carries the height — the same treatment `.tc-review-table__old` has always
- * given the BEFORE values. No `max-height`, no nested scroller, no ellipsis:
- * every mechanism that hides a tail is a mechanism an injected argument hides
- * behind. If a bound is ever added here it must announce itself as a bound.
- */
 .tc-review-table__change {
   background: rgba(232, 180, 94, 0.09);
   border: 1px solid rgba(232, 180, 94, 0.28);
   border-radius: 5px;
   color: var(--color-text);
-  display: flex;
-  flex-direction: column;
+  display: block;
   font-size: var(--font-size-mono-10-5);
-  gap: 4px;
   line-height: 1.5;
   min-width: 0;
-  padding: 3px 7px;
+  padding: 1px 7px;
 }
 
-/* Wraps rather than overflows. The origin note trails the value in flow, so
-   when the value fills the line the note takes the next one — it can never be
-   pushed outside the cell, which is what `margin-left: auto` did here (auto
-   margins resolve to 0 under negative free space, so the one annotation saying
-   "the agent wrote this" was the first thing off screen). */
 .tc-review-table__change > span {
-  align-items: baseline;
-  column-gap: 7px;
+  align-items: center;
   display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  row-gap: 2px;
-  white-space: normal;
+  gap: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tc-review-table__change small {
   color: var(--color-text-subtle);
-  flex: none;
   font-family: var(--font-mono);
   font-size: var(--font-size-3xs);
+  margin-right: 6px;
   text-transform: uppercase;
 }
 
-/* `overflow-wrap: anywhere` and not `break-word`: only `anywhere` also lowers
-   the element's min-content contribution, so an unbroken 400-character token
-   (a URL, a base64 body) wraps inside the track instead of widening the grid
-   and spilling the row. */
 .tc-review-table__change-value {
   background: rgba(232, 180, 94, 0.09);
   border: 1px solid rgba(232, 180, 94, 0.28);
   border-radius: 5px;
   color: var(--color-text);
-  flex: 1 1 auto;
   font-size: var(--font-size-mono-10-5);
-  min-width: 0;
-  overflow-wrap: anywhere;
   padding: 1px 7px;
-  white-space: pre-wrap;
-}
-
-/* The amber chip means "the user typed this". An argument that rides along
-   unedited is still SENT and still shown, but it must not borrow the edit's
-   emphasis, or the one value the reviewer actually changed stops standing out
-   in a row of eight. */
-.tc-review-table__change
-  > span[data-origin="carried"]
-  .tc-review-table__change-value {
-  background: transparent;
-  border-color: var(--color-border);
-  color: var(--color-text-muted);
-}
-
-/* An agent-authored value is the one nobody typed and nobody read — it carries
-   the review's only warning weight. */
-.tc-review-table__change
-  > span[data-origin="proposed"]
-  .tc-review-table__change-value {
-  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
-  border-color: color-mix(in srgb, var(--color-warning) 32%, transparent);
-}
-
-/* No auto margin. This note is the only thing that distinguishes "you typed
-   this" from "nobody read this", so it is laid out in flow like any other
-   token and wraps onto its own line rather than being pushed off the end. */
-.tc-review-table__send-origin {
-  margin: 0;
+  white-space: nowrap;
 }
 
 .tc-review-table__note {

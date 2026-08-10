@@ -94,7 +94,6 @@ const ENUM_TUPLES = {
     "schema",
     "registry",
     "generated",
-    "selected",
   ] as const satisfies readonly ViewBasis[],
   view_keep: ["generic", "shaped"] as const satisfies readonly ViewKeep[],
   revision_author: [
@@ -558,16 +557,6 @@ describe("isRowSetEffectReview (PRD-12)", () => {
         row_key: "row-a",
         title: "Acme renewal",
         changes: [{ field: "priority", old: 1, new: 2 }],
-        sends: [
-          { arg: "issue_id", origin: "carried", column: "id", old: 9, new: 9 },
-          {
-            arg: "priority",
-            origin: "edited",
-            column: "priority",
-            old: 1,
-            new: 2,
-          },
-        ],
         decision: "approve",
         decision_source: "user",
         hold_reason: null,
@@ -609,43 +598,6 @@ describe("isRowSetEffectReview (PRD-12)", () => {
         rows: [{ ...review.rows[0], changes: [{ old: 1, new: 2 }] }],
       }),
     ).toBe(false);
-  });
-
-  // `sends` is the only complete account of what a row will send. A response
-  // that omits it, empties it, or ships an entry the guard cannot read is a
-  // response the reviewer cannot judge — reject the whole thing.
-  it("rejects a row whose outbound arguments are missing or empty", () => {
-    const { sends: _dropped, ...withoutSends } = review.rows[0];
-    expect(isRowSetEffectReview({ ...review, rows: [withoutSends] })).toBe(
-      false,
-    );
-    expect(
-      isRowSetEffectReview({
-        ...review,
-        rows: [{ ...review.rows[0], sends: [] }],
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects a malformed, unknown-origin, or key-padded outbound argument", () => {
-    const bad = (entry: unknown) =>
-      isRowSetEffectReview({
-        ...review,
-        rows: [{ ...review.rows[0], sends: [entry] }],
-      });
-    expect(bad({ origin: "carried", old: 9, new: 9 })).toBe(false);
-    expect(bad({ arg: "issue_id", origin: "typed", old: 9, new: 9 })).toBe(
-      false,
-    );
-    expect(bad({ arg: "issue_id", origin: "carried", column: 7 })).toBe(false);
-    // Closed keys: a newly leaked field on an outbound argument is a value the
-    // reviewer would never see rendered.
-    expect(
-      bad({ arg: "issue_id", origin: "carried", old: 9, new: 9, hint: "x" }),
-    ).toBe(false);
-    expect(bad({ arg: "issue_id", origin: "carried", column: null })).toBe(
-      true,
-    );
   });
 
   it("requires retry basis and forbids it on an initial apply", () => {

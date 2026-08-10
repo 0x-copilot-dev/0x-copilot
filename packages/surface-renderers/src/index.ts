@@ -19,7 +19,6 @@ import { registerArtifactAdapters } from "./artifacts";
 
 export {
   emailAdapter,
-  emailStateFrom,
   registerEmailAdapter,
   type EmailDiff,
   type EmailDiffPending,
@@ -77,28 +76,6 @@ export {
   ARCHETYPE_ADAPTERS,
   IMPLEMENTED_ARCHETYPES,
   registerArchetypeAdapters,
-  // Editable surface Phase 2 — the connector half. A `table://` surface renders
-  // as editable cells when, and only when, the host attached a write-back grant
-  // (`hostConnectorEditor` reads it off the render state). Save STAGES; the
-  // decision is taken at the write gate that already exists.
-  EditableConnectorTable,
-  EDITABLE_ROW_CAP,
-  hostConnectorEditor,
-  asConnectorRow,
-  buildConnectorRowEdits,
-  cellKey,
-  editableCellText,
-  isEditableCell,
-  rowKeyFor,
-  rowsOf,
-  rowTitleFor,
-  type ConnectorEditsResult,
-  type ConnectorFieldChange,
-  type ConnectorRow,
-  type ConnectorRowEdit,
-  type ConnectorSurfaceEditorActions,
-  type EditableConnectorTableProps,
-  type PendingCellEdits,
   RecordRenderer,
   RecordDiffRenderer,
   recordAdapter,
@@ -121,20 +98,11 @@ export {
   CodeArtifactRenderer,
   DatasetArtifactRenderer,
   DocumentArtifactRenderer,
-  // Editable surface Phase 1. `ArtifactEditorActions` is the ONLY thing a host
-  // wires to make a document editable — a `{disabled, saveRevision}` object it
-  // builds around its own transport. Editability is never on the wire and never
-  // on a `SurfaceSpec`; a surface the host did not open renders read-only.
-  EditableDocument,
   FileArtifactRenderer,
   RawArtifactFallback,
-  hostEditorActions,
   parseCsv,
   registerArtifactAdapters,
-  type ArtifactEditorActions,
   type ArtifactRenderState,
-  type ArtifactRevisionSaveOutcome,
-  type EditableDocumentProps,
 } from "./artifacts";
 export {
   formatValue,

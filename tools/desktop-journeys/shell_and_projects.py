@@ -30,52 +30,11 @@ from _lib import DriverSession, JourneyPlan, load_env_key, require
 PROVIDER = os.environ.get("SHELL_OVERFLOW_PROVIDER", "anthropic")
 
 # The two short window heights the walk is repeated at. 600 is what a user gets
-# by halving the default window; the second is THE SHORTEST WINDOW THE APP
-# ALLOWS, measured at runtime rather than written down.
-#
-# It used to be a literal 420, and that number could never be reached: the
-# BrowserWindow sets `minHeight` (`apps/desktop/main/window.ts`, pinned by
-# `window.test.ts`), the window manager clamps to it, and `apply_size`'s vacuity
-# guard then failed every phase that walked these sizes — permanently, on a
-# state no user can produce. Measuring means this tracks the app's own minimum
-# for free and can never again test a window that cannot exist.
-#
-# Shortness is not what carries these phases anyway: `assert_surface_self_scrolls`
-# checks the surface OWNS an internal scroll, is not clipped by the frame, and is
-# reachable at both ends — structural properties that hold whether or not the
-# content happens to overflow at a given height (it reports "fits, no scroll
-# needed" as a pass). The original note conceded as much: the FTUE's regression
-# was the sized-past-the-frame one, "which is height independent".
-TALL_SHORT_HEIGHT = 600
-SIZE_WIDTH = 1200
-
-_shortest_height: int | None = None
-
-
-def short_sizes(s: DriverSession) -> list[tuple[int, int]]:
-    """`[(1200, 600), (1200, <app minimum>)]`, measuring the minimum once.
-
-    Asking for an absurd height and reading back what the window actually became
-    IS the measurement — the clamp is the app's own `minHeight`.
-    """
-
-    global _shortest_height
-    if _shortest_height is None:
-        reported = s.resize(SIZE_WIDTH, 1)
-        viewport = reported.get("viewport") or {}
-        got = viewport.get("innerHeight")
-        assert got is not None, f"could not measure the window floor: {reported}"
-        _shortest_height = int(got)
-        print(f"  [size] app's shortest window measured at {_shortest_height}px")
-        # A floor at or above the default would mean the walk never shortens the
-        # window at all, and every short-window assertion below would be
-        # vacuous — the exact failure this whole mechanism exists to prevent.
-        assert _shortest_height < TALL_SHORT_HEIGHT, (
-            f"the window floor ({_shortest_height}px) is not shorter than "
-            f"{TALL_SHORT_HEIGHT}px — there is no short window left to test"
-        )
-    return [(SIZE_WIDTH, TALL_SHORT_HEIGHT), (SIZE_WIDTH, _shortest_height)]
-
+# by halving the default window; 420 is short enough that the sign-in card
+# genuinely overflows and is reachable only by scrolling `.loginx-shell`.
+# (Measured: the FTUE body still fits at 420 — its regression was the
+# sized-past-the-frame one, which is height independent.)
+SIZES: list[tuple[int, int]] = [(1200, 600), (1200, 420)]
 
 FRAME = "[data-testid=desktop-window-frame]"
 
@@ -359,7 +318,7 @@ def sp1_signin_gate_short(s: DriverSession) -> None:
 
     v = Violations()
     assert s.wait_for("[data-testid=sign-in-gate]"), "sign-in gate never appeared"
-    for width, height in short_sizes(s):
+    for width, height in SIZES:
         apply_size(s, v, width, height)
         time.sleep(0.4)
         assert_document_frozen(s, v, f"sign-in @{height}")
@@ -384,7 +343,7 @@ def sp2_ftue_surface_short(s: DriverSession) -> None:
         "FTUE surface never appeared after sign-in"
     )
     time.sleep(1.0)
-    for width, height in short_sizes(s):
+    for width, height in SIZES:
         apply_size(s, v, width, height)
         time.sleep(0.4)
         assert_document_frozen(s, v, f"ftue @{height}")
@@ -408,23 +367,6 @@ def sp3_enter_the_shell(s: DriverSession) -> None:
     key = load_env_key(PROVIDER)  # value never printed
     print(f"  provider={PROVIDER} key_len={len(key)} (value withheld)")
     s.ftue_add_key(PROVIDER, key)
-
-    # The FTUE composer carries the filing zone too. It was missing at first,
-    # which repeated PRD-FS-10 §7's folder-bar bug exactly: the affordance
-    # existed on every composer EXCEPT first run — the one send that CREATES the
-    # conversation, and so the only place filing can ride the create rather than
-    # a follow-up PATCH. A wiring claim, which is why it is asserted live: the
-    # host has to pass the prop, and `OnboardingComposer` derives it silently.
-    assert s.present("[data-testid=composer-project-filing]"), (
-        "no filing zone on the FTUE composer — first run is the one send that "
-        "creates the conversation, so filing must be reachable there"
-    )
-    # Zero projects on a fresh install ⇒ the create-only variant.
-    assert s.present("[data-testid=composer-project-filing-create]"), (
-        "FTUE filing zone rendered with no way to act"
-    )
-    s.shot("ftue-filing-zone")
-
     assert s.wait_for("[data-testid=first-run-skip]", 30), "FTUE skip missing"
     s.click("[data-testid=first-run-skip]")
     assert s.wait_for("[data-component=chat-shell]", 60), (
@@ -438,7 +380,7 @@ def sp4_shell_frozen_at_short_heights(s: DriverSession) -> None:
     """Every destination and settings section, at both short heights."""
 
     v = Violations()
-    for width, height in short_sizes(s):
+    for width, height in SIZES:
         apply_size(s, v, width, height)
         time.sleep(0.5)
         assert_document_frozen(s, v, f"shell @{height}")
@@ -624,39 +566,6 @@ def _thread_titles(s: DriverSession) -> list[str]:
     )
 
 
-def _move_from_chats_row(
-    s: DriverSession, conversation_id: str, project_id: str | None
-) -> None:
-    """Re-file a chat from the Chats list: row ⋯ → Move to project → pick.
-
-    The composer's filing zone is pre-first-message only, so this is the surface
-    that owns re-filing a chat that already has a transcript. The sheet mounts
-    the SAME `ProjectFilingChip`, hence the identical option testids.
-    """
-
-    s.open_destination("Chats")
-    row = f'[data-testid=chat-archive-row][data-conversation-id="{conversation_id}"]'
-    assert s.wait_for(row, 30), f"chat row {conversation_id} not in the Chats list"
-    s.click(f"{row} [data-testid=chat-archive-row-overflow-trigger]")
-    assert s.wait_for("[data-testid=chat-archive-row-overflow-menu]", 15), (
-        "the row's ⋯ menu never opened"
-    )
-    s.click("[data-testid=chat-archive-row-move-to-project]")
-    assert s.wait_for("[data-testid=desktop-project-filing-sheet]", 15), (
-        "'Move to project…' opened no sheet"
-    )
-    s.click("[data-testid=composer-project-filing-trigger]")
-    assert s.wait_for("[data-testid=composer-project-filing-menu]", 15)
-    if project_id is None:
-        s.click("[data-testid=composer-project-filing-none]")
-    else:
-        s.click(
-            "[data-testid=composer-project-filing-option]"
-            f'[data-project-id="{project_id}"]'
-        )
-    time.sleep(1.5)
-
-
 def _open_filing_menu(s: DriverSession, timeout_s: int = 30) -> None:
     """Open the composer's filing menu, waiting out any in-flight write.
 
@@ -761,20 +670,19 @@ def sp6_create_from_chip_files_the_chat(s: DriverSession) -> None:
         "filing chip is not below the composer frame — the above/below split "
         "(folders up, project down) has been broken"
     )
-    # With ZERO projects the zone is the CREATE-ONLY variant: a direct
-    # "New project" button, not a pill whose menu's only real entry would be
-    # "No project" — an absence reported as though it were a filing decision.
-    # Assert the AFFORDANCE, not one shape of it; the pill and its menu are
-    # asserted in SP-7 onwards, once a project exists.
-    assert s.present("[data-testid=composer-project-filing-create]"), (
-        "zero-project zone is not the create-only variant — a fresh install has "
-        "nothing to pick, so the zone must offer the way to make one"
+    assert "No project" in _chip_label(s), (
+        f"a fresh chat should read 'No project', got {_chip_label(s)!r}"
     )
     s.shot("chip-unfiled-zero-projects")
 
-    s.click("[data-testid=composer-project-filing-create]")
+    s.click("[data-testid=composer-project-filing-trigger]")
+    assert s.wait_for("[data-testid=composer-project-filing-menu]")
+    assert s.present("[data-testid=composer-project-filing-new]"), (
+        "'New project…' missing — with no projects the menu has no exit"
+    )
+    s.click("[data-testid=composer-project-filing-new]")
     assert s.wait_for("[data-testid=desktop-project-create-sheet]", 20), (
-        "the zone's 'New project' opened nothing"
+        "the chip's 'New project…' opened nothing"
     )
     # Create words, not edit words: the sheet reused the edit editor and said
     # "Edit project" / "Save" for a project that did not exist yet.
@@ -1049,17 +957,17 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
         f"a run started under scope A was filed elsewhere: {json.dumps(fresh)[:300]}"
     )
 
-    # D. Re-file an EXISTING chat (the PATCH path) — from the CHATS ROW.
-    #
-    # Not from the composer: the filing zone is pre-first-message only, so once
-    # a chat has a transcript the surface that owns re-filing is the Chats row's
-    # ⋯ → "Move to project". That is the deliberate division — filing is
-    # orientation when you START, and an action ON a chat afterwards.
+    # D. Re-file an EXISTING chat (the PATCH path).
     moved_id = fresh["conversation_id"]
     settled = _wait_run_settled(s, moved_id)
-    print(f"  run settled ({settled}); re-filing from the Chats row")
+    print(f"  run settled ({settled}); re-filing")
 
-    _move_from_chats_row(s, moved_id, project_id=b_id)
+    _open_filing_menu(s)
+    s.click(f'[data-testid=composer-project-filing-option][data-project-id="{b_id}"]')
+    time.sleep(1.5)
+    assert PROJECT_B in _chip_label(s), (
+        f"chip did not move to project B, reads {_chip_label(s)!r}"
+    )
     deadline = time.time() + 20
     while time.time() < deadline:
         if _project_of(s, moved_id) == b_id:
@@ -1071,8 +979,10 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
     )
     s.shot("refiled-to-b")
 
-    # E. Unfiling clears the field. `null` and "absent" differ to a PATCH.
-    _move_from_chats_row(s, moved_id, project_id=None)
+    # E. Unfiling clears the field.
+    _open_filing_menu(s)
+    s.click("[data-testid=composer-project-filing-none]")
+    time.sleep(1.5)
     deadline = time.time() + 20
     while time.time() < deadline:
         if _project_of(s, moved_id) is None:
@@ -1081,6 +991,9 @@ def sp11_new_run_inherits_scope_then_refile_and_unfile(s: DriverSession) -> None
     assert _project_of(s, moved_id) is None, (
         "unfiling left the chat filed as "
         f"{_project_of(s, moved_id)!r} — the write sent no explicit null"
+    )
+    assert "No project" in _chip_label(s), (
+        f"chip did not return to 'No project': {_chip_label(s)!r}"
     )
     s.shot("unfiled")
 
@@ -1106,11 +1019,7 @@ def main() -> int:
         phases=[
             ("SP-1", "sign-in gate reachable at short heights", sp1_signin_gate_short),
             ("SP-2", "FTUE surface reachable at short heights", sp2_ftue_surface_short),
-            (
-                "SP-3",
-                "add a key, meet filing on the FTUE, enter the shell",
-                sp3_enter_the_shell,
-            ),
+            ("SP-3", "add a key and enter the shell", sp3_enter_the_shell),
             (
                 "SP-4",
                 "document frozen across every destination + settings section",

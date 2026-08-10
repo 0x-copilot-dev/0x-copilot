@@ -11,7 +11,7 @@ from agent_runtime.api.rowset_effect_review import (
     RowSetReviewRow,
 )
 from agent_runtime.settings import RuntimeSettings
-from agent_runtime.surfaces_v2.rowset import ArgOrigin, RowFieldChange, StagedArg
+from agent_runtime.surfaces_v2.rowset import RowFieldChange
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
@@ -43,18 +43,6 @@ def _review(
                 row_key="row-a",
                 title="Acme renewal",
                 changes=(RowFieldChange(field="priority", old=1, new=2),),
-                sends=(
-                    StagedArg(
-                        arg="id", origin=ArgOrigin.PROPOSED, column=None, new="row-a"
-                    ),
-                    StagedArg(
-                        arg="priority",
-                        origin=ArgOrigin.PROPOSED,
-                        column="priority",
-                        old=1,
-                        new=2,
-                    ),
-                ),
                 decision="approve",
                 decision_source="default",
                 can_decide=kind == "apply",

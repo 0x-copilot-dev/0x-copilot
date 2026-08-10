@@ -28,11 +28,9 @@ produced it. The model already has the data; the canvas is a projection of it.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 import logging
 import time
-from types import MappingProxyType
 from typing import Any, Final
 
 from langchain_core.runnables import RunnableConfig
@@ -53,10 +51,6 @@ from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     CapabilityUrn,
     MiddlewareStage,
-)
-from agent_runtime.capabilities.surfaces.write_ops_capture import (
-    CapturedWriteOps,
-    WriteOpCandidate,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,13 +100,6 @@ class McpPresentedTool(DelegatingTool):
     tool_name: str
     #: Presenting a write here would double-emit against the approval path.
     presentable: bool
-    #: This connector's OWN write ops, read off the same catalogue that produced
-    #: this tool. The read this stage presents is the one moment those
-    #: descriptors are in hand — the server is loaded, its ``input_schema``s are
-    #: in memory — and the connector write-back lane needs them hours later in a
-    #: different process. Capturing here is what lets that lane be a lookup
-    #: instead of an MCP client on an HTTP request path.
-    write_ops: tuple[WriteOpCandidate, ...] = ()
     presenter: Any = None
 
     def _run(
@@ -166,7 +153,6 @@ class McpPresentedTool(DelegatingTool):
                     ),
                     output=output,
                     latency_ms=latency_ms,
-                    write_ops=self.write_ops,
                 )
             )
         except Exception:  # noqa: BLE001 — see the docstring
@@ -243,64 +229,6 @@ class McpPresentedTool(DelegatingTool):
         return {PresentValues.OUTPUT_KEY: payload}
 
 
-class ConnectorWriteOpCatalogue:
-    """``connector -> that connector's WRITE ops``, read off a loaded catalogue.
-
-    The one honest place this map can be built. ``descriptor.action`` is the
-    classification the source already made, and ``BaseTool.args_schema`` for an
-    MCP tool is the server's raw ``inputSchema`` **dict** (see
-    :class:`ToolSchemaIdentity`) — so the pair the registrar already holds
-    carries both halves of a write-op descriptor, and nothing has to be
-    re-fetched or re-classified to assemble them.
-
-    Building it here rather than at save time is the whole design: by the time a
-    user presses Save the session is gone, and reconstructing it would mean an
-    MCP client on an HTTP request path.
-
-    A tool whose ``args_schema`` is not a mapping is still captured, with an
-    empty schema. It then refuses loudly if the model chooses it (an op with no
-    declared ``required`` cannot bound a write), which is the diagnosable
-    outcome; dropping it would instead read as *"this connector has no write
-    op"*.
-    """
-
-    @classmethod
-    def from_pairs(
-        cls, pairs: Iterable[tuple[BaseTool, CapabilityDescriptor]]
-    ) -> Mapping[str, tuple[WriteOpCandidate, ...]]:
-        """Group every WRITE tool's descriptor under its connector namespace."""
-
-        grouped: dict[str, list[WriteOpCandidate]] = {}
-        for tool, descriptor in pairs:
-            if descriptor.action is not Action.WRITE:
-                continue
-            name = (tool.name or "").strip()
-            if not name:
-                continue
-            grouped.setdefault(
-                CapabilityUrn.parse(descriptor.urn).namespace, []
-            ).append(
-                WriteOpCandidate(
-                    name=name,
-                    description=tool.description or "",
-                    input_schema=cls._schema_of(tool),
-                )
-            )
-        return MappingProxyType(
-            {
-                connector: CapturedWriteOps.bounded(ops)
-                for connector, ops in grouped.items()
-            }
-        )
-
-    @staticmethod
-    def _schema_of(tool: BaseTool) -> dict[str, Any]:
-        """The server's raw ``inputSchema``, or ``{}`` when it is not one."""
-
-        schema = getattr(tool, "args_schema", None)
-        return dict(schema) if isinstance(schema, Mapping) else {}
-
-
 @dataclass
 class McpPresentMiddleware:
     """The PRESENT stage: an executed read reaches the Work Ledger."""
@@ -308,11 +236,6 @@ class McpPresentMiddleware:
     # ``init=False`` for the same reason every other stage does it: a
     # mislabelled middleware defeats the composer's order guarantee.
     stage: MiddlewareStage = field(default=MiddlewareStage.PRESENT, init=False)
-    #: ``connector -> WRITE ops``, from :class:`ConnectorWriteOpCatalogue`. The
-    #: registrar supplies it because only the registrar has seen every tool the
-    #: run loaded; the default empty map keeps every unit that composes this
-    #: stage alone working, and simply captures nothing.
-    write_ops: Mapping[str, tuple[WriteOpCandidate, ...]] = field(default_factory=dict)
     #: Overridden only by tests; production resolves the run-scoped emitter
     #: through the presenter's own ContextVar.
     presenter: Any = None
@@ -330,13 +253,11 @@ class McpPresentMiddleware:
             connector=parsed.namespace,
             tool_name=tool.name,
             presentable=descriptor.action is Action.READ,
-            write_ops=self.write_ops.get(parsed.namespace, ()),
             presenter=self.presenter,
         )
 
 
 __all__ = (
-    "ConnectorWriteOpCatalogue",
     "McpPresentMiddleware",
     "McpPresentedTool",
     "PresentValues",

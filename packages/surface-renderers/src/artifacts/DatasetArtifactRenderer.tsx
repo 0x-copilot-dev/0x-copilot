@@ -6,8 +6,8 @@ import {
   datasetRevisionChangeFor,
   diffDatasetGrids,
 } from "./DatasetRevisionDiff";
-import type { ArtifactEditorActions, ArtifactRenderState } from "./model";
-import { hostEditorActions, previewNotice } from "./model";
+import type { ArtifactRenderState } from "./model";
+import { previewNotice } from "./model";
 
 /**
  * B2 capacity contract: a preview may retain at most 100k rows / 1m cells,
@@ -21,17 +21,15 @@ export const DATASET_DOM_ROW_BUDGET = 100;
 const MAX_PREVIEW_COLUMNS = 100;
 const EMPTY_DATASET_PATCH: DatasetPatch = {};
 
-export type { ArtifactRevisionSaveOutcome } from "./model";
+export type ArtifactRevisionSaveOutcome = "saved" | "conflict" | "error";
 
-/**
- * Host-created editor capability. It is never decoded from artifact content.
- *
- * The same shape the document surface takes, and deliberately the same TYPE:
- * one host grant, read by one reader (`hostEditorActions`), so the two editable
- * artifact surfaces cannot drift into two ideas of what "the host let me write"
- * means. The alias is kept because it is the published name.
- */
-export type DatasetEditorActions = ArtifactEditorActions;
+/** Host-created editor capability. It is never decoded from artifact content. */
+export interface DatasetEditorActions {
+  readonly disabled: boolean;
+  readonly saveRevision: (
+    source: string,
+  ) => Promise<ArtifactRevisionSaveOutcome>;
+}
 
 export interface CsvTable {
   readonly rows: readonly (readonly string[])[];
@@ -398,6 +396,22 @@ function cellKey(row: number, column: number): string {
   return `${row}:${column}`;
 }
 
+function editorActionsFor(
+  artifact: ArtifactRenderState,
+): DatasetEditorActions | null {
+  const candidate = (
+    artifact as ArtifactRenderState & {
+      readonly datasetEditor?: unknown;
+    }
+  ).datasetEditor;
+  if (typeof candidate !== "object" || candidate === null) return null;
+  const value = candidate as Partial<DatasetEditorActions>;
+  return typeof value.disabled === "boolean" &&
+    typeof value.saveRevision === "function"
+    ? (value as DatasetEditorActions)
+    : null;
+}
+
 /** Fixed, inert table renderer. It never interprets formulas, HTML, or JSON values. */
 export function DatasetArtifactRenderer(props: {
   readonly artifact: ArtifactRenderState;
@@ -458,7 +472,7 @@ function DatasetPreview(props: {
       </>
     );
   }
-  const actions = hostEditorActions(props.artifact, "datasetEditor");
+  const actions = editorActionsFor(props.artifact);
   return (
     <section
       className="ui-dataset-surface"

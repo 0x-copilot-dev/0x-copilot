@@ -22,6 +22,7 @@ from agent_runtime.capabilities.browser.effect_adapter import (
     BrowserEffectExecutor,
     BrowserEffectStageAdapter,
 )
+from agent_runtime.capabilities.browser.operation_adapter import BrowserOperationAdapter
 
 __all__ = [
     "BrowserCapabilityReadiness",
@@ -29,6 +30,7 @@ __all__ = [
     "BrowserReadinessReason",
     "BrowserEffectExecutor",
     "BrowserEffectStageAdapter",
+    "BrowserOperationAdapter",
     "DesktopBrowserMcpClient",
     "DesktopBrowserMcpProvider",
     "DesktopBrowserEffectBridge",

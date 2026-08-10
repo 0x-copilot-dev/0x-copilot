@@ -108,7 +108,6 @@ interface RenderArgs {
   readonly focusCards?: ReactNode;
   readonly railWidth?: number;
   readonly railCollapsed?: boolean;
-  readonly canvasEmpty?: boolean;
 }
 
 function renderCanvas(args: RenderArgs = {}) {
@@ -134,7 +133,6 @@ function renderCanvas(args: RenderArgs = {}) {
         focusCards={args.focusCards}
         railWidth={args.railWidth}
         railCollapsed={args.railCollapsed}
-        canvasEmpty={args.canvasEmpty}
       />,
     ),
   );
@@ -156,38 +154,6 @@ describe("ThreadCanvas", () => {
     clearRegistry();
     warnSpy.mockRestore();
     vi.restoreAllMocks();
-  });
-
-  // WHICH STUDIO COLUMN GETS THE SLACK.
-  //
-  // The surface column takes `1fr` because it holds the artifact under review.
-  // When the canvas is terminally empty it holds three lines of status copy and
-  // was STILL taking the slack: measured in the live desktop app at 1200px, the
-  // chat got 368px (31%) while ~830px said "Answered in chat · No artifact was
-  // created", six tool-card titles ellipsized in the column beside it.
-  //
-  // jsdom runs no layout, so these assert the TEMPLATE — which is what decides
-  // the widths — rather than measured boxes.
-  describe("studio column allocation", () => {
-    const columns = (): string =>
-      getComputedStyle(screen.getByTestId("thread-canvas")).gridTemplateColumns;
-
-    it("gives the surface the slack while a subject is expected", () => {
-      renderCanvas({ mode: "studio", railWidth: 368 });
-      expect(columns()).toBe("minmax(0, 1fr) 1px 368px");
-    });
-
-    it("gives the transcript the slack when the canvas is provably empty", () => {
-      renderCanvas({ mode: "studio", railWidth: 368, canvasEmpty: true });
-      // The fixed width follows the CONTENT, not the column: the status panel
-      // is what gets a fixed column now.
-      expect(columns()).toBe("300px 1px minmax(0, 1fr)");
-    });
-
-    it("leaves Focus alone — it already collapses the surface column", () => {
-      renderCanvas({ mode: "focus", canvasEmpty: true });
-      expect(columns()).toBe("minmax(0, 1fr)");
-    });
   });
 
   describe("structure", () => {

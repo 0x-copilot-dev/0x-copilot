@@ -3,9 +3,8 @@
 Drives the emitter through a recording :data:`EmitFn` (no runtime, no network):
 a tool result emits the four events in order; a spec envelope yields a
 shaped/registry view + spec-resolved title **and the spec itself on
-``surface.created``**; a spec-less envelope is delivered with a fallback title
-and **no** ``view.derived`` (nothing shaped it, and no ``ViewBasis`` member can
-say so); a non-mapping (absent) surface yields classified + read only;
+``surface.created``**; a spec-less envelope yields a generic/schema view +
+fallback title; a non-mapping (absent) surface yields classified + read only;
 ``payload_ref`` is always ``call:<call_id>``; ``class`` / ``basis`` carry the
 real PRD-C1 classification (catalog read here, fail-closed write/default for an
 unknown op, never spoofable via output); ``spec_rung`` decides the
@@ -309,13 +308,9 @@ class TestOnToolResult(RecordingEmitMixin):
 
         assert recorded[2]["payload"]["title"] == "Linear · getIssue"
 
-    def test_specless_envelope_is_delivered_with_no_view_derived_at_all(
+    def test_specless_envelope_yields_generic_schema_view_and_fallback_title(
         self,
     ) -> None:
-        # The surface still ships; the DERIVATION does not, because there was
-        # none. ``basis: schema`` used to be written here and it asserted that
-        # deterministic inference succeeded above a surface with no spec —
-        # exactly the over-claim the selected/generated split exists to stop.
         emitter, recorded = self._make_emitter()
         env = self._specless_envelope()
 
@@ -332,25 +327,9 @@ class TestOnToolResult(RecordingEmitMixin):
         assert created["kind"] == "table"
         # No spec ⇒ "<connector> · <op>" fallback title.
         assert created["title"] == "customsvc · list_rows"
-        assert [row["event_type"] for row in recorded] == [
-            LedgerEventType.ACTION_CLASSIFIED.value,
-            LedgerEventType.READ_EXECUTED.value,
-            LedgerEventType.SURFACE_CREATED.value,
-        ]
-
-    def test_no_basis_is_minted_for_a_surface_nothing_shaped(self) -> None:
-        # The four ``ViewBasis`` members all name a shaping that HAPPENED, so
-        # none of them can carry "nothing was derived". The absent event is the
-        # answer; a fifth member would change a pinned cross-language contract
-        # in order to record a non-event.
-        emitter, recorded = self._make_emitter()
-        env = self._specless_envelope()
-
-        self._run(emitter, surface=env, surface_uri=env["surface_uri"])
-
-        assert all(
-            row["event_type"] != LedgerEventType.VIEW_DERIVED.value for row in recorded
-        )
+        derived = recorded[3]["payload"]
+        assert derived["tier"] == "generic"
+        assert derived["basis"] == "schema"
 
     def test_absent_surface_emits_classified_and_read_only(self) -> None:
         emitter, recorded = self._make_emitter()
@@ -454,11 +433,7 @@ class TestSpecDelivery(RecordingEmitMixin):
         assert recorded[2]["payload"]["state"]["data"] == {
             "issue": {"title": "ENG-142 Fix streaming reconnect"}
         }
-        # A spec that did not survive delivery leaves nothing to derive from,
-        # so no ``view.derived`` is written over it either.
-        assert all(
-            row["event_type"] != LedgerEventType.VIEW_DERIVED.value for row in recorded
-        )
+        assert recorded[3]["payload"]["tier"] == "generic"
 
     def test_the_emitted_spec_is_a_copy_not_the_caller_s_mapping(self) -> None:
         # An event payload is a durable record of what was sent. Sharing the
@@ -561,9 +536,7 @@ class TestViewDerivationRung(RecordingEmitMixin):
     def test_a_rung_cannot_claim_a_spec_the_envelope_does_not_carry(self) -> None:
         # ``view.derived`` describes what was DELIVERED. A caller naming a rung
         # over an empty state would put "shaped" on the ledger above a surface
-        # the client renders raw — the precise falsehood this PRD removes. The
-        # emitter does not soften the claim to ``generic``/``schema`` either:
-        # the delivered state was shaped by nothing, so nothing is recorded.
+        # the client renders raw — the precise falsehood this PRD removes.
         emitter, recorded = self._make_emitter()
         env = self._specless_envelope()
 
@@ -574,9 +547,8 @@ class TestViewDerivationRung(RecordingEmitMixin):
             spec_rung=SpecRung.INFERRED,
         )
 
-        assert all(
-            row["event_type"] != LedgerEventType.VIEW_DERIVED.value for row in recorded
-        )
+        derived = recorded[3]["payload"]
+        assert (derived["tier"], derived["basis"]) == ("generic", "schema")
 
 
 class TestOnSpecGenerated(RecordingEmitMixin):

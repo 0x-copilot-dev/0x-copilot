@@ -872,19 +872,26 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
           ],
         };
       }
-      // History now arrives in ONE conversation-scoped call carrying only the
-      // frames a card is folded from, instead of a full ledger replay per run.
-      // The fold is unchanged and still runs client-side, which is why the
-      // assertions below did not have to move.
-      if (req.path.endsWith("/card-events")) {
+      if (req.path.endsWith("/runs/run-history/events")) {
         return {
+          run_id: "run-history",
           events: [
             historicToolStarted,
             historicToolFinished,
             historicStarted,
             historicFinished,
           ],
-          run_ids: ["run-history", "run-current"],
+          latest_sequence_no: 4,
+          run_status: "completed",
+          has_more: false,
+        };
+      }
+      if (req.path.endsWith("/runs/run-current/events")) {
+        return {
+          run_id: "run-current",
+          events: [],
+          latest_sequence_no: 0,
+          run_status: "completed",
           has_more: false,
         };
       }
@@ -945,20 +952,11 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(toggle);
     expect(historicCard).toHaveTextContent("97 is prime.");
-    // History arrives in ONE conversation-scoped call, and NOT as a per-run
-    // ledger replay. Both halves are asserted: the first is the behaviour, the
-    // second is the cost — this used to issue two full replays per run (one for
-    // the tool fold, one for the fleet fold), so reopening a long conversation
-    // replayed every run's entire event log twice to recover a few cards.
-    const cardEventCalls = transport.requests.filter((request) =>
-      request.path.includes("/card-events"),
-    );
-    expect(cardEventCalls.length).toBe(1);
     expect(
       transport.requests.some((request) =>
-        /\/runs\/[^/]+\/events$/.test(request.path),
+        request.path.endsWith("/runs/run-history/events"),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {
@@ -3350,111 +3348,6 @@ describe("RunDestination — the checklist survives steering", () => {
     });
     await waitFor(() =>
       expect(screen.getAllByTestId("tc-todo-row")).toHaveLength(1),
-    );
-  });
-});
-
-// A SETTLED TURN KEEPS ITS CARDS.
-//
-// The transcript folds tool cards from the ACTIVE run's event stream, and
-// `useRunSession` clears that stream on rebind — so the moment a second turn
-// began, the first turn's cards had no source and it rendered bare. The sealed
-// message cannot carry them either: `TurnPartsProjection` persists prose only,
-// deliberately, so card state has exactly one home.
-//
-// `GET /conversations/{id}/card-events` hands the renderer the older runs'
-// frames back, and the SAME projector folds them. This asserts the wiring end
-// to end: a frame that arrives ONLY from that endpoint must still become a card
-// on its own turn.
-describe("RunDestination — history's cards come from the card-events endpoint", () => {
-  const settledFrame = (runId: string, tool: string) => ({
-    event_id: `e-${runId}-${tool}`,
-    run_id: runId,
-    conversation_id: CONV,
-    sequence_no: 3,
-    event_type: "tool_call_started",
-    activity_kind: "tool",
-    display_title: `Calling ${tool}`,
-    payload: { tool_name: tool, call_id: `${tool}-1` },
-    created_at: new Date(1716000030000).toISOString(),
-  });
-
-  it("renders a card whose only source is the settled-history fetch", async () => {
-    const transport = new FakeTransport();
-    let asked = 0;
-    transport.requestHandler = async (req) => {
-      if (req.path.includes("/card-events")) {
-        asked += 1;
-        return {
-          events: [settledFrame("run-old", "glob")],
-          run_ids: ["run-old"],
-          has_more: false,
-        };
-      }
-      if (req.path.includes("/messages")) return { messages: [] };
-      return runningRun("History check");
-    };
-
-    renderRun(transport, makeStore());
-
-    // The fetch happened…
-    await waitFor(() => expect(asked).toBeGreaterThan(0));
-    // …and its frame became a card, folded by the projector that already
-    // existed. Before this endpoint there was no way for this card to exist:
-    // its run is not the active one, so its frames were never in `session.events`.
-    await waitFor(() =>
-      expect(screen.getByTestId("tc-chat-messages")).toHaveTextContent(
-        /Calling glob/,
-      ),
-    );
-  });
-
-  it("lets the live card win over its archived copy", async () => {
-    // The endpoint returns every run, the ACTIVE one included, and that is
-    // fine: the archive merges by call id with the live projection written
-    // last, so an in-flight call is rendered from the stream rather than from
-    // the settled snapshot. Filtering the active run out server-side would be a
-    // second mechanism for a precedence this merge already expresses.
-    const transport = new FakeTransport();
-    transport.requestHandler = async (req) => {
-      if (req.path.includes("/card-events")) {
-        return {
-          events: [settledFrame("run-1", "glob")],
-          run_ids: ["run-1"],
-          has_more: false,
-        };
-      }
-      if (req.path.includes("/messages")) return { messages: [] };
-      return runningRun("History check");
-    };
-
-    renderRun(transport, makeStore());
-    await waitFor(() =>
-      expect(screen.getByTestId("tc-chat-messages")).toHaveTextContent(
-        /Calling glob/,
-      ),
-    );
-    // ONE card for the call, not one archived plus one live.
-    const cards = document.querySelectorAll('[data-testid^="tc-chat-tool-"]');
-    const globCards = [...cards].filter((node) =>
-      (node.textContent ?? "").includes("Calling glob"),
-    );
-    expect(globCards.length).toBeLessThanOrEqual(1);
-  });
-
-  it("keeps the cockpit alive when history cannot be fetched", async () => {
-    // History is an enhancement over the live stream, never a precondition:
-    // older turns stay bare rather than the cockpit going down with the fetch.
-    const transport = new FakeTransport();
-    transport.requestHandler = async (req) => {
-      if (req.path.includes("/card-events")) throw new Error("offline");
-      if (req.path.includes("/messages")) return { messages: [] };
-      return runningRun("History check");
-    };
-
-    renderRun(transport, makeStore());
-    await waitFor(() =>
-      expect(screen.getByTestId("run-destination")).toBeInTheDocument(),
     );
   });
 });

@@ -105,11 +105,7 @@ BYPASS_TOGGLE = "[data-testid=filesystem-bypass-toggle]"
 BYPASS_TOGGLE_HIT = f"label.ui-switch:has({BYPASS_TOGGLE})"
 
 
-# Both forms: `AppRail` labels the item "Run (1)" while a run is live, so an
-# exact match stops resolving exactly when there is a run to go back to.
-RUN_RAIL = (
-    '[data-destination][aria-label="Run"], [data-destination][aria-label^="Run ("]'
-)
+RUN_RAIL = '[aria-label="Run"][data-destination]'
 
 
 CARD_SELECTOR = "[data-testid^=tc-chat-approval-]"

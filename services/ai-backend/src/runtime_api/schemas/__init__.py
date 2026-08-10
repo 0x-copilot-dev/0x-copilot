@@ -143,7 +143,6 @@ from runtime_api.schemas.events import (
     RuntimeEventPresentation,
     RuntimeEventPresentationPreviewRow,
     RuntimeEventPresentationProjector,
-    ConversationCardEventsResponse,
     RuntimeEventReplayResponse,
 )
 from runtime_api.schemas.runs import (
@@ -275,7 +274,6 @@ __all__ = [
     "AssistantSubagentUsageRollup",
     "AssistantUsageMetrics",
     "RuntimeEventEnvelope",
-    "ConversationCardEventsResponse",
     "RuntimeEventReplayResponse",
     "RuntimeEventDraft",
     "ApprovalDecisionRequest",

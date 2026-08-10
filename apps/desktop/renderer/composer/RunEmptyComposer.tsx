@@ -140,14 +140,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     catalogRefreshKey,
     conversationId,
     conversationModel,
-    // pre-first-message: setup is exactly what this screen is for.
-    useMemo(
-      () =>
-        filing === undefined
-          ? undefined
-          : { ...filing, hasSentFirstMessage: false },
-      [filing],
-    ),
+    filing,
   );
 
   // Provider-key writes must re-drive the composer's model catalog. The inline

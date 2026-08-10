@@ -28,26 +28,16 @@ def test_canonical_chat_model_consumer_inventory_is_reviewed() -> None:
         "ShapeRequestCoordinator._completion_for -> build_chat_model_from_id",
         "agent_runtime/api/surface_view_coordinator.py:"
         "SurfaceViewCoordinator._completion_for -> build_chat_model_from_id",
-        # The in-run shaping subsystem's ONE construction site. It used to be
-        # two — ``build_surface_generation_scheduler`` (refinement) and
-        # ``build_read_path_shaper`` (ladder rung 5) each kept a copy of the
-        # same resolve-kwargs / build / degrade dance, and the copies drifted:
-        # both silently built the model with no credential because neither
-        # caller passed one. They now share ``ShapingModelBuild.attempt``, which
-        # is the reviewed consumer: resolver-gated model id, BYOK kwargs from
-        # the run's ``ShapingCredentials``, fail-soft to "shaping off" with a
-        # key-free reason on the log line. The two builders remain distinct
-        # budgets and triggers; only the construction is shared.
         "agent_runtime/capabilities/surfaces/generator.py:"
-        "ShapingModelBuild.attempt -> build_chat_model_from_id",
+        "build_surface_generation_scheduler -> build_chat_model_from_id",
         "agent_runtime/execution/deep_agent_builder.py:"
         "build_chat_model_from_id -> build_chat_model",
         "agent_runtime/execution/deep_agent_builder.py:"
         "build_deep_agent -> build_chat_model",
-        # `jobs/proposal_extractor.py` and `jobs/todo_extractor.py` each held a
-        # `_invoke_model -> build_chat_model` site until 2026-08-06. Both jobs were
-        # deleted as adjudicated orphans — the worker never enqueued either, and the
-        # desktop runs no job loop at all — so the seam has two fewer consumers.
+        "runtime_worker/jobs/proposal_extractor.py:"
+        "ProposalExtractor._invoke_model -> build_chat_model",
+        "runtime_worker/jobs/todo_extractor.py:"
+        "TodoExtractor._invoke_model -> build_chat_model",
         "runtime_worker/model_invocation_composition.py:"
         "_RouteModelResolver.resolve -> build_chat_model",
     )

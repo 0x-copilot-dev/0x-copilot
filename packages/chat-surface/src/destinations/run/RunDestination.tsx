@@ -81,7 +81,6 @@ import {
   type SubagentEntry,
   type SubagentListResponse,
   type SurfaceEdits,
-  RuntimeEventEnvelope,
 } from "@0x-copilot/api-types";
 import { isArtifactTransport } from "@0x-copilot/chat-transport";
 
@@ -101,15 +100,6 @@ import { projectCitations } from "./projectCitations";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
-// Editable surface Phase 2: the grant that makes a connector-read surface's
-// cells clickable. Built here because this is the only place that holds all
-// three halves — the host Transport, the run that owns the surface, and the
-// surface's own id — and attached to the hydrated render state, never to the
-// `SurfaceSpec` (the model authors those).
-import {
-  attachConnectorEditor,
-  createConnectorSurfaceEditor,
-} from "../../surfaces/connectorWriteBack";
 import type { SurfaceHue } from "../../surfaces/surfaceHue";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
@@ -145,7 +135,6 @@ import {
   type LedgerViewTier,
   type LedgerShapeRequestState,
 } from "../../thread-canvas";
-import type { SurfacePayload } from "../../thread-canvas/eventProjector";
 // PRD-C2/D1/D3/E1/E2 — the Generative Surfaces v2 canvas mount pieces. All are
 // pure presentational components + pure ledger folds + one Transport-fed fetch;
 // the cockpit composes them behind the `surfacesV2` flag (flag off ⇒ never
@@ -434,7 +423,6 @@ function useConversationFleetArchive(
   conversationId: ConversationId,
   runIds: readonly string[],
   liveFleets: readonly FleetProjection[],
-  cardFrames: readonly RuntimeEventEnvelope[],
 ): ConversationFleetArchive {
   const [archived, setArchived] =
     useState<readonly FleetProjection[]>(EMPTY_FLEET_ARCHIVE);
@@ -477,9 +465,28 @@ function useConversationFleetArchive(
       setArchived(EMPTY_FLEET_ARCHIVE);
       return undefined;
     }
-    setArchived(projectSubagents(cardFrames).fleets);
-    return undefined;
-  }, [conversationId, replayRunIds, cardFrames]);
+    let cancelled = false;
+    void Promise.all(
+      replayRunIds.map(async (runId) => {
+        const response = await transport.request<RuntimeEventReplayResponse>({
+          method: "GET",
+          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
+        });
+        return projectSubagents(response.events ?? []).fleets;
+      }),
+    )
+      .then((fleetGroups) => {
+        if (!cancelled) setArchived(fleetGroups.flat());
+      })
+      .catch(() => {
+        // Cards already observed live remain visible. A historical replay is a
+        // progressive enhancement, so a transient failure must not block chat.
+        if (!cancelled) setArchived(EMPTY_FLEET_ARCHIVE);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, replayRunIds]);
 
   const fleets = useMemo(() => {
     const merged = new Map<string, FleetProjection>();
@@ -542,72 +549,11 @@ function useConversationTodos(
   return runTodos ?? held;
 }
 
-/** `GET /v1/agent/conversations/{id}/card-events` — card frames for every run. */
-interface ConversationCardEventsPayload {
-  readonly events?: readonly RuntimeEventEnvelope[] | null;
-  readonly run_ids?: readonly string[] | null;
-  readonly has_more?: boolean | null;
-}
-
-const EMPTY_CARD_FRAMES: readonly RuntimeEventEnvelope[] = [];
-
-/**
- * The conversation's settled card frames, fetched ONCE and folded twice.
- *
- * Both archives below rebuild a settled turn's cards from the same frames —
- * tool calls through `projectToolCalls`, fleets through `projectSubagents` —
- * and each used to replay every run's FULL event ledger to get them. That was
- * `2N` requests for an N-turn conversation, every time it was reopened, to
- * recover a handful of cards per run.
- *
- * One request now, carrying only card-bearing frames. The folds are untouched
- * and still live on this side: the endpoint returns frames, never folded cards,
- * so "what a tool card is" still has exactly one implementation, shared with
- * the live path.
- */
-function useConversationCardFrames(
-  transport: ReturnType<typeof useTransport>,
-  conversationId: ConversationId,
-): readonly RuntimeEventEnvelope[] {
-  const [frames, setFrames] =
-    useState<readonly RuntimeEventEnvelope[]>(EMPTY_CARD_FRAMES);
-
-  useEffect(() => {
-    if (conversationId === "new") {
-      setFrames(EMPTY_CARD_FRAMES);
-      return undefined;
-    }
-    let cancelled = false;
-    void transport
-      .request<ConversationCardEventsPayload>({
-        method: "GET",
-        path: `/v1/agent/conversations/${encodeURIComponent(conversationId)}/card-events`,
-      })
-      .then((payload) => {
-        if (!cancelled) {
-          const events = payload.events ?? EMPTY_CARD_FRAMES;
-          setFrames(events.length > 0 ? events : EMPTY_CARD_FRAMES);
-        }
-      })
-      .catch(() => {
-        // Cards already observed live remain visible. History is a progressive
-        // enhancement, so a transient failure must not block chat.
-        if (!cancelled) setFrames(EMPTY_CARD_FRAMES);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, conversationId]);
-
-  return frames;
-}
-
 function useConversationToolCallArchive(
   transport: ReturnType<typeof useTransport>,
   conversationId: ConversationId,
   runIds: readonly string[],
   liveToolCalls: readonly ToolCallEntry[],
-  cardFrames: readonly RuntimeEventEnvelope[],
 ): ConversationToolCallArchive {
   const [archived, setArchived] = useState<readonly ToolCallEntry[]>(
     EMPTY_TOOL_CALL_ARCHIVE,
@@ -651,9 +597,28 @@ function useConversationToolCallArchive(
       setArchived(EMPTY_TOOL_CALL_ARCHIVE);
       return undefined;
     }
-    setArchived(projectToolCalls(cardFrames));
-    return undefined;
-  }, [conversationId, replayRunIds, cardFrames]);
+    let cancelled = false;
+    void Promise.all(
+      replayRunIds.map(async (runId) => {
+        const response = await transport.request<RuntimeEventReplayResponse>({
+          method: "GET",
+          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
+        });
+        return projectToolCalls(response.events ?? []);
+      }),
+    )
+      .then((toolCallGroups) => {
+        if (!cancelled) setArchived(toolCallGroups.flat());
+      })
+      .catch(() => {
+        // Cards already observed live remain visible. A historical replay is a
+        // progressive enhancement, so a transient failure must not block chat.
+        if (!cancelled) setArchived(EMPTY_TOOL_CALL_ARCHIVE);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, replayRunIds]);
 
   const toolCalls = useMemo(() => {
     const merged = new Map<string, ToolCallEntry>();
@@ -1963,16 +1928,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     subagentProjection.subagents,
   );
-  // Fetched once here and folded by BOTH archives below — the fleet fold and
-  // the tool fold read the same frames, and each used to replay every run's
-  // full ledger to get them.
-  const cardFrames = useConversationCardFrames(transport, conversationId);
   const conversationFleets = useConversationFleetArchive(
     transport,
     conversationId,
     session.runs.map((run) => run.runId),
     subagentProjection.fleets,
-    cardFrames,
   );
   const transcriptFleets = useMemo(
     () =>
@@ -2006,7 +1966,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     conversationId,
     session.runs.map((run) => run.runId),
     toolCalls,
-    cardFrames,
   );
 
   // The agent's checklist, projected off the SAME `session.events` (FR-3.3 — a
@@ -2029,14 +1988,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
   // `CitationsProvider` mounted around the single TcChat so the host chip
   // renderer resolves `[[N]]` / `[c<id>]` chips against it.
-  // `cardFrames` is the CONVERSATION's card history (every run); `session.events`
-  // is the bound run. Both are needed: `[[N]]` ordinals are allocated per
-  // conversation, so turn 2 routinely cites turn 1's tool call, and the bound
-  // run's stream cannot contain that binding. Same input the tool-card archive
-  // already reads — citations were simply never given it.
   const citationProjection = useMemo(
-    () => projectCitations(session.events, cardFrames),
-    [session.events, cardFrames],
+    () => projectCitations(session.events),
+    [session.events],
   );
 
   // Keep the inline chat-only source card on the same canonical stream as
@@ -2887,33 +2841,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // map the compatibility reader owned, which held nothing, so the hydrated
   // payload sitting in `hydration` was never consulted. One source of content
   // is the property that made that bug impossible to reintroduce here.
-  //
-  // The hydrated state is also where the connector-write GRANT is attached.
-  // Every surface in this map came from a connector read on this run — that is
-  // what a v2 surface IS — so the origin test is the lookup itself, not a second
-  // guess at a URI. A miss stays a miss and carries no grant: an artifact tab
-  // resolves through `renderSurfaceOverride` into `ArtifactSurface`, which owns
-  // the OTHER half of the design's Save table (a local revision) and must not
-  // acquire this one by accident.
-  //
-  // Withheld while scrubbed is handled a layer up — `ThreadCanvas` consults this
-  // resolver only when `scrubbedSeq === null` — so a time-travelled surface has
-  // no editor by construction rather than by a flag we could forget to set.
   const resolveSurfaceState = useMemo(
-    () =>
-      surfacesV2
-        ? (uri: string): SurfacePayload | undefined => {
-            const state = hydration.stateFor(uri);
-            if (state === undefined) return undefined;
-            const editor = createConnectorSurfaceEditor({
-              transport,
-              runId: session.runId,
-              surfaceId: uri,
-            });
-            return attachConnectorEditor(state, editor) as SurfacePayload;
-          }
-        : undefined,
-    [surfacesV2, hydration, transport, session.runId],
+    () => (surfacesV2 ? (uri: string) => hydration.stateFor(uri) : undefined),
+    [surfacesV2, hydration],
   );
   const visibleSurfaceTabs = useMemo(() => {
     const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));
@@ -4369,15 +4299,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // B3 Focus is a compact projection of the same lifecycle—not a hidden
       // full Studio canvas. Undefined on the v1 path preserves legacy Focus.
       focusCards={focusCards}
-      // The canvas is provably done and holds no subject, so Studio should stop
-      // reserving the slack for a surface that is not coming and give it to the
-      // transcript instead. `parked` and `assembling` are excluded on purpose —
-      // both may still resolve into a real subject.
-      canvasEmpty={
-        displayedCanvasLifecycle !== null &&
-        (displayedCanvasLifecycle.lifecycle === "chat_only" ||
-          displayedCanvasLifecycle.lifecycle === "complete_empty")
-      }
       hasInlineSubjects={inlineArtifacts.length > 0}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
@@ -4923,39 +4844,17 @@ const RUN_COCKPIT_SCOPE_CSS = `
     flex-direction: row !important;
     gap: normal !important;
   }
+
+  .run-destination[data-mode="focus"][data-run-status="streaming"]
+    [data-testid^="tc-chat-message-"]:has(.reasoning-markdown) {
+      border-color: var(--color-text-muted) !important;
+      color: var(--color-text-muted) !important;
+      display: block !important;
+      font-size: 11.5px !important;
+    }
 `;
 
-/*
- * DELETED: the `[data-mode="focus"][data-run-status="streaming"]
- * [data-testid^="tc-chat-message-"]:has(.reasoning-markdown)` rule.
- *
- * It was written when reasoning rendered as bare prose in the transcript and
- * had to be quieted from outside. `ThinkingBlock` now owns reasoning's
- * typography — label, muted body, size — so the rule was a SECOND authority on
- * it, and the two disagreed:
- *
- * - `font-size: 11.5px !important` gave reasoning a fifth off-ladder size, and
- *   applied it only while streaming in Focus — so a thought RESIZED under the
- *   reader the moment its run settled;
- * - `display: block !important` beat the flex column on `messageItemStyle`,
- *   which is where the gap between a thought and the answer below it comes
- *   from — so in exactly the mode+state this rule matched, the answer went back
- *   to being glued to the thinking row.
- *
- * The scope block above is for the cockpit's LAYOUT GEOMETRY over the
- * primitives' inline defaults, which is a real job. Restyling a primitive's
- * interior from out here is not: if reasoning needs to look different, that
- * belongs in the component that draws it.
- */
-
-/**
- * Exported for the design-parity harness, which renders `TcChat` on its own and
- * would otherwise measure it WITHOUT the `!important` layer the real cockpit
- * puts over it — i.e. would prove a type scale the product does not actually
- * draw. Deliberately not on the package barrel: hosts mount `RunDestination`,
- * which renders this itself.
- */
-export function RunCockpitScopeStyles(): ReactElement {
+function RunCockpitScopeStyles(): ReactElement {
   return (
     <style data-testid="run-cockpit-scope-styles">
       {RUN_COCKPIT_SCOPE_CSS}

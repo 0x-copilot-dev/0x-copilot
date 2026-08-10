@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from collections.abc import Sequence
-from typing import ClassVar, Literal
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import (
@@ -51,11 +50,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     CURRENT_LEDGER_WRITER,
     LedgerWriter,
     UnknownLedgerWriterError,
-    ViewBasis,
-    ViewTier,
     WorkLedgerVocabulary,
 )
-from agent_runtime.surfaces_v2.rowset import ArgOrigin
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -70,11 +66,6 @@ from runtime_api.schemas.context_occupancy import ContextOccupancySnapshotPayloa
 # row titles, change field names / string values). Rendered UI text is treated
 # as plain, length-capped strings; the domain validator caps the source too.
 _ROWSET_TEXT_MAX = 200
-
-# The three ``StagedArg.origin`` values, validated as SHAPE (the string is one
-# of three) rather than cast. Derived from the domain enum so the projection
-# cannot drift from what the staging lane emits.
-_STAGED_ARG_ORIGINS = frozenset(item.value for item in ArgOrigin)
 
 # Host-folder grant ask — mirrors the producer's own bounds on
 # ``WorkspaceGrantRequest`` (capabilities/desktop/workspace_grant.py) so the
@@ -208,25 +199,6 @@ class _OperationFields:
     LATENCY_MS = "latency_ms"
     FAILURE_CODE = "failure_code"
     RETRYABLE = "retryable"
-
-
-class _ViewDerivedVocabulary:
-    """The two ``view.derived`` fields whose values are a closed set, not free text.
-
-    Derived from the ledger enums rather than restated, so a member added to
-    ``ViewBasis`` reaches the wire by being declared once — which is what makes
-    this file a genuine fourth declaration of that key rather than a
-    pass-through that lets new values ride along by accident.
-
-    The filtering earns its keep in the other direction. ``_text`` forwards any
-    non-empty string, so an emitter that skipped the payload model could put an
-    undeclared basis on the wire, and every reader downstream would have to
-    decide for itself what a word it has never heard of means. An unlisted value
-    is dropped instead.
-    """
-
-    TIER: ClassVar[frozenset[str]] = frozenset(member.value for member in ViewTier)
-    BASIS: ClassVar[frozenset[str]] = frozenset(member.value for member in ViewBasis)
 
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -1530,36 +1502,7 @@ class RuntimeEventPresentationProjector:
         state = cls._surface_state(payload.get(_SurfaceStateFields.STATE))
         if state is not None:
             safe_payload[_SurfaceStateFields.STATE] = state
-        write_ops = cls._surface_write_ops(payload.get(_LedgerKeys.Field.WRITE_OPS))
-        if write_ops:
-            safe_payload[_LedgerKeys.Field.WRITE_OPS] = write_ops
         return safe_payload
-
-    @classmethod
-    def _surface_write_ops(cls, value: object) -> list[JsonObject]:
-        """Re-validate the captured connector write ops (see the docstring above).
-
-        This member is what makes the connector write-back lane possible at all:
-        the descriptors are captured when the READ runs and the save, in another
-        process, composes against them. It therefore has to cross this funnel —
-        an allow-list that does not name a key deletes it, and a deleted capture
-        is a Save that 503s forever, which is the exact failure this projection's
-        own docstring already records once.
-
-        It is rebuilt through :class:`CapturedWriteOps` rather than passed
-        through, for the same reason ``state`` is rebuilt member by member: a
-        trusted event type is not evidence of a well-formed payload, and this
-        value is a connector's own untrusted schema declaration. The codec keeps
-        arg names, arg types and ``required`` and drops every value-bearing
-        member, so nothing that reaches a client — or the mapping model — can
-        carry connector-authored data.
-        """
-
-        from agent_runtime.capabilities.surfaces.write_ops_capture import (  # noqa: PLC0415
-            CapturedWriteOps,
-        )
-
-        return CapturedWriteOps.to_payload(CapturedWriteOps.from_payload(value))
 
     @classmethod
     def _surface_state(cls, value: object) -> JsonObject | None:
@@ -1639,27 +1582,17 @@ class RuntimeEventPresentationProjector:
         Keeps ``v`` / ``surface_id`` / ``tier`` / ``basis`` / optional
         ``spec_ref`` / optional ``gen{model}``. ``gen`` is re-built from a nested
         allow-list (``ms`` is not measured in A3, so only ``model`` survives).
-
-        ``tier`` and ``basis`` are closed vocabularies rather than free text and
-        are filtered as such (:class:`_ViewDerivedVocabulary`) — this is the
-        provenance a receipt reads, and a basis nobody declared is worse than no
-        basis at all.
         """
 
         safe_payload: JsonObject = {}
         cls._copy_payload_version(payload, safe_payload)
-        for text_key, vocabulary in (
-            (_LedgerKeys.Field.SURFACE_ID, None),
-            (_LedgerKeys.Field.TIER, _ViewDerivedVocabulary.TIER),
-            (_LedgerKeys.Field.BASIS, _ViewDerivedVocabulary.BASIS),
-            (_LedgerKeys.Field.SPEC_REF, None),
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.TIER,
+            _LedgerKeys.Field.BASIS,
+            _LedgerKeys.Field.SPEC_REF,
         ):
-            raw_value = payload.get(text_key)
-            value = (
-                cls._text(raw_value)
-                if vocabulary is None
-                else cls._vocabulary_text(raw_value, vocabulary)
-            )
+            value = cls._text(payload.get(text_key))
             if value is not None:
                 safe_payload[text_key] = value
         gen = payload.get(_LedgerKeys.Field.GEN)
@@ -1957,50 +1890,7 @@ class RuntimeEventPresentationProjector:
                 for change in (cls._row_change(raw) for raw in changes)
                 if change is not None
             ]
-        sends = value.get(_LedgerKeys.Field.SENDS)
-        if isinstance(sends, (list, tuple)):
-            row[_LedgerKeys.Field.SENDS] = cls._staged_args(sends)
         return row
-
-    @classmethod
-    def _staged_args(cls, values: Sequence[object]) -> list[JsonObject]:
-        """Rebuild ``sends`` — the row's account of what it will send.
-
-        Whole or nothing. Every other member of this projection drops the
-        entries it cannot parse, which is right for a display diff and wrong
-        here: a partial account under-discloses an arg that still dispatches,
-        so an unparseable member empties the list and the client's own
-        fail-closed arm renders the row undecidable.
-        """
-
-        parsed: list[JsonObject] = []
-        for raw in values:
-            item = cls._staged_arg(raw)
-            if item is None:
-                return []
-            parsed.append(item)
-        return parsed
-
-    @classmethod
-    def _staged_arg(cls, value: object) -> JsonObject | None:
-        """Rebuild one ``{arg, origin, column, old, new}`` outbound-arg entry."""
-
-        if not isinstance(value, dict):
-            return None
-        arg = cls._text(value.get(_LedgerKeys.Field.ARG))
-        origin = cls._text(value.get(_LedgerKeys.Field.ORIGIN))
-        if arg is None or origin not in _STAGED_ARG_ORIGINS:
-            return None
-        column = value.get(_LedgerKeys.Field.COLUMN)
-        return {
-            _LedgerKeys.Field.ARG: arg[:_ROWSET_TEXT_MAX],
-            _LedgerKeys.Field.ORIGIN: origin,
-            _LedgerKeys.Field.COLUMN: (
-                column[:_ROWSET_TEXT_MAX] if isinstance(column, str) else None
-            ),
-            _LedgerKeys.Field.OLD: value.get(_LedgerKeys.Field.OLD),
-            _LedgerKeys.Field.NEW: value.get(_LedgerKeys.Field.NEW),
-        }
 
     @classmethod
     def _row_change(cls, value: object) -> JsonObject | None:
@@ -2702,18 +2592,6 @@ class RuntimeEventPresentationProjector:
         return value.lower()
 
     @classmethod
-    def _vocabulary_text(cls, value: object, allowed: frozenset[str]) -> str | None:
-        """Text, but only when the contract's own vocabulary declares the value.
-
-        ``_text`` forwards any non-empty string, which is right for a title and
-        wrong for an enum-valued field: it is one guarantee short of "this word
-        means what the contract says it means".
-        """
-
-        text = cls._text(value)
-        return text if text is not None and text in allowed else None
-
-    @classmethod
     def _text(cls, value: object) -> str | None:
         if not isinstance(value, str):
             return None
@@ -2981,38 +2859,6 @@ class RuntimeEventEnvelope(_RuntimeEventBase):
             created_at=stream_event.timestamp,
             **kwargs,
         )
-
-
-class ConversationCardEventsResponse(RuntimeContract):
-    """Card-bearing frames for EVERY run in a conversation, newest run first.
-
-    Why frames and not folded cards. The transcript is assembled by the renderer
-    over one seq order — ``TurnPartsProjection`` says so explicitly, and refuses
-    to persist cards into the sealed turn for exactly that reason: it would make
-    a second source of truth for card state. That reasoning is right, and this
-    endpoint keeps it. What was actually missing is more mundane: the renderer
-    folds cards from the ACTIVE run's event stream, and a settled run's stream
-    is dropped the moment the client rebinds. So a completed turn lost its tool
-    cards with nowhere to get them back from — not because the fold was wrong,
-    but because the input was gone.
-
-    This hands that input back, scoped to a conversation and filtered to the
-    frames that carry cards, and lets the SAME client fold run over them. No
-    second projection exists, on either side of the wire.
-
-    Each envelope carries its own ``run_id``, which is what lets the renderer
-    anchor a card to the turn that produced it — ``sequence_no`` alone cannot,
-    because every run numbers from 0.
-    """
-
-    events: tuple[RuntimeEventEnvelope, ...]
-    #: Runs whose frames are included, newest first. A run with no card-bearing
-    #: frame still appears here, so the client can tell "this turn ran no tools"
-    #: apart from "this turn's frames were truncated away".
-    run_ids: tuple[str, ...]
-    #: True when older runs were dropped by ``run_limit``. The client renders
-    #: what it got rather than pretending the thread starts there.
-    has_more: bool = False
 
 
 class RuntimeEventReplayResponse(RuntimeContract):

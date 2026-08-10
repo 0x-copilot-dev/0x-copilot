@@ -42,12 +42,6 @@ from _lib import (  # noqa: E402
 
 JOURNEY_ID: Final = "G2"
 ARTIFACT_NAME: Final = "forecast.csv"
-
-# The Sources rail no longer paints `sources-v2-open-artifact`: the compact
-# source card that replaced the old rows (357836ce) marks an owner-routed row
-# with `data-openable` and puts the open action on the row's own button. Three
-# journeys were still driving the retired testid.
-OPEN_ARTIFACT_SOURCE: Final = "[data-testid=sources-v2-row][data-openable=true] button"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
@@ -757,10 +751,10 @@ def _open_artifact_from_sources(session: DriverSession) -> None:
     )
     assert "Artifact" in source_text, "dataset provenance did not identify its artifact"
     if not session.present("[data-testid=artifact-frame]"):
-        assert session.present(OPEN_ARTIFACT_SOURCE), (
+        assert session.present("[data-testid=sources-v2-open-artifact]"), (
             "dataset source is not user-openable from provenance"
         )
-        session.click(OPEN_ARTIFACT_SOURCE)
+        session.click("[data-testid=sources-v2-open-artifact]")
         assert session.wait_for("[data-testid=artifact-frame]"), (
             "opening the dataset source did not render an artifact surface"
         )

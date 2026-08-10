@@ -26,7 +26,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectProposalKind,
     LedgerEventType,
 )
-from agent_runtime.surfaces_v2.rowset import RowFieldChange, StagedArg
+from agent_runtime.surfaces_v2.rowset import RowFieldChange
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     RowSetEffectProposal,
 )
@@ -49,18 +49,9 @@ class RowSetProposalResolverPort(Protocol):
 
 
 class RowSetReviewRow(RuntimeContract):
-    """One reviewable row.
-
-    ``sends`` is the total account of the connector args this row would
-    dispatch; ``changes`` is the narrower cell diff. The reviewer reads
-    ``sends`` — it is the only one of the two that is complete by construction,
-    and the proposal digest covers it.
-    """
-
     row_key: str = Field(min_length=1, max_length=256)
     title: str = Field(min_length=1, max_length=512)
     changes: tuple[RowFieldChange, ...]
-    sends: tuple[StagedArg, ...]
     decision: Literal["approve", "hold"]
     decision_source: Literal["default", "agent", "user"]
     hold_reason: str | None = Field(default=None, max_length=512)
@@ -401,7 +392,6 @@ def _project_review(
                 row_key=row.row_key,
                 title=row.title,
                 changes=row.changes,
-                sends=row.sends,
                 decision=decision,
                 decision_source=source,
                 hold_reason=agent_holds.get(row.row_key),

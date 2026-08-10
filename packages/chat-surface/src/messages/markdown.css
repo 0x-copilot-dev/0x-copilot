@@ -48,14 +48,8 @@
   animation: assistant-stream-enter 180ms ease-out;
 }
 
-/* `inherit`, not `--color-text`: reasoning is the ONE prose body in the
- * transcript whose container deliberately quiets it — `ThinkingBlock`'s body
- * and `.aui-reasoning-group__content` both set `--color-text-muted`, and this
- * rule (plus the `p, li` one below) overrode BOTH, painting a thought the
- * reader never asked to see at the same contrast as the answer. Size alone
- * cannot carry the hierarchy if the colour argues with it. */
 .reasoning-markdown {
-  color: inherit;
+  color: var(--color-text);
   min-width: 0;
   white-space: normal;
 }
@@ -97,7 +91,7 @@
 }
 
 .reasoning-markdown :where(p, li) {
-  color: inherit;
+  color: var(--color-text);
 }
 
 .assistant-markdown :where(a),
@@ -502,162 +496,4 @@
   .assistant-markdown--streaming {
     animation: none;
   }
-}
-
-/* ==========================================================================
-   Reasoning group — the "Thinking… / Thought process" disclosure
-   --------------------------------------------------------------------------
-   MOVED here from `apps/frontend/src/styles.css`. `ReasoningGroup` ships from
-   this package and BOTH hosts mount it, but its rules lived only in the web
-   app — so on desktop the group rendered with none of them: the label at the
-   inherited base size rather than `--font-size-xs`, and the browser's own
-   `<details>` triangle rather than ours, because neither `list-style: none`
-   nor the `::-webkit-details-marker` reset was ever loaded. It read as "the
-   font is too large and the chevron is too small"; it was neither, it was
-   absent styling. Same stranded-CSS failure as approvals.css / composer.css /
-   citations.css before it, and the reason this file is imported by both hosts.
-
-   The disclosure marker is OURS, not the platform's: `list-style: none` plus
-   the `-webkit` reset kill the native triangle, so anything that reads as an
-   affordance has to be authored below.
-   ========================================================================== */
-
-.aui-reasoning-group {
-  align-self: stretch;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  margin: 0 0 var(--space-2xs);
-  max-width: 760px;
-  padding: 0;
-  width: 100%;
-}
-
-.aui-reasoning-group > summary {
-  align-items: center;
-  background: transparent;
-  border: 1px dashed transparent;
-  border-radius: var(--radius-full);
-  color: var(--color-text-subtle);
-  cursor: pointer;
-  display: inline-flex;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  gap: var(--space-sm);
-  list-style: none;
-  padding: var(--space-2xs) var(--space-sm);
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease;
-  user-select: none;
-}
-
-.aui-reasoning-group > summary::-webkit-details-marker {
-  display: none;
-}
-
-.aui-reasoning-group > summary:hover,
-.aui-reasoning-group > summary:focus-visible {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-.aui-reasoning-group[open] > summary {
-  background: var(--color-surface);
-  border-color: var(--color-border);
-  color: var(--color-text);
-}
-
-.aui-reasoning-group__icon {
-  color: var(--color-accent);
-  display: inline-flex;
-  flex-shrink: 0;
-  height: 0.875rem;
-  width: 0.875rem;
-}
-
-.aui-reasoning-group[data-status="running"] .aui-reasoning-group__icon {
-  animation: reasoning-spin 1.5s linear infinite;
-}
-
-/* The quietest thing on the row: this is chrome ABOVE the model's own words,
-   not a heading for them. It steps down from the summary's `xs` — at the
-   inherited base size (which is what desktop was getting while these rules
-   were stranded in the web app) it competed with the answer underneath it. */
-.aui-reasoning-group__label {
-  font-size: var(--font-size-2xs);
-  letter-spacing: var(--tracking-caption);
-  white-space: nowrap;
-}
-
-.aui-reasoning-group__time {
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
-  margin-left: var(--space-xs);
-}
-
-.aui-reasoning-group__time:empty {
-  display: none;
-}
-
-.aui-reasoning-group__content {
-  background: var(--color-surface-muted);
-  border-left: 2px solid var(--color-accent);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  border-top: 0;
-  color: var(--color-text-muted);
-  display: grid;
-  font-size: var(--font-size-xs);
-  font-style: italic;
-  gap: var(--space-sm);
-  line-height: 1.65;
-  margin-top: var(--space-2xs);
-  padding: var(--space-md) var(--space-lg);
-  white-space: pre-wrap;
-}
-
-.aui-reasoning-group__content :where(strong, em) {
-  color: var(--color-text);
-  font-style: normal;
-  font-weight: var(--font-weight-medium);
-}
-
-.aui-reasoning-group[data-status="running"]
-  .aui-reasoning-group__content::after {
-  animation: reasoning-cursor-blink 1s steps(1, end) infinite;
-  color: var(--color-accent);
-  content: "▍";
-  font-style: normal;
-  margin-left: 0.125rem;
-}
-
-@keyframes reasoning-cursor-blink {
-  0%,
-  50% {
-    opacity: 1;
-  }
-  51%,
-  100% {
-    opacity: 0;
-  }
-}
-
-/* The disclosure glyph. Sized to the label rather than to the icon: it is
-   punctuation for the row, not a second subject. It rotates on open, which is
-   the only motion in this control — the row itself must not move, because it
-   sits directly above streaming text. */
-.aui-reasoning-group__chevron {
-  flex: none;
-  height: 0.875rem;
-  margin-left: var(--space-2xs);
-  opacity: 0.7;
-  transition: transform 160ms ease;
-  width: 0.875rem;
-}
-
-.aui-reasoning-group[open] > summary .aui-reasoning-group__chevron {
-  transform: rotate(180deg);
 }

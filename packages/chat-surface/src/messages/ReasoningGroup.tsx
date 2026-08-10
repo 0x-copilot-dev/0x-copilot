@@ -30,16 +30,9 @@ export interface ReasoningGroupProps {
  * contained parts' first/latest event timestamps.
  *
  * `data-status` exposes the running/complete state to CSS so the body can
- * render the streaming cursor without a JS-side animation. CSS lives in THIS
- * package (`messages/markdown.css`), which both hosts import — it used to live
- * in the web app's stylesheet, so desktop rendered the group entirely
- * unstyled: base-size label, and the browser's own `<details>` triangle
- * because our marker reset never loaded.
- *
- * The chevron is authored here for the same reason the reset exists: once
- * `list-style: none` kills the native marker, a disclosure with no glyph of
- * its own has NO affordance at all. It is `aria-hidden` — `<details>` already
- * announces its own expanded state, so a second announcement would be noise.
+ * render the streaming cursor without a JS-side animation. CSS lives in the
+ * host substrate (`apps/frontend/src/styles.css`) under
+ * `.aui-reasoning-group`.
  */
 export function ReasoningGroup({
   children,
@@ -58,19 +51,6 @@ export function ReasoningGroup({
         <span className="aui-reasoning-group__time">
           {elapsedSeconds > 0 ? `${elapsedSeconds}s` : ""}
         </span>
-        <svg
-          className="aui-reasoning-group__chevron"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
       </summary>
       <div className="aui-reasoning-group__content">{children}</div>
     </details>

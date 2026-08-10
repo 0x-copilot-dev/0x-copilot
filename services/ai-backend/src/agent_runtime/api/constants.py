@@ -166,7 +166,6 @@ class Keys:
         EXPORT_RUN_RECEIPT_V2 = "export_run_receipt_v2"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
-        GET_CONVERSATION_CARD_EVENTS = "get_conversation_card_events"
         GET_CONVERSATION_CANVAS = "get_conversation_canvas"
         # PRD-05 — org-scoped, paginated, newest-first run history (one row per
         # RUN, all statuses). The collection GET on ``/runs`` — registered

@@ -35,7 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,202 +127,10 @@ workspace revision for `brief.md` in the granted local workspace. Keep it held
 for explicit review and approval only: do not apply it, do not claim success,
 do not browse, and do not use connectors or unrelated tools."""
 
-# The values typed into the artifact's own blocks, in document order. The
-# document is the AGENT's, so the journey cannot know its text in advance — it
-# replaces the first spans it finds and then proves, byte for byte, that only
-# those spans moved. Two of them, so the save also exercises a BATCH.
-USER_EDIT_VALUES: Final = (
-    "Reviewed Desktop Brief",
-    "This paragraph was edited in place in Studio and must remain reviewable "
-    "before the Electron-main workspace authority writes it.",
-)
-
-
-@dataclass(frozen=True)
-class PaintedSelector:
-    """One selector this journey drives, and the product source that paints it.
-
-    A selector is a contract with product code that nothing in Python can check,
-    so it rots silently. This journey went on asserting `#artifact-editor-text`
-    and `Save new revision` for as long as the raw-markdown textarea has been
-    deleted, and its hermetic guard suite stayed green the whole time because
-    the fake session answered `True` for every selector it had not been
-    explicitly told to hide.
-
-    ``emitter`` is a regex the guard suite searches for in ``source``. Pin the
-    smallest thing that must exist for the selector to be paintable — the
-    literal testid, or the template expression plus the value its prefix
-    defaults to. When a selector is retired, this entry is what fails first, and
-    it fails naming the journey step that depended on it.
-    """
-
-    selector: str
-    source: str
-    emitter: str
-
-
-# --- the artifact review surface -------------------------------------------
-ARTIFACT_FRAME: Final = "[data-testid=artifact-frame]"
-REVISION_HISTORY: Final = "[data-testid=artifact-revision-history]"
-COMPARE_BUTTON: Final = 'button:has-text("Compare to current")'
-REVISION_COMPARISON: Final = '[aria-label="Artifact revision comparison"]'
-# The Sources rail lost `sources-v2-open-artifact` when the compact card moved
-# in (357836ce); an openable provenance row is now marked by its own attribute.
-OPENABLE_SOURCE_ROW: Final = "[data-testid=sources-v2-row][data-openable=true]"
-OPEN_SOURCE_BUTTON: Final = f"{OPENABLE_SOURCE_ROW} button"
-SOURCES_TAB: Final = "[data-testid=sources-v2-tab]"
-
-# --- the in-place document editor ------------------------------------------
-# `EditableDocument` scopes every testid with `props.idPrefix ?? "doc"`, and the
-# standalone artifact frame passes no prefix. There is no whole-document field:
-# a block IS the control, and editing one opens an input at that block's place.
-DOCUMENT_EDITOR: Final = "[data-testid=doc-editor]"
-EDITOR_ACTIONS: Final = "[data-testid=doc-editor-actions]"
-EDITOR_STATUS: Final = "[data-testid=doc-editor-status]"
-SAVE_BUTTON: Final = f'{EDITOR_ACTIONS} button:has-text("Save")'
-PROSE_BLOCK_PREFIX: Final = "doc-block-"
-TABLE_CELL_PREFIX: Final = "doc-cell-"
-
-# --- the held workspace stage and its receipt ------------------------------
-WORKSPACE_STAGE: Final = "[data-testid=tc-workspace-stage]"
-STAGE_PATH: Final = "[data-testid=tc-workspace-stage-path]"
-STAGE_REVISION: Final = "[data-testid=tc-workspace-stage-revision]"
-STAGE_DIFF: Final = "[data-testid=tc-workspace-stage-diff]"
-STAGE_EDIT: Final = "[data-testid=tc-workspace-stage-edit]"
-STAGE_APPROVE: Final = "[data-testid=tc-workspace-stage-approve]"
-RECEIPT_LAUNCH: Final = "[data-testid=receipt-v2-launch]"
-RECEIPT_OPEN: Final = "[data-testid=receipt-v2-open]"
-RECEIPT_SURFACE: Final = "[data-testid=receipt-v2-surface]"
-RECEIPT_STATUS: Final = "[data-testid=receipt-v2-status]"
-RECEIPT_METRIC: Final = "[data-testid=receipt-v2-metric]"
-SOURCE_ROW: Final = "[data-testid=sources-v2-row]"
-SOURCES_RAIL_TAB: Final = '[role=tab]:has-text("Sources")'
-
-CHAT_SURFACE_SRC: Final = "packages/chat-surface/src"
-STAGE_SURFACE_SRC: Final = (
-    f"{CHAT_SURFACE_SRC}/thread-canvas/TcWorkspaceStageSurface.tsx"
-)
-RECEIPT_SURFACE_SRC: Final = f"{CHAT_SURFACE_SRC}/surfaces/receipt/ReceiptV2Surface.tsx"
-SOURCES_TAB_SRC: Final = f"{CHAT_SURFACE_SRC}/workspace/SourcesV2Tab.tsx"
-SOURCE_LIST_SRC: Final = f"{CHAT_SURFACE_SRC}/workspace/CompactSourceList.tsx"
-WORKSPACE_RAIL_SRC: Final = f"{CHAT_SURFACE_SRC}/destinations/run/RunWorkspaceRail.tsx"
-EDITABLE_DOCUMENT_SRC: Final = (
-    "packages/surface-renderers/src/artifacts/EditableDocument.tsx"
-)
-
-PAINTED_SELECTORS: Final = (
-    PaintedSelector(
-        ARTIFACT_FRAME,
-        f"{CHAT_SURFACE_SRC}/artifacts/ArtifactFrame.tsx",
-        r'data-testid="artifact-frame"',
-    ),
-    PaintedSelector(
-        REVISION_HISTORY,
-        f"{CHAT_SURFACE_SRC}/artifacts/ArtifactRevisionHistory.tsx",
-        r'data-testid="artifact-revision-history"',
-    ),
-    PaintedSelector(
-        COMPARE_BUTTON,
-        f"{CHAT_SURFACE_SRC}/artifacts/ArtifactRevisionHistory.tsx",
-        r"Compare to current",
-    ),
-    PaintedSelector(
-        REVISION_COMPARISON,
-        f"{CHAT_SURFACE_SRC}/artifacts/ArtifactRevisionCompare.tsx",
-        r'aria-label="Artifact revision comparison"',
-    ),
-    PaintedSelector(SOURCES_TAB, SOURCES_TAB_SRC, r'data-testid="sources-v2-tab"'),
-    PaintedSelector(SOURCE_ROW, SOURCES_TAB_SRC, r'rowTestId="sources-v2-row"'),
-    PaintedSelector(
-        OPENABLE_SOURCE_ROW,
-        SOURCE_LIST_SRC,
-        r'data-openable=\{item\.onActivate !== undefined \? "true" : "false"\}',
-    ),
-    PaintedSelector(
-        OPEN_SOURCE_BUTTON,
-        SOURCE_LIST_SRC,
-        r"item\.onActivate !== undefined \? \(\s*<button",
-    ),
-    PaintedSelector(SOURCES_RAIL_TAB, WORKSPACE_RAIL_SRC, r'label: "Sources"'),
-    PaintedSelector(
-        WORKSPACE_STAGE, STAGE_SURFACE_SRC, r'data-testid="tc-workspace-stage"'
-    ),
-    PaintedSelector(
-        STAGE_PATH, STAGE_SURFACE_SRC, r'data-testid="tc-workspace-stage-path"'
-    ),
-    PaintedSelector(
-        STAGE_REVISION,
-        STAGE_SURFACE_SRC,
-        r'data-testid="tc-workspace-stage-revision"',
-    ),
-    # Painted through `DetailSection`'s `testId` prop rather than inline, which
-    # is exactly why an inventory pins the EMITTER and not a grep for
-    # `data-testid=`: the same selector is spelled two ways in product source.
-    PaintedSelector(STAGE_DIFF, STAGE_SURFACE_SRC, r'testId="tc-workspace-stage-diff"'),
-    PaintedSelector(
-        STAGE_EDIT, STAGE_SURFACE_SRC, r'data-testid="tc-workspace-stage-edit"'
-    ),
-    PaintedSelector(
-        STAGE_APPROVE,
-        STAGE_SURFACE_SRC,
-        r'data-testid="tc-workspace-stage-approve"',
-    ),
-    PaintedSelector(
-        RECEIPT_LAUNCH, RECEIPT_SURFACE_SRC, r'data-testid="receipt-v2-launch"'
-    ),
-    PaintedSelector(
-        RECEIPT_OPEN, RECEIPT_SURFACE_SRC, r'data-testid="receipt-v2-open"'
-    ),
-    PaintedSelector(
-        RECEIPT_SURFACE, RECEIPT_SURFACE_SRC, r'data-testid="receipt-v2-surface"'
-    ),
-    PaintedSelector(
-        RECEIPT_STATUS, RECEIPT_SURFACE_SRC, r'data-testid="receipt-v2-status"'
-    ),
-    PaintedSelector(
-        RECEIPT_METRIC, RECEIPT_SURFACE_SRC, r'data-testid="receipt-v2-metric"'
-    ),
-    PaintedSelector(
-        DOCUMENT_EDITOR,
-        EDITABLE_DOCUMENT_SRC,
-        r'const prefix = props\.idPrefix \?\? "doc";',
-    ),
-    PaintedSelector(
-        DOCUMENT_EDITOR,
-        EDITABLE_DOCUMENT_SRC,
-        r"data-testid=\{`\$\{prefix\}-editor`\}",
-    ),
-    PaintedSelector(
-        EDITOR_ACTIONS,
-        EDITABLE_DOCUMENT_SRC,
-        r"data-testid=\{`\$\{prefix\}-editor-actions`\}",
-    ),
-    PaintedSelector(
-        EDITOR_STATUS,
-        EDITABLE_DOCUMENT_SRC,
-        r"data-testid=\{`\$\{prefix\}-editor-status`\}",
-    ),
-    # The toolbar's primary button. It reads "Save" and, while a revision is in
-    # flight, "Saving…" — `has-text` is a substring match, so one selector
-    # covers both and neither matches "Discard" beside it.
-    PaintedSelector(SAVE_BUTTON, EDITABLE_DOCUMENT_SRC, r'"Saving…" : "Save"'),
-    PaintedSelector(
-        f"[data-testid^={PROSE_BLOCK_PREFIX}]",
-        EDITABLE_DOCUMENT_SRC,
-        r"`\$\{prefix\}-block-\$\{index\}`",
-    ),
-    PaintedSelector(
-        f"[data-testid^={TABLE_CELL_PREFIX}]",
-        EDITABLE_DOCUMENT_SRC,
-        r"`\$\{prefix\}-cell-\$\{index\}-\$\{rowIndex\}-\$\{column\}`",
-    ),
-    # Opening a span swaps the read-only node for a field named after it. This
-    # is the suffix the whole edit gesture hangs off, so it is pinned by itself.
-    PaintedSelector(
-        "[data-testid$=-input]",
-        EDITABLE_DOCUMENT_SRC,
-        r"testId=\{`\$\{testId\}-input`\}",
-    ),
+USER_EDITED_MARKDOWN: Final = (
+    "# Reviewed Desktop Brief\n\n"
+    "This paragraph was edited in Studio and must remain reviewable before "
+    "the Electron-main workspace authority writes it.\n"
 )
 
 
@@ -337,15 +145,6 @@ class ArtifactReference:
     kind: str
     content_ref: str
     content_digest: str
-
-
-@dataclass(frozen=True)
-class InPlaceEdit:
-    """One span the reader retyped, named by the testid that carries it."""
-
-    test_id: str
-    original: str
-    replacement: str
 
 
 @dataclass(frozen=True)
@@ -820,12 +619,12 @@ def _assert_workspace_stage_surface(
     session: DriverSession, stage: WorkspaceStage
 ) -> None:
     required = {
-        "stage": WORKSPACE_STAGE,
-        "path": STAGE_PATH,
-        "revision": STAGE_REVISION,
-        "diff": STAGE_DIFF,
-        "edit": STAGE_EDIT,
-        "approve": STAGE_APPROVE,
+        "stage": "[data-testid=tc-workspace-stage]",
+        "path": "[data-testid=tc-workspace-stage-path]",
+        "revision": "[data-testid=tc-workspace-stage-revision]",
+        "diff": "[data-testid=tc-workspace-stage-diff]",
+        "edit": "[data-testid=tc-workspace-stage-edit]",
+        "approve": "[data-testid=tc-workspace-stage-approve]",
     }
     missing = [
         name for name, selector in required.items() if not session.present(selector)
@@ -919,28 +718,12 @@ def _assert_stage_binds_immutable_artifact(
     )
 
 
-def _testid(value: str) -> str:
-    return f'[data-testid="{value}"]'
-
-
 def _assert_editor_surface(session: DriverSession) -> None:
-    """Require the surface a reader actually gets: blocks that ARE the controls.
-
-    There is no whole-document field to require any more, and requiring one is
-    how this guard came to describe a UI the product had stopped painting. What
-    must exist is the editor section, its revision toolbar, and at least one
-    editable span — because a document whose every block landed in the `raw`
-    catch-all renders perfectly and cannot be edited at all, which is the
-    failure this step exists to catch.
-    """
-
     required = {
-        "artifact frame": ARTIFACT_FRAME,
-        "document editor": DOCUMENT_EDITOR,
-        "revision history": REVISION_HISTORY,
-        "revision actions": EDITOR_ACTIONS,
-        "unsaved-edit count": EDITOR_STATUS,
-        "editable block": f"[data-testid^={PROSE_BLOCK_PREFIX}]",
+        "artifact frame": "[data-testid=artifact-frame]",
+        "artifact editor": "[data-testid=artifact-editor]",
+        "revision history": "[data-testid=artifact-revision-history]",
+        "editor field": "#artifact-editor-text",
     }
     missing = [
         name for name, selector in required.items() if not session.present(selector)
@@ -949,17 +732,17 @@ def _assert_editor_surface(session: DriverSession) -> None:
 
 
 def _open_first_artifact_from_sources(session: DriverSession) -> None:
-    if session.present(ARTIFACT_FRAME):
+    if session.present("[data-testid=artifact-frame]"):
         return
-    session.click(SOURCES_RAIL_TAB)
-    assert session.wait_for(SOURCES_TAB), (
+    session.click('[role=tab]:has-text("Sources")')
+    assert session.wait_for("[data-testid=sources-v2-tab]"), (
         "Studio did not show the Sources provenance rail for the artifact"
     )
-    assert session.present(OPEN_SOURCE_BUTTON), (
+    assert session.present("[data-testid=sources-v2-open-artifact]"), (
         "artifact source is not user-openable from provenance"
     )
-    session.click(OPEN_SOURCE_BUTTON)
-    assert session.wait_for(ARTIFACT_FRAME), (
+    session.click("[data-testid=sources-v2-open-artifact]")
+    assert session.wait_for("[data-testid=artifact-frame]"), (
         "opening the artifact source did not render an artifact surface"
     )
 
@@ -1224,11 +1007,11 @@ def _assert_exact_file_bytes(path: Path, approved: bytes) -> None:
 
 
 def _assert_receipt_and_sources(session: DriverSession) -> None:
-    assert session.wait_for(RECEIPT_LAUNCH), (
+    assert session.wait_for("[data-testid=receipt-v2-launch]"), (
         "terminal workspace effect did not expose a receipt launcher"
     )
-    session.click(RECEIPT_OPEN)
-    assert session.wait_for(RECEIPT_SURFACE), (
+    session.click("[data-testid=receipt-v2-open]")
+    assert session.wait_for("[data-testid=receipt-v2-surface]"), (
         "receipt launcher did not open the Studio receipt"
     )
     receipt_status = str(
@@ -1255,20 +1038,14 @@ def _assert_receipt_and_sources(session: DriverSession) -> None:
         }
     ], "receipt does not account for the exact approved workspace effect"
 
-    session.click(SOURCES_RAIL_TAB)
-    assert session.wait_for(SOURCES_TAB), (
+    session.click('[role=tab]:has-text("Sources")')
+    assert session.wait_for("[data-testid=sources-v2-tab]"), (
         "Studio did not expose Sources/provenance after the workspace receipt"
     )
-    # The compact source row draws its title as the first child of its copy
-    # column — an anchor, a button or a bare span depending on how the row
-    # opens. It carries no class hook, so this reads the row's own structure
-    # rather than the `.ui-item-title` that the pre-compact card used to have
-    # and that this query went on naming after the card was replaced.
     source_labels = _evaluate_json(
         session,
         "JSON.stringify(Array.from(document.querySelectorAll("
-        f"{json.dumps('[data-testid=sources-v2-row]')}"
-        ")).map((row)=>row.children[1]?.firstElementChild?.textContent ?? null))",
+        "'[data-testid=sources-v2-row] .ui-item-title')).map((node)=>node.textContent))",
     )
     assert isinstance(source_labels, list) and all(
         isinstance(label, str) for label in source_labels
@@ -1307,150 +1084,12 @@ def _assert_no_plaintext_secret(secret: str, roots: tuple[Path, ...]) -> None:
                 continue
 
 
-def _editable_span_ids(session: DriverSession) -> list[str]:
-    """The testids of every span the reader can click into, in document order.
-
-    Discovered rather than hard-coded: the document is the agent's, so how many
-    blocks it has and which of them the block model can edit in place is not
-    something this journey may assume.
-    """
-
-    ids = _evaluate_json(
-        session,
-        "JSON.stringify(Array.from(document.querySelectorAll("
-        f"{json.dumps(f'[data-testid^={PROSE_BLOCK_PREFIX}],[data-testid^={TABLE_CELL_PREFIX}]')}"
-        ")).map((node)=>node.getAttribute('data-testid'))"
-        ".filter((id)=>typeof id==='string'&&!id.endsWith('-input')))",
-    )
-    assert isinstance(ids, list) and all(isinstance(one, str) for one in ids), (
-        "editable document did not expose its blocks as addressable spans"
-    )
-    return [str(one) for one in ids]
-
-
-def _plan_user_edits(session: DriverSession, before: str) -> list[InPlaceEdit]:
-    """Pick spans to retype, and read what each one holds now.
-
-    A span is only usable here when its current text occurs EXACTLY ONCE in the
-    document, because that is what lets the assertion afterwards be byte-exact
-    without this file re-implementing the block model to find offsets. Anything
-    ambiguous (an empty heading, a repeated cell, a cell whose escaped pipe the
-    field shows unescaped) is skipped rather than guessed at.
-    """
-
-    planned: list[InPlaceEdit] = []
-    for test_id in _editable_span_ids(session):
-        if len(planned) == len(USER_EDIT_VALUES):
-            break
-        current = _span_value(session, test_id)
-        if current == "" or before.count(current) != 1:
-            continue
-        planned.append(
-            InPlaceEdit(
-                test_id=test_id,
-                original=current,
-                replacement=USER_EDIT_VALUES[len(planned)],
-            )
-        )
-    assert planned, (
-        "no block of the agent's Markdown artifact could be edited in place; "
-        "the reader has a rendered document and no way to change it"
-    )
-    return planned
-
-
-def _span_value(session: DriverSession, test_id: str) -> str:
-    """Open one span's field, read what it holds, and leave it open."""
-
-    field = _testid(f"{test_id}-input")
-    session.click(_testid(test_id))
-    assert session.wait_visible(field), (
-        f"clicking {test_id} did not open an editable field in its place"
-    )
-    value = session.evaluate(f"document.querySelector({json.dumps(field)}).value")
-    assert isinstance(value, str), f"{test_id} opened a field with no value"
-    return value
-
-
-def _apply_user_edit(session: DriverSession, edit: InPlaceEdit) -> None:
-    """Type one span's new text and commit it, without leaving the document."""
-
-    field = _testid(f"{edit.test_id}-input")
-    if not session.present(field):
-        _span_value(session, edit.test_id)
-    session.fill(field, edit.replacement)
-    session.press(field, "Enter")
-    assert session.wait_for(_testid(edit.test_id)), (
-        f"committing {edit.test_id} did not restore its rendered block"
-    )
-    modified = session.evaluate(
-        f"document.querySelector({json.dumps(_testid(edit.test_id))})"
-        ".getAttribute('data-modified')"
-    )
-    assert modified == "true", (
-        f"{edit.test_id} does not report itself as edited after being retyped"
-    )
-
-
-def _expected_spliced_document(before: str, edits: Sequence[InPlaceEdit]) -> str:
-    """The document these edits must produce: SPLICE, never regeneration.
-
-    Every byte outside an edited span is copied through untouched. This is the
-    Python mirror of the surface's own splice engine, written here so the
-    assertion is independent of it — a save that reformatted the agent's prose,
-    re-emitted its table, or dropped a link would satisfy "the new text is in
-    there" and fail this.
-    """
-
-    spans: list[tuple[int, int, str]] = []
-    for edit in edits:
-        assert before.count(edit.original) == 1, (
-            f"{edit.test_id} does not name exactly one span of the document"
-        )
-        start = before.index(edit.original)
-        spans.append((start, start + len(edit.original), edit.replacement))
-    spans.sort()
-    pieces: list[str] = []
-    cursor = 0
-    for start, end, replacement in spans:
-        assert start >= cursor, "two planned edits cover one span"
-        pieces.append(before[cursor:start])
-        pieces.append(replacement)
-        cursor = end
-    pieces.append(before[cursor:])
-    return "".join(pieces)
-
-
-def _assert_unsaved_count(session: DriverSession, count: int) -> None:
-    status = session.evaluate(
-        f"document.querySelector({json.dumps(EDITOR_STATUS)}).textContent"
-    )
-    plural = "edit" if count == 1 else "edits"
-    assert status == f"{count} unsaved {plural}", (
-        f"editor reports {status!r} after {count} in-place edits"
-    )
-
-
 def _save_user_edit(
     session: DriverSession, artifact: ArtifactReference
 ) -> ArtifactReference:
-    """Edit the artifact the way the surface asks to be edited: block by block.
-
-    The whole-document textarea this used to fill is deleted — a reader changes
-    a cell by clicking the cell and a paragraph by clicking the paragraph, so
-    that is the gesture driven here. Nothing leaves on a keystroke; one Save
-    turns the batch into one new revision.
-    """
-
     _assert_editor_surface(session)
-    before = _read_artifact_bytes(session, artifact).decode("utf-8")
-    edits = _plan_user_edits(session, before)
-    for edit in edits:
-        _apply_user_edit(session, edit)
-    _assert_unsaved_count(session, len(edits))
-    expected = _expected_spliced_document(before, edits)
-
-    session.click(SAVE_BUTTON)
+    session.fill("#artifact-editor-text", USER_EDITED_MARKDOWN)
+    session.click('button:has-text("Save new revision")')
     deadline = time.time() + 60
     while time.time() < deadline:
         detail = _artifact_detail(session, artifact.artifact_id)
@@ -1466,9 +1105,8 @@ def _save_user_edit(
                     content_digest=_required_digest(current, "content_digest"),
                 )
                 edited_bytes = _read_artifact_bytes(session, edited)
-                assert edited_bytes == expected.encode("utf-8"), (
-                    "Studio editor did not splice the user's edits into the "
-                    "artifact: bytes outside the edited spans changed"
+                assert edited_bytes == USER_EDITED_MARKDOWN.encode("utf-8"), (
+                    "Studio editor did not persist the user-edited artifact bytes"
                 )
                 assert (
                     hashlib.sha256(edited_bytes).hexdigest() == edited.content_digest
@@ -1479,12 +1117,14 @@ def _save_user_edit(
 
 
 def _show_revision_diff(session: DriverSession) -> None:
-    assert session.wait_for(REVISION_HISTORY), "edited artifact has no revision history"
-    assert session.present(COMPARE_BUTTON), (
+    assert session.wait_for("[data-testid=artifact-revision-history]"), (
+        "edited artifact has no revision history"
+    )
+    assert session.present('button:has-text("Compare to current")'), (
         "edited artifact did not expose a revision-pinned diff"
     )
-    session.click(COMPARE_BUTTON)
-    assert session.wait_for(REVISION_COMPARISON), (
+    session.click('button:has-text("Compare to current")')
+    assert session.wait_for('[aria-label="Artifact revision comparison"]'), (
         "artifact revision comparison did not render"
     )
 
@@ -1492,7 +1132,7 @@ def _show_revision_diff(session: DriverSession) -> None:
 def _approve_stage(session: DriverSession) -> None:
     confirmation = _start_native_automation(_approval_command())
     try:
-        session.click(STAGE_APPROVE)
+        session.click("[data-testid=tc-workspace-stage-approve]")
     finally:
         _wait_native_automation(confirmation, action="workspace confirmation")
 

@@ -28,7 +28,6 @@ from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.identity import Identity
 from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
-    ConversationCardEventsResponse,
     ActiveRunCountResponse,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -240,31 +239,6 @@ class RuntimeApiRoutes:
             limit=limit,
             before=before,
             include_deleted=include_deleted,
-        )
-
-    @classmethod
-    async def get_conversation_card_events(
-        cls,
-        request: Request,
-        conversation_id: str,
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
-        run_limit: int = Query(50, ge=1, le=200),
-    ) -> ConversationCardEventsResponse:
-        """Return card-bearing frames across a conversation's runs.
-
-        A settled turn's tool cards exist only in its run's event stream, which
-        the client drops on rebind — so a completed turn rendered bare with no
-        way to recover. This returns the frames those cards are folded from for
-        the whole conversation, and the client runs its EXISTING fold over them;
-        no second projection is introduced on either side.
-        """
-        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.cqs(request).list_conversation_card_events(
-            org_id=org_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            run_limit=run_limit,
         )
 
     @classmethod
@@ -1011,13 +985,6 @@ class RuntimeApiRouter:
             name=Keys.RouteName.GET_CONVERSATION_RUNS,
         )
         router.add_api_route(
-            "/conversations/{conversation_id}/card-events",
-            RuntimeApiRoutes.get_conversation_card_events,
-            methods=["GET"],
-            response_model=ConversationCardEventsResponse,
-            name=Keys.RouteName.GET_CONVERSATION_CARD_EVENTS,
-        )
-        router.add_api_route(
             "/conversations/{conversation_id}/canvas",
             RuntimeApiRoutes.get_conversation_canvas,
             methods=["GET"],
@@ -1216,15 +1183,6 @@ class RuntimeApiRouter:
             from runtime_api.http.stages import register_stage_routes
 
             register_stage_routes(router)
-            # Connector write-back — Save on an edited surface. Registered next
-            # to the stage routes because it is their front door: it only ever
-            # STAGES, and ``/stages/{id}/apply`` above stays the single door to
-            # execution. Same flag gate ⇒ off is byte-identical.
-            from runtime_api.http.surface_write_back import (
-                register_surface_write_back_routes,
-            )
-
-            register_surface_write_back_routes(router)
             # PRD-E2 (Generative Surfaces v2) — the cross-run pending-work queue.
             # Same flag gate: off ⇒ ``GET /v1/agent/pending-work`` does not exist
             # (404) ⇒ byte-identical. Read-side only (no new events, no writes).

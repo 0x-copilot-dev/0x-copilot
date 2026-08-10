@@ -4,10 +4,7 @@ The API records an approve decision and enqueues a durable ``stage_commit_reques
 command; this handler consumes it. It is the single legitimate path to a
 ``write.applied`` event, and it never executes inline in the API.
 
-``handle(command)`` orders four fail-closed invariants around the one side effect
-(a bulk row-set apply adds a fifth — see ``_handle_rowset``: the row accounting is
-re-established HERE, at the last point before dispatch, because the row the fold
-hands back was rebuilt from an untrusted ledger payload):
+``handle(command)`` orders four fail-closed invariants around the one side effect:
 
 1. **Approval gate (fail-closed).** Fold the run's ledger through ``StagedWriteFold``
    and refuse unless the stage is ``APPROVED``, ``approved_rev == command.rev``, and the
@@ -50,7 +47,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectOutcome,
     LedgerEventType,
 )
-from agent_runtime.surfaces_v2.rowset import RowStance, StagedRow
+from agent_runtime.surfaces_v2.rowset import RowStance
 from agent_runtime.surfaces_v2.staging import (
     DraftRef,
     StagedWriteFold,
@@ -75,10 +72,6 @@ _LOGGER = logging.getLogger("runtime_worker.stage_commit")
 _AUDIT_COMMITTED = "surface.commit.committed"
 _AUDIT_ABORTED_DRIFT = "surface.commit.aborted_precondition_drift"
 _AUDIT_FAILED = "surface.commit.failed"
-# D3 last-mile accounting refusal: a commanded row could not re-establish what
-# it would send, so nothing was dispatched. Its own action string because it is
-# not a connector failure and not target drift.
-_AUDIT_ABORTED_UNACCOUNTED = "surface.commit.aborted_unaccounted_row"
 
 
 class RuntimeStageCommitHandler:
@@ -191,26 +184,10 @@ class RuntimeStageCommitHandler:
     ) -> None:
         """Dispatch ONLY the approved rows, per-row idempotent; ledger the outcomes.
 
-        Two fail-closed gates, in this order, and neither can be the only one.
-
-        1. **Authorization** (fold-based): the stage must be APPLY_PENDING, the
-           apply decision at ``command.decision_seq`` must cover EXACTLY
-           ``command.row_keys``, every key must fold ``will_apply``, and none may
-           already have an outcome. Any mismatch ⇒ warn-log + no-op, NO event —
-           an unauthorized command is not an outcome worth recording.
-        2. **Accounting** (:meth:`StagedWriteState.row_send_plan`): every
-           commanded row must still prove what it would send. This is the LAST
-           point before dispatch, and it is separate from gate 1 on purpose —
-           gate 1 asks "may this command run", gate 2 asks "can what it would
-           send be shown to be what was reviewed". A refusal here is a real
-           user-visible outcome, so unlike gate 1 it emits
-           ``write.applied{failed, rowset_unaccounted}`` naming the row and the
-           rule, and dispatches NOTHING — not the offending row, and not its
-           siblings either. Shrinking the batch would turn the apply the user
-           authorized into a different one and would let an account stripped
-           from one row pass quietly.
-
-        Held rows are never dispatched by either path.
+        Fail-closed gate (fold-based): the stage must be APPLY_PENDING, the apply
+        decision at ``command.decision_seq`` must cover EXACTLY ``command.row_keys``,
+        every key must fold ``will_apply``, and none may already have an outcome.
+        Any mismatch ⇒ warn-log + no-op, NO event. Held rows are never dispatched.
         """
 
         state = await self._fold_stage(command)
@@ -223,29 +200,13 @@ class RuntimeStageCommitHandler:
             )
             return
 
-        plan = state.row_send_plan(commanded)
-        if plan.refusal is not None:
-            # The row key is safe to log (the producer chose it); no value is.
-            _LOGGER.warning(
-                "stage_commit.rowset_unaccounted stage_id=%s row_key=%s: nothing sent",
-                command.stage_id,
-                plan.refusal.row_key,
-            )
-            await self._emit_failed(
-                run=run,
-                command=command,
-                failure_code=Values.FAILURE_ROWSET_UNACCOUNTED,
-                audit_action=_AUDIT_ABORTED_UNACCOUNTED,
-                detail=plan.refusal.message(),
-                row_keys=commanded,
-            )
-            return
-
         row_results: list[dict[str, object]] = []
         applied = 0
         failed = 0
-        for row in plan.rows:
-            row_key = row.row_key
+        for row_key in commanded:
+            row = state.staged_row(row_key)
+            if row is None:  # gate proved membership; defensive only
+                continue
             request = self._build_rowset_request(command=command, state=state, row=row)
             dispatched = await self._dispatch(
                 run=run,
@@ -328,14 +289,9 @@ class RuntimeStageCommitHandler:
         *,
         command: RuntimeStageCommitCommand,
         state: StagedWriteState,
-        row: StagedRow,
+        row: object,
     ) -> StageCommitRequest:
-        """Build the connector request for ONE row — ``row_args`` verbatim (FR-C3).
-
-        ``target_args`` dispatches unchanged, which is only safe because the row
-        reached here through :meth:`StagedWriteState.row_send_plan`: every key in
-        this dict has a matching ``sends`` entry that the reviewer saw.
-        """
+        """Build the connector request for ONE row — ``row_args`` verbatim (FR-C3)."""
 
         return StageCommitRequest(
             org_id=command.org_id,
@@ -348,8 +304,8 @@ class RuntimeStageCommitHandler:
             target_connector=state.target_connector,
             target_op=state.target_op,
             body="",
-            row_key=row.row_key,
-            row_args=dict(row.target_args),
+            row_key=getattr(row, "row_key", None),
+            row_args=dict(getattr(row, "target_args", {}) or {}),
         )
 
     @staticmethod
@@ -589,44 +545,29 @@ class RuntimeStageCommitHandler:
         command: RuntimeStageCommitCommand,
         failure_code: str,
         audit_action: str,
-        detail: str | None = None,
-        row_keys: tuple[str, ...] | None = None,
     ) -> None:
-        """Emit ``write.applied{failed, failure{code, detail?}}`` + the audit row.
+        """Emit ``write.applied{failed, failure{code}}`` + the matching audit row.
 
         The draft status is left untouched, so a fresh approve can retry.
-        ``detail`` is a safe public sentence (never connector output) and rides
-        the ``failure`` block the projector already allow-lists, so a refusal
-        that names one row reaches the reader instead of only the log.
-        ``row_keys`` scopes a row-set refusal to the set that did not send.
         """
 
-        failure: dict[str, object] = {Keys.Field.CODE: failure_code}
-        if detail is not None:
-            failure[Keys.Field.DETAIL] = detail
-        payload: dict[str, object] = {
-            Keys.Field.RESULT: Values.RESULT_FAILED,
-            Keys.Field.FAILURE: failure,
-        }
-        if row_keys is not None:
-            payload[Keys.Field.ROW_KEYS] = list(row_keys)
         await self._emit_write_applied(
             run=run,
             command=command,
-            payload=payload,
+            payload={
+                Keys.Field.RESULT: Values.RESULT_FAILED,
+                Keys.Field.FAILURE: {Keys.Field.CODE: failure_code},
+            },
             summary=Messages.FAILED_TITLE,
         )
-        metadata: dict[str, object] = {
-            Keys.Field.RESULT: Values.RESULT_FAILED,
-            Keys.Field.CODE: failure_code,
-        }
-        if detail is not None:
-            metadata[Keys.Field.DETAIL] = detail
         await self._write_audit(
             run=run,
             command=command,
             action=audit_action,
-            metadata=metadata,
+            metadata={
+                Keys.Field.RESULT: Values.RESULT_FAILED,
+                Keys.Field.CODE: failure_code,
+            },
         )
 
     async def _flip_draft_sent(self, *, run: object, record: DraftRecord) -> None:
