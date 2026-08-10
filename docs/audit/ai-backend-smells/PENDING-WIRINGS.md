@@ -36,7 +36,7 @@ kept as written on 2026-08-01.
 | ----------------- | -------------------------------------------------------------------------------------------- | ----: |
 | **Blocked**       | Names a specific **unshipped** dependency (route, hook, consumer, column). Cannot wire yet.  |     7 |
 | **Newly visible** | Already unreachable; the scanner could not say so until the facade blind spot was closed.    |     2 |
-| **Wireable**      | No unshipped blocker — every dep is present; the decision is **wire-or-drop**, not a wait.   |     2 |
+| **Wireable**      | No unshipped blocker — every dep is present; the decision is **wire-or-drop**, not a wait.   |     1 |
 | **Delete**        | No blocker **and** superseded by a wired twin / stale shim / redundant scaffolding.          |     0 |
 | **Not an orphan** | Live `python -m` entrypoint (`__main__` guard) the scanner mis-flags. Exclude from the scan. |     1 |
 | **Retired**       | Module since deleted; row kept for provenance.                                               |    42 |
@@ -115,16 +115,11 @@ list and the audit that authorised it. Two are held and keep their rows above:
 
 ---
 
-## Wireable now — no unshipped blocker; decide wire-or-drop (2)
+## Wireable now — no unshipped blocker; decide wire-or-drop (1)
 
 Every dependency is present; these are landed _behind_ their switch. Each is either
 a scheduled wiring or a candidate to drop — none is a "wait."
 
-- **`runtime_worker.jobs.approval_expiry_sweeper`** (245, 05-05) — the only thing that
-  expires stale approvals. All port methods + a production `HttpWorkspaceMembershipResolver`
-  are shipped; it is just never constructed in `runtime_worker/__main__.py` (gated behind
-  `RUNTIME_APPROVAL_EXPIRY_SWEEP_ENABLED`, off). **This is TASKS.md T2.3.** → **wire** (also
-  construct a membership resolver in the worker `__main__`).
 - **`agent_runtime.release.e2_final_conformance`** (524, 07-26) — a fail-closed release
   conformance report that reads source trees; nothing runs it yet. Names no blocker, but it
   is the aggregator the other conformance gates would report into. **<30 days → confirm with
@@ -259,19 +254,27 @@ and both entries were pruned from `orphan_ratchet_baseline.txt` at the time.
 of use: a package `__init__` re-exporting its own submodule (resolved through the facade
 instead of trusted), and a dotted string literal that merely looks like a module (a logger
 channel was clearing a genuinely unwired 907-line job — `routine_scheduler` — out of the
-report). The scan now reports **30** orphans against a 30-line baseline, and
+report). That day the scan reported **30** orphans against a 30-line baseline; after the
+35-module deletion later the same day the baseline is **8** lines and the scan agrees with
+it (re-checked 2026-08-10). The point that outlives the numbers is the next clause, and
 `test_baseline_has_no_entry_the_scanner_cannot_reproduce` fails on a line the scanner can
 no longer justify, so the "catches debt appearing, not debt clearing" asymmetry noted in
 §"Wired up" is closed.
 
 ---
 
-## Wired up — blocker shipped, row retired (3)
+## Wired up — blocker shipped, row retired (4)
 
 The state this ledger exists to reach. Recorded rather than silently erased, because
 "it was pending once" is the provenance a future reader needs when they find the
 module already wired and wonder whether that was deliberate.
 
+- **`runtime_worker.jobs.approval_expiry_sweeper`** (245, enrolled 05-05) — filed as
+  "Wireable now, never constructed in `runtime_worker/__main__.py`" until 2026-08-10,
+  by which point that had stopped being true: it is imported at
+  `runtime_worker/__main__.py:39` and constructed below it. **TASKS.md T2.3 shipped and
+  this row was not retired with it** — the row outlived its own claim, which is the
+  failure mode this section exists to catch.
 - **`agent_runtime.capabilities.mcp.connector_resolver`** (75, enrolled 08-02) — waited on
   **P2-6** and **P2-8**; both shipped. `runtime_worker/stream_tools.py` imports
   `ToolConnectorResolver` and publishes it per run (`publish_connector_resolver`, P2-6),
@@ -309,6 +312,58 @@ on a baseline line the scan cannot justify, so wiring a module up — or deletin
 the prune in the same change. It found a third rider immediately:
 `runtime_worker.jobs.encrypt_existing_columns`, whose module the Postgres removal deleted
 while leaving the line.
+
+---
+
+## Re-adjudicated — the 2026-08-10 resurrection (0 entered the table)
+
+**Every module `e5f8ef2b` deleted came back on 2026-08-10, and none of it was new.**
+Recorded here because the failure is cheap to repeat and expensive to re-derive: it
+cost most of a day the first time, and nothing in the tree prevents a third.
+
+**What happened.** A checkout had not been pulled since 08-06 — the day of the
+deletion. Its working tree still held all 35 modules on disk. Snapshotting it
+(`rescue/wip-e84e82f8-20260810`, 265 files) and diffing against a current `dev` made
+every deleted file look like an addition. They "exist on no branch", and the reason
+is that **someone removed them on purpose, with an audit, and wrote down why** —
+this file.
+
+**What was checked, and how.** 63 of the 66 files that exist on no branch were
+deleted by `e5f8ef2b`. Comparing blob hashes between `e5f8ef2b^` and the resurrected
+tree: **63 identical, 0 modified.** Not "similar" — the same objects. Two more
+(`ArtifactEditor.tsx` + its test) were deleted by `f7d9021f`, which shipped in
+`@0x-copilot/cli` **v0.2.1**; re-landing them would reintroduce the raw-markdown
+`<textarea>` that release removed. Exactly **one** file was novel
+(`tools/cli-testing/harness/rectrailer.mjs`, referenced by nothing).
+
+The one-command reproduction, for whoever meets this next:
+
+```bash
+git log --diff-filter=AD --follow -- services/ai-backend/src/agent_runtime/persistence/encryption.py
+# an A directly above a D means: deleted on purpose, then resurrected by a stale tree
+```
+
+**The trap that made it convincing.** The resurrected tests pass — 373 of 374. That
+number is worthless and it is worth saying why, because it is what nearly bought the
+argument: the tests were deleted by the same commit, from the same snapshot, as the
+code they exercise. A deleted module passing its own deleted tests proves
+self-consistency, never need. Ask what _imports_ it, not what tests it.
+
+**Verdict: the deletion stands. Nothing was re-landed, and no row entered the
+disposition table.** Landing 12k LOC of adjudicated-dead code with fresh ledger rows
+would have converted a closed decision into permanent debt wearing an official
+paper trail — the ledger laundering the very thing it exists to expose.
+
+Two claims collected while checking, so nobody re-derives them:
+
+- **`context.tool_result_admission_gate` has no caller.** Its only occurrence in
+  `src/` is a Sphinx cross-ref at `context/tool_result_admission.py:104` pointing at
+  the **test** module. A docstring reference is not an import; it reads like one in
+  a grep.
+- **`capabilities.tools.privacy` named a blocker that never existed.**
+  `agent_runtime.api.privacy_fetcher` appears nowhere in repo history. That module
+  is the worked example of why a ledger entry must name a blocker **quotable from
+  source** — an unquotable one cannot be parked, because the row would be fiction.
 
 ---
 

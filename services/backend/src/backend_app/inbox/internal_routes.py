@@ -1,7 +1,23 @@
 """Internal Inbox producer endpoint — ``POST /internal/v1/inbox/items``.
 
-Service-token-gated. ai-backend posts here via
-``services/ai-backend/src/agent_runtime/api/inbox_producer.py``.
+Service-token-gated.
+
+**This route currently has no producer.** It was built for
+``services/ai-backend/.../agent_runtime/api/inbox_producer.py``, which was deleted on
+2026-08-06 as an adjudicated orphan (``e5f8ef2b``) — nothing in ai-backend had ever
+constructed it. The Inbox destination was folded out of the product IA in the same
+period: ``apps/frontend/src/app/routes.ts`` redirects ``inbox`` to Activity, and
+``InboxRoute.tsx`` is unrendered.
+
+So the seam is live on this side and absent on both the producing and the consuming
+side. The route is kept — it is service-token gated, tested, and inserts nothing on
+its own, so it costs nothing to leave standing — but it is NOT a wiring someone
+forgot: re-pointing it at a producer is a product decision about whether Inbox comes
+back, not a follow-up task. Recorded in
+``docs/audit/ai-backend-smells/PENDING-WIRINGS.md`` §Re-adjudicated (2026-08-10).
+
+The old docstring named the deleted module as its live caller, which cost a reader a
+day: the reference reads as evidence the producer exists somewhere.
 
 Authorization (per ``docs/atlas-new-design/destinations/inbox-prd.md`` §7.3):
 
