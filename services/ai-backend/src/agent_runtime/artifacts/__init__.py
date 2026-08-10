@@ -24,6 +24,11 @@ from agent_runtime.artifacts.contracts import (
     ArtifactStoredRevision,
     ByteRange,
 )
+from agent_runtime.artifacts.content_merge import (
+    ArtifactMergeResult,
+    ArtifactMergeStatus,
+    ThreeWayTextMerge,
+)
 from agent_runtime.artifacts.errors import (
     ArtifactBlobUnavailableError,
     ArtifactConflictError,
@@ -99,6 +104,8 @@ __all__ = (
     "ArtifactLimits",
     "ArtifactListPage",
     "ArtifactListQuery",
+    "ArtifactMergeResult",
+    "ArtifactMergeStatus",
     "ArtifactMetadataStorePort",
     "ArtifactMutationResult",
     "ArtifactOperation",
@@ -126,4 +133,5 @@ __all__ = (
     "ByteRange",
     "ProjectedArtifact",
     "ProjectedArtifactRevision",
+    "ThreeWayTextMerge",
 )
