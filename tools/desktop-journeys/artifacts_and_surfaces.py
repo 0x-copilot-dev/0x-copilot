@@ -72,6 +72,17 @@ from _lib import (
     wait_for_terminal_run,
 )
 
+#: The artifact boot's environment with both E2 mode overrides REMOVED, so the
+#: MCP dependency group stays legacy-passthrough and the backend MCP registry
+#: is actually composed. Every surface flag is identical — the connector phases
+#: assert on surfaces too, and changing those would change what they measure.
+CONNECTOR_JOURNEY_ENVIRONMENT: Final = {
+    name: value
+    for name, value in ARTIFACT_JOURNEY_ENVIRONMENT.items()
+    if name not in {"OPERATION_GATEWAY_MODE", "WORKSPACE_EFFECT_MODE"}
+}
+
+
 STATE: dict[str, Any] = {}
 
 
@@ -1013,7 +1024,31 @@ EXPECTED_REVISION: Final[str] = "eight-shapes.1"
 #: historical defect is rung 0 inferring a perfectly valid table over
 #: ``items_path: "result"`` and stuffing the connector's whole payload into one
 #: ``Text`` cell.
-TRANSPORT_SLOTS: Final[frozenset[str]] = frozenset({"id", "type", "text"})
+#:
+#: Split in two because they are not equally diagnostic. ``type`` and ``text``
+#: are content-block field names with no meaning to any connector in this
+#: matrix, so either one ALONE convicts.
+TRANSPORT_ONLY_SLOTS: Final[frozenset[str]] = frozenset({"type", "text"})
+
+#: ``id`` is the ambiguous one, and treating it like the other two cost a real
+#: verdict: shape 5 (prose) drew ``ID`` holding ``#4471`` — the fixture's own
+#: ``number`` — beside Incident/Urgency/Status/Owner/Service, and was failed for
+#: "binding the transport" while every drawn column was the connector's. A label
+#: is not provenance. ``id`` therefore convicts only in company: alongside
+#: another transport slot it is the envelope's ID/Type/Text triple, and alone it
+#: is just what an incident calls itself.
+TRANSPORT_AMBIGUOUS_SLOTS: Final[frozenset[str]] = frozenset({"id"})
+
+TRANSPORT_SLOTS: Final[frozenset[str]] = (
+    TRANSPORT_ONLY_SLOTS | TRANSPORT_AMBIGUOUS_SLOTS
+)
+
+#: The ROOT container of the MCP envelope itself. Binding over one of these is
+#: the envelope whatever the columns are called, which is the half labels alone
+#: cannot see: relabel the historical defect's columns and a label-only rule
+#: passes it. Compared against the root segment only — shape 8 legitimately
+#: binds ``items.1.incidents``, and a substring test would convict it.
+TRANSPORT_ITEMS_ROOTS: Final[frozenset[str]] = frozenset({"result", "content"})
 
 #: Slot labels that can only have come from the fixture's own rows. Two of these
 #: with none of :data:`TRANSPORT_SLOTS` is what "the surface bound the payload"
@@ -1161,6 +1196,27 @@ class ShapeOutcome:
         return {slot.strip().lower() for slot in self.slots if slot.strip()}
 
     @property
+    def binds_transport_envelope(self) -> bool:
+        """Is what was drawn the MCP envelope rather than the connector's payload?
+
+        Two independent signatures, because each covers the other's blind spot.
+        LABELS catch the defect in its known form (``ID``/``Type``/``Text``);
+        the ITEMS PATH catches it after a relabel, when the columns are named
+        anything at all but the rows are still content blocks. Either convicts.
+        """
+
+        keys = self.slot_keys
+        # A content-block field name no connector shares — conclusive alone.
+        if keys & TRANSPORT_ONLY_SLOTS:
+            return True
+        # ``id`` plus any other transport slot is the envelope's own triple.
+        if len(keys & TRANSPORT_SLOTS) >= 2:
+            return True
+        # Bound over the envelope's own container, whatever it drew as columns.
+        root = (self.server_items_path or "").split(".")[0].strip().lower()
+        return root in TRANSPORT_ITEMS_ROOTS
+
+    @property
     def bound(self) -> bool:
         """Did the surface bind the CONNECTOR's payload, or the transport's envelope?
 
@@ -1168,14 +1224,13 @@ class ShapeOutcome:
         A table drawn over ``{"result": [<content blocks>]}`` is a real,
         mounted, non-empty table — it just describes the wire format, and shape
         8 draws three rows of it, which from across the room looks exactly like
-        three incidents. Requiring connector-named slots AND forbidding
-        transport-named ones separates the two.
+        three incidents. Requiring connector-named slots AND ruling out the
+        transport envelope separates the two.
         """
 
-        keys = self.slot_keys
-        if keys & TRANSPORT_SLOTS:
+        if self.binds_transport_envelope:
             return False
-        return len(keys & CONNECTOR_SLOTS) >= MIN_BOUND_SLOTS
+        return len(self.slot_keys & CONNECTOR_SLOTS) >= MIN_BOUND_SLOTS
 
     @property
     def verdict(self) -> str:
@@ -1471,7 +1526,7 @@ class FloorJourney:
         except json.JSONDecodeError:
             return {"raw": raw}
 
-    def diagnose(self, run_id: str) -> dict:
+    def diagnose(self, run_id: str, captured_client: dict | None = None) -> dict:
         """Trace all four hops and print them as one table.
 
         The architecture's central invariant is that ``surface_id`` is ONE value:
@@ -1485,7 +1540,9 @@ class FloorJourney:
 
         ledger = self._hop_ledger(run_id)
         server = self._hop_server(run_id)
-        client = self._hop_client()
+        # Prefer the snapshot taken while THIS run's chat was on screen; the
+        # live DOM is some later shape's chat by the time the trace is folded.
+        client = captured_client if captured_client is not None else self._hop_client()
 
         print(f"\n[trace] run_id: {run_id!r}")
         print("[trace] hop 1 LEDGER (events.jsonl on disk)")
@@ -1675,11 +1732,21 @@ class FloorJourney:
             if outcome.ok:
                 continue
             if outcome.slots:
-                why = (
-                    "those are the MCP envelope's own fields, not the connector's"
-                    if outcome.slot_keys & TRANSPORT_SLOTS
-                    else "no connector field was bound"
-                )
+                # Say which signature convicted, or the reader chases the wrong
+                # half: an items_path conviction can draw perfectly ordinary
+                # columns, and "no connector field was bound" would be a lie.
+                if (
+                    outcome.slot_keys & TRANSPORT_SLOTS
+                    and outcome.binds_transport_envelope
+                ):
+                    why = "those are the MCP envelope's own fields, not the connector's"
+                elif outcome.binds_transport_envelope:
+                    why = (
+                        "it is bound over the MCP envelope's own container "
+                        f"({outcome.server_items_path!r}), whatever the columns say"
+                    )
+                else:
+                    why = "no connector field was bound"
                 print(
                     f"    shape {outcome.shape.number}: drew {outcome.slots} over "
                     f"items_path={outcome.server_items_path!r} — {why}"
@@ -1713,17 +1780,26 @@ class FloorJourney:
         s.shot("floor-00-connector-registered")
 
         trace_run_id = ""
+        trace_client: dict | None = None
         for index, shape in enumerate(self.shapes):
             outcome = self.drive_shape(shape, first=index == 0)
             self.outcomes.append(outcome)
             if shape.number == TRACE_SHAPE:
                 trace_run_id = self._run_id()
+                # Capture the CLIENT hop HERE, while the traced shape's chat is
+                # still the one on screen. `_hop_client` reads the live DOM and
+                # takes no run id, but the trace is folded after ALL shapes have
+                # run — and every shape opens a NEW chat. Reading it late
+                # compared shape 8's tab keys against shape 1's ledger, so
+                # `shared` was empty by construction and the identity assertion
+                # could never pass. An always-red check reports nothing.
+                trace_client = self._hop_client()
 
         self.print_matrix()
 
         # -- the deep trace, on the shape every real connector produces ----
         if trace_run_id:
-            trace = self.diagnose(trace_run_id)
+            trace = self.diagnose(trace_run_id, trace_client)
             # ONE IDENTITY. The defect this trace exists to catch was the canvas
             # minting `table://legacy-v2/table%3A%2F%2F…` and resolving it
             # against a map that could never hold it. Both halves are asserted:
@@ -2049,6 +2125,31 @@ def sign_in_and_key(s: DriverSession) -> None:
     ), "entered BYOK provider was not configured"
 
 
+#: Cheapest possible message that ends first-run. Its ANSWER is never asserted.
+FIRST_RUN_HELLO: Final = "Say OK and nothing else."
+
+
+def sign_in_key_and_enter_shell(s: DriverSession) -> None:
+    """``sign_in_and_key``, then leave first-run so the destination rail exists.
+
+    Only the FIRST phase in a boot meets the FTUE composer, and the shell's
+    destination rail is not mounted until a first message has been sent — see
+    ``DriverSession.send``, which documents the same split. The artifact boot
+    gets this for free because AS-1 opens it with ``send_first_run_message``;
+    the connector boot's first phase calls ``new_chat()`` immediately, which
+    clicks a rail that is not on screen yet and dies 15s later on a selector
+    timeout that looks nothing like its cause.
+    """
+
+    sign_in_and_key(s)
+    s.send_first_run_message(FIRST_RUN_HELLO)
+    assert s.wait_for(
+        '[data-destination][aria-label="Chats"], '
+        '[data-destination][aria-label^="Chats ("]',
+        120,
+    ), "the destination rail never mounted after the first-run message"
+
+
 # ── AS-1: the counterexample ─────────────────────────────────────────────────
 def as1_plain_chat_publishes_nothing(s: DriverSession) -> None:
     """An ordinary question must produce NO rich UI at all.
@@ -2157,6 +2258,15 @@ def as5_the_canvas_survives_a_chat_only_follow_up(s: DriverSession) -> None:
     )
     assert_canvas_shows_the_dataset(canvas_state(s), when="before the follow-up")
 
+    # Back to Chat first, for the same reason AS-6 does it: AS-4 ran
+    # `open_artifact_from_sources` and the rail is still on Sources, where the
+    # composer is not mounted. Without this the phase dies on "the composer
+    # textarea never became visible" — a missing selector, which says nothing
+    # about whether the canvas survived a follow-up.
+    s.click('[role=tab]:has-text("Chat")')
+    assert s.wait_for("[data-testid=composer-textarea]"), (
+        "returning to the Chat tab did not mount the composer"
+    )
     before = len(runs_for_conversation(s, conversation_id))
     s.send(FOLLOW_UP_PROMPT)
     run_two = wait_for_new_run(s, conversation_id, before)
@@ -2201,7 +2311,16 @@ def as6_artifact_edit_regressions(s: DriverSession) -> None:
     conversation_id = STATE.get("conversation_id")
     require(artifact and conversation_id, "needs the artifact AS-2 publishes")
 
-    open_artifact_from_sources(s)
+    # Do NOT re-open from Sources here. That rail is RUN-scoped — "everything
+    # the agent read or fetched THIS RUN" — and AS-5's chat-only follow-up made
+    # run 2 the bound run, whose provenance contains no artifact at all, so the
+    # hop fails on "dataset provenance did not identify its artifact" and says
+    # nothing about the edit regressions this phase exists for. AS-4 owns the
+    # Sources path; here the artifact is already presented, which is precisely
+    # what AS-5 asserts as its last act.
+    assert s.wait_for("[data-testid=artifact-dataset-renderer]", 60), (
+        "the dataset is not on the canvas, so the edit regressions cannot be assessed"
+    )
     assert_dataset_surface(s)
     assert s.wait_for(CELL), "no editable dataset cell"
 
@@ -2350,13 +2469,19 @@ def as8_switching_finished_artifacts_raises_no_alert(s: DriverSession) -> None:
     tabs = before.get("tabs") or []
     require(len(tabs) >= 2, f"the run published {len(tabs)} artifact(s); need two")
 
+    # The click takes the FIRST tab in DOM order, which is what `read_strip`
+    # reports as ``tabs[0]`` — so the assertion can be told which uri it must
+    # find active instead of guessing. Passing the SESSION here (and omitting
+    # `clicked_uri`) raised TypeError before the assertion ran at all, so this
+    # phase has never once executed the check it exists for.
+    clicked_uri = tabs[0].get("uri")
     s.click("[data-testid=tc-tabs] [role=tab]")
     time.sleep(2)
     after = read_strip(s)
     s.shot("older-tab-selected")
     log(f"ipc calls recorded: {count_ipc(s)}")
     try:
-        assert_no_alert(s, after)
+        assert_no_alert(before, after, clicked_uri)
     except AssertionError:
         # The banner is a symptom; what the canvas thought and what the surface
         # actually requested is the cause. Dump both before failing, or the next
@@ -2387,7 +2512,14 @@ def as9_the_inference_floor(s: DriverSession) -> None:
     which from across the room looks exactly like three incidents). That is more
     dangerous than an empty surface because it looks like it worked. So the
     discriminator is whose vocabulary the drawn slots come from:
-    :data:`TRANSPORT_SLOTS` disqualifies, :data:`CONNECTOR_SLOTS` is what counts.
+    :meth:`ShapeOutcome.binds_transport_envelope` disqualifies,
+    :data:`CONNECTOR_SLOTS` is what counts.
+
+    That discriminator reads BOTH the labels and the items path, because a label
+    is not provenance. ``id`` is a content-block field AND what an incident calls
+    itself, so convicting on it alone failed shape 5 for drawing the connector's
+    own ``#4471``; and a relabelled envelope table would have escaped a
+    label-only rule entirely. See :data:`TRANSPORT_ONLY_SLOTS`.
 
     Needs the loopback fixture MCP server; skips when it is not listening, and
     skips rather than measures when the server that IS listening reports a
@@ -2436,7 +2568,15 @@ def as10_the_local_mailbox_and_its_email_surface(s: DriverSession) -> None:
             f"no mailbox MCP server on {MAILBOX_URL} — start "
             "tools/desktop-journeys/local-mailbox/fixture_mcp.py",
         )
-    MailboxJourney(s, left=new_chat(s)).run()
+    # ASSERT the verdict. `run()` reports failure by RETURNING non-zero, and
+    # `JourneyPlan.run_phase` only fails a phase on a RAISED exception — so
+    # discarding this made every mailbox finding advisory. That is not a
+    # hypothetical: this phase reported PASS for 550s while the agent had no
+    # MCP tools at all and the mailbox was never read. A gate that cannot fail
+    # reports nothing.
+    assert MailboxJourney(s, left=new_chat(s)).run() == 0, (
+        "a mailbox finding FAILED — see the findings printed above"
+    )
 
 
 def main() -> int:
@@ -2488,6 +2628,29 @@ def main() -> int:
                 "switching between finished artifacts raises no alert",
                 as8_switching_finished_artifacts_raises_no_alert,
             ),
+        ],
+    )
+    # A SECOND boot, and not a stylistic one. `ARTIFACT_JOURNEY_ENVIRONMENT`
+    # sets OPERATION_GATEWAY_MODE=enforce, which marks ONE member of the MCP
+    # dependency group {operation_gateway, effect_stager, effect_commit,
+    # mcp_gateway} explicitly controlled — and that flips the WHOLE group off
+    # legacy passthrough onto cohort admission (rollout_admission.permits_all).
+    # The other five modes are emitted only by service-env's `cohortPolicy`,
+    # which returns {} on an UNPACKAGED build, and these journeys drive the
+    # source target. So mcp_gateway stays OFF, the worker composes an
+    # EmptyMcpRegistry with no `resolve_server`, the factory logs
+    # `mcp_catalog.not_mounted reason=no_mcp_seam`, and the agent gets ZERO MCP
+    # tools — it then reports the connector as unavailable, which reads exactly
+    # like a broken connector. Registering the fixture cannot help; nothing is
+    # listening for it. The connector phases therefore need a boot whose E2
+    # group is left wholly uncontrolled.
+    plan.boot(
+        "source · fresh · connectors (E2 group uncontrolled)",
+        lambda: DriverSession(name="artifacts-and-surfaces"),
+        setup=sign_in_key_and_enter_shell,
+        env=CONNECTOR_JOURNEY_ENVIRONMENT,
+        clear_env=SECRET_ENVIRONMENT_NAMES,
+        phases=[
             (
                 "AS-9",
                 "the inference floor: eight MCP envelopes, one dataset, "
