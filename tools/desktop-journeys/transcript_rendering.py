@@ -38,7 +38,6 @@ password field — never printed, logged, or written to an artifact.
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable
 
@@ -53,7 +52,6 @@ from _lib import (
     wait_for_terminal_run,
 )
 
-PROVIDER = os.environ.get("JOURNEY_PROVIDER", "anthropic")
 
 #: Cross-phase handoff. The rich-card matrix is a sequence of claims about the
 #: SAME conversation — "the card TR-1 made is still there after TR-3" cannot be

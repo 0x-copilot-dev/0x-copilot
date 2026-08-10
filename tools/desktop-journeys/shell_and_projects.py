@@ -27,7 +27,7 @@ import time
 
 from _lib import DriverSession, JourneyPlan, load_env_key, require
 
-PROVIDER = os.environ.get("SHELL_OVERFLOW_PROVIDER", "anthropic")
+PROVIDER = os.environ.get("SHELL_OVERFLOW_PROVIDER", "virtuals")
 
 # The two short window heights the walk is repeated at. 600 is what a user gets
 # by halving the default window; the second is THE SHORTEST WINDOW THE APP

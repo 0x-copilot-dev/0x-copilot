@@ -608,6 +608,13 @@ class DriverSession:
         assert self.wait_for("[data-testid=first-run-add-key]"), (
             "FTUE key card never appeared"
         )
+        # Virtuals is the default journey provider, so the catalog race in
+        # `wait_for_virtuals_catalog` is now on the common path rather than in
+        # one journey. Doing it here means every journey inherits the fix by
+        # construction instead of each remembering to wait.
+        if provider == "virtuals":
+            waited = wait_for_virtuals_catalog(self)
+            print(f"  virtuals catalog ready after ~{waited:.0f}s", flush=True)
         self.click("[data-testid=first-run-add-key]")
         assert self.wait_for("[data-testid=first-run-keyform]")
         self.fill("[data-testid=first-run-key-input]", key)  # value never printed
@@ -887,23 +894,68 @@ def preflight_staged_runtime(*, target: str = SOURCE_TARGET) -> None:
         )
 
 
+# Virtuals leads the chain: it is the default provider for journey runs.
+#
+# Not an arbitrary preference. It is the gateway the product is actually sold
+# through, and the only provider whose path has broken *silently* — `ChatOpenAI`
+# documents that it neither extracts nor preserves the non-standard
+# `reasoning_content` Virtuals streams, so the runtime billed reasoning tokens it
+# could never display and nothing raised (see `virtuals_thinking.py`). Direct
+# OpenAI/Anthropic keys exercise a first-party path that cannot catch that class
+# of bug. They stay in the chain as fallbacks so a machine with no Virtuals key
+# still runs the suite instead of skipping it.
+BYOK_PROVIDER_CHAIN: tuple[str, ...] = ("virtuals", "openai", "anthropic")
+
+
 def byok_provider(*, env_var: str = "JOURNEY_PROVIDER") -> tuple[str, str]:
     """Pick a provider that actually has a local key. Never returns the key alone."""
 
     requested = os.environ.get(env_var, "auto").strip().lower()
-    if requested not in {"auto", "openai", "anthropic"}:
-        raise AssertionError(f"{env_var} must be auto, openai, or anthropic")
-    providers = (requested,) if requested != "auto" else ("openai", "anthropic")
+    if requested not in {"auto", *BYOK_PROVIDER_CHAIN}:
+        raise AssertionError(
+            f"{env_var} must be auto or one of {', '.join(BYOK_PROVIDER_CHAIN)}"
+        )
+    providers = (requested,) if requested != "auto" else BYOK_PROVIDER_CHAIN
     for provider in providers:
         try:
             return provider, load_env_key(provider)
         except SystemExit:
             # load_env_key emits only a variable/path; never a provider key.
             continue
-    label = requested if requested != "auto" else "OpenAI or Anthropic"
+    label = (
+        requested
+        if requested != "auto"
+        else f"{', '.join(BYOK_PROVIDER_CHAIN[:-1])} or {BYOK_PROVIDER_CHAIN[-1]}"
+    )
     raise PhaseSkipped(
         f"no local {label} BYOK key is available through services/ai-backend/.env"
     )
+
+
+def wait_for_virtuals_catalog(session: DriverSession, timeout_s: int = 60) -> float:
+    """Block until the model catalog carries Virtuals rows. Returns seconds waited.
+
+    This is not padding, and it must run BEFORE the key is saved.
+    ``VirtualsModelSource`` never fetches on the request path, so a fresh
+    profile's first catalog read returns nothing and only *schedules* the fetch.
+    The FTUE refetches the catalog exactly once, immediately after the key is
+    saved — so a driver that pastes a key two seconds after boot beats the
+    snapshot, caches a Virtuals-free catalog, and never asks again. Measured:
+    rows appear ~2s in, the driver saved at ~2s. A human is slower than a driver,
+    which is why this only ever bit automation.
+
+    Returning rather than asserting is deliberate: a journey that merely needs a
+    working key should not fail because the catalog was slow, and one that asserts
+    on Virtuals rows (``virtuals_connected``) does its own checking afterwards.
+    """
+    waited = 0.0
+    while waited < timeout_s:
+        models = session.transport("GET", "/v1/agent/models").get("models", [])
+        if any(m.get("provider") == "virtuals" for m in models):
+            break
+        time.sleep(1)
+        waited += 1
+    return waited
 
 
 def runs_for_conversation(session: DriverSession, conversation_id: str) -> list[dict]:

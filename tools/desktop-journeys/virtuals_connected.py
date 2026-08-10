@@ -78,25 +78,10 @@ def sign_in_and_connect(s: DriverSession) -> None:
         "FTUE key card never appeared"
     )
 
-    # Wait for the Virtuals catalog snapshot to land BEFORE adding the key.
+    # The catalog-snapshot race this journey found now lives in `_lib`, and
+    # `ftue_add_key` waits it out for every Virtuals journey — see
+    # `wait_for_virtuals_catalog` for why the wait must precede the save.
     #
-    # This is not padding. `VirtualsModelSource` never fetches on the request
-    # path, so a fresh profile's first catalog read returns nothing and only
-    # SCHEDULES the fetch. The FTUE refetches the catalog once, immediately
-    # after the key is saved — and a driver that pastes a key two seconds after
-    # boot beats the snapshot, so the client caches a Virtuals-free catalog and
-    # never asks again. Measured: rows appear ~2s in, the driver saved at ~2s.
-    # A human takes longer than a driver, so this reproduces the human timing.
-    # The underlying race is real and is reported separately.
-    waited = 0.0
-    while waited < 60:
-        models = s.transport("GET", "/v1/agent/models").get("models", [])
-        if any(m.get("provider") == PROVIDER for m in models):
-            break
-        time.sleep(1)
-        waited += 1
-    print(f"  virtuals catalog ready after ~{waited:.0f}s")
-
     # Infers the provider from the key and asserts it landed on `virtuals`.
     s.ftue_add_key(PROVIDER, _key())  # value never printed
 

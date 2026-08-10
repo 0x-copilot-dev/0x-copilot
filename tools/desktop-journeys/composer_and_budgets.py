@@ -22,12 +22,10 @@ password field — never printed, logged, or written to an artifact.
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from _lib import DriverSession, JourneyPlan, byok_provider
 
-PROVIDER = os.environ.get("JOURNEY_PROVIDER", "anthropic")
 
 STATE: dict[str, object] = {}
 
