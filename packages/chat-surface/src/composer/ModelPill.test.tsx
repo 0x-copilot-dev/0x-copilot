@@ -472,3 +472,112 @@ describe("formatModelSize", () => {
     expect(formatModelSize(Number.NaN)).toBeNull();
   });
 });
+
+describe("ModelPill — usable models first, and a route to Settings → Models", () => {
+  // A catalog whose keyed model sorts LAST in catalog order — the real shape a
+  // Virtuals-only user sees, where four `needs key` rows preceded the one model
+  // they could run and pushed it under the 264px scroll cap.
+  const keyedLast: Array<ModelCatalogModel & { disabled?: boolean }> = [
+    {
+      id: "openai/gpt-5.6-luna",
+      provider: "openai",
+      model_name: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      configured: false,
+      disabled: true,
+    },
+    {
+      id: "anthropic/claude-opus-5",
+      provider: "anthropic",
+      model_name: "claude-opus-5",
+      name: "Claude Opus 5",
+      configured: false,
+      disabled: true,
+    },
+    {
+      id: "virtuals/claude-sonnet-5",
+      provider: "virtuals",
+      model_name: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      configured: true,
+    },
+  ];
+
+  function openMenu(): void {
+    fireEvent.click(screen.getByRole("button", { name: /^Model:/ }));
+  }
+
+  /** Row names INSIDE the menu.
+   *
+   * Not a text query over the document: the pill's own trigger renders the
+   * selected model's name too, so a regex across the page returns it as an
+   * extra leading entry — which silently satisfied an "is it first?"
+   * assertion no matter how the list was ordered. Read the row name nodes.
+   */
+  function rowNames(): string[] {
+    return [...document.querySelectorAll(".atlas-model-pill__nm")].map((n) =>
+      (n.textContent || "").trim(),
+    );
+  }
+
+  it("lists models you hold a key for ABOVE the ones needing a key", () => {
+    render(
+      <ModelPill
+        models={keyedLast}
+        value="virtuals/claude-sonnet-5"
+        onChange={vi.fn()}
+      />,
+    );
+    openMenu();
+    expect(rowNames()[0]).toBe("Claude Sonnet 5");
+  });
+
+  it("keeps the catalog's own order WITHIN each half (stable sort)", () => {
+    render(
+      <ModelPill
+        models={keyedLast}
+        value="virtuals/claude-sonnet-5"
+        onChange={vi.fn()}
+      />,
+    );
+    openMenu();
+    // The two unconfigured rows keep their relative catalog order; only the
+    // configured/unconfigured split is imposed.
+    expect(rowNames()).toEqual([
+      "Claude Sonnet 5",
+      "GPT-5.6 Luna",
+      "Claude Opus 5",
+    ]);
+  });
+
+  it("offers a Manage route to Settings → Models when the host wires one", () => {
+    const onManageModels = vi.fn();
+    render(
+      <ModelPill
+        models={keyedLast}
+        value="virtuals/claude-sonnet-5"
+        onChange={vi.fn()}
+        onManageModels={onManageModels}
+      />,
+    );
+    openMenu();
+    fireEvent.click(screen.getByTestId("model-pill-manage"));
+    expect(onManageModels).toHaveBeenCalledTimes(1);
+    // The popover closes on the way out — leaving it open behind Settings
+    // would strand a menu over a surface the user just navigated to.
+    expect(screen.queryByTestId("model-pill-manage")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the scope wording when no host route exists", () => {
+    render(
+      <ModelPill
+        models={keyedLast}
+        value="virtuals/claude-sonnet-5"
+        onChange={vi.fn()}
+      />,
+    );
+    openMenu();
+    expect(screen.getByText("this chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("model-pill-manage")).not.toBeInTheDocument();
+  });
+});

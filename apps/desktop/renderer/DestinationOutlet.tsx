@@ -121,6 +121,7 @@ export interface DestinationOutletProps {
    * the on-device half of the picker.
    */
   readonly onOpenLocalModelSettings?: () => void;
+  readonly onManageModels?: () => void;
   /**
    * Navigate to the Tools (connectors) surface. The Run composer's connectors
    * trigger + `+`-menu "show connectors" use it for the MCP + non-MCP view.
@@ -145,6 +146,7 @@ export function DestinationOutlet({
   onOpenApprovalSettings,
   onOpenModelSettings,
   onOpenLocalModelSettings,
+  onManageModels,
   onOpenConnectors,
   onOpenSkills,
   providerKeysRevision = 0,
@@ -170,6 +172,7 @@ export function DestinationOutlet({
         onOpenApprovalSettings,
         onOpenModelSettings,
         onOpenLocalModelSettings,
+        onManageModels,
         onOpenConnectors,
         onOpenSkills,
         providerKeysRevision,
@@ -192,6 +195,7 @@ interface SurfaceContext {
   readonly onOpenApprovalSettings?: () => void;
   readonly onOpenModelSettings?: () => void;
   readonly onOpenLocalModelSettings?: () => void;
+  readonly onManageModels?: () => void;
   readonly onOpenConnectors?: () => void;
   readonly onOpenSkills?: () => void;
   readonly providerKeysRevision: number;
@@ -223,6 +227,7 @@ function renderSurface(
           onNewChat={ctx.onNewChat}
           onOpenModelSettings={ctx.onOpenModelSettings}
           onOpenLocalModelSettings={ctx.onOpenLocalModelSettings}
+          onManageModels={ctx.onManageModels}
           onOpenConnectors={ctx.onOpenConnectors}
           onOpenSkills={ctx.onOpenSkills}
           providerKeysRevision={ctx.providerKeysRevision}

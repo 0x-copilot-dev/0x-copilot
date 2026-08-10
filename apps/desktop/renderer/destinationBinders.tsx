@@ -1140,6 +1140,7 @@ export function RunBinder({
   onNewChat,
   onOpenModelSettings,
   onOpenLocalModelSettings,
+  onManageModels,
   onOpenConnectors,
   onOpenSkills,
   providerKeysRevision = 0,
@@ -1160,6 +1161,7 @@ export function RunBinder({
   readonly onOpenModelSettings?: () => void;
   /** Open Settings → Local models (model popover's "Get local models →"). */
   readonly onOpenLocalModelSettings?: () => void;
+  readonly onManageModels?: () => void;
   /** Navigate to the Tools (connectors) surface — composer connections view. */
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface — composer skills settings. */
@@ -1513,6 +1515,7 @@ export function RunBinder({
         providerKeysPort={providerKeysPort}
         catalogRefreshKey={providerKeysRevision}
         onGetLocalModels={onOpenLocalModelSettings}
+        onManageModels={onManageModels}
         // The nav's conversation (not `boundConversationId`): a brand-new chat
         // must stay `null` so its model pick is remembered as "last used"
         // rather than filed under the synthetic "new" id every new chat shares.
@@ -1565,6 +1568,7 @@ export function RunBinder({
         onOpenSkillsSettings={onOpenSkills}
         onOpenModelSettings={onOpenModelSettings}
         onGetLocalModels={onOpenLocalModelSettings}
+        onManageModels={onManageModels}
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
         catalogRefreshKey={providerKeysRevision}

@@ -2196,6 +2196,34 @@ textarea {
   color: var(--color-text-subtle);
 }
 
+/* The meta slot as an ACTION (model picker's "Manage" → Settings → Models).
+ * Inherits the meta's type and placement so the header keeps its shape whether
+ * the slot is a label or a control; only the affordances are added. A button
+ * element carries no UA chrome here on purpose — the design's header has one
+ * quiet line, and a raised control in it would read as a second title. */
+button.ui-pop__h-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  margin-right: -6px; /* keep the glyph on the frame's optical right edge */
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: none;
+  cursor: pointer;
+}
+
+button.ui-pop__h-meta svg {
+  width: 12px;
+  height: 12px;
+}
+
+button.ui-pop__h-meta:hover,
+button.ui-pop__h-meta:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover, rgb(255 255 255 / 6%));
+}
+
 /* Scrolling row region — the design's `.pop__list`. Vertical ONLY: a popover is
  * a fixed-width panel whose rows truncate, so a horizontal scrollbar is always
  * a layout bug, never an affordance. It used to be plain `overflow: auto`, and

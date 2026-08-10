@@ -80,6 +80,8 @@ export interface RunEmptyComposerProps {
    * Host-owned navigation; omitted ⇒ the link is not rendered.
    */
   readonly onGetLocalModels?: () => void;
+  /** Model popover header "Manage" -> Settings -> Models (the curation surface). */
+  readonly onManageModels?: () => void;
   /**
    * The conversation this composer starts a run in — scopes the REMEMBERED
    * model pick so it survives leaving and re-entering the destination. Usually
@@ -113,6 +115,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     providerKeysPort,
     catalogRefreshKey,
     onGetLocalModels,
+    onManageModels,
     conversationId = null,
     conversationModel = null,
     filing,
@@ -288,6 +291,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       // Model popover footer → Settings → Local models. Same deep-link idiom as
       // the provider-keys CTA, just the other half of the picker.
       onGetLocalModels={onGetLocalModels}
+      onManageModels={onManageModels}
       models={models}
       selectedModel={selectedModel}
       onModelChange={onModelChange}
