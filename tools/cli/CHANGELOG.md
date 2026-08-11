@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.2 - 2026-08-11
+
+### Bug Fixes
+
+- **desktop-journeys:** let the connector phases see a connector, and judge the floor on provenance ([`6ce0433b`](https://github.com/0x-copilot-dev/0x-copilot/commit/6ce0433be865ba7509b667636ec2a2005858b65d))
+- **ai-backend:** recover a lost artifact revision without the model ([`b21bace7`](https://github.com/0x-copilot-dev/0x-copilot/commit/b21bace772d4382f38f7cc9962174a7d4b44b5ca))
+- **chat-surface:** hydrate a surface whose run restarted the seq counter ([`a949a6bd`](https://github.com/0x-copilot-dev/0x-copilot/commit/a949a6bdf1f885a23d1ab8902e628200e3966d6c))
+
+### Maintenance
+
+- **journeys:** make Virtuals the default provider ([`dcb6e7ff`](https://github.com/0x-copilot-dev/0x-copilot/commit/dcb6e7ffe5e80412e15398dcfd1e4abea433e559))
+- **journeys:** let AS-6 run at all, and let it name its own failure ([`35426ae0`](https://github.com/0x-copilot-dev/0x-copilot/commit/35426ae0ac84eae377a2e64d2faeebda2f1d5deb))
+- record the resurrection, and the two traps that made it convincing ([`67573dc2`](https://github.com/0x-copilot-dev/0x-copilot/commit/67573dc2a7a53260b68f35b3f923a4124fee98ef))
+
+[Full changelog](https://github.com/0x-copilot-dev/0x-copilot/compare/cli-v0.2.1...cli-v0.2.2)
+
 ## 0.2.1 - 2026-08-10
 
 ### Features
