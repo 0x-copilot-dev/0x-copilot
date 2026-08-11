@@ -359,9 +359,15 @@ def test_waiver_count_does_not_grow() -> None:
     orphan that must be waived) fails HERE and has to justify the bump."""
 
     _, waivers = find_orphans(default_paths())
-    # Bumped 12 -> 13 for the Generative Surfaces v2 cockpit chips
-    # (PostureChip / PendingCounterChip): exported from the barrel and consumed
+    # 13 -> 5: the DEAD-1 backlog this counter was created to track has been
+    # paid down. The eight waivers that disappeared were not re-classified —
+    # the code they waived is deleted (the `memory`, `agents`, `home`, `inbox`,
+    # `library`, `routines`, `team`, `todos` and `tools` destinations, none of
+    # which any host mounted).
+    #
+    # Ratchet down, never up. The five that remain are the Generative Surfaces
+    # v2 cockpit chips and their siblings: barrel-exported and consumed
     # in-package by RunDestination (the cockpit both hosts mount), but not
-    # host-name-referenced, so the shallow guard waives them. Legit in-package
-    # consumers, owner-tagged at the export site.
-    assert len(waivers) == 13
+    # host-name-referenced, so the shallow guard waives them. Those are legit
+    # in-package consumers, owner-tagged at the export site.
+    assert len(waivers) == 5
