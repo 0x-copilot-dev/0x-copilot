@@ -1,8 +1,8 @@
 // <WebhookCreateWizard /> — 5-step machine that creates a Webhook.
 //
 // Source: connectors-prd §7.3 (wizard) + §9.4 (verification snippet) +
-// §3.1 wire (`Webhook`, `WebhookCreateResponse`). Reuses
-// `useStepMachine` from `../tools/onboarding` — no new step machine.
+// §3.1 wire (`Webhook`, `WebhookCreateResponse`). Uses the colocated
+// `./useStepMachine` — no new step machine.
 //
 // Steps:
 //   1. URL              — paste the receiver URL.
@@ -31,7 +31,7 @@ import type {
   WebhookSecretStrategy,
 } from "@0x-copilot/api-types";
 
-import { useStepMachine } from "../../tools/onboarding/useStepMachine";
+import { useStepMachine } from "./useStepMachine";
 
 import { RevealOnce } from "../RevealOnce";
 

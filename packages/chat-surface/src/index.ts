@@ -612,46 +612,6 @@ export {
 
 // === Phase 2-A / 3 destinations ===
 export {
-  HomeDestination,
-  HomePanel,
-  type HomeDestinationProps,
-  type HomePanelProps,
-} from "./destinations/home";
-export {
-  InboxDestination,
-  InboxPanel,
-  bucketInbox,
-  type InboxDestinationProps,
-  type InboxItem,
-  type InboxItemKind,
-  type InboxItemPriority,
-  type InboxItemStatus,
-  type InboxPanelCounts,
-  type InboxPanelFilterSlug,
-  type InboxPanelProps,
-  type InboxSectionKey,
-  type InboxSender,
-  type InboxSenderKind,
-  type InboxSystemOrigin,
-  type RenderDetailSlot,
-} from "./destinations/inbox";
-export {
-  TodosDestination,
-  TodosPanel,
-  bucketTodos,
-  type Todo,
-  type TodoExtraction,
-  type TodoPriority,
-  type TodoSectionKey,
-  type TodoSource,
-  type TodosDestinationProps,
-  type TodosFilterSlug,
-  type TodosPanelProps,
-  type TodosPayload,
-  type TodosProjectChip,
-  type TodosSavedFilter,
-} from "./destinations/todos";
-export {
   ProjectFilterChip,
   ProjectsDestination,
   // PRD-10 (D9 wire-or-delete ledger): the create/edit sheet + the two team
@@ -693,80 +653,6 @@ export {
   type ProjectsFilterSlug,
   type RenderProjectDetailSlot,
 } from "./destinations/projects";
-export {
-  LibraryDestination,
-  type LibraryDestinationProps,
-  LibraryPanel,
-  type LibraryPanelProps,
-  type LibrarySourceFilterCounts,
-  type LibrarySourceFilterSlug,
-  SaveToLibraryPopover, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the Library save-to popover is unmounted pending the DEAD-1 IA-fold disposition).
-  type SaveToLibraryPopoverProps,
-  type SaveToLibrarySubmit,
-  type LibraryDatasetSummary,
-  type LibraryFileKind,
-  type LibraryFileSummary,
-  type LibraryIndexStatus,
-  type LibraryItemKind,
-  type LibraryItemSummary,
-  type LibraryKindFilterCounts,
-  type LibraryKindFilterSlug,
-  type LibraryPageSummary,
-  type LibrarySortSlug,
-  type LibrarySource,
-  type LibrarySourceKind,
-  type LibraryViewMode,
-  type SaveToLibraryDefaultKind,
-  type SaveToLibrarySource,
-} from "./destinations/library";
-export {
-  AgentCard,
-  AgentsDestination,
-  AgentsPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (`agents` is not in `destinationsForProfile`; disposition owned by the DEAD-1 IA-fold audit).
-  AGENTS_PANEL_WIDTH,
-  AGENT_COST_LABELS,
-  AGENT_FILTER_LABELS,
-  STARTER_RECOMMENDATIONS,
-  filterAgents,
-  resolveAgentItemRef,
-  searchAgents,
-  type AgentCardProps,
-  type AgentCostTier,
-  type AgentFilter,
-  type AgentItemDisplay,
-  type AgentItemRef,
-  type AgentOrigin,
-  type AgentStub,
-  type AgentsDestinationProps,
-  type AgentsPanelProps,
-} from "./destinations/agents";
-export {
-  ToolsDestination,
-  ToolsPanel,
-  ToolCard,
-  filterTools,
-  isInstalled,
-  searchTools,
-  sortTools,
-  statusTone,
-  TOOLS_FILTER_LABELS,
-  TOOLS_FILTER_ORDER,
-  TOOLS_KIND_LABELS,
-  TOOLS_KIND_ORDER,
-  TOOLS_SCOPE_LABELS,
-  TOOLS_SCOPE_ORDER,
-  TOOLS_SORT_LABELS,
-  TOOLS_SORT_ORDER,
-  TOOLS_STATUS_LABELS,
-  ONBOARD_KIND_TILES,
-  type KindOnboardTile,
-  type ToolCardProps,
-  type ToolsDestinationProps,
-  type ToolsFilterContext,
-  type ToolsFilterSlug,
-  type ToolsPanelProps,
-  type ToolsSortSlug,
-} from "./destinations/tools";
 export {
   ConnectorsDestination,
   // Mounted BY ConnectorsDestination (the row's Remove opens it); exported so
@@ -820,90 +706,9 @@ export type {
   WebhookCreateWizardProps,
   WebhookCreateWizardRequest,
 } from "./destinations/connectors";
-export {
-  applyRoleFilter,
-  applySearch,
-  applySort,
-  OffboardingWizard,
-  PersonCard,
-  PersonDetailView, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team person-detail view is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
-  TeamDestination,
-  TeamInviteWizard, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team invite wizard is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
-  TeamPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team panel is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
-  type OffboardingAsset,
-  type OffboardingWizardProps,
-  type PersonCardProps,
-  type PersonDetailTabId,
-  type PersonDetailViewProps,
-  type PresenceFilterCounts,
-  type PresenceFilterSlug,
-  type TeamDestinationProps,
-  type TeamFilterCounts,
-  type TeamFilterSlug,
-  type TeamInviteWizardProps,
-  type TeamInviteWizardResult,
-  type TeamPanelProps,
-  type TeamSortSlug,
-} from "./destinations/team";
-// === Phase 12 P12-B2 — Memory destination (presentation layer) ===
-// MemoryDestination is the 13th destination's shell. The data binder
-// (host) lands in P12-C2; until then App.tsx mounts the shell with no
-// `items` prop and the destination renders an unwired-state explanation.
-export {
-  MemoryDestination,
-  MemoryPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (`memory` is not in `destinationsForProfile`; disposition owned by the DEAD-1 IA-fold audit).
-  MemoryDetailView,
-  MemoryEditor,
-  MemoryProposalToast,
-  MemoryProposalToastStack, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the memory-proposal toast stack is unmounted while `memory` is folded; disposition owned by the DEAD-1 IA-fold audit).
-  MemoryProposalCard, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the memory-proposal card is unmounted while `memory` is folded; disposition owned by the DEAD-1 IA-fold audit).
-  type MemoryDestinationProps,
-  type MemoryDetailTabSlug,
-  type MemoryDetailViewProps,
-  type MemoryEditorProps,
-  type MemoryEditorSavePayload,
-  type MemoryKindFilterCounts,
-  type MemoryKindFilterSlug,
-  type MemoryPanelProps,
-  type MemoryPanelTagChip,
-  type MemoryProposalCardProps,
-  type MemoryProposalToastProps,
-  type MemoryProposalToastStackProps,
-  type MemoryScopeFilterSlug,
-  type RenderMemoryDetailSlot,
-} from "./destinations/memory";
 // === end Phase 12 Memory ===
 // === end Phase 2-A / 3 destinations ===
 
-// === Phase 5 — Routines (12th destination) ===
-export {
-  RoutinesDestination,
-  RoutinesPanel,
-  nextFireDisplay,
-  uniqueTriggerKinds,
-  type RenderRoutineDetailSlot,
-  type Routine,
-  type RoutineAutonomy,
-  type RoutineBehavior,
-  type RoutineConnectorConfig,
-  type RoutineDataResidency,
-  type RoutineManualFire,
-  type RoutineMissedFirePolicy,
-  type RoutineOutputTarget,
-  type RoutinePermissions,
-  type RoutineScope,
-  type RoutineStatus,
-  type RoutineTrigger,
-  type RoutineTriggerKind,
-  type RoutinesDestinationProps,
-  type RoutinesFilterCounts,
-  type RoutinesFilterSlug,
-  type RoutinesPanelProjectChip,
-  type RoutinesPanelProps,
-  type RoutinesPanelTriggerCounts,
-  type RoutinesPanelTriggerSlug,
-  type TriggerId,
-} from "./destinations/routines";
 // === end Phase 5 ===
 
 // === Phase 12 — Settings pages (NOT a destination) ===

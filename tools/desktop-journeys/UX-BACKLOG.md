@@ -4,6 +4,28 @@ Reported product/design issues and their implementation/verification record.
 Entries remain here after resolution so future desktop journeys have an
 evidence-backed product decision to test against.
 
+## B-05 — Bypass control is offered on a fresh install, but the module says "default off"
+
+- **Status:** Open — needs a product decision, not a code fix
+- **Observed:** A fresh install reports `filesystem_bypass_enabled: true`, so the
+  execution-mode pill is enabled and Bypass is selectable with no persisted row.
+- **The two sides.**
+  [`filesystem_bypass.py:177`](../../services/ai-backend/src/agent_runtime/execution/filesystem_bypass.py:177)
+  sets `DEFAULT_FILESYSTEM_BYPASS_OFFERED = True`, and the comment above it
+  explains why: when the pydantic default and the raw-JSONB read disagreed, the
+  API advertised a control that every run then sealed off — "a pill the user
+  could select that the server then silently ignored." Setting it `True` made
+  the two layers agree. The same module's **docstring** still describes tier 1
+  as "a Settings switch … default **off**."
+- **Why it matters:** both statements are load-bearing. `True` is what makes the
+  API and the run agree; "default off" is what the workspace-bypass journeys
+  encode. Whichever is wrong, one of them is currently lying to a reader.
+- **Decide, then align:** resolve which is intended before changing either side.
+  `ABSENT is not FALSE` (line 174) must survive whichever way it goes — an
+  explicit operator `False` has to keep working.
+- **Coverage:** [workspace_bypass.py](./workspace_bypass.py) — the default and
+  enforce lanes both exercise the pill.
+
 ## B-01 — Run receipt launcher overwhelms ordinary Studio runs
 
 - **Status:** Resolved — verified in the freshly packed installed desktop

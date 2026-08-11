@@ -54,14 +54,22 @@ No FastAPI, no HTTP routing, no worker loop. Everything here is importable by bo
 | `delegation/subagents/`        | `runner.py`, `handoff.py`, `atlas_task_tool.py`, `definitions.py`                                         | Subagent fleet lifecycle; `AtlasTaskTool` — model-facing delegation primitive                                                                                                           |
 | `persistence/`                 | `ports.py`                                                                                                | Higher-level port protocols: `DraftStorePort`, `CitationStorePort`, `SubagentStorePort`, `SourceStorePort`, `ConversationToolOrdinalStorePort`, `ShareStorePort`, `CheckpointStorePort` |
 | `persistence/records/`         | `common.py`, `runs.py`, `citations.py`, `drafts.py`, `subagents.py`, …                                    | Pydantic record types for every persisted entity                                                                                                                                        |
-| `persistence/`                 | `schema/postgres.py`, `schema/migrate.py`                                                                 | Postgres DDL and migration runner                                                                                                                                                       |
-| `persistence/`                 | `encryption.py`, `_aws_kms_client.py`                                                                     | Field-level encryption for sensitive columns (KMS-backed)                                                                                                                               |
+| `persistence/`                 | `optimistic.py`, `message_copy.py`, `errors.py`, `constants.py`                                           | Optimistic-concurrency helpers, message copy, typed persistence errors                                                                                                                  |
 | `observability/`               | `redactor.py`, `tracing.py`, `otel.py`, `logging.py`, `usage_recorder.py`, `token_usage.py`               | OTEL tracing, structured logging, payload redaction, usage recording                                                                                                                    |
 | `budgets/`                     | `enforcer.py`, `charger.py`, `estimator.py`, `reservations.py`                                            | Token budget enforcement, CAS-safe charging, per-run reservation                                                                                                                        |
 | `pricing/`                     | `catalog.py`, `calculator.py`, `refresh_loop.py`                                                          | Model pricing catalog (micro-USD); `CostCalculator`; background refresh from LiteLLM                                                                                                    |
 | `prompts/`                     | `runtime.py`, `tools.py`                                                                                  | System prompt assembly; tool-description injection                                                                                                                                      |
 | `retention/`                   | `policy_resolver.py`                                                                                      | Resolve retention policies from workspace config                                                                                                                                        |
 | `deployment/`                  | `profile.py`                                                                                              | Deployment profile (feature flags resolved from env)                                                                                                                                    |
+| `surfaces_v2/`                 | `ledger_models.py`, `entities.py`, `ledger_ids.py`, `commit_engine.py`, `projection.py`, `receipt_v2.py`  | **Work Ledger** for Generative Surfaces v2/v2.1: the typed event vocabulary as pydantic contracts, projection entity twins, the user-visible ledger-id codec, commit engine, receipts   |
+| `effects/`                     | `contracts.py`, `policy.py`, `fold.py`, `staging.py`, `coordinator.py`, `executor.py`                     | Pure staging domain for external effects — proposal, policy, fold, decision only. Deliberately holds **no** transport, persistence adapter, queue consumer, or effect executor wiring   |
+| `artifacts/`                   | `service.py`, `contracts.py`, `projection.py`, `content_merge.py`, `ports.py`                             | Canonical, backend-agnostic artifact repository domain                                                                                                                                  |
+| `harness_quality/`             | `evaluation.py`, `scoring.py`, `golden_traces.py`, `suite_execution.py`, `projection.py`                  | Versioned, privacy-preserving harness-quality controls. Owns evaluation metadata and projections — never a second copy of runtime events or user content                                |
+| `control_plane/`               | `contracts.py`, `context.py`, `feature_modes.py`, `model_reliability.py`, `revision_binding.py`           | Shared control-plane contracts for one agent-runtime execution                                                                                                                          |
+| `release/`                     | `manifest.py`, `promotion.py`, `assignment.py`, `e2_final_conformance.py`                                 | Read-only release-conformance contracts                                                                                                                                                 |
+| `presentation/`                | `policy.py`, `turn_parts.py`                                                                              | Pure, server-owned presentation policy and lifecycle projections. Consumes structural ledger events and safe metadata only — never model prose or artifact bytes                        |
+| `hyperparameters/`             | `contracts.py`, `loader.py`                                                                               | Agent-behaviour tunables from one checked-in JSON document, loaded once. Consumers take a section by injection; only a composition root imports the loader                              |
+| Root modules                   | `answer_verification.py`, `validation.py`, `rollout.py`, `rollout_admission.py`, `rollout_shadow.py`      | Answer verification, shared validation, and the rollout/shadow admission path                                                                                                           |
 
 ---
 
@@ -110,11 +118,21 @@ Imports from `agent_runtime/` and `runtime_api/schemas/` only.
 
 ### `runtime_adapters/` — Concrete adapter implementations
 
-| Sub-module   | Key files                                                        | Owns                                                                                 |
-| ------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Root         | `factory.py`, `base.py`                                          | Adapter selection by `RUNTIME_STORE_BACKEND`; shared base types                      |
-| `in_memory/` | `runtime_api_store.py`, `draft_store.py`, `citation_store.py`, … | Async in-memory implementations of every port — used in tests and single-process dev |
-| `postgres/`  | `runtime_api_store.py`, `draft_store.py`, `citation_store.py`, … | Async Postgres implementations using asyncpg connection pools                        |
+> **There is no Postgres storage backend.** `e03840ed`
+> (`refactor(ai-backend)!: remove the Postgres storage backend`) removed it,
+> along with `persistence/schema/` and `persistence/encryption.py`. The desktop
+> default is the **file-native** store. Any doc still describing an
+> `ai-backend` Postgres adapter, DDL/migration runner, RLS, read replicas, or
+> column encryption is describing deleted code.
+
+| Sub-module   | Key files                                                        | Owns                                                                                                                     |
+| ------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Root         | `registry.py`, `factory.py`, `base.py`                           | Backend selection by `RUNTIME_STORE_BACKEND`, dispatched through `registry.py`                                           |
+| `providers/` | `file_provider.py`, `in_memory_provider.py`                      | One provider module per backend. **Adding a backend is a provider plus one registration** — no edit to any dispatch code |
+| `file/`      | JSONL session folders                                            | The desktop default: runs, messages and events persisted as JSONL                                                        |
+| `in_memory/` | `runtime_api_store.py`, `draft_store.py`, `citation_store.py`, … | Async in-memory implementations of every port — used in tests and single-process dev                                     |
+| Root         | `_materialized_store.py`, `_artifact_repository.py`              | `MaterializedViewStoreBase` — the shared base both backends specialise                                                   |
+| Root         | `artifact_lifecycle.py`, `artifact_queue.py`, `offload.py`       | Artifact lifecycle, queueing, and payload offload                                                                        |
 
 ---
 
