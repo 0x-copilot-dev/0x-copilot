@@ -12,7 +12,7 @@ Related architecture docs:
 
 - [service-boundaries.md](service-boundaries.md) — package/app ownership; updated in Phase 0 to register `apps/desktop` and `packages/surface-renderers`.
 - [runtime-stream-handshake.md](runtime-stream-handshake.md) — SSE `sequence_no` contract; the desktop transport consumes this unchanged.
-- [multi-tenant-deployment.md](multi-tenant-deployment.md) — workspace/tenancy semantics surfaced by the desktop's active-workspace gate.
+- [workspace-topology.md](workspace-topology.md) — workspace/tenancy semantics surfaced by the desktop's active-workspace gate.
 
 ## 1. Goals & non-goals
 
@@ -51,7 +51,7 @@ The substrate options were custom Electron, VS Code marketplace extension, and C
 
 The decision was **empirically validated by Phase S** of the PRD. Both Electron (S1-B) and a VS Code marketplace extension (S1-A) variant were built around the same shared renderer code (`packages/surface-renderers/email`); substrate cost was measured side-by-side (LOC, build complexity, dev experience, visual fidelity, security boundary). Custom Electron won on single source of truth, simple & elegant, and forward-fit for tier-2 dynamic-adapter loading. Full data: [phase-0.5/S2-decision.md](../plan/desktop/phase-0.5/S2-decision.md).
 
-Reasoning summary (full chain in [project-desktop-substrate-direction](../../.claude/projects/-Users-parthpahwa-Documents-work-0x-copilot/memory/project_desktop_substrate_direction.md)):
+Reasoning summary:
 
 - **DRY** is a wash — VS Code's claimed reuse (diff editor, tabs, tree, command palette) doesn't apply: our diffs are inline annotations on structured forms (not text-line diffs), tab strips are segment controls (not editor groups), only Chats has a tree, command palette is ~150 LOC.
 - **Substitution** favors Electron — fewer mount layers, no webview-RPC contract to version.

@@ -4,10 +4,15 @@ Canonical AI backend service. FastAPI + LangGraph + Deep Agents + Agent Skills.
 
 Module split:
 
-- `agent_runtime/` — pure domain. `execution/` (graph, deep agent builder, runtime contracts), `capabilities/` (tools, skills, MCP loaders + middleware + permissions), `context/memory`, `delegation/subagents`, `persistence/` (records, schema, ports), `observability/`, `api/` (presentation/service layer).
+- `agent_runtime/` — pure domain, 21 packages. The runtime core is `execution/` (graph, deep agent builder, runtime contracts), `capabilities/` (tools, skills, MCP loaders + middleware + permissions), `context/memory`, `delegation/subagents`, `persistence/` (records + ports), `observability/`, `api/` (presentation/service layer), `prompts/`, `control_plane/`, `hyperparameters/`, `deployment/`.
+  - **Generative Surfaces:** `surfaces_v2/` (35 files — the Work Ledger: typed event vocabulary, entity twins, ledger-id codec, commit engine, receipts), `effects/` (pure staging domain — proposal/policy/fold/decision, no transport or executor wiring), `artifacts/`, `presentation/`.
+  - **Known-misplaced** (target home is `backend`, per [BOUNDARY-AUDIT.md](../../docs/audit/ai-backend-smells/BOUNDARY-AUDIT.md)): `harness_quality/`, `pricing/`, `budgets/`, `release/`, `retention/`. They already exist — the "do not add here" rule below is about not growing this set, not a claim the tree is clean.
+  - `persistence/` has **no `schema/` and no `encryption.py`**: see the storage note below.
 - `runtime_api/` — FastAPI app: conversations, runs, event replay, SSE streaming, cancel, approvals.
 - `runtime_worker/` — separate process that claims queued runs, drives LangGraph, and emits typed `RuntimeEventEnvelope` records. API can run an in-process worker via `RUNTIME_START_IN_PROCESS_WORKER=true` for local dev.
 - `runtime_adapters/` — `in_memory` for tests/dev, `file` (JSONL session folders) for the desktop. Selected by `RUNTIME_STORE_BACKEND` and dispatched through `runtime_adapters/registry.py`; the paired LangGraph saver comes from `agent_runtime/execution/checkpointing.py`. Adding a backend is a provider module plus one registration in each, with no edit to any dispatch code.
+
+**Storage: there is no Postgres backend in this service.** `e03840ed` (`refactor(ai-backend)!: remove the Postgres storage backend`) removed the adapter, `persistence/schema/` (DDL + migration runner) and `persistence/encryption.py` (KMS column encryption). If a doc, spec or runbook describes an `ai-backend` Postgres adapter, migration runner, RLS policy, read replica, or field-level column encryption, it is describing **deleted code** — fix it rather than reviving it. `services/backend` still owns its own Postgres.
 
 ## What belongs in this service
 

@@ -1,16 +1,19 @@
-// `useStepMachine` — a single, narrow primitive that backs every Tools
-// onboarding wizard (OpenAPI, MCP, Code).
+// `useStepMachine` — a single, narrow primitive backing the webhook
+// create wizard's linear back/forward steps.
+//
+// It used to live in `destinations/tools/onboarding/`, where it backed the
+// four Tools onboarding wizards. Those wizards were unreachable in both
+// hosts and were deleted; this hook moved here, to its one remaining
+// consumer, rather than to a shared layer — a shared home for a single
+// caller is the abstraction this file's original note warned against.
 //
 // Why a local hook (no library):
-// - Tools wizards are the only place in chat-surface today that need a
-//   sequential step machine. Pulling in `xstate` or similar for four
-//   short flows would be heavier than the entire `tools/onboarding/`
-//   folder. `useReducer` is enough.
-// - Sub-PRD §2 U1/U2/U3 specifies linear steps with back/forward —
-//   exactly what a numeric step counter handles.
-// - SP-1 (cross-audit §1.6): we don't extract this to design-system
-//   because it has no other consumer yet. Lift later if a second
-//   destination needs it.
+// - `useReducer` is enough. Pulling in `xstate` or similar for one short
+//   flow would outweigh the wizard it serves.
+// - Linear steps with back/forward is exactly what a numeric step counter
+//   handles.
+// - Lift it to `shell/` or design-system only when a second destination
+//   genuinely needs it.
 //
 // Substitution rule: the hook is pure — it owns `currentStep` and a
 // `canAdvance` flag (parent gates by step). The hook does NOT own the
