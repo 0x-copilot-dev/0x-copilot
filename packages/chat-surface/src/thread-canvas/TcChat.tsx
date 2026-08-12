@@ -889,6 +889,11 @@ export function TcChat(props: TcChatProps): ReactElement {
   // scrubbed: the checklist snapshot has no per-row timestamps to rewind to, so
   // showing today's list beside a time-travelled transcript would assert a
   // state that did not hold at the cut.
+  // NOTE: no wrapper element here. `TcChat.test.tsx` pins
+  // `panel.nextElementSibling === tc-chat-composer-slot` in both modes — the
+  // checklist is pinned DIRECTLY above the composer and nothing may come
+  // between them. `TcTodoList` therefore carries the shared content rail on
+  // its own root (see `railStyle` there) rather than being wrapped in one.
   const todoList =
     todos !== null && !ghost ? (
       <TcTodoList projection={todos} blocked={oldestPending !== null} />
@@ -2141,14 +2146,24 @@ const PALETTE = {
 // (design review: three nested borders within ~25px at the composer corner).
 // One gap for the canvas stack (transcript · pinned notices · todo panel ·
 // composer), shared by both modes so the two cannot drift apart again.
-const CANVAS_STACK_GAP = 14;
+//
+// 20, not the old 10: at 13px body text a 10px gutter reads as "stuck
+// together" next to Claude Desktop / Codex, which give the composer real air.
+// The todo panel used to add its own 8px bottom margin on top of this, so the
+// stack had two different gaps depending on which pair you measured; that
+// margin is gone and this constant is now the only spacing authority.
+const CANVAS_STACK_GAP = 20;
+
+// The canvas' own inset from the rail and the window edge. 12 left the
+// composer nearly flush against the app rail in a narrow window.
+const CANVAS_PADDING = 16;
 
 const chatContainerStyle = (): CSSProperties => ({
   display: "flex",
   flexDirection: "column",
   height: "100%",
   background: "transparent",
-  padding: 12,
+  padding: CANVAS_PADDING,
   gap: CANVAS_STACK_GAP,
   color: PALETTE.textHi,
   // v3 anchors chat body text at 12.5–13px (copilot.css `body{font-size:13px}`,
@@ -2274,7 +2289,7 @@ const focusContainerStyle: CSSProperties = {
   maxWidth: "none",
   margin: 0,
   background: "transparent",
-  padding: 12,
+  padding: CANVAS_PADDING,
   // Focus carried NO gap while Studio had one, so the transcript, the pinned
   // todo panel and the composer butted together with zero breathing room —
   // the last transcript line read as if the todo panel were sitting on top of

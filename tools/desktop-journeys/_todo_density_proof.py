@@ -31,7 +31,9 @@ JS_MEASURE = """
   const panel = document.querySelector('[data-testid=tc-todo-list]');
   if (!panel) return {panel: false};
   const chat = document.querySelector('[data-testid=tc-chat]');
-  const composer = document.querySelector('textarea')?.closest('div[style], form') || null;
+  // The composer SLOT is the box the panel is pinned above; compare against
+  // that, not an inner wrapper a `closest()` happens to land on.
+  const composer = document.querySelector('[data-testid=tc-chat-composer-slot]');
   const p = panel.getBoundingClientRect();
   const c = composer ? composer.getBoundingClientRect() : null;
   // Direct element children that actually paint (the <style> tag does not).
@@ -45,7 +47,22 @@ JS_MEASURE = """
     paintedRows: rows,
     hasProgressBar: !!panel.querySelector('[aria-hidden=true] > span'),
     gapToComposer: c ? Math.round(c.top - p.bottom) : null,
-    chatGap: chat ? getComputedStyle(chat).gap : null,
+    // The reported bug: the panel was wider than the box it is pinned above.
+    panelWidth: Math.round(p.width),
+    composerWidth: c ? Math.round(c.width) : null,
+    widthDelta: c ? Math.round(p.width - c.width) : null,
+    leftDelta: c ? Math.round(p.left - c.left) : null,
+    rightDelta: c ? Math.round(p.right - c.right) : null,
+    viewport: Math.round(document.documentElement.clientWidth),
+    // Measure the panel's ACTUAL parent — the flex container that owns the
+    // stack gap. Reading a testid and assuming it carries the style is how the
+    // first pass reported `0px` for a padding that was really applied.
+    stackTag: panel.parentElement ? panel.parentElement.getAttribute('data-testid') : null,
+    stackRowGap: panel.parentElement ? getComputedStyle(panel.parentElement).rowGap : null,
+    stackPadding: panel.parentElement ? getComputedStyle(panel.parentElement).paddingTop : null,
+    stackDisplay: panel.parentElement ? getComputedStyle(panel.parentElement).display : null,
+    tcChatMatches: document.querySelectorAll('[data-testid="tc-chat"]').length,
+    chatRowGap: chat ? getComputedStyle(chat).rowGap : null,
     mode: document.querySelector('[data-testid=run-workspace-rail]')?.getAttribute('data-mode'),
   };
 })()
@@ -63,6 +80,12 @@ def main() -> int:
     key = load_env_key(PROVIDER)
     print(f"key_len={len(key)} (withheld)")
     with DriverSession(name="todo-density-proof") as s:
+        # A wide window is where the content-rail cap bites — the panel
+        # overhanging the composer is invisible in a narrow one.
+        try:
+            print("resize:", s.resize(1800, 1150))
+        except Exception as exc:  # the WM may refuse; the run is still valid
+            print(f"resize unavailable ({exc}); continuing at default size")
         s.sign_in_local()
         s.ftue_add_key(PROVIDER, key)
         s.send(PROMPT, timeout_s=300)
