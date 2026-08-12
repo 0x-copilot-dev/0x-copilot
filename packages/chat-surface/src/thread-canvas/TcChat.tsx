@@ -2139,13 +2139,17 @@ const PALETTE = {
 // rail (whose tab strip provides the separation), and the composer carries its
 // own bordered shell — a third bordered box around both read as visual noise
 // (design review: three nested borders within ~25px at the composer corner).
+// One gap for the canvas stack (transcript · pinned notices · todo panel ·
+// composer), shared by both modes so the two cannot drift apart again.
+const CANVAS_STACK_GAP = 14;
+
 const chatContainerStyle = (): CSSProperties => ({
   display: "flex",
   flexDirection: "column",
   height: "100%",
   background: "transparent",
   padding: 12,
-  gap: 10,
+  gap: CANVAS_STACK_GAP,
   color: PALETTE.textHi,
   // v3 anchors chat body text at 12.5–13px (copilot.css `body{font-size:13px}`,
   // `.msg{font-size:12.5px}`). Without this the message text inherited the UA
@@ -2271,6 +2275,12 @@ const focusContainerStyle: CSSProperties = {
   margin: 0,
   background: "transparent",
   padding: 12,
+  // Focus carried NO gap while Studio had one, so the transcript, the pinned
+  // todo panel and the composer butted together with zero breathing room —
+  // the last transcript line read as if the todo panel were sitting on top of
+  // it. The panel is meant to be "identical in Focus and Studio"; its spacing
+  // has to be too.
+  gap: CANVAS_STACK_GAP,
   color: PALETTE.textHi,
   fontSize: 13,
   fontFamily: "var(--font-sans)",
