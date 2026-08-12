@@ -739,8 +739,32 @@ def cb4_todo_checklist_renders_and_advances(s: DriverSession) -> None:
     # T4 — the invented Plan is gone, in both modes.
     assert not s.present("[data-testid=focus-plan]"), "Studio still renders a Plan"
     s.click("[data-testid=run-mode-focus]")
+    # Focus opens with the Run-details column FOLDED (#607). This phase used to
+    # wait for `tc-focus-panel` straight after the mode switch and failed as
+    # "Focus mode never opened its Activity panel" — asserting the pre-#607
+    # default, not a defect. Expand it first, the way a user does.
+    #
+    # Match the collapsed rail's expand control by its exact aria-label:
+    # `focus_panel_default.py` records that a looser selector hit an app-rail
+    # destination and navigated away from Run entirely.
+    opened = s.evaluate(
+        """
+        (() => {
+          if (document.querySelector('[data-testid=tc-focus-panel]')) return 'already-open';
+          const b = [...document.querySelectorAll('button')].find(x =>
+            (x.getAttribute('aria-label')||'') === 'Expand run details');
+          if (!b) return 'no-toggle-found';
+          b.click();
+          return 'clicked';
+        })()
+        """
+    )
+    assert opened != "no-toggle-found", (
+        "Focus rendered neither the Activity panel nor its 'Expand run details' "
+        "control — the collapsed default is now unundoable"
+    )
     assert s.wait_for("[data-testid=tc-focus-panel]", 20), (
-        "Focus mode never opened its Activity panel"
+        f"the Focus Activity panel did not open on demand (toggle: {opened})"
     )
     s.shot("t4-focus-no-plan")
     assert not s.present("[data-testid=focus-plan]"), (
