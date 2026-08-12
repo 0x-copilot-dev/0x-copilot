@@ -941,14 +941,21 @@ class RuntimeEventPresentationProjector:
         event_type: RuntimeApiEventType,
         payload: JsonObject,
     ) -> JsonObject:
-        summary = cls._text(payload.get(Keys.Field.SUMMARY)) or cls._text(
+        # A DELTA is a chunk mid-sentence, so its whitespace is load-bearing on
+        # both edges; the final REASONING_SUMMARY is a whole assembled string,
+        # where trimming the ends is right. The emitter writes the same chunk to
+        # `summary` and `delta` on a delta event, so both take the same helper.
+        is_delta = event_type is RuntimeApiEventType.REASONING_SUMMARY_DELTA
+        text = cls._stream_text if is_delta else cls._text
+
+        summary = text(payload.get(Keys.Field.SUMMARY)) or text(
             payload.get(Keys.Payload.MESSAGE)
         )
         safe_payload: JsonObject = {}
         if summary is not None:
             safe_payload[Keys.Field.SUMMARY] = summary
-        if event_type is RuntimeApiEventType.REASONING_SUMMARY_DELTA:
-            delta = cls._text(payload.get(Keys.Payload.DELTA))
+        if is_delta:
+            delta = cls._stream_text(payload.get(Keys.Payload.DELTA))
             if delta is not None:
                 safe_payload[Keys.Payload.DELTA] = delta
         return safe_payload
@@ -2721,6 +2728,27 @@ class RuntimeEventPresentationProjector:
         if not normalized:
             return None
         return normalized
+
+    @classmethod
+    def _stream_text(cls, value: object) -> str | None:
+        """``_text`` for a STREAMED CHUNK: keeps the whitespace.
+
+        A delta is a fragment of a larger string, not a label. ``_text`` strips
+        every value it passes, which silently deleted the space at each chunk
+        boundary: the provider sent ``"the system"`` then ``" date is set"`` and
+        the ledger stored ``"the system"`` + ``"date is set"``, so the transcript
+        rendered ``"the systemdate is set"``. Reasoning showed this and the
+        answer did not, because only reasoning is projected through an
+        allow-list that calls ``_text`` on its chunk.
+
+        The empty check is on the RAW value, not the stripped one, because a
+        chunk that is only whitespace is exactly the space between two words —
+        dropping it re-creates the same bug one chunk further along.
+        """
+
+        if not isinstance(value, str) or value == "":
+            return None
+        return value
 
 
 class AssistantUsageMetrics(RuntimeContract):
