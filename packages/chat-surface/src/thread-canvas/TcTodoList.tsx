@@ -57,6 +57,12 @@ export function TcTodoList({
       ? !disclosure.open
       : isComplete;
 
+  // The terminal, folded state — the one that sits pinned above the composer
+  // for the rest of the conversation. It is the only state that gets the
+  // compact treatment; an unfinished list keeps its full chrome because the
+  // user is still reading progress off it.
+  const foldedComplete = isComplete && collapsed;
+
   if (todos.length === 0) {
     return null;
   }
@@ -69,10 +75,10 @@ export function TcTodoList({
       data-complete={isComplete ? "true" : "false"}
       data-blocked={blocked ? "true" : "false"}
       data-generation={generation}
-      style={rootStyle}
+      style={foldedComplete ? rootStyleFoldedComplete : rootStyle}
     >
       <style>{TODO_LIST_CSS}</style>
-      <div style={headerStyle}>
+      <div style={foldedComplete ? headerStyleFoldedComplete : headerStyle}>
         <span style={titleStyle}>Todos</span>
         {generation > 1 ? (
           <span data-testid="tc-todo-list-generation" style={generationStyle}>
@@ -95,11 +101,19 @@ export function TcTodoList({
           <ChevronIcon />
         </button>
       </div>
-      <div aria-hidden="true" style={progressTrackStyle}>
-        <span
-          style={progressFillStyle(completedCount, todos.length, isComplete)}
-        />
-      </div>
+      {/* A finished, folded list said the same thing three times: the header
+          count (`3/3`), a full-width bar at 100%, and the summary line. The
+          bar is the one with no extra information, and dropping it is what
+          turns a three-row band pinned above the composer back into a quiet
+          one-line receipt. It stays for every unfinished list, where the fill
+          is the only at-a-glance read of progress. */}
+      {foldedComplete ? null : (
+        <div aria-hidden="true" style={progressTrackStyle}>
+          <span
+            style={progressFillStyle(completedCount, todos.length, isComplete)}
+          />
+        </div>
+      )}
       {collapsed ? (
         <p data-testid="tc-todo-list-summary" style={summaryStyle}>
           {isComplete ? (
@@ -235,11 +249,23 @@ const rootStyle: CSSProperties = {
   borderRadius: "var(--radius-lg, 12px)",
 };
 
+// Terminal + folded: no progress bar follows, so the header owes it no bottom
+// gutter, and the whole card tightens to a single quiet row.
+const rootStyleFoldedComplete: CSSProperties = {
+  ...rootStyle,
+  padding: "7px 12px 8px",
+};
+
 const headerStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
   padding: "0 2px 8px",
+};
+
+const headerStyleFoldedComplete: CSSProperties = {
+  ...headerStyle,
+  padding: "0 2px 0",
 };
 
 const titleStyle: CSSProperties = {
