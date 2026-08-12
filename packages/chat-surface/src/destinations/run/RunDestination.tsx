@@ -4900,12 +4900,26 @@ function RunViewingBanner(props: RunViewingBannerProps): ReactElement {
  * ThreadCanvas consumers remain completely unchanged.
  */
 const RUN_COCKPIT_SCOPE_CSS = `
+  /* The canvas stack: transcript · pinned todo panel · composer.
+   *
+   * This block used to say \`gap: normal; padding: 0\`, and because it is the
+   * !important layer, that is what the cockpit actually drew no matter what
+   * TcChat's inline styles said. Two consequences, both reported:
+   *   - the todo panel sat flush against the composer (gap 0), and the last
+   *     transcript line read as if the panel were on top of it;
+   *   - the transcript was inset 16px by its own padding while the panel and
+   *     composer were inset by nothing, so the composer ran to the window edge
+   *     and the three did not share a left edge.
+   *
+   * The stack gap now lives here, and the horizontal inset moves UP to this
+   * container so all three children align on it (see tc-chat-messages below,
+   * which keeps only its vertical padding). */
   .run-destination [data-testid="tc-chat"] {
     box-sizing: border-box !important;
     background: var(--color-bg) !important;
     border-right: 1px solid var(--color-border) !important;
-    gap: normal !important;
-    padding: 0 !important;
+    gap: 20px !important;
+    padding: 0 16px 16px !important;
   }
 
   .run-destination[data-mode="focus"] [data-testid="tc-chat"] {
@@ -4913,9 +4927,11 @@ const RUN_COCKPIT_SCOPE_CSS = `
     max-width: none !important;
   }
 
+  /* Vertical only — the horizontal inset is the stack container's now, so the
+   * transcript, the todo panel and the composer share one left edge. */
   .run-destination [data-testid="tc-chat-messages"] {
     gap: 14px !important;
-    padding: 16px !important;
+    padding: 16px 0 !important;
   }
 
   .run-destination [data-testid="composer"] {

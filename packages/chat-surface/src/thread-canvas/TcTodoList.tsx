@@ -239,10 +239,29 @@ function ChevronIcon(): ReactElement {
   );
 }
 
+// The shared content rail. `TcChat` caps the transcript, the ghost banner and
+// the composer at `--chat-content-width` and centres them; this panel is
+// pinned directly above the composer, so it has to sit on the same rail or it
+// overhangs the box it is pinned to — visibly, on any window wide enough for
+// the cap to bite. It is declared here rather than wrapped around the panel in
+// `TcChat` because `panel.nextElementSibling === tc-chat-composer-slot` is a
+// pinned contract: nothing may come between the checklist and the composer.
+// The width itself is the CSS var, so the two cannot drift to different values.
+const railStyle: CSSProperties = {
+  boxSizing: "border-box",
+  marginLeft: "auto",
+  marginRight: "auto",
+  maxWidth: "var(--chat-content-width, 68rem)",
+  width: "100%",
+};
+
 const rootStyle: CSSProperties = {
+  ...railStyle,
   display: "flex",
   flexDirection: "column",
-  margin: "0 0 8px",
+  // No `margin` shorthand here — it would reset `railStyle`'s auto side
+  // margins and un-centre the panel. Vertical spacing is the canvas stack's
+  // single `CANVAS_STACK_GAP`, not this component's business.
   padding: "10px 12px 11px",
   background: "var(--color-surface)",
   border: "1px solid var(--color-border)",
