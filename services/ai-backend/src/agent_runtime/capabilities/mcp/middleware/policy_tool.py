@@ -100,6 +100,7 @@ from agent_runtime.capabilities.policy.contracts import (
     MiddlewareStage,
     PolicyDecision,
 )
+from agent_runtime.capabilities.surfaces.builtin import server_slug
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
 
@@ -531,12 +532,49 @@ class PolicyToolMiddleware:
         capability's card — its trust, its auth state, its allowlists, its
         availability — while dispatching a different connector's tool. Rather
         than police the wrong card, bind nothing and refuse.
+
+        **The two registers meet here, and the check has to speak both.**
+        ``tool.name`` is the model-surface name — namespaced by
+        :class:`~agent_runtime.capabilities.mcp.tool_naming.McpToolName` so two
+        connectors exposing ``search`` can coexist — while ``descriptor.urn`` is
+        built in the connector register from the bare name the server advertises.
+        Rebuilding the URN from the namespaced name compares
+        ``mcp:linear:mcp__linear__list_issues`` against ``mcp:linear:list_issues``,
+        which matches nothing: the card fails to resolve and *every* MCP call in
+        *every* run refuses with ``POLICY_UNAVAILABLE``. So a namespaced name is
+        dropped to its connector register before the comparison.
+
+        Doing that gains a check the bare-name world could not express. Because
+        the model-surface name carries its connector, re-composing it against
+        *this card* proves the namespace names this very card — so a tool
+        registered under ``github`` paired with a ``linear`` descriptor is now
+        detectable, where two bare ``search`` tools were indistinguishable.
+
+        Known boundary, deliberately fail-closed: a tool name that is not already
+        a plain identifier (it sanitizes, or the pair overflows the provider
+        length limit and :meth:`McpToolName._fitted` digests it) does not survive
+        the round trip back into the URN, so it refuses here rather than being
+        policed against a card that may not be its own.
         """
 
         card = self.cards_by_urn.get(descriptor.urn)
         if card is None:
             return None
-        if descriptor.urn != CapabilityUrn.for_mcp(card.name, tool.name):
+        parsed = McpToolName.parse(tool.name)
+        if parsed is None:
+            # Connector register on both sides already (a source that does not
+            # namespace, or a native name) — the original comparison, verbatim.
+            bare = tool.name
+        elif McpToolName.compose(server=server_slug(card.name), tool=tool.name) != (
+            tool.name
+        ):
+            # The namespace names some other connector. ``compose`` absorbs a
+            # prefix only when it is this server's, so an unchanged round trip
+            # is exactly the proof that it is.
+            return None
+        else:
+            bare = parsed.tool
+        if descriptor.urn != CapabilityUrn.for_mcp(card.name, bare):
             return None
         return card
 
