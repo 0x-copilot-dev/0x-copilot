@@ -47,6 +47,8 @@ from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
+from agent_runtime.capabilities.surfaces.builtin import server_slug
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
@@ -174,6 +176,27 @@ class McpCatalogMixin(DynamicMcpLoadingMixin):
         prefix = McpCatalogPaths.tools_dir(self.CatalogValues.SERVER)
         return {path for path in catalog_files if path.startswith(prefix)}
 
+    def invoke_name(self, tool_name: str, *, server: str | None = None) -> str:
+        """The registered, callable name for ``tool_name`` on ``server``.
+
+        The catalog is the model's only instruction on what to call, so every
+        name it renders is this one — ``McpToolSource`` registers connector
+        tools namespaced, and a catalog still advertising the connector's bare
+        name would name a tool the model surface does not have.
+        """
+
+        return McpToolName.compose(
+            server=server_slug(server or self.CatalogValues.SERVER), tool=tool_name
+        )
+
+    def tool_file_path(self, tool_name: str, *, server: str | None = None) -> str:
+        """The catalog path for ``tool_name`` — stemmed by its callable name."""
+
+        resolved = server or self.CatalogValues.SERVER
+        return McpCatalogPaths.tool_file(
+            resolved, self.invoke_name(tool_name, server=resolved)
+        )
+
 
 class TestCatalogTree(McpCatalogMixin):
     def test_fifty_two_tool_server_produces_one_file_per_tool(self) -> None:
@@ -183,8 +206,7 @@ class TestCatalogTree(McpCatalogMixin):
         assert len(files) == self.CatalogValues.LARGE_TOOL_COUNT + 1
         assert McpCatalogPaths.server_markdown(self.CatalogValues.SERVER) in files
         assert self.tool_paths(files) == {
-            McpCatalogPaths.tool_file(self.CatalogValues.SERVER, tool.name)
-            for tool in self.make_many_tools()
+            self.tool_file_path(tool.name) for tool in self.make_many_tools()
         }
 
     def test_every_artifact_is_line_oriented(self) -> None:
@@ -244,7 +266,7 @@ class TestAlwaysLoadedTier(McpCatalogMixin):
         content = catalog.server_markdown.content
 
         for tool in self.make_many_tools():
-            assert f"`{tool.name}`" in content
+            assert f"`{self.invoke_name(tool.name)}`" in content
 
     def test_index_never_drops_a_tool_name_to_meet_the_budget(self) -> None:
         many = tuple(
@@ -254,7 +276,21 @@ class TestAlwaysLoadedTier(McpCatalogMixin):
         content = catalog.server_markdown.content
 
         for tool in many:
-            assert f"`{tool.name}`" in content
+            assert f"`{self.invoke_name(tool.name)}`" in content
+
+    def test_index_names_the_tool_the_model_can_actually_call(self) -> None:
+        # The index is the shortlist a model dispatches straight from, and
+        # ``DISPATCH_GUIDANCE`` tells it to call the tool by the name it sees
+        # here. ``McpToolSource`` registers connector tools namespaced, so the
+        # connector's bare name names nothing on the model surface — printing it
+        # would repeat the retired-``call_mcp_tool`` failure with a new string.
+        catalog = McpCatalogBuilder.build(
+            self.make_loaded(tools=(self.make_catalog_tool("list_issues"),))
+        )
+        content = catalog.server_markdown.content
+
+        assert "`mcp__linear__list_issues` [read]" in content
+        assert "`list_issues` [read]" not in content
 
     def test_index_action_class_is_the_policy_derivation(self) -> None:
         tools = (
@@ -264,8 +300,8 @@ class TestAlwaysLoadedTier(McpCatalogMixin):
         catalog = McpCatalogBuilder.build(self.make_loaded(tools=tools))
         content = catalog.server_markdown.content
 
-        assert f"`{self.CatalogValues.READ_TOOL}` [read]" in content
-        assert f"`{self.CatalogValues.WRITE_TOOL}` [write]" in content
+        assert f"`{self.invoke_name(self.CatalogValues.READ_TOOL)}` [read]" in content
+        assert f"`{self.invoke_name(self.CatalogValues.WRITE_TOOL)}` [write]" in content
         for tool in tools:
             assert McpToolActionClass.for_tool(
                 server=self.CatalogValues.SERVER, tool=tool.name
@@ -282,7 +318,10 @@ class TestAlwaysLoadedTier(McpCatalogMixin):
             self.make_loaded(tools=(self.make_catalog_tool("mystery_tool"),))
         )
 
-        assert "`mystery_tool` [write]" in catalog.server_markdown.content
+        assert (
+            f"`{self.invoke_name('mystery_tool')}` [write]"
+            in catalog.server_markdown.content
+        )
 
     def test_index_tells_the_model_how_to_reach_a_tool(self) -> None:
         catalog = McpCatalogBuilder.build(self.make_loaded())
@@ -300,20 +339,18 @@ class TestToolFiles(McpCatalogMixin):
     def test_one_tool_is_fully_recoverable_from_one_file(self) -> None:
         descriptor = self.make_catalog_tool(self.CatalogValues.READ_TOOL)
         catalog = McpCatalogBuilder.build(self.make_loaded(tools=(descriptor,)))
-        path = McpCatalogPaths.tool_file(
-            self.CatalogValues.SERVER, self.CatalogValues.READ_TOOL
-        )
+        path = self.tool_file_path(self.CatalogValues.READ_TOOL)
 
         payload = json.loads(catalog.as_mapping()[path])
 
-        assert payload["name"] == descriptor.name
+        assert payload["name"] == self.invoke_name(descriptor.name)
         assert payload["input_schema"] == dict(descriptor.input_schema)
         assert payload["output_shape"] == dict(descriptor.output_shape)
         assert payload["action"] == McpToolActionClass.READ.value
-        # The tool IS the descriptor's name; `server_name` remains for
-        # provenance, not as an argument to fill in.
+        # The tool IS its registered name; `server_name` remains for provenance,
+        # not as an argument to fill in.
         assert payload["invoke_with"] == {
-            "tool": descriptor.name,
+            "tool": self.invoke_name(descriptor.name),
             "server_name": self.CatalogValues.SERVER,
         }
 
@@ -321,7 +358,7 @@ class TestToolFiles(McpCatalogMixin):
         catalog = McpCatalogBuilder.build(
             self.make_loaded(tools=(self.make_catalog_tool("create_issue"),))
         )
-        path = McpCatalogPaths.tool_file(self.CatalogValues.SERVER, "create_issue")
+        path = self.tool_file_path("create_issue")
 
         payload = json.loads(catalog.as_mapping()[path])
 
@@ -331,8 +368,10 @@ class TestToolFiles(McpCatalogMixin):
         # surface under its own name, so pointing at the retired umbrella sends
         # the model to a tool that does not exist. A live run proved the cost:
         # the model read all 52 descriptors, called `call_mcp_tool`, and
-        # returned a successful-looking nothing.
-        assert payload["invoke_with"]["tool"] == "create_issue"
+        # returned a successful-looking nothing. The address is now the
+        # NAMESPACED registered name, for the same reason: that is the only
+        # string the model surface answers to.
+        assert payload["invoke_with"]["tool"] == "mcp__linear__create_issue"
         assert payload["invoke_with"]["server_name"] == self.CatalogValues.SERVER
         assert payload["action"] == McpToolActionClass.WRITE.value
 
@@ -385,13 +424,13 @@ class TestCatalogStore(McpCatalogMixin):
         )
 
         paths = set(store.snapshot())
-        assert McpCatalogPaths.tool_file(self.CatalogValues.SERVER, "only_one") in paths
+        assert self.tool_file_path("only_one") in paths
         assert not any(
             path.startswith(McpCatalogPaths.tools_dir(self.CatalogValues.SERVER))
             and path.endswith("linear_tool_00.json")
             for path in paths
         )
-        assert McpCatalogPaths.tool_file("slack_mcp", "post") in paths
+        assert self.tool_file_path("post", server="slack_mcp") in paths
 
     def test_snapshot_taken_before_a_publish_is_not_mutated(self) -> None:
         store = McpCatalogStore()

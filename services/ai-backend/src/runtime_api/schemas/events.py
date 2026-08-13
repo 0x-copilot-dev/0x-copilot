@@ -1006,8 +1006,19 @@ class RuntimeEventPresentationProjector:
         # ``payload.tool_name`` verbatim. Imported lazily (see module docstring
         # at top) to avoid a circular import during ``agent_runtime`` init.
         from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+        from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 
+        # Then drop the per-tool namespace. Under per-tool registration the
+        # model surface is ``mcp__linear__list_issues``, so that is what
+        # ``payload.tool_name`` carries on every stream event — and this title
+        # is what the frontend renders on the row, which names its connector on
+        # its own field. Left alone the row reads "Calling
+        # mcp__linear__list_issues". A no-op for every native tool name, and the
+        # two normalisations compose: the dispatcher unwrap answers the legacy
+        # gateway, this answers per-tool, and neither event shape is both.
         tool_name = McpDispatcherUnwrap.effective_tool_name(payload)
+        if tool_name is not None:
+            tool_name = McpToolName.strip(tool_name)
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             if tool_name is None:
                 return Messages.Event.TOOL_CALL

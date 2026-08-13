@@ -51,6 +51,7 @@ from agent_runtime.capabilities.mcp.constants import Messages
 from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.mcp.tool_source import (
     AuthorizedCardLister,
     McpToolCatalog,
@@ -86,6 +87,23 @@ class StubMcpTool(BaseTool):
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError("Stub MCP tools are never executed in unit tests.")
+
+
+class DispatchingStubMcpTool(StubMcpTool):
+    """A stub that actually dispatches, modelling the adapter's closure.
+
+    ``convert_mcp_tool_to_langchain_tool`` captures the session and the server's
+    own wire name when it builds the tool, so what a call reaches is fixed at
+    construction and is NOT read back off ``BaseTool.name``. ``wire`` stands in
+    for that captured pair: renaming the tool for the model surface must leave
+    it untouched, which is the property that makes namespacing safe at all.
+    """
+
+    #: ``"{server}:{wire tool name}"`` — what the connector would receive.
+    wire: str = ""
+
+    def _run(self, *args: Any, **kwargs: Any) -> Any:
+        return self.wire
 
 
 class StubAuth(httpx.Auth):
@@ -257,6 +275,11 @@ class McpToolSourceFixtureMixin:
     def tool(self, name: str, metadata: dict[str, Any] | None = None) -> StubMcpTool:
         return StubMcpTool(name=name, metadata=metadata)
 
+    def dispatching_tool(self, name: str, *, server: str) -> DispatchingStubMcpTool:
+        """A tool whose call target is captured at construction, as the adapter does."""
+
+        return DispatchingStubMcpTool(name=name, wire=f"{server}:{name}")
+
     def config(
         self,
         *,
@@ -310,11 +333,24 @@ class McpToolSourceFixtureMixin:
             credentials=credentials,
         )
 
+    def registered(self, tool_name: str, server: str | None = None) -> str:
+        """The model-surface name ``tool_name`` registers under on ``server``."""
+
+        return McpToolName.compose(server=server or self.SERVER, tool=tool_name)
+
     def action_for(self, catalog: McpToolCatalog, tool_name: str) -> Action:
+        """The action derived for a tool, addressed by its BARE name.
+
+        Tests name the tool the way the connector advertises it; registration
+        namespaces it. Composing here keeps every caller written in the register
+        a test author is actually thinking in.
+        """
+
+        registered = self.registered(tool_name)
         return next(
             descriptor.action
             for tool, descriptor in catalog.pairs
-            if tool.name == tool_name
+            if tool.name == registered
         )
 
 
@@ -342,7 +378,10 @@ class TestLoadProducesPairs(McpToolSourceFixtureMixin, BoundAnnotationsRegistryM
             }
         )
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["list_issues", "create_issue"]
+        assert [tool.name for tool, _ in pairs] == [
+            "mcp__linear__list_issues",
+            "mcp__linear__create_issue",
+        ]
         assert all(isinstance(d, CapabilityDescriptor) for _, d in pairs)
 
     async def test_descriptor_identity_comes_from_the_p1b_derivation(self) -> None:
@@ -529,9 +568,12 @@ class TestPublishedMaps(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMixin
         )
         await harness.source.load()
         catalog = harness.source.catalog
-        assert dict(catalog.tool_to_server) == {"create_issue": "linear"}
+        # Keyed on the MODEL-surface name, because that is what ``tool_name``
+        # carries on the stream events the resolver is queried from.
+        assert dict(catalog.tool_to_server) == {"mcp__linear__create_issue": "linear"}
         resolver = catalog.connector_resolver()
-        assert resolver.server_for("create_issue") == "linear"
+        assert resolver.server_for("mcp__linear__create_issue") == "linear"
+        assert resolver.server_for("create_issue") is None
         assert resolver.server_for("write_todos") is None
 
     async def test_published_maps_are_read_only_snapshots(self) -> None:
@@ -635,7 +677,7 @@ class TestFailureIsolation(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMi
             errors_by_server={"github": McpConnectionError("socket died")},
         )
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["list_issues"]
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__list_issues"]
         (failure,) = harness.source.catalog.failures
         assert failure.code is McpLoadErrorCode.CONNECTION_FAILED
         assert failure.safe_message == Messages.Loader.CONNECTION_FAILED
@@ -701,24 +743,88 @@ class TestFailureIsolation(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMi
         assert secret not in failure.safe_message
         assert "boom" not in failure.safe_message
 
-    async def test_duplicate_tool_name_across_servers_is_dropped_fail_closed(
-        self,
-    ) -> None:
-        # An ambiguous ``tool_name -> server_slug`` map would mis-attribute a
-        # call to the wrong connector: a provenance and policy failure.
+    async def test_two_connectors_may_both_expose_the_same_tool_name(self) -> None:
+        # The reason the namespace exists. Before it, the second ``search`` lost
+        # a DUPLICATE_DESCRIPTOR_NAME race and its connector was unusable for the
+        # whole run; the registered name now carries the connector, so both are
+        # callable and neither is dropped.
         harness = self.harness(
             cards=self._two_cards(),
             configs=self._two_configs(),
             tools_by_server={
-                "github": [self.tool("shared_tool")],
-                "linear": [self.tool("shared_tool"), self.tool("list_issues")],
+                "github": [self.tool("search")],
+                "linear": [self.tool("search"), self.tool("list_issues")],
             },
         )
+
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["shared_tool", "list_issues"]
-        catalog = harness.source.catalog
-        assert catalog.tool_to_server["shared_tool"] == "github"
-        (failure,) = catalog.failures
+
+        assert [tool.name for tool, _ in pairs] == [
+            "mcp__github__search",
+            "mcp__linear__search",
+            "mcp__linear__list_issues",
+        ]
+        assert harness.source.catalog.failures == ()
+
+    async def test_each_shared_name_still_resolves_to_its_own_connector(self) -> None:
+        # The provenance half: an ambiguous ``tool_name -> server_slug`` map
+        # would stamp the wrong connector onto a call's events and police it
+        # against the wrong card. Two entries, two servers, no ambiguity.
+        harness = self.harness(
+            cards=self._two_cards(),
+            configs=self._two_configs(),
+            tools_by_server={
+                "github": [self.tool("search")],
+                "linear": [self.tool("search")],
+            },
+        )
+
+        await harness.source.load()
+
+        resolver = harness.source.catalog.connector_resolver()
+        assert resolver.server_for("mcp__github__search") == "github"
+        assert resolver.server_for("mcp__linear__search") == "linear"
+        # The bare name addresses nothing: it is not on the model surface, so it
+        # can never arrive on an event.
+        assert resolver.server_for("search") is None
+
+    async def test_each_shared_name_dispatches_to_its_own_server(self) -> None:
+        # The registered name is renamed; the DISPATCH is not. ``langchain-mcp-
+        # adapters`` captures the wire name and the session in the tool's own
+        # closure, so the two ``search`` tools must still call two servers.
+        harness = self.harness(
+            cards=self._two_cards(),
+            configs=self._two_configs(),
+            tools_by_server={
+                "github": [self.dispatching_tool("search", server="github")],
+                "linear": [self.dispatching_tool("search", server="linear")],
+            },
+        )
+
+        pairs = await harness.source.load()
+
+        dispatched = {
+            tool.name: await tool.ainvoke({"query": "issues"}) for tool, _ in pairs
+        }
+        assert dispatched == {
+            "mcp__github__search": "github:search",
+            "mcp__linear__search": "linear:search",
+        }
+
+    async def test_a_genuine_clash_of_namespaced_names_is_still_typed(self) -> None:
+        # The collision check is not removed, only made precise: two tools whose
+        # names collapse to one under the provider charset still cannot share a
+        # registration, and the loser is visible rather than silent.
+        harness = self.harness(
+            tools_by_server={
+                self.SERVER: [self.tool("list_issues"), self.tool("list__issues")]
+            }
+        )
+
+        pairs = await harness.source.load()
+
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__list_issues"]
+        (failure,) = harness.source.catalog.failures
         assert failure.code is McpLoadErrorCode.DUPLICATE_DESCRIPTOR_NAME
         assert failure.safe_message == Messages.Loader.DUPLICATE_TOOL_NAMES
         assert failure.server_name == "linear"
@@ -728,7 +834,7 @@ class TestFailureIsolation(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMi
             tools_by_server={self.SERVER: [self.tool("   "), self.tool("list_issues")]}
         )
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["list_issues"]
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__list_issues"]
 
 
 class TestSingleDerivationPath(
@@ -842,7 +948,7 @@ class TestServerSlugCollision(McpToolSourceFixtureMixin, BoundAnnotationsRegistr
 
         pairs = await harness.source.load()
 
-        assert [tool.name for tool, _ in pairs] == ["list_issues"]
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear-app__list_issues"]
 
 
 class TestNativeToolNameCollision(
@@ -850,10 +956,30 @@ class TestNativeToolNameCollision(
 ):
     """A connector may not shadow a native tool's name (LOCAL_TOOL_COLLISION)."""
 
-    async def test_reserved_name_is_refused_with_a_typed_failure(self) -> None:
+    async def test_a_builtins_name_is_no_longer_reachable_to_shadow(self) -> None:
+        # The namespace turns the whole class of shadowing from "dropped with a
+        # typed failure" into "cannot arise". A connector advertising
+        # ``write_todos`` registers as ``mcp__linear__write_todos``, shadows the
+        # TodoListMiddleware builtin not at all, and the user keeps the tool
+        # instead of losing it to a name they never chose.
         harness = self.harness(
             tools_by_server={self.SERVER: [self.tool("write_todos")]},
             reserved_names=frozenset({"write_todos"}),
+        )
+
+        pairs = await harness.source.load()
+
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__write_todos"]
+        assert harness.source.catalog.failures == ()
+
+    async def test_reserved_name_is_refused_with_a_typed_failure(self) -> None:
+        # What survives the namespace: a NATIVE tool that itself carries the
+        # ``mcp__`` shape is the one case the prefix cannot separate, so the
+        # guard stays and still fails typed rather than letting a connector
+        # publish ``tool_to_server`` for a builtin's own name.
+        harness = self.harness(
+            tools_by_server={self.SERVER: [self.tool("write_todos")]},
+            reserved_names=frozenset({"mcp__linear__write_todos"}),
         )
 
         pairs = await harness.source.load()
@@ -870,28 +996,32 @@ class TestNativeToolNameCollision(
         # -- exactly the invariant "a native tool must not acquire MCP identity".
         harness = self.harness(
             tools_by_server={self.SERVER: [self.tool("write_todos")]},
-            reserved_names=frozenset({"write_todos"}),
+            reserved_names=frozenset({"mcp__linear__write_todos"}),
         )
 
         await harness.source.load()
 
         catalog = harness.source.catalog
-        assert "write_todos" not in catalog.tool_to_server
-        assert catalog.connector_resolver().server_for("write_todos") is None
+        assert "mcp__linear__write_todos" not in catalog.tool_to_server
+        assert (
+            catalog.connector_resolver().server_for("mcp__linear__write_todos") is None
+        )
 
     async def test_non_reserved_tools_on_the_same_server_still_load(self) -> None:
         harness = self.harness(
             tools_by_server={
                 self.SERVER: [self.tool("write_todos"), self.tool("list_issues")]
             },
-            reserved_names=frozenset({"write_todos"}),
+            reserved_names=frozenset({"mcp__linear__write_todos"}),
         )
 
         pairs = await harness.source.load()
 
         # One poisoned name does not cost the connector its whole toolset.
-        assert [tool.name for tool, _ in pairs] == ["list_issues"]
-        assert harness.source.catalog.tool_to_server == {"list_issues": self.SERVER}
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__list_issues"]
+        assert harness.source.catalog.tool_to_server == {
+            "mcp__linear__list_issues": self.SERVER
+        }
 
     async def test_no_reserved_names_keeps_every_tool(self) -> None:
         harness = self.harness(
@@ -901,7 +1031,7 @@ class TestNativeToolNameCollision(
         pairs = await harness.source.load()
 
         # The default is empty: the guard only fires on names the host declares.
-        assert [tool.name for tool, _ in pairs] == ["write_todos"]
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__write_todos"]
         assert harness.source.catalog.failures == ()
 
 

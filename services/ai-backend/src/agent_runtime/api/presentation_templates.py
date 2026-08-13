@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping
 from string import Formatter
 
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from runtime_api.schemas import RuntimeApiEventType
 
@@ -180,7 +181,10 @@ class _Identifier:
     def humanize(cls, value: object) -> str | None:
         if not isinstance(value, str):
             return None
-        text = value.strip()
+        # Model-surface MCP names (``mcp__linear__list_issues``) drop to their
+        # connector-register tail first; the connector is displayed on its own
+        # field, so keeping it here would say it twice. No-op for native names.
+        text = McpToolName.strip(value)
         if not text:
             return None
         lowered = text.lower()

@@ -56,6 +56,7 @@ from agent_runtime.capabilities.mcp.middleware.policy_tool import (
     PolicyStageMessages,
     PolicyToolMiddleware,
 )
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     MiddlewareStage,
@@ -677,6 +678,82 @@ class TestFailClosedBindings(PolicyToolFixtureMixin):
         error = self.error_of(result)
         assert error["code"] == McpLoadErrorCode.PERMISSION_DENIED.value
         assert error["safe_message"] == PolicyStageMessages.SYNCHRONOUS_DISPATCH
+        assert wrapped.inner.calls == []
+
+
+class TestNamespacedToolNameBinding(PolicyToolFixtureMixin):
+    """The stage must bind a tool whose model-surface name is namespaced.
+
+    ``McpToolSource`` registers every connector tool as
+    ``mcp__{server_slug}__{tool}`` while deriving its descriptor — and therefore
+    its URN — from the connector's own bare name. The two registers meet for the
+    first time in ``McpPolicyGate._card_for``, whose cross-check rebuilds the URN
+    from ``tool.name``. Comparing a namespaced name against a bare-name URN
+    matches nothing, so the card resolves to ``None`` and **every MCP call in
+    every run** refuses with ``POLICY_UNAVAILABLE`` — the whole connector
+    surface, silently, with no load failure recorded anywhere.
+    """
+
+    NAMESPACED_READ = McpToolName.compose(
+        server=PolicyToolFixtureMixin.SERVER, tool=PolicyToolFixtureMixin.READ_TOOL
+    )
+
+    async def test_namespaced_read_dispatches_instead_of_refusing(self) -> None:
+        wrapped = self.build(
+            tool_name=self.NAMESPACED_READ, descriptor_tool=self.READ_TOOL
+        )
+        result = await self.call(wrapped, team="ENG")
+        assert result == "issues"
+        assert len(wrapped.inner.calls) == 1
+
+    async def test_namespaced_write_still_parks_for_approval(self) -> None:
+        # The namespace must not cost the gate either: a WRITE whose card now
+        # resolves has to reach the approval interrupt, not sail through.
+        wrapped = self.build(
+            tool_name=McpToolName.compose(server=self.SERVER, tool=self.WRITE_TOOL),
+            descriptor_tool=self.WRITE_TOOL,
+        )
+        await self.call(wrapped, team="ENG")
+        assert wrapped.interrupt.calls == 1
+
+    async def test_a_digested_over_long_name_refuses_rather_than_guessing(
+        self,
+    ) -> None:
+        # The documented boundary, pinned so it stays a decision rather than a
+        # surprise. Past the provider's 64-character limit ``compose`` digests
+        # the pair, and a digested name cannot be inverted back into the bare
+        # name the URN was built from — so the pair does not round-trip and the
+        # stage refuses instead of policing against a card it cannot confirm is
+        # this tool's. Reachable for a long connector slug plus a long tool
+        # name; the fix is for the SOURCE to derive the descriptor from
+        # ``strip(compose(...))`` so the two are equal by construction.
+        long_tool = "list_issues_by_project_and_team_with_filters_and_cursor"
+        namespaced = McpToolName.compose(server=self.SERVER, tool=long_tool)
+        assert namespaced != f"mcp__{self.SERVER}__{long_tool}", (
+            "fixture must actually exercise the digested path"
+        )
+
+        wrapped = self.build(tool_name=namespaced, descriptor_tool=long_tool)
+        result = await self.call(wrapped, team="ENG")
+
+        error = self.error_of(result)
+        assert error["code"] == McpLoadErrorCode.PERMISSION_DENIED.value
+        assert error["safe_message"] == PolicyStageMessages.POLICY_UNAVAILABLE
+        assert wrapped.inner.calls == []
+
+    async def test_a_namespace_naming_another_connector_refuses(self) -> None:
+        # Strictly stronger than the bare-name world could be: the model-surface
+        # name carries its connector, so a tool registered under ``github`` and
+        # paired with a ``linear`` descriptor is now detectable — and must be
+        # refused rather than policed against Linear's card.
+        wrapped = self.build(
+            tool_name=McpToolName.compose(server="github", tool=self.READ_TOOL),
+            descriptor_tool=self.READ_TOOL,
+        )
+        result = await self.call(wrapped, team="ENG")
+        error = self.error_of(result)
+        assert error["code"] == McpLoadErrorCode.PERMISSION_DENIED.value
+        assert error["safe_message"] == PolicyStageMessages.POLICY_UNAVAILABLE
         assert wrapped.inner.calls == []
 
 

@@ -48,6 +48,7 @@ from agent_runtime.capabilities.mcp.cards import (
     McpTransport,
 )
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.models import ModelConfigResolver
@@ -80,6 +81,12 @@ _USER_ID = "user_123"
 _SERVER = "linear"
 _READ_TOOL = "get_issues"
 _WRITE_TOOL = "create_issue"
+#: The MODEL-SURFACE register. Per-tool registration namespaces every
+#: connector tool, so this is the name the model emits in a tool call; the
+#: connector still answers to the bare name above, which is what
+#: ``provider.client.calls`` is asserted in.
+_READ_REGISTERED = McpToolName.compose(server=_SERVER, tool=_READ_TOOL)
+_WRITE_REGISTERED = McpToolName.compose(server=_SERVER, tool=_WRITE_TOOL)
 # The four capabilities the model-facing MCP operation gateway requires to
 # compose for an enforced run (mirrors ``test_mcp_operation_composition``).
 _GATEWAY_CAPABILITIES = (
@@ -431,7 +438,7 @@ class TestTrustedReadAutoRuns(LinearMcpRunMixin):
         provider = self._provider()
         self._patch_registry(monkeypatch, provider)
         self._script_one_mcp_call(
-            monkeypatch, tool_name="get_issues", arguments={"team": "ENG"}
+            monkeypatch, tool_name=_READ_REGISTERED, arguments={"team": "ENG"}
         )
         store = InMemoryRuntimeApiStore()
         settings = self._settings()
@@ -462,7 +469,7 @@ class TestWriteParksThenApproveExecutes(LinearMcpRunMixin):
         self._patch_registry(monkeypatch, provider)
         self._script_one_mcp_call(
             monkeypatch,
-            tool_name="create_issue",
+            tool_name=_WRITE_REGISTERED,
             arguments={"title": "Ship it", "team": "ENG"},
         )
         store = InMemoryRuntimeApiStore()
@@ -553,7 +560,7 @@ class TestNonOAuthWriteParksThenApproveExecutes(NonOAuthLocalMcpRunMixin):
         self._patch_registry(monkeypatch, provider)
         self._script_one_mcp_call(
             monkeypatch,
-            tool_name="create_issue",
+            tool_name=_WRITE_REGISTERED,
             arguments={"title": "Ship it", "team": "ENG"},
         )
         store = InMemoryRuntimeApiStore()
@@ -617,15 +624,15 @@ class TestWriteGateHoldsWhenSiblingCallsRunAlongsideIt(LinearMcpRunMixin):
         # The gate's shape is unchanged — two trusted reads ALLOW and dispatch
         # concurrently while the write parks — but there is no umbrella to
         # address them through.
-        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, _READ_TOOL)
+        monkeypatch.setenv(FakeModelProvider.ENV_TOOL_NAME, _READ_REGISTERED)
         monkeypatch.setenv(
             FakeModelProvider.ENV_PARALLEL_TOOL_CALLS,
             json.dumps(
                 [
-                    {"name": _READ_TOOL, "args": {"team": "ENG"}},
-                    {"name": _READ_TOOL, "args": {"team": "DESIGN"}},
+                    {"name": _READ_REGISTERED, "args": {"team": "ENG"}},
+                    {"name": _READ_REGISTERED, "args": {"team": "DESIGN"}},
                     {
-                        "name": _WRITE_TOOL,
+                        "name": _WRITE_REGISTERED,
                         "args": {"title": "Ship it", "team": "ENG"},
                     },
                 ]

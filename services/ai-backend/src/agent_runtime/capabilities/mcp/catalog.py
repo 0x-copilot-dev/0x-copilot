@@ -93,6 +93,8 @@ from agent_runtime.capabilities.mcp.cards import (
     McpServerCard,
     McpToolDescriptor,
 )
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
+from agent_runtime.capabilities.surfaces.builtin import server_slug
 from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
@@ -422,9 +424,17 @@ class McpCatalogFile(RuntimeContract):
 
 
 class McpCatalogIndexRow(RuntimeContract):
-    """One tool as it appears in the ``SERVER.md`` index."""
+    """One tool as it appears in the ``SERVER.md`` index.
+
+    Carries both registers because the row is built from one and rendered in the
+    other: ``tool_name`` is what the connector advertises (the key the action
+    catalog and the annotations registry are written under), ``invoke_name`` is
+    the namespaced name the tool is actually registered as and therefore the
+    only name a model can successfully call.
+    """
 
     tool_name: str
+    invoke_name: str
     action: McpToolActionClass
     summary: str
 
@@ -609,12 +619,19 @@ class McpCatalogRenderer:
         server_name: str,
         descriptor: McpToolDescriptor,
         action: McpToolActionClass,
+        invoke_name: str,
     ) -> str:
         """Render one tool's complete contract as pretty-printed JSON.
 
         Everything needed to make the call lives in this one file — schema,
         output shape, action class, and the dispatch envelope — so recovering a
         tool is exactly one ``read_file``.
+
+        Every name emitted here is ``invoke_name``, the registered
+        ``mcp__{server}__{tool}``. The connector's own bare name is deliberately
+        absent: it is not callable, and a file that showed both would be asking
+        the model to pick. Provenance is ``server_name``, which it already
+        carries.
         """
 
         payload: dict[str, Any] = {
@@ -623,15 +640,15 @@ class McpCatalogRenderer:
             Keys.Field.INPUT_SCHEMA: dict(descriptor.input_schema),
             # The machine-readable half of the same instruction, and the one
             # the model actually follows. Under per-tool registration the tool
-            # IS the descriptor's name — there is no umbrella to address and no
+            # IS its registered name — there is no umbrella to address and no
             # `{server_name, tool_name}` envelope to fill in. `server_name` stays
             # for provenance: the reader still needs to know which connector a
             # descriptor came from.
             Keys.Field.INVOKE_WITH: {
-                Keys.Field.TOOL: descriptor.name,
+                Keys.Field.TOOL: invoke_name,
                 Keys.Field.SERVER_NAME: server_name,
             },
-            Keys.Field.NAME: descriptor.name,
+            Keys.Field.NAME: invoke_name,
             Keys.Field.OUTPUT_SHAPE: dict(descriptor.output_shape),
             Keys.Field.READ_ONLY: descriptor.read_only,
             Keys.Field.RISK_LEVEL: descriptor.risk_level.value,
@@ -738,7 +755,9 @@ class McpCatalogRenderer:
 
     @classmethod
     def _index_prefix(cls, row: McpCatalogIndexRow) -> str:
-        return f"- `{row.tool_name}` [{row.action.value}]"
+        # ``invoke_name``: the index is the shortlist a model calls straight
+        # from, so the name it shows has to be the registered one.
+        return f"- `{row.invoke_name}` [{row.action.value}]"
 
     @classmethod
     def _summary_width(cls, prefixes: Sequence[str]) -> int:
@@ -866,9 +885,19 @@ class McpCatalogBuilder:
     def _index_rows(
         cls, server_name: str, tools: Sequence[McpToolDescriptor]
     ) -> tuple[McpCatalogIndexRow, ...]:
+        """Pair each descriptor's own name with the name the model must call.
+
+        ``tool.name`` stays the key for the action lookup — ``ACTION_CATALOG`` is
+        written under the connector's own names — while ``invoke_name`` is the
+        registered, namespaced one every rendered byte then uses.
+        """
+
         return tuple(
             McpCatalogIndexRow(
                 tool_name=tool.name,
+                invoke_name=McpToolName.compose(
+                    server=server_slug(server_name), tool=tool.name
+                ),
                 action=McpToolActionClass.for_tool(server=server_name, tool=tool.name),
                 summary=McpCatalogText.one_line(tool.description),
             )
@@ -882,13 +911,22 @@ class McpCatalogBuilder:
         tools: Sequence[McpToolDescriptor],
         rows: Sequence[McpCatalogIndexRow],
     ) -> list[McpCatalogFile]:
+        """Write one file per tool, named for the tool the model can call.
+
+        The stem is ``invoke_name``, not the connector's bare name, so the one
+        string the index shows is the one that reads the file AND the one that
+        makes the call — ``SERVER.md``'s ``read_file <tools_dir><tool>.json``
+        stays literally true with no mapping for the model to guess.
+        """
+
         return [
             cls._file(
-                McpCatalogPaths.tool_file(server_name, tool.name),
+                McpCatalogPaths.tool_file(server_name, row.invoke_name),
                 McpCatalogRenderer.tool_file(
                     server_name=server_name,
                     descriptor=tool,
                     action=row.action,
+                    invoke_name=row.invoke_name,
                 ),
             )
             for tool, row in zip(tools, rows, strict=True)
