@@ -94,12 +94,22 @@ class SubagentHandoffPolicy:
         requested_skills: Sequence[str],
         parent_grant: SubagentCapabilityGrant | None,
     ) -> SubagentCapabilityGrant:
-        """Return the only authority that may cross the delegation boundary."""
+        """Return the only authority that may cross the delegation boundary.
+
+        The parent's sealed filesystem-bypass decision is applied here, not at
+        the call sites: every handoff — first dispatch and follow-up update
+        alike — must be clamped by the same rule, and a rule applied by each
+        caller is a rule one caller forgets.
+        """
 
         parent = parent_grant or SubagentAuthorityPolicy.inherited_parent_grant(
             context_scopes=context.permission_scopes,
             definition_tools=definition.tools,
             definition_skills=definition.skills,
+        )
+        parent = SubagentAuthorityPolicy.delegable_parent_grant(
+            parent,
+            bypass_active=context.filesystem_bypass.skips_approval_pause,
         )
         return SubagentAuthorityPolicy.narrow(
             parent=parent,

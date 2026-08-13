@@ -5,6 +5,35 @@ receive.  A parent grant is an independent ceiling.  The child always gets the
 intersection of the two plus any explicit request; it can never recover a
 tool, scope, skill, capability, or approval posture that one of those parents
 withheld.
+
+The permission floor, stated so nobody has to infer it
+-----------------------------------------------------
+
+**A child's posture is floored at its parent's and may only be stricter.**
+Concretely, for every axis:
+
+* tools, skills, scopes, capabilities — set intersection with the parent grant.
+  A definition naming a tool the parent lacks does not conjure it.
+* approval policy (read / write / destructive) — the *stricter* of parent and
+  definition, per :meth:`SubagentPolicyGrant.narrow`. A definition may tighten
+  its own posture and that wins; it may not loosen and have it stick.
+
+Two consequences a reader routinely gets backwards:
+
+1. **"Floored at the parent's" is not "inherits the parent's".** It is an upper
+   bound, not an assignment. A stricter definition still wins.
+2. **A bypass does not cross the delegation boundary.** The user approves a
+   bypass posture for the work they can see the agent doing. Handing it to a
+   fan-out of delegates turns one consent into N unattended ones, which is
+   exactly how a bypass grant silently widens. :meth:`delegable_parent_grant`
+   clamps a bypassing parent back to the asking posture *before* narrowing, so
+   the child asks even though the parent did not.
+
+The one place the floor used to leak is :meth:`inherited_parent_grant`, which
+fabricates a parent ceiling when no verified grant was supplied. It defaulted
+the approval posture instead of carrying the parent's, so a *strict* parent
+could be widened by nothing more than the absence of an explicit grant. It now
+takes ``parent_policy``.
 """
 
 from __future__ import annotations
@@ -103,6 +132,12 @@ class SubagentAuthorityPolicy:
 
     DISPATCH_CAPABILITY = "subagent"
 
+    #: The loosest posture a parent may hand across the delegation boundary:
+    #: reads flow, writes ask, destructive work requires explicit approval.
+    #: This is ``SubagentPolicyGrant``'s own default, named here so the clamp
+    #: below reads as a rule rather than as a convenient coincidence.
+    NON_DELEGABLE_BYPASS_FLOOR: ClassVar[SubagentPolicyGrant] = SubagentPolicyGrant()
+
     @classmethod
     def inherited_parent_grant(
         cls,
@@ -110,12 +145,18 @@ class SubagentAuthorityPolicy:
         context_scopes: frozenset[str],
         definition_tools: frozenset[str],
         definition_skills: frozenset[str],
+        parent_policy: SubagentPolicyGrant | None = None,
     ) -> SubagentCapabilityGrant:
         """Build the compatibility parent ceiling when no explicit grant exists.
 
         This is deliberately the definition's own ceiling, not an unbounded
         wildcard.  Existing callers retain their behavior while new assembly
         points can pass a narrower verified parent grant.
+
+        ``parent_policy`` is the parent's real approval posture. Omitting it
+        used to substitute the *default* posture, which silently widened a
+        parent that was stricter than the default — the leak named in this
+        module's header.
         """
 
         return SubagentCapabilityGrant(
@@ -123,6 +164,33 @@ class SubagentAuthorityPolicy:
             tools=definition_tools,
             skills=definition_skills,
             permission_scopes=context_scopes,
+            policy=parent_policy or SubagentPolicyGrant(),
+        )
+
+    @classmethod
+    def delegable_parent_grant(
+        cls,
+        parent: SubagentCapabilityGrant,
+        *,
+        bypass_active: bool,
+    ) -> SubagentCapabilityGrant:
+        """Clamp a bypassing parent to the asking posture before it delegates.
+
+        A bypass removes the approval pause for the work the user is watching.
+        It is not a grant the parent may pass on: a delegate runs unattended,
+        and N delegates turn one consent into N. When the parent holds no
+        bypass this returns the grant unchanged, so the ordinary path allocates
+        nothing and behaves exactly as before.
+        """
+
+        if not bypass_active:
+            return parent
+        return parent.model_copy(
+            update={
+                "policy": SubagentPolicyGrant.narrow(
+                    parent.policy, cls.NON_DELEGABLE_BYPASS_FLOOR
+                )
+            }
         )
 
     @classmethod
