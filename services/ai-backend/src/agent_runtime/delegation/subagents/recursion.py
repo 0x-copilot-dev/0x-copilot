@@ -18,8 +18,8 @@ delegations run concurrently.
 Deep Agents hands a subagent that declares no ``tools`` the *parent's* tool
 list. If ``task`` is ever in that list, the child can delegate — and its child
 can delegate — with nothing structural in the way, on the user's own BYOK key.
-:meth:`SubagentRecursionPolicy.child_tool_surface` removes it by default and
-keeps it only when the spec explicitly opts in. This is belt-and-braces with
+:meth:`SubagentRecursionPolicy.narrow_spec` removes it by default and keeps it
+only when the spec explicitly opts in. This is belt-and-braces with
 rule 1: rule 1 refuses the *call*, rule 2 removes the *capability*.
 
 **3. A child's permission posture is floored at its parent's — never above it.**

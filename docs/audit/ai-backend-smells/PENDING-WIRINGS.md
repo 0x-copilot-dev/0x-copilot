@@ -53,15 +53,28 @@ the Delete/Wireable set is "confirm first," not "remove now."
 These are pending-wiring in the strict sense: the module names what it needs and
 that thing is not in the tree. Track the owner; do not delete.
 
-| Module                                                   |  LOC | Added | Waits on (unshipped)                                                                                                             | Blocker location                                                                                                                                             |
-| -------------------------------------------------------- | ---: | ----- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent_runtime.observability.context_origin_conformance` | 1271 | 07-30 | invocation as a merge/CI gate ("cannot merge", "hard-fails CI")                                                                  | no caller; sibling `llm_seam` gate _is_ aggregated into `release/e2_final_conformance.py:216`, this one never was                                            |
-| `agent_runtime.capabilities.workspace.patch_plan`        |  804 | 07-27 | "an **eventual C1 overlay transaction** may consume" the validated plan                                                          | no `OverlayTransaction`/applier consumer (rest of the `workspace` package _is_ wired)                                                                        |
-| `agent_runtime.harness_quality.operational_corpus`       | 1521 | 07-29 | the **Step 15** promotion evaluator, same as its deleted importer                                                                | inherited this row when `promotion_cohorts` — its only `src` importer — was deleted with F3 discovery; still exercised by three harness-quality test modules |
-| `agent_runtime.release.promotion`                        |  183 | 07-27 | the Step-15 driver that constructs `PairedPromotionEvaluator` (prose is silent; sibling `promotion_cohorts` names Step 15)       | persistence sink `put_paired_report` _is_ wired; no production caller                                                                                        |
-| `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                               | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
-| `agent_runtime.delegation.subagents.coordination`        |  574 | 07-27 | **ARQ-012** — "route the existing Atlas task tool through this one coordinator", plus server-derived budget/deadline reservation | `IMPLEMENTATION-BACKLOG.md` §ARQ-012, status **open**; it is the slice that closes ARQ-006. "Do not add a second subagent implementation."                   |
-| `agent_runtime.delegation.subagents.handoff`             |  202 | 04-30 | nothing of its own — it is the hard dependency of the row above (`DelegationCoordinator._build_handoff`)                         | also named by **ARQ-006** as one of the two uncomposed abstractions the F9 coordinator must bind                                                             |
+| Module                                                   |  LOC | Added | Waits on (unshipped)                                                                                                       | Blocker location                                                                                                                                             |
+| -------------------------------------------------------- | ---: | ----- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent_runtime.observability.context_origin_conformance` | 1271 | 07-30 | invocation as a merge/CI gate ("cannot merge", "hard-fails CI")                                                            | no caller; sibling `llm_seam` gate _is_ aggregated into `release/e2_final_conformance.py:216`, this one never was                                            |
+| `agent_runtime.capabilities.workspace.patch_plan`        |  804 | 07-27 | "an **eventual C1 overlay transaction** may consume" the validated plan                                                    | no `OverlayTransaction`/applier consumer (rest of the `workspace` package _is_ wired)                                                                        |
+| `agent_runtime.harness_quality.operational_corpus`       | 1521 | 07-29 | the **Step 15** promotion evaluator, same as its deleted importer                                                          | inherited this row when `promotion_cohorts` — its only `src` importer — was deleted with F3 discovery; still exercised by three harness-quality test modules |
+| `agent_runtime.release.promotion`                        |  183 | 07-27 | the Step-15 driver that constructs `PairedPromotionEvaluator` (prose is silent; sibling `promotion_cohorts` names Step 15) | persistence sink `put_paired_report` _is_ wired; no production caller                                                                                        |
+| `agent_runtime.capabilities.mcp.credentials.backend`     |  628 | 08-03 | **P2-8** selecting a `CredentialProvider` — the flip is default-OFF, so nothing constructs one yet                         | consumes `services/backend`'s `POST /internal/v1/mcp/servers/{id}/access-token` (shipped, `d472c80b`); waits only on the ai-backend side choosing a provider |
+| `agent_runtime.delegation.subagents.handoff`             |  202 | 04-30 | **ARQ-012** — its only caller is `DelegationCoordinator._build_handoff`, which the live task path does not reach           | also named by **ARQ-006** as one of the two uncomposed abstractions the F9 coordinator must bind                                                             |
+
+**`agent_runtime.delegation.subagents.coordination` left this table on 08-14 —
+partly, honestly.** The live `task` tool now admits against
+`DelegationAdmissionPolicy.max_depth` through `DelegationDepthPolicy`
+(`delegation/subagents/recursion.py`), so the module is genuinely imported from a
+module the runtime factory reaches and the scanner no longer reports it. That is
+one field of one contract. **`DelegationCoordinator.build_plan`, `DelegationBudget`,
+`DelegationRequest`, `DelegationPlan` and the dependency-DAG staging remain
+unwired**, still waiting on the same thing: **ARQ-012**, "route the existing Atlas
+task tool through this one coordinator", plus the server-derived budget/deadline
+reservation that a batch admission needs and no caller currently computes
+(`IMPLEMENTATION-BACKLOG.md` §ARQ-012, status **open**). Module-scale orphan
+detection cannot express "20% wired", which is exactly why the remainder is
+written down here instead of being silently laundered by one import.
 
 ### The ratchet cannot see these two — a package `__init__` hides an orphan
 
@@ -109,7 +122,10 @@ list and the audit that authorised it. Two are held and keep their rows above:
 
 - **`agent_runtime.delegation.subagents.coordination`** — open **ARQ-012**; the
   prior adjudicated audit says removing it "belongs to whoever closes ARQ-006, not
-  to a deletion PR."
+  to a deletion PR." Held then, and held now for a second reason: as of 08-14 its
+  `DelegationAdmissionPolicy.max_depth` is the live delegation-depth ceiling, so
+  it is no longer deletable without re-homing that contract. The rest of it is
+  still unwired — see the note under the table above.
 - **`agent_runtime.harness_quality.golden_traces`** — part of the F1 cluster that
   [REDUCTION-LEDGER](REDUCTION-LEDGER.md) §"Needs your decision (~50k)" still parks.
 

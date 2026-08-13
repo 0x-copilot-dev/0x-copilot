@@ -159,12 +159,13 @@ class Messages:
         REQUESTED_SUBAGENT_UNKNOWN = "Requested subagent is not available."
 
     class Delegation:
-        """Model-visible refusals raised on the live ``task`` tool path."""
+        """Model-visible refusals raised on the live ``task`` tool path.
 
-        NESTED_DELEGATION_UNAVAILABLE = (
-            "Delegation is unavailable to a subagent; do the work yourself and "
-            "report back to the agent that delegated to you."
-        )
+        There is deliberately no "nested delegation unavailable" string here.
+        Rule 2 removes ``task`` from a child's tool surface outright, so a
+        delegate never sees the tool to call it — a refusal message for that
+        case would have no emitter and would be dead the day it was written.
+        """
 
         @classmethod
         def depth_limit_exceeded(cls, *, max_depth: int) -> str:
