@@ -30,7 +30,7 @@ from agent_runtime.capabilities.skills.virtual import (
     VirtualSkillBundle,
     VirtualSkillRegistry,
 )
-from agent_runtime.capabilities.skills.visibility import text_attribute
+from agent_runtime.capabilities.skills.visibility import SkillCardText
 from agent_runtime.prompts.tools import (
     LIST_SKILLS_TOOL_DESCRIPTION,
     LOAD_SKILL_TOOL_DESCRIPTION,
@@ -162,7 +162,11 @@ class ListSkillsTool:
         if ledger is None or not ledger.has_offer:
             return tuple(cards)
         offered = set(ledger.offered_names)
-        return tuple(card for card in cards if text_attribute(card, "name") in offered)
+        return tuple(
+            card
+            for card in cards
+            if SkillCardText.attribute(card, Keys.Fields.NAME) in offered
+        )
 
     @classmethod
     def _matches(cls, card: object, query: str) -> bool:
@@ -170,18 +174,19 @@ class ListSkillsTool:
         if not query:
             return True
         lowered = query.lower()
-        return lowered in text_attribute(card, Keys.Fields.NAME).lower() or (
-            lowered in text_attribute(card, Keys.Fields.DESCRIPTION).lower()
+        return lowered in SkillCardText.attribute(card, Keys.Fields.NAME).lower() or (
+            lowered in SkillCardText.attribute(card, Keys.Fields.DESCRIPTION).lower()
         )
 
     @classmethod
     def _row(cls, card: object) -> dict[str, str]:
         """Project one card to the compact row the model reads."""
-        name = text_attribute(card, Keys.Fields.NAME)
+        name = SkillCardText.attribute(card, Keys.Fields.NAME)
         return {
             "name": name,
-            "display_name": text_attribute(card, Keys.Fields.DISPLAY_NAME) or name,
-            "description": text_attribute(card, Keys.Fields.DESCRIPTION),
+            "display_name": SkillCardText.attribute(card, Keys.Fields.DISPLAY_NAME)
+            or name,
+            "description": SkillCardText.attribute(card, Keys.Fields.DESCRIPTION),
         }
 
 

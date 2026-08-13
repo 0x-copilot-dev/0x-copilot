@@ -56,22 +56,26 @@ from agent_runtime.capabilities.skills.constants import Keys, Limits, Messages
 from agent_runtime.execution.contracts import RuntimeContract
 
 
-def text_attribute(source: object, attribute: str) -> str:
-    """Return a stripped string attribute of ``source``, or ``""``.
+class SkillCardText:
+    """Reads text off a Skill card without assuming which class produced it.
 
     Cards reach this module either as :class:`VirtualSkillCard` instances or as
     whatever a custom provider returned, so every read is by attribute name and
     every non-string is treated as absent.
     """
 
-    value = getattr(source, attribute, None)
-    return value.strip() if isinstance(value, str) else ""
+    @classmethod
+    def attribute(cls, source: object, attribute: str) -> str:
+        """Return a stripped string attribute of ``source``, or ``""``."""
 
+        value = getattr(source, attribute, None)
+        return value.strip() if isinstance(value, str) else ""
 
-def skill_name_of(card: object) -> str:
-    """Return a card's stable name, falling back to its repr for diagnostics."""
+    @classmethod
+    def name_of(cls, card: object) -> str:
+        """Return a card's stable name, falling back to its repr for diagnostics."""
 
-    return text_attribute(card, Keys.Fields.NAME) or str(card)
+        return cls.attribute(card, Keys.Fields.NAME) or str(card)
 
 
 class SkillVisibilityConditions(RuntimeContract):
@@ -203,13 +207,15 @@ class SkillVisibilityContext(RuntimeContract):
 
         tool_names = {
             name
-            for name in (text_attribute(tool, Keys.Fields.NAME) for tool in tools)
+            for name in (
+                SkillCardText.attribute(tool, Keys.Fields.NAME) for tool in tools
+            )
             if name
         }
         connector_slugs: set[str] = set()
         for connector in connectors:
             for attribute in (Keys.Fields.NAME, Keys.Fields.CONNECTOR_SLUG):
-                slug = text_attribute(connector, attribute)
+                slug = SkillCardText.attribute(connector, attribute)
                 if slug:
                     connector_slugs.add(slug)
         return cls(
@@ -264,14 +270,14 @@ class SkillIndexPlanner:
             if cls.conditions_of(card).is_satisfied_by(context):
                 eligible.append(card)
             else:
-                hidden.append(skill_name_of(card))
+                hidden.append(SkillCardText.name_of(card))
 
         rows: list[str] = []
         surfaced: list[str] = []
         deferred: list[str] = []
         budget = max_chars
         for card in eligible:
-            name = skill_name_of(card)
+            name = SkillCardText.name_of(card)
             if len(rows) >= max_entries:
                 deferred.append(name)
                 continue
@@ -304,18 +310,19 @@ class SkillIndexPlanner:
     def row(cls, card: object) -> str:
         """Render one bounded index row for ``card``."""
 
-        name = skill_name_of(card)
+        name = SkillCardText.name_of(card)
         allowed_tools = tuple(getattr(card, Keys.Fields.ALLOWED_TOOLS, ()) or ())
         return cls.ROW.format(
             name=name,
-            display_name=text_attribute(card, Keys.Fields.DISPLAY_NAME) or name,
-            virtual_path=text_attribute(card, Keys.Fields.VIRTUAL_PATH),
+            display_name=SkillCardText.attribute(card, Keys.Fields.DISPLAY_NAME)
+            or name,
+            virtual_path=SkillCardText.attribute(card, Keys.Fields.VIRTUAL_PATH),
             allowed=(
                 cls.ALLOWED.format(tools=Keys.Characters.COMMA.join(allowed_tools))
                 if allowed_tools
                 else ""
             ),
-            summary=cls.clip(text_attribute(card, Keys.Fields.DESCRIPTION)),
+            summary=cls.clip(SkillCardText.attribute(card, Keys.Fields.DESCRIPTION)),
         )
 
     @classmethod

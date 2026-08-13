@@ -80,8 +80,19 @@ from agent_runtime.capabilities.middleware import (
     wrap_tools_with_display,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
-from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
+from agent_runtime.capabilities.skills.middleware import (
+    ListSkillsInput,
+    ListSkillsTool,
+    LoadSkillInput,
+    LoadSkillTool,
+)
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
+from agent_runtime.capabilities.skills.usage import SkillUsageLedger
+from agent_runtime.capabilities.skills.visibility import (
+    SkillIndexPlan,
+    SkillIndexPlanner,
+    SkillVisibilityContext,
+)
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
     AskAQuestionInput,
     AskAQuestionTool,
@@ -387,11 +398,21 @@ async def _assemble_harness(
         model_tools = enforced_tools.tools
         control_binding = RunControlContext.current()
         task_policy_binding = RunControlContext.task_policy()
+        # Taken here, after policy enforcement, because the visibility
+        # predicate reads the tool surface the model will ACTUALLY see: a
+        # Skill declaring ``fallback_for_tools: <x>`` must stay offered when
+        # policy removed ``<x>`` from this run.
+        skill_index_plan = _skill_index_plan(
+            skill_cards=skill_cards,
+            model_tools=model_tools,
+            mcp_servers=mcp_servers,
+        )
         prompt_assembly_plan = _prompt_assembly_plan(
             instructions=instructions,
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
+            skill_index_plan=skill_index_plan,
             tool_schema_revision=_model_tool_schema_revision(model_tools),
             workspace_active=bool(
                 workspace_backend is not None
@@ -752,6 +773,19 @@ def _with_mcp_per_tool_interrupts(
     return {**registration.interrupt_on, **interrupt_on}
 
 
+def _skill_search_available(skill_registry: object | None) -> bool:
+    """Return ``True`` when this run can register the ``list_skills`` search.
+
+    One definition, two readers — the registration in ``_model_visible_tools``
+    and the reserved-name set — so the name can never be reserved on a run that
+    does not register the tool, or registered on a run that does not reserve it.
+    """
+
+    return skill_registry is not None and callable(
+        getattr(skill_registry, "list_available_skills", None)
+    )
+
+
 def _reserved_tool_names(
     tools: Sequence[object],
     *,
@@ -771,6 +805,7 @@ def _reserved_tool_names(
         include_auth_mcp=_auth_session_creator(mcp_registry) is not None,
         include_skill_loader=skill_registry is not None
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
+        include_skill_search=_skill_search_available(skill_registry),
         include_mcp_discovery=True,
     )
 
@@ -1058,6 +1093,24 @@ def _model_visible_tools(
                 owner=ModelToolOwner.SKILLS,
             )
         )
+    # The second half of progressive disclosure. The prompt index is bounded,
+    # so a large library leaves Skills named nowhere in the system prompt;
+    # without a search the bound would silently delete capability rather than
+    # defer it. Gated on the listing method the search actually calls, not on
+    # the loader's, so a registry that only loads registers only the loader.
+    if _skill_search_available(skill_registry):
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    ListSkillsTool(
+                        registry=skill_registry,  # type: ignore[arg-type]
+                        runtime_context=runtime_context,
+                    ),
+                    ListSkillsInput,
+                ),
+                owner=ModelToolOwner.SKILLS,
+            )
+        )
     if prior_tool_result_loader is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
@@ -1182,6 +1235,7 @@ def _prompt_assembly_plan(
     runtime_context: AgentRuntimeContext,
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
+    skill_index_plan: SkillIndexPlan | None = None,
     tool_schema_revision: str,
     workspace_active: bool,
     workspace_writable: bool,
@@ -1209,7 +1263,11 @@ def _prompt_assembly_plan(
         )
     )
     skill_block = _standalone_prompt_block(
-        _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
+        _instructions_with_skill_cards(
+            instructions="",
+            skill_cards=skill_cards,
+            plan=skill_index_plan,
+        )
     )
     suggested_block = _standalone_prompt_block(
         _instructions_with_suggested_connectors(
@@ -1550,6 +1608,7 @@ def _local_tool_names(
     include_mcp_tools: bool,
     include_auth_mcp: bool,
     include_skill_loader: bool,
+    include_skill_search: bool = False,
     include_mcp_discovery: bool = False,
 ) -> frozenset[str]:
     """Return trusted names already exposed to the model for collision checks."""
@@ -1565,7 +1624,9 @@ def _local_tool_names(
     if include_auth_mcp:
         names.add(McpValues.ToolName.AUTH_MCP)
     if include_skill_loader:
-        names.add("load_skill")
+        names.add(LoadSkillTool.name)
+    if include_skill_search:
+        names.add(ListSkillsTool.name)
     names.add(Values.Tool.ASK_A_QUESTION)
     names.add(Values.Tool.LIST_CONNECTED_SERVERS)
     if include_mcp_discovery:
@@ -1777,28 +1838,66 @@ def _instructions_with_suggested_connectors(
     )
 
 
+def _skill_index_plan(
+    *,
+    skill_cards: Sequence[object],
+    model_tools: Sequence[object],
+    mcp_servers: Sequence[object],
+) -> SkillIndexPlan:
+    """Decide, once per harness build, which Skills the prompt index will carry.
+
+    This is the only place in the runtime that holds BOTH halves of the
+    decision: the Skill cards (resolved in the ``acreate_agent_runtime``
+    gather) and the run's actually-resolved capability surface (model tools
+    after policy enforcement, and the authorized MCP cards). The registry
+    cannot make it — it is one branch of the same gather, so at the moment it
+    lists cards the tool surface does not exist yet.
+
+    The resulting plan is recorded on the run's :class:`SkillUsageLedger`
+    here rather than at render time, so the set the sidecar reports as
+    "offered" is by construction the same object the prompt was rendered
+    from — not a second computation that can drift from it.
+    """
+
+    plan = SkillIndexPlanner.plan(
+        cards=skill_cards,
+        visibility=SkillVisibilityContext.of(
+            tools=model_tools,
+            connectors=mcp_servers,
+        ),
+    )
+    SkillUsageLedger.record_offer(
+        surfaced=plan.surfaced,
+        deferred=plan.deferred,
+        hidden=plan.hidden,
+    )
+    return plan
+
+
 def _instructions_with_skill_cards(
-    *, instructions: str, skill_cards: Sequence[object]
+    *,
+    instructions: str,
+    skill_cards: Sequence[object],
+    plan: SkillIndexPlan | None = None,
 ) -> str:
-    """Append the skill card block to the base instructions when skills are available."""
+    """Append the bounded Skill index to the base instructions.
+
+    ``plan`` is the decision taken by :func:`_skill_index_plan` for this run.
+    Callers that have no resolved capability surface (the legacy prompt-order
+    test, and any direct caller) pass none; the planner then runs against an
+    unresolved visibility context, which filters nothing and applies only the
+    bound — the pre-existing behaviour for any library small enough to fit.
+    """
     if not skill_cards:
         return instructions
-    card_lines = []
-    for skill in skill_cards:
-        name = getattr(skill, "name", str(skill))
-        description = getattr(skill, "description", "")
-        virtual_path = getattr(skill, "virtual_path", "")
-        display_name = getattr(skill, "display_name", None) or name
-        allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
-        allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
-        card_lines.append(
-            f"- {name} ({display_name}, path={virtual_path}{allowed}): {description}"
-        )
+    index = plan if plan is not None else SkillIndexPlanner.plan(cards=skill_cards)
+    if index.is_empty:
+        return instructions
     return "\n\n".join(
         (
             instructions,
             SKILL_CARDS_INSTRUCTIONS,
-            "\n".join(card_lines),
+            "\n".join(index.rows),
         )
     )
 
