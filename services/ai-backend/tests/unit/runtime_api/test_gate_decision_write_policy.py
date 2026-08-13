@@ -169,6 +169,55 @@ class TestRequestValidator:
         )
         assert req.write_policy == "allow_always"
 
+    @pytest.mark.parametrize("scope", ["once", "always"])
+    def test_decision_scope_allowed_on_approve(self, scope: str) -> None:
+        req = ApprovalDecisionRequest(
+            decision=ApprovalDecision.APPROVED,
+            decided_by_user_id=_USER,
+            decision_scope=scope,
+        )
+        assert req.decision_scope == scope
+
+    def test_decision_scope_requires_an_approve_422(self) -> None:
+        # Same fail-closed axis as ``write_policy``: a scope WIDENS what an
+        # approval covers, so a decline must not be able to carry one.
+        with pytest.raises(ValidationError) as exc:
+            ApprovalDecisionRequest(
+                decision=ApprovalDecision.REJECTED,
+                decided_by_user_id=_USER,
+                decision_scope="always",
+            )
+        assert "decision_scope" in str(exc.value)
+
+    def test_decision_scope_is_rejected_on_an_edited_approval_422(self) -> None:
+        # ``suggest_edit`` stands in for the edited lane generally: the edited
+        # call is not the call the card described, so a rule derived from the
+        # card's subjects would grant something the user never saw.
+        with pytest.raises(ValidationError) as exc:
+            ApprovalDecisionRequest(
+                decision=ApprovalDecision.SUGGEST_EDIT,
+                decided_by_user_id=_USER,
+                edited_payload={"title": "edited"},
+                decision_scope="always",
+            )
+        assert "decision_scope" in str(exc.value)
+
+    def test_decision_scope_rejects_an_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            ApprovalDecisionRequest(
+                decision=ApprovalDecision.APPROVED,
+                decided_by_user_id=_USER,
+                decision_scope="forever",
+            )
+
+    def test_decision_scope_defaults_to_absent(self) -> None:
+        # Absent is the pre-existing wire shape, and ``DecisionScope.from_wire``
+        # reads it as ``once`` at the far end.
+        req = ApprovalDecisionRequest(
+            decision=ApprovalDecision.APPROVED, decided_by_user_id=_USER
+        )
+        assert req.decision_scope is None
+
 
 # --------------------------------------------------------------------------- #
 # coordinator-side guards + persistence + gate.resolved

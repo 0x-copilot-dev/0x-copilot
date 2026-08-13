@@ -146,6 +146,71 @@ class TestAskAQuestionApprovalResume:
             "answer": "Tokyo",
         }
 
+    def test_resume_payload_carries_the_decision_scope_when_one_was_sent(self) -> None:
+        """The hop that makes ``always`` reachable inside the graph.
+
+        A parked WRITE borrows this ``ask_a_question`` shape, and this dict is
+        the LangGraph resume value ``ToolAccessGate._interpret_resume`` reads
+        back as ``GateResume.decision_scope``. Without the key the policy lane
+        that raised the gate has no way to learn which scope the user picked.
+        """
+
+        command = RuntimeApprovalResolvedCommand(
+            approval_id=_Values.APPROVAL_ID,
+            run_id=_Values.RUN_ID,
+            org_id=_Values.ORG_ID,
+            decision=ApprovalDecision.APPROVED,
+            decision_scope="always",
+        )
+
+        resume = RuntimeApprovalHandler._resume_payload(
+            command, metadata={"approval_kind": "ask_a_question"}
+        )
+
+        assert resume == {
+            "approval_id": _Values.APPROVAL_ID,
+            "decision": "approved",
+            "answer": None,
+            "decision_scope": "always",
+        }
+
+    def test_resume_payload_omits_the_scope_key_when_none_was_sent(self) -> None:
+        """This value is persisted in the checkpoint, so an unconditional
+        ``decision_scope: None`` would rewrite the stored shape of every plain
+        ask-a-question resume to say something the caller never said. Absent and
+        ``None`` are the same answer to the only reader (``.get``)."""
+
+        command = RuntimeApprovalResolvedCommand(
+            approval_id=_Values.APPROVAL_ID,
+            run_id=_Values.RUN_ID,
+            org_id=_Values.ORG_ID,
+            decision=ApprovalDecision.APPROVED,
+            answer="Tokyo",
+        )
+
+        resume = RuntimeApprovalHandler._resume_payload(
+            command, metadata={"approval_kind": "ask_a_question"}
+        )
+
+        assert "decision_scope" not in resume
+
+    def test_a_command_written_before_the_field_existed_still_deserializes(
+        self,
+    ) -> None:
+        """The durable queue contract: ``decision_scope`` is optional and typed
+        as a plain string, so a command enqueued by an older API is readable."""
+
+        command = RuntimeApprovalResolvedCommand.model_validate(
+            {
+                "approval_id": _Values.APPROVAL_ID,
+                "run_id": _Values.RUN_ID,
+                "org_id": _Values.ORG_ID,
+                "decision": "approved",
+            }
+        )
+
+        assert command.decision_scope is None
+
     def test_resume_payload_falls_back_to_action_shape_for_other_kinds(self) -> None:
         command = RuntimeApprovalResolvedCommand(
             approval_id="other",
