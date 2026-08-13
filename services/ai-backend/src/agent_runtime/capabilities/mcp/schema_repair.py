@@ -95,25 +95,10 @@ class McpSchemaRepairReport(RuntimeContract):
         return ",".join(rule.value for rule in self.rules) or McpSchemaRepairLog.NONE
 
 
-class _RepairLedger:
-    """Mutable accumulator threaded through one repair pass.
-
-    Deliberately not a contract: it is scratch state for a single call, and
-    :class:`McpSchemaRepairReport` is the typed thing that leaves the module.
-    """
-
-    def __init__(self) -> None:
-        self._rules: set[McpSchemaRepairRule] = set()
-
-    def add(self, rule: McpSchemaRepairRule) -> None:
-        """Record that ``rule`` fired at least once during this pass."""
-
-        self._rules.add(rule)
-
-    def fired(self) -> tuple[McpSchemaRepairRule, ...]:
-        """Return the fired rules in a stable (alphabetical) order."""
-
-        return tuple(sorted(self._rules, key=lambda rule: rule.value))
+#: Scratch accumulator threaded through one repair pass: the set of rules that
+#: fired. A plain ``set`` on purpose — it needs exactly ``add``, and
+#: :class:`McpSchemaRepairReport` is the typed thing that leaves the module.
+_RepairLedger = set["McpSchemaRepairRule"]
 
 
 class McpSchemaRepairLog:
@@ -319,7 +304,7 @@ class McpSchemaRepair:
         ``max_bytes`` after every degradation stage has run.
         """
 
-        ledger = _RepairLedger()
+        ledger: _RepairLedger = set()
         original_bytes = cls._encoded_size(value, field_name)
         repaired = cls._map_nodes(
             value, lambda node, top: cls._repair(node, top, ledger)
@@ -342,7 +327,9 @@ class McpSchemaRepair:
             server_name=McpSchemaRepairLog.active_server(),
             tool_name=tool_name or McpSchemaRepairLog.NONE,
             field_name=field_name,
-            rules=ledger.fired(),
+            # Sorted so the log field is stable run to run; StrEnum sorts by
+            # its value, which is the label that gets logged.
+            rules=tuple(sorted(ledger)),
             original_bytes=original_bytes,
             repaired_bytes=size,
         )
