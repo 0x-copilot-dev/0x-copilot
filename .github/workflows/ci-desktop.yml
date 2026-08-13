@@ -267,15 +267,35 @@ jobs:
           COPILOT_HOME: ${{ github.workspace }}/apps/desktop/resources
         run: python3 tools/desktop-journeys/first_run.py
 
-      # Screenshots + driver.log + the supervised services' own logs. Without
-      # these a red run on a runner nobody can ssh into is unreadable.
+      # The four supervised services write their logs under the app's userData
+      # dir, which is OUTSIDE the workspace. Copy them next to the screenshots so
+      # one in-workspace path carries every piece of evidence.
+      #
+      # Done in the shell on purpose. An upload `path:` beginning with `~` is
+      # expanded by @actions/glob, not by bash, and `if-no-files-found: warn`
+      # downgrades a miss to a warning — so getting it wrong loses the service
+      # logs silently, in precisely the red run that needed them. `$HOME` here is
+      # expanded by the shell, which is verifiable. No `${{ }}` in the script
+      # body: a substituted value is a script-injection vector (ci-gates header).
+      - name: Collect supervised service logs
+        if: failure()
+        run: |
+          for logs in "$HOME/Library/Application Support/0xCopilot"/journey-first-run-*/logs; do
+            [ -d "$logs" ] || continue
+            dest="tools/desktop-journeys/runs/services-$(basename "$(dirname "$logs")")"
+            mkdir -p "$dest"
+            cp "$logs"/*.log "$dest"/ 2>/dev/null || true
+          done
+          find tools/desktop-journeys/runs -type f | sed 's/^/  evidence: /'
+
+      # Screenshots, driver.log (Electron main), and the supervised services'
+      # logs. Without these a red run on a runner nobody can ssh into is
+      # unreadable.
       - name: Upload journey evidence
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desktop-journey-first-run-evidence
-          path: |
-            tools/desktop-journeys/runs/**
-            ~/Library/Application Support/0xCopilot/journey-first-run-*/logs/**
+          path: tools/desktop-journeys/runs/**
           if-no-files-found: warn
           retention-days: 7
