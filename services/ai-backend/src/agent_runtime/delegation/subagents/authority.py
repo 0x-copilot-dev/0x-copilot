@@ -32,8 +32,17 @@ Two consequences a reader routinely gets backwards:
 The one place the floor used to leak is :meth:`inherited_parent_grant`, which
 fabricates a parent ceiling when no verified grant was supplied. It defaulted
 the approval posture instead of carrying the parent's, so a *strict* parent
-could be widened by nothing more than the absence of an explicit grant. It now
-takes ``parent_policy``.
+could be widened by nothing more than the absence of an explicit grant.
+
+Closing that took two halves, and the second is the one worth pointing at: the
+parameter (``parent_policy``) is useless unless the live seam passes it.
+:meth:`SubagentHandoffPolicy.narrow_authority` — the only production caller —
+resolves the parent's real posture from the run context through
+``ToolUsePolicyResolver`` and feeds it in, so the fallback ceiling is the
+parent's own policy rather than the deployment default. A test that calls
+``inherited_parent_grant(parent_policy=...)`` directly proves the parameter
+works and proves nothing about the leak; the test that matters enters at
+``narrow_authority``.
 """
 
 from __future__ import annotations
@@ -46,6 +55,7 @@ from pydantic import Field, field_validator
 from agent_runtime.capabilities.tools.permissions import (
     ToolUsePolicyKind,
     ToolUsePolicyMode,
+    ToolUsePolicySnapshot,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.validation import ValueNormalizer
@@ -86,6 +96,31 @@ class SubagentPolicyGrant(RuntimeContract):
             read=stricter(parent.read, definition.read),
             write=stricter(parent.write, definition.write),
             destructive=stricter(parent.destructive, definition.destructive),
+        )
+
+    @classmethod
+    def from_policy_snapshot(
+        cls, snapshot: ToolUsePolicySnapshot
+    ) -> "SubagentPolicyGrant":
+        """Project the run's resolved tool-use policy onto the three grant axes.
+
+        This is the parent's *real* posture — the workspace default composed
+        with the user's override, the same snapshot the tool gate enforces for
+        the parent's own calls. Reading the ceiling from there is what makes
+        "floored at the parent's" a fact rather than an aspiration: without it
+        the fallback ceiling is a fresh ``SubagentPolicyGrant()``, i.e. the
+        deployment default, which is a *widening* for any parent stricter than
+        the default.
+
+        A run with no stored policy resolves to exactly those defaults, so the
+        ordinary path is unchanged; only a parent that actually tightened its
+        posture sees a difference.
+        """
+
+        return cls(
+            read=snapshot.mode_for_kind(ToolUsePolicyKind.READ),
+            write=snapshot.mode_for_kind(ToolUsePolicyKind.WRITE),
+            destructive=snapshot.mode_for_kind(ToolUsePolicyKind.DESTRUCTIVE),
         )
 
     def mode_for(self, kind: ToolUsePolicyKind) -> ToolUsePolicyMode:

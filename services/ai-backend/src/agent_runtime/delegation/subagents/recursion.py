@@ -38,8 +38,9 @@ are the ones a reader gets backwards:
   wins; a definition may not be looser and have it stick.
 
 The one place this used to leak is :meth:`inherited_parent_grant`, which
-fabricates a parent ceiling when no verified grant was supplied. It now takes
-the parent's real posture instead of defaulting, so a strict parent cannot be
+fabricates a parent ceiling when no verified grant was supplied. The live seam
+(:meth:`SubagentHandoffPolicy.narrow_authority`) now resolves the parent's real
+posture from the run context and passes it in, so a strict parent cannot be
 widened by the mere absence of an explicit grant.
 """
 
