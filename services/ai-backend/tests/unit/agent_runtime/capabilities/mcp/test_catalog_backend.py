@@ -182,7 +182,10 @@ class TestCatalogListing(CatalogBackendMixin):
         # backend receives for ``/mcp/mcp/tools``.
         result = self.backend(store).ls("/mcp/tools")
 
-        assert self.entry_paths(result) == ["/mcp/tools/odd_tool.json"]
+        # ``mcp__mcp__odd_tool``: the namespace names the connector, and this
+        # connector is called ``mcp``. Ugly, and correct — it is the name the
+        # tool is registered under.
+        assert self.entry_paths(result) == ["/mcp/tools/mcp__mcp__odd_tool.json"]
 
     def test_unknown_directory_answers_with_a_directive_not_empty_success(
         self,
@@ -271,12 +274,12 @@ class TestCatalogReads(CatalogBackendMixin):
         )
 
         result = self.backend(store).read(
-            f"/linear/tools/{self.CatalogValues.READ_TOOL}.json"
+            f"/linear/tools/{self.invoke_name(self.CatalogValues.READ_TOOL)}.json"
         )
 
         assert result.error is None
         payload = json.loads((result.file_data or {})["content"])
-        assert payload["name"] == self.CatalogValues.READ_TOOL
+        assert payload["name"] == self.invoke_name(self.CatalogValues.READ_TOOL)
         assert payload["input_schema"]["type"] == "object"
 
     def test_read_slices_by_source_line(self) -> None:
@@ -327,7 +330,7 @@ class TestCatalogSearch(CatalogBackendMixin):
         assert result.error is None
         assert {match["path"] for match in (result.matches or [])} == {
             "/linear/SERVER.md",
-            f"/linear/tools/{self.CatalogValues.READ_TOOL}.json",
+            f"/linear/tools/{self.invoke_name(self.CatalogValues.READ_TOOL)}.json",
         }
 
     def test_grep_returns_line_numbers_and_text(self) -> None:
@@ -410,17 +413,13 @@ class TestCatalogMount(CatalogBackendMixin):
         listed = composite.ls(McpCatalogPaths.tools_dir(self.CatalogValues.SERVER))
         paths = self.entry_paths(listed)
 
-        assert paths == [
-            McpCatalogPaths.tool_file(
-                self.CatalogValues.SERVER, self.CatalogValues.READ_TOOL
-            )
-        ]
+        assert paths == [self.tool_file_path(self.CatalogValues.READ_TOOL)]
         # The path ``ls`` handed back must be the one ``read_file`` accepts —
         # that round trip is the entire discovery flow.
         read_back = composite.read(paths[0])
         assert read_back.error is None
         assert json.loads((read_back.file_data or {})["content"])["name"] == (
-            self.CatalogValues.READ_TOOL
+            self.invoke_name(self.CatalogValues.READ_TOOL)
         )
 
     def test_composite_grep_reaches_the_catalog_from_the_root(self) -> None:
@@ -438,9 +437,7 @@ class TestCatalogMount(CatalogBackendMixin):
 
         assert {match["path"] for match in (result.matches or [])} == {
             McpCatalogPaths.server_markdown(self.CatalogValues.SERVER),
-            McpCatalogPaths.tool_file(
-                self.CatalogValues.SERVER, self.CatalogValues.READ_TOOL
-            ),
+            self.tool_file_path(self.CatalogValues.READ_TOOL),
         }
 
     def test_composite_glob_reaches_the_catalog(self) -> None:

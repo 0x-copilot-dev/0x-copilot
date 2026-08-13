@@ -408,7 +408,10 @@ class TestCatalogReachesTheBuiltAgent(CatalogWiringMixin):
         assert "loaded_server" not in rendered
         assert f"/mcp/{self.TestValues.Names.DRIVE_MCP}/SERVER.md" in rendered
         listing = backend.ls(f"/mcp/{self.TestValues.Names.DRIVE_MCP}/tools")
+        # The file is stemmed by the tool's REGISTERED name, so the one string
+        # the model reads out of the catalog is also the one it can call. The
+        # directory keeps the card's own name; the namespace carries its slug.
         assert [entry["path"] for entry in (listing.entries or [])] == [
             f"/mcp/{self.TestValues.Names.DRIVE_MCP}/tools/"
-            f"{self.TestValues.Names.DRIVE_SEARCH}.json"
+            f"{self.invoke_name(self.TestValues.Names.DRIVE_SEARCH, server=self.TestValues.Names.DRIVE_MCP)}.json"
         ]
