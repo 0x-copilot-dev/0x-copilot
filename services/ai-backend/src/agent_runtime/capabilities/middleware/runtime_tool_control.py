@@ -32,7 +32,7 @@ from langchain.agents.middleware.types import (
     PrivateStateAttr,
     ToolCallRequest,
 )
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
@@ -62,6 +62,10 @@ from agent_runtime.execution.call_identity import (
     RuntimeCallContext,
     RuntimeModelCallIdentity,
     RuntimeToolCallIdentity,
+)
+from agent_runtime.execution.run_steering import (
+    RunSteeringContext,
+    SteeringMessage,
 )
 from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
@@ -144,6 +148,12 @@ class RuntimeControlMiddleware(AgentMiddleware):
     name = "0xCopilotRuntimeControlMiddleware"
     state_schema = RuntimeControlState
 
+    #: The execution scope of the graph the user is actually talking to. Named
+    #: once here because two seams now branch on it — the scope resolver below
+    #: and the steering drain — and a re-typed literal in either is a silent
+    #: mis-route rather than a failure.
+    SUPERVISOR_SCOPE: str = "supervisor"
+
     def __init__(
         self,
         *,
@@ -188,7 +198,10 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 model_turn=model_turn,
                 execution_scope=self._execution_scope_for_runtime(runtime),
             )
-        return {"runtime_control_model_turn": model_turn}
+        return {
+            "runtime_control_model_turn": model_turn,
+            **self._steering_update(runtime),
+        }
 
     def wrap_model_call(
         self,
@@ -326,6 +339,41 @@ class RuntimeControlMiddleware(AgentMiddleware):
             )
         return {
             "runtime_control_model_turn": model_turn,
+            **self._steering_update(runtime),
+        }
+
+    @classmethod
+    def _steering_update(cls, runtime: object) -> dict[str, Any]:
+        """Deliver any waiting user steer as context for THIS model call.
+
+        This hook is the only safe delivery boundary in the graph. It runs after
+        the previous tool node has fully settled and before the next provider
+        dispatch, so a steer that arrived halfway through a 30-second tool call
+        waits in the mailbox instead of tearing that call down — interrupting an
+        in-flight external effect is cancellation's job, and it already has one.
+
+        Supervisor scope only. A subagent inherits this middleware and the run's
+        context binding, so an unscoped drain would hand the user's course
+        correction to whichever child happened to reach a model step first, and
+        the supervisor — the one holding the plan the user is correcting — would
+        never see it. It is also consume-once: the drain empties the mailbox, so
+        the message rides the conversation state from here on rather than being
+        re-appended at every subsequent turn.
+        """
+
+        if cls._execution_scope_for_runtime(runtime) != cls.SUPERVISOR_SCOPE:
+            return {}
+        steers: tuple[SteeringMessage, ...] = RunSteeringContext.drain()
+        if not steers:
+            return {}
+        return {
+            "messages": [
+                HumanMessage(
+                    content=steer.as_model_text(),
+                    id=steer.steer_id,
+                )
+                for steer in steers
+            ]
         }
 
     def _observe_final_tool_surface(self, request: ModelRequest[Any]) -> None:
@@ -682,11 +730,11 @@ class RuntimeControlMiddleware(AgentMiddleware):
     def _execution_scope(request: ToolCallRequest) -> str:
         return RuntimeControlMiddleware._execution_scope_for_runtime(request.runtime)
 
-    @staticmethod
-    def _execution_scope_for_runtime(runtime: object) -> str:
+    @classmethod
+    def _execution_scope_for_runtime(cls, runtime: object) -> str:
         config = getattr(runtime, "config", None)
         if not isinstance(config, Mapping):
-            return "supervisor"
+            return cls.SUPERVISOR_SCOPE
         metadata = config.get("metadata")
         configurable = config.get("configurable")
         for container in (metadata, configurable):
@@ -695,7 +743,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
             value = container.get(SUPERVISOR_TASK_CALL_ID_KEY)
             if isinstance(value, str) and value.strip():
                 return f"subagent:{value.strip()}"
-        return "supervisor"
+        return cls.SUPERVISOR_SCOPE
 
     @staticmethod
     def _observe_upstream_policy_block(request: ToolCallRequest) -> None:

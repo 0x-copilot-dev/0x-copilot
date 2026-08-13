@@ -103,6 +103,17 @@ class RuntimeApiEventType(StrEnum):
     RUN_STARTED = "run_started"
     RUN_CANCELLING = "run_cancelling"
     RUN_CANCELLED = "run_cancelled"
+    # The user steered a run that was already in flight. Emitted by
+    # ``RunCoordinator.steer_run`` at the moment the steer is accepted — before
+    # the worker command is enqueued, so the transcript records the interjection
+    # even when no process is executing the run and the delivery misses. It is a
+    # causal fact inside the run's sealed prefix: a steer against a terminal run
+    # is refused by the coordinator before any append, so this event type can
+    # never arrive after the seal. Projects to ``RuntimeActivityKind.NOTE`` — an
+    # inline in-thread line ("You steered Atlas"), not a card and not assistant
+    # prose. Payload carries ``SteerNotePayload`` (steer_id / text / requested_by
+    # / requested_at).
+    RUN_STEERED = "run_steered"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     PROGRESS = "progress"

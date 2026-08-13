@@ -143,6 +143,9 @@ class Keys:
         # Undo within the 60 s reversibility window.
         APPROVAL_UNDO = "approval_undo"
         CANCEL_RUN = "cancel_run"
+        # Mid-run steering. A sibling of ``cancel_run``, not of ``create_run``:
+        # it addresses a run already in flight rather than starting one.
+        STEER_RUN = "steer_run"
         CREATE_CONVERSATION = "create_conversation"
         CREATE_RUN = "create_run"
         DELETE_USER_HISTORY = "delete_user_history"
@@ -399,6 +402,13 @@ class Messages:
         INVALID_CONNECTOR_SCOPES = "Connector scope payload is invalid."
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
+        # Steering redirects a turn that is still being taken. Refusing the
+        # request is the honest answer once there is no next model step to
+        # deliver it to; the copy says what to do instead rather than naming an
+        # internal status the caller cannot act on.
+        RUN_NOT_STEERABLE = (
+            "This run is no longer in flight; send your message as a new turn."
+        )
         # E1 D4/D5 — source facts are provenance records, not capabilities.
         # These intentionally reveal neither whether a source existed nor why
         # its owning authority declined to reopen it.
@@ -492,6 +502,7 @@ class Messages:
         REASONING = "Thinking"
         RUN_CANCELLING = "Run cancellation was requested."
         RUN_QUEUED = "Run was queued for runtime execution."
+        RUN_STEERED = "You steered this run."
         SUBAGENT = "Subagent update"
         TOOL_CALL = "Calling tool"
         TOOL_RESULT = "Tool result"

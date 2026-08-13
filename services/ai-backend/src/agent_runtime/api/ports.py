@@ -66,6 +66,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
+    RuntimeSteerCommand,
     RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
@@ -1366,6 +1367,14 @@ class RuntimeQueuePort(Protocol):
 
     async def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         """Enqueue a cancellation command for workers."""
+
+    async def enqueue_steer(self, command: RuntimeSteerCommand) -> None:
+        """Enqueue a mid-run steering message for workers.
+
+        A control command, alongside cancel: the worker claims it above the
+        execution semaphore, because the moment a user needs to redirect a run
+        is exactly the moment every execution slot is busy.
+        """
 
     async def enqueue_approval_resolved(
         self, command: RuntimeApprovalResolvedCommand
