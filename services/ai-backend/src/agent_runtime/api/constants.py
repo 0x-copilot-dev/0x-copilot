@@ -548,6 +548,35 @@ class Messages:
 
         CITATION_MADE = "Cited a tool call"
 
+        @classmethod
+        def compaction_title(cls, *, tokens_saved: int, tool_name: str | None) -> str:
+            """Return the display title for a context-compaction divider.
+
+            Computed here, server-side, once -- the client must never derive a
+            timeline label from an event-name prefix. The tool name is included
+            when the call was identified because "Compacted 8.6k tokens of
+            read_file output" tells the reader which result the model no longer
+            has in full, which is the entire point of drawing the boundary.
+            """
+
+            amount = cls._compact_token_count(tokens_saved)
+            if tool_name:
+                return f"Compacted {amount} tokens of {tool_name} output"
+            return f"Compacted {amount} tokens of tool output"
+
+        @staticmethod
+        def _compact_token_count(tokens: int) -> str:
+            """Render a token count the way a reader scans it, not exactly."""
+
+            if tokens < 1_000:
+                return str(tokens)
+            thousands = tokens / 1_000
+            if thousands < 10:
+                return f"{thousands:.1f}k".replace(".0k", "k")
+            return f"{round(thousands)}k"
+
+        COMPRESSION_NOTE = "Compacted tool output"
+
     class Validation:
         """Field-level validation error message factories for Pydantic validators."""
 

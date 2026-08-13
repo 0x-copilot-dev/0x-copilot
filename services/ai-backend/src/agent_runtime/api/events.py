@@ -256,18 +256,26 @@ class RuntimeEventProducer:
         before_tokens: int,
         after_tokens: int,
         strategy: str,
+        trigger: str | None = None,
+        tool_name: str | None = None,
         summary: str | None = None,
         payload_refs: Mapping[str, object] | None = None,
         metadata: JsonObject | None = None,
     ) -> RuntimeEventEnvelope:
-        """Emit a ``COMPRESSION_NOTE`` envelope for the chat NoteCard.
+        """Emit a ``COMPRESSION_NOTE`` envelope for the transcript divider.
 
-        Called from the memory-compression hook when the context window
-        manager redacts older messages mid-run. ``strategy`` mirrors
+        Called from the worker's tool-result stream pass
+        (``runtime_worker.stream_tools``) when
+        :class:`~agent_runtime.context.tool_result_admission.ToolResultAdmissionAdapter`
+        has bounded a result out of model context. ``strategy`` mirrors
         ``ContextCompressionStrategy`` values (``summarize``, ``offload``,
-        etc.) so the FE can branch its NoteCard copy if it needs to. The
+        etc.); ``trigger`` mirrors ``Values.CompactionTrigger``. The
         ``payload_refs`` slot lets callers attach offload/file refs without
         leaking content into the prompt path.
+
+        ``tokens_saved`` is derived HERE rather than accepted, so the difference
+        the divider prints can never disagree with the two counts it prints
+        beside it.
         """
 
         if before_tokens < 0 or after_tokens < 0:
@@ -280,8 +288,13 @@ class RuntimeEventProducer:
         payload: JsonObject = {
             "before_tokens": int(before_tokens),
             "after_tokens": int(after_tokens),
+            "tokens_saved": int(before_tokens) - int(after_tokens),
             "strategy": clean_strategy,
         }
+        if trigger is not None and trigger.strip():
+            payload["trigger"] = trigger.strip()
+        if tool_name is not None and tool_name.strip():
+            payload["tool_name"] = tool_name.strip()
         if summary is not None and summary.strip():
             payload["summary"] = summary.strip()
         if payload_refs:
