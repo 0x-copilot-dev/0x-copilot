@@ -37,6 +37,8 @@ from runtime_api.schemas import (
     AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
+    SteerRunRequest,
+    SteerRunResponse,
     ConversationBucket,
     ConversationConnectorScopesResponse,
     ConversationCanvasResponse,
@@ -721,6 +723,36 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def steer_run(
+        cls,
+        request: Request,
+        run_id: str,
+        payload: SteerRunRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> SteerRunResponse:
+        """Send a user message into a run that is already executing.
+
+        The steer is recorded in the run's transcript immediately and queued for
+        delivery at the run's next model step — never mid-tool-call. ``409`` when
+        the run is no longer in flight; a steer that cannot be read is refused
+        rather than silently accepted.
+
+        ``requested_by_user_id`` is overwritten from the verified session for the
+        same reason ``cancel_run`` overwrites it: a body-supplied identity is
+        caller-controlled, and honouring it would let one user put words into
+        another user's run.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        payload = payload.model_copy(update={"requested_by_user_id": user_id})
+        return await cls.run_coordinator(request).steer_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            request=payload,
+        )
+
+    @classmethod
     async def list_approvals(
         cls,
         request: Request,
@@ -1153,6 +1185,13 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=CancelRunResponse,
             name=Keys.RouteName.CANCEL_RUN,
+        )
+        router.add_api_route(
+            "/runs/{run_id}/steer",
+            RuntimeApiRoutes.steer_run,
+            methods=["POST"],
+            response_model=SteerRunResponse,
+            name=Keys.RouteName.STEER_RUN,
         )
         router.add_api_route(
             "/approvals/{approval_id}/decision",
