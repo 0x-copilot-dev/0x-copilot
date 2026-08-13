@@ -94,6 +94,17 @@ class CheckedInDocumentMixin:
             "lead_chars": 900,
             "min_window_chars": 200,
         },
+        # One ``run_tool_program`` plan's ceilings. ``max_concurrency`` bounds
+        # fan-out *inside* one program only — the run's tool budget still
+        # charges every step, so a wide program spends its allowance faster
+        # rather than escaping it.
+        "tool_program": {
+            "max_steps": 16,
+            "max_concurrency": 4,
+            "wall_clock_seconds": 120.0,
+            "max_total_output_bytes": 262_144,
+            "max_result_bytes": 65_536,
+        },
     }
 
     @staticmethod

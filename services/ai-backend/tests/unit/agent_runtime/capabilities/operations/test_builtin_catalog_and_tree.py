@@ -47,6 +47,7 @@ class TestBuiltinOperationCatalog:
             "read",
             "run_code_mode",
             "run_in_sandbox",
+            "run_tool_program",
             "stage_rowset_write",
             "suggest_mcp_connector",
             "task",
