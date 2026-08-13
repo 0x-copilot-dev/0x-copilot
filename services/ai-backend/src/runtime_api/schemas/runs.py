@@ -23,6 +23,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.depth import ReasoningDepth
 from agent_runtime.execution.filesystem_bypass import FilesystemBypassSelection
+from agent_runtime.execution.run_steering import SteeringMessage
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
@@ -38,6 +39,7 @@ class _Fields:
     CONTENT_FORMAT = "content_format"
     REQUEST_OPTIONS = "request_options"
     USER_MESSAGE_ID = "user_message_id"
+    TEXT = "text"
 
 
 class ModelSelectionRequest(RuntimeContract):
@@ -573,3 +575,45 @@ class CancelRunResponse(RuntimeContract):
     status: AgentRunStatus
     cancel_requested_at: datetime | None = None
     latest_sequence_no: NonNegativeInt
+
+
+class SteerRunRequest(RuntimeContract):
+    """Request to redirect a run that is already executing.
+
+    ``requested_by_user_id`` is stamped from the verified session by the route
+    before the coordinator sees it (exactly as cancel does), so a caller cannot
+    steer someone else's run by naming them in the body.
+    """
+
+    text: str = Field(min_length=1, max_length=SteeringMessage.MAX_TEXT_LENGTH)
+    requested_by_user_id: str
+
+    @field_validator(Keys.Field.REQUESTED_BY_USER_ID)
+    @classmethod
+    def _normalize_requested_by_user_id(cls, value: object) -> str:
+        return ValueNormalizer.normalize_id(value, Keys.Field.REQUESTED_BY_USER_ID)
+
+    @field_validator(_Fields.TEXT, mode="before")
+    @classmethod
+    def _normalize_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class SteerRunResponse(RuntimeContract):
+    """The accepted steer and where it landed in the run's ledger.
+
+    ``sequence_no`` is the steer note's own position, not the run's cursor, so a
+    client that is already streaming can reconcile the optimistic echo it drew
+    against the durable event without a second fetch.
+
+    ``delivered`` is intentionally absent. Acceptance and delivery are separate
+    facts: the command is durable here, but whether a process executing the run
+    picked it up before the run ended is only knowable later, and reporting it
+    on this response would be a guess dressed as a receipt.
+    """
+
+    run_id: str
+    status: AgentRunStatus
+    steer_id: str
+    sequence_no: NonNegativeInt
+    accepted_at: datetime

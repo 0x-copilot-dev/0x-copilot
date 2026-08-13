@@ -79,6 +79,10 @@ class Values:
     class EventType:
         APPROVAL_RESOLVED = "approval_resolved"
         RUN_CANCEL_REQUESTED = "run_cancel_requested"
+        # A user message addressed to a run that is already executing. A control
+        # command, not a run command: it never starts graph execution, and like
+        # a cancel it must be claimable while every execution slot is busy.
+        RUN_STEER_REQUESTED = "run_steer_requested"
         RUN_REQUESTED = "run_requested"
         # PRD-D2 — the durable command a stage approve enqueues; the worker-side
         # shared effect dispatcher is its only consumer. The commit never runs inline

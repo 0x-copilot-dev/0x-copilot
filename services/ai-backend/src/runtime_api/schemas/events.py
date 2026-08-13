@@ -29,6 +29,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
 from agent_runtime.execution.model_invocation.journal import ModelInvocationRecord
+from agent_runtime.execution.run_steering import SteeringMessage
 from agent_runtime.prompts.observation import (
     PromptAssembledRecord,
     PromptCacheObservedRecord,
@@ -418,6 +419,18 @@ class ContextOccupancyPayload(RuntimeContract):
     snapshot: ContextOccupancySnapshotPayload
 
 
+class SteerNotePayload(RuntimeContract):
+    """The user's mid-run interjection, as the transcript records it.
+
+    Carries the SAME :class:`SteeringMessage` the queued command carries, not a
+    transcript-only copy of it. The record a reader replays and the message the
+    model was handed are therefore one object with one set of bounds — there is
+    no second shape that could disagree about what the user actually said.
+    """
+
+    steer: SteeringMessage
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -678,6 +691,8 @@ class RuntimeEventPresentationProjector:
             return cls._model_invocation_payload(payload)
         if event_type is RuntimeApiEventType.CONTEXT_OCCUPANCY:
             return cls._context_occupancy_payload(payload)
+        if event_type is RuntimeApiEventType.RUN_STEERED:
+            return cls._run_steered_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -863,7 +878,18 @@ class RuntimeEventPresentationProjector:
             # the canvas gate card + posture chip read these, not the legacy
             # approval event, when the v2 flag is on.
             return RuntimeActivityKind.EVENT
-        if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
+        if event_type in {
+            RuntimeApiEventType.COMPRESSION_NOTE,
+            # A mid-run steer shares the note bucket, and the choice is load
+            # bearing rather than convenient. MESSAGE is the assistant's own
+            # prose — routing a user interjection there would render the user's
+            # words as something the agent said. EVENT is a state merge with no
+            # place on the timeline, which is the one thing this event must have:
+            # the record has to show *when* the user intervened, in line, between
+            # the beats it changed. NOTE is exactly that shape — an inline
+            # in-thread line, not a card.
+            RuntimeApiEventType.RUN_STEERED,
+        }:
             # PR A1 — context-compression note. Renders as an inline
             # dim line ("Atlas summarised 3 older messages…") rather
             # than a card; FE consumes via `<NoteCard>`.
@@ -2368,6 +2394,26 @@ class RuntimeEventPresentationProjector:
             )
             return {}
         return validated.model_dump(mode="json")
+
+    @classmethod
+    def _run_steered_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one user steer and refuse to record a contentless note.
+
+        Validate-and-re-dump for the same reason as the occupancy sibling above:
+        :class:`SteeringMessage` is already ``extra='forbid'`` with bounded
+        fields, so a second hand-written allow-list here would be a copy that
+        drifts.
+
+        Unlike its observability siblings this one does NOT swallow the failure
+        into ``{}``. A journal row that loses its payload costs a metric; a steer
+        note that loses its payload is an inline "you steered Atlas" line with
+        nothing in it — the user's own words dropped from their own transcript
+        while the request reported success. The sole producer validates before
+        it appends, so raising here can only mean a producer bug, and the append
+        fails at that producer instead of writing a ghost row.
+        """
+
+        return SteerNotePayload.model_validate(payload).model_dump(mode="json")
 
     @classmethod
     def _copy_payload_version(
