@@ -16,6 +16,7 @@ from agent_runtime.capabilities.middleware.runtime_tool_control import (
     RuntimeToolControlMiddleware,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
+from agent_runtime.context.tool_result_admission import ToolResultCap
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from runtime_adapters.file import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -145,10 +146,153 @@ async def test_file_runtime_admits_without_budget_rows_and_projects_once(
     await store.close()
 
 
-async def test_non_file_runtime_preserves_no_admission_behavior() -> None:
+async def test_non_file_runtime_builds_no_offload_adapter() -> None:
+    """No object store, so no *offload* — which is not the same as no bound.
+
+    Renamed from ``..._preserves_no_admission_behavior``: that name asserted
+    the defect. The adapter is still correctly absent here, because offloading
+    needs somewhere to put the bytes; what changed is that its absence no
+    longer means the result reaches the model unbounded. See
+    :func:`test_non_file_runtime_caps_an_oversized_result_and_says_so`.
+    """
+
     store = InMemoryRuntimeApiStore()
     handler = RuntimeRunHandler(persistence=store, event_store=store)
 
     guard = await handler._build_tool_budget_guard(_run())
     assert guard is None or guard._tool_result_admission is None
     assert handler.stream_event_mapper.message_processor._tool_result_offloader is None
+
+
+def _request(tool: BaseTool, *, call_id: str) -> ToolCallRequest:
+    return ToolCallRequest(
+        tool_call={
+            "name": tool.name,
+            "args": {},
+            "id": call_id,
+            "type": "tool_call",
+        },
+        tool=tool,
+        state={},
+        runtime=cast(Any, object()),
+    )
+
+
+async def _through_the_tool_seam(
+    tool: BaseTool,
+    *,
+    call_id: str,
+    guard: ToolBudgetGuard | None,
+) -> ToolMessage:
+    """Drive one tool call through the live graph seam.
+
+    ``RuntimeControlMiddleware`` is installed unconditionally by the deep agent
+    builder (``agent_runtime/execution/factory.py``), so this is the path every
+    graph-visible tool call takes on every store backend.
+    """
+
+    async def execute(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content=await tool._arun(),
+            tool_call_id=request.tool_call["id"],
+        )
+
+    token = None if guard is None else ToolBudgetGuard.bind_for_run(guard)
+    try:
+        assert ToolBudgetGuard.active() is guard
+        result = await RuntimeToolControlMiddleware().awrap_tool_call(
+            _request(tool, call_id=call_id),
+            execute,
+        )
+    finally:
+        if token is not None:
+            ToolBudgetGuard.unbind(token)
+    assert isinstance(result, ToolMessage)
+    return result
+
+
+async def _non_file_guard() -> ToolBudgetGuard:
+    """Build the guard a web / postgres / in-memory run really gets.
+
+    The seeded wildcard budget row means the guard *is* built here — what is
+    missing is the offload adapter, because the store has no object store to
+    move oversized bytes into. That combination is the whole defect: an
+    admission hook that was reached on every call and handed the result back
+    untouched.
+    """
+
+    store = InMemoryRuntimeApiStore()
+    handler = RuntimeRunHandler(persistence=store, event_store=store)
+    guard = await handler._build_tool_budget_guard(_run())
+    assert guard is not None
+    assert guard._tool_result_admission is None
+    assert handler.stream_event_mapper.message_processor._tool_result_offloader is None
+    return guard
+
+
+async def test_non_file_runtime_caps_an_oversized_result_and_says_so() -> None:
+    """The web / postgres / in-memory hole: no object store, so no bound.
+
+    The offload adapter needs somewhere to put the bytes, so it is desktop-only
+    and correctly ``None`` here. Before the cap that meant *no* limit at all on
+    these backends: a multi-megabyte MCP read went into model context whole,
+    while the identical run on the desktop was reduced to a 4 KiB stub.
+    """
+
+    raw = ("large tool output\n" * 5_000) + _RAW_TAIL
+    assert len(raw) > ToolResultCap.OVERSIZED_ABOVE_CHARS
+
+    result = await _through_the_tool_seam(
+        _LargeResultTool(result=raw),
+        call_id="uncapped-backend-call",
+        guard=await _non_file_guard(),
+    )
+
+    model_content = result.content
+    assert isinstance(model_content, str)
+    assert len(model_content) <= ToolResultCap.MODEL_CONTENT_LIMIT_CHARS
+    assert _RAW_TAIL not in model_content
+    # Truncation the model can act on rather than a silent clip.
+    assert ToolResultCap.Messages.MARKER in model_content
+    assert f"of {len(raw):,} characters" in model_content
+    assert ToolResultCap.Messages.RECOVERY in model_content
+    # Honest about this backend: nothing was retained, so nothing is fetchable.
+    assert "/large_tool_results/" not in model_content
+
+
+async def test_non_file_runtime_leaves_a_small_result_byte_identical() -> None:
+    """The cap is a ceiling, not a rewrite: ordinary results are untouched."""
+
+    exact = "small exact result"
+
+    result = await _through_the_tool_seam(
+        _LargeResultTool(result=exact),
+        call_id="small-result-call",
+        guard=await _non_file_guard(),
+    )
+
+    assert result.content == exact
+
+
+async def test_tool_seam_caps_even_when_no_budget_guard_was_built() -> None:
+    """A guard is optional; the model-context bound is not.
+
+    ``_build_tool_budget_guard`` returns ``None`` when the store exposes no
+    budget rows and no offload target — a stub persistence port, or a real one
+    whose budget read failed, which is deliberately swallowed so optional
+    policy I/O cannot stop a run. That branch skipped admission entirely.
+    """
+
+    raw = ("unguarded tool output\n" * 5_000) + _RAW_TAIL
+
+    result = await _through_the_tool_seam(
+        _LargeResultTool(result=raw),
+        call_id="unguarded-call",
+        guard=None,
+    )
+
+    model_content = result.content
+    assert isinstance(model_content, str)
+    assert len(model_content) <= ToolResultCap.MODEL_CONTENT_LIMIT_CHARS
+    assert _RAW_TAIL not in model_content
+    assert ToolResultCap.Messages.MARKER in model_content

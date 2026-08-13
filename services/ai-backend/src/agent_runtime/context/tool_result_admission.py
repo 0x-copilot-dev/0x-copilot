@@ -11,6 +11,16 @@ content is handed to the existing ``OffloadWriter`` and the returned object
 contains only a bounded preview, an opaque read-back reference, and redacted
 compression metrics.  The same object can also drive the worker event
 projection without running a second, potentially divergent offload decision.
+
+That adapter needs somewhere to put the bytes it drops, so it exists only where
+the store has an object store -- today, the desktop file backend.  The *cap*,
+however, is not about where bytes go; it is about what the model is allowed to
+be handed.  :class:`ToolResultCap` is the same bound expressed for a backend
+that can retain nothing: it reuses the adapter's own inline threshold and its
+own admitted-content ceiling, keeps a bounded head of the result, and states in
+the message itself how much was dropped and what the model can do instead.
+Without it a 5 MB MCP read entered model context whole on every backend except
+the desktop.
 """
 
 from __future__ import annotations
@@ -616,9 +626,135 @@ class ToolResultAdmissionAdapter:
         ).recent_context_tokens
 
 
+class ToolResultCap:
+    """The same admission bound, for a backend that can retain nothing.
+
+    :class:`ToolResultAdmissionAdapter` bounds a result by *moving* it: the
+    bytes go to an object store and the model gets a reference.  Only the
+    desktop file backend has that store, so every other image -- web, postgres,
+    in-memory -- had no bound at all and handed the model whatever a tool
+    returned.  This class supplies the bound those backends can actually keep.
+
+    Both numbers below are the adapter's, read off it rather than restated, so
+    the two lanes make the *same* oversize decision and hand the model the
+    *same* amount of content.  A result is oversized above
+    :attr:`ToolResultAdmissionAdapter.DEFAULT_INLINE_TOKEN_BUDGET` tokens' worth
+    of characters -- byte-for-byte the threshold
+    :meth:`ContextPayloadManager.prepare_tool_output` applies to the offload
+    lane -- and what survives fits in
+    :attr:`ToolResultAdmissionAdapter.DEFAULT_OFFLOADED_MODEL_CONTENT_LIMIT_CHARS`,
+    the ceiling an offloaded stub already respects.  There is deliberately no
+    third constant to keep in sync.
+
+    Two deliberate differences from the offload lane, both forced by the missing
+    store:
+
+    - The preview is as large as the ceiling allows rather than
+      ``ContextPayloadManager``'s 2,000-character taste, because here it is the
+      *only* copy the model will ever see.
+    - The notice cannot say "read the reference".  Saying so would be a lie on
+      this backend, and a model that believes it will spend a turn fetching
+      something that does not exist.  It says the bytes are gone and names the
+      one thing that does work: call the tool again, narrower.
+
+    The cut is by characters, not by lines.  Copying a line-first bound here
+    would reintroduce the empty-preview failure ``ContextPayloadManager``
+    already documents: a 70 KB single-line JSON blob has exactly one "line",
+    which no line budget can admit, so a line-first reader hands the model
+    nothing at all.
+    """
+
+    OVERSIZED_ABOVE_CHARS: ClassVar[int] = (
+        ToolResultAdmissionAdapter.DEFAULT_INLINE_TOKEN_BUDGET
+        * TokenBudgetEvaluator.CHARS_PER_TOKEN_ESTIMATE
+    )
+    MODEL_CONTENT_LIMIT_CHARS: ClassVar[int] = (
+        ToolResultAdmissionAdapter.DEFAULT_OFFLOADED_MODEL_CONTENT_LIMIT_CHARS
+    )
+
+    class Messages:
+        """The model-facing truncation notice, written as an instruction.
+
+        Collected here for the same reason every other model-visible string in
+        this runtime is: it is read by a model, it is asserted on by tests, and
+        it must not be re-improvised at a second call site.
+        """
+
+        MARKER: ClassVar[str] = "--- TOOL RESULT TRUNCATED ---"
+        DROPPED: ClassVar[str] = (
+            "Kept the first {kept:,} of {total:,} characters; dropped {dropped:,}."
+        )
+        NOT_RETAINED: ClassVar[str] = (
+            "This deployment has no tool-result store, so the dropped characters "
+            "were not written anywhere and cannot be read back -- there is no "
+            "reference to fetch and no file to search. Do not assume the part you "
+            "cannot see was empty or unimportant."
+        )
+        RECOVERY: ClassVar[str] = (
+            "To get the rest, narrow the call instead of repeating it: re-run this "
+            "tool with a filter, a query, or an offset/limit (or the next page) "
+            "that returns only what you still need. If you can delegate, hand that "
+            "narrower re-run to a subagent so the full output never enters this "
+            "conversation."
+        )
+
+    @classmethod
+    def apply(cls, output: object) -> object:
+        """Return ``output`` unchanged when it fits, else a bounded string.
+
+        Total by design.  Returning the *original object* rather than its
+        serialization on the fitting path is what keeps this safe to put on
+        every tool return: a tool that declares a dict return still gets its
+        dict, ``content_and_artifact`` pairs still unpack, and a run on a
+        backend that never had a bound behaves byte-identically until the
+        moment a result is genuinely oversized.
+        """
+
+        content = ToolResultAdmissionAdapter.serialize(output)
+        if len(content) <= cls.OVERSIZED_ABOVE_CHARS:
+            return output
+        return cls.truncate(content)
+
+    @classmethod
+    def truncate(cls, content: str) -> str:
+        """Return a bounded head of ``content`` plus the notice that says so."""
+
+        total = len(content)
+        # The notice states the counts, so its own length depends on them, and
+        # the preview budget depends on the notice.  Break the cycle with an
+        # upper bound: ``dropped`` can never exceed ``total``, and the notice is
+        # one fixed template, so rendering it with ``total`` in every count slot
+        # is at least as long as the notice finally emitted.
+        widest = cls._notice(kept=total, dropped=total, total=total)
+        preview_limit = max(cls.MODEL_CONTENT_LIMIT_CHARS - len(widest), 0)
+        preview = content[:preview_limit]
+        notice = cls._notice(
+            kept=len(preview),
+            dropped=total - len(preview),
+            total=total,
+        )
+        return f"{preview}{notice}"
+
+    @classmethod
+    def _notice(cls, *, kept: int, dropped: int, total: int) -> str:
+        """Render the trailing notice for one truncation."""
+
+        messages = cls.Messages
+        body = "\n\n".join(
+            (
+                messages.MARKER,
+                messages.DROPPED.format(kept=kept, dropped=dropped, total=total),
+                messages.NOT_RETAINED,
+                messages.RECOVERY,
+            )
+        )
+        return f"\n\n{body}"
+
+
 __all__ = (
     "ToolResultAdmission",
     "ToolResultAdmissionAdapter",
     "ToolResultAdmissionFact",
     "ToolResultAdmissionRejected",
+    "ToolResultCap",
 )
