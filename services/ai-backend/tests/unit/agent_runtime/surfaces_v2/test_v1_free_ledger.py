@@ -40,6 +40,7 @@ from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolRegistrar,
 )
 from agent_runtime.capabilities.mcp.cards import McpAuthState
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
@@ -226,7 +227,12 @@ class LedgerDrivenReadMixin(DynamicMcpLoadingMixin):
             reserved_names=frozenset(),
         )
         assert registration is not None, "per-tool registration must produce the tool"
-        return next(t for t in registration.tools if t.name == tool)
+        # Registration namespaces the model surface, so the tool is registered
+        # as ``mcp__linear__get_issue``, not as the bare name the connector
+        # advertises. Matching on the bare name here found nothing and the
+        # generator raised StopIteration.
+        registered = McpToolName.compose(server=server, tool=tool)
+        return next(t for t in registration.tools if t.name == registered)
 
     def _bind_canonical_gateway(
         self,
