@@ -34,7 +34,7 @@ from collections import deque
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Final
+from typing import ClassVar, Final
 from uuid import uuid4
 
 from pydantic import Field
@@ -74,7 +74,11 @@ class SteeringMessage(RuntimeContract):
     #: a guard on the injection path, not a product limit on what a user may
     #: type — a longer thought belongs in the next turn, which has a whole
     #: context window for it.
-    MAX_TEXT_LENGTH: Final[int] = 4000
+    #:
+    #: ``ClassVar`` rather than ``Final``: inside a Pydantic model ``Final`` is
+    #: a *field* annotation in V3, which would put a 4000 on the wire and let a
+    #: caller re-declare the cap that bounds them.
+    MAX_TEXT_LENGTH: ClassVar[int] = 4000
 
     steer_id: str = Field(
         default_factory=lambda: f"steer_{uuid4().hex}",
