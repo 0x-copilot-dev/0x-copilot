@@ -57,6 +57,7 @@ import {
   type ProjectDetail,
   type ProjectDetailProfile,
   type ProjectSummary,
+  type ContextPillView,
   type RunEmptyComposerCtx,
   type RunStartRequest,
   type WorkspaceStageHost,
@@ -1557,6 +1558,9 @@ export function RunBinder({
       // What this chat last ran with — the composer's model-pill seed of last
       // resort, derived by the cockpit from the run list it already fetched.
       readonly conversationModel?: string | null;
+      // The context meter, built ONCE by the cockpit from the two `/context`
+      // reads so both hosts draw the same number for the same conversation.
+      readonly context?: ContextPillView | null;
     }) => (
       <RunComposer
         dispatch={ctx.dispatch}
@@ -1577,6 +1581,7 @@ export function RunBinder({
         // sends through the cockpit's dispatch, which owns the run target.
         conversationId={conversationId}
         conversationModel={ctx.conversationModel}
+        context={ctx.context}
         // Same binding as the empty composer's — one filing state per chat, so
         // the pill reads the same before and after the first message.
         filing={filing}

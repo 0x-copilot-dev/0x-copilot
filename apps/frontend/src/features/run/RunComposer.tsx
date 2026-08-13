@@ -28,6 +28,7 @@ import {
 import {
   AssistantComposer,
   parseTransportError,
+  type ContextPillView,
   type RunStartRequest,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
@@ -68,6 +69,9 @@ export interface RunComposerCtx {
   readonly onCancel: () => void;
   /** Newly authenticated connector to enable in the run-scoped Tools state. */
   readonly autoActivateConnectorId?: string | null;
+  /** The context meter's view, built by the cockpit from the two `/context`
+   *  reads. `null` when nothing has been measured — render no meter. */
+  readonly context?: ContextPillView | null;
 }
 
 export interface RunComposerProps {
@@ -172,6 +176,10 @@ export function RunComposer({
         onOpenSkillsSettings={noop}
         onOpenMcpSettings={noop}
         toolsTrigger={toolsTrigger}
+        // Context meter. The cockpit reads both `/context` endpoints once and
+        // hands the built view down the ctx, so this binder and the desktop one
+        // cannot fetch it differently. `undefined` renders no meter.
+        context={ctx.context}
         models={models}
         selectedModel={selectedModel}
         onModelChange={onModelChange}
