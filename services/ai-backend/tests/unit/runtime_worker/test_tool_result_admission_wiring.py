@@ -124,7 +124,7 @@ async def test_file_runtime_admits_without_budget_rows_and_projects_once(
     assert len(model_content) <= 4_096
     assert _RAW_TAIL not in model_content
 
-    projected = offloader.apply(
+    projected = offloader.apply_with_notice(
         {
             Keys.Field.TOOL_NAME: tool.name,
             Keys.Field.OUTPUT: {Keys.Field.CONTENT: model_content},
@@ -132,7 +132,7 @@ async def test_file_runtime_admits_without_budget_rows_and_projects_once(
         trace_id=run.trace_id or run.run_id,
         projection_key=run.run_id,
         projection_content=model_content,
-    )
+    ).payload
 
     # The stream projector consumed the exact pre-model decision. It did not
     # call admission again or write the already-bounded representation.

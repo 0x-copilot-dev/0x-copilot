@@ -78,31 +78,6 @@ class ToolResultOffloader:
                 policy=effective_policy,
             )
 
-    def apply(
-        self,
-        payload: JsonObject,
-        *,
-        trace_id: str,
-        projection_key: str | None = None,
-        projection_content: object | None = None,
-    ) -> JsonObject:
-        """Return ``payload`` unchanged, or with its output offloaded when large.
-
-        The returned mapping keeps ``tool_name`` / ``call_id`` / ``status`` /
-        ``visibility`` intact and, on offload, replaces ``output`` with a bounded
-        preview while adding an ``output_ref`` pointer.
-
-        Thin wrapper over :meth:`apply_with_notice` for callers that only need
-        the rewritten payload.
-        """
-
-        return self.apply_with_notice(
-            payload,
-            trace_id=trace_id,
-            projection_key=projection_key,
-            projection_content=projection_content,
-        ).payload
-
     def apply_with_notice(
         self,
         payload: JsonObject,
@@ -113,6 +88,11 @@ class ToolResultOffloader:
     ) -> OffloadOutcome:
         """Rewrite ``payload`` and report the compaction it performed.
 
+        ``outcome.payload`` is ``payload`` unchanged, or with its output
+        offloaded when large: ``tool_name`` / ``call_id`` / ``status`` /
+        ``visibility`` stay intact and, on offload, ``output`` is replaced by a
+        bounded preview alongside an ``output_ref`` pointer.
+
         The admission decision has always been made here; until now only its
         payload rewrite escaped and the
         :class:`~agent_runtime.context.memory.contracts.ContextCompressionEvent`
@@ -120,6 +100,11 @@ class ToolResultOffloader:
         pass emit one ``compression_note`` beside the ``TOOL_RESULT`` event it
         belongs to, instead of the user seeing a preview with no explanation of
         where the rest went.
+
+        This is the one entry point. A payload-only ``apply`` wrapper was kept
+        briefly for callers that did not want the notice; it ended up with no
+        production caller at all, so it is gone rather than left as a second way
+        to reach the same decision.
         """
 
         if Keys.Field.OUTPUT not in payload:
