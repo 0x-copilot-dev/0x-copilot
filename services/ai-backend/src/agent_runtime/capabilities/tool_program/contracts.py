@@ -146,20 +146,40 @@ class StepRef(RuntimeContract):
         return cls(step=target, path=tuple(segments))
 
 
+# NOTE (not a docstring, deliberately): ``tool`` is an **opaque** identifier. It
+# is never parsed, prefixed, or pattern-matched here — it is looked up verbatim
+# against the run's authorized tool surface, so a tool naming scheme can change
+# without touching this file. That fact belongs to maintainers, and every
+# sentence in the docstring below is instead paid for on every model call of
+# every run, because pydantic puts it in the tool schema.
 class ToolProgramStep(RuntimeContract):
-    """One planned call: a tool name, its arguments, and its ordering edges.
+    """One tool call in the plan."""
 
-    ``tool`` is an **opaque** identifier. It is never parsed, prefixed, or
-    pattern-matched here — it is looked up verbatim against the run's authorized
-    tool surface, so a tool naming scheme can change without touching this file.
-    """
-
-    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.\-]+$")
-    tool: str = Field(min_length=1, max_length=256)
-    arguments: dict[str, JsonValue] = Field(default_factory=dict)
-    #: Ordering edges the arguments do not already imply (a step that must run
-    #: after another without consuming its output).
-    depends_on: tuple[str, ...] = ()
+    id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_.\-]+$",
+        description="Name for this step, referenced by later steps.",
+    )
+    tool: str = Field(
+        min_length=1,
+        max_length=256,
+        description="A tool you are already allowed to call.",
+    )
+    arguments: dict[str, JsonValue] = Field(
+        default_factory=dict,
+        description=(
+            'Arguments for the tool. Any value may be {"$from": "<step id>", '
+            '"path": [...]} to use that step\'s output.'
+        ),
+    )
+    depends_on: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Steps that must finish first when this step does not reference "
+            "their output."
+        ),
+    )
 
 
 class RunToolProgramInput(RuntimeContract):
