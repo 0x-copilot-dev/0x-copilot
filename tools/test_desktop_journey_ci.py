@@ -187,6 +187,173 @@ class TestPhasePinning:
         assert plan.exit_code == 1
 
 
+class _Clock:
+    """A virtual clock, so a timeout test costs no wall time and the budget the
+    code actually used is observable rather than inferred."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
+    fake = _Clock()
+    monkeypatch.setattr(lib.time, "time", fake.time)
+    monkeypatch.setattr(lib.time, "sleep", fake.sleep)
+    return fake
+
+
+class _BootingSession:
+    """A DOM that shows `boot-gate` until T+`boot_seconds`, then the sign-in gate.
+
+    Drives the REAL `DriverSession` methods without launching anything: it only
+    answers `present` / `evaluate` / `click`.
+
+    The boot clears on the CLOCK, not after N polls, because that is what the
+    real app does — the supervisor finishes when it finishes, whether or not
+    anyone is looking. Modelling it by poll count would quietly make the stub
+    depend on the caller's polling loop, and the pre-fix `sign_in_local` never
+    polled `boot-gate` at all.
+    """
+
+    name = "stub"
+
+    def __init__(
+        self, clock: "_Clock", boot_seconds: float, *, fatal: bool = False
+    ) -> None:
+        self.clock = clock
+        self.ready_at = clock.now + boot_seconds
+        self.fatal = fatal
+        self.clicked: list[str] = []
+
+    @property
+    def booting(self) -> bool:
+        return self.clock.now < self.ready_at
+
+    def present(self, selector: str) -> bool:
+        if "boot-fatal]" in selector:
+            return self.fatal
+        if "boot-gate" in selector:
+            return self.booting
+        # Everything else (the sign-in button) exists only once boot is over.
+        return not self.booting
+
+    def evaluate(self, js: str) -> str:
+        if "boot-fatal-message" in js:
+            return "postgres refused to start"
+        if "boot-message" in js:
+            return "Starting the local database"
+        return ""
+
+    def click(self, selector: str) -> None:
+        self.clicked.append(selector)
+
+    # The REAL methods, bound to this stub. Only ones that PREDATE the boot wait
+    # are bound at class-body time: binding `wait_for_app_ready` here would turn
+    # a harness that lacks it into a COLLECTION error, and this file's premise
+    # (see `SELECTOR_ENV` above) is that a missing mechanism must fail on
+    # behaviour — "it gave up while the app was still booting" — not on an
+    # AttributeError that says nothing about what broke. `sign_in_local` looks
+    # the boot wait up on `self`, so the binding below is what the pre-fix
+    # version simply never reaches.
+    wait_for = lib.DriverSession.wait_for
+    sign_in_local = lib.DriverSession.sign_in_local
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "wait_for_app_ready":
+            fn = getattr(lib.DriverSession, "wait_for_app_ready", None)
+            if fn is not None:
+                return fn.__get__(self)
+        raise AttributeError(name)
+
+
+def _boot_wait():
+    """`DriverSession.wait_for_app_ready`, or a readable failure."""
+
+    fn = getattr(lib.DriverSession, "wait_for_app_ready", None)
+    assert fn is not None, (
+        "DriverSession has no `wait_for_app_ready`: nothing waits out the "
+        "supervised boot screen, so every journey asserts against `boot-gate`"
+    )
+    return fn
+
+
+class TestWaitingOutTheSupervisedBoot:
+    """The control server answers while the app still shows `boot-gate`.
+
+    Measured against a staged runtime on a warm laptop: 110s from launch to the
+    sign-in gate, ~9s of which was the window. A journey that asserts on the
+    sign-in surface before that reports "sign-in gate never appeared" — a box
+    timeout wearing a product failure's clothes, and the exact reason a per-PR
+    e2e gate would have been red on its first run.
+    """
+
+    def test_sign_in_waits_out_the_boot_instead_of_giving_up_at_sixty_seconds(
+        self, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    ) -> None:
+        """THE load-bearing test, and the one that fails on the unpatched harness.
+
+        A 100s boot is under the 260s boot budget and over `wait_for`'s 60s
+        default. The pre-fix `sign_in_local` went straight to
+        `wait_for("[data-testid=sign-in-button]")`, so it gave up at 60 virtual
+        seconds and raised "sign-in gate never appeared" — which is exactly what
+        the real run did on a laptop that took 110s.
+        """
+
+        monkeypatch.setattr(lib, "BOOT_TIMEOUT_S", 260)
+        session = _BootingSession(clock, boot_seconds=100)
+        session.sign_in_local()
+        assert session.clicked == ["[data-testid=sign-in-button]"]
+        assert clock.now >= 1_100.0, "it clicked before the app had finished booting"
+
+    def test_it_waits_past_the_sixty_second_default(
+        self, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    ) -> None:
+        monkeypatch.setattr(lib, "BOOT_TIMEOUT_S", 260)
+        session = _BootingSession(clock, boot_seconds=100)
+        waited = _boot_wait()(session)
+        assert waited == pytest.approx(100.0, abs=0.5), (
+            f"waited {waited}s; a 60s ceiling would have given up at 60"
+        )
+
+    def test_the_budget_is_boot_timeout_s_not_a_hardcoded_number(
+        self, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    ) -> None:
+        """The knob `ci-desktop.yml` sets must be the one that governs here."""
+
+        monkeypatch.setattr(lib, "BOOT_TIMEOUT_S", 9)
+        session = _BootingSession(clock, boot_seconds=float("inf"))
+        with pytest.raises(AssertionError, match="still booting after 9s"):
+            _boot_wait()(session)
+        assert clock.now == pytest.approx(1_009.0, abs=0.5), "it left budget unspent"
+
+    def test_a_fatal_boot_error_fails_fast_with_the_apps_own_message(
+        self, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    ) -> None:
+        """Burning the whole budget to then report a timeout hides a diagnosis
+        the app already printed."""
+
+        monkeypatch.setattr(lib, "BOOT_TIMEOUT_S", 260)
+        session = _BootingSession(clock, boot_seconds=float("inf"), fatal=True)
+        with pytest.raises(AssertionError, match="postgres refused to start"):
+            _boot_wait()(session)
+        assert clock.now == pytest.approx(1_000.0), "a fatal boot error cost time"
+
+    def test_a_timeout_names_the_stage_the_app_was_stuck_on(
+        self, monkeypatch: pytest.MonkeyPatch, clock: _Clock
+    ) -> None:
+        monkeypatch.setattr(lib, "BOOT_TIMEOUT_S", 5)
+        session = _BootingSession(clock, boot_seconds=float("inf"))
+        with pytest.raises(AssertionError, match="Starting the local database"):
+            _boot_wait()(session)
+
+
 @pytest.fixture(scope="module")
 def workflow() -> dict[str, Any]:
     return yaml.safe_load(CI_DESKTOP.read_text(encoding="utf-8"))

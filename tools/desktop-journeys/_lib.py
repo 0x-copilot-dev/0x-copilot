@@ -588,10 +588,80 @@ class DriverSession:
         return json.loads(raw)
 
     # -- common user actions (real testIds; keep in sync with the app) --
+    def wait_for_app_ready(self, timeout_s: int | None = None) -> float:
+        """Block until the supervised boot screen is gone. Returns seconds waited.
+
+        The control-server probe in :meth:`start` returns as soon as the FIRST
+        WINDOW exists, and the first window is the boot screen
+        (``BootProgress.tsx``, ``data-testid=boot-gate``). The services behind
+        it — initdb, migrations, three uvicorns — are still coming up, and the
+        renderer shows nothing else until they are healthy. So "the app
+        launched" and "the app is usable" are two different moments, and
+        everything a journey wants to click belongs to the second one.
+
+        Measured on a warm M-series laptop against a staged runtime: **110s**
+        from launch to the sign-in gate, of which ~9s was the window. A hosted
+        macOS runner is slower still. The 60s default on :meth:`wait_for` is
+        therefore below the real cold-boot cost — which is why this waits on
+        ``BOOT_TIMEOUT_S``, the budget the harness ALREADY uses for exactly this
+        question and which the caller can already raise.
+
+        Two behaviours make a red run readable instead of merely red:
+
+        * a fatal boot error (``boot-fatal``) fails IMMEDIATELY with the app's
+          own message, rather than burning the whole budget to then report a
+          timeout;
+        * a timeout names the boot stage the app was stuck on, so "still
+          Starting the local database after 260s" cannot be misread as a
+          product assertion about the screen that never rendered.
+        """
+
+        budget = BOOT_TIMEOUT_S if timeout_s is None else timeout_s
+        start = time.time()
+        deadline = start + budget
+        stage = ""
+        while time.time() < deadline:
+            if self.present("[data-testid=boot-fatal]"):
+                message = self.evaluate(
+                    "(document.querySelector('[data-testid=boot-fatal-message]')"
+                    "?.innerText||'').trim()"
+                )
+                raise AssertionError(
+                    f"the app reported a FATAL boot error after "
+                    f"{time.time() - start:.0f}s: {message!r}. The supervised "
+                    "services did not come up; their logs are under the run's "
+                    "userData `logs/` dir, not in the renderer."
+                )
+            if not self.present("[data-testid=boot-gate]"):
+                return time.time() - start
+            stage = (
+                self.evaluate(
+                    "(document.querySelector('[data-testid=boot-message]')"
+                    "?.innerText||'').trim()"
+                )
+                or stage
+            )
+            time.sleep(0.5)
+        raise AssertionError(
+            f"the app was still booting after {budget}s — last stage: {stage!r}. "
+            "This is the BOX, not the product: raise BOOT_TIMEOUT_S, or read the "
+            "supervised services' logs to see which one never became healthy."
+        )
+
     def sign_in_local(self) -> None:
-        """Sign-in gate → "Use locally, no account" (the no-signup device account)."""
+        """Sign-in gate → "Use locally, no account" (the no-signup device account).
+
+        Waits the boot screen out first. Without that this asserted on a DOM
+        that was still showing `boot-gate`, and reported the honest-looking
+        "sign-in gate never appeared" — a harness timeout wearing a product
+        failure's clothes, and the same trap `driver.mjs` documents for
+        `electron.launch`.
+        """
+        waited = self.wait_for_app_ready()
+        print(f"[{self.name}] app ready after {waited:.0f}s of boot", flush=True)
         assert self.wait_for("[data-testid=sign-in-button]"), (
-            "sign-in gate never appeared"
+            "sign-in gate never appeared (the boot screen had already cleared, "
+            "so this one IS about the sign-in surface)"
         )
         self.click("[data-testid=sign-in-button]")
 

@@ -277,6 +277,30 @@ does not contain it — the fail-closed guarantee stated in
 that reads like coverage. The hermetic run→stream tail therefore stays in the
 boot drill, which boots the same topology as a staging process and can set it.
 
+#### The boot screen is not the app — `BOOT_TIMEOUT_S` covers both
+
+The driver's control server answers as soon as the **first window** exists, and
+the first window is the boot screen (`BootProgress.tsx`, `data-testid=boot-gate`).
+The supervised services behind it are still starting. Measured on a warm
+M-series laptop against an already-staged runtime:
+
+| Moment                                    | Elapsed |
+| ----------------------------------------- | ------- |
+| driver control server answers (window up) | ~9s     |
+| `boot-gate` clears → sign-in gate         | ~110s   |
+
+`sign_in_local` therefore calls `DriverSession.wait_for_app_ready()` first, which
+spends the **`BOOT_TIMEOUT_S`** budget (default 260s) rather than `wait_for`'s 60s
+default. Without it a journey asserts against the boot screen and reports
+`sign-in gate never appeared` — a box timeout wearing a product failure's
+clothes. If you see that message now, the boot screen HAD already cleared and the
+sign-in surface really is the problem.
+
+Two deliberate behaviours: a fatal boot error (`boot-fatal`) fails immediately
+with the app's own message instead of burning the budget, and a timeout names the
+stage it was stuck on ("still Starting the local database"). Raise
+`BOOT_TIMEOUT_S` on a slow box; it can only convert a timeout into a real verdict.
+
 **When it goes red:**
 
 1. Read the **phase table** and the JSON summary at the end of the log, not the
@@ -287,15 +311,24 @@ boot drill, which boots the same topology as a staging process and can set it.
 3. `failed` with `unmatched_phases` in the JSON means someone renamed `FR-0`
    without updating `ci-desktop.yml`. `tools/test_desktop_journey_ci.py` normally
    catches that in `repo-gates` first — if it did not, that test needs the fix too.
-4. Otherwise download the **`desktop-journey-first-run-evidence`** artifact
+4. `still booting after 420s` is the runner, not the product — see the boot table
+   above. Check the uploaded service logs for the one that never became healthy.
+5. Otherwise download the **`desktop-journey-first-run-evidence`** artifact
    (uploaded on failure): screenshots per phase, `driver.log` for the Electron
    main process, and the supervised services' own logs.
-5. Reproduce locally with the exact command the job runs:
+6. Reproduce locally with the exact command the job runs:
    ```bash
    node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
    npm run build --workspace @0x-copilot/desktop
    JOURNEY_PHASES=FR-0 COPILOT_HOME="$PWD/apps/desktop/resources" \
      python3 tools/desktop-journeys/first_run.py
+   ```
+   From a worktree with no `node_modules` and no desktop build, point `APP_DIR`
+   at a checkout that has both — the journey code is still yours, only the app
+   under test is borrowed:
+   ```bash
+   APP_DIR=/path/to/main/apps/desktop COPILOT_HOME=/path/to/main/apps/desktop/resources \
+   JOURNEY_PHASES=FR-0 /opt/homebrew/bin/python3.13 tools/desktop-journeys/first_run.py
    ```
 
 It is **not** a required status check. A new e2e gate needs a few runs of

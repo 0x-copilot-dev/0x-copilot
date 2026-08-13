@@ -214,7 +214,21 @@ jobs:
       # value in a failing log is the value written here.
       CTL_PORT: "8791"
       # A first boot on a fresh profile runs initdb + migrations + three
-      # uvicorns. Hosted macOS is slower than a laptop at all three.
+      # uvicorns. Hosted macOS is slower than a laptop at all three, and this
+      # number is measured rather than guessed: on a warm M-series laptop, with
+      # the runtime already staged, launch → the sign-in gate took 110s (94s of
+      # it after the window existed). 420 leaves a wide margin over that.
+      #
+      # It governs BOTH waits, which is the whole reason the job works:
+      #   * _lib.py `_probe()` — how long until the driver's control server
+      #     answers, i.e. until the first WINDOW exists; and
+      #   * `DriverSession.wait_for_app_ready` — how long the app may keep
+      #     showing `boot-gate` (BootProgress.tsx) after that.
+      # Those are different moments. The window appears in ~9s; the services
+      # behind it take ~100s more. Before the second wait existed, every journey
+      # went straight to `wait_for(..., timeout_s=60)` and failed with
+      # "sign-in gate never appeared" — a box timeout wearing a product
+      # failure's clothes, and a red gate on this job's very first run.
       BOOT_TIMEOUT_S: "420"
       DRIVER_LAUNCH_TIMEOUT_MS: "300000"
     steps:
