@@ -37,6 +37,9 @@ from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, StateGraph
 
+from agent_runtime.api.conversation_coordinator import ConversationCoordinator
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.capabilities.middleware import RuntimeControlMiddleware
 from agent_runtime.execution import deep_agent_builder as builder_module
 from agent_runtime.execution.contracts import (
@@ -51,12 +54,16 @@ from agent_runtime.execution.deep_agent_builder import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.execution.runtime import (
     ainvoke_runtime,
     astream_runtime,
     runtime_config,
 )
 from agent_runtime.hyperparameters.contracts import ExecutionHyperparameters
+from agent_runtime.settings import RuntimeSettings
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
+from runtime_api.schemas import CreateConversationRequest, CreateRunRequest
 
 
 class _LoopState(TypedDict, total=False):
@@ -353,3 +360,92 @@ class TestTheDefaultIsHighEnoughForARealTurn:
         )
 
         assert isinstance(result["messages"][-1], AIMessage)
+
+
+class TestTheConfiguredLimitSurvivesRunCreate:
+    """The hop no other test in this file covers: settings -> persisted context.
+
+    Everything above builds a context by hand, so all of it stays green if
+    ``RunCoordinator.create_run`` never passes ``recursion_limit`` at all — the
+    field would simply fall back to its own default, which is deliberately the
+    SAME number as the settings default. That makes the one line joining
+    configuration to the run invisible to an equality assertion against the
+    default, and it is exactly the seam this repo loses features at.
+
+    So the value configured here is NOT the default. With the coordinator's
+    argument removed the context reports 500 and this fails; with it present the
+    number the operator chose is what the worker re-hydrates and hands to Pregel.
+    """
+
+    #: Deliberately not 500 (the default) and not a bound — a number that can
+    #: only be here because configuration carried it.
+    CONFIGURED = 137
+
+    async def test_create_run_persists_the_configured_limit_on_the_context(
+        self,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        store = InMemoryRuntimeApiStore()
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+                "COPILOT_HP__EXECUTION__RECURSION_LIMIT": str(self.CONFIGURED),
+            }
+        )
+        # Guards the half of the path above ``create_run``: if the document's
+        # env override stopped being read, the assertion below would compare
+        # 500 against 500 and pass while nothing was configurable at all.
+        assert settings.execution.recursion_limit == self.CONFIGURED
+
+        event_producer = RuntimeEventProducer(
+            persistence=store,
+            event_store=store,
+            on_event_appended=None,
+        )
+        run_coordinator = RunCoordinator(
+            persistence=store,
+            queue=store,
+            event_producer=event_producer,
+            settings=settings,
+            model_resolver=ModelConfigResolver(settings=settings),
+        )
+        conversation = await ConversationCoordinator(
+            persistence=store,
+            settings=settings,
+            run_coordinator=run_coordinator,
+        ).create_conversation(
+            CreateConversationRequest(
+                org_id="org_recursion",
+                user_id="user_recursion",
+                assistant_id="assistant_recursion",
+            )
+        )
+
+        created = await run_coordinator.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id="org_recursion",
+                user_id="user_recursion",
+                user_input="hi",
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+
+        persisted = store.runs[created.run_id].runtime_context
+        assert persisted.recursion_limit == self.CONFIGURED
+        # And it is still the number the graph would actually receive: the
+        # worker rebuilds the RunnableConfig from this persisted context, so the
+        # two assertions together close settings -> context -> Pregel.
+        harness = RuntimeHarness(
+            agent=object(),
+            context=persisted,
+            dependencies=fake_dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+        assert runtime_config(harness)["recursion_limit"] == self.CONFIGURED

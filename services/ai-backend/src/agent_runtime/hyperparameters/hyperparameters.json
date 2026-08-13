@@ -32,7 +32,9 @@
     "delta_coalesce_window_ms": 0,
     "delta_coalesce_max_chunks": 64,
     "worker_poll_interval_seconds": 1.0,
-    "worker_lock_seconds": 60
+    "worker_lock_seconds": 60,
+    "recursion_limit": 500,
+    "run_deadline_seconds": 1800.0
   },
   "subagents": {
     "timeout_seconds": 120,

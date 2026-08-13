@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.hyperparameters.contracts import (
     ExecutionHyperparameters,
+    HyperparameterBounds,
     Hyperparameters,
 )
 from agent_runtime.hyperparameters.loader import HyperparameterLoader
@@ -303,6 +304,22 @@ class RuntimeExecutionSettings(RuntimeContract):
     )
     worker_lock_seconds: int = Field(
         default=_EXECUTION.worker_lock_seconds, gt=0, le=3600
+    )
+    # LangGraph super-steps per graph invocation. Reaches the graph through
+    # ``AgentRuntimeContext.recursion_limit`` -> ``runtime_config``. New in this
+    # change, so it has NO legacy ``RUNTIME_*`` variable: the document (or
+    # ``COPILOT_HP__EXECUTION__RECURSION_LIMIT``) is the only surface.
+    recursion_limit: int = Field(
+        default=_EXECUTION.recursion_limit,
+        ge=1,
+        le=HyperparameterBounds.RECURSION_LIMIT_MAX,
+    )
+    # Run-level wall clock, distinct from ``ModelConfig.timeout_seconds``.
+    # Consumed by the worker's run handler, not by the model client.
+    run_deadline_seconds: float = Field(
+        default=_EXECUTION.run_deadline_seconds,
+        gt=0,
+        le=HyperparameterBounds.RUN_DEADLINE_SECONDS_MAX,
     )
     start_in_process_worker: bool = True
     allow_empty_capabilities: bool = False
@@ -780,6 +797,13 @@ class RuntimeSettings(BaseSettings):
                         str(execution_tunables.worker_lock_seconds),
                     )
                 ),
+                # No ``_s(v, E....)`` wrapper on these two: they are new knobs,
+                # so there is no legacy ``RUNTIME_*`` name to keep honouring.
+                # The document is the only author, overridable exactly once via
+                # ``COPILOT_HP__EXECUTION__{RECURSION_LIMIT,RUN_DEADLINE_SECONDS}``
+                # — which the loader has already applied to ``execution_tunables``.
+                recursion_limit=execution_tunables.recursion_limit,
+                run_deadline_seconds=execution_tunables.run_deadline_seconds,
                 start_in_process_worker=_s(v, E.START_IN_PROCESS_WORKER, "true").lower()
                 in _truthy,
                 allow_empty_capabilities=_s(

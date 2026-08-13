@@ -23,7 +23,11 @@ import pytest
 from pydantic import BaseModel
 
 from agent_runtime.execution import deep_agent_builder
-from agent_runtime.execution.contracts import ModelConfig
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.hyperparameters.contracts import (
+    ExecutionHyperparameters,
+    HyperparameterBounds,
+)
 from agent_runtime.persistence.records.tool_budgets import DefaultToolBudget
 from agent_runtime.settings import RuntimeExecutionSettings
 
@@ -50,6 +54,29 @@ _NAMED_DEFAULTS: dict[str, dict[str, Callable[[], object]]] = {
         ),
         "deep_agent_builder._DEFAULT_TOOL_CALL_BUDGET": (
             lambda: deep_agent_builder._DEFAULT_TOOL_CALL_BUDGET
+        ),
+    },
+    # Same shape, same reason. ``AgentRuntimeContext`` holds the super-step
+    # budget as a LITERAL rather than importing the document's value, and it has
+    # to: ``hyperparameters.contracts`` imports
+    # ``delegation.subagents.constants``, whose package import reaches
+    # ``execution.contracts`` right back — so the import that would remove this
+    # copy is a cycle that breaks every import of ``agent_runtime`` (the same
+    # cycle ``deep_agent_builder._DEFAULT_TOOL_CALL_BUDGET`` is blocked by).
+    # The copy is forced; the gate is what keeps it honest.
+    "recursion_limit": {
+        # ENFORCED: what ``runtime_config`` actually puts in the RunnableConfig
+        # is ``AgentRuntimeContext.recursion_limit``, so a context built without
+        # a composition root (tests, the ``langgraph.json`` export) is bounded by
+        # THIS number, not by the document's.
+        "AgentRuntimeContext.recursion_limit": (
+            lambda: _field_default(AgentRuntimeContext, "recursion_limit")
+        ),
+        "ExecutionHyperparameters.recursion_limit": (
+            lambda: _field_default(ExecutionHyperparameters, "recursion_limit")
+        ),
+        "RuntimeExecutionSettings.recursion_limit": (
+            lambda: _field_default(RuntimeExecutionSettings, "recursion_limit")
         ),
     },
 }
@@ -85,3 +112,25 @@ def test_tool_call_budget_agrees_on_the_enforced_ten() -> None:
     assert DefaultToolBudget.MAX_CALLS_PER_RUN == 10
     for label, read in _NAMED_DEFAULTS["tool_call_budget"].items():
         assert read() == 10, f"{label} is {read()!r}, expected the enforced 10"
+
+
+def test_recursion_limit_ceiling_does_not_fork_from_the_bounds_constant() -> None:
+    """The CEILING is a second forkable copy, and agreement alone would miss it.
+
+    ``AgentRuntimeContext`` validates the super-step budget with a literal
+    ``le=2_000`` — the same value ``HyperparameterBounds.RECURSION_LIMIT_MAX``
+    declares for the document. Raising the bound in one place only is silent in
+    the worst direction: the document would accept a number the context then
+    rejects at construction, i.e. a run that fails to start rather than a run
+    with a wrong limit. The defaults gate above cannot see this, because it
+    reads defaults and this is a validator argument.
+    """
+
+    ceiling = AgentRuntimeContext.model_fields["recursion_limit"].metadata
+    declared = [getattr(entry, "le") for entry in ceiling if hasattr(entry, "le")]
+
+    assert declared == [HyperparameterBounds.RECURSION_LIMIT_MAX], (
+        f"AgentRuntimeContext.recursion_limit is bounded by {declared!r}, but "
+        f"HyperparameterBounds.RECURSION_LIMIT_MAX is "
+        f"{HyperparameterBounds.RECURSION_LIMIT_MAX!r}."
+    )
