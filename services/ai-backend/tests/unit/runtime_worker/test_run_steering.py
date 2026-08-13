@@ -268,7 +268,7 @@ class TestSteerDeliveryBoundary(FakeRuntimeMixin):
         )
 
     def test_before_model_hands_the_steer_to_the_next_model_call(self) -> None:
-        inbox = RunSteeringInbox(run_id="run_123")
+        inbox = RunSteeringInbox()
         token = RunSteeringContext.bind_for_run(inbox)
         try:
             inbox.deposit(
@@ -302,7 +302,7 @@ class TestSteerDeliveryBoundary(FakeRuntimeMixin):
         effect down is Stop's job, and Stop already has it.
         """
 
-        inbox = RunSteeringInbox(run_id="run_123")
+        inbox = RunSteeringInbox()
         token = RunSteeringContext.bind_for_run(inbox)
         middleware = RuntimeControlMiddleware()
         settled: list[str] = []
@@ -336,7 +336,7 @@ class TestSteerDeliveryBoundary(FakeRuntimeMixin):
         child reached a model step first — and the supervisor would never see it.
         """
 
-        inbox = RunSteeringInbox(run_id="run_123")
+        inbox = RunSteeringInbox()
         token = RunSteeringContext.bind_for_run(inbox)
         subagent_runtime = self.FakeRuntime(
             {"metadata": {"supervisor_task_call_id": "call_abc"}}

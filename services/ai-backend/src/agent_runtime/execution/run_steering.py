@@ -118,17 +118,9 @@ class RunSteeringInbox:
     #: appended, in full, to a provider request.
     MAX_PENDING: Final[int] = 16
 
-    def __init__(self, *, run_id: str) -> None:
-        self._run_id = run_id
+    def __init__(self) -> None:
         self._lock = Lock()
         self._pending: deque[SteeringMessage] = deque()
-        self._delivered: list[SteeringMessage] = []
-
-    @property
-    def run_id(self) -> str:
-        """Return the run this mailbox belongs to."""
-
-        return self._run_id
 
     @property
     def pending(self) -> int:
@@ -136,13 +128,6 @@ class RunSteeringInbox:
 
         with self._lock:
             return len(self._pending)
-
-    @property
-    def delivered(self) -> tuple[SteeringMessage, ...]:
-        """Return the steers this mailbox has handed to a model step, in order."""
-
-        with self._lock:
-            return tuple(self._delivered)
 
     def deposit(self, message: SteeringMessage) -> bool:
         """Queue one steer; report whether the mailbox accepted it.
@@ -161,14 +146,18 @@ class RunSteeringInbox:
     def drain(self) -> tuple[SteeringMessage, ...]:
         """Take every waiting steer, in arrival order, exactly once.
 
-        Draining records what it handed over, so a caller can prove a steer
-        reached a model step rather than inferring it from an empty queue.
+        Consume-once is the point. The drained messages join the conversation
+        state the model carries forward, so a mailbox that re-served them would
+        re-append the same interjection at every remaining turn of the run.
+
+        No delivered-log is kept here. The durable record of what the user sent
+        is the run's own ``run_steered`` ledger event, and a second in-memory
+        copy would be an unread list growing for the life of the run.
         """
 
         with self._lock:
             drained = tuple(self._pending)
             self._pending.clear()
-            self._delivered.extend(drained)
             return drained
 
 

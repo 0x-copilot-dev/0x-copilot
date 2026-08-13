@@ -137,9 +137,7 @@ class LiveRunRegistry:
         key = (run_id or "").strip()
         if not key or task is None or len(self._handles) >= self.MAX_TRACKED_RUNS:
             return None
-        handle = LiveRunHandle(
-            run_id=key, task=task, steering=RunSteeringInbox(run_id=key)
-        )
+        handle = LiveRunHandle(run_id=key, task=task, steering=RunSteeringInbox())
         self._handles[key] = handle
         return handle
 
