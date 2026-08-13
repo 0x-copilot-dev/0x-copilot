@@ -60,6 +60,7 @@ from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     MiddlewareStage,
 )
+from agent_runtime.capabilities.policy.decisions import RunDecisionLedgers
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     ConnectorAccessMode,
@@ -677,6 +678,104 @@ class TestFailClosedBindings(PolicyToolFixtureMixin):
         error = self.error_of(result)
         assert error["code"] == McpLoadErrorCode.PERMISSION_DENIED.value
         assert error["safe_message"] == PolicyStageMessages.SYNCHRONOUS_DISPATCH
+        assert wrapped.inner.calls == []
+
+
+class TestDestructiveUnderBypass(PolicyToolFixtureMixin):
+    """BYPASS lifts the write gate; it does not lift the destructive one.
+
+    Asserted through the real wrapper, so what is pinned is a dispatch: the
+    inner connector tool is or is not invoked.
+    """
+
+    async def test_destructive_parks_under_bypass(self) -> None:
+        wrapped = self.build(
+            tool_name=self.DESTRUCTIVE_TOOL, context=self.context(bypass=True)
+        )
+        await self.call(wrapped, team="ENG")
+        assert wrapped.interrupt.calls == 1
+        # And it still executes on approve — GATE, not DENY.
+        assert len(wrapped.inner.calls) == 1
+
+    async def test_a_declined_destructive_under_bypass_never_dispatches(self) -> None:
+        wrapped = self.build(
+            tool_name=self.DESTRUCTIVE_TOOL,
+            context=self.context(bypass=True),
+            resume=self.DECLINED,
+        )
+        await self.call(wrapped, team="ENG")
+        assert wrapped.interrupt.calls == 1
+        assert wrapped.inner.calls == []
+
+    async def test_the_card_raised_under_bypass_withholds_the_always_option(
+        self,
+    ) -> None:
+        wrapped = self.build(
+            tool_name=self.DESTRUCTIVE_TOOL, context=self.context(bypass=True)
+        )
+        await self.call(wrapped, team="ENG")
+        assert wrapped.interrupt.payloads[0]["grant_options"] == ["allow_once"]
+
+
+class TestRunScopedAlwaysThroughTheMiddleware(PolicyToolFixtureMixin):
+    """``always`` on a card stops the run re-asking the same question.
+
+    The middleware registers the pending ask before parking and records the
+    reply the moment the resume comes back approved; the NEXT call re-enters the
+    PDP and reads the rule. That round trip is what makes the rule layer
+    reachable rather than merely present.
+    """
+
+    APPROVED_ALWAYS: Mapping[str, str] = {
+        "decision": "approved",
+        "decision_scope": "always",
+    }
+
+    def setup_method(self) -> None:
+        RunDecisionLedgers.reset()
+
+    def teardown_method(self) -> None:
+        RunDecisionLedgers.reset()
+
+    async def test_always_stops_the_second_write_parking(self) -> None:
+        wrapped = self.build(tool_name=self.WRITE_TOOL, resume=self.APPROVED_ALWAYS)
+        await self.call(wrapped, team="ENG")
+        assert wrapped.interrupt.calls == 1
+
+        await self.call(wrapped, tool_call_id="call_p24_b", team="ENG")
+
+        assert wrapped.interrupt.calls == 1
+        assert len(wrapped.inner.calls) == 2
+
+    async def test_once_keeps_asking(self) -> None:
+        # The default, and what a plain approve has always meant.
+        wrapped = self.build(tool_name=self.WRITE_TOOL, resume=self.APPROVED)
+        await self.call(wrapped, team="ENG")
+        await self.call(wrapped, tool_call_id="call_p24_b", team="ENG")
+        assert wrapped.interrupt.calls == 2
+        assert len(wrapped.inner.calls) == 2
+
+    async def test_always_does_not_carry_across_to_a_destructive_op(self) -> None:
+        # An `always` on a write cannot buy silence on a delete, because the
+        # rule is written against the permission key the card named.
+        write = self.build(tool_name=self.WRITE_TOOL, resume=self.APPROVED_ALWAYS)
+        await self.call(write, team="ENG")
+        destructive = self.build(
+            tool_name=self.DESTRUCTIVE_TOOL, resume=self.APPROVED_ALWAYS
+        )
+        await self.call(destructive, tool_call_id="call_p24_c", team="ENG")
+        assert destructive.interrupt.calls == 1
+
+    async def test_a_declined_always_writes_no_rule(self) -> None:
+        # ``GateResume`` drops the scope on a rejection, so a decline cannot
+        # leave behind the grant it was declining.
+        wrapped = self.build(
+            tool_name=self.WRITE_TOOL,
+            resume={"decision": "rejected", "decision_scope": "always"},
+        )
+        await self.call(wrapped, team="ENG")
+        await self.call(wrapped, tool_call_id="call_p24_b", team="ENG")
+        assert wrapped.interrupt.calls == 2
         assert wrapped.inner.calls == []
 
 
