@@ -32,7 +32,7 @@ from agent_runtime.capabilities.skills.visibility import (
     SkillVisibilityContext,
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
-from agent_runtime.execution.factory import acreate_agent_runtime
+from agent_runtime.execution.factory import _skill_card_line, acreate_agent_runtime
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
 from tests.unit.fakes import FakeMcpRegistry
 
@@ -286,6 +286,7 @@ class TestTheIndexStaysUnderItsBound:
             cards=tuple(
                 card(f"skill_{index:03d}", description="x" * 200) for index in range(20)
             ),
+            render=_skill_card_line,
             max_entries=Limits.SKILL_INDEX_MAX_ENTRIES,
             max_chars=400,
         )
@@ -295,11 +296,20 @@ class TestTheIndexStaysUnderItsBound:
         assert 0 < len(plan.surfaced) < 20
         assert plan.deferred
 
-    def test_a_long_description_is_clipped_not_dropped(self) -> None:
-        row = SkillIndexPlanner.row(card(Names.LAUNCH_REVIEW, description="y" * 500))
+    async def test_a_long_description_is_clipped_not_dropped(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        prompt, _ = await assemble_prompt(
+            context=runtime_context_admin,
+            dependencies=fake_dependencies,
+            cards=(card(Names.LAUNCH_REVIEW, description="y" * 500),),
+        )
 
-        assert Names.LAUNCH_REVIEW in row
-        assert len(row) < 500
+        assert Names.LAUNCH_REVIEW in prompt
+        assert "y" * Limits.SKILL_INDEX_SUMMARY_MAX_CHARS not in prompt
+        assert "y" * (Limits.SKILL_INDEX_SUMMARY_MAX_CHARS - 1) in prompt
 
 
 class TestOnDemandFetch:

@@ -1861,6 +1861,7 @@ def _skill_index_plan(
 
     plan = SkillIndexPlanner.plan(
         cards=skill_cards,
+        render=_skill_card_line,
         visibility=SkillVisibilityContext.of(
             tools=model_tools,
             connectors=mcp_servers,
@@ -1872,6 +1873,30 @@ def _skill_index_plan(
         hidden=plan.hidden,
     )
     return plan
+
+
+def _skill_card_line(skill: object, summary: str) -> str:
+    """Render one Skill's compact index row.
+
+    The row text stays here, where it has always lived, rather than moving into
+    the skills package with the bound that selects it. ``allowed_tools`` is the
+    reason: it is parsed, typed and validated by the manifest and then spent on
+    the f-string below and nowhere else, which is a live entry in
+    ``tools/dark_wiring_baseline.txt`` that a separate change owns. Rendering
+    the row inside ``capabilities/skills`` would put that read in the field's
+    own package, where the prompt-only detector cannot see it — silently
+    retiring the finding without fixing the field.
+
+    ``summary`` arrives already clipped to the index's per-row budget; the
+    planner owns how much fits, this owns how it reads.
+    """
+
+    name = getattr(skill, "name", str(skill))
+    virtual_path = getattr(skill, "virtual_path", "")
+    display_name = getattr(skill, "display_name", None) or name
+    allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
+    allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
+    return f"- {name} ({display_name}, path={virtual_path}{allowed}): {summary}"
 
 
 def _instructions_with_skill_cards(
@@ -1890,8 +1915,12 @@ def _instructions_with_skill_cards(
     """
     if not skill_cards:
         return instructions
-    index = plan if plan is not None else SkillIndexPlanner.plan(cards=skill_cards)
-    if index.is_empty:
+    index = (
+        plan
+        if plan is not None
+        else SkillIndexPlanner.plan(cards=skill_cards, render=_skill_card_line)
+    )
+    if not index.rows:
         return instructions
     return "\n\n".join(
         (

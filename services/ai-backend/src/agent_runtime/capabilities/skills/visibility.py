@@ -41,7 +41,14 @@ the *shape* and not the *substrate*, for two reasons:
 What we *did* take from the catalog is the part that generalises: an
 always-loaded index tier that is bounded in bytes, one clipped summary line per
 entry, and an explicit "here is how to get the rest" footer instead of silent
-truncation. :class:`SkillIndexPlanner` is that renderer.
+truncation. :class:`SkillIndexPlanner` is that selector.
+
+It selects; it does not spell the row. The caller passes a
+:data:`SkillIndexRow` renderer and the planner measures *that* text against the
+budget, so there is exactly one place in the service that decides how a Skill
+card reads (``execution/factory.py``, where it has always lived) and the bound
+is enforced against the string the model will actually receive rather than
+against a second rendering that can drift from it.
 
 Tool and connector names are treated as **opaque strings** compared by exact
 membership. Nothing here parses a name's shape, so a naming-scheme change
@@ -50,10 +57,14 @@ elsewhere in the runtime cannot silently change which Skills are visible.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from agent_runtime.capabilities.skills.constants import Keys, Limits, Messages
 from agent_runtime.execution.contracts import RuntimeContract
+
+#: ``(card, clipped_summary) -> one index row``. The planner owns how much
+#: summary fits; the caller owns how the row reads.
+SkillIndexRow = Callable[[object, str], str]
 
 
 class SkillCardText:
@@ -238,25 +249,16 @@ class SkillIndexPlan(RuntimeContract):
     deferred: tuple[str, ...] = ()
     hidden: tuple[str, ...] = ()
 
-    @property
-    def is_empty(self) -> bool:
-        """Return ``True`` when no Skill row will be rendered."""
-        return not self.rows
-
 
 class SkillIndexPlanner:
-    """Applies the conditional filter, then the bound, then renders the rows."""
-
-    #: Rendered once per row; mirrors the pre-existing card line so a run with
-    #: few, unconditional Skills produces the same prompt text it always did.
-    ROW: str = "- {name} ({display_name}, path={virtual_path}{allowed}): {summary}"
-    ALLOWED: str = ", allowed_tools={tools}"
+    """Applies the conditional filter, then the bound, over caller-rendered rows."""
 
     @classmethod
     def plan(
         cls,
         *,
         cards: Sequence[object],
+        render: SkillIndexRow,
         visibility: SkillVisibilityContext | None = None,
         max_entries: int = Limits.SKILL_INDEX_MAX_ENTRIES,
         max_chars: int = Limits.SKILL_INDEX_MAX_CHARS,
@@ -281,7 +283,9 @@ class SkillIndexPlanner:
             if len(rows) >= max_entries:
                 deferred.append(name)
                 continue
-            row = cls.row(card)
+            row = render(
+                card, cls.clip(SkillCardText.attribute(card, Keys.Fields.DESCRIPTION))
+            )
             if len(row) + 1 > budget:
                 deferred.append(name)
                 continue
@@ -305,25 +309,6 @@ class SkillIndexPlanner:
         if not isinstance(metadata, Mapping):
             return SkillVisibilityConditions()
         return SkillVisibilityConditions.from_metadata(metadata)
-
-    @classmethod
-    def row(cls, card: object) -> str:
-        """Render one bounded index row for ``card``."""
-
-        name = SkillCardText.name_of(card)
-        allowed_tools = tuple(getattr(card, Keys.Fields.ALLOWED_TOOLS, ()) or ())
-        return cls.ROW.format(
-            name=name,
-            display_name=SkillCardText.attribute(card, Keys.Fields.DISPLAY_NAME)
-            or name,
-            virtual_path=SkillCardText.attribute(card, Keys.Fields.VIRTUAL_PATH),
-            allowed=(
-                cls.ALLOWED.format(tools=Keys.Characters.COMMA.join(allowed_tools))
-                if allowed_tools
-                else ""
-            ),
-            summary=cls.clip(SkillCardText.attribute(card, Keys.Fields.DESCRIPTION)),
-        )
 
     @classmethod
     def clip(
