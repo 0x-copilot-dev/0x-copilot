@@ -32,7 +32,7 @@ from langchain.agents.middleware.types import (
     PrivateStateAttr,
     ToolCallRequest,
 )
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
@@ -67,6 +67,14 @@ from agent_runtime.execution.run_steering import (
     RunSteeringContext,
     SteeringMessage,
 )
+from agent_runtime.hooks.contracts import (
+    HookPhase,
+    ModelRequestBeforeInput,
+    PromptAssembleInput,
+    ToolExecuteAfterInput,
+    ToolExecuteBeforeInput,
+)
+from agent_runtime.hooks.dispatch import HookDispatch, ToolCallVerdict
 from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
     TokenUsageExtractorRegistry,
@@ -221,6 +229,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 )
             binding.observe(prompt_result)
         self._observe_final_tool_surface(provider_request)
+        provider_request = self._apply_model_call_hooks(provider_request)
         handoff = self._cache_fallback_handoff(binding, prompt_result)
         with PromptCacheFallbackContext.bind(handoff):
             return handler(provider_request)
@@ -250,6 +259,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 model_call_id=model_call_id,
             )
         self._observe_final_tool_surface(provider_request)
+        provider_request = self._apply_model_call_hooks(provider_request)
         handoff = self._cache_fallback_handoff(binding, prompt_result)
         with PromptCacheFallbackContext.bind(handoff):
             response = await handler(provider_request)
@@ -382,6 +392,97 @@ class RuntimeControlMiddleware(AgentMiddleware):
         )
 
     @classmethod
+    def _apply_model_call_hooks(
+        cls,
+        request: ModelRequest[Any],
+    ) -> ModelRequest[Any]:
+        """Run ``model.request.before`` and ``prompt.assemble`` for one call.
+
+        ``model.request.before`` is observe-only — ``HookDispatch.observe``
+        returns ``None``, so there is nothing here to assign back onto the
+        request. The only writable affordance is ``prompt.assemble``, and it can
+        only APPEND: the returned block is concatenated after the assembled
+        system prompt, so plugin bytes can never precede the policy fragment,
+        and ``tools`` / ``messages`` / ``model_settings`` are never touched.
+
+        Both run after F2 has produced the effective prompt, so an appended
+        block is deliberately outside the sealed, cacheable assembly plan and
+        outside its recorded digest.
+
+        Every fact handed to a hook is read from ``request``, never from
+        ``self._final_tool_surface``. Today those two agree: nothing awaits
+        between the write and the read, so this is not a bug being fixed. It is
+        the narrower dependency — a hook payload that is a pure function of the
+        request cannot be desynchronized from it by any future edit that adds a
+        suspension point, and the classmethod is what keeps that true.
+        """
+
+        wants_observe = HookDispatch.enabled(HookPhase.MODEL_REQUEST_BEFORE)
+        wants_prompt = HookDispatch.enabled(HookPhase.PROMPT_ASSEMBLE)
+        if not wants_observe and not wants_prompt:
+            return request
+        tool_names = tuple(
+            str(getattr(tool, "name", "")).strip() for tool in (request.tools or ())
+        )
+        digest = cls._system_prompt_digest(request.system_message)
+        execution_scope = cls._execution_scope_for_runtime(request.runtime)
+        model_identifier = _model_family(request.model, fallback="unknown")
+        if wants_observe:
+            HookDispatch.observe(
+                HookPhase.MODEL_REQUEST_BEFORE,
+                ModelRequestBeforeInput(
+                    model_identifier=model_identifier,
+                    execution_scope=execution_scope,
+                    message_count=len(request.messages or []),
+                    tool_names=tool_names,
+                    system_prompt_digest=digest,
+                ),
+            )
+        if not wants_prompt:
+            return request
+        appended = HookDispatch.prompt_assemble(
+            PromptAssembleInput(
+                model_identifier=model_identifier,
+                execution_scope=execution_scope,
+                system_prompt_digest=digest,
+                tool_names=tool_names,
+            )
+        )
+        if not appended:
+            return request
+        system_message = cls._appended_system_message(request.system_message, appended)
+        if system_message is None:
+            return request
+        return request.override(system_message=system_message)
+
+    @staticmethod
+    def _system_prompt_digest(system_message: SystemMessage | None) -> str:
+        """Content-free identity for the system prompt handed to a hook."""
+
+        content = getattr(system_message, "content", None)
+        return canonical_json_sha256(
+            {"system": content if isinstance(content, str) else ""}
+        )
+
+    @staticmethod
+    def _appended_system_message(
+        system_message: SystemMessage | None,
+        appended: str,
+    ) -> SystemMessage | None:
+        """Return the system message with ``appended`` concatenated after it.
+
+        ``None`` means "leave the request alone": a structured (non-text) system
+        message is not something this seam rewrites blind.
+        """
+
+        if system_message is None:
+            return SystemMessage(content=appended)
+        content = system_message.content
+        if not isinstance(content, str):
+            return None
+        return system_message.model_copy(update={"content": f"{content}\n\n{appended}"})
+
+    @classmethod
     def _prepare_prompt_for_call(
         cls,
         request: ModelRequest[Any],
@@ -462,6 +563,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
         lock to hold every call apart.
         """
 
+        verdict, request = self._apply_tool_call_hooks(request)
+        if verdict.vetoed:
+            return self._hook_veto_message(request, verdict)
         identity = self._call_identity(request)
         with RuntimeCallContext.bind(identity):
             execute = (
@@ -474,11 +578,12 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 if isinstance(request.tool, PolicyBlockedTool)
                 else (lambda: self._execute(request=request, handler=handler))
             )
-            return self._observe_sync_tool_lifecycle(
+            result = self._observe_sync_tool_lifecycle(
                 request=request,
                 identity=identity,
                 execute=execute,
             )
+        return self._apply_tool_result_hooks(request, result)
 
     async def awrap_tool_call(
         self,
@@ -505,6 +610,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
         a thing this seam has to reason about.
         """
 
+        verdict, request = self._apply_tool_call_hooks(request)
+        if verdict.vetoed:
+            return self._hook_veto_message(request, verdict)
         identity = self._call_identity(request)
         with RuntimeCallContext.bind(identity):
 
@@ -516,11 +624,160 @@ class RuntimeControlMiddleware(AgentMiddleware):
                     return await handler(request)
                 return await self._aexecute(request=request, handler=handler)
 
-            return await self._observe_async_tool_lifecycle(
+            result = await self._observe_async_tool_lifecycle(
                 request=request,
                 identity=identity,
                 execute=execute,
             )
+        return self._apply_tool_result_hooks(request, result)
+
+    @classmethod
+    def _apply_tool_call_hooks(
+        cls,
+        request: ToolCallRequest,
+    ) -> tuple[ToolCallVerdict, ToolCallRequest]:
+        """Run ``tool.execute.before`` and fold its verdict into the request.
+
+        A veto short-circuits before identity binding, budget admission, and
+        dispatch, so a refused call costs the run nothing. An argument rewrite
+        is applied through ``ToolCallRequest.override`` and then flows through
+        every INNER middleware — this seam is the outermost ``wrap_tool_call``
+        wrapper — so the host-path screen and the Deep Agents permission layer
+        still see, and can still refuse, whatever a hook wrote.
+
+        Known and deliberate: a vetoed call opens no
+        :class:`RuntimeToolLifecycleReducer` entry, because it has no execution
+        to have a lifecycle. The refusal is still observable twice over — the
+        model gets an error ``ToolMessage``, and the veto itself is a
+        ``modified`` record on the run's hook ledger — but a reader of the tool
+        ledger alone will not see that the call was attempted. Opening a
+        lifecycle entry only to settle it as refused would also make the
+        reconciliation paths carry a case that never has an in-flight call.
+        """
+
+        if not HookDispatch.enabled(HookPhase.TOOL_EXECUTE_BEFORE):
+            return (ToolCallVerdict(), request)
+        facts = cls._hook_call_facts(request)
+        if facts is None:
+            return (ToolCallVerdict(), request)
+        tool_name, tool_call_id, arguments = facts
+        verdict = HookDispatch.tool_execute_before(
+            ToolExecuteBeforeInput(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                execution_scope=cls._execution_scope(request),
+                arguments=arguments,
+            )
+        )
+        if verdict.vetoed or verdict.arguments is None:
+            return (verdict, request)
+        return (
+            verdict,
+            request.override(
+                tool_call={**request.tool_call, "args": dict(verdict.arguments)}
+            ),
+        )
+
+    @classmethod
+    def _apply_tool_result_hooks(
+        cls,
+        request: ToolCallRequest,
+        result: ToolHandlerResult,
+    ) -> ToolHandlerResult:
+        """Run ``tool.execute.after`` on the text about to reach the model.
+
+        Deliberately placed AFTER lifecycle settlement: the recorded outcome
+        (success / error / interrupt / command) is computed from what the tool
+        actually returned, so rewriting the text cannot rewrite the run's
+        record of what happened.
+        """
+
+        if not HookDispatch.enabled(HookPhase.TOOL_EXECUTE_AFTER):
+            return result
+        facts = cls._hook_call_facts(request)
+        if facts is None:
+            return result
+        tool_name, tool_call_id, arguments = facts
+        rewritten = HookDispatch.tool_execute_after(
+            ToolExecuteAfterInput(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                execution_scope=cls._execution_scope(request),
+                arguments=arguments,
+                result_text=cls._model_visible_text(result, tool_call_id=tool_call_id),
+                succeeded=_succeeded(result),
+            )
+        )
+        if rewritten is None:
+            return result
+        return _map_tool_messages(
+            result,
+            lambda message: (
+                message
+                if message.tool_call_id != tool_call_id
+                else message.model_copy(update={"content": rewritten})
+            ),
+        )
+
+    @staticmethod
+    def _model_visible_text(
+        result: ToolHandlerResult,
+        *,
+        tool_call_id: str,
+    ) -> str | None:
+        """Return this call's model-visible text, or ``None`` if structured."""
+
+        for message in _tool_messages(result):
+            if message.tool_call_id != tool_call_id:
+                continue
+            return message.content if isinstance(message.content, str) else None
+        return None
+
+    @staticmethod
+    def _hook_veto_message(
+        request: ToolCallRequest,
+        verdict: ToolCallVerdict,
+    ) -> ToolMessage:
+        """Surface a hook veto the way every other refusal is surfaced.
+
+        An error ``ToolMessage`` rather than a raise: the run continues and the
+        model can adapt, exactly as it does for a budget rejection or a
+        policy-blocked tool.
+        """
+
+        return ToolMessage(
+            content=(
+                verdict.veto_reason or "This tool call was blocked by a runtime hook."
+            ),
+            tool_call_id=str(request.tool_call.get("id", "")),
+            name=str(request.tool_call.get("name", "")) or None,
+            status="error",
+        )
+
+    @staticmethod
+    def _hook_call_facts(
+        request: ToolCallRequest,
+    ) -> tuple[str, str, dict[str, Any]] | None:
+        """Return ``(tool_name, tool_call_id, arguments)`` or ``None``.
+
+        ``None`` when either identifier is missing: that is a malformed call the
+        existing seam already fails on, and hooks must not observe or influence
+        the shape of that failure. The arguments are a COPY, so a handler that
+        mutates what it was handed changes nothing — only an explicit
+        ``REWRITE_ARGUMENTS`` outcome takes effect.
+        """
+
+        tool_call_id = str(request.tool_call.get("id", "")).strip()
+        tool_name = str(request.tool_call.get("name", "")).strip()
+        if not tool_call_id or not tool_name:
+            return None
+        raw_arguments = request.tool_call.get("args", {})
+        arguments = (
+            dict(raw_arguments)
+            if isinstance(raw_arguments, Mapping)
+            else {"input": raw_arguments}
+        )
+        return (tool_name, tool_call_id, arguments)
 
     def _observe_sync_tool_lifecycle(
         self,
@@ -1058,56 +1315,54 @@ def _admit_result(
             return message
         return message.model_copy(update={"content": content})
 
+    return _map_tool_messages(result, admit)
+
+
+def _map_tool_messages(
+    result: ToolHandlerResult,
+    transform: Callable[[ToolMessage], ToolMessage],
+) -> ToolHandlerResult:
+    """Rebuild ``result`` with ``transform`` applied to every ``ToolMessage``.
+
+    The single traversal for every model-visible rewrite this seam performs —
+    budget-driven result admission and the ``tool.execute.after`` hook both go
+    through it, so a ``Command`` payload is unwrapped identically for both.
+    """
+
     if isinstance(result, list):
-        admitted_items = [
-            _admit_result(
-                item,
-                guard=guard,
-                tool_name=tool_name,
-                call_id=call_id,
-                tool_call_id=tool_call_id,
-            )
-            for item in result
-        ]
-        if all(
-            admitted is original
-            for admitted, original in zip(admitted_items, result, strict=True)
-        ):
+        mapped_items = [_map_tool_messages(item, transform) for item in result]
+        # Identity preservation is deliberate: a result the transform did not
+        # touch must come back as the SAME object, so the paths that were
+        # previously untouched stay reference-for-reference.
+        if all(new is old for new, old in zip(mapped_items, result, strict=True)):
             return result
-        return admitted_items
+        return mapped_items
     if isinstance(result, ToolMessage):
-        return admit(result)
+        return transform(result)
     update = result.update
     if not isinstance(update, Mapping) or "messages" not in update:
         return result
     messages = update["messages"]
     if isinstance(messages, ToolMessage):
-        admitted_messages: ToolMessage | list[object] = admit(messages)
-        unchanged = admitted_messages is messages
+        mapped: ToolMessage | list[object] = transform(messages)
+        unchanged = mapped is messages
     elif isinstance(messages, Sequence) and not isinstance(
         messages,
         (str, bytes, bytearray),
     ):
-        admitted_list = [
-            admit(message) if isinstance(message, ToolMessage) else message
+        mapped_list = [
+            transform(message) if isinstance(message, ToolMessage) else message
             for message in messages
         ]
-        admitted_messages = admitted_list
+        mapped = mapped_list
         unchanged = all(
-            admitted is original
-            for admitted, original in zip(admitted_list, messages, strict=True)
+            new is old for new, old in zip(mapped_list, messages, strict=True)
         )
     else:
         return result
     if unchanged:
         return result
-    return replace(
-        result,
-        update={
-            **update,
-            "messages": admitted_messages,
-        },
-    )
+    return replace(result, update={**update, "messages": mapped})
 
 
 def _tool_messages(result: ToolHandlerResult) -> tuple[ToolMessage, ...]:

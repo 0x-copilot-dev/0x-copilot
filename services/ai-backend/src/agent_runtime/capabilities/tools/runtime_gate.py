@@ -19,6 +19,8 @@ from agent_runtime.capabilities.tools.permissions import (
     ToolUsePolicySnapshot,
     kind_for_side_effects,
 )
+from agent_runtime.hooks.contracts import HookPhase, PolicyDecideAfterInput
+from agent_runtime.hooks.dispatch import HookDispatch
 
 
 class ToolGateAction(StrEnum):
@@ -104,6 +106,7 @@ class ToolUsePolicyGate:
         return cls.decide_for_side_effects(
             snapshot=snapshot,
             side_effects=spec.side_effects,
+            tool_name=spec.name,
         )
 
     @classmethod
@@ -112,6 +115,7 @@ class ToolUsePolicyGate:
         *,
         snapshot: ToolUsePolicySnapshot,
         side_effects: frozenset[ToolSideEffect],
+        tool_name: str | None = None,
     ) -> ToolGateDecision:
         """Run the policy lookup + branch from a raw side-effect set.
 
@@ -125,10 +129,37 @@ class ToolUsePolicyGate:
         kind = kind_for_side_effects(side_effects)
         mode = snapshot.mode_for_kind(kind)
         if mode is ToolUsePolicyMode.BLOCK:
-            return ToolGateDecision.reject(kind=kind)
-        if mode in {ToolUsePolicyMode.ASK, ToolUsePolicyMode.REQUIRE}:
-            return ToolGateDecision.require_approval(kind=kind, mode=mode)
-        return ToolGateDecision.allow()
+            decision = ToolGateDecision.reject(kind=kind)
+        elif mode in {ToolUsePolicyMode.ASK, ToolUsePolicyMode.REQUIRE}:
+            decision = ToolGateDecision.require_approval(kind=kind, mode=mode)
+        else:
+            decision = ToolGateDecision.allow()
+        cls._observe(decision, tool_name=tool_name)
+        return decision
+
+    @staticmethod
+    def _observe(decision: ToolGateDecision, *, tool_name: str | None) -> None:
+        """Publish the decision to ``policy.decide.after``. Observe only.
+
+        ``HookDispatch.observe`` returns ``None``, and ``decision`` is already
+        built when this runs — there is no expression here, and none can be
+        added without changing this method's signature, that lets a handler
+        turn a REJECT into an ALLOW or drop an approval requirement.
+        """
+
+        HookDispatch.observe(
+            HookPhase.POLICY_DECIDE_AFTER,
+            PolicyDecideAfterInput(
+                tool_name=(tool_name or "").strip() or "unnamed",
+                action=decision.action.value,
+                policy_kind=(
+                    decision.policy_fired.value
+                    if decision.policy_fired is not None
+                    else None
+                ),
+                mode=decision.mode.value if decision.mode is not None else None,
+            ),
+        )
 
 
 __all__ = [
