@@ -17,6 +17,7 @@ from runtime_api.schemas import (
     RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
+    RuntimeSteerCommand,
 )
 
 
@@ -60,6 +61,9 @@ class ArtifactAwareRuntimeQueue:
 
     async def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
         await self._queue.enqueue_cancel(command)
+
+    async def enqueue_steer(self, command: RuntimeSteerCommand) -> None:
+        await self._queue.enqueue_steer(command)
 
     async def enqueue_approval_resolved(
         self, command: RuntimeApprovalResolvedCommand
