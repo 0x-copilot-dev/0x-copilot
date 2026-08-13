@@ -126,5 +126,39 @@ class FileStoreWorkerWiring:
 
         return FileLargeToolResultBackend(store.object_store)
 
+    def host_write_journal(
+        self, *, org_id: str, conversation_id: str, run_id: str
+    ) -> object | None:
+        """Return this run's agent-write undo journal, or ``None`` elsewhere.
+
+        Gated on the same duck-typed file store as everything else here, and for
+        a stronger reason than convention: the journal's whole job is to hold
+        the pre-image BYTES, and the object store that can hold them exists only
+        on this backend. A journal without one would record that a file changed
+        and be unable to put it back — a list of regrets rather than an undo.
+
+        Bound to the run here so the floor only ever hands it a path: the floor
+        is composed once per harness and has no run identity of its own, and
+        threading the identity through the backend composition instead would put
+        it on every non-desktop image for nothing.
+        """
+
+        store = self.file_store()
+        if store is None:
+            return None
+        from agent_runtime.capabilities.desktop.write_journal import (  # noqa: PLC0415
+            HostWriteJournal,
+        )
+        from runtime_adapters.file import (  # noqa: PLC0415
+            FileHostWriteJournalStore,
+        )
+
+        return HostWriteJournal(
+            FileHostWriteJournalStore(store.layout, store.object_store),
+            org_id=org_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+        )
+
 
 __all__ = ("FileStoreWorkerWiring",)

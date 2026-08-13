@@ -312,6 +312,12 @@ async def _assemble_harness(
         granted_host_roots=granted_host_roots,
         agent_scratch=agent_scratch,
         memory_routes=_file_memory_routes(memory_backend),
+        # The run's undo journal. Threaded exactly like the roots and the
+        # scratch — resolved ONCE by the worker and carried, never re-derived —
+        # because a journal built from a different set of facts than the floor
+        # is a journal that can record a write the floor refused, or miss one it
+        # admitted.
+        host_write_journal=runtime_dependencies.host_write_journal,
     )
     # The MCP filesystem catalog. One store, written by ``load_mcp_server`` and
     # read by the ``/mcp/`` route — the two are composed together for this run,
@@ -2187,6 +2193,7 @@ def _composed_deep_backend(
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
     memory_routes: Mapping[str, object] | None = None,
+    host_write_journal: object | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
@@ -2259,6 +2266,7 @@ def _composed_deep_backend(
             workspace_backend,
             granted_host_roots=granted_host_roots,
             agent_scratch=agent_scratch,
+            host_write_journal=host_write_journal,
         ),
         routes=routes,
     )
@@ -2269,6 +2277,7 @@ def _host_default_backend(
     *,
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
+    host_write_journal: object | None = None,
 ) -> object:
     """The backend for every path no route claims — including host paths.
 
@@ -2370,6 +2379,14 @@ def _host_default_backend(
         # 2 dead in the packaged app, silently, while a checkout outside a
         # dotted directory worked fine and hid it.
         assets=builtin_asset_roots(),
+        # Undo. The floor is the only object that sees every admitted host
+        # write AND knows which grant admitted it, so it is the only place a
+        # pre-image can be captured with the authority that let the write
+        # happen. Capture bolted on anywhere else would either miss the paths
+        # only this class decides (every dotted segment) or record writes that
+        # never landed. ``None`` off the desktop file store: no object store, no
+        # bytes to keep, and the floor then behaves exactly as before.
+        journal=host_write_journal,  # type: ignore[arg-type]
     )
 
 

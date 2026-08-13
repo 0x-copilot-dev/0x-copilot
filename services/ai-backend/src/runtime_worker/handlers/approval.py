@@ -970,6 +970,16 @@ class RuntimeApprovalHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
+        # The resume half of the undo journal. Omitting it here would leave the
+        # single write a human explicitly approved as the one write in the whole
+        # system with no pre-image — see the note on the run path.
+        host_write_journal = self._file_store_wiring.host_write_journal(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+        )
+        if host_write_journal is not None:
+            update["host_write_journal"] = host_write_journal
         drafts_backend = self._drafts_backend(run)
         if drafts_backend is not None:
             update["drafts_backend"] = drafts_backend

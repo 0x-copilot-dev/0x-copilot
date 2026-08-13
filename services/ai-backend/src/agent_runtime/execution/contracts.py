@@ -674,6 +674,14 @@ class RuntimeDependencies(RuntimeContract):
     # every existing composition is unchanged; ``()`` means "resolved: nothing is
     # attached". ``None`` everywhere off the desktop path.
     granted_host_roots: tuple[object, ...] | None = None
+    # Optional per-run undo journal for agent writes to the user's real disk (a
+    # ``HostWriteJournal``). Built per run by the worker on the desktop file
+    # store only; the factory hands it to ``HostFilesystemFloor``, which
+    # captures the pre-image of every host write it ADMITS. ``None`` everywhere
+    # else — and ``None`` means the run simply keeps no undo history, which is
+    # the previous behaviour and the correct degradation on a store with no
+    # object store to hold the bytes.
+    host_write_journal: object | None = None
     # Optional gated ``run_code_mode`` tool (AC6 Monty code mode). Built per run
     # by the worker only when ``RUNTIME_ENABLE_MONTY`` + ``single_user_desktop``
     # hold and the file object store is present; the factory appends it to the

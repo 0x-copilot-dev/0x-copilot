@@ -80,6 +80,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from deepagents.backends.protocol import (
     PERMISSION_DENIED,
+    DeleteResult,
     EditResult,
     FileDownloadResponse,
     ReadResult,
@@ -87,10 +88,12 @@ from deepagents.backends.protocol import (
 )
 
 from agent_runtime.capabilities.desktop.host_path import HostPathClassifier
+from agent_runtime.capabilities.desktop.write_journal import path_within
 
 if TYPE_CHECKING:
     from agent_runtime.capabilities.desktop.agent_scratch import AgentScratchRoot
     from agent_runtime.capabilities.desktop.host_filesystem import GrantedRoot
+    from agent_runtime.capabilities.desktop.write_journal import HostWriteJournal
 
 
 class HostFloorMessages:
@@ -132,16 +135,24 @@ class HostFilesystemFloor:
         roots: tuple[GrantedRoot, ...] = (),
         scratch: AgentScratchRoot | None = None,
         assets: tuple[str, ...] = (),
+        journal: HostWriteJournal | None = None,
     ) -> None:
         """Guard ``backend`` for the host paths ``roots`` does not cover.
 
         ``assets`` are READ-ONLY locations shipped inside the runtime's own
         installation — see :func:`builtin_asset_roots`.
+
+        ``journal`` captures the pre-image of every write this floor admits, so
+        the user can undo it (see
+        :mod:`~agent_runtime.capabilities.desktop.write_journal`). ``None``
+        means the run keeps no undo history — the previous behaviour, and the
+        correct degradation on every non-file store.
         """
         self._backend = backend
         self._roots = roots
         self._scratch_path = None if scratch is None else scratch.posix
         self._assets = assets
+        self._journal = journal
 
     @property
     def backend(self) -> object:
@@ -162,6 +173,11 @@ class HostFilesystemFloor:
     def assets(self) -> tuple[str, ...]:
         """Read-only roots shipped inside the runtime's own installation."""
         return self._assets
+
+    @property
+    def journal(self) -> HostWriteJournal | None:
+        """The undo journal capturing this run's writes, if it has one."""
+        return self._journal
 
     def __getattr__(self, name: str) -> Any:
         """Delegate every op this floor does not guard (see the module header)."""
@@ -236,13 +252,39 @@ class HostFilesystemFloor:
         the question when the folder is attached.
         """
 
+        return not self._is_host(path) or self.writable_root_for(path) is not None
+
+    def writable_root_for(self, path: str | None) -> str | None:
+        """WHICH root admits a host write of ``path`` — the undo journal's key.
+
+        :meth:`permits_write` answers the security question; this answers the
+        accountability one, and they are the same computation so they cannot
+        disagree. The returned root is stored on every capture record and
+        re-checked at revert time, which is what stops a revert from becoming a
+        way to write outside the granted set.
+        """
+
         if not self._is_host(path):
-            return True
-        if self._within_scratch(path):
-            return True
-        return any(
-            root.writable and self._within(path, root.path) for root in self._roots
-        )
+            return None
+        if self._scratch_path is not None and self._within(path, self._scratch_path):
+            return self._scratch_path
+        for root in self._roots:
+            if root.writable and self._within(path, root.path):
+                return root.path
+        return None
+
+    def _capture(self, path: str, *, deleting: bool = False) -> None:
+        """Journal what is at ``path`` before an ADMITTED mutation lands.
+
+        Called only after ``permits_write`` has passed, so the journal can never
+        hold a path the floor refused.
+        """
+
+        if self._journal is None:
+            return
+        root = self.writable_root_for(path)
+        if root is not None:
+            self._journal.capture(path, root, deleting=deleting)
 
     def _within_scratch(self, path: str | None) -> bool:
         """True when ``path`` is the scratch root or lies beneath it."""
@@ -264,15 +306,15 @@ class HostFilesystemFloor:
         ``/a/Projects``. A traversal segment is never admitted at all: a
         lexical parent-walk cannot be trusted through a symlink, and deepagents'
         ``validate_path`` already rejects ``..`` before any op reaches a backend.
+
+        The predicate itself lives in
+        :func:`~agent_runtime.capabilities.desktop.write_journal.path_within`
+        because a revert must decide containment EXACTLY as the floor did. Two
+        spellings of one rule is how a restore ends up writing somewhere this
+        object would have refused.
         """
 
-        if not path or not path.startswith("/") or not root.startswith("/"):
-            return False
-        parts = PurePosixPath(path).parts
-        if ".." in parts:
-            return False
-        root_parts = PurePosixPath(root).parts
-        return parts[: len(root_parts)] == root_parts
+        return path_within(path, root)
 
     # --- read ---------------------------------------------------------------
 
@@ -337,12 +379,14 @@ class HostFilesystemFloor:
         """Write ``file_path`` unless the floor refuses it."""
         if not self.permits_write(file_path):
             return WriteResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path)
         return self._backend.write(file_path, content)  # type: ignore[attr-defined]
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
         """Write ``file_path`` unless the floor refuses it."""
         if not self.permits_write(file_path):
             return WriteResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path)
         return await self._backend.awrite(file_path, content)  # type: ignore[attr-defined]
 
     def edit(
@@ -355,6 +399,7 @@ class HostFilesystemFloor:
         """Edit ``file_path`` unless the floor refuses it."""
         if not self.permits_write(file_path):
             return EditResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path)
         return self._backend.edit(  # type: ignore[attr-defined]
             file_path, old_string, new_string, replace_all
         )
@@ -369,9 +414,35 @@ class HostFilesystemFloor:
         """Edit ``file_path`` unless the floor refuses it."""
         if not self.permits_write(file_path):
             return EditResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path)
         return await self._backend.aedit(  # type: ignore[attr-defined]
             file_path, old_string, new_string, replace_all
         )
+
+    # --- deletion -----------------------------------------------------------
+    #
+    # `delete` was NOT guarded here, and that was a hole rather than an
+    # omission by design. deepagents classifies its `delete` tool as the
+    # ``write`` operation (`_DEFAULT_FS_TOOL_OPS`), so the rule set governs it —
+    # but the rule set is exactly what cannot see a dotted segment, which is the
+    # entire reason this class exists. `__getattr__` therefore delegated
+    # `delete("/Users/ada/.ssh/id_rsa")` straight to the real filesystem. The
+    # same two verdicts the writes get now apply, and the pre-image is captured
+    # so a removal is undoable rather than terminal.
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Delete ``file_path`` unless the floor refuses it."""
+        if not self.permits_write(file_path):
+            return DeleteResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path, deleting=True)
+        return self._backend.delete(file_path)  # type: ignore[attr-defined]
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        """Delete ``file_path`` unless the floor refuses it."""
+        if not self.permits_write(file_path):
+            return DeleteResult(error=HostFloorMessages.HOST_WRITE)
+        self._capture(file_path, deleting=True)
+        return await self._backend.adelete(file_path)  # type: ignore[attr-defined]
 
 
 def builtin_skills_root() -> Path:
