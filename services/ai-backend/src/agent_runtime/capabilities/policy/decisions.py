@@ -142,17 +142,14 @@ class RunDecisionLedger:
 
         ``ONCE`` persists nothing — it is what a plain approve has always done.
         ``ALWAYS`` appends an ALLOW rule per subject of the replied ask, then
-        reports every other pending ask whose subjects the merged ruleset now
-        answers with ALLOW. An ask is only reported when EVERY one of its
-        subjects allows: a rule that covers the tool but not the path it was
-        handed has not answered that question.
+        reports every other pending ask the merged ruleset now answers with
+        ALLOW.
+
+        An unknown ``request_id`` degrades to ``ONCE``: there is no ask to derive
+        a rule from, and an id nobody parked must not be able to widen anything.
         """
 
         ask = self._pending.pop(request_id, None)
-        if scope is not DecisionScope.ONCE and ask is None:
-            # Nothing to derive a rule from — an unknown id must not widen
-            # anything, so it degrades to the narrow scope.
-            return ReplyOutcome(scope=DecisionScope.ONCE)
         if ask is None or scope is DecisionScope.ONCE:
             return ReplyOutcome(scope=DecisionScope.ONCE)
 
@@ -168,13 +165,19 @@ class RunDecisionLedger:
         return ReplyOutcome(scope=DecisionScope.ALWAYS, resolved=tuple(resolved))
 
     def _is_allowed(self, ask: PendingAsk) -> bool:
-        """True when the session ruleset now allows EVERY subject of ``ask``."""
+        """True when the session ruleset now answers ``ask`` with ALLOW.
 
-        return all(
-            (rule := self._rules.evaluate(ask.permission, subject)) is not None
-            and rule.action is RuleAction.ALLOW
-            for subject in ask.subjects
-        )
+        Deliberately the SAME fold the PDP applies —
+        :meth:`PermissionRuleset.verdict` over the whole subject tuple — and not
+        a stricter "every subject must match" rescan. The ledger's only job is to
+        report what the new rule covers, and "covered" has exactly one definition:
+        what :meth:`PdpPolicyService._posture_decision` will conclude when that
+        parked call re-enters it on replay. A second, stricter predicate here
+        would leave asks sitting in ``_pending`` that are in fact about to
+        dispatch — bookkeeping that disagrees with the decision it describes.
+        """
+
+        return self._rules.verdict(ask.permission, ask.subjects) is RuleAction.ALLOW
 
 
 class RunDecisionLedgers:
@@ -202,12 +205,6 @@ class RunDecisionLedgers:
         ledger = RunDecisionLedger()
         cls._BY_RUN[run_id] = ledger
         return ledger
-
-    @classmethod
-    def discard(cls, run_id: str) -> None:
-        """Drop a run's ledger. Safe to call for a run that never had one."""
-
-        cls._BY_RUN.pop(run_id, None)
 
     @classmethod
     def reset(cls) -> None:

@@ -170,10 +170,6 @@ class PermissionRuleset(PolicyContract):
         PERMISSION_RULES = "permission_rules"
         NEVER = "never"
 
-    @property
-    def is_empty(self) -> bool:
-        return not self.rules
-
     def evaluate(self, permission: str, subject: str) -> PermissionRule | None:
         """The LAST rule matching ``(permission, subject)``, or ``None``.
 
