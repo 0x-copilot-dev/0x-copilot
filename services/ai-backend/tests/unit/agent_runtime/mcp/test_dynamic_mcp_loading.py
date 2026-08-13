@@ -182,11 +182,22 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
                 description=" ",
             )
 
+        # A schema that is not an object at all cannot be repaired into one.
         with pytest.raises(ValidationError):
             self.make_tool(
                 name=self.TestValues.Names.DRIVE_SEARCH,
                 input_schema=self.malformed_schema(),
             )
+
+        # ...but a *typeless* schema is repaired, not rejected. This assertion
+        # replaces one that required the opposite: the old suite treated a
+        # missing top-level ``type`` as malformed and dropped the tool, which
+        # is the bug -- real connectors ship this shape constantly.
+        repaired = self.make_tool(
+            name=self.TestValues.Names.DRIVE_SEARCH,
+            input_schema=self.typeless_schema(),
+        )
+        assert repaired.input_schema[Keys.Schema.TYPE] == Values.SchemaType.OBJECT
 
         with pytest.raises(ValidationError):
             self.make_resource(uri=self.TestValues.Uris.FILE)
@@ -448,6 +459,56 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         assert collision_result.error.code == McpLoadErrorCode.LOCAL_TOOL_COLLISION
         assert budget_result.error is not None
         assert budget_result.error.code == McpLoadErrorCode.LOAD_BUDGET_EXCEEDED
+
+    def test_loader_repairs_typeless_schema_instead_of_dropping_the_server(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        """A tool that omits ``type`` must survive the load, whole connector intact.
+
+        This is the regression the repair exists for. ``parse_tools`` converts
+        any ``ValidationError`` into ``MALFORMED_DESCRIPTOR`` for the *entire
+        server*, so before the repair this single payload deleted the connector
+        from the model's surface -- and because the raise happened inside a
+        Pydantic field validator, the user saw no error at all, just an agent
+        claiming it could not do the thing.
+        """
+
+        client = self.FakeMcpClient(
+            tools=(self.typeless_tool_payload(),),
+            resources=(),
+        )
+        loader = self.make_loader(client)
+
+        result = asyncio.run(self.load_default(loader, runtime_context_admin))
+
+        # Registers: the connector survives and the tool reaches the surface.
+        assert result.error is None
+        assert result.loaded_server is not None
+        (tool,) = result.loaded_server.tools
+        assert tool.name == self.TestValues.Names.DRIVE_SEARCH
+
+        # ...with every vendor defect repaired rather than dropped.
+        schema = tool.input_schema
+        assert schema[Keys.Schema.TYPE] == Values.SchemaType.OBJECT
+        assert "$defs" in schema and "definitions" not in schema
+        assert schema[Keys.Schema.PROPERTIES]["fields"]["$ref"] == "#/$defs/IssueFields"
+        assert schema[Keys.Schema.PROPERTIES]["assignee"][Keys.Schema.TYPE] == [
+            Values.SchemaType.STRING,
+            "null",
+        ]
+        assert schema[Keys.Schema.REQUIRED] == ["project", "summary"]
+
+        # Dispatches: the repaired tool is invocable through the same client
+        # the registry resolves for a real call.
+        dispatched = asyncio.run(
+            client.call_tool(
+                tool_name=tool.name,
+                arguments={"project": "ENG", "summary": "Broken schema"},
+            )
+        )
+
+        assert "ENG" in dispatched["content"][0]["text"]
 
     def test_loader_rejects_display_name_requests(
         self,

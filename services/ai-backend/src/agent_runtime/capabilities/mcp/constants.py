@@ -176,6 +176,9 @@ class Values:
     class SchemaType:
         """JSON schema ``type`` string values used in MCP descriptors."""
 
+        ARRAY = "array"
+        NULL = "null"
+        NUMBER = "number"
         OBJECT = "object"
         STRING = "string"
 
@@ -263,6 +266,12 @@ class Limits:
     DESCRIPTOR_DESCRIPTION_MAX_LENGTH = 4_000
     LOAD_COST_MAX = 100_000
     MCP_SCHEMA_MAX_BYTES = 16_384
+    # Ceiling applied to a *nested* schema ``description`` by the last
+    # degradation stage in ``McpSchemaRepair`` — and only once a schema has
+    # already blown past ``MCP_SCHEMA_MAX_BYTES`` with ``examples`` and
+    # ``default`` already shed. Sized to keep one full sentence of intent per
+    # field, which is what the model needs to fill the argument in.
+    SCHEMA_DESCRIPTION_MAX_LENGTH = 240
     METADATA_LATENCY_MAX_MS = 600_000
     RESOURCE_NAME_MAX_LENGTH = 120
     MIME_TYPE_MAX_LENGTH = 200
@@ -473,7 +482,7 @@ class Messages:
 
         @classmethod
         def schema_type_required(cls, field_name: str) -> str:
-            """Return a validation message when a schema is missing a type key."""
+            """TEMPORARY probe shim: restored only to run the unpatched baseline."""
             return f"{field_name} must include a JSON schema type"
 
         @classmethod
