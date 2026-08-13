@@ -8,6 +8,19 @@ import re
 class Keys:
     """Stable string keys used by the skills middleware package."""
 
+    class Conditions:
+        """Frontmatter metadata keys declaring when a Skill is worth offering.
+
+        A Skill author writes these as ordinary top-level scalars in SKILL.md
+        frontmatter; :class:`SkillManifestParser` folds unknown scalars into
+        ``metadata``, which is what reaches the runtime on the card.
+        """
+
+        FALLBACK_FOR_CONNECTORS = "fallback_for_connectors"
+        FALLBACK_FOR_TOOLS = "fallback_for_tools"
+        REQUIRES_CONNECTORS = "requires_connectors"
+        REQUIRES_TOOLS = "requires_tools"
+
     class Characters:
         """Single-character string constants used in frontmatter parsing."""
 
@@ -36,6 +49,8 @@ class Keys:
     class Fields:
         """Field name constants for skill manifests and source configs."""
 
+        CONNECTOR_SLUG = "connector_slug"
+        DISPLAY_NAME = "display_name"
         ALLOWED_SOURCES = "allowed_sources"
         ALLOWED_TOOLS = "allowed_tools"
         COMPATIBILITY = "compatibility"
@@ -100,6 +115,18 @@ class Limits:
     SKILL_FILE_MAX_BYTES = 10 * 1024 * 1024
     SOURCE_PRECEDENCE_MAX = 1_000_000
 
+    #: Hard ceiling on the always-loaded Skill index in the system prompt.
+    #: Modelled on ``McpCatalogHyperparameters.server_markdown_max_bytes``:
+    #: the index is a *tier*, not the library, and a tier that grows with the
+    #: library is the linear token tax this exists to remove. Skills past the
+    #: bound stay reachable through ``list_skills`` / ``load_skill``.
+    SKILL_INDEX_MAX_ENTRIES = 24
+    SKILL_INDEX_MAX_CHARS = 4_000
+    SKILL_INDEX_SUMMARY_MAX_CHARS = 160
+    #: Page size for the on-demand ``list_skills`` search.
+    SKILL_LIST_DEFAULT_LIMIT = 30
+    SKILL_LIST_MAX_LIMIT = 100
+
 
 class Patterns:
     """Compiled patterns for normalized skill identifiers and references."""
@@ -110,6 +137,21 @@ class Patterns:
 
 class Messages:
     """Centralized public and validation messages for skills middleware."""
+
+    class Index:
+        """Copy rendered into the bounded Skill index."""
+
+        ELLIPSIS = "…"
+
+        @classmethod
+        def deferred_footer(cls, deferred: int) -> str:
+            """Return the line that tells the model the index is truncated."""
+            noun = "Skill" if deferred == 1 else "Skills"
+            return (
+                f"({deferred} further {noun} match this run but are not listed "
+                "above. Call list_skills with a keyword to search them, then "
+                "load_skill to read one.)"
+            )
 
     class Errors:
         """Safe public error message strings for skills middleware."""

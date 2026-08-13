@@ -26,7 +26,16 @@ from agent_runtime.validation import ValueNormalizer
 
 
 class VirtualSkillCard(RuntimeContract):
-    """Compact Skill summary for listing and capability gating."""
+    """Compact Skill summary for listing and capability gating.
+
+    ``metadata`` is the Skill's own frontmatter metadata, forwarded by the
+    backend's ``/internal/v1/skills/cards`` projection. It is what carries a
+    Skill's conditional-visibility declaration
+    (:class:`~agent_runtime.capabilities.skills.visibility.SkillVisibilityConditions`)
+    to the prompt-assembly layer, so an author declares "only offer me when
+    Linear is connected" in SKILL.md and needs no second file and no API. The
+    default keeps a provider that sends no metadata working unchanged.
+    """
 
     skill_id: str
     name: str
@@ -38,6 +47,7 @@ class VirtualSkillCard(RuntimeContract):
     version: int
     allowed_tools: tuple[str, ...] = ()
     enabled: bool = True
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class VirtualSkillBundle(RuntimeContract):

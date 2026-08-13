@@ -149,5 +149,7 @@ MCP_SERVER_CARDS_INSTRUCTIONS = (
 SKILL_CARDS_INSTRUCTIONS = (
     "Available user-created Skills are compact cards backed by a virtual registry. "
     "When a Skill is relevant, call load_skill with the stable skill_name to read "
-    "its full Markdown instructions. Do not assume virtual paths are local files."
+    "its full Markdown instructions. Do not assume virtual paths are local files. "
+    "This list is a bounded index, not the whole library — when nothing below "
+    "fits but a Skill plausibly exists, call list_skills to search the rest."
 )

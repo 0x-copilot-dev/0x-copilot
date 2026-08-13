@@ -88,6 +88,13 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         "agent_runtime.capabilities.mcp:per_tool_mcp_tools",
         "agent_runtime.capabilities.sandbox:sandbox_execute_tool",
         "agent_runtime.capabilities.skills:30_skill_cards",
+        # Accepted rent, and the trade it buys: one schema block per model call
+        # in exchange for ``30_skill_cards`` above becoming a BOUNDED index.
+        # Before it, the Skill block grew one row per enabled Skill forever, so
+        # the resident cost of a library was linear in its size; with it the
+        # block is capped and the tail is reachable by search. The rent is
+        # constant, and it replaces a cost that was not.
+        "agent_runtime.capabilities.skills:ListSkillsTool",
         "agent_runtime.capabilities.skills:LoadSkillTool",
         "agent_runtime.capabilities.tools:AskAQuestionTool",
         "agent_runtime.capabilities.tools:LoadPriorToolResultTool",
@@ -119,7 +126,7 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
     append sites onto one entry would shrink the tuple rather than fail. The
     gate's duplicate check makes that a violation, and this asserts the
     resulting count directly: one entry per composition site in
-    ``_model_visible_tools``, which today is the registry seed plus thirteen
+    ``_model_visible_tools``, which today is the registry seed plus fourteen
     appends plus the P2-8 per-tool MCP extend. The ``call_mcp_tool`` umbrella
     and the per-tool surface are the arms of one branch — a run composes one or
     the other, never both — so the count is of declaring SITES, as it has
@@ -143,9 +150,11 @@ def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:
         if label.rsplit(":", 1)[0] in tool_owners
         and not label.rsplit(":", 1)[1][:1].isdigit()
     ]
-    # 14 since the umbrella `call_mcp_tool` was retired: it was one composed
-    # site, and the per-tool surface that replaced it is a single site too.
-    assert len(composed) == 14
+    # 15 since `list_skills` joined: the umbrella `call_mcp_tool` retirement
+    # left 14 (it was one composed site, and the per-tool surface that replaced
+    # it is a single site too), and progressive disclosure adds the search that
+    # makes the bounded Skill index a deferral rather than a deletion.
+    assert len(composed) == 15
 
 
 class PlantedSourceTreeMixin:

@@ -177,3 +177,11 @@ LOAD_SKILL_TOOL_DESCRIPTION = (
     "Load the full Markdown for an available Skill by stable skill_name. "
     "Use this only when a compact Skill card is relevant to the user request."
 )
+
+LIST_SKILLS_TOOL_DESCRIPTION = (
+    "Search every Skill available to this conversation by keyword, including "
+    "the ones not listed in the system prompt. Returns compact rows (name, "
+    "display name, one-line description) — call load_skill with a returned "
+    "name to read the full instructions. Use this when the listed Skills do "
+    "not cover the request but a Skill plausibly exists for it."
+)
