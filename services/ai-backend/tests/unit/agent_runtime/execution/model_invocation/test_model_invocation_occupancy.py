@@ -934,8 +934,14 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         assert response.result[0].content == "done"
 
     async def test_feature_off_paths_are_untouched(self) -> None:
-        # No F10 binding installed: the middleware must hand the exact request
-        # to the handler and measure nothing at all.
+        # No F10 binding installed: the middleware must measure nothing at all
+        # and must not alter the semantic request.
+        #
+        # It is no longer the *identical object*, because this path now carries
+        # the per-model-call retry policy and that policy has to know whether
+        # visible text already streamed before it may re-dispatch. The observer
+        # that answers this rides on the model. Occupancy — what this test is
+        # about — is still untouched: the exploding recorder is never called.
         request = self.request()
         seen: list[ModelRequest[Any]] = []
 
@@ -946,7 +952,11 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         recorder = ExplodingRecorder()
         await self.middleware(recorder).awrap_model_call(request, capturing)
 
-        assert seen == [request]
+        (dispatched,) = seen
+        assert dispatched.messages == request.messages
+        assert dispatched.system_message == request.system_message
+        assert dispatched.tools == request.tools
+        assert dispatched.state == request.state
         assert recorder.calls == []
 
     def test_the_default_recorder_is_shared_across_middleware_instances(self) -> None:

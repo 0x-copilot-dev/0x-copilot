@@ -58,6 +58,18 @@ class CheckedInDocumentMixin:
             "initial_backoff_seconds": 0.5,
             "max_backoff_seconds": 4.0,
         },
+        # Per-model-call pacing, owned by ``ModelCallRetryPolicy``. Unlike the
+        # rest of this document these are NOT "today's runtime values": there
+        # was no per-call policy before, only whatever the provider SDK did
+        # underneath. AC4 does not apply to a knob that had no prior value.
+        "model_retry": {
+            "max_attempts": 3,
+            "initial_backoff_seconds": 2.0,
+            "backoff_factor": 2.0,
+            "jitter_factor": 0.25,
+            "max_backoff_seconds": 30.0,
+            "provider_hint_max_seconds": 30.0,
+        },
         "execution": {
             "max_retries": 2,
             "max_parallel_runs": 4,
