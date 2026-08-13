@@ -257,24 +257,25 @@ class RuntimeEventProducer:
         after_tokens: int,
         strategy: str,
         trigger: str | None = None,
-        messages_before: int | None = None,
-        messages_after: int | None = None,
+        tool_name: str | None = None,
         summary: str | None = None,
         payload_refs: Mapping[str, object] | None = None,
         metadata: JsonObject | None = None,
     ) -> RuntimeEventEnvelope:
         """Emit a ``COMPRESSION_NOTE`` envelope for the transcript divider.
 
-        Called from :class:`~agent_runtime.context.memory.compaction.ContextCompactionRecorder`
-        when the summarization middleware folds older messages mid-run.
-        ``strategy`` mirrors ``ContextCompressionStrategy`` values
-        (``summarize``, ``offload``, etc.); ``trigger`` mirrors
-        ``Values.CompactionTrigger``. The ``payload_refs`` slot lets callers
-        attach offload/file refs without leaking content into the prompt path.
+        Called from the worker's tool-result stream pass
+        (``runtime_worker.stream_tools``) when
+        :class:`~agent_runtime.context.tool_result_admission.ToolResultAdmissionAdapter`
+        has bounded a result out of model context. ``strategy`` mirrors
+        ``ContextCompressionStrategy`` values (``summarize``, ``offload``,
+        etc.); ``trigger`` mirrors ``Values.CompactionTrigger``. The
+        ``payload_refs`` slot lets callers attach offload/file refs without
+        leaking content into the prompt path.
 
-        ``messages_folded`` is derived HERE rather than accepted, so the
-        difference the divider prints can never disagree with the two counts it
-        prints beside it.
+        ``tokens_saved`` is derived HERE rather than accepted, so the difference
+        the divider prints can never disagree with the two counts it prints
+        beside it.
         """
 
         if before_tokens < 0 or after_tokens < 0:
@@ -287,18 +288,13 @@ class RuntimeEventProducer:
         payload: JsonObject = {
             "before_tokens": int(before_tokens),
             "after_tokens": int(after_tokens),
+            "tokens_saved": int(before_tokens) - int(after_tokens),
             "strategy": clean_strategy,
         }
         if trigger is not None and trigger.strip():
             payload["trigger"] = trigger.strip()
-        if messages_before is not None and messages_after is not None:
-            if messages_before < 0 or messages_after < 0:
-                raise ValueError("message counts must be non-negative")
-            if messages_after > messages_before:
-                raise ValueError("messages_after must not exceed messages_before")
-            payload["messages_before"] = int(messages_before)
-            payload["messages_after"] = int(messages_after)
-            payload["messages_folded"] = int(messages_before) - int(messages_after)
+        if tool_name is not None and tool_name.strip():
+            payload["tool_name"] = tool_name.strip()
         if summary is not None and summary.strip():
             payload["summary"] = summary.strip()
         if payload_refs:
