@@ -12,9 +12,17 @@ Keeping the gate + builders here means the paths cannot drift again.
 Everything is **gated on the duck-typed file store**: the event store is the
 file adapter only when it exposes both an ``object_store`` and a ``layout``. On
 the web / postgres / in-memory images this returns ``None`` everywhere, so the
-offloader stays ``None`` (inline behavior, byte-identical) and no read routes are
-added. The file adapter (and its object-store / sqlite deps) is imported lazily
-so it never loads on those images.
+offloader stays ``None`` and no read routes are added. The file adapter (and its
+object-store / sqlite deps) is imported lazily so it never loads on those images.
+
+``None`` here means "cannot *offload*", not "need not bound". It used to mean
+both: an absent adapter left
+:meth:`~agent_runtime.capabilities.tool_budget_guard.ToolBudgetGuard.admit_tool_result`
+returning the raw result, so a multi-megabyte MCP read entered model context
+whole on every image except the desktop. Those backends now fall back to
+:class:`~agent_runtime.context.tool_result_admission.ToolResultCap`, which
+applies the same threshold without a store. Nothing in this gate changed --
+offloading still requires an object store to offload *to*.
 """
 
 from __future__ import annotations

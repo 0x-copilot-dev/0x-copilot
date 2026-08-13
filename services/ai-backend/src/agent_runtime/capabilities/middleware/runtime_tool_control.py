@@ -46,6 +46,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
+from agent_runtime.context.tool_result_admission import ToolResultCap
 from agent_runtime.control_plane.context import (
     RunControlContext,
     RuntimeToolControlOutcome,
@@ -753,7 +754,18 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> ToolHandlerResult:
         guard = ToolBudgetGuard.active()
         if guard is None:
-            return handler(request)
+            # No budgets and no offload target still leaves the result bound —
+            # see :func:`_admit_result`. The name is read straight off the call
+            # rather than through ``_request_facts``, which raises on a missing
+            # name: this path deliberately did no admission before, so it must
+            # not acquire a new way to fail a run that used to succeed.
+            return _admit_result(
+                handler(request),
+                guard=None,
+                tool_name=str(request.tool_call.get("name", "")),
+                call_id=None,
+                tool_call_id=str(request.tool_call["id"]),
+            )
         tool_name, arguments, estimated = _request_facts(request)
         try:
             intent = guard.admit_task_policy(
@@ -816,7 +828,14 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> ToolHandlerResult:
         guard = ToolBudgetGuard.active()
         if guard is None:
-            return await handler(request)
+            # See the synchronous path: the cap is not conditional on a guard.
+            return _admit_result(
+                await handler(request),
+                guard=None,
+                tool_name=str(request.tool_call.get("name", "")),
+                call_id=None,
+                tool_call_id=str(request.tool_call["id"]),
+            )
         tool_name, arguments, estimated = _request_facts(request)
         try:
             intent = await ToolBudgetGuard.aadmit_task_policy_for_async_dispatch(
@@ -952,23 +971,47 @@ def _succeeded(result: ToolHandlerResult) -> bool:
 def _admit_result(
     result: ToolHandlerResult,
     *,
-    guard: ToolBudgetGuard,
+    guard: ToolBudgetGuard | None,
     tool_name: str,
-    call_id: str,
+    call_id: str | None,
     tool_call_id: str,
 ) -> ToolHandlerResult:
+    """Bound the model-visible content of one tool call, guard or no guard.
+
+    ``guard`` is ``None`` on exactly one path: a run whose org configured no
+    tool budgets, whose store offers no offload target, and which therefore
+    builds no per-run guard at all. That path used to return the handler's
+    result untouched, which made every result bound elsewhere in this module
+    unreachable on the default web / postgres configuration. Routing it through
+    the same function keeps the model-admission boundary at one place; only
+    *what* bounds it differs, because a guard also carries the budget note and
+    the offload adapter.
+
+    Rewriting is conditional on something actually changing. Every branch below
+    returns the *identical* object when admission left the content alone, which
+    is what makes it safe to run this on the previously untouched no-guard path:
+    a result that needed no bound is passed through byte-for-byte and reference-
+    for-reference, so nothing downstream can tell this function ran.
+    """
+
     def admit(message: ToolMessage) -> ToolMessage:
         if message.tool_call_id != tool_call_id:
             return message
-        content = guard.admit_model_visible_result(
-            message.content,
-            tool_name=tool_name,
-            call_id=call_id,
+        content = (
+            ToolResultCap.apply(message.content)
+            if guard is None
+            else guard.admit_model_visible_result(
+                message.content,
+                tool_name=tool_name,
+                call_id=call_id or "",
+            )
         )
+        if content is message.content:
+            return message
         return message.model_copy(update={"content": content})
 
     if isinstance(result, list):
-        return [
+        admitted_items = [
             _admit_result(
                 item,
                 guard=guard,
@@ -978,6 +1021,12 @@ def _admit_result(
             )
             for item in result
         ]
+        if all(
+            admitted is original
+            for admitted, original in zip(admitted_items, result, strict=True)
+        ):
+            return result
+        return admitted_items
     if isinstance(result, ToolMessage):
         return admit(result)
     update = result.update
@@ -986,15 +1035,23 @@ def _admit_result(
     messages = update["messages"]
     if isinstance(messages, ToolMessage):
         admitted_messages: ToolMessage | list[object] = admit(messages)
+        unchanged = admitted_messages is messages
     elif isinstance(messages, Sequence) and not isinstance(
         messages,
         (str, bytes, bytearray),
     ):
-        admitted_messages = [
+        admitted_list = [
             admit(message) if isinstance(message, ToolMessage) else message
             for message in messages
         ]
+        admitted_messages = admitted_list
+        unchanged = all(
+            admitted is original
+            for admitted, original in zip(admitted_list, messages, strict=True)
+        )
     else:
+        return result
+    if unchanged:
         return result
     return replace(
         result,
