@@ -482,7 +482,7 @@ class Messages:
 
         @classmethod
         def schema_type_required(cls, field_name: str) -> str:
-            """TEMPORARY probe shim: restored only to run the unpatched baseline."""
+            """Return a validation message when a schema is missing a type key."""
             return f"{field_name} must include a JSON schema type"
 
         @classmethod
