@@ -1099,7 +1099,26 @@ class RuntimeWorker:
         error: AgentRuntimeError,
         retry_permitted: bool = True,
     ) -> None:
-        """Mark the claim as failed; routes to retry or dead-letter based on the error and attempt count."""
+        """Mark the claim as failed; routes to retry or dead-letter based on the error and attempt count.
+
+        This is the *claim* retry, and it is a different scope from the
+        per-model-call retry in
+        ``agent_runtime.execution.model_invocation.retry_schedule``. The two do
+        not double-count, by construction: a model call that exhausts its own
+        bounded retries re-raises the last provider exception, so the run fails
+        for the same reason it would have failed without any per-call policy,
+        and arrives here carrying the same typed error and the same
+        ``retryable`` flag. Nothing about a per-call retry is visible at this
+        level — no extra attempt is counted and none is consumed.
+
+        That a claim retry may still follow is deliberate rather than
+        overlooked. The scopes recover different things: the per-call policy
+        absorbs a provider hiccup *without discarding the turn*, while a claim
+        retry restarts the turn and is the only thing that can recover a worker
+        crash, a lost lock, or a store outage. Collapsing them would mean either
+        paying a whole turn for a 429 (today's cost) or leaving a crashed worker
+        unrecovered.
+        """
         retryable = error.retryable and retry_permitted
         safe_error = error.to_envelope()
         if safe_error.retryable != retryable:

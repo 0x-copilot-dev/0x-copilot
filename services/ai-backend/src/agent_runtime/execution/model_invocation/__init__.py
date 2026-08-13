@@ -80,6 +80,12 @@ from agent_runtime.execution.model_invocation.journal import (
     SequencedModelInvocationRecord,
     route_records,
 )
+from agent_runtime.execution.model_invocation.retry_schedule import (
+    ModelCallRetryPolicy,
+    ModelRetryDecision,
+    ProviderRetryHint,
+    provider_retry_hint,
+)
 from agent_runtime.execution.model_invocation.release_controls import (
     ModelReliabilityReleaseDecision,
     ModelReliabilityReleaseResolver,
@@ -100,6 +106,7 @@ __all__ = (
     "AtomicModelInvocationAuthorityAdapterPort",
     "EphemeralRouteModelResolverPort",
     "ModelCacheFallbackPosture",
+    "ModelCallRetryPolicy",
     "ModelAttemptAdmissionPolicy",
     "ModelAttemptAdmissionRecord",
     "ModelAttemptAdmissionRequest",
@@ -155,6 +162,7 @@ __all__ = (
     "ModelRouteExclusionReason",
     "ModelRouteEntry",
     "ModelRoutePlan",
+    "ModelRetryDecision",
     "ModelRoutePolicy",
     "ModelStreamState",
     "ProcessLocalProviderCircuitHealth",
@@ -168,10 +176,12 @@ __all__ = (
     "ProviderFailureClassifier",
     "ProviderFailureObservation",
     "ProviderLifecycleEvent",
+    "ProviderRetryHint",
     "ProviderLifecycleReducer",
     "ProviderLifecycleTransitionError",
     "ProviderTerminalState",
     "SequencedModelInvocationRecord",
+    "provider_retry_hint",
     "route_records",
     "canonical_model_request_digest",
 )

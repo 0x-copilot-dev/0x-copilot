@@ -22,6 +22,14 @@
     "initial_backoff_seconds": 0.5,
     "max_backoff_seconds": 4.0
   },
+  "model_retry": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 2.0,
+    "backoff_factor": 2.0,
+    "jitter_factor": 0.25,
+    "max_backoff_seconds": 30.0,
+    "provider_hint_max_seconds": 30.0
+  },
   "execution": {
     "max_retries": 2,
     "max_parallel_runs": 4,

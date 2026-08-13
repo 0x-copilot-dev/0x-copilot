@@ -209,6 +209,38 @@ class ProviderFailureAdapterRegistry:
             )
         return adapter.observe(error, lifecycle)
 
+    def observe_unattributed(
+        self,
+        error: BaseException,
+        lifecycle: ProviderAttemptLifecycle,
+    ) -> ProviderFailureObservation:
+        """Classify when the caller cannot name the provider.
+
+        :meth:`observe` needs our canonical slug (``"openai"``), which the F10
+        path takes from the verified route. Callers outside that path have only
+        the LangChain model object, whose ``_llm_type`` is the *library's* name
+        (``"openai-chat"``, ``"chat-google-generative-ai"``) and matches no key
+        here. Keying off it would silently classify every provider failure as
+        ``UNKNOWN`` — retryable failures included.
+
+        So the exception is asked instead of the caller. That is not a guess:
+        every adapter matches on exact SDK class identity (module + qualname
+        through the MRO), the modules are disjoint, and an exception that
+        belongs to no reviewed SDK still lands on ``UNKNOWN``. At most one
+        adapter can recognise any given error, which is why scanning is
+        deterministic rather than order-dependent.
+        """
+
+        for adapter in self._adapters.values():
+            observation = adapter.observe(error, lifecycle)
+            if observation.signal is not ModelFailureSignal.UNKNOWN:
+                return observation
+        return ProviderFailureObservation(
+            signal=ModelFailureSignal.UNKNOWN,
+            dispatch_state=lifecycle.dispatch_state,
+            stream_state=lifecycle.stream_state,
+        )
+
 
 __all__ = (
     "ProviderExceptionClass",

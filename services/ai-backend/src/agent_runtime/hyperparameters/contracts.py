@@ -262,6 +262,60 @@ class RetryHyperparameters(HyperparameterSection):
         return self
 
 
+class ModelRetryHyperparameters(HyperparameterSection):
+    """Pacing for re-dispatching ONE model call, owned by us not the SDK.
+
+    Distinct from :class:`RetryHyperparameters` above, which paces a *tool*
+    call, and from ``execution.max_retries``, which paces a whole *run claim*.
+    Three scopes, three sections: a 429 twenty tool calls into a turn should
+    cost a few seconds of backoff on the model call, not a re-run of the turn.
+
+    ``max_attempts`` governs only the deployment default path. When the F10
+    model-invocation journal is installed, ``ModelInvocationBudget`` remains the
+    attempt authority and this section contributes pacing alone — one ceiling,
+    not two disagreeing ones.
+    """
+
+    #: Total attempts for one model call, counting the first. ``3`` matches
+    #: ``ModelInvocationBudget.max_attempts``' own ``le=3`` ceiling so the
+    #: default path can never out-retry the journaled path.
+    max_attempts: int = Field(default=3, ge=1, le=3)
+    initial_backoff_seconds: float = Field(
+        default=2.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Multiplier per attempt. ``1.0`` is a legal (constant-delay) schedule.
+    backoff_factor: float = Field(default=2.0, ge=1.0, le=10.0)
+    #: Fraction of the base delay added as upper jitter, spreading concurrent
+    #: callers instead of synchronising them onto the same peak.
+    jitter_factor: float = Field(default=0.25, ge=0.0, le=1.0)
+    #: Ceiling when the provider sent no ``retry-after``.
+    max_backoff_seconds: float = Field(
+        default=30.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Ceiling applied to a provider-stated wait. Bounded for a concrete
+    #: reason: ``execution.worker_lock_seconds`` is 60, so honouring a literal
+    #: ``retry-after: 3600`` would let a second worker claim a run this one is
+    #: still executing.
+    provider_hint_max_seconds: float = Field(
+        default=30.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+
+    @model_validator(mode="after")
+    def _initial_backoff_is_reachable(self) -> Self:
+        """Refuse an initial backoff the ceiling would clamp away on attempt 1.
+
+        Same failure mode as :class:`RetryHyperparameters`: a configured value
+        that appears to apply and never does.
+        """
+
+        if self.initial_backoff_seconds > self.max_backoff_seconds:
+            raise ValueError(
+                "initial_backoff_seconds cannot exceed max_backoff_seconds; the "
+                "backoff schedule would clamp it away on the first attempt"
+            )
+        return self
+
+
 class ExecutionHyperparameters(HyperparameterSection):
     """Run-level parallelism, budgets, and worker cadence.
 
@@ -476,6 +530,9 @@ class Hyperparameters(_FrozenContract):
     )
     reads: ReadHyperparameters = Field(default_factory=ReadHyperparameters)
     retry: RetryHyperparameters = Field(default_factory=RetryHyperparameters)
+    model_retry: ModelRetryHyperparameters = Field(
+        default_factory=ModelRetryHyperparameters
+    )
     execution: ExecutionHyperparameters = Field(
         default_factory=ExecutionHyperparameters
     )
