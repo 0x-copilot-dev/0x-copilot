@@ -20,6 +20,15 @@ description: Summarize incidents with timeline and owners.
 Use for incident postmortems.
 """
 
+CONDITIONAL_SKILL_MARKDOWN = """---
+name: linear-triage
+description: Triage a Linear backlog into owners and severities.
+requires_connectors: linear
+---
+# Linear Triage
+Use when the run can reach Linear.
+"""
+
 
 def test_public_and_internal_skill_flow() -> None:
     app = create_app(skill_service=SkillRegistryService(store=InMemorySkillStore()))
@@ -63,6 +72,38 @@ def test_public_and_internal_skill_flow() -> None:
     assert all(
         skill["name"] != "support_incident_review" for skill in disabled_cards["skills"]
     )
+
+
+def test_skill_cards_carry_the_authors_conditional_visibility_declaration() -> None:
+    """A card must carry the frontmatter the runtime decides visibility from.
+
+    The runtime chooses which Skills are worth system-prompt tokens from the
+    *card*, before any body is loaded — so a declaration the card projection
+    drops is a declaration that silently never applies, and the Skill reverts to
+    being offered on every run. That failure is invisible from either side: the
+    author's SKILL.md is well-formed, the card is well-formed, and the bundle
+    (which does carry ``metadata``) still proves the value was stored. Only this
+    hop shows it.
+    """
+
+    app = create_app(skill_service=SkillRegistryService(store=InMemorySkillStore()))
+    client = TestClient(app)
+
+    client.post(
+        "/v1/skills",
+        json={
+            "org_id": "org_123",
+            "user_id": "user_123",
+            "markdown": CONDITIONAL_SKILL_MARKDOWN,
+        },
+    )
+    cards = client.get(
+        "/internal/v1/skills/cards",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()
+
+    card = next(skill for skill in cards["skills"] if skill["name"] == "linear_triage")
+    assert card["metadata"]["requires_connectors"] == "linear"
 
 
 def test_internal_skill_routes_use_service_header_scope_when_token_is_configured(
