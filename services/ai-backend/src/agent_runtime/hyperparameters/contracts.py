@@ -106,19 +106,6 @@ class HyperparameterBounds:
     #: is no longer summarising the web, it is pasting it.
     SEARCH_CONTENT_TOKENS_MAX: Final[int] = 8_000
     SEARCH_PASSAGE_CHARS_MAX: Final[int] = 20_000
-    #: LangGraph super-steps per graph invocation. At the measured cost of this
-    #: repo's Deep Agents graph (see ``ExecutionHyperparameters.recursion_limit``)
-    #: this ceiling is roughly 500 model/tool rounds in a single turn — past the
-    #: point where "the model is working" and "the model is looping" stop being
-    #: distinguishable from the outside. Not ``TIMEOUT_SECONDS_MAX``-shaped,
-    #: because a super-step is a unit of work, not of time: the wall clock is
-    #: bounded separately by ``RUN_DEADLINE_SECONDS_MAX``.
-    RECURSION_LIMIT_MAX: Final[int] = 2_000
-    #: The run-level wall clock, deliberately larger than
-    #: ``TIMEOUT_SECONDS_MAX`` (600s): that bound caps a SINGLE invocation, and
-    #: a run legitimately makes many. Four hours is far past any interactive
-    #: session and exists only so a mis-typed value cannot mean "never".
-    RUN_DEADLINE_SECONDS_MAX: Final[float] = 14_400.0
 
 
 class _FrozenContract(BaseModel):
@@ -317,55 +304,6 @@ class ExecutionHyperparameters(HyperparameterSection):
     delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1_024)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60.0)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3_600)
-    # LangGraph super-steps allowed per graph invocation, passed through
-    # ``runtime_config`` into the ``RunnableConfig``.
-    #
-    # Measured, not guessed. Driving the REAL Deep Agents graph (a scripted chat
-    # model emitting N tool rounds) and bisecting the smallest limit that still
-    # completes gives a linear fit, on langgraph 1.2.9 / deepagents 0.7.1:
-    #
-    #     minimal graph (no middleware, no subagents):  3 + 2 * tool_rounds
-    #     with RuntimeControlMiddleware + a subagent:   6 + 4 * tool_rounds
-    #
-    # Measured at 0/1/2/3/5/8 rounds, exact at every point. The shape that
-    # matters is the SLOPE: a model->tool->model round costs a small constant
-    # number of super-steps, so the limit converts to a round count by simple
-    # division. The intercept and slope both grow with the middleware stack, so
-    # treat 4/round as the working figure and expect it to drift upward as
-    # middleware is added — which is the argument for a generous backstop rather
-    # than a tight one.
-    #
-    # Two library defaults are in play and neither is ours. ``langchain_core``
-    # still defines ``DEFAULT_RECURSION_LIMIT = 25``, which by the fit above is
-    # about five tool rounds — below the per-tool-name ``tool_call_budget`` of
-    # 10, so a perfectly healthy run would die on a step limit instead of on the
-    # legible budget message. But that is not the number this graph actually
-    # gets: ``langgraph._internal._config`` supplies its own
-    # ``DEFAULT_RECURSION_LIMIT`` of 10007 — some 2500 tool rounds, i.e. no
-    # meaningful bound at all, and on a BYOK key 2500 completions of a loop the
-    # user is paying for. Checked against the installed library rather than the
-    # docs, because the two constants disagree and only one is reachable here.
-    #
-    # 500 is ~125 tool rounds at 4/round: an order of magnitude clear of every
-    # in-loop budget a healthy run can legitimately spend (``tool_call_budget``
-    # is 10 per tool name, 20 at ``deep``), and a bounded worst case of ~125
-    # completions instead of ~2500. It is a backstop, not a working budget — the
-    # budgets the model is *told* about are what should end a healthy run. It is
-    # deliberately NOT a cost cap in time; that is ``run_deadline_seconds``,
-    # which binds a slow loop where this one binds a fast one.
-    recursion_limit: int = Field(
-        default=500, ge=1, le=HyperparameterBounds.RECURSION_LIMIT_MAX
-    )
-    # Wall-clock ceiling for one worker execution of a run, distinct from
-    # ``default_timeout_seconds`` / ``ModelConfig.timeout_seconds``: those bound
-    # a single invocation (and are depth-scaled per subagent), this bounds the
-    # whole agent loop. 1800s = 10x the 180s invocation default, so a healthy
-    # multi-step run with subagents never approaches it, while a run wedged
-    # somewhere the super-step counter cannot see — a tool that never returns,
-    # a provider stream that stalls without erroring — still terminates.
-    run_deadline_seconds: float = Field(
-        default=1800.0, gt=0, le=HyperparameterBounds.RUN_DEADLINE_SECONDS_MAX
-    )
 
 
 class SubagentHyperparameters(HyperparameterSection):

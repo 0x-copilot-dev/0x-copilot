@@ -141,7 +141,6 @@ from agent_runtime.execution.factory import (
     acreate_agent_runtime,
 )
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
-from agent_runtime.execution.run_deadline import RunDeadline
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
@@ -612,11 +611,6 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         run_control_token: object | None = None
-        # The run's wall clock. Built BEFORE the try so the ``except
-        # TimeoutError`` handler below can ask it whether it was the scope that
-        # fired — the per-call ``ModelConfig.timeout_seconds`` raises the same
-        # exception, and the two need different termination reasons.
-        run_deadline = self._run_deadline_for(run)
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -734,35 +728,31 @@ class RuntimeRunHandler:
                 tool_observation_index=tool_observation_index,
             )
             await self._append_model_call_started(run, metrics, messages)
-            # Outer scope = the whole agent loop; the per-call timeouts inside
-            # stay exactly as they were. Nesting is the point: whichever fires
-            # first cancels the body, and ``run_deadline.expired`` says which.
-            async with run_deadline.scope():
-                if command.runtime_context.model_profile.supports_streaming and (
-                    self._runtime_streamer_explicit
-                    or callable(getattr(harness.agent, "astream", None))
-                ):
-                    result = await self._stream_runtime(
-                        command,
-                        run,
+            if command.runtime_context.model_profile.supports_streaming and (
+                self._runtime_streamer_explicit
+                or callable(getattr(harness.agent, "astream", None))
+            ):
+                result = await self._stream_runtime(
+                    command,
+                    run,
+                    harness,
+                    messages,
+                    metrics,
+                )
+            else:
+                result = await asyncio.wait_for(
+                    self.runtime_invoker(
                         harness,
                         messages,
-                        metrics,
-                    )
-                else:
-                    result = await asyncio.wait_for(
-                        self.runtime_invoker(
-                            harness,
-                            messages,
-                        ),
-                        timeout=command.runtime_context.model_profile.timeout_seconds,
-                    )
-                    metrics.record_usage_from(result)
-                    if await self.stream_event_mapper.append_native_interrupt_events(
-                        run=run,
-                        value=result,
-                    ):
-                        result = {self._Fields.ACTION_REQUIRED: True}
+                    ),
+                    timeout=command.runtime_context.model_profile.timeout_seconds,
+                )
+                metrics.record_usage_from(result)
+                if await self.stream_event_mapper.append_native_interrupt_events(
+                    run=run,
+                    value=result,
+                ):
+                    result = {self._Fields.ACTION_REQUIRED: True}
             await self._process_model_artifact_content(result, run=run)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
@@ -839,18 +829,6 @@ class RuntimeRunHandler:
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
-            # Same exception, two causes. ``run_deadline.expired`` is the only
-            # thing that can tell them apart, and the distinction is what the
-            # user sees: "one call was slow" versus "this run ran too long".
-            deadline_exceeded = run_deadline.expired
-            timeout_reason = (
-                TerminationReason.RUN_DEADLINE_EXCEEDED
-                if deadline_exceeded
-                else TerminationReason.RUN_TIMEOUT
-            )
-            timeout_summary = (
-                "Run exceeded its time limit" if deadline_exceeded else "Run timed out"
-            )
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.TIMED_OUT,
@@ -874,8 +852,8 @@ class RuntimeRunHandler:
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
-                reason=timeout_reason,
-                summary=timeout_summary,
+                reason=TerminationReason.RUN_TIMEOUT,
+                summary="Run timed out",
             )
             await self.audit_emitter.emit_run_failed(
                 failed,
@@ -2552,21 +2530,6 @@ class RuntimeRunHandler:
             message for message in records if message.message_id in selected_ids
         )
 
-    def _run_deadline_for(self, run: RunRecord) -> RunDeadline:
-        """Build this run's wall-clock budget from settings.
-
-        Anchored at ``started_at`` (``created_at`` before the worker marked the
-        run running) rather than at "now", so a re-claim after a lease expiry
-        inherits the time already spent instead of handing the run a fresh full
-        budget on every claim — which is how a wedged run would live forever
-        while a deadline appeared to be configured.
-        """
-
-        return RunDeadline(
-            seconds=self.settings.execution.run_deadline_seconds,
-            anchor=run.started_at or run.created_at,
-        )
-
     async def _stream_runtime(
         self,
         command: RuntimeRunCommand,
@@ -2575,12 +2538,7 @@ class RuntimeRunHandler:
         messages: Sequence[object],
         metrics: AssistantRunMetrics,
     ) -> object:
-        """Stream the LangGraph run under the per-call timeout and return the composed final result.
-
-        The RUN-level wall clock is a separate, outer scope owned by the caller
-        (``_run_deadline_for``); this one is ``ModelConfig.timeout_seconds``,
-        which bounds this invocation only.
-        """
+        """Stream the LangGraph run under a timeout and return the composed final result."""
         async with asyncio.timeout(
             command.runtime_context.model_profile.timeout_seconds
         ):

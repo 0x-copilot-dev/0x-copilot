@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from time import perf_counter
 from typing import Any
 
-from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from agent_runtime.execution.contracts import RuntimeErrorCode
@@ -116,29 +115,12 @@ def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
             "trace_id": context.trace_id,
         },
         "max_concurrency": context.max_parallel_tasks,
-        # Without this key the graph runs under whatever default the library
-        # happens to ship — 10007 super-steps as measured on langgraph 1.2.9,
-        # roughly 2000 tool rounds, which is not a bound anyone chose. Note the
-        # number is the library's to change; that it is not ours is the point,
-        # not the specific value. It is a top-level
-        # ``RunnableConfig`` field, NOT a ``configurable`` entry: put it under
-        # ``configurable`` and Pregel never reads it, which is the silent-no-op
-        # version of this fix. ``test_recursion_limit`` asserts both the key's
-        # position here and that Pregel's step counter actually honours it.
-        "recursion_limit": context.recursion_limit,
         "metadata": metadata,
         "tags": ["agent_runtime", f"run:{run_id}"],
     }
 
 
 _NON_RETRYABLE_ERRORS = (TypeError, ValueError, AttributeError)
-
-#: Public copy for the ``GraphRecursionError`` translation below. Kept next to
-#: the translation rather than inside it so the wording has one home.
-RECURSION_LIMIT_MESSAGE = (
-    "This run kept going without reaching an answer and was stopped at its "
-    "step limit. Try narrowing the request, or splitting it into smaller steps."
-)
 
 
 class _TracedRuntimeCall:
@@ -227,27 +209,6 @@ class _TracedRuntimeCall:
                     safe_message=exc.safe_message,
                 )
             raise
-        except GraphRecursionError as exc:
-            # Must precede the generic handler: ``GraphRecursionError`` derives
-            # from ``RecursionError`` -> ``RuntimeError``, so the branch below
-            # would classify it as an EXTERNAL_SERVICE_ERROR and — because it is
-            # not in ``_NON_RETRYABLE_ERRORS`` — mark it RETRYABLE. Retrying a
-            # graph that just spent its whole step allowance re-runs the same
-            # loop at the same cost. It is a budget outcome, not a provider
-            # blip, and it is always non-retryable.
-            error = AgentRuntimeError(
-                RuntimeErrorCode.RECURSION_LIMIT_EXCEEDED,
-                RECURSION_LIMIT_MESSAGE,
-                retryable=False,
-                correlation_id=self._trace_id,
-            )
-            self._log_failure(
-                error_code=error.code,
-                retryable=error.retryable,
-                safe_message=error.safe_message,
-                metadata=RuntimeLogger.exception_metadata(exc),
-            )
-            raise error from exc
         except Exception as exc:
             retryable = not isinstance(exc, _NON_RETRYABLE_ERRORS)
             self._log_failure(
