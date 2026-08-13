@@ -76,6 +76,28 @@ reservation that a batch admission needs and no caller currently computes
 detection cannot express "20% wired", which is exactly why the remainder is
 written down here instead of being silently laundered by one import.
 
+**The subagent permission floor is designed and tested on the `handoff` lane, and
+that lane is still the dark one (row above).** Worth stating explicitly, because
+the code reads as if it were live: `SubagentHandoffPolicy.narrow_authority`
+intersects the parent grant with the subagent definition, takes the stricter
+approval posture per axis, derives the fallback ceiling from the run's real
+`ToolUsePolicyResolver` snapshot (08-14) rather than a fabricated default, and
+clamps a bypass-holding parent back to the asking posture before it delegates.
+None of it runs on a model turn: `narrow_authority` is reached only from
+`SubagentHandoffBuilder.build_task` → `DelegationCoordinator.build_plan`, which
+has no product caller.
+
+What bounds a delegate on the live Deep Agents path today is structural, in
+`delegation/subagents/recursion.py`: a too-deep `task` call is refused, and
+`task` is removed from a child's tool surface unless its spec opts in. Posture
+is inherited rather than clamped — `execution.factory` runs
+`ToolUsePolicyEnforcer` over the model tool surface _before_ the subagents are
+built, so a tool-less subagent spec receives the parent's already-wrapped tool
+objects: equal to the parent, never looser, but a parent's bypass does cross the
+boundary. **Closing that is the concrete delegation half of ARQ-012** — it is the
+one rule from `authority.py`'s header the live path does not yet enforce, and it
+was deliberately not faked at the `task` seam.
+
 ### The ratchet cannot see these two — a package `__init__` hides an orphan
 
 **Half-resolved.** The scanner follow-up this section asked for shipped: `orphans.py`

@@ -35,14 +35,37 @@ the approval posture instead of carrying the parent's, so a *strict* parent
 could be widened by nothing more than the absence of an explicit grant.
 
 Closing that took two halves, and the second is the one worth pointing at: the
-parameter (``parent_policy``) is useless unless the live seam passes it.
-:meth:`SubagentHandoffPolicy.narrow_authority` — the only production caller —
+parameter (``parent_policy``) is useless unless the caller passes it.
+:meth:`SubagentHandoffPolicy.narrow_authority` — this module's only caller —
 resolves the parent's real posture from the run context through
 ``ToolUsePolicyResolver`` and feeds it in, so the fallback ceiling is the
 parent's own policy rather than the deployment default. A test that calls
 ``inherited_parent_grant(parent_policy=...)`` directly proves the parameter
 works and proves nothing about the leak; the test that matters enters at
 ``narrow_authority``.
+
+Which lane this is, stated plainly so nobody mistakes it for the live one
+------------------------------------------------------------------------
+
+**This narrowing lane is not yet on the path a model run takes.** The live
+delegation path is Deep Agents' ``task`` tool
+(``delegation.subagents.atlas_task_tool``); it never calls
+``SubagentHandoffPolicy``. The only caller of ``narrow_authority`` is
+``SubagentHandoffBuilder``'s task builder, whose only caller is the
+``DelegationCoordinator`` planner — which has no product caller at all
+(recorded in ``tools/dark_wiring_baseline.txt`` and ``PENDING-WIRINGS.md``). So
+the rules above are the *designed* floor, correct and tested, waiting on the
+coordinator being wired.
+
+What actually bounds a delegate today is structural rather than postural, and
+lives in ``delegation.subagents.recursion``: rule 1 refuses a too-deep ``task``
+call, and rule 2 removes ``task`` from the child's tool surface. A child's
+approval posture on the live path is the parent's, because Deep Agents hands a
+tool-less subagent spec the parent's *already policy-wrapped* tool objects
+(``execution.factory`` applies ``ToolUsePolicyEnforcer`` before the subagents
+are built) — equal to the parent, never looser, but also not clamped, so the
+bypass carve-out below is not yet enforced live. That is the gap to close when
+the coordinator lands; it is deliberately not faked here.
 """
 
 from __future__ import annotations

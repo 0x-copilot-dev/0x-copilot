@@ -39,7 +39,12 @@ from agent_runtime.delegation.subagents.authority import (
     SubagentPolicyGrant,
 )
 from agent_runtime.delegation.subagents.constants import Defaults, Limits
-from agent_runtime.delegation.subagents.contracts import SubagentErrorCode
+from agent_runtime.delegation.subagents.contracts import (
+    SubagentDefinition,
+    SubagentErrorCode,
+)
+from agent_runtime.delegation.subagents.handoff import SubagentHandoffPolicy
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.delegation.subagents.coordination import DelegationAdmissionPolicy
 from agent_runtime.delegation.subagents.recursion import (
     ALLOW_NESTED_DELEGATION_KEY,
@@ -427,6 +432,100 @@ class TestChildPermissionFloor(DelegationFixtureMixin):
 
         assert narrowed.policy.read is ToolUsePolicyMode.ASK
         assert narrowed.policy.write is ToolUsePolicyMode.BLOCK
+
+
+class HandoffSeamMixin:
+    """Builders for entering the floor at ``narrow_authority``, not below it.
+
+    ``inherited_parent_grant`` takes ``parent_policy`` as a keyword, so a test
+    that calls it directly supplies the very thing under test and passes even
+    when no caller ever does. These builders exist so the assertions below can
+    enter one level up, where the ceiling has to be *derived* from the run.
+    """
+
+    @staticmethod
+    def context(tool_use: dict[str, object] | None = None) -> AgentRuntimeContext:
+        return AgentRuntimeContext(
+            user_id="user_1",
+            org_id="org_1",
+            roles={"Admin"},
+            permission_scopes={"tools:read"},
+            model_profile=ModelConfig(
+                provider="Fake",
+                model_name="fake-model",
+                max_input_tokens=128_000,
+                timeout_seconds=30,
+                temperature=0,
+                supports_streaming=True,
+            ),
+            trace_id="trace_1",
+            user_policies_json={"tool_use": tool_use} if tool_use else {},
+        )
+
+    @staticmethod
+    def definition() -> SubagentDefinition:
+        return SubagentDefinition.model_validate(
+            {
+                "name": "researcher",
+                "description": "Researches a narrow question on request.",
+                "graph_id": "graph_research",
+                "tools": frozenset({"web_search"}),
+            }
+        )
+
+    def narrowed(self, tool_use: dict[str, object] | None = None) -> Any:
+        return SubagentHandoffPolicy.narrow_authority(
+            context=self.context(tool_use),
+            definition=self.definition(),
+            requested_tools=(),
+            requested_skills=(),
+            parent_grant=None,
+        )
+
+
+class TestParentPostureReachesTheFloor(HandoffSeamMixin):
+    """The live half of rule 3: the derived ceiling is the parent's own posture.
+
+    Without the wiring, ``narrow_authority`` synthesises the parent ceiling with
+    a fresh ``SubagentPolicyGrant()`` — the deployment default — so a workspace
+    that tightened its policy is silently widened back to the default for every
+    delegated task. The parameter existed and was tested; nothing passed it.
+    """
+
+    def test_a_strict_workspace_policy_is_carried_into_the_child_grant(self) -> None:
+        narrowed = self.narrowed({"workspace": {"write": "block"}})
+
+        assert narrowed.policy.write is ToolUsePolicyMode.BLOCK, (
+            "the parent's real posture must be the ceiling, not the default"
+        )
+
+    def test_a_user_override_beats_the_workspace_default(self) -> None:
+        """The ceiling is the resolved snapshot, not either input alone."""
+
+        narrowed = self.narrowed(
+            {"workspace": {"destructive": "require"}, "user": {"destructive": "block"}}
+        )
+
+        assert narrowed.policy.destructive is ToolUsePolicyMode.BLOCK
+
+    def test_an_unconfigured_run_is_unchanged(self) -> None:
+        """The fail-open lane still resolves to the deployment defaults."""
+
+        narrowed = self.narrowed()
+
+        assert narrowed.policy.read is ToolUsePolicyMode.AUTO
+        assert narrowed.policy.write is ToolUsePolicyMode.ASK
+        assert narrowed.policy.destructive is ToolUsePolicyMode.REQUIRE
+
+    def test_a_looser_policy_cannot_widen_past_the_definition(self) -> None:
+        """The floor is a ceiling on both sides: AUTO writes still meet ASK."""
+
+        narrowed = self.narrowed({"workspace": {"write": "auto"}})
+
+        assert narrowed.policy.write is ToolUsePolicyMode.ASK, (
+            "the definition's own posture still applies; deriving the parent "
+            "ceiling must not become a widening path"
+        )
 
 
 class TestDelegatedBudgetSemantics(DelegationFixtureMixin):

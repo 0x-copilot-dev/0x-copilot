@@ -23,25 +23,24 @@ only when the spec explicitly opts in. This is belt-and-braces with
 rule 1: rule 1 refuses the *call*, rule 2 removes the *capability*.
 
 **3. A child's permission posture is floored at its parent's — never above it.**
-The child's effective authority is the intersection of the parent grant and the
-subagent definition (``SubagentAuthorityPolicy.narrow``), and its approval
-posture is the *stricter* of the two on every axis
-(``SubagentPolicyGrant.narrow``). Two consequences worth naming, because they
-are the ones a reader gets backwards:
+On the path this module governs, that floor is structural: Deep Agents hands a
+subagent spec that declares no ``tools`` the parent's *already policy-wrapped*
+tool objects (``execution.factory`` runs ``ToolUsePolicyEnforcer`` over the
+model surface before the subagents are built), so a child's posture is its
+parent's — equal to it, never looser. Rule 2 above is what keeps that
+inheritance from also handing over the ability to delegate.
 
-* A parent holding a bypass posture (``ToolUsePolicyMode.AUTO`` on writes, or
-  a sealed ``filesystem_bypass``) does **not** hand that bypass down. The
-  definition's own posture still applies, and the default definition asks for
-  writes, so the child asks.
-* The floor is not "inherit the parent's posture". It is "never looser than the
-  parent's posture". A definition may be stricter than its parent and that
-  wins; a definition may not be looser and have it stick.
-
-The one place this used to leak is :meth:`inherited_parent_grant`, which
-fabricates a parent ceiling when no verified grant was supplied. The live seam
-(:meth:`SubagentHandoffPolicy.narrow_authority`) now resolves the parent's real
-posture from the run context and passes it in, so a strict parent cannot be
-widened by the mere absence of an explicit grant.
+The richer form of the rule — intersect against the subagent definition and
+take the *stricter* posture per axis, so a definition may tighten but never
+loosen — is written and tested in
+:mod:`agent_runtime.delegation.subagents.authority`, along with the carve-out
+that a parent's bypass must not cross the delegation boundary. Read that
+module's header before changing anything here: it is the designed floor, and
+it states plainly that its own lane (``SubagentHandoffPolicy`` ->
+``DelegationCoordinator``) has no product caller yet, so the bypass carve-out
+is not enforced on a live run today. Nothing in this module depends on that
+lane; the two are deliberately kept separate rather than one pretending to be
+the other.
 """
 
 from __future__ import annotations
