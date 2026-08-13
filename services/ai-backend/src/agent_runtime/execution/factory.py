@@ -370,6 +370,7 @@ async def _assemble_harness(
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
+            tool_program_factory=runtime_dependencies.tool_program_factory,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             revise_artifact_tool=runtime_dependencies.revise_artifact_tool,
@@ -986,6 +987,7 @@ def _model_visible_tools(
     mcp_discovery_cache: object | None,
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
+    tool_program_factory: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
     revise_artifact_tool: object | None = None,
@@ -1224,7 +1226,48 @@ def _model_visible_tools(
                 owner=ModelToolOwner.BACKENDS,
             )
         )
+    # ``run_tool_program`` is appended LAST, and that ordering is load-bearing
+    # rather than cosmetic: the factory below is handed the tools composed above
+    # it, and that is precisely the set a program may schedule. Moving this call
+    # earlier would silently narrow what a batch can reach; there is no ordering
+    # at which it could widen it, because the mapping is built from this list.
+    program_tool = _tool_program_tool(
+        tool_program_factory,
+        model_tools=model_tools,
+    )
+    if program_tool is not None:
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                wrap_model_tool_for_shadow(program_tool, capability="builtin"),
+                owner=ModelToolOwner.TOOL_PROGRAM,
+            )
+        )
     return tuple(model_tools)
+
+
+def _tool_program_tool(
+    factory: object | None,
+    *,
+    model_tools: Sequence[object],
+) -> object | None:
+    """Build ``run_tool_program`` over the tools composed for this run.
+
+    Returns ``None`` when no factory was injected (every non-desktop run), when
+    no composed tool carries a usable name, or when the factory itself declines.
+    A tool without a name cannot be planned against and is simply not offered;
+    it is never guessed at.
+    """
+
+    if factory is None:
+        return None
+    tools_by_name = {
+        name: tool
+        for tool in model_tools
+        if (name := str(getattr(tool, "name", "")).strip())
+    }
+    if not tools_by_name:
+        return None
+    return factory.build_tool(tools_by_name=tools_by_name)  # type: ignore[attr-defined]
 
 
 def _canonical_graph_tool(tool: object) -> object:

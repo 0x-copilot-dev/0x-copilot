@@ -567,6 +567,9 @@ class TestSandboxWorkerBundle:
             def sandbox_execute_tool(self):
                 return None
 
+            def tool_program_factory(self):
+                return None
+
         handler = RuntimeRunHandler(
             persistence=_RunStore(_persisted_run(context)),  # type: ignore[arg-type]
             event_store=file_store,  # type: ignore[arg-type]

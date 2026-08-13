@@ -96,6 +96,12 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         # constant, and it replaces a cost that was not.
         "agent_runtime.capabilities.skills:ListSkillsTool",
         "agent_runtime.capabilities.skills:LoadSkillTool",
+        # Accepted rent: one schema block per model call, in exchange for a
+        # three-call read chain costing one model turn and one tool result
+        # instead of three of each. The description is deliberately terse — the
+        # work this tool saves is the model's own repeated calling, so a long
+        # explanation would spend the saving it exists to buy.
+        "agent_runtime.capabilities.tool_program:program_tool",
         "agent_runtime.capabilities.tools:AskAQuestionTool",
         "agent_runtime.capabilities.tools:LoadPriorToolResultTool",
         "agent_runtime.capabilities.workspace:binary_b64",

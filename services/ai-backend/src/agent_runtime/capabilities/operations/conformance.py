@@ -190,6 +190,7 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ),
         ("builtin", "suggest_mcp_connector", "execution.factory._model_visible_tools"),
         ("builtin", "run_code_mode", "execution.factory._model_visible_tools"),
+        ("builtin", "run_tool_program", "execution.factory._model_visible_tools"),
         ("builtin", "run_in_sandbox", "execution.factory._model_visible_tools"),
         ("builtin", "stage_rowset_write", "execution.factory._model_visible_tools"),
         ("builtin", "write_todos", "langchain.agents.middleware.TodoListMiddleware"),

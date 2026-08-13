@@ -163,6 +163,22 @@
   {
     "descriptor": {
       "capability": "builtin",
+      "op": "run_tool_program",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "tool program",
+    "timeout_ms": 120000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
       "op": "run_in_sandbox",
       "executor": "sandbox",
       "effect_class": "internal_reversible",

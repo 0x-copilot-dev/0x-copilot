@@ -16,6 +16,10 @@ from agent_runtime.capabilities.operations.builtin_catalog import (
 from agent_runtime.capabilities.operations.catalog import (
     DEFAULT_OPERATION_DESCRIPTORS,
 )
+from agent_runtime.capabilities.tool_program import (
+    ToolProgramLimits,
+    ToolProgramToolFactory,
+)
 from agent_runtime.delegation.subagents.atlas_task_tool import build_atlas_task_tool
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.factory import _model_visible_tools
@@ -51,6 +55,9 @@ _PINNED_MODEL_VISIBLE_TOOL_ORDER = (
     "run_in_sandbox",
     "stage_rowset_write",
     "publish_artifact",
+    # Appended last by design: the program is built over the tools composed
+    # before it, so it can only ever be the final entry in this sequence.
+    "run_tool_program",
 )
 
 
@@ -104,6 +111,15 @@ def _fully_enabled_factory_tools(
         sandbox_execute_tool=_tool("run_in_sandbox"),
         stage_rowset_write_tool=_FeatureTool("stage_rowset_write"),
         publish_artifact_tool=_FeatureTool("publish_artifact"),
+        tool_program_factory=ToolProgramToolFactory(
+            limits=ToolProgramLimits(
+                max_steps=4,
+                max_concurrency=2,
+                wall_clock_ms=1_000,
+                max_total_output_bytes=10_000,
+                max_result_bytes=5_000,
+            )
+        ),
         runtime_context=runtime_context_admin,
     )
 

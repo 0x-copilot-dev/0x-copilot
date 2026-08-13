@@ -717,6 +717,13 @@ class RuntimeDependencies(RuntimeContract):
     # to the model-visible tool set and adds its prompt guidance. ``None``
     # everywhere else, so non-desktop / disabled runs are byte-identical.
     sandbox_execute_tool: object | None = None
+    # Optional ``run_tool_program`` factory. Unlike the tools above this is a
+    # *factory*, not a built tool, because a program's authorized surface is the
+    # run's own model-visible toolset — which does not exist until the factory
+    # has finished composing it. The worker resolves the bounds, the factory
+    # supplies the toolset, and the tool is built at that handshake. ``None``
+    # leaves the model surface byte-identical.
+    tool_program_factory: object | None = None
     # Optional gated ``stage_rowset_write`` tool (PRD-D3 bulk row-set staging).
     # Built per run by the worker only when ``SURFACES_V2`` is on; the factory
     # appends it to the model-visible tool set. ``None`` (and absent from the

@@ -72,6 +72,15 @@
     "model_visible": true
   },
   {
+    "tool_name": "run_tool_program",
+    "capability": "builtin",
+    "op": "run_tool_program",
+    "source": "capabilities.tool_program.tool",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
     "tool_name": "run_in_sandbox",
     "capability": "builtin",
     "op": "run_in_sandbox",
