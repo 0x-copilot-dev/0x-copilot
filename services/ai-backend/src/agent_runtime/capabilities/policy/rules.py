@@ -127,9 +127,7 @@ class Wildcard:
         if cached is not None:
             return cached
         escaped = cls._ESCAPE.sub(r"\\\g<0>", pattern.replace("\\", "/"))
-        compiled = re.compile(
-            escaped.replace("*", ".*").replace("?", "."), re.DOTALL
-        )
+        compiled = re.compile(escaped.replace("*", ".*").replace("?", "."), re.DOTALL)
         if len(cls._COMPILED) >= cls._COMPILED_MAX:
             cls._COMPILED.clear()
         cls._COMPILED[pattern] = compiled
@@ -189,9 +187,7 @@ class PermissionRuleset(PolicyContract):
                 return rule
         return None
 
-    def verdict(
-        self, permission: str, subjects: Sequence[str]
-    ) -> RuleAction | None:
+    def verdict(self, permission: str, subjects: Sequence[str]) -> RuleAction | None:
         """Fold ``evaluate`` across every subject, most-restrictive first.
 
         DENY beats ASK beats ALLOW, matching OpenCode's ``ask`` loop (:72-82),
