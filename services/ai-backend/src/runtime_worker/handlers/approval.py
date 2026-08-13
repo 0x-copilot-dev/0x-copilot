@@ -1335,14 +1335,23 @@ class RuntimeApprovalHandler:
             # The write gate borrows this shape (``ToolAccessGate`` emits
             # ``approval_kind == "ask_a_question"``), so the once/always scope
             # rides here. A genuine question ignores the key — it reads
-            # ``answer`` — and ``GateResume`` drops it on a rejection, so adding
-            # it cannot change what any existing resume means.
-            return {
+            # ``answer``.
+            #
+            # Added ONLY when the client actually named a scope. This payload is
+            # the LangGraph resume value and is persisted in the checkpoint, so an
+            # unconditional ``decision_scope: None`` would rewrite the stored
+            # shape of every ask-a-question resume ever taken to say something the
+            # caller never said. ``_interpret_resume`` reads it with ``.get``, so
+            # an absent key and a ``None`` key are the same answer to the only
+            # reader — which makes the conditional free.
+            payload: dict[str, object] = {
                 cls._Fields.APPROVAL_ID: command.approval_id,
                 cls._Fields.DECISION: decision,
                 cls._Fields.ANSWER: command.answer,
-                cls._Fields.DECISION_SCOPE: command.decision_scope,
             }
+            if command.decision_scope is not None:
+                payload[cls._Fields.DECISION_SCOPE] = command.decision_scope
+            return payload
         # MCP tool path. With ``outcome`` populated (the production path) we
         # project the actual per-item decisions in interrupt order so a mixed
         # approve/reject N=5 batch sends LangGraph the literal mix and not 5
