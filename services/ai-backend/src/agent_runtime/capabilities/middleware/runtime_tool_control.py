@@ -595,6 +595,15 @@ class RuntimeControlMiddleware(AgentMiddleware):
         every INNER middleware — this seam is the outermost ``wrap_tool_call``
         wrapper — so the host-path screen and the Deep Agents permission layer
         still see, and can still refuse, whatever a hook wrote.
+
+        Known and deliberate: a vetoed call opens no
+        :class:`RuntimeToolLifecycleReducer` entry, because it has no execution
+        to have a lifecycle. The refusal is still observable twice over — the
+        model gets an error ``ToolMessage``, and the veto itself is a
+        ``modified`` record on the run's hook ledger — but a reader of the tool
+        ledger alone will not see that the call was attempted. Opening a
+        lifecycle entry only to settle it as refused would also make the
+        reconciliation paths carry a case that never has an in-flight call.
         """
 
         if not HookDispatch.enabled(HookPhase.TOOL_EXECUTE_BEFORE):
