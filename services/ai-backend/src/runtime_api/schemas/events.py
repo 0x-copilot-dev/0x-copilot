@@ -1066,6 +1066,26 @@ class RuntimeEventPresentationProjector:
                 if isinstance(ordinal, int) and ordinal > 0:
                     return Messages.Event.citation_made_title(ordinal)
             return Messages.Event.CITATION_MADE
+        if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
+            # The transcript divider's label. Derived from the typed counts the
+            # producer already validated, so the line the user reads and the
+            # numbers beside it cannot disagree, and so no client has to infer
+            # a label from the event name.
+            tokens_saved = payload.get("tokens_saved")
+            if not isinstance(tokens_saved, int) or isinstance(tokens_saved, bool):
+                before = payload.get("before_tokens")
+                after = payload.get("after_tokens")
+                tokens_saved = (
+                    before - after
+                    if isinstance(before, int) and isinstance(after, int)
+                    else None
+                )
+            if not isinstance(tokens_saved, int) or tokens_saved <= 0:
+                return Messages.Event.COMPRESSION_NOTE
+            return Messages.Event.compaction_title(
+                tokens_saved=tokens_saved,
+                tool_name=cls._text(payload.get(Keys.Field.TOOL_NAME)),
+            )
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             # Generative-UI (PRD-01). The user-facing message class lives in
             # ``agent_runtime.api.constants`` (out of this PR's scope); the
