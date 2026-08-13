@@ -15,7 +15,7 @@ and these fail.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 
@@ -276,6 +276,41 @@ class TestTheRouteIsReachable(ComposedAppMixin):
         assert outcome["path"] == str(bad)
         assert bad.read_bytes() == b"bad before\n"
         assert good.read_text() == "good now\n"
+
+
+class TestRetentionIsSweptAtBoot(ComposedAppMixin):
+    """The prune method is reachable, not a method nobody ever calls."""
+
+    async def test_composing_the_app_drops_an_expired_capture(self, tmp_path):
+        """Bounded retention has to happen somewhere. Boot is that somewhere."""
+
+        root = tmp_path / "store"
+        _, ports = self.compose(root)
+        journal = ports.host_write_journal_store
+        for entry_id, age_days in (("stale", 30), ("fresh", 1)):
+            journal.append(
+                HostWriteRecord(
+                    entry_id=entry_id,
+                    org_id=ORG,
+                    conversation_id="conv-1",
+                    run_id="run-1",
+                    sequence=age_days,
+                    path=f"/Users/ada/Projects/{entry_id}.md",
+                    authorized_root="/Users/ada/Projects",
+                    kind=HostWriteKind.MODIFIED,
+                    prior_sha256=journal.put_blob(entry_id.encode()),
+                    prior_size=len(entry_id),
+                    captured_at=datetime.now(timezone.utc) - timedelta(days=age_days),
+                )
+            )
+
+        # Boot again over the same root: composition is the sweep.
+        _, rebooted = self.compose(root)
+
+        surviving = rebooted.host_write_journal_store.records_for_run(
+            org_id=ORG, run_id="run-1"
+        )
+        assert [record.entry_id for record in surviving] == ["fresh"]
 
 
 class TestOwnershipAndAudit(ComposedAppMixin):

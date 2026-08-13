@@ -910,9 +910,19 @@ class RuntimeApiAppFactory:
         journal_store = getattr(ports, "host_write_journal_store", None)
         if journal_store is None:
             return None
-        return HostWriteUndoService(
+        service = HostWriteUndoService(
             persistence=ports.persistence, journal_store=journal_store
         )
+        # Boot is the retention sweep, matching the file store's own open-time
+        # purge. Deliberately NOT gated on RUNTIME_FILE_STORE_RETENTION_DAYS:
+        # that knob defaults to 0 (off), and a captured pre-image kept forever
+        # is the user's own file content accumulating in a directory they never
+        # asked us to fill. The journal's window is its own 7 days.
+        try:
+            service.prune()
+        except Exception:  # noqa: BLE001 - retention must never block boot
+            _STRUCTURED_LOGGER.warning("host_write_undo.prune_failed")
+        return service
 
     @classmethod
     def default_draft_service(cls, app):
