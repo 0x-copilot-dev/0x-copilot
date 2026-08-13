@@ -114,23 +114,40 @@ class McpToolName:
     def compose(cls, *, server: str, tool: str) -> str:
         """Return the model-surface name for ``tool`` hosted by ``server``.
 
-        Idempotent for every name inside :attr:`MAX_LENGTH`: a ``tool`` that is
-        already namespaced contributes only its bare tail. The ``server``
-        argument always wins the attribution and the parsed one is discarded —
-        the caller holds the true connector, and the tool name is untrusted
-        input read off an MCP server, so it may not re-attribute itself to a
-        connector it does not belong to.
+        **Idempotent** for every name inside :attr:`MAX_LENGTH`: re-composing a
+        name this method already produced for the same connector returns it
+        unchanged, so a caller cannot double-prefix by running the registration
+        path twice.
 
-        A pair long enough to need :meth:`_fitted` is idempotent only in the
-        tool half: re-composing a fitted name against a connector slug that was
-        itself truncated re-digests it. That needs a slug over 42 characters and
-        is not a case any caller here can reach — ``server_slug`` produces the
-        connector's own short name.
+        **Injective** in the sanitized ``(server, tool)`` pair, which is what
+        keeps the collision this module exists to remove from coming back in
+        another form. The prefix is only absorbed when it names *this* server;
+        a prefix naming a different one is an ordinary part of the tool's name
+        and is sanitized into the tail. That case is real, not hypothetical —
+        an aggregating connector (mcp-proxy, metamcp) re-advertises its
+        upstreams' tools already carrying their ``mcp__<upstream>__`` prefix, so
+        absorbing any prefix would map ``mcp__github__search`` and
+        ``mcp__gitlab__search`` onto one registered name and drop the second
+        with the very ``DUPLICATE_DESCRIPTOR_NAME`` failure this module removes.
+
+        The ``server`` argument always wins the attribution: the caller holds
+        the true connector, while the tool name is untrusted input read off an
+        MCP server and may not re-attribute itself to a connector it does not
+        belong to.
+
+        A pair long enough to need :meth:`_fitted` stays idempotent as long as
+        the connector slug itself survives truncation intact — it does for any
+        slug up to 42 characters, which is every slug ``server_slug`` can
+        produce for a real connector.
         """
 
-        parsed = cls.parse(tool)
-        bare = parsed.tool if parsed is not None else tool
         server_part = cls.sanitize(server)
+        parsed = cls.parse(tool)
+        # Absorb the prefix only when it is THIS server's — see the injectivity
+        # paragraph above.
+        bare = (
+            parsed.tool if parsed is not None and parsed.server == server_part else tool
+        )
         tool_part = cls.sanitize(bare)
         name = f"{cls.PREFIX}{server_part}{cls.DELIMITER}{tool_part}"
         if len(name) <= cls.MAX_LENGTH:
