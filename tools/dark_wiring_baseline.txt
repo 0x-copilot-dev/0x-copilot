@@ -1,0 +1,366 @@
+# Sub-module symbols that are built but not wired — the burn-down list for
+# tools/check_dark_wiring.py.
+#
+# Every line is a symbol that reached production with its last seam missing:
+# reachable by no product caller, populated by no producer, or enforced by
+# nothing but a sentence handed to a model. They predate the gate. This file is
+# DEBT, not approval.
+#
+# There is deliberately no `--update-baseline` writer, for the reason
+# route_reachability_baseline.txt has none: the only sanctioned way to add a line
+# is to write the reason by hand, where a reviewer reads it in the diff. Wiring a
+# symbol to a real consumer makes its line here stale, and a stale line FAILS the
+# gate — so this file can only ever shrink.
+#
+# Format: <ratchet key> :: <why it is here>
+#
+# A line is legitimate for exactly two reasons: (a) the symbol is genuinely dark
+# and is being kept deliberately, or (b) it IS reached, by a consumer this static
+# scan cannot see — an unresolvable receiver, a dynamically assembled attribute,
+# a TypeScript destructure. Say which. The gate is biased toward silence, so (b)
+# should be rare; when it happens it is a fact about the scan's blind spots and
+# is worth recording as one.
+
+
+# ---------------------------------------------------------------------------
+# Reachable from tests and from nowhere else. A public callable that no other
+# src module names: the tests keep it compiling and green, and no product path
+# ever enters it. Some of these are legitimate test seams (`reset_for_tests`);
+# the rest are the sub-module form of the orphan module.
+# ---------------------------------------------------------------------------
+agent_runtime.api.events:RuntimeEventProducer.append_compression_note :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.api.ledger_seal:LedgerSeal.sealed_by :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.api.model_catalog:ModelCatalog.reset_source :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.api.notifications:InboxAndEmailNotificationDispatcher.notify_approval_resolved :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.api.notifications:LoggingNotificationDispatcher.notify_approval_resolved :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.api.notifications:NotificationDispatcher.notify_approval_resolved :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.api.usage_service:UsageQueryService.days_between :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.artifacts.execution_mode:ArtifactOperationAudit.parse_audit_record :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.artifacts.service:ArtifactService.create_from_bytes :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.conversation_ordinals:ConversationOrdinalAllocator.has_ordinal :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.desktop.host_floor:HostFilesystemFloor.scratch_path :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.desktop.workspace_attestation:DesktopWorkspaceAttestationRegistry.from_public_key :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.mcp.credentials.refreshing_auth:RefreshingBearerAuth.sync_auth_flow :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.descriptor_revision_binding:McpDescriptorAuthorityResolution.for_state :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.mcp.descriptor_revision_binding:McpDescriptorRevisionAuthority.set_unavailable :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.capabilities.mcp.files:FileMcpConfigStore.delete_server :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.files:FileMcpConfigStore.read_server :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.files:FileMcpConfigStore.read_tools :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.files:FileMcpConfigStore.rebuild_from_configs :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.freshness:McpDescriptorFreshnessDecision.reuse_allowed :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.freshness:RevisionAwareMcpDiscoveryCache.subject_registration_diagnostics :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.middleware.exec_policy_tool:McpExecPolicyTool.stream_resumption_enabled :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.mcp.proxy_transport:BackendProxyTransport.handle_async_request :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.middleware.runtime_tool_control:RuntimeControlMiddleware.before_model :: no src caller at all; referenced only by 4 test file(s)
+agent_runtime.capabilities.middleware.runtime_tool_control:RuntimeControlMiddleware.final_tool_surface :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.operations.builtin_catalog:BuiltinOperationCatalog.descriptor_or_safe_default :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.builtin_catalog:BuiltinOperationCatalog.model_visible_entries :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.operations.conformance:OperationConformanceGate.validate_model_tool_surface :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_AnnAssign :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_Assign :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_Attribute :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_Import :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.operations.presentation_boundary:_TransportAdapterBoundaryPolicy.visit_ImportFrom :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.policy.contracts:CapabilityUrn.for_builtin :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.capabilities.sandbox.policy_backend:PolicyEnforcedSandboxBackend.commands_used :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.sandbox.providers.openai_hosted:OpenAIHostedContainerBackend.execution_evidence :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.tools.permissions:ToolUsePolicySnapshot.mode_for_tool :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.capabilities.workspace.policy_answers:WorkspacePolicyAnswers.is_policy_answer :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.context.context_contracts:ContextPlan.omitted_decisions :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.context.memory.backends:MemoryRoutePlan.route_for_path :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.context.memory.policy:MemoryPolicyAuthorizer.ensure_authorized :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.control_plane.feature_modes:FeatureModeDecision.fallback_active :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.feature_modes:FeatureModeSet.from_untrusted_mapping :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityControlSnapshot.is_all_off :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityReleaseDecision.circuit_shadow_observation :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityReleaseDecision.equivalent_route_shadow_observation :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityReleaseDecision.primary_only :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityReleaseDecision.retry_shadow_observation :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.control_plane.model_reliability:ModelReliabilityReleaseDecision.safe_off :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.delegation.subagents.coordination:DelegationCoordinator.build_plan :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.delegation.subagents.handoff:SubagentHandoffPolicy.enforce_existing_task :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.delegation.subagents.handoff:SubagentHandoffPolicy.enforce_task_update :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.effects.contracts:EffectStageRevision.is_executable :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.execution.fake_model:DeterministicFakeChatModel.bind_tools :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.execution.model_invocation.contracts:ModelInvocationRequirements.from_model_config :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.execution.model_invocation.runtime:_ProviderLifecycleCallback.on_llm_end :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.execution.model_invocation.runtime:_ProviderLifecycleCallback.on_llm_error :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.execution.providers.model_failure_adapters:ProviderExceptionClass.from_type :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.harness_quality.evaluation:RuntimeTrajectoryProjector.project_run :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.hyperparameters.contracts:McpCatalogHyperparameters.index_body_budget_bytes :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.context_third_party:ThirdPartyContextOrigins.active_harness_suffix :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.context_third_party:ThirdPartyContextOrigins.estimated_total_tokens :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.context_token_counter:DigestTokenCache.reset_shared :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.lifecycle_metrics:LifecycleOperationalMetrics.record_retention_lag :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.otel:SafeAttributeSpanProcessor.on_end :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.observability.otel:TelemetryBootstrap.reset_for_tests :: no src caller at all; referenced only by 3 test file(s)
+agent_runtime.observability.redactor:SafeLogDumper.reset_cache :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.observability.usage_recorder:SummarizationUsageRecorder.record_summarization_call :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.persistence.records.drafts:DraftPath.parse_draft_id :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.persistence.records.telemetry:RuntimeContextOccupancyRecord.segment_count :: no src caller at all; referenced only by 4 test file(s)
+agent_runtime.prompts.provider_cache:ProviderCacheAdapterRegistry.adapter_refs :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.prompts.provider_cache:ProviderCacheRejectionRule.for_dedicated_wrapper :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.release.e2_final_conformance:E2FinalConformanceReport.as_json :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.rollout_shadow_adapters:ShadowProjectionComparators.compare_usage_folds :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.surfaces_v2.lifecycle_reference_snapshots:LifecycleReferenceSnapshot.assert_complete :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.surfaces_v2.lifecycle_reference_snapshots:LifecycleReferenceSnapshot.assert_no_active_legal_holds :: no src caller at all; referenced only by 1 test file(s)
+agent_runtime.surfaces_v2.mcp_connector:McpStageCommitConnector.read_remote_state :: no src caller at all; referenced only by 2 test file(s)
+agent_runtime.surfaces_v2.rowset:RowsetValidator.assert_accounted :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.factory:RuntimeAdapterFactory.from_store :: no src caller at all; referenced only by 51 test file(s)
+runtime_adapters.file._audit_manifest:AuditManifestVerifier.verify_rows :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.agent_state_store:FileMemoryStore.rebuild_human_views :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.agent_state_store:FileSkillsStore.write_asset :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.agent_state_store:FileSkillsStore.write_skill :: no src caller at all; referenced only by 4 test file(s)
+runtime_adapters.file.agent_state_store:FileSubagentDefinitionStore.write_definition :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.repair:StoreDiagnosis.total_dangling_refs :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.conversation_health :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.verify_audit_log :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.in_memory.legacy_stage_migration_control:InMemoryLegacyStageReservationStore.put_candidate_evidence :: no src caller at all; referenced only by 1 test file(s)
+runtime_adapters.offload:OffloadWriterResolver.for_store :: no src caller at all; referenced only by 1 test file(s)
+runtime_worker.audit:WorkerAuditEmitter.emit_tool_call_outcome :: no src caller at all; referenced only by 1 test file(s)
+runtime_worker.dependencies:DefaultRuntimeDependenciesFactory.build_default_discovery_cache :: no src caller at all; referenced only by 13 test file(s)
+runtime_worker.loop:RuntimeWorker.run_until_idle :: no src caller at all; referenced only by 18 test file(s)
+runtime_worker.run_metrics:AssistantRunMetrics.model_invocation_cost_micro_usd :: no src caller at all; referenced only by 1 test file(s)
+runtime_worker.stream_tools:StreamMessageProcessor.tool_call_payload :: no src caller at all; referenced only by 1 test file(s)
+runtime_worker.think_scrubber:StreamingThinkScrubber.in_block :: no src caller at all; referenced only by 1 test file(s)
+runtime_worker.tool_call_ledger:ToolCallLedger.has_entries :: no src caller at all; referenced only by 2 test file(s)
+runtime_worker.tool_call_ledger:ToolCallLedger.mark_rejected :: no src caller at all; referenced only by 1 test file(s)
+
+# ---------------------------------------------------------------------------
+# Contract fields that default to None and that nothing populates. Each is
+# threaded through constructors as a copy of itself, so it looks alive at every
+# hop, and no hop ever produces a value. A reader of one of these cannot tell
+# "not set" from "not due yet" — which is how an approval expiry sweeper runs
+# forever, expires nothing, and reports success.
+# ---------------------------------------------------------------------------
+agent_runtime.api.legal_hold_contracts:LegalHoldView.released_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.api.legal_hold_contracts:LegalHoldView.released_by_user_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.api.source_open_service:SourceOpenResultV2.artifact_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.api.source_open_service:SourceOpenResultV2.artifact_revision :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.artifacts.contracts:ArtifactCreateRequest.accent :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.artifacts.contracts:ArtifactStoredRecord.suggested_filename :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.desktop.workspace_authority:WorkspaceChangeEntry.content_digest :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.mcp.catalog:McpCatalogPointer.display_name :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.sandbox.contracts:SandboxRunResult.exit_code :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.surfaces.spec_models:SurfaceState.spec :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.tools.builtin.publish_artifact:PublishArtifactInput.accent :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.capabilities.workspace.contracts:WorkspaceBaseEntry.content_digest :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.effects.contracts:EffectDispatchRequest.row_keys :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.effects.coordinator:EffectCoordinatorResult.claim_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.execution.contracts:RuntimeRunContext.parent_trace_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.execution.model_invocation.contracts:ModelAttemptAdmissionRequest.projected_cost_microusd :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.execution.model_invocation.contracts:ModelAttemptAdmissionRequest.projected_input_tokens :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.execution.model_invocation.contracts:ModelAttemptAdmissionRequest.projected_output_tokens :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.budgets:BudgetRecord.limit_micro_usd :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.budgets:BudgetRecord.limit_tokens :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.citations:CitationRecord.freshness_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.shares:ShareRecord.expires_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.telemetry:RuntimeModelCallUsageRecord.connector_slug :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.telemetry:RuntimeModelCallUsageRecord.originating_tool_call_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.telemetry:RuntimeModelCallUsageRecord.originating_tool_name :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.persistence.records.telemetry:RuntimeModelCallUsageRecord.user_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.prompts.assembly:PromptAssemblyPlan.locked_task_profile :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.prompts.runtime_binding:PromptRuntimeObservation.plan_revision :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.commit_engine:StageCommitRequest.row_key :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.entities:Artifact.accent :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.entities:ArtifactRevision.source_ref :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.entities:EffectExecutionResult.result_digest :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.ledger_models:OperationRequestedPayload.parent_operation_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.pending_work:PendingWorkItem.gate_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+agent_runtime.surfaces_v2.pending_work:PendingWorkItem.stage_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.approvals:ApprovalDecisionRecord.answer :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.approvals:ApprovalRequestRecord.expires_at :: the expiry sweeper queries this field and nothing populates it; every write in the service copies it off another record
+runtime_api.schemas.approvals:AssignedApproval.chain_parent_approval_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.approvals:AssignedApproval.expires_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.approvals:AssignedApproval.forwarded_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.commands:RuntimeApprovalResolvedCommand.answer :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.commands:RuntimeCancelCommand.reason :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.context_occupancy:ConversationContextOccupancyResponse.run_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversation_canvas:ConversationCanvasResponse.next_cursor :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversation_canvas:ConversationCanvasSubject.accent :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversations:ContextCallRow.task_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversations:ConversationRecord.folder :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversations:ConversationRecord.project_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.conversations:MessageRecord.trace_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.drafts:DraftSendResponse.stage_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.fork:ForkResponse.folder :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.fork:ForkResponse.title :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:ModelCatalogItem.family :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:ModelCatalogItem.input_cost_per_mtok :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:ModelCatalogItem.output_cost_per_mtok :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:ModelCatalogItem.release_date :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:ModelCatalogItem.supports_tools :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:RunHistoryEntry.cancelled_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:RunHistoryEntry.completed_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.runs:RunHistoryEntry.started_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.shares:ConversationShare.expires_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.shares:ConversationShare.revoked_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.shares:ConversationShare.share_token_prefix :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.stages:StageArgView.column :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.stages:StageRowView.agent_hold_reason :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.stages:StageRowView.apply_outcome :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.stages:StageRowView.decided_by :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:RunUsageCallRow.cost_micro_usd :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:RunUsageCallRow.parent_event_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:RunUsageCallRow.subagent_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:RunUsageCallRow.surface_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:RunUsageCallRow.task_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsageAttributionEdgeRow.artifact_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsageAttributionEdgeRow.stage_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsageAttributionEdgeRow.surface_id :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsagePurposeRow.cost_micro_usd :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsageRunRow.completed_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.usage:UsageSubagentRow.cost_micro_usd :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.workspace:SourceEntry.freshness_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.workspace:SubagentEntry.completed_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.workspace:SubagentEntry.duration_ms :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.workspace:SubagentEntry.started_at :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+runtime_api.schemas.workspace_defaults:WorkspaceDefaultsRecord.enabled_models :: None-default field threaded through constructors only as a copy of itself; no product code originates a value
+
+# ---------------------------------------------------------------------------
+# Payload keys the server emits and the client never reads. Each of these is
+# used in key position in Python (so it genuinely reaches the wire) and appears
+# in the app tree only as a bare string — a strip list, a switch label, a type
+# member. Declaring a key is not consuming it.
+# ---------------------------------------------------------------------------
+agent_runtime.answer_verification:EvidenceAccessState.not_found :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.capabilities.desktop.host_path:HostPathRefusal.volume_root :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.capabilities.mcp.constants:ErrorCode.permission_denied :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.capabilities.mcp.revision_resolver:RevisionResolveState.not_found :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.capabilities.surfaces.shape_request:_ShapeKeys.spec_version :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.delegation.subagents.constants:ErrorCode.permission_denied :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.execution.contracts:StreamEventType.final_response :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.execution.contracts:StreamEventType.tool_call :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.execution.contracts:StreamEventType.tool_result :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.execution.providers.openai_responses_stream_adapter:_Fields.file_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.observability.attribution:Purpose.shape_request :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.observability.attribution:Purpose.view_shaping :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.observability.lifecycle_ledger:LifecycleKind.tool_call :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.persistence.records.retention:RetentionKind.context_payloads :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.persistence.records.retention:RetentionKind.memory_items :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.prompts.observation:PromptCacheOutcome.read_write :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.effect_commit :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.effect_stager :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.mcp_gateway :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.operation_gateway :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.workspace_commit :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.rollout:RolloutCapability.workspace_overlay :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.gate:_PayloadKey.api_event_type :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.ledger_models:EffectProposalKind.browser_submission :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.ledger_models:EffectProposalKind.row_set :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.pending_work_v2:_Key.claim_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.pending_work_v2:_Key.gate_kind :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.receipt_export_v2:_Keys.key_version :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.receipt_export_v2:_Keys.prev_hash :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+agent_runtime.surfaces_v2.receipt_export_v2:_Keys.row_count :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_adapters.base:_Fields.regenerate_from_message_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.common:AgentRunStatus.timed_out :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.common:RuntimeApiEventType.approval_requested :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.common:RuntimeApiEventType.mcp_auth_required :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.events:_Fields.grant_scope :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.events:_Fields.spec_version :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_api.schemas.events:_OperationFields.failure_code :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.handlers.approval:_Fields.native_interrupt_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.handlers.run:_Fields.regenerate_from_message_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_events:_Fields.grant_options :: emitted on every filesystem approval; the sole app-side mention is the strip list at apps/frontend/src/features/chat/chatModel/payloadHelpers.ts, i.e. an instruction to discard it
+runtime_worker.stream_events:_Fields.grant_scope :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_events:_Fields.native_interrupt_id :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_messages:_Fields.api_event_type :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+runtime_worker.stream_messages:_ReasoningBlock.thinking_signature :: key is emitted to the client and the app tree mentions it only as a bare string, never reading it off the payload
+
+# ---------------------------------------------------------------------------
+# Store capabilities wired on one backend only. Each exists on a single
+# runtime_adapters/<backend>/ package, on no sibling backend and on no Protocol
+# port, and no module outside that package names it. Nothing typed against the
+# port can call them, so selecting any other backend silently drops the
+# capability with no error and no log line.
+# ---------------------------------------------------------------------------
+runtime_adapters.file._audit_manifest:AuditManifest.export_record :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._capacity:QuotaGuard.current_bytes :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.delete_conversation_cascade :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.insert_events :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.is_empty :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.search_conversations :: FTS5 conversation search; the index is maintained on every write and no module outside runtime_adapters/file/ ever queries it
+runtime_adapters.file._catalog_index:CatalogIndex.upsert_conversation :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.upsert_message :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._catalog_index:CatalogIndex.upsert_run :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._deletion:ObjectReachabilityScanner.collectible :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._deletion:ObjectReachabilityScanner.scan_all :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:ConversationHealth.from_diagnosis :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:FileStoreHealthTracker.catalog_rebuilt :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:FileStoreHealthTracker.mark_catalog_rebuilt :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:FileStoreHealthTracker.mark_needs_repair :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:FileStoreHealthTracker.reasons_for :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._health:StoreHealthReport.needs_repair_ids :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._jsonl:JsonlIo.append_line :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._jsonl:JsonlIo.append_lines :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._jsonl:JsonlIo.read_json :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._jsonl:JsonlIo.rewrite_json :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._jsonl:JsonlIo.rewrite_lines :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.conversation_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.conversation_meta_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.ensure_scaffold :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.events_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.index_db_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.messages_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.object_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.objects_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.restrict_file :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.runs_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.sessions_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.state_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.subagent_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.subagents_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.workspace_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._paths:FileStoreLayout.workspaces_dir :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._state_ledger:StateLedger.append_delete :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._state_ledger:StateLedger.line_count :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._state_ledger:StateLedger.load_ops :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.append_committed :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.append_failed :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.catalog_discarded :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.deletion_completed :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.interior_corruption :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.quota_rejected :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.retention_sweep_completed :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.state_ledger_compacted :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.state_ledger_compaction_failed :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.store_opened :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file._telemetry:FileStoreTelemetry.torn_tail_ignored :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.agent_state_store:FileAgentStoreGate.active_layout :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.agent_state_store:FileMemoryStore.list_documents :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.agent_state_store:FileSubagentDefinitionStore.read_raw_definitions :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.artifact_blob_store:FileArtifactBlobStore.integrity_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.artifact_publication:FileArtifactPublicationCoordinator.reaping_path :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.export_import:ConversationArchiver.import_ :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.legacy_stage_migration_control:FileLegacyStageReservationStore.assert_append_fence :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.legacy_stage_migration_control:FileLegacyStageReservationStore.mark_append_staged :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.mcp_catalog_store:FileMcpCatalogStore.loaded_server_names :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.object_store:FileObjectStore.iter_digests :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.object_store:FileObjectStore.write_in_flight :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StoreRepair.diagnose_conversation :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StoreRepair.quarantine_corrupt_tail :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StoreRepair.rebuild_catalog :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StoreRepair.salvage_export :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StreamDiagnosis.has_torn_tail :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:StreamDiagnosis.needs_repair :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.repair:_ScannedStream.has_interior_corruption :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.export_conversation :: conversation export archive; its only caller is the adapter that defines it
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.import_conversation :: conversation import archive; same shape, same file, no product caller
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.store_health :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.file.runtime_api_store:FileRuntimeApiStore.sweep_expired_conversations :: capability exists only on the file store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/file/ names it
+runtime_adapters.in_memory.subagent_store:_SubagentProjector.recency_key :: capability exists only on the in_memory store backend, on no sibling backend and no Protocol port, and nothing outside runtime_adapters/in_memory/ names it
+
+# ---------------------------------------------------------------------------
+# Validated fields spent on a prompt. Each is parsed, typed and validated — so
+# it reads as an enforced rule — and its only consumer outside the declaring
+# package interpolates it into an f-string. The runtime enforces none of them;
+# the model is free to ignore every one.
+# ---------------------------------------------------------------------------
+agent_runtime.capabilities.browser:BrowserReadRequest.operation_id :: validated field whose only read outside its declaring package is an f-string in a prompt
+agent_runtime.capabilities.skills:SkillManifest.allowed_tools :: parsed, typed and validated at capabilities/skills/manifest.py, then spent on one f-string in the skill card at execution/factory.py — advice to the model, enforced nowhere
+agent_runtime.capabilities.tools.builtin:SuggestMcpConnectorInput.server_id :: validated field whose only read outside its declaring package is an f-string in a prompt
+agent_runtime.capabilities.tools:ToolCard.display_name :: validated field whose only read outside its declaring package is an f-string in a prompt
+agent_runtime.capabilities.workspace:WorkspaceGrantBinding.mount_label :: validated field whose only read outside its declaring package is an f-string in a prompt
+agent_runtime.control_plane:RunControlDecision.decision_id :: validated field whose only read outside its declaring package is an f-string in a prompt
+runtime_api.schemas:QualityDecisionPayload.decision_id :: validated field whose only read outside its declaring package is an f-string in a prompt

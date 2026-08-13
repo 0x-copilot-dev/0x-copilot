@@ -26,38 +26,60 @@ counts as "exercising" depends on what the symbol *is*, and collapsing that
 distinction is what makes a naive version useless:
 
 * a **callable** is exercised by a caller, so a mention from any other src module
-  counts;
-* a **contract field** is exercised by a *producer*. A field nobody writes is
-  dark however many readers it has — that is exactly ``expires_at``, which has a
-  reader, a sweeper and a query, and no writer. Reads therefore do not count;
+  counts — and so does a call from elsewhere in its own module, since a reachable
+  module makes the call reachable too;
+* a **contract field** is exercised by a *producer*, and only the ``x: T | None =
+  None`` shape is in scope. The field must be threaded through constructors
+  somewhere as a copy of itself and never once originated: alive-looking at every
+  hop, produced at none. That is exactly ``expires_at``, which has a reader, a
+  sweeper and a query, and no writer. A field merely sitting on a working default
+  is a different and uninteresting fact, and a contract whose fields are *mostly*
+  copies is a projection doing its job;
 * a **wire key** (``FIELD = "some_key"``) is exercised by whoever reads the key
   off the payload, and for this service that consumer is TypeScript. So the app
   tree is scanned for a genuine property read (``payload.some_key`` /
   ``payload["some_key"]``). A bare string in a strip list is not a read, and a
   ``some_key?: string[]`` member in ``packages/api-types`` is a declaration, not
   a consumer — which is precisely why ``grant_options`` looks wired and is not.
+  Only constants Python uses in *key position* qualify, which is what keeps enum
+  values (compared, never property-read) out of a detector that cannot see them.
 
 **2. ``backend-only``** — a public store capability defined in exactly one
 ``runtime_adapters/<backend>/`` package, absent from its sibling backends and
-from every ``Protocol`` port in the service. Nothing typed against the port can
-call it; it is reachable only by first proving which backend is live, so the
-other backends silently degrade. This is the ``runtime_worker/file_store_wiring``
-shape (``hasattr(store, ...)`` → capability or ``None``) stated as a static fact
-about the class surface instead of a runtime probe.
+from every ``Protocol`` port in the service, **and named by no module outside
+that package**. Nothing typed against the port can call it; it is reachable only
+by first proving which backend is live, so the other backends silently degrade.
+This is the ``runtime_worker/file_store_wiring`` shape (``hasattr(store, ...)``
+→ capability or ``None``) stated as a static fact about the class surface
+instead of a runtime probe. Both halves are required: a file-native store
+legitimately owns dozens of methods its in-memory sibling has no reason to have,
+and all of those are called.
 
 **3. ``prompt-only``** — a validated contract field whose every read outside its
 declaring package is interpolated into an f-string. The value was *validated*, so
 it reads as enforced; it is advisory text handed to a model free to ignore it.
 
-Attribution, and why it is per-package
-======================================
+Attribution, and why it follows the import graph
+================================================
 
 Detector 3 is keyed on ``(package, field name)``, not on the field name alone,
 and that is load-bearing rather than tidy. ``allowed_tools`` is declared by six
-different classes across three packages; a name-only index sees the *subagent*
-handoff genuinely narrowing tools and concludes the *skills* manifest field is
-enforced. Reads from inside the declaring package are likewise excluded, because
-a package consuming its own field is not evidence that anything downstream does.
+different classes across three packages, so a name-only index cannot tell which
+one a read refers to — and gets it exactly backwards: the *subagent* handoff
+genuinely narrows tools, which makes the name look enforced and hides the
+*skills* manifest field whose only consumer is a prompt. The gate then flags the
+one field that is enforced and stays silent on the one that is not.
+
+The import graph settles it without type inference. A read in file F is
+attributed to a declaration in package P only when F is in P or imports from it:
+``handoff.py`` never imports ``capabilities.skills``, so its real read cannot be
+of the skills field; ``factory.py`` imports both, so its prompt read counts
+against both. A file can only read a field of a contract it can name.
+
+A real read *anywhere that can see the field* counts as enforcement, including
+inside the declaring package — local enforcement is enforcement, and excluding
+own-package reads discards precisely the evidence that ``SubagentTask``'s field
+is enforced by its package-mate.
 
 A read that only moves the value on — ``allowed_tools=tuple(x.allowed_tools)``,
 the same name in and out — is a **pass-through**, not a consumer. Counting those
@@ -471,9 +493,9 @@ class ProducerIndex:
                             continue
                         if owner:
                             index.keyword_built.add(owner)
-                            index.by_class.setdefault(
-                                (owner, keyword.arg), set()
-                            ).add(file.path)
+                            index.by_class.setdefault((owner, keyword.arg), set()).add(
+                                file.path
+                            )
                         else:
                             index.loose.setdefault(keyword.arg, set()).add(file.path)
                 elif isinstance(node, ast.Assign):
@@ -892,9 +914,7 @@ def find_backend_only(src: list[PyFile]) -> list[Finding]:
                 for base in node.bases
             )
             for statement in node.body:
-                if not isinstance(
-                    statement, (ast.FunctionDef, ast.AsyncFunctionDef)
-                ):
+                if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 name = statement.name
                 if is_protocol:
@@ -1033,9 +1053,7 @@ def _names_in_fstrings(scope: ast.AST) -> set[str]:
     return found
 
 
-def _tracked_reads(
-    scope: ast.AST, names: frozenset[str]
-) -> list[tuple[ast.AST, str]]:
+def _tracked_reads(scope: ast.AST, names: frozenset[str]) -> list[tuple[ast.AST, str]]:
     """``(node, name)`` for every attribute read or ``getattr`` of a tracked name."""
 
     found: list[tuple[ast.AST, str]] = []
@@ -1078,6 +1096,34 @@ def _is_pass_through(scope: ast.AST, needle: ast.AST, name: str) -> bool:
     return False
 
 
+def _visible_packages(file: PyFile) -> frozenset[str]:
+    """Every package this module imports from, plus its own.
+
+    Each imported module contributes all of its dotted prefixes, so a file that
+    does ``from agent_runtime.capabilities.skills.middleware import X`` is
+    recorded as able to see ``agent_runtime.capabilities.skills`` — the package
+    :func:`_package_of` reports for that contract's declaring file.
+    """
+
+    found: set[str] = {_package_of(file.path)}
+    for node in ast.walk(file.tree):
+        module = ""
+        if isinstance(node, ast.ImportFrom) and node.module:
+            module = node.module
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                found.update(
+                    ".".join(parts[: index + 1]) for index in range(len(parts))
+                )
+            continue
+        if not module:
+            continue
+        parts = module.split(".")
+        found.update(".".join(parts[: index + 1]) for index in range(len(parts)))
+    return frozenset(found)
+
+
 def find_prompt_only(
     *, declarations: list[Declaration], src: list[PyFile]
 ) -> list[Finding]:
@@ -1091,26 +1137,64 @@ def find_prompt_only(
         return []
 
     names = frozenset(tracked)
-    prompt_reads: dict[str, set[str]] = {}
-    real_reads: dict[str, set[str]] = {}
+    #: name -> [(reader package, packages that reader can see)]
+    prompt_reads: dict[str, list[tuple[str, frozenset[str]]]] = {}
+    real_reads: dict[str, list[tuple[str, frozenset[str]]]] = {}
     for file in src:
         if not (names & file.tokens):
             continue
         classifier = _ReadClassifier(names=names)
         classifier.visit(file.tree)
         package = _package_of(file.path)
+        reach = _visible_packages(file)
         for name in classifier.prompt:
-            prompt_reads.setdefault(name, set()).add(package)
+            prompt_reads.setdefault(name, []).append((package, reach))
         for name in classifier.real:
-            real_reads.setdefault(name, set()).add(package)
+            real_reads.setdefault(name, []).append((package, reach))
 
     findings: list[Finding] = []
     seen: set[str] = set()
     for name, declared in sorted(tracked.items()):
         for declaration in declared:
             package = _package_of(declaration.file)
-            outside_prompt = prompt_reads.get(name, set()) - {package}
-            outside_real = real_reads.get(name, set()) - {package}
+
+            def sees(
+                reader: str, reach: frozenset[str], *, owner: str = package
+            ) -> bool:
+                """Could this reader be reading *this* declaration's field?
+
+                Six classes across three packages declare a field called
+                ``allowed_tools``, so a name-keyed index cannot tell which one a
+                read refers to — and gets it exactly backwards here. The subagent
+                handoff genuinely narrows tools, which made the *name* look
+                enforced and hid the skills manifest field, whose only consumer
+                is a prompt f-string. Reversed, the gate flagged the one field
+                that is enforced and stayed silent on the one that is not.
+
+                The import graph settles it without type inference: ``handoff.py``
+                never imports ``capabilities.skills``, so its real read cannot be
+                of the skills field; ``factory.py`` imports both, so its prompt
+                read counts against both. A file can only read a field of a
+                contract it can name.
+                """
+
+                return reader == owner or owner in reach
+
+            outside_prompt = {
+                reader
+                for reader, reach in prompt_reads.get(name, [])
+                if sees(reader, reach) and reader != package
+            }
+            # A real read *anywhere that can see this field* means enforced —
+            # including inside the declaring package. Excluding own-package reads
+            # (on the theory that a package consuming its own field proves
+            # nothing downstream) discards precisely the evidence that
+            # ``SubagentTask.allowed_tools`` is enforced, since the enforcing
+            # code is its package-mate ``handoff.py``. Local enforcement is
+            # enforcement.
+            outside_real = any(
+                sees(reader, reach) for reader, reach in real_reads.get(name, [])
+            )
             if not outside_prompt or outside_real:
                 continue
             key = f"{package}:{declaration.owner}.{name}"
@@ -1238,8 +1322,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if new:
         sys.stderr.write(
-            "FAIL: new symbol(s) that are built but not wired to any product "
-            "caller\n"
+            "FAIL: new symbol(s) that are built but not wired to any product caller\n"
         )
         for finding in new:
             sys.stderr.write(
