@@ -96,6 +96,7 @@ from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolCollaborators,
 )
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.contracts import ConnectorAccessMode
 from agent_runtime.execution.fake_model import FakeModelProvider
@@ -122,6 +123,13 @@ _SERVER = "linear"
 _SERVER_ID = "srv_linear"
 _READ_TOOL = "get_issues"
 _WRITE_TOOL = "create_issue"
+#: What the MODEL calls and what every stream event carries. Per-tool
+#: registration namespaces the model surface so two connectors exposing one name
+#: can coexist; the connector itself still answers to the bare name above, which
+#: is why ``connector.calls`` below is asserted in that register — renaming the
+#: ``BaseTool`` must not rename the wire call.
+_READ_REGISTERED = McpToolName.compose(server=_SERVER, tool=_READ_TOOL)
+_WRITE_REGISTERED = McpToolName.compose(server=_SERVER, tool=_WRITE_TOOL)
 _READ_ARGS = {"team": "ENG"}
 _WRITE_ARGS = {"title": "Ship it", "team": "ENG"}
 # The four capabilities the model-facing MCP operation gateway requires to
@@ -612,7 +620,7 @@ class TestPerToolTrustedReadAutoRuns(PerToolLinearRunMixin):
     ) -> None:
         connector, sink = self._wire(monkeypatch, per_tool=True)
         self._script_per_tool_call(
-            monkeypatch, tool_name=_READ_TOOL, arguments=_READ_ARGS
+            monkeypatch, tool_name=_READ_REGISTERED, arguments=_READ_ARGS
         )
         store = InMemoryRuntimeApiStore()
         settings = self._settings()
@@ -638,7 +646,7 @@ class TestPerToolTrustedReadAutoRuns(PerToolLinearRunMixin):
         assert connector.proxy_clients == []
         # The flip actually happened this run — the umbrella tool is gone.
         assert self._tool_payloads(store, run_id, tool_name="call_mcp_tool") == []
-        assert self._tool_payloads(store, run_id, tool_name=_READ_TOOL) != []
+        assert self._tool_payloads(store, run_id, tool_name=_READ_REGISTERED) != []
 
 
 class TestPerToolWriteParksThenApproveExecutes(PerToolLinearRunMixin):
@@ -647,7 +655,7 @@ class TestPerToolWriteParksThenApproveExecutes(PerToolLinearRunMixin):
     ) -> None:
         connector, sink = self._wire(monkeypatch, per_tool=True)
         self._script_per_tool_call(
-            monkeypatch, tool_name=_WRITE_TOOL, arguments=_WRITE_ARGS
+            monkeypatch, tool_name=_WRITE_REGISTERED, arguments=_WRITE_ARGS
         )
         store = InMemoryRuntimeApiStore()
         settings = self._settings()
@@ -697,7 +705,7 @@ class TestPerToolConnectorProvenance(PerToolLinearRunMixin):
     ) -> None:
         connector, sink = self._wire(monkeypatch, per_tool=True)
         self._script_per_tool_call(
-            monkeypatch, tool_name=_READ_TOOL, arguments=_READ_ARGS
+            monkeypatch, tool_name=_READ_REGISTERED, arguments=_READ_ARGS
         )
         store = InMemoryRuntimeApiStore()
         settings = self._settings()
@@ -712,7 +720,7 @@ class TestPerToolConnectorProvenance(PerToolLinearRunMixin):
         assert connector.calls == [(_READ_TOOL, _READ_ARGS)]
         # The factory published the run's registration map exactly once.
         assert [published[0] for published in sink.published] == [run_id]
-        payloads = self._tool_payloads(store, run_id, tool_name=_READ_TOOL)
+        payloads = self._tool_payloads(store, run_id, tool_name=_READ_REGISTERED)
         assert payloads, self._event_types(store, run_id)
         # There is no dispatcher payload to unwrap here — every one of these
         # resolved through the published map, which is the P2-6 fallback.
@@ -731,7 +739,7 @@ class TestPerToolConnectorProvenance(PerToolLinearRunMixin):
         invocations = [
             record
             for record in store.tool_invocations.values()
-            if record.run_id == run_id and record.tool_name == _READ_TOOL
+            if record.run_id == run_id and record.tool_name == _READ_REGISTERED
         ]
         assert invocations, list(store.tool_invocations.values())
         assert {record.connector_slug for record in invocations} == {_SERVER}
