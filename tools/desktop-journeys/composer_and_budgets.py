@@ -24,7 +24,12 @@ from __future__ import annotations
 import json
 import time
 
-from _lib import DriverSession, JourneyPlan, byok_provider
+from _lib import (
+    DriverSession,
+    JourneyPlan,
+    byok_provider,
+    wait_for_conversation_id,
+)
 
 
 STATE: dict[str, object] = {}
@@ -907,13 +912,11 @@ def cb8_context_meter_reflects_the_ledger(s: DriverSession) -> None:
         "the cockpit never re-opened a bound run"
     )
 
-    conversation_id = s.evaluate(
-        "(() => (location.hash.match(/conversations?\\/([^/?#]+)/) || [])[1] || null)()"
-    )
-    assert conversation_id, (
-        "could not read a conversation id off the route; the phase cannot ask "
-        "the server what it should be seeing"
-    )
+    # The route is `#/convo/<id>`, and `wait_for_conversation_id` is the helper
+    # that knows it — including the openNewRun race its docstring describes.
+    # Hand-rolling the regex here got it wrong ("conversations/") and turned a
+    # working meter into a phase that failed on its own premise.
+    conversation_id = wait_for_conversation_id(s, timeout_s=20)
 
     # What the server says. This is the premise — without it the pill is
     # CORRECT to render nothing, and asserting its presence would be the bug.

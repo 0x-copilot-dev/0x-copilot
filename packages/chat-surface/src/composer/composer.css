@@ -2020,3 +2020,15 @@
 .atlas-ctx-pop__link:hover {
   border-color: var(--color-border-stronger);
 }
+
+/* The fold's remainder row. Quieter than a declaration and italic, because it
+ * is a SUM over several rather than a thing that exists — reading it as one
+ * more declaration is the misreading the fold could otherwise introduce. */
+.atlas-ctx-row[data-remainder] .atlas-ctx-row__label {
+  color: var(--color-text-subtle);
+  font-style: italic;
+}
+
+.atlas-ctx-row[data-remainder] .atlas-ctx-row__tok {
+  color: var(--color-text-muted);
+}

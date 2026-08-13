@@ -50,13 +50,14 @@ function view(over: Partial<ContextPillView> = {}): ContextPillView {
             thirdParty: true,
             cacheable: true,
             approximate: false,
+            lifecycle: "resident",
           },
         ],
       },
       {
         lifecycle: "per_result",
         label: "Per result",
-        note: "× 24 results",
+        note: "scales with results",
         rows: [
           {
             key: "messages:tool_results::",
@@ -69,6 +70,7 @@ function view(over: Partial<ContextPillView> = {}): ContextPillView {
             thirdParty: false,
             cacheable: false,
             approximate: true,
+            lifecycle: "per_result",
           },
         ],
       },
@@ -167,7 +169,7 @@ describe("ContextPill — the breakdown", () => {
     expect(pop).toHaveTextContent("Resident");
     expect(pop).toHaveTextContent("every call");
     expect(pop).toHaveTextContent("Per result");
-    expect(pop).toHaveTextContent("× 24 results");
+    expect(pop).toHaveTextContent("scales with results");
   });
 
   it("marks a third-party, cacheable row and an approximate one differently", () => {
