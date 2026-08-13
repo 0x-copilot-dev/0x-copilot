@@ -588,10 +588,80 @@ class DriverSession:
         return json.loads(raw)
 
     # -- common user actions (real testIds; keep in sync with the app) --
+    def wait_for_app_ready(self, timeout_s: int | None = None) -> float:
+        """Block until the supervised boot screen is gone. Returns seconds waited.
+
+        The control-server probe in :meth:`start` returns as soon as the FIRST
+        WINDOW exists, and the first window is the boot screen
+        (``BootProgress.tsx``, ``data-testid=boot-gate``). The services behind
+        it — initdb, migrations, three uvicorns — are still coming up, and the
+        renderer shows nothing else until they are healthy. So "the app
+        launched" and "the app is usable" are two different moments, and
+        everything a journey wants to click belongs to the second one.
+
+        Measured on a warm M-series laptop against a staged runtime: **110s**
+        from launch to the sign-in gate, of which ~9s was the window. A hosted
+        macOS runner is slower still. The 60s default on :meth:`wait_for` is
+        therefore below the real cold-boot cost — which is why this waits on
+        ``BOOT_TIMEOUT_S``, the budget the harness ALREADY uses for exactly this
+        question and which the caller can already raise.
+
+        Two behaviours make a red run readable instead of merely red:
+
+        * a fatal boot error (``boot-fatal``) fails IMMEDIATELY with the app's
+          own message, rather than burning the whole budget to then report a
+          timeout;
+        * a timeout names the boot stage the app was stuck on, so "still
+          Starting the local database after 260s" cannot be misread as a
+          product assertion about the screen that never rendered.
+        """
+
+        budget = BOOT_TIMEOUT_S if timeout_s is None else timeout_s
+        start = time.time()
+        deadline = start + budget
+        stage = ""
+        while time.time() < deadline:
+            if self.present("[data-testid=boot-fatal]"):
+                message = self.evaluate(
+                    "(document.querySelector('[data-testid=boot-fatal-message]')"
+                    "?.innerText||'').trim()"
+                )
+                raise AssertionError(
+                    f"the app reported a FATAL boot error after "
+                    f"{time.time() - start:.0f}s: {message!r}. The supervised "
+                    "services did not come up; their logs are under the run's "
+                    "userData `logs/` dir, not in the renderer."
+                )
+            if not self.present("[data-testid=boot-gate]"):
+                return time.time() - start
+            stage = (
+                self.evaluate(
+                    "(document.querySelector('[data-testid=boot-message]')"
+                    "?.innerText||'').trim()"
+                )
+                or stage
+            )
+            time.sleep(0.5)
+        raise AssertionError(
+            f"the app was still booting after {budget}s — last stage: {stage!r}. "
+            "This is the BOX, not the product: raise BOOT_TIMEOUT_S, or read the "
+            "supervised services' logs to see which one never became healthy."
+        )
+
     def sign_in_local(self) -> None:
-        """Sign-in gate → "Use locally, no account" (the no-signup device account)."""
+        """Sign-in gate → "Use locally, no account" (the no-signup device account).
+
+        Waits the boot screen out first. Without that this asserted on a DOM
+        that was still showing `boot-gate`, and reported the honest-looking
+        "sign-in gate never appeared" — a harness timeout wearing a product
+        failure's clothes, and the same trap `driver.mjs` documents for
+        `electron.launch`.
+        """
+        waited = self.wait_for_app_ready()
+        print(f"[{self.name}] app ready after {waited:.0f}s of boot", flush=True)
         assert self.wait_for("[data-testid=sign-in-button]"), (
-            "sign-in gate never appeared"
+            "sign-in gate never appeared (the boot screen had already cleared, "
+            "so this one IS about the sign-in surface)"
         )
         self.click("[data-testid=sign-in-button]")
 
@@ -1139,6 +1209,45 @@ class PhaseResult:
 #: ``DriverSession`` and asserts; returning normally is the pass.
 Phase = tuple[str, str, Callable[[DriverSession], None]]
 
+#: Env var pinning WHICH phases this process may run (comma/space separated).
+PHASE_SELECTOR_ENV = "JOURNEY_PHASES"
+
+
+def selected_phase_ids() -> frozenset[str] | None:
+    """The phase ids ``JOURNEY_PHASES`` pins, or ``None`` for "run them all".
+
+    Since one boot now carries every phase in a file, running the file is the
+    only way to get a claim — and those phases share that boot's state ON
+    PURPOSE, so a later one inherits whatever route, rail, env and run history
+    its predecessors left behind. A caller that wants exactly ONE claim (a
+    per-PR CI job, a bisect, a bug reproduction) therefore cannot get it by
+    running the file: it inherits state it never asked for and fails in a LATER
+    phase with a symptom-shaped message that reads exactly like a product bug.
+
+    ``JOURNEY_PHASES=FR-0`` runs FR-0 and DROPS the rest. Dropped, not recorded
+    as skipped: a skipped phase is deliberately non-zero (see
+    :attr:`JourneyPlan.exit_code`), so recording six phases the caller
+    explicitly did not ask for would make every pinned run red. A boot with no
+    selected phase is not booted at all — the whole point is to not pay for
+    initdb + migrations + three uvicorns to run nothing.
+
+    Matching is case-insensitive and whitespace-tolerant. An id that matches
+    nothing is a hard failure rather than a quiet empty run: see
+    :attr:`JourneyPlan.exit_code`. That is the difference between "CI runs one
+    phase" and "CI runs zero phases and reports success", which is precisely the
+    failure mode a per-PR e2e gate exists to not have.
+    """
+
+    raw = os.environ.get(PHASE_SELECTOR_ENV, "").strip()
+    if not raw:
+        return None
+    ids = frozenset(
+        token.strip().lower()
+        for token in raw.replace(",", " ").split()
+        if token.strip()
+    )
+    return ids or None
+
 
 @contextmanager
 def scoped_env(
@@ -1190,6 +1299,11 @@ class JourneyPlan:
         self.name = name
         self.results: list[PhaseResult] = []
         self._started = time.time()
+        #: Phase ids this run is pinned to, or ``None`` for all of them.
+        self.selected = selected_phase_ids()
+        #: Which pinned ids an actual declared phase answered to. Anything left
+        #: over is a caller pointing at a phase that no longer exists.
+        self._matched: set[str] = set()
 
     # -- recording --
     def _record(
@@ -1263,6 +1377,17 @@ class JourneyPlan:
         group and nothing else.
         """
 
+        # Pin BEFORE the factory runs. A boot with no selected phase must not
+        # cost initdb + migrations + three uvicorns to then run nothing.
+        phases = self._pin(phases)
+        if not phases:
+            print(
+                f"\n── boot: {label} — skipped, "
+                f"{PHASE_SELECTOR_ENV} pins no phase in this group",
+                flush=True,
+            )
+            return
+
         print(f"\n── boot: {label} ({len(phases)} phases)", flush=True)
         with scoped_env(env, clear=clear_env):
             try:
@@ -1301,6 +1426,16 @@ class JourneyPlan:
                     label, phases, Outcome.FAILED, f"{type(exc).__name__}: {exc}"
                 )
 
+    def _pin(self, phases: Sequence[Phase]) -> Sequence[Phase]:
+        """Narrow ``phases`` to what ``JOURNEY_PHASES`` selected. See
+        :func:`selected_phase_ids` for why dropping beats skipping."""
+
+        if self.selected is None:
+            return phases
+        kept = [phase for phase in phases if phase[0].strip().lower() in self.selected]
+        self._matched.update(phase[0].strip().lower() for phase in kept)
+        return kept
+
     def _skip_group(
         self,
         label: str,
@@ -1321,6 +1456,14 @@ class JourneyPlan:
         }
 
     @property
+    def unmatched_selection(self) -> tuple[str, ...]:
+        """Pinned phase ids no declared phase answered to."""
+
+        if self.selected is None:
+            return ()
+        return tuple(sorted(self.selected - self._matched))
+
+    @property
     def exit_code(self) -> int:
         """`0` only when every phase ran and passed.
 
@@ -1328,8 +1471,17 @@ class JourneyPlan:
         capability, which outranks a missing local prerequisite. A run with even
         one skipped phase is never `0`, because the file did not prove what its
         name claims.
+
+        A ``JOURNEY_PHASES`` id that matched no declared phase outranks all of
+        them and reports `1`. A pinned run is a caller asserting that a specific
+        claim is checked; if renaming a phase silently turned that into an empty
+        run, the caller — a per-PR CI gate, say — would go on reporting success
+        while proving nothing. That is the exact pathology this harness exists
+        to catch, so it must not be one.
         """
 
+        if self.unmatched_selection:
+            return 1
         outcomes = {r.outcome for r in self.results}
         if not self.results:
             return EXIT_SKIPPED
@@ -1347,6 +1499,14 @@ class JourneyPlan:
         counts = self.counts()
         code = self.exit_code
         elapsed = time.time() - self._started
+        unmatched = self.unmatched_selection
+        if unmatched:
+            print(
+                f"\n!! {PHASE_SELECTOR_ENV} named "
+                + ", ".join(repr(phase_id) for phase_id in unmatched)
+                + f", which {self.name} does not declare — nothing was proven. "
+                "Fix the caller (a CI job, a script) or restore the phase id."
+            )
         print(f"\n══ {self.name} — {len(self.results)} phases in {elapsed:.0f}s")
         for result in self.results:
             if not result.ok:
@@ -1370,6 +1530,12 @@ class JourneyPlan:
                     ),
                     "counts": counts,
                     "seconds": round(elapsed, 1),
+                    **(
+                        {"selected_phases": sorted(self.selected)}
+                        if self.selected is not None
+                        else {}
+                    ),
+                    **({"unmatched_phases": list(unmatched)} if unmatched else {}),
                     "phases": [
                         {
                             "boot": r.boot,
