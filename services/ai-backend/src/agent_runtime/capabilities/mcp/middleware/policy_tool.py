@@ -398,6 +398,17 @@ class PolicyGatedMcpTool(DelegatingTool):
                 McpLoadErrorCode.PERMISSION_DENIED,
                 PolicyStageMessages.APPROVAL_UNAVAILABLE,
             )
+        approval_id = self._approval_id(tool_call_id)
+        # Remember the ask BEFORE parking, keyed on the id the card and the
+        # resume path already join on. Registering after the park would be too
+        # late in the only case that matters: a sibling call answered `always`
+        # while this one is still parked could not cover an ask the ledger had
+        # never been told about.
+        McpDispatchPolicy.register_pending(
+            context=self.runtime_context,
+            decision=decision,
+            approval_id=approval_id,
+        )
         resume = await self.gate.park_for_approval(
             card=card,
             # The CONNECTOR register: this value becomes ``gate.op`` and the
@@ -407,13 +418,24 @@ class PolicyGatedMcpTool(DelegatingTool):
             tool_name=McpToolName.strip(self.name),
             arguments=arguments,
             op_class=decision.descriptor.action.value,
-            approval_id=self._approval_id(tool_call_id),
+            approval_id=approval_id,
         )
         if not resume.approved:
             return self._refusal(
                 McpLoadErrorCode.PERMISSION_DENIED,
                 PolicyStageMessages.WRITE_DECLINED,
             )
+        # An APPROVED resume is the one moment the user's chosen scope exists in
+        # the runtime. `once` writes nothing (today's behaviour, unchanged);
+        # `always` appends a run-scoped ALLOW rule over the subjects this call
+        # carried, which the NEXT `evaluate` above reads back — so the second
+        # identical write in this run dispatches without a card. This call is the
+        # difference between the rule layer existing and being reachable.
+        McpDispatchPolicy.record_reply(
+            context=self.runtime_context,
+            approval_id=approval_id,
+            scope=resume.decision_scope,
+        )
         return None
 
     def _policy_denied(self, reason: str) -> Any:

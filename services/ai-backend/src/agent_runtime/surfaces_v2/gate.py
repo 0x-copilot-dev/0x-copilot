@@ -72,6 +72,17 @@ class _PayloadKey:
     # the flag signal downstream (``stream_events`` emits ``gate.opened`` iff it
     # is set — no second flag read needed).
     GATE = "gate"
+    #: Top-level (NOT inside the ``gate`` block) because the filesystem lane
+    #: already spells it there — ``runtime_worker/stream_events.py``'s
+    #: ``_Fields.GRANT_OPTIONS``. Putting it inside ``gate`` would need its own
+    #: projection branch for the same idea.
+    #:
+    #: A write gate rides the ``ask_a_question`` wire shape, so it is projected by
+    #: ``RuntimeEventPresentationProjector._ask_a_question_requested_payload``,
+    #: NOT by the sibling ``_approval_requested_payload`` branch that already
+    #: handled this key. That is the same split which previously left ``op_class``
+    #: and ``risk_level`` stripped on this lane; both projections now name it.
+    GRANT_OPTIONS = "grant_options"
 
 
 class _GateKey:
@@ -90,6 +101,12 @@ class _ResumeKey:
     """Keys on the worker resume dict (``{approval_id, decision}``)."""
 
     DECISION = "decision"
+    #: How far the approval reaches — ``once`` (this call) or ``always`` (write
+    #: a rule that answers the rest of the run). Threaded from the decision
+    #: endpoint through ``RuntimeApprovalResolvedCommand`` and
+    #: ``RuntimeApprovalHandler._resume_payload``'s ``ask_a_question`` branch,
+    #: which is the branch the write gate borrows.
+    DECISION_SCOPE = "decision_scope"
 
 
 class _Values:
@@ -114,6 +131,13 @@ class _Values:
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_KIND_WRITE = "ask_a_question"
     STATUS_PENDING = "pending"
+    #: ``grant_options`` on the write-gate card. ``allow_once`` is what a plain
+    #: approve has always done; ``allow_always`` is the second scope, and it is
+    #: offered ONLY for a non-destructive op — see :meth:`
+    #: ToolAccessGate._grant_options`.
+    ALLOW_ONCE = "allow_once"
+    ALLOW_ALWAYS = "allow_always"
+    OP_CLASS_DESTRUCTIVE = "destructive"
 
 
 class _Messages:
@@ -184,6 +208,12 @@ class GateResume(RuntimeContract):
 
     approved: bool
     write_policy: Literal["ask_first", "allow_always"] | None = None
+    #: The reply's SCOPE, as the client sent it — ``once`` / ``always``, or
+    #: ``None`` when the resume named none. Left as an opaque string here on
+    #: purpose: the gate's job is to report what came back, and the meaning of
+    #: ``always`` (which rule it writes, over which subjects) belongs to the
+    #: policy lane that raised the GATE, not to the transport that carried it.
+    decision_scope: str | None = None
 
 
 class GatePurposeBuilder:
@@ -422,6 +452,7 @@ class ToolAccessGate:
             _PayloadKey.MESSAGE: message,
             "question": message,
             _PayloadKey.STATUS: _Values.STATUS_PENDING,
+            _PayloadKey.GRANT_OPTIONS: self._grant_options(op_class),
             _PayloadKey.GATE: {
                 _GateKey.V: _Values.PAYLOAD_V,
                 _GateKey.PURPOSE: GatePurposeBuilder.build(
@@ -434,6 +465,42 @@ class ToolAccessGate:
                 _GateKey.OP_CLASS: op_class,
             },
         }
+
+    @staticmethod
+    def _grant_options(op_class: str) -> list[str]:
+        """Which scopes this card may be answered with.
+
+        ``allow_once`` is unconditional — it is what a plain approve has always
+        meant. ``allow_always`` is offered for every op EXCEPT a destructive one.
+
+        The split is the same one the filesystem lane already reasons about at
+        ``runtime_worker/stream_events.py:227-234``, and it is worth being exact
+        about because the two lanes give the SAME wire word two different
+        meanings:
+
+        * **Filesystem lane** — ``allow_always`` ATTACHES A FOLDER: a durable
+          workspace grant, wider than the one path the card named. That lane
+          therefore withholds it for a write, because "a grant appearing from a
+          card that never mentioned one" is an escalation.
+        * **This lane** — ``allow_always`` writes a RUN-SCOPED rule over exactly
+          the subjects this call already carried (its URN and its own string
+          arguments; see :class:`PolicySubjects`). It widens nothing beyond what
+          the card named and it expires with the run. That is precisely the
+          "what the user actually wants after the third card is *stop pausing for
+          this run*" the filesystem note itself lands on — so the two lanes are
+          not in tension, they are answering two different questions and each
+          offers the option that is safe for its own.
+
+        Destructive is the one exclusion here, for the same reason
+        :meth:`PdpPolicyService._posture_decision` puts the destructive rung above
+        BYPASS: the value of pausing on an irreversible act is that it is decided
+        *each time it is about to happen*. An advance yes to a class of deletes is
+        the thing that rung exists to prevent, so the card does not offer one.
+        """
+
+        if op_class.strip().lower() == _Values.OP_CLASS_DESTRUCTIVE:
+            return [_Values.ALLOW_ONCE]
+        return [_Values.ALLOW_ONCE, _Values.ALLOW_ALWAYS]
 
     def _interrupt_payload(
         self,
@@ -529,12 +596,24 @@ class ToolAccessGate:
         """Coerce a resume value to a :class:`GateResume` (approved / not)."""
 
         decision: object = None
+        scope: object = None
         if isinstance(resume, Mapping):
             decision = resume.get(_ResumeKey.DECISION)
+            scope = resume.get(_ResumeKey.DECISION_SCOPE)
         approved = (
             isinstance(decision, str) and decision.lower() in _Values.APPROVED_DECISIONS
         ) or resume is True
-        return GateResume(approved=approved)
+        # A scope only ever travels with an APPROVAL. Carrying one off a
+        # rejection would let a decline write an allow rule, which is the exact
+        # inversion this field must not be able to express.
+        return GateResume(
+            approved=approved,
+            decision_scope=(
+                scope.strip().lower()[:32]
+                if approved and isinstance(scope, str) and scope.strip()
+                else None
+            ),
+        )
 
 
 class GateLedger:

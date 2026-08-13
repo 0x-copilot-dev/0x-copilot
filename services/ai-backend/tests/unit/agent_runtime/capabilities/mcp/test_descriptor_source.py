@@ -27,6 +27,10 @@ from agent_runtime.capabilities.policy.contracts import (
     Posture,
     Trust,
 )
+from agent_runtime.capabilities.policy.decisions import (
+    DecisionScope,
+    RunDecisionLedgers,
+)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     ConnectorAccessMode,
@@ -340,6 +344,320 @@ class TestDispatchPolicy(DescriptorSourceMixin):
             ),
         )
         assert decision.decision is PolicyDecision.ALLOW
+
+
+class TestDestructiveUnderBypassAtTheDispatchSeam(DescriptorSourceMixin):
+    """The safety hole, closed at the seam the MCP middleware actually calls.
+
+    ``PolicyGatedMcpTool._authorize`` (``mcp/middleware/policy_tool.py:382``) has
+    exactly this call and maps GATE onto the write-approval interrupt, so a
+    verdict asserted here is the verdict a real connector dispatch gets.
+    """
+
+    def test_destructive_gates_under_bypass(self) -> None:
+        # Was ALLOW: the BYPASS branch returned above the action check, so on a
+        # single-user desktop — where nobody authors the workspace BLOCK that
+        # was the only thing above it — Bypass auto-ran deletes.
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="delete_issue",
+            arguments={"id": "L-1"},
+            context=self.context(bypass=True),
+        )
+        assert decision.decision is PolicyDecision.GATE
+        assert decision.reason == "approval_required.destructive"
+        # GATE carries the descriptor whose ``action`` the middleware passes to
+        # ``park_for_approval`` as ``op_class`` — which is what makes the card
+        # withhold the ``allow_always`` option for a destructive op.
+        assert decision.descriptor.action is Action.DESTRUCTIVE
+        assert decision.posture is Posture.BYPASS
+
+    def test_bypass_still_auto_runs_an_ordinary_write(self) -> None:
+        # The pill keeps meaning "writes auto"; only the destructive rung moved.
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "x"},
+            context=self.context(bypass=True),
+        )
+        assert decision.decision is PolicyDecision.ALLOW
+
+    def test_authoring_the_destructive_axis_to_auto_still_lifts_it(self) -> None:
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="delete_issue",
+            arguments={"id": "L-1"},
+            context=self.context(
+                bypass=True,
+                # The axis is authored under ``tool_use.workspace`` — the same
+                # sub-policy ``ToolUsePolicyResolver.resolve`` already reads, so
+                # anyone who had written ``destructive: auto`` keeps their
+                # behaviour and the change stays strictly additive.
+                user_policies_json={"tool_use": {"workspace": {"destructive": "auto"}}},
+            ),
+        )
+        assert decision.decision is PolicyDecision.ALLOW
+
+
+class TestAuthoredRulesReachTheDispatchSeam(DescriptorSourceMixin):
+    """``user_policies_json`` → ``PermissionRuleset.authored`` → the verdict.
+
+    This is the half of the rule layer a user authors in settings. It is read
+    off the run context that ``McpDispatchPolicy.evaluate`` already receives, so
+    it is snapshot-at-run-start policy data enforced in-process — never a
+    per-tool-call HTTP hop (``services/ai-backend/CLAUDE.md``, PDP/PEP).
+    """
+
+    def _policies(
+        self,
+        *,
+        rules: dict[str, object] | None = None,
+        never: list[str] | None = None,
+    ) -> dict[str, object]:
+        tool_use: dict[str, object] = {}
+        if rules is not None:
+            tool_use["permission_rules"] = rules
+        if never is not None:
+            tool_use["never"] = never
+        return {"tool_use": tool_use}
+
+    def test_an_authored_allow_lifts_a_write_gate_under_manual(self) -> None:
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "x"},
+            context=self.context(
+                user_policies_json=self._policies(rules={"mcp:linear:*": "allow"})
+            ),
+        )
+        assert decision.decision is PolicyDecision.ALLOW
+
+    def test_an_authored_deny_survives_bypass(self) -> None:
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "x"},
+            context=self.context(
+                bypass=True,
+                user_policies_json=self._policies(
+                    rules={"mcp:linear:create_issue": "deny"}
+                ),
+            ),
+        )
+        assert decision.decision is PolicyDecision.DENY
+        assert decision.reason == "permission_denied"
+
+    def test_an_authored_rule_can_discriminate_on_an_argument(self) -> None:
+        policies = self._policies(
+            rules={"mcp:linear:*": {"*DROP TABLE*": "deny", "mcp:linear:*": "allow"}}
+        )
+        allowed = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "Fix the login bug"},
+            context=self.context(user_policies_json=policies),
+        )
+        denied = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "DROP TABLE issues"},
+            context=self.context(user_policies_json=policies),
+        )
+        assert allowed.decision is PolicyDecision.ALLOW
+        assert denied.decision is PolicyDecision.DENY
+
+    def test_the_never_list_survives_bypass(self) -> None:
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"path": "/Users/sarah/.ssh/id_rsa"},
+            context=self.context(
+                bypass=True,
+                user_policies_json=self._policies(
+                    rules={"mcp:linear:*": "allow"},
+                    never=["/Users/sarah/.ssh/**"],
+                ),
+            ),
+        )
+        # Above the posture AND above the run's own allow rule: the never-list is
+        # a floor, not a row whose action happens to be "deny".
+        assert decision.decision is PolicyDecision.DENY
+        assert decision.reason == "permission_denied"
+
+    def test_a_malformed_policy_row_costs_that_row_and_not_the_run(self) -> None:
+        # ``user_policies_json`` is hydrated untrusted input.
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="list_issues",
+            arguments={},
+            context=self.context(
+                user_policies_json={"tool_use": {"permission_rules": "nonsense"}}
+            ),
+        )
+        assert decision.decision is PolicyDecision.ALLOW
+
+    def test_subjects_are_carried_on_the_verdict_for_the_middleware(self) -> None:
+        # The middleware registers the pending ask from these, and a later
+        # ``always`` writes its rule over them — two derivations of "what did
+        # this call touch" that could drift is how a grant ends up covering
+        # something the card never named.
+        decision = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "Fix bug", "count": 3},
+            context=self.context(),
+        )
+        assert decision.subjects == ("mcp:linear:create_issue", "Fix bug")
+
+
+class TestRunScopedAlwaysGrant(DescriptorSourceMixin):
+    """``register_pending`` → ``record_reply(always)`` → the NEXT ``evaluate``.
+
+    The loop the policy middleware drives: it registers before parking
+    (``policy_tool.py:405``), and calls ``record_reply`` the moment
+    ``park_for_approval`` returns APPROVED (``policy_tool.py:428``). What makes
+    the rule layer reachable rather than merely present is that the second
+    identical write in the same run reads the rule back.
+    """
+
+    _RUN = "run_p1b"
+
+    def setup_method(self) -> None:
+        RunDecisionLedgers.reset()
+
+    def teardown_method(self) -> None:
+        RunDecisionLedgers.reset()
+
+    def _evaluate(self, context: AgentRuntimeContext) -> object:
+        return McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "Fix bug"},
+            context=context,
+        )
+
+    def test_always_makes_the_next_identical_write_allow(self) -> None:
+        context = self.context()
+        first = self._evaluate(context)
+        assert first.decision is PolicyDecision.GATE  # type: ignore[attr-defined]
+
+        McpDispatchPolicy.register_pending(
+            context=context, decision=first, approval_id="ap-1"
+        )  # type: ignore[arg-type]
+        outcome = McpDispatchPolicy.record_reply(
+            context=context, approval_id="ap-1", scope="always"
+        )
+        assert outcome.scope is DecisionScope.ALWAYS
+
+        second = self._evaluate(context)
+        assert second.decision is PolicyDecision.ALLOW  # type: ignore[attr-defined]
+
+    def test_once_leaves_the_next_write_gated(self) -> None:
+        context = self.context()
+        first = self._evaluate(context)
+        McpDispatchPolicy.register_pending(
+            context=context, decision=first, approval_id="ap-1"
+        )  # type: ignore[arg-type]
+        outcome = McpDispatchPolicy.record_reply(
+            context=context, approval_id="ap-1", scope="once"
+        )
+        assert outcome.scope is DecisionScope.ONCE
+        assert self._evaluate(context).decision is PolicyDecision.GATE  # type: ignore[attr-defined]
+
+    def test_an_absent_scope_is_once(self) -> None:
+        # ``GateResume.decision_scope`` is ``None`` whenever the client named no
+        # scope, and for every rejection. Fail-closed to the narrow answer.
+        context = self.context()
+        first = self._evaluate(context)
+        McpDispatchPolicy.register_pending(
+            context=context, decision=first, approval_id="ap-1"
+        )  # type: ignore[arg-type]
+        McpDispatchPolicy.record_reply(context=context, approval_id="ap-1", scope=None)
+        assert self._evaluate(context).decision is PolicyDecision.GATE  # type: ignore[attr-defined]
+
+    def test_an_always_does_not_lift_the_destructive_rung(self) -> None:
+        # A grant raised from a card cannot buy standing authority over deletes,
+        # which is also why ``ToolAccessGate._grant_options`` does not offer the
+        # ``allow_always`` control on a destructive card in the first place.
+        context = self.context()
+        destructive = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="delete_issue",
+            arguments={"id": "L-1"},
+            context=context,
+        )
+        McpDispatchPolicy.register_pending(
+            context=context, decision=destructive, approval_id="ap-del"
+        )
+        McpDispatchPolicy.record_reply(
+            context=context, approval_id="ap-del", scope="always"
+        )
+        again = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="delete_issue",
+            arguments={"id": "L-1"},
+            context=context,
+        )
+        assert again.decision is PolicyDecision.GATE
+        assert again.reason == "approval_required.destructive"
+
+    def test_an_always_reports_the_sibling_asks_it_now_covers(self) -> None:
+        context = self.context()
+        first = self._evaluate(context)
+        McpDispatchPolicy.register_pending(
+            context=context, decision=first, approval_id="ap-1"
+        )  # type: ignore[arg-type]
+        sibling = McpDispatchPolicy.evaluate(
+            card=self.card(),
+            server=self.SERVER,
+            tool="create_issue",
+            arguments={"title": "Another bug"},
+            context=context,
+        )
+        McpDispatchPolicy.register_pending(
+            context=context, decision=sibling, approval_id="ap-2"
+        )
+        outcome = McpDispatchPolicy.record_reply(
+            context=context, approval_id="ap-1", scope="always"
+        )
+        assert outcome.resolved == ("ap-2",)
+        # And the report agrees with the decision: the sibling really does
+        # dispatch on replay rather than raising a second card.
+        assert (
+            McpDispatchPolicy.evaluate(
+                card=self.card(),
+                server=self.SERVER,
+                tool="create_issue",
+                arguments={"title": "Another bug"},
+                context=context,
+            ).decision
+            is PolicyDecision.ALLOW
+        )
+
+    def test_a_grant_does_not_leak_into_another_run(self) -> None:
+        context = self.context()
+        first = self._evaluate(context)
+        McpDispatchPolicy.register_pending(
+            context=context, decision=first, approval_id="ap-1"
+        )  # type: ignore[arg-type]
+        McpDispatchPolicy.record_reply(
+            context=context, approval_id="ap-1", scope="always"
+        )
+        other = self.context().model_copy(update={"run_id": "run_other"})
+        assert self._evaluate(other).decision is PolicyDecision.GATE  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":  # pragma: no cover

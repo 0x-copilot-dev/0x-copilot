@@ -419,6 +419,10 @@ class ApprovalCoordinator:
                 org_id=record.org_id,
                 decision=request.decision,
                 answer=request.answer,
+                # The once/always scope the card was answered with. Inert for
+                # every approval kind except the write gate, whose resume payload
+                # is the only one that reads it.
+                decision_scope=request.decision_scope,
                 trace_propagation=QueueTracePropagator.inject(),
             )
         )

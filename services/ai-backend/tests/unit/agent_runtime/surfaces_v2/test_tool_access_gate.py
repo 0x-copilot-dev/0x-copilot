@@ -693,3 +693,155 @@ async def test_only_the_one_line_is_lifted_out_of_the_gate_block() -> None:
     assert "gate" not in projected
     assert "op_class" not in projected
     assert "scopes" not in projected
+
+
+# --------------------------------------------------------------------------- #
+# grant_options — which scopes a write-gate card may be answered with
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_write_card_offers_both_scopes() -> None:
+    """``allow_always`` is offered because on THIS lane it widens nothing.
+
+    The word is shared with the filesystem lane
+    (``runtime_worker/stream_events.py:227-234``) but means something narrower
+    here: there, ``allow_always`` ATTACHES A FOLDER — a durable grant wider than
+    the one path the card named, which is why that lane withholds it for a write.
+    Here it writes a run-scoped rule over exactly the subjects this call already
+    carried, and it expires with the run.
+    """
+
+    payload = await _park_write(arguments={"title": "Fix login"})
+
+    assert payload["grant_options"] == ["allow_once", "allow_always"]
+
+
+async def test_a_destructive_card_offers_only_once() -> None:
+    """No advance yes to a class of deletes — the rung's whole reason to exist."""
+
+    payload = await _park_write(tool_name="delete_issue", op_class="destructive")
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+@pytest.mark.parametrize("op_class", ["DESTRUCTIVE", " destructive "])
+async def test_the_destructive_exclusion_is_not_case_or_whitespace_sensitive(
+    op_class: str,
+) -> None:
+    payload = await _park_write(op_class=op_class)
+
+    assert payload["grant_options"] == ["allow_once"]
+
+
+async def test_grant_options_survive_presentation_to_the_client() -> None:
+    """A card option the projector drops is an option no user can ever pick.
+
+    A parked write borrows the ``ask_a_question`` wire shape, so it lands in
+    ``_ask_a_question_requested_payload`` — the projection that already had to be
+    taught ``op_class`` and ``risk_level`` for the same reason. Projecting
+    ``grant_options`` only on the sibling ``approval_requested`` path leaves it
+    stripped on the one lane that emits it.
+    """
+
+    payload = await _park_write()
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload=dict(payload),
+    )
+
+    assert projected["grant_options"] == ["allow_once", "allow_always"]
+
+
+async def test_a_destructive_card_reaches_the_client_without_the_always_option() -> (
+    None
+):
+    """And on this lane ``grant_options`` is the ONLY signal that says so.
+
+    ``_ask_a_question_requested_payload`` also allow-lists ``op_class``, but the
+    write gate emits that key inside its ``gate`` block rather than at the top
+    level, so the projector never finds it — a separate, pre-existing gap. Until
+    that is closed, a client can only tell a destructive card from an ordinary
+    write by the absence of ``allow_always`` here.
+    """
+
+    payload = await _park_write(tool_name="delete_issue", op_class="destructive")
+
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload=dict(payload),
+    )
+
+    assert projected["grant_options"] == ["allow_once"]
+
+
+async def test_projection_of_grant_options_drops_non_string_entries() -> None:
+    projected = RuntimeEventPresentationProjector.payload_for_event(
+        event_type=RuntimeApiEventType.APPROVAL_REQUESTED,
+        payload={
+            "approval_id": "a1",
+            "approval_kind": "ask_a_question",
+            "message": "Approve?",
+            "grant_options": ["allow_once", 7, None, {"x": 1}, "allow_always"],
+        },
+    )
+
+    assert projected["grant_options"] == ["allow_once", "allow_always"]
+
+
+# --------------------------------------------------------------------------- #
+# GateResume.decision_scope — the reply's scope, as the client sent it
+# --------------------------------------------------------------------------- #
+
+
+async def _resume_with(resume: object) -> GateResume:
+    gate = _gate(interrupt=_CapturingInterrupt(resume))
+    return await gate.park_for_approval(
+        card=_card(auth_state=McpAuthState.AUTHENTICATED),
+        tool_name="create_issue",
+        arguments={"title": "Fix login"},
+        op_class="write",
+        approval_id="mcp_write:run_abcdef:call_1",
+    )
+
+
+@pytest.mark.parametrize("scope", ["always", " ALWAYS "])
+async def test_an_approved_resume_carries_its_scope(scope: str) -> None:
+    result = await _resume_with({"decision": "approved", "decision_scope": scope})
+
+    assert result.approved is True
+    assert result.decision_scope == "always"
+
+
+async def test_a_rejected_resume_drops_the_scope() -> None:
+    """A decline that could write an allow rule is the one inversion this field
+    must not be able to express."""
+
+    result = await _resume_with({"decision": "rejected", "decision_scope": "always"})
+
+    assert result.approved is False
+    assert result.decision_scope is None
+
+
+@pytest.mark.parametrize(
+    "resume",
+    [
+        {"decision": "approved"},
+        {"decision": "approved", "decision_scope": None},
+        {"decision": "approved", "decision_scope": "   "},
+        {"decision": "approved", "decision_scope": 42},
+        True,
+    ],
+)
+async def test_an_absent_or_unusable_scope_is_none(resume: object) -> None:
+    result = await _resume_with(resume)
+
+    assert result.approved is True
+    assert result.decision_scope is None
+
+
+async def test_an_oversized_scope_string_is_bounded() -> None:
+    result = await _resume_with({"decision": "approved", "decision_scope": "a" * 500})
+
+    assert result.decision_scope is not None
+    assert len(result.decision_scope) == 32
