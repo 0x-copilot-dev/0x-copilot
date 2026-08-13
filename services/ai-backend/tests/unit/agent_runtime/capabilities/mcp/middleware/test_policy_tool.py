@@ -716,6 +716,31 @@ class TestNamespacedToolNameBinding(PolicyToolFixtureMixin):
         await self.call(wrapped, team="ENG")
         assert wrapped.interrupt.calls == 1
 
+    async def test_a_digested_over_long_name_refuses_rather_than_guessing(
+        self,
+    ) -> None:
+        # The documented boundary, pinned so it stays a decision rather than a
+        # surprise. Past the provider's 64-character limit ``compose`` digests
+        # the pair, and a digested name cannot be inverted back into the bare
+        # name the URN was built from — so the pair does not round-trip and the
+        # stage refuses instead of policing against a card it cannot confirm is
+        # this tool's. Reachable for a long connector slug plus a long tool
+        # name; the fix is for the SOURCE to derive the descriptor from
+        # ``strip(compose(...))`` so the two are equal by construction.
+        long_tool = "list_issues_by_project_and_team_with_filters_and_cursor"
+        namespaced = McpToolName.compose(server=self.SERVER, tool=long_tool)
+        assert namespaced != f"mcp__{self.SERVER}__{long_tool}", (
+            "fixture must actually exercise the digested path"
+        )
+
+        wrapped = self.build(tool_name=namespaced, descriptor_tool=long_tool)
+        result = await self.call(wrapped, team="ENG")
+
+        error = self.error_of(result)
+        assert error["code"] == McpLoadErrorCode.PERMISSION_DENIED.value
+        assert error["safe_message"] == PolicyStageMessages.POLICY_UNAVAILABLE
+        assert wrapped.inner.calls == []
+
     async def test_a_namespace_naming_another_connector_refuses(self) -> None:
         # Strictly stronger than the bare-name world could be: the model-surface
         # name carries its connector, so a tool registered under ``github`` and
