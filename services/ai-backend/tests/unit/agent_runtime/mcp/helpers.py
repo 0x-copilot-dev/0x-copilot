@@ -27,6 +27,7 @@ class DynamicMcpLoadingMixin:
     class TestValues:
         class Descriptions:
             CARD = "Search Google Drive through MCP."
+            NOT_A_SCHEMA = "definitely not a schema"
             RESOURCE = "Root Drive resource index."
             TOOL = "Search indexed Google Drive documents."
 
@@ -244,8 +245,70 @@ class DynamicMcpLoadingMixin:
             },
         }
 
-    def malformed_schema(self) -> Mapping[str, object]:
+    def typeless_schema(self) -> Mapping[str, object]:
+        """A schema with no top-level ``type`` -- repaired, no longer rejected.
+
+        This helper used to be called ``malformed_schema`` and this exact
+        payload was asserted to reject the *whole connector*. It is not
+        malformed: omitting ``type`` beside ``properties`` is what a large
+        share of real MCP servers ship, and ``McpSchemaRepair`` now coerces it
+        to ``object``. Kept as its own helper so the repair has a named
+        fixture, and so nothing quietly re-adopts it as "malformed".
+        """
+
         return {Keys.Schema.PROPERTIES: {}}
+
+    def malformed_schema(self) -> object:
+        """A schema no repair can rescue: not a JSON object at all.
+
+        The only remaining unconditional rejection. A string in a schema
+        position carries no properties to coerce and no keywords to infer
+        from, so ``MALFORMED_DESCRIPTOR`` is still the honest answer.
+        """
+
+        return self.TestValues.Descriptions.NOT_A_SCHEMA
+
+    def vendor_create_issue_schema(self) -> Mapping[str, object]:
+        """An Atlassian-shaped ``createIssue`` schema with four real defects.
+
+        Every trait here is copied from the shape trackers actually publish,
+        and each one alone used to be fatal or provider-rejected:
+
+        * no top-level ``type`` beside ``properties``;
+        * draft-07 ``definitions`` with ``#/definitions/...`` pointers;
+        * the Pydantic optional idiom ``anyOf: [{...}, {"type": "null"}]``;
+        * a ``required`` entry (``reporter``) no property defines.
+        """
+
+        return {
+            Keys.Schema.PROPERTIES: {
+                "project": {Keys.Schema.TYPE: Values.SchemaType.STRING},
+                "summary": {Keys.Schema.TYPE: Values.SchemaType.STRING},
+                "assignee": {
+                    "anyOf": [
+                        {Keys.Schema.TYPE: Values.SchemaType.STRING},
+                        {Keys.Schema.TYPE: "null"},
+                    ],
+                    "description": "Account id to assign the issue to.",
+                },
+                "fields": {"$ref": "#/definitions/IssueFields"},
+            },
+            Keys.Schema.REQUIRED: ["project", "summary", "reporter"],
+            "definitions": {
+                "IssueFields": {
+                    Keys.Schema.TYPE: Values.SchemaType.OBJECT,
+                    Keys.Schema.PROPERTIES: {"labels": {Keys.Schema.TYPE: "array"}},
+                }
+            },
+        }
+
+    def typeless_tool_payload(self) -> Mapping[str, object]:
+        """A vendor tool that used to delete its whole connector on load."""
+
+        return {
+            **self.malformed_tool_payload(),
+            Keys.Field.INPUT_SCHEMA: self.vendor_create_issue_schema(),
+        }
 
     def malformed_tool_payload(self) -> Mapping[str, object]:
         return {

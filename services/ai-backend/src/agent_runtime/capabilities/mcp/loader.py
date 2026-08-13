@@ -27,6 +27,7 @@ from agent_runtime.capabilities.mcp.cards import (
     McpValueNormalizer,
     McpWarningCode,
 )
+from agent_runtime.capabilities.mcp.schema_repair import McpSchemaRepairLog
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClient,
@@ -228,6 +229,28 @@ class McpLoader:
         )
 
     async def _load_uncached(
+        self,
+        request: McpLoadRequest,
+        resolution: RegisteredMcpServer,
+    ) -> McpLoadResult:
+        """Bind the connector identity around the whole live discovery span.
+
+        A schema repair fires inside a Pydantic field validator, which sees the
+        descriptor's own fields but never the card that hosts it — so without
+        this the repair log would say "some schema somewhere was rewritten" and
+        the next reader could not tell which vendor to file the bug against.
+
+        This is the one span that covers *both* places a descriptor gets built:
+        the provider's own ``_tool_descriptor`` (which runs inside
+        ``client.list_tools()``) and ``McpLoaderHelpers.parse_tools`` (which
+        validates raw dicts afterwards). Wrapping here rather than at either
+        one is what keeps a second construction path from going unattributed.
+        """
+
+        with McpSchemaRepairLog.for_server(resolution.card.name):
+            return await self._discover_uncached(request, resolution)
+
+    async def _discover_uncached(
         self,
         request: McpLoadRequest,
         resolution: RegisteredMcpServer,
