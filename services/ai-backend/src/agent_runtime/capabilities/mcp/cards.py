@@ -31,6 +31,10 @@ from agent_runtime.capabilities.mcp.constants import (
     Messages,
     Values,
 )
+from agent_runtime.capabilities.mcp.schema_repair import (
+    McpSchemaRepair,
+    McpSchemaRepairLog,
+)
 
 JsonSchema: TypeAlias = Mapping[str, Any]
 SUPPORTED_RESOURCE_URI_SCHEMES = frozenset(
@@ -393,8 +397,19 @@ class McpToolDescriptor(RuntimeContract):
     @field_validator(Keys.Field.INPUT_SCHEMA, Keys.Field.OUTPUT_SHAPE)
     @classmethod
     def _validate_schema(cls, value: JsonSchema, info: ValidationInfo) -> JsonSchema:
-        """Validate that the schema field is a JSON-serialisable object."""
-        return McpSchemaValidator.validate_json_schema(value, info.field_name)
+        """Repair the schema field, naming the tool in whatever the repair logs.
+
+        ``name`` is declared before both schema fields, so it is already in
+        ``info.data`` here — unless its own validation failed, hence the
+        ``.get``. The repair log is useless without it: "some schema was
+        rewritten" does not tell the next reader which vendor to file against.
+        """
+        tool_name = info.data.get(Keys.Field.NAME) if info.data else None
+        return McpSchemaValidator.validate_json_schema(
+            value,
+            info.field_name,
+            tool_name=tool_name if isinstance(tool_name, str) else "",
+        )
 
     @field_validator(Keys.Field.RISK_LEVEL, mode="before")
     @classmethod
@@ -691,16 +706,34 @@ class McpSchemaValidator:
     """JSON-schema compatibility validation for loaded MCP descriptors."""
 
     @classmethod
-    def validate_json_schema(cls, value: JsonSchema, field_name: str) -> JsonSchema:
-        """Validate that ``value`` is a JSON-serialisable mapping with a ``type`` key."""
+    def validate_json_schema(
+        cls,
+        value: JsonSchema,
+        field_name: str,
+        *,
+        tool_name: str = "",
+    ) -> JsonSchema:
+        """Repair ``value`` into a schema every provider accepts, or reject it.
+
+        This used to reject twice — once for a missing top-level ``type``, once
+        past ``Limits.MCP_SCHEMA_MAX_BYTES`` — and both raises happen inside a
+        Pydantic field validator, so the failure never reached the user *as* a
+        failure. ``McpLoaderHelpers.parse_tools`` turns any ``ValidationError``
+        into ``MALFORMED_DESCRIPTOR`` for the **whole server**, so one vendor
+        tool with an omitted ``type`` deleted the entire connector from the
+        model's surface and the agent said it could not do the thing.
+
+        Both conditions are repairable, so ``McpSchemaRepair`` repairs them and
+        logs what it changed. Only two conditions still reject: a value that is
+        not a JSON object at all, and one still over the ceiling after every
+        degradation stage has run.
+        """
         if not isinstance(value, Mapping):
             raise ValueError(Messages.Validation.json_schema_object(field_name))
-        if Keys.Schema.TYPE not in value:
-            raise ValueError(Messages.Validation.schema_type_required(field_name))
-        try:
-            encoded = json.dumps(value, sort_keys=True)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(Messages.Validation.json_serializable(field_name)) from exc
-        if len(encoded.encode(Keys.Encoding.UTF_8)) > Limits.MCP_SCHEMA_MAX_BYTES:
-            raise ValueError(Messages.Validation.schema_size_exceeded(field_name))
-        return dict(value)
+        repaired, report = McpSchemaRepair.repair(
+            value,
+            field_name=field_name,
+            tool_name=tool_name,
+        )
+        McpSchemaRepairLog.record(report)
+        return repaired
