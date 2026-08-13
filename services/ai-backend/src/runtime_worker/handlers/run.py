@@ -622,17 +622,21 @@ class RuntimeRunHandler:
         # is reached, and unbound in the same ``finally`` as every other
         # run-scoped binding. The registry is snapshotted here, so a
         # registration that lands mid-run cannot change what this run does.
+        # Validated BEFORE anything is bound. ``RunLifecycleInput`` constrains
+        # the run's identifiers, and the ``finally`` below emits ``run.end``
+        # ahead of six unbinds — so a blank identifier raising down there would
+        # leak every one of them. Building the model once here means the
+        # ``finally`` only ever calls ``model_copy``, which does not re-validate
+        # and therefore cannot raise.
+        hook_lifecycle = RunLifecycleInput(
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            org_id=run.org_id,
+            phase=HookPhase.RUN_START,
+        )
         hook_token = RuntimeHookContext.bind_for_run()
         hook_run_status = AgentRunStatus.COMPLETED.value
-        HookDispatch.observe(
-            HookPhase.RUN_START,
-            RunLifecycleInput(
-                run_id=run.run_id,
-                conversation_id=run.conversation_id,
-                org_id=run.org_id,
-                phase=HookPhase.RUN_START,
-            ),
-        )
+        HookDispatch.observe(HookPhase.RUN_START, hook_lifecycle)
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -994,12 +998,11 @@ class RuntimeRunHandler:
             # terminal status the handler is about to persist.
             HookDispatch.observe(
                 HookPhase.RUN_END,
-                RunLifecycleInput(
-                    run_id=run.run_id,
-                    conversation_id=run.conversation_id,
-                    org_id=run.org_id,
-                    phase=HookPhase.RUN_END,
-                    status=hook_run_status,
+                hook_lifecycle.model_copy(
+                    update={
+                        "phase": HookPhase.RUN_END,
+                        "status": hook_run_status,
+                    }
                 ),
             )
             self._emit_hook_ledger_summary(run)

@@ -342,8 +342,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
             request.tools or []
         )
 
+    @classmethod
     def _apply_model_call_hooks(
-        self,
+        cls,
         request: ModelRequest[Any],
     ) -> ModelRequest[Any]:
         """Run ``model.request.before`` and ``prompt.assemble`` for one call.
@@ -358,16 +359,24 @@ class RuntimeControlMiddleware(AgentMiddleware):
         Both run after F2 has produced the effective prompt, so an appended
         block is deliberately outside the sealed, cacheable assembly plan and
         outside its recorded digest.
+
+        Every fact handed to a hook is read from ``request``, never from
+        ``self._final_tool_surface``. That attribute is a single slot on a
+        middleware instance the graph reuses across calls, so reading it here
+        would let one model call's hook observe another's tool surface once the
+        framework runs two of them concurrently. The classmethod makes that
+        mistake unavailable rather than merely unmade.
         """
 
-        surface = self._final_tool_surface
-        tool_names = surface.tool_names if surface is not None else ()
         wants_observe = HookDispatch.enabled(HookPhase.MODEL_REQUEST_BEFORE)
         wants_prompt = HookDispatch.enabled(HookPhase.PROMPT_ASSEMBLE)
         if not wants_observe and not wants_prompt:
             return request
-        digest = _system_prompt_digest(request.system_message)
-        execution_scope = self._execution_scope_for_runtime(request.runtime)
+        tool_names = tuple(
+            str(getattr(tool, "name", "")).strip() for tool in (request.tools or ())
+        )
+        digest = cls._system_prompt_digest(request.system_message)
+        execution_scope = cls._execution_scope_for_runtime(request.runtime)
         model_identifier = _model_family(request.model, fallback="unknown")
         if wants_observe:
             HookDispatch.observe(
@@ -392,10 +401,37 @@ class RuntimeControlMiddleware(AgentMiddleware):
         )
         if not appended:
             return request
-        system_message = _appended_system_message(request.system_message, appended)
+        system_message = cls._appended_system_message(request.system_message, appended)
         if system_message is None:
             return request
         return request.override(system_message=system_message)
+
+    @staticmethod
+    def _system_prompt_digest(system_message: SystemMessage | None) -> str:
+        """Content-free identity for the system prompt handed to a hook."""
+
+        content = getattr(system_message, "content", None)
+        return canonical_json_sha256(
+            {"system": content if isinstance(content, str) else ""}
+        )
+
+    @staticmethod
+    def _appended_system_message(
+        system_message: SystemMessage | None,
+        appended: str,
+    ) -> SystemMessage | None:
+        """Return the system message with ``appended`` concatenated after it.
+
+        ``None`` means "leave the request alone": a structured (non-text) system
+        message is not something this seam rewrites blind.
+        """
+
+        if system_message is None:
+            return SystemMessage(content=appended)
+        content = system_message.content
+        if not isinstance(content, str):
+            return None
+        return system_message.model_copy(update={"content": f"{content}\n\n{appended}"})
 
     @classmethod
     def _prepare_prompt_for_call(
@@ -480,7 +516,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
 
         verdict, request = self._apply_tool_call_hooks(request)
         if verdict.vetoed:
-            return _hook_veto_message(request, verdict)
+            return self._hook_veto_message(request, verdict)
         identity = self._call_identity(request)
         with RuntimeCallContext.bind(identity):
             execute = (
@@ -527,7 +563,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
 
         verdict, request = self._apply_tool_call_hooks(request)
         if verdict.vetoed:
-            return _hook_veto_message(request, verdict)
+            return self._hook_veto_message(request, verdict)
         identity = self._call_identity(request)
         with RuntimeCallContext.bind(identity):
 
@@ -610,7 +646,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 tool_call_id=tool_call_id,
                 execution_scope=cls._execution_scope(request),
                 arguments=arguments,
-                result_text=_model_visible_text(result, tool_call_id=tool_call_id),
+                result_text=cls._model_visible_text(result, tool_call_id=tool_call_id),
                 succeeded=_succeeded(result),
             )
         )
@@ -623,6 +659,41 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 if message.tool_call_id != tool_call_id
                 else message.model_copy(update={"content": rewritten})
             ),
+        )
+
+    @staticmethod
+    def _model_visible_text(
+        result: ToolHandlerResult,
+        *,
+        tool_call_id: str,
+    ) -> str | None:
+        """Return this call's model-visible text, or ``None`` if structured."""
+
+        for message in _tool_messages(result):
+            if message.tool_call_id != tool_call_id:
+                continue
+            return message.content if isinstance(message.content, str) else None
+        return None
+
+    @staticmethod
+    def _hook_veto_message(
+        request: ToolCallRequest,
+        verdict: ToolCallVerdict,
+    ) -> ToolMessage:
+        """Surface a hook veto the way every other refusal is surfaced.
+
+        An error ``ToolMessage`` rather than a raise: the run continues and the
+        model can adapt, exactly as it does for a budget rejection or a
+        policy-blocked tool.
+        """
+
+        return ToolMessage(
+            content=(
+                verdict.veto_reason or "This tool call was blocked by a runtime hook."
+            ),
+            tool_call_id=str(request.tool_call.get("id", "")),
+            name=str(request.tool_call.get("name", "")) or None,
+            status="error",
         )
 
     @staticmethod
@@ -1179,66 +1250,6 @@ def _map_tool_messages(
     else:
         return result
     return replace(result, update={**update, "messages": mapped})
-
-
-def _model_visible_text(
-    result: ToolHandlerResult,
-    *,
-    tool_call_id: str,
-) -> str | None:
-    """Return this call's model-visible text, or ``None`` if it is structured."""
-
-    for message in _tool_messages(result):
-        if message.tool_call_id != tool_call_id:
-            continue
-        return message.content if isinstance(message.content, str) else None
-    return None
-
-
-def _hook_veto_message(
-    request: ToolCallRequest,
-    verdict: ToolCallVerdict,
-) -> ToolMessage:
-    """Surface a hook veto the way every other refusal is surfaced.
-
-    An error ``ToolMessage`` rather than a raise: the run continues and the
-    model can adapt, exactly as it does for a budget rejection or a
-    policy-blocked tool.
-    """
-
-    return ToolMessage(
-        content=verdict.veto_reason or "This tool call was blocked by a runtime hook.",
-        tool_call_id=str(request.tool_call.get("id", "")),
-        name=str(request.tool_call.get("name", "")) or None,
-        status="error",
-    )
-
-
-def _system_prompt_digest(system_message: SystemMessage | None) -> str:
-    """Content-free identity for the system prompt handed to a hook."""
-
-    content = getattr(system_message, "content", None)
-    return canonical_json_sha256(
-        {"system": content if isinstance(content, str) else ""}
-    )
-
-
-def _appended_system_message(
-    system_message: SystemMessage | None,
-    appended: str,
-) -> SystemMessage | None:
-    """Return the system message with ``appended`` concatenated after it.
-
-    ``None`` means "leave the request alone": a structured (non-text) system
-    message is not something this seam rewrites blind.
-    """
-
-    if system_message is None:
-        return SystemMessage(content=appended)
-    content = system_message.content
-    if not isinstance(content, str):
-        return None
-    return system_message.model_copy(update={"content": f"{content}\n\n{appended}"})
 
 
 def _tool_messages(result: ToolHandlerResult) -> tuple[ToolMessage, ...]:

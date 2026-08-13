@@ -75,17 +75,6 @@ class HookPhase(StrEnum):
     RUN_END = "run.end"
 
 
-#: Phases whose handlers may return a value at all. Every other phase is
-#: observe-only and any non-``None`` return from it is a contract violation.
-MUTATING_PHASES: frozenset[HookPhase] = frozenset(
-    {
-        HookPhase.TOOL_EXECUTE_BEFORE,
-        HookPhase.TOOL_EXECUTE_AFTER,
-        HookPhase.PROMPT_ASSEMBLE,
-    }
-)
-
-
 # --------------------------------------------------------------------------
 # Inputs. Every one is frozen, and every one is built from a COPY of the real
 # call state, so a handler that mutates what it was handed changes nothing.
@@ -287,7 +276,6 @@ class HookInvocationRecord(RuntimeContract):
 __all__ = [
     "MAX_APPENDED_CONTEXT_CHARS",
     "MAX_REWRITTEN_RESULT_CHARS",
-    "MUTATING_PHASES",
     "PHASE_OUTCOME_TYPES",
     "HookInvocationRecord",
     "HookInvocationStatus",

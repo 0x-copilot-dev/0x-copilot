@@ -63,9 +63,6 @@ class HookRegistry:
 
         return self._by_phase.get(phase, ())
 
-    def __bool__(self) -> bool:
-        return bool(self._by_phase)
-
 
 class RuntimeHooks:
     """Process-level explicit registration table."""
@@ -112,21 +109,6 @@ class RuntimeHooks:
             cls._next_order += 1
             cls._hooks.append(registered)
             return registered
-
-    @classmethod
-    def unregister(cls, *, phase: HookPhase, name: str) -> bool:
-        """Remove one handler; returns whether anything was removed."""
-
-        normalized = name.strip()
-        with cls._lock:
-            remaining = [
-                hook
-                for hook in cls._hooks
-                if not (hook.phase is phase and hook.name == normalized)
-            ]
-            removed = len(remaining) != len(cls._hooks)
-            cls._hooks = remaining
-            return removed
 
     @classmethod
     def snapshot(cls) -> HookRegistry:
