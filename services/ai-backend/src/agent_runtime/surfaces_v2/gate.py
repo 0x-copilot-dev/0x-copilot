@@ -74,9 +74,14 @@ class _PayloadKey:
     GATE = "gate"
     #: Top-level (NOT inside the ``gate`` block) because the filesystem lane
     #: already spells it there — ``runtime_worker/stream_events.py``'s
-    #: ``_Fields.GRANT_OPTIONS`` — and ``runtime_api/schemas/events.py:2448``
-    #: already sanitises that one key on its way to the client. Putting it inside
-    #: ``gate`` would need a second projection branch for the same idea.
+    #: ``_Fields.GRANT_OPTIONS``. Putting it inside ``gate`` would need its own
+    #: projection branch for the same idea.
+    #:
+    #: A write gate rides the ``ask_a_question`` wire shape, so it is projected by
+    #: ``RuntimeEventPresentationProjector._ask_a_question_requested_payload``,
+    #: NOT by the sibling ``_approval_requested_payload`` branch that already
+    #: handled this key. That is the same split which previously left ``op_class``
+    #: and ``risk_level`` stripped on this lane; both projections now name it.
     GRANT_OPTIONS = "grant_options"
 
 

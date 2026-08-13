@@ -2598,6 +2598,19 @@ class RuntimeEventPresentationProjector:
             flag = payload.get(flag_key)
             if isinstance(flag, bool):
                 safe_payload[flag_key] = flag
+        # The SCOPES this card may be answered with (``allow_once`` /
+        # ``allow_always``). Same story as ``op_class`` / ``risk_level`` two
+        # blocks up, and the same lane: a parked write borrows the
+        # ``ask_a_question`` wire shape, so a key projected only on the sibling
+        # ``approval_requested`` path (:2448) never reaches the card that
+        # actually needs it. ``ToolAccessGate._grant_options`` is what decides a
+        # destructive op may not be answered ``always`` — dropped here, the card
+        # cannot tell the two apart and the decision is made nowhere.
+        grant_options = payload.get("grant_options")
+        if isinstance(grant_options, list | tuple):
+            safe_payload["grant_options"] = [
+                option for option in grant_options if isinstance(option, str)
+            ]
         display_title = cls._gate_display_title(payload)
         if display_title is not None:
             safe_payload[_LedgerKeys.Field.DISPLAY_TITLE] = display_title
