@@ -127,6 +127,37 @@ class TestDispatcherDisplayTitle:
         assert title is not None
         assert "web_search" in title
 
+    def test_namespaced_per_tool_name_renders_without_its_prefix(self) -> None:
+        """Per-tool registration puts ``mcp__linear__list_issues`` on the model
+        surface, so that is what ``payload.tool_name`` carries on every stream
+        event. This projection is the ``display_title`` the frontend renders —
+        left alone it reads "Calling mcp__linear__list_issues", and the row
+        already names the connector on its own field."""
+
+        payload = {"tool_name": "mcp__linear__list_issues"}
+
+        title = _display_title(
+            event_type=RuntimeApiEventType.TOOL_CALL_STARTED, payload=payload
+        )
+
+        assert title is not None
+        assert "list_issues" in title
+        assert "mcp__" not in title
+
+    def test_namespaced_name_renders_the_same_on_every_tool_event(self) -> None:
+        for event_type in (
+            RuntimeApiEventType.TOOL_CALL_DELTA,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
+            RuntimeApiEventType.TOOL_RESULT,
+        ):
+            title = _display_title(
+                event_type=event_type,
+                payload={"tool_name": "mcp__linear__create_issue"},
+            )
+            assert title is not None, event_type
+            assert "create_issue" in title, event_type
+            assert "mcp__" not in title, event_type
+
     def test_configured_display_title_wins_over_unwrap(self) -> None:
         """An explicit ``display_title`` on the payload must still win — the
         unwrap is a fallback, not an override. The projector reads the
