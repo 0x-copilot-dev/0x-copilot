@@ -51,7 +51,6 @@ class Keys:
 
         CONNECTOR_SLUG = "connector_slug"
         DISPLAY_NAME = "display_name"
-        VIRTUAL_PATH = "virtual_path"
         ALLOWED_SOURCES = "allowed_sources"
         ALLOWED_TOOLS = "allowed_tools"
         COMPATIBILITY = "compatibility"
