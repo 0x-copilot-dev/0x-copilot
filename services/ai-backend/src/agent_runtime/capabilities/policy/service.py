@@ -316,7 +316,7 @@ class PdpPolicyService:
 
         * **A rule's ALLOW sits BELOW DESTRUCTIVE**, so an authored ``allow`` can
           tighten a destructive op but never loosen one — exactly the conjunction
-          3.7's per-connector override already enforces ("never DESTRUCTIVE").
+          3.8's per-connector override already enforces ("never DESTRUCTIVE").
           A rule's ``deny``/``ask`` sit ABOVE Bypass, because a tightening the
           user wrote down should not be undone by a posture toggle.
         """
