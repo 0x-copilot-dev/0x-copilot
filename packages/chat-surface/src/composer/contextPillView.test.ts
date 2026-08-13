@@ -313,9 +313,13 @@ describe("buildContextPillView", () => {
         context: context(),
         occupancy: occupancy(),
       });
+      // The heading names the RECURRENCE; each row owns its own exact `× N`.
+      // A group-level count was a second, vaguer number — and every obvious
+      // formulation was wrong once segments arrived one-per-contribution
+      // ("× 1 results" from a max, budget-notes-as-results from a sum).
       expect(view?.groups[0]!.note).toBe("every call");
-      expect(view?.groups[1]!.note).toBe("× 24 results");
-      expect(view?.groups[2]!.note).toBeNull();
+      expect(view?.groups[1]!.note).toBe("scales with results");
+      expect(view?.groups[2]!.note).toBe("scales with turns");
     });
 
     it("drops zero-token segments rather than listing them", () => {
@@ -377,13 +381,19 @@ describe("buildContextPillView", () => {
       });
       const rows = view!.groups.flatMap((group) => group.rows);
       expect(rows.map((row) => row.label)).toContain("instructions");
-      expect(rows.map((row) => row.key)).toContain("system:instructions::");
+      // The key is `lifecycle::label` — the axis rows fold on. It deliberately
+      // excludes `detail`, which is a per-contribution ordinal.
+      expect(rows.map((row) => row.key)).toContain(
+        "resident::system:instructions",
+      );
     });
 
-    it("keys two rows of the same label apart by their detail", () => {
-      // `label` alone is not unique — one declaration can contribute several
-      // rows separated only by `detail`. A colliding key silently drops one of
-      // them from the popover AND misfiles its lifecycle group.
+    it("FOLDS two contributions of one declaration into a single row", () => {
+      // This assertion used to demand the opposite — one row per segment, keyed
+      // apart by `detail`. A live run disproved it: the ledger emits a segment
+      // per contribution, so that rule put `tool_result` in the popover eight
+      // times as msg[10]…msg[17]. `detail` is a per-contribution ordinal, not
+      // an identity; the declaration is.
       const view = buildContextPillView({
         context: context(),
         occupancy: occupancy({
@@ -394,8 +404,9 @@ describe("buildContextPillView", () => {
         }),
       });
       const rows = view!.groups.flatMap((group) => group.rows);
-      expect(rows).toHaveLength(2);
-      expect(new Set(rows.map((row) => row.key)).size).toBe(2);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.tokens).toBe(16_000);
+      expect(rows[0]!.detail).toBe("\u00d7 82");
     });
 
     it("names the UNDECLARED sentinel rather than rendering an empty cell", () => {
@@ -499,5 +510,166 @@ describe("buildContextPillView", () => {
       occupancy: occupancy(),
     });
     expect(view?.compaction).toEqual({ before: 128_000, after: 34_000 });
+  });
+});
+
+// The shape a REAL snapshot has, taken from a live packaged run
+// (journey-composer-and-budgets, 2026-08-14): the ledger emits one segment per
+// contribution, so `detail` carries a message ordinal or a tool name and the
+// same declaration recurs many times. 44 segments, 16 declarations.
+//
+// Every fixture above has one segment per label, which is exactly why the
+// original one-row-per-segment render looked fine in tests and shipped a
+// 44-row list into a 300px popover.
+function liveShapeSegments(): ContextOccupancySegment[] {
+  const out: ContextOccupancySegment[] = [];
+  const push = (
+    label: string,
+    lifecycle: ContextOccupancySegment["lifecycle"],
+    cls: ContextOccupancySegment["segment_class"],
+    detail: string,
+    tokens: number,
+  ): void => {
+    out.push(
+      segment({
+        label,
+        lifecycle,
+        segment_class: cls,
+        third_party: false,
+        detail,
+        estimated_tokens: tokens,
+        item_count: 1,
+        cache_eligibility: null,
+        counter_source: "tokenizer",
+      }),
+    );
+  };
+  // 8 tool results, one per message ordinal.
+  [1404, 1226, 1107, 1044, 1013, 996, 928, 774].forEach((t, i) =>
+    push(
+      "agent_runtime.conversation:tool_result",
+      "per_result",
+      "messages",
+      `msg[${String(10 + i)}]`,
+      t,
+    ),
+  );
+  // 5 budget notes, same declaration, different ordinals.
+  [41, 41, 41, 41, 41].forEach((t, i) =>
+    push(
+      "agent_runtime.capabilities:tool_budget_note",
+      "per_result",
+      "messages",
+      `msg[${String(11 + i)}]`,
+      t,
+    ),
+  );
+  // 11 undeclared, one per tool.
+  [
+    "write_file",
+    "glob",
+    "delete",
+    "ls",
+    "read",
+    "grep",
+    "edit",
+    "bash",
+    "task",
+    "web",
+    "fetch",
+  ].forEach((tool, i) =>
+    push("UNDECLARED", "resident", "system", tool, 182 - i * 5),
+  );
+  // 10 distinct first-party tool schemas — the long tail nobody acts on.
+  [
+    "publish_artifact",
+    "revise_artifact",
+    "stage_rowset_write",
+    "list_connected_servers",
+    "suggest_mcp_connector",
+    "auth_mcp",
+    "load_mcp_server",
+    "load_skill",
+    "ask_a_question",
+    "load_prior_tool_result",
+  ].forEach((name, i) =>
+    push(
+      `agent_runtime.capabilities:${name}`,
+      "resident",
+      "tools",
+      name,
+      1381 - i * 100,
+    ),
+  );
+  return out;
+}
+
+describe("buildContextPillView — the shape a live ledger actually has", () => {
+  const live = () =>
+    buildContextPillView({
+      context: context(),
+      occupancy: occupancy({ segments: liveShapeSegments() }),
+    })!;
+
+  it("folds repeated segments of one declaration into ONE row", () => {
+    // 8 `tool_result` segments differing only by message ordinal are one fact.
+    const perResult = live().groups.find((g) => g.lifecycle === "per_result")!;
+    const toolResults = perResult.rows.find((r) => r.label === "tool_result")!;
+    expect(toolResults.tokens).toBe(8492);
+    expect(toolResults.detail).toBe("× 8");
+  });
+
+  it("drops the message ordinal — msg[13] is not a thing anyone can act on", () => {
+    const labels = live()
+      .groups.flatMap((g) => g.rows)
+      .map((r) => `${r.label} ${r.detail ?? ""}`);
+    expect(labels.some((l) => l.includes("msg["))).toBe(false);
+  });
+
+  it("keeps the whole popover under a readable row count", () => {
+    // 44 segments in, and the original render put 44 rows in a 300px frame.
+    const rows = live().groups.flatMap((g) => g.rows);
+    // The live run carried 44; this fixture reproduces the same SHAPE at 34.
+    expect(liveShapeSegments()).toHaveLength(34);
+    expect(rows.length).toBeLessThanOrEqual(12);
+  });
+
+  it("caps each group at four rows plus a remainder that NAMES what it swallowed", () => {
+    // A silent top-4 would read as "that is everything".
+    const resident = live().groups.find((g) => g.lifecycle === "resident")!;
+    expect(resident.rows).toHaveLength(5);
+    const more = resident.rows.at(-1)!;
+    expect(more.remainder).toBe(true);
+    expect(more.label).toMatch(/^\d+ more$/);
+    expect(more.tokens).toBeGreaterThan(0);
+  });
+
+  it("loses no tokens to the fold — the remainder carries the tail's sum", () => {
+    const view = live();
+    const drawn = view.groups
+      .flatMap((g) => g.rows)
+      .reduce((sum, r) => sum + r.tokens, 0);
+    const measured = liveShapeSegments().reduce(
+      (sum, s) => sum + s.estimated_tokens,
+      0,
+    );
+    expect(drawn).toBe(measured);
+  });
+
+  it("files a folded row by its own lifecycle, not by its label", () => {
+    // `conversation:tool_result` is per_result while the rest of
+    // `conversation:*` is per_turn. Keying the group lookup on label alone put
+    // tool results in the transcript's group.
+    const perResult = live().groups.find((g) => g.lifecycle === "per_result")!;
+    expect(perResult.rows.map((r) => r.label)).toContain("tool_result");
+    const perTurn = live().groups.find((g) => g.lifecycle === "per_turn");
+    expect(perTurn?.rows.map((r) => r.label) ?? []).not.toContain(
+      "tool_result",
+    );
+  });
+
+  it("keeps a group of five or fewer intact rather than folding one row away", () => {
+    const perResult = live().groups.find((g) => g.lifecycle === "per_result")!;
+    expect(perResult.rows.every((r) => r.remainder !== true)).toBe(true);
   });
 });

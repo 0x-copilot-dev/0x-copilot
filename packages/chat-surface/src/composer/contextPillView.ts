@@ -98,6 +98,14 @@ export interface ContextSegmentRow {
    *  estimate the ledger fell back to, and the row says so rather than
    *  presenting a worse number with the same confidence as a tokenized one. */
   readonly approximate: boolean;
+  /** Which group this row belongs to. Carried ON the row since it folds by
+   *  `(lifecycle, label)` — a side-lookup keyed on label alone would misfile
+   *  `conversation:tool_result` (per_result) into the transcript's group. */
+  readonly lifecycle: ContextLifecycle;
+  /** True for the synthetic "N more" row {@link foldTail} appends. It is a SUM,
+   *  so it carries no markers of its own and must never be read as one
+   *  declaration. */
+  readonly remainder?: boolean;
 }
 
 export interface ContextLifecycleGroup {
@@ -234,7 +242,7 @@ export function buildContextPillView({
     cachedTokens,
     freeTokens,
     slices: buildSlices(rows, snapshot, windowTokens),
-    groups: buildGroups(rows, segments),
+    groups: buildGroups(rows, windowTokens),
     unattributedDelta: snapshot?.unattributed_delta ?? 0,
     undeclaredTokens: snapshot?.undeclared_tokens ?? 0,
     compaction: latestCompaction(context),
@@ -263,36 +271,135 @@ function modelLabelFor(
   return name.trim() === "" ? "Model" : name;
 }
 
-/** Rows for every segment carrying tokens, tone-stepped within their class.
+/**
+ * One row per DECLARATION, not per measured segment.
  *
- *  Zero-token segments are dropped: a declaration that measured to nothing is
- *  a true fact about the request and a useless row in a 300px frame. */
+ * The ledger emits a segment per contribution, and `detail` is its bounded
+ * sub-identity — a message ordinal, a tool name. So a real snapshot carries
+ * `conversation:tool_result` eight times as `msg[10]…msg[17]`, the transcript
+ * ten times, and `UNDECLARED` once per undeclared tool. Rendered one-to-one
+ * that is 44 rows in a 300px frame, and `tool_result · msg[13]` is not a thing
+ * anyone can act on — the actionable fact is "tool results, ×8, 8,492".
+ *
+ * So segments fold on `(lifecycle, label)`, the summed `item_count` becomes the
+ * multiplicity, and the ordinals are dropped. Measured against a live run this
+ * is 44 rows -> 16; {@link foldTail} then handles the long tail.
+ *
+ * Fixtures hid this: one segment per label reads identically either way. The
+ * shape only shows up against a stack that has actually run.
+ *
+ * Zero-token segments are dropped — a declaration that measured to nothing is a
+ * true fact about the request and a useless row.
+ */
 function buildRows(
   segments: readonly ContextOccupancySegment[],
   windowTokens: number | null,
 ): ContextSegmentRow[] {
-  const scored = segments
-    .filter((segment) => segment.estimated_tokens > 0)
-    .sort((a, b) => b.estimated_tokens - a.estimated_tokens);
+  const folded = new Map<string, FoldedSegment>();
+  for (const segment of segments) {
+    if (segment.estimated_tokens <= 0) continue;
+    const key = `${segment.lifecycle}::${segment.label}`;
+    const prior = folded.get(key);
+    if (prior === undefined) {
+      folded.set(key, {
+        key,
+        label: segment.label,
+        segmentClass: segment.segment_class,
+        lifecycle: segment.lifecycle,
+        tokens: segment.estimated_tokens,
+        items: Math.max(1, segment.item_count),
+        // ANY contributor being third-party makes the group removable by
+        // disconnecting something, which is the point of the marker.
+        thirdParty: segment.third_party,
+        // ALL, not any: claiming a cached prefix for a group that is only
+        // partly cacheable understates what the next turn will be billed.
+        cacheable: isCacheable(segment.cache_eligibility),
+        // ANY proxy count makes the SUM approximate.
+        approximate: segment.counter_source === "proxy",
+      });
+      continue;
+    }
+    prior.tokens += segment.estimated_tokens;
+    prior.items += Math.max(1, segment.item_count);
+    prior.thirdParty ||= segment.third_party;
+    prior.cacheable &&= isCacheable(segment.cache_eligibility);
+    prior.approximate ||= segment.counter_source === "proxy";
+  }
 
+  const scored = [...folded.values()].sort((a, b) => b.tokens - a.tokens);
   const seenPerClass = new Map<ContextSegmentClass, number>();
 
-  return scored.map((segment) => {
-    const rank = seenPerClass.get(segment.segment_class) ?? 0;
-    seenPerClass.set(segment.segment_class, rank + 1);
+  return scored.map((entry) => {
+    const rank = seenPerClass.get(entry.segmentClass) ?? 0;
+    seenPerClass.set(entry.segmentClass, rank + 1);
     return {
-      key: segmentKey(segment),
-      label: displayLabel(segment.label),
-      detail: segment.detail,
-      segmentClass: segment.segment_class,
+      key: entry.key,
+      label: displayLabel(entry.label),
+      // The multiplicity IS the detail now. `× 8` is what makes "shrink the
+      // per-result note" the obvious move; `msg[13]` never did.
+      detail: entry.items > 1 ? `× ${String(entry.items)}` : null,
+      segmentClass: entry.segmentClass,
       tone: TONE_STEPS[rank] ?? TONE_FLOOR,
-      tokens: segment.estimated_tokens,
-      pctOfWindow: shareOfWindow(segment.estimated_tokens, windowTokens),
-      thirdParty: segment.third_party,
-      cacheable: isCacheable(segment.cache_eligibility),
-      approximate: segment.counter_source === "proxy",
+      tokens: entry.tokens,
+      pctOfWindow: shareOfWindow(entry.tokens, windowTokens),
+      thirdParty: entry.thirdParty,
+      cacheable: entry.cacheable,
+      approximate: entry.approximate,
+      lifecycle: entry.lifecycle,
     };
   });
+}
+
+interface FoldedSegment {
+  key: string;
+  label: string;
+  segmentClass: ContextSegmentClass;
+  lifecycle: ContextLifecycle;
+  tokens: number;
+  items: number;
+  thirdParty: boolean;
+  cacheable: boolean;
+  approximate: boolean;
+}
+
+/** Rows shown per lifecycle group before the tail is folded. */
+const ROWS_PER_GROUP = 4;
+
+/**
+ * Keep the rows that carry the finding; fold the rest into ONE row that names
+ * what it swallowed.
+ *
+ * Even folded by declaration, `resident` on a live run is eleven first-party
+ * tool schemas at 200–1,400 tokens each. Nobody acts on `revise_artifact: 722`
+ * — they act on the total. But a silent top-4 would read as "that is
+ * everything", so the remainder is a row with its own count and tokens. This is
+ * the same rule as "no silent caps": the disclosure IS the cap.
+ */
+function foldTail(
+  rows: readonly ContextSegmentRow[],
+  windowTokens: number | null,
+): ContextSegmentRow[] {
+  if (rows.length <= ROWS_PER_GROUP + 1) return [...rows];
+  const head = rows.slice(0, ROWS_PER_GROUP);
+  const tail = rows.slice(ROWS_PER_GROUP);
+  const tokens = tail.reduce((sum, row) => sum + row.tokens, 0);
+  return [
+    ...head,
+    {
+      key: `${head[0]?.key ?? ""}::more`,
+      label: `${String(tail.length)} more`,
+      detail: null,
+      segmentClass: tail[0]!.segmentClass,
+      tone: TONE_FLOOR,
+      tokens,
+      pctOfWindow: shareOfWindow(tokens, windowTokens),
+      thirdParty: tail.some((row) => row.thirdParty),
+      cacheable: false,
+      approximate: tail.some((row) => row.approximate),
+      lifecycle: tail[0]!.lifecycle,
+      remainder: true,
+    },
+  ];
 }
 
 /**
@@ -397,47 +504,36 @@ function buildSlices(
 /** Group rows by lifecycle, in {@link LIFECYCLE_ORDER}, dropping empties. */
 function buildGroups(
   rows: readonly ContextSegmentRow[],
-  segments: readonly ContextOccupancySegment[],
+  windowTokens: number | null,
 ): ContextLifecycleGroup[] {
-  const lifecycleByKey = new Map<string, ContextLifecycle>();
-  for (const segment of segments) {
-    lifecycleByKey.set(segmentKey(segment), segment.lifecycle);
-  }
-
   const groups: ContextLifecycleGroup[] = [];
   for (const lifecycle of LIFECYCLE_ORDER) {
-    const owned = rows.filter(
-      (row) => lifecycleByKey.get(row.key) === lifecycle,
-    );
+    const owned = rows.filter((row) => row.lifecycle === lifecycle);
     if (owned.length === 0) continue;
     groups.push({
       lifecycle,
       label: LIFECYCLE_LABEL[lifecycle],
-      note: groupNote(lifecycle, segments),
-      rows: owned,
+      note: groupNote(lifecycle),
+      rows: foldTail(owned, windowTokens),
     });
   }
   return groups;
 }
 
 /**
- * The multiplier that turns a number into an action.
+ * What recurrence the group describes.
  *
- * `resident` bytes recur on every call, so the note is the recurrence itself.
- * `per_result` bytes scale with how many results came back, so the note is the
- * count — that is what makes "shrink the per-result note" the obvious fix
- * rather than "delete the tool".
+ * Deliberately NOT a count. Each row now carries its own exact `× N` from the
+ * fold, so a group-level number would be a second, vaguer one — and the obvious
+ * formulations are all wrong: a max over `item_count` reads "× 1 results" once
+ * segments are one-per-contribution, and a sum counts budget notes as results.
+ * The heading names the RECURRENCE; the rows own the arithmetic.
  */
-function groupNote(
-  lifecycle: ContextLifecycle,
-  segments: readonly ContextOccupancySegment[],
-): string | null {
+function groupNote(lifecycle: ContextLifecycle): string | null {
   if (lifecycle === "resident") return "every call";
-  if (lifecycle !== "per_result") return null;
-  const items = segments
-    .filter((segment) => segment.lifecycle === "per_result")
-    .reduce((max, segment) => Math.max(max, segment.item_count), 0);
-  return items > 0 ? `× ${items} results` : null;
+  if (lifecycle === "per_result") return "scales with results";
+  if (lifecycle === "per_turn") return "scales with turns";
+  return null;
 }
 
 /** The most recent compaction, by `at`. Sorting rather than trusting order:

@@ -270,8 +270,15 @@ function ContextRow({
 }: {
   readonly row: ContextSegmentRow;
 }): ReactElement {
+  // The fold's remainder is a SUM over several declarations, so it carries no
+  // markers: a `3P` chip on it would claim every folded row is third-party.
+  const summary = row.remainder === true;
   return (
-    <p className="atlas-ctx-row" data-testid={`context-row-${row.label}`}>
+    <p
+      className="atlas-ctx-row"
+      data-remainder={summary || undefined}
+      data-testid={`context-row-${row.label}`}
+    >
       <span
         className="atlas-ctx-row__sw"
         aria-hidden="true"
@@ -290,12 +297,12 @@ function ContextRow({
                 but cached" is a different finding from "large and re-billed".
           `≈`:  counter_source "proxy", the fail-open signature. The ledger took
                 a worse number over failing the run, and the row says so. */}
-      {row.thirdParty ? (
+      {row.thirdParty && !summary ? (
         <span className="atlas-ctx-mk atlas-ctx-mk--3p" title="Third-party">
           3P
         </span>
       ) : null}
-      {row.cacheable ? (
+      {row.cacheable && !summary ? (
         <span
           className="atlas-ctx-mk atlas-ctx-mk--cache"
           title="Cached prefix"
@@ -303,7 +310,7 @@ function ContextRow({
           ⌾
         </span>
       ) : null}
-      {row.approximate ? (
+      {row.approximate && !summary ? (
         <span className="atlas-ctx-mk atlas-ctx-mk--prox" title="Estimated">
           ≈
         </span>
