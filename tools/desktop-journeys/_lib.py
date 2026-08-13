@@ -1139,6 +1139,45 @@ class PhaseResult:
 #: ``DriverSession`` and asserts; returning normally is the pass.
 Phase = tuple[str, str, Callable[[DriverSession], None]]
 
+#: Env var pinning WHICH phases this process may run (comma/space separated).
+PHASE_SELECTOR_ENV = "JOURNEY_PHASES"
+
+
+def selected_phase_ids() -> frozenset[str] | None:
+    """The phase ids ``JOURNEY_PHASES`` pins, or ``None`` for "run them all".
+
+    Since one boot now carries every phase in a file, running the file is the
+    only way to get a claim — and those phases share that boot's state ON
+    PURPOSE, so a later one inherits whatever route, rail, env and run history
+    its predecessors left behind. A caller that wants exactly ONE claim (a
+    per-PR CI job, a bisect, a bug reproduction) therefore cannot get it by
+    running the file: it inherits state it never asked for and fails in a LATER
+    phase with a symptom-shaped message that reads exactly like a product bug.
+
+    ``JOURNEY_PHASES=FR-0`` runs FR-0 and DROPS the rest. Dropped, not recorded
+    as skipped: a skipped phase is deliberately non-zero (see
+    :attr:`JourneyPlan.exit_code`), so recording six phases the caller
+    explicitly did not ask for would make every pinned run red. A boot with no
+    selected phase is not booted at all — the whole point is to not pay for
+    initdb + migrations + three uvicorns to run nothing.
+
+    Matching is case-insensitive and whitespace-tolerant. An id that matches
+    nothing is a hard failure rather than a quiet empty run: see
+    :attr:`JourneyPlan.exit_code`. That is the difference between "CI runs one
+    phase" and "CI runs zero phases and reports success", which is precisely the
+    failure mode a per-PR e2e gate exists to not have.
+    """
+
+    raw = os.environ.get(PHASE_SELECTOR_ENV, "").strip()
+    if not raw:
+        return None
+    ids = frozenset(
+        token.strip().lower()
+        for token in raw.replace(",", " ").split()
+        if token.strip()
+    )
+    return ids or None
+
 
 @contextmanager
 def scoped_env(
@@ -1190,6 +1229,11 @@ class JourneyPlan:
         self.name = name
         self.results: list[PhaseResult] = []
         self._started = time.time()
+        #: Phase ids this run is pinned to, or ``None`` for all of them.
+        self.selected = selected_phase_ids()
+        #: Which pinned ids an actual declared phase answered to. Anything left
+        #: over is a caller pointing at a phase that no longer exists.
+        self._matched: set[str] = set()
 
     # -- recording --
     def _record(
@@ -1263,6 +1307,17 @@ class JourneyPlan:
         group and nothing else.
         """
 
+        # Pin BEFORE the factory runs. A boot with no selected phase must not
+        # cost initdb + migrations + three uvicorns to then run nothing.
+        phases = self._pin(phases)
+        if not phases:
+            print(
+                f"\n── boot: {label} — skipped, "
+                f"{PHASE_SELECTOR_ENV} pins no phase in this group",
+                flush=True,
+            )
+            return
+
         print(f"\n── boot: {label} ({len(phases)} phases)", flush=True)
         with scoped_env(env, clear=clear_env):
             try:
@@ -1301,6 +1356,16 @@ class JourneyPlan:
                     label, phases, Outcome.FAILED, f"{type(exc).__name__}: {exc}"
                 )
 
+    def _pin(self, phases: Sequence[Phase]) -> Sequence[Phase]:
+        """Narrow ``phases`` to what ``JOURNEY_PHASES`` selected. See
+        :func:`selected_phase_ids` for why dropping beats skipping."""
+
+        if self.selected is None:
+            return phases
+        kept = [phase for phase in phases if phase[0].strip().lower() in self.selected]
+        self._matched.update(phase[0].strip().lower() for phase in kept)
+        return kept
+
     def _skip_group(
         self,
         label: str,
@@ -1321,6 +1386,14 @@ class JourneyPlan:
         }
 
     @property
+    def unmatched_selection(self) -> tuple[str, ...]:
+        """Pinned phase ids no declared phase answered to."""
+
+        if self.selected is None:
+            return ()
+        return tuple(sorted(self.selected - self._matched))
+
+    @property
     def exit_code(self) -> int:
         """`0` only when every phase ran and passed.
 
@@ -1328,8 +1401,17 @@ class JourneyPlan:
         capability, which outranks a missing local prerequisite. A run with even
         one skipped phase is never `0`, because the file did not prove what its
         name claims.
+
+        A ``JOURNEY_PHASES`` id that matched no declared phase outranks all of
+        them and reports `1`. A pinned run is a caller asserting that a specific
+        claim is checked; if renaming a phase silently turned that into an empty
+        run, the caller — a per-PR CI gate, say — would go on reporting success
+        while proving nothing. That is the exact pathology this harness exists
+        to catch, so it must not be one.
         """
 
+        if self.unmatched_selection:
+            return 1
         outcomes = {r.outcome for r in self.results}
         if not self.results:
             return EXIT_SKIPPED
@@ -1347,6 +1429,14 @@ class JourneyPlan:
         counts = self.counts()
         code = self.exit_code
         elapsed = time.time() - self._started
+        unmatched = self.unmatched_selection
+        if unmatched:
+            print(
+                f"\n!! {PHASE_SELECTOR_ENV} named "
+                + ", ".join(repr(phase_id) for phase_id in unmatched)
+                + f", which {self.name} does not declare — nothing was proven. "
+                "Fix the caller (a CI job, a script) or restore the phase id."
+            )
         print(f"\n══ {self.name} — {len(self.results)} phases in {elapsed:.0f}s")
         for result in self.results:
             if not result.ok:
@@ -1370,6 +1460,12 @@ class JourneyPlan:
                     ),
                     "counts": counts,
                     "seconds": round(elapsed, 1),
+                    **(
+                        {"selected_phases": sorted(self.selected)}
+                        if self.selected is not None
+                        else {}
+                    ),
+                    **({"unmatched_phases": list(unmatched)} if unmatched else {}),
                     "phases": [
                         {
                             "boot": r.boot,

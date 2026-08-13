@@ -64,8 +64,10 @@ jobs:
         with:
           python-version: "3.13"
 
+      # pyyaml: test_desktop_journey_ci.py parses .github/workflows/ci-desktop.yml
+      # to check the per-PR desktop-journey job against the journey it pins.
       - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pyyaml
 
       # Each gate is tested before it is trusted: a gate whose own tests fail is
       # not evidence about the repository, it is a broken instrument. Every gate
@@ -85,7 +87,8 @@ jobs:
             tools/test_check_migration_manifest.py \
             tools/test_check_reader_methods.py \
             tools/test_apply_branch_protection.py \
-            tools/test_cli_release.py
+            tools/test_cli_release.py \
+            tools/test_desktop_journey_ci.py
 
       - name: Dark capabilities
         run: python tools/check_dark_capabilities.py

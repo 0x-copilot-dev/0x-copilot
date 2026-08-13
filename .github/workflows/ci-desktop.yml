@@ -23,6 +23,8 @@ on:
       - "tools/cli/package.json"
       - "tools/cli-testing/package.json"
       - "tools/cli-testing/package-lock.json"
+      - "tools/cli-testing/harness/**"
+      - "tools/desktop-journeys/**"
       - "tools/desktop-runtime/manifest.json"
       - "package.json"
       - "package-lock.json"
@@ -43,6 +45,8 @@ on:
       - "tools/cli/package.json"
       - "tools/cli-testing/package.json"
       - "tools/cli-testing/package-lock.json"
+      - "tools/cli-testing/harness/**"
+      - "tools/desktop-journeys/**"
       - "tools/desktop-runtime/manifest.json"
       - "package.json"
       - "package-lock.json"
@@ -148,3 +152,130 @@ jobs:
 
       - name: Test the workspace-fs addon
         run: npm run test:native --workspace @0x-copilot/desktop
+
+  # ── ONE real user journey against the BUILT app, on every PR ────────────────
+  #
+  # tools/desktop-journeys/ drives the real packaged app — supervised Electron +
+  # embedded PostgreSQL + all three Python services — through the Playwright
+  # control server, clicking real testIds. It has repeatedly caught
+  # "unit-tests-pass-but-the-real-app-is-broken" regressions, and until this job
+  # NOTHING ran it on a PR: `grep -rln desktop-journeys .github/workflows/`
+  # returned zero files. desktop-supervised-boot-drill.yml is the nearest thing
+  # and it is schedule + dispatch + tools/desktop-runtime paths only, driving the
+  # stack as a STAGING process rather than through the shipped app.
+  #
+  # Four constraints shape this job. Each is load-bearing; none is style.
+  #
+  # 1. EXACTLY ONE PHASE, pinned by JOURNEY_PHASES below. Since e8622a1d the
+  #    phases in a journey file share ONE boot and consume each other's state on
+  #    purpose, so running the whole file per-PR would inherit stale route / rail
+  #    / env / run-history and fail in a LATER phase with a symptom-shaped
+  #    message that reads exactly like a product bug. FR-0 is first, so it
+  #    consumes nothing.
+  #
+  # 2. NO SECRETS, NO THIRD-PARTY CALL. FR-0 is the only phase that needs no
+  #    provider key and drives no model: it asserts the keyless BYOK gate and
+  #    that the catalog, read through the app, reports nothing configured.
+  #    NOTE ON THE FAKE MODEL: RUNTIME_FAKE_MODEL=1 is what the boot drill uses,
+  #    and it is deliberately unreachable from here. `buildServiceEnv` starts
+  #    from {} and copies only ENV_PASSTHROUGH_ALLOWLIST
+  #    (apps/desktop/main/services/service-env.ts), which does not contain it —
+  #    that is the fail-closed guarantee stated in
+  #    agent_runtime/execution/fake_model.py ("the shipped desktop never sets
+  #    it"). Setting it in this job's env would be a no-op that reads like
+  #    coverage, so it is not set. The hermetic run->stream tail stays where it
+  #    can actually run: desktop-supervised-boot-drill.yml.
+  #
+  # 3. STAGE FRESH. <COPILOT_HOME>/runtime/**/services/** is a COPY of services/*
+  #    taken at stage time and nothing re-syncs it, so a cached stage would test
+  #    code the PR deleted. Only the DOWNLOADS (CPython + PostgreSQL tarballs)
+  #    are cached; the stage itself is rebuilt from this commit's tree.
+  #
+  # 4. NOT A REQUIRED CHECK. A new e2e gate needs a few runs of observed
+  #    stability before anything is allowed to block on it. Requiring it also
+  #    means making it unconditional (see the ci-gates.yml header) — this job is
+  #    path-filtered and macOS-billed, so that is a separate, deliberate step.
+  desktop-journey-first-run:
+    name: desktop journey (first_run FR-0)
+    # Apple Silicon: the staged runtime manifest ships darwin/win32 only, and
+    # this is the arch whose bundle the runner can both download and execute.
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      # THE ONE-PHASE CONSTRAINT, in one place. _lib.py's JourneyPlan runs only
+      # the phases named here and drops the rest; naming an id the journey does
+      # not declare exits 1 rather than passing an empty run, so renaming FR-0
+      # cannot leave this job green over nothing.
+      JOURNEY_PHASES: FR-0
+      # Port 8790 is _lib.py's default and collides with a driver left over from
+      # a previous run. A hosted runner is ephemeral so nothing is left over, and
+      # `concurrency:` above cancels a same-ref run before this one starts —
+      # a distinct port is belt-and-braces, chosen rather than derived so the
+      # value in a failing log is the value written here.
+      CTL_PORT: "8791"
+      # A first boot on a fresh profile runs initdb + migrations + three
+      # uvicorns. Hosted macOS is slower than a laptop at all three.
+      BOOT_TIMEOUT_S: "420"
+      DRIVER_LAUNCH_TIMEOUT_MS: "300000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # _lib.py needs 3.11+ (StrEnum). Pinned rather than trusting whatever
+      # `python3` the image happens to ship, because that failure is an import
+      # error minutes into a 45-minute job.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      # DOWNLOAD cache only (CPython + PostgreSQL tarballs), keyed on the pinned
+      # manifest so a re-pin busts it. The staged tree itself is never cached —
+      # see constraint 3 above. Same cache the boot drill uses.
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/enterprise-desktop-runtime
+          key: desktop-runtime-${{ runner.os }}-arm64-${{ hashFiles('tools/desktop-runtime/manifest.json') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-arm64-
+
+      # Installs playwright (driver.mjs launches Electron through it) and the
+      # electron binary the driver resolves from this checkout's node_modules.
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Fresh stage from THIS commit's services/*. Ad-hoc code-signing so the
+      # freshly extracted mach-o binaries execute without a Developer ID.
+      - name: Stage self-contained runtime (darwin-arm64, ad-hoc signed)
+        run: node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --adhoc-sign
+
+      # The driver launches apps/desktop/out/**, not the TypeScript sources.
+      - name: Build the desktop bundle
+        run: npm run build --workspace @0x-copilot/desktop
+
+      # THE JOURNEY. Exit 0 only if FR-0 ran and passed: a skip (3) or a blocked
+      # (2) is non-zero by design, so an absent stage or a vanished phase id
+      # cannot be mistaken for success.
+      - name: One live journey phase against the built app
+        env:
+          # The `source` target's default is this path, but naming it is what
+          # keeps the preflight and the launch pointed at the stage built above.
+          COPILOT_HOME: ${{ github.workspace }}/apps/desktop/resources
+        run: python3 tools/desktop-journeys/first_run.py
+
+      # Screenshots + driver.log + the supervised services' own logs. Without
+      # these a red run on a runner nobody can ssh into is unreadable.
+      - name: Upload journey evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-journey-first-run-evidence
+          path: |
+            tools/desktop-journeys/runs/**
+            ~/Library/Application Support/0xCopilot/journey-first-run-*/logs/**
+          if-no-files-found: warn
+          retention-days: 7
