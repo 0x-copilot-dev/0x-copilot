@@ -480,10 +480,10 @@ class Messages:
             """Return a validation message for schemas that exceed the byte limit."""
             return f"{field_name} exceeds the configured schema size"
 
-        @classmethod
-        def schema_type_required(cls, field_name: str) -> str:
-            """Return a validation message when a schema is missing a type key."""
-            return f"{field_name} must include a JSON schema type"
+        # ``schema_type_required`` was removed with the rejection it explained:
+        # a missing top-level ``type`` is coerced by ``McpSchemaRepair``, never
+        # refused. Leaving the message behind would invite someone to re-raise
+        # it and silently delete a connector again.
 
         @classmethod
         def stable_slug(cls, field_name: str) -> str:
