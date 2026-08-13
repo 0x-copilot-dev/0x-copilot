@@ -176,12 +176,6 @@ class McpToolName:
         return ParsedMcpToolName(server=server, tool=tool)
 
     @classmethod
-    def is_namespaced(cls, name: object) -> bool:
-        """Whether ``name`` is a model-surface MCP name this module composed."""
-
-        return cls.parse(name) is not None
-
-    @classmethod
     def strip(cls, name: object) -> str:
         """Return the connector-register name — the presentation/lookup key.
 

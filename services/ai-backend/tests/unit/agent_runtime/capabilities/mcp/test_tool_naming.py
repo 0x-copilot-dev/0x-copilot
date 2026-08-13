@@ -159,7 +159,6 @@ class TestParse(NameFixtureMixin):
         # first knowing the tool's origin.
         for native in ("write_todos", "mcp_thing", "mcp__", "mcp__only", ""):
             assert McpToolName.parse(native) is None
-            assert McpToolName.is_namespaced(native) is False
 
     def test_a_non_string_does_not_parse(self) -> None:
         assert McpToolName.parse(None) is None
