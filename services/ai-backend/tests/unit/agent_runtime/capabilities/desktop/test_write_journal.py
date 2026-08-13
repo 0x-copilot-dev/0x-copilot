@@ -225,7 +225,15 @@ class TestCaptureAndRevert(JournalStackMixin):
         assert [outcome.status for outcome in outcomes] == [RevertStatus.REMOVED]
 
     def test_a_delete_is_revertible(self, tmp_path):
-        """The floor now guards delete, so a removal is undoable."""
+        """A removal captured by the floor is undoable.
+
+        This one drives ``floor.delete`` rather than the ``delete`` TOOL, and
+        the sibling test below says why: in this composition the rule set
+        already denies the model's ``delete`` tool, so the floor's guard is
+        defense-in-depth rather than the only thing in the way. Reaching the
+        capture path therefore means calling the floor, which is exactly what
+        ``__getattr__`` would have delegated straight to the real disk.
+        """
 
         root = tmp_path / "Projects"
         root.mkdir()
@@ -233,11 +241,10 @@ class TestCaptureAndRevert(JournalStackMixin):
         target.write_text("please come back\n")
 
         store = self.store(tmp_path)
-        journal = self.journal(store)
         floor = HostFilesystemFloor(
             FilesystemBackend(virtual_mode=False),
             roots=(GrantedRoot(path=str(root), writable=True),),
-            journal=journal,
+            journal=self.journal(store),
         )
         floor.delete(str(target))
         assert not target.exists()
@@ -247,6 +254,32 @@ class TestCaptureAndRevert(JournalStackMixin):
         HostWriteReverter(store).revert(records)
 
         assert target.read_text() == "please come back\n"
+
+    def test_the_model_delete_tool_is_denied_by_the_rule_set(self, tmp_path):
+        """Pins the claim the test above depends on, so it cannot rot.
+
+        The WIP this branch finishes asserted that ``delete`` reached the real
+        filesystem ungoverned because deepagents classifies it as the ``write``
+        op and the matcher is blind to dotted segments. That is only half true:
+        the ALLOW rule for a granted root indeed fails to match a hidden
+        segment, but the catch-all DENY ``/**`` matches it, so the tool is
+        refused before any backend sees it — for an ordinary path and a dotted
+        one alike. If a future deepagents drops that catch-all, this test
+        flips and the floor's own delete guard becomes load-bearing.
+        """
+
+        root = tmp_path / "Projects"
+        (root / ".hidden").mkdir(parents=True)
+        for target in (root / "plain.md", root / ".hidden" / "secret.md"):
+            target.write_text("still here\n")
+            store = self.store(tmp_path / target.name)
+            middleware = self.middleware(root, self.journal(store))
+
+            message = self.call(middleware, "delete", file_path=str(target))
+
+            assert "permission denied" in message
+            assert target.read_text() == "still here\n"
+            assert self.records(store) == ()
 
     def test_a_binary_file_round_trips(self, tmp_path):
         """Pre-images are bytes, so no encoding can corrupt them."""
@@ -258,13 +291,8 @@ class TestCaptureAndRevert(JournalStackMixin):
         target.write_bytes(blob)
 
         store = self.store(tmp_path)
-        journal = self.journal(store)
-        floor = HostFilesystemFloor(
-            FilesystemBackend(virtual_mode=False),
-            roots=(GrantedRoot(path=str(root), writable=True),),
-            journal=journal,
-        )
-        floor.write(str(target), "clobbered by text")
+        middleware = self.middleware(root, self.journal(store))
+        self.call(middleware, "write_file", file_path=str(target), content="clobbered")
 
         HostWriteReverter(store).revert(self.records(store))
 
