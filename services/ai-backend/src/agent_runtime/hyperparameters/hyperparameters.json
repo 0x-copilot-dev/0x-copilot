@@ -62,5 +62,12 @@
     "window_chars": 1200,
     "lead_chars": 900,
     "min_window_chars": 200
+  },
+  "tool_program": {
+    "max_steps": 16,
+    "max_concurrency": 4,
+    "wall_clock_seconds": 120.0,
+    "max_total_output_bytes": 262144,
+    "max_result_bytes": 65536
   }
 }

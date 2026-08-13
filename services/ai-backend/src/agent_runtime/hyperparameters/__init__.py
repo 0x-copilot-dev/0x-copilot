@@ -22,6 +22,7 @@ from agent_runtime.hyperparameters.contracts import (
     ReadHyperparameters,
     RetryHyperparameters,
     SubagentHyperparameters,
+    ToolProgramHyperparameters,
 )
 from agent_runtime.hyperparameters.loader import (
     HyperparameterError,
@@ -47,4 +48,5 @@ __all__ = [
     "ReadHyperparameters",
     "RetryHyperparameters",
     "SubagentHyperparameters",
+    "ToolProgramHyperparameters",
 ]

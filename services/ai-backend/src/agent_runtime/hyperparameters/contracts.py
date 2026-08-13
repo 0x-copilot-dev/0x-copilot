@@ -106,6 +106,17 @@ class HyperparameterBounds:
     #: is no longer summarising the web, it is pasting it.
     SEARCH_CONTENT_TOKENS_MAX: Final[int] = 8_000
     SEARCH_PASSAGE_CHARS_MAX: Final[int] = 20_000
+    #: One ``run_tool_program`` plan's step count. A program is a batch of the
+    #: run's own tools, so the ceiling mirrors ``PARALLELISM_MAX`` rather than
+    #: inventing a second order of magnitude: past this it is a workflow engine,
+    #: which is not what a single tool result can honestly report on.
+    TOOL_PROGRAM_STEPS_MAX: Final[int] = 100
+    #: Bytes a program may accumulate across every step's output, and bytes of
+    #: the projection it hands back. Both sit under
+    #: ``RESULT_PREVIEW_BYTES_MAX`` because a program that pulls more than a
+    #: persisted tool result's own preview ceiling into one process has stopped
+    #: being a way of keeping payloads OUT of context.
+    TOOL_PROGRAM_BYTES_MAX: Final[int] = 1_048_576
 
 
 class _FrozenContract(BaseModel):
@@ -459,6 +470,64 @@ class CitationHyperparameters(HyperparameterSection):
     )
 
 
+class ToolProgramHyperparameters(HyperparameterSection):
+    """Hard bounds on one ``run_tool_program`` plan.
+
+    The model authors the plan; it authors none of these. Every one is a
+    *ceiling* the executor enforces itself rather than a number the plan may
+    assert, which is why they live in the reviewable document instead of in the
+    tool's input schema.
+
+    ``max_concurrency`` bounds the fan-out *inside* one program only. It is not
+    a second run-level parallelism knob: the run's tool budget still charges
+    every step, so a wide program spends its allowance faster rather than
+    escaping it.
+    """
+
+    max_steps: int = Field(
+        default=16, ge=1, le=HyperparameterBounds.TOOL_PROGRAM_STEPS_MAX
+    )
+    max_concurrency: int = Field(
+        default=4, ge=1, le=HyperparameterBounds.PARALLELISM_MAX
+    )
+    #: Wall clock for the whole program, sharing the single-call timeout
+    #: envelope every other timeout in this document sits under.
+    wall_clock_seconds: float = Field(
+        default=120.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Sum of every step's serialized output, held in this process.
+    max_total_output_bytes: int = Field(
+        default=262_144, ge=1_024, le=HyperparameterBounds.TOOL_PROGRAM_BYTES_MAX
+    )
+    #: Ceiling on the serialized projection actually returned to the model.
+    max_result_bytes: int = Field(
+        default=65_536, ge=256, le=HyperparameterBounds.TOOL_PROGRAM_BYTES_MAX
+    )
+
+    @model_validator(mode="after")
+    def _result_must_fit_the_program(self) -> "ToolProgramHyperparameters":
+        """A projection ceiling above the whole program's is not a ceiling.
+
+        The projection is built out of the step outputs, so a
+        ``max_result_bytes`` above ``max_total_output_bytes`` can never bind —
+        it would read as a configured limit while the only one in force is the
+        other number.
+        """
+
+        if self.max_result_bytes > self.max_total_output_bytes:
+            raise ValueError(
+                "tool_program.max_result_bytes exceeds "
+                "tool_program.max_total_output_bytes; the projection cannot be "
+                "larger than everything it is built from"
+            )
+        if self.max_concurrency > self.max_steps:
+            raise ValueError(
+                "tool_program.max_concurrency exceeds tool_program.max_steps; "
+                "no program could ever reach that width"
+            )
+        return self
+
+
 class Hyperparameters(_FrozenContract):
     """The whole document: every agent-behaviour tunable, loaded once.
 
@@ -489,6 +558,9 @@ class Hyperparameters(_FrozenContract):
     )
     citations: CitationHyperparameters = Field(default_factory=CitationHyperparameters)
     search: SearchHyperparameters = Field(default_factory=SearchHyperparameters)
+    tool_program: ToolProgramHyperparameters = Field(
+        default_factory=ToolProgramHyperparameters
+    )
 
 
 class HyperparameterOverride(_FrozenContract):
