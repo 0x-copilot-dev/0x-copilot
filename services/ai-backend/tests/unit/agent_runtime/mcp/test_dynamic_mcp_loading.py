@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 from pydantic import ValidationError
@@ -509,6 +510,38 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
 
         assert "ENG" in dispatched["content"][0]["text"]
+
+    def test_loader_attributes_a_repair_to_the_connector_that_shipped_it(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The repair line must name the server, driven through the real loader.
+
+        The repair itself runs inside a Pydantic field validator, which cannot
+        see the card that hosts the descriptor. ``McpLoader._load_uncached``
+        binds the connector identity around the whole discovery span; if that
+        binding is ever dropped, the repair still works and every other test
+        here still passes, but the line degrades to ``server=-`` and the
+        evidence stops naming a vendor to file against.
+        """
+
+        client = self.FakeMcpClient(
+            tools=(self.typeless_tool_payload(),),
+            resources=(),
+        )
+        loader = self.make_loader(client)
+
+        with caplog.at_level(logging.WARNING):
+            result = asyncio.run(self.load_default(loader, runtime_context_admin))
+
+        assert result.error is None
+        (record,) = [
+            r for r in caplog.records if "mcp_schema_repair.applied" in r.getMessage()
+        ]
+        message = record.getMessage()
+        assert f"server={self.TestValues.Names.DRIVE_MCP}" in message
+        assert f"tool={self.TestValues.Names.DRIVE_SEARCH}" in message
 
     def test_loader_rejects_display_name_requests(
         self,
