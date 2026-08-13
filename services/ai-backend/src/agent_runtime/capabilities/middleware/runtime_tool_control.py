@@ -361,11 +361,11 @@ class RuntimeControlMiddleware(AgentMiddleware):
         outside its recorded digest.
 
         Every fact handed to a hook is read from ``request``, never from
-        ``self._final_tool_surface``. That attribute is a single slot on a
-        middleware instance the graph reuses across calls, so reading it here
-        would let one model call's hook observe another's tool surface once the
-        framework runs two of them concurrently. The classmethod makes that
-        mistake unavailable rather than merely unmade.
+        ``self._final_tool_surface``. Today those two agree: nothing awaits
+        between the write and the read, so this is not a bug being fixed. It is
+        the narrower dependency — a hook payload that is a pure function of the
+        request cannot be desynchronized from it by any future edit that adds a
+        suspension point, and the classmethod is what keeps that true.
         """
 
         wants_observe = HookDispatch.enabled(HookPhase.MODEL_REQUEST_BEFORE)
