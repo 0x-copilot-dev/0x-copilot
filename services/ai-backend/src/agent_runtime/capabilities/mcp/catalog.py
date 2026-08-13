@@ -620,6 +620,14 @@ class McpCatalogRenderer:
         payload: dict[str, Any] = {
             Keys.Field.ACTION: action.value,
             Keys.Field.DESCRIPTION: descriptor.description,
+            # This is where the schema stays *readable*, and it is what makes
+            # the byte ceiling survivable. ``McpSchemaRepair`` degrades a schema
+            # over ``Limits.MCP_SCHEMA_MAX_BYTES`` rather than rejecting it, and
+            # it only ever sheds documentation — ``examples``, ``default``, and
+            # over-long ``description`` prose. Every property, type, enum and
+            # ``required`` name survives into this file, whole and
+            # pretty-printed, so the contract is never squeezed into a
+            # tool-listing blurb and recovering it is still one ``read_file``.
             Keys.Field.INPUT_SCHEMA: dict(descriptor.input_schema),
             # The machine-readable half of the same instruction, and the one
             # the model actually follows. Under per-tool registration the tool
