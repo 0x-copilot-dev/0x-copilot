@@ -688,6 +688,7 @@ class RunCoordinator:
             suggested_connectors=suggested_connectors,
             model_profile=model_config,
             max_parallel_tasks=self._settings.execution.max_parallel_tasks,
+            recursion_limit=self._settings.execution.recursion_limit,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
             # Coalesce the tri-state per-turn flag: an unset flag (no per-turn
