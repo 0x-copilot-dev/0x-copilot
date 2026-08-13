@@ -53,6 +53,20 @@ class Values:
         OFFLOAD = "offload"
         SUMMARIZE = "summarize"
 
+    class CompactionTrigger:
+        """Why the summarization middleware folded history on this model call.
+
+        A closed pair, deliberately: both are DERIVED from what is observable at
+        the model-call seam, and neither is guessed. ``TOOL_REQUEST`` is proven
+        by a ``compact_conversation`` tool call sitting in the state history that
+        was folded; every other compaction is the middleware's own token/message
+        trigger firing, which is ``TOKEN_THRESHOLD``. Adding a third value means
+        finding a third observable, not inventing a third guess.
+        """
+
+        TOKEN_THRESHOLD = "token_threshold"
+        TOOL_REQUEST = "tool_request"
+
     class FallbackTrigger:
         CONTEXT_OVERFLOW = "context_overflow"
         SUMMARIZATION_FAILURE = "summarization_failure"
