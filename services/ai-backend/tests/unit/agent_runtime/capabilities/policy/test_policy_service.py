@@ -35,11 +35,20 @@ from agent_runtime.capabilities.policy.contracts import (
     Principal,
     Trust,
 )
+from agent_runtime.capabilities.policy.rules import (
+    PermissionRule,
+    PermissionRuleset,
+    RuleAction,
+)
 from agent_runtime.capabilities.policy.service import (
     ConnectorAllowlist,
     PdpPolicyService,
 )
-from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
+from agent_runtime.capabilities.tools.permissions import (
+    ToolUsePolicyKind,
+    ToolUsePolicyMode,
+    ToolUsePolicySnapshot,
+)
 
 
 class PolicyServiceFixtureMixin:
@@ -159,12 +168,16 @@ class PolicyServiceFixtureMixin:
         overrides: ConnectorWritePolicyOverrides | None = None,
         allowlist: "PolicyServiceFixtureMixin._FakeAllowlist | None" = None,
         untrusted_read_gate: bool = True,
+        rules: PermissionRuleset | None = None,
+        never: PermissionRuleset | None = None,
     ) -> PdpPolicyService:
         return PdpPolicyService(
             snapshot=self._snapshot() if snapshot is None else snapshot,
             overrides=self._overrides() if overrides is None else overrides,
             allowlist=self._FakeAllowlist() if allowlist is None else allowlist,
             untrusted_read_gate=untrusted_read_gate,
+            rules=rules,
+            never=never,
         )
 
     def _decide(
@@ -354,8 +367,26 @@ class TestApprovalMatrixDefaultSnapshot(PolicyServiceFixtureMixin):
             ),
             (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, PolicyDecision.ALLOW, ""),
             (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, PolicyDecision.ALLOW, ""),
-            # DESTRUCTIVE — trust-independent: GATE always under MANUAL, ALLOW under
-            # BYPASS (bypass surrenders even the destructive hard-gate).
+            # DESTRUCTIVE — trust-independent AND posture-independent: GATE in
+            # BOTH postures.
+            #
+            # CHANGED (was ALLOW under BYPASS, "bypass surrenders even the
+            # destructive hard-gate"). That cell was the bug this row now pins:
+            # the BYPASS branch returned ALLOW *above* the action check, so the
+            # one rung that exists to stop an irreversible act was never
+            # evaluated in the posture where it mattered. The only thing above it
+            # was an admin-authored workspace BLOCK, which nobody authors on a
+            # single-user desktop — the product — so in practice Bypass deleted
+            # without asking.
+            #
+            # GATE (not DENY) is the same asymmetry the filesystem lane already
+            # ships: `desktop/host_filesystem.py:46-48` — "bypass removes the
+            # PAUSE, never widens the SET". The user keeps the ability to say
+            # yes; what they lose is having said yes in advance, via a pill, to a
+            # whole class of destructive acts. A deployment that genuinely wants
+            # destructive auto-run still has one — it authors
+            # `destructive=auto` on the axis, which is asserted separately by
+            # `TestDestructiveRungUnderBypass`.
             (
                 Action.DESTRUCTIVE,
                 Trust.TRUSTED,
@@ -374,15 +405,15 @@ class TestApprovalMatrixDefaultSnapshot(PolicyServiceFixtureMixin):
                 Action.DESTRUCTIVE,
                 Trust.TRUSTED,
                 Posture.BYPASS,
-                PolicyDecision.ALLOW,
-                "",
+                PolicyDecision.GATE,
+                "approval_required.destructive",
             ),
             (
                 Action.DESTRUCTIVE,
                 Trust.UNTRUSTED,
                 Posture.BYPASS,
-                PolicyDecision.ALLOW,
-                "",
+                PolicyDecision.GATE,
+                "approval_required.destructive",
             ),
         ],
     )

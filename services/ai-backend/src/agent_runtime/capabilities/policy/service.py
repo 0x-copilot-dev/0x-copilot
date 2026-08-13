@@ -51,6 +51,11 @@ from agent_runtime.capabilities.policy.contracts import (
     Principal,
     Trust,
 )
+from agent_runtime.capabilities.policy.rules import (
+    PermissionRuleset,
+    PolicySubjects,
+    RuleAction,
+)
 from agent_runtime.capabilities.surfaces.builtin import server_slug
 from agent_runtime.capabilities.tools.permissions import (
     ToolUsePolicyKind,
@@ -101,12 +106,22 @@ class PdpPolicyService:
     * **Stage 2 — authorization**: session ∧ connector scope subsets plus the
       org/user allowlist (via the port).
     * **Stage 3 — approval posture**: the ``action × trust × posture`` matrix
-      (spec §3, "Move 1"), composed from the ``snapshot`` and per-connector
-      ``overrides`` (which only ever downgrade WRITE+ASK→AUTO), with a workspace
-      ``BLOCK`` surviving both the override and BYPASS.
+      (spec §3, "Move 1"), composed from the ``snapshot``, the per-connector
+      ``overrides`` (which only ever downgrade WRITE+ASK→AUTO), and the
+      ``(permission × pattern)`` rule layer, with the never-list, a workspace
+      ``BLOCK`` and the DESTRUCTIVE rung all surviving BYPASS.
+      :meth:`_posture_decision` documents the ladder and why its order is the
+      safety argument.
     """
 
-    __slots__ = ("_snapshot", "_overrides", "_allowlist", "_untrusted_read_gate")
+    __slots__ = (
+        "_snapshot",
+        "_overrides",
+        "_allowlist",
+        "_untrusted_read_gate",
+        "_rules",
+        "_never",
+    )
 
     class _Reason:
         """The closed set of safe, non-leaking reason codes ``decide`` returns.
@@ -149,6 +164,8 @@ class PdpPolicyService:
         overrides: ConnectorWritePolicyOverrides,
         allowlist: ConnectorAllowlistPort,
         untrusted_read_gate: bool = True,
+        rules: PermissionRuleset | None = None,
+        never: PermissionRuleset | None = None,
     ) -> None:
         """Inject the frozen policy inputs the PDP resolves against.
 
@@ -165,12 +182,22 @@ class PdpPolicyService:
             A deployment may set ``False`` to make it ALLOW-visible (lower
             friction, at the cost of auto-dispatching an untrusted server's read).
             A **trusted** READ auto-runs regardless of this knob (Move 1).
+        :param rules: the ``(permission × pattern)`` ruleset (config ⧺ this run's
+            ``always`` grants). **Strictly additive**: the default empty ruleset
+            matches nothing, so every existing caller keeps today's decisions
+            exactly. See :mod:`agent_runtime.capabilities.policy.rules`.
+        :param never: the user's never-list — a durable DENY consulted above
+            everything a posture can touch. Separate from ``rules`` so "Bypass
+            cannot lift this" is a property of the call site (stage 3.1), not a
+            convention about a row's action value.
         """
 
         self._snapshot = snapshot
         self._overrides = overrides
         self._allowlist = allowlist
         self._untrusted_read_gate = untrusted_read_gate
+        self._rules = rules if rules is not None else PermissionRuleset()
+        self._never = never if never is not None else PermissionRuleset()
 
     def decide(
         self,
@@ -182,12 +209,13 @@ class PdpPolicyService:
     ) -> tuple[PolicyDecision, str]:
         """Return the tri-state decision + a safe reason code, DENY-first.
 
-        ``args`` is threaded because the Protocol requires it, but is
-        **currently unconsulted**: the §3 matrix inspects only
-        ``descriptor.action`` / ``descriptor.trust`` + ``posture`` + injected
-        policy. It is reserved for future per-argument policy (path-scoped
-        writes, destructive-argument detection); consuming it later keeps
-        ``decide`` pure and adds no port.
+        ``args`` is now **consulted** — this is the per-argument policy the P1b
+        docstring reserved it for. It is folded into :class:`PolicySubjects`
+        (URN + every top-level string argument) and matched against the injected
+        rulesets; nothing here parses a tool name or an argument name, so the
+        derivation cannot be broken by a change to how either is composed.
+        ``decide`` stays pure and total: the subjects come from its arguments,
+        the rules from its constructor.
         """
 
         # Stage 1 — Availability (the frozen, run-scoped connector_state).
@@ -206,9 +234,12 @@ class PdpPolicyService:
         if not self._is_allowlisted(principal, urn=descriptor.urn):
             return PolicyDecision.DENY, self._Reason.PERMISSION_DENIED
 
-        # Stage 3 — Approval posture (the Move 1 matrix).
+        # Stage 3 — Approval posture (the Move 1 matrix + the rule layer).
         return self._posture_decision(
-            descriptor=descriptor, posture=posture, connector=connector
+            descriptor=descriptor,
+            posture=posture,
+            connector=connector,
+            subjects=PolicySubjects.of(urn=descriptor.urn, args=args),
         )
 
     def _has_scopes(
@@ -256,39 +287,102 @@ class PdpPolicyService:
         descriptor: CapabilityDescriptor,
         posture: Posture,
         connector: str,
+        subjects: tuple[str, ...],
     ) -> tuple[PolicyDecision, str]:
-        """Resolve ``(action × trust × posture)`` → decision (spec §3 / §5.1).
+        """Resolve ``(action × trust × posture × rules)`` → decision (§3 / §5.1).
 
-        Terminal-first so the §7 invariants hold under any combination: a
-        workspace ``BLOCK`` denies before any downgrade; BYPASS then lifts every
-        remaining ASK/REQUIRE gate; an untrusted read never silently auto-runs on
-        its annotation alone; the per-connector override touches only WRITE+ASK.
+        Terminal-first, and the ORDER is the safety argument. Reading downward,
+        each stage is strictly harder to lift than the one below it:
+
+        ``never-list`` › ``workspace BLOCK`` › ``rule tightenings`` ›
+        ``DESTRUCTIVE`` › ``rule ALLOW`` › ``BYPASS`` › ``the axis``.
+
+        Two placements are the point of this ladder:
+
+        * **DESTRUCTIVE sits ABOVE BYPASS**, and GATEs rather than DENYs. It used
+          to sit below, which meant the destructive rung — the one rung that
+          exists to stop an irreversible act — was never evaluated in the Bypass
+          posture at all. The only thing above BYPASS was an admin-authored
+          workspace BLOCK, and on a single-user desktop (which is the product)
+          nobody authors one, so in practice Bypass auto-ran deletes.
+
+          This mirrors what the filesystem lane already ships correctly:
+          ``desktop/host_filesystem.py:46-48`` — "bypass removes the PAUSE, never
+          widens the SET" — where rules 4 and 5 are identical in both postures and
+          only the granted-root WRITE rule moves (:305). GATE, not DENY, is the
+          same asymmetry: the user keeps the ability to say yes on a card that
+          names the act; what they lose is the ability to have said yes in advance
+          to a class of acts, once, with a pill.
+
+        * **A rule's ALLOW sits BELOW DESTRUCTIVE**, so an authored ``allow`` can
+          tighten a destructive op but never loosen one — exactly the conjunction
+          3.7's per-connector override already enforces ("never DESTRUCTIVE").
+          A rule's ``deny``/``ask`` sit ABOVE Bypass, because a tightening the
+          user wrote down should not be undone by a posture toggle.
         """
 
         action = descriptor.action
         axis = self._AXIS_BY_ACTION[action]
         mode = self._snapshot.mode_for_kind(axis)
 
-        # 3.1 — A workspace BLOCK is terminal. Neither the per-connector override
+        # 3.1 — The never-list. A durable, user-authored floor: no posture, no
+        # rule, and no per-connector override reaches above it. It is checked
+        # before the workspace BLOCK only so that both orders give the same
+        # answer (both DENY) and the strictest statement is evaluated first.
+        if self._never.verdict(descriptor.urn, subjects) is RuleAction.DENY:
+            return PolicyDecision.DENY, self._Reason.PERMISSION_DENIED
+
+        # 3.2 — A workspace BLOCK is terminal. Neither the per-connector override
         # nor BYPASS lifts an admin prohibition (§7: "posture removes the pause,
         # never the ... gates"; the override conjunction never fires on BLOCK).
         if mode is ToolUsePolicyMode.BLOCK:
             return PolicyDecision.DENY, self._Reason.PERMISSION_DENIED
 
-        # 3.2 — BYPASS lifts every remaining ASK/REQUIRE gate to ALLOW: the §3
-        # "Bypass" column is ALLOW across every row once the terminal BLOCK above
-        # is excluded (§3 bypass note; §7 "posture removes the pause").
+        # 3.3 — Rule TIGHTENINGS, above BYPASS. `deny` refuses outright; `ask`
+        # parks on a card. Both are things the user wrote down about a specific
+        # (permission × pattern), so a posture pill must not silently undo them.
+        verdict = self._rules.verdict(descriptor.urn, subjects)
+        if verdict is RuleAction.DENY:
+            return PolicyDecision.DENY, self._Reason.PERMISSION_DENIED
+        if verdict is RuleAction.ASK:
+            return PolicyDecision.GATE, self._APPROVAL_REASON_BY_AXIS[axis]
+
+        # 3.4 — DESTRUCTIVE pauses in EVERY posture. See the docstring: this is
+        # the branch that used to sit below BYPASS and therefore never ran where
+        # it mattered.
+        #
+        # The one thing that still lifts it is the AXIS ITSELF being authored to
+        # AUTO, and that exception is the whole "posture ≠ policy" distinction
+        # rather than a hole in it. ``destructive=auto`` is a workspace/user
+        # statement about destructive ops specifically, written where policy is
+        # written; BYPASS is a posture pill about pausing. Honouring the first
+        # and not the second is what "bypass removes the PAUSE, never widens the
+        # SET" means here, and it is also what keeps this strictly additive —
+        # ``mode_for_kind(DESTRUCTIVE)`` still decides for anyone who authored it.
+        if action is Action.DESTRUCTIVE and mode is not ToolUsePolicyMode.AUTO:
+            return PolicyDecision.GATE, self._Reason.APPROVAL_DESTRUCTIVE
+
+        # 3.5 — A rule's ALLOW: the `always` grant, and the one place a rule
+        # widens. Unreachable for a destructive op unless the axis itself was
+        # authored to AUTO (3.4), which is the only case where widening a
+        # destructive op was already the authored answer.
+        if verdict is RuleAction.ALLOW:
+            return PolicyDecision.ALLOW, self._Reason.ALLOW
+
+        # 3.6 — BYPASS lifts every remaining ASK/REQUIRE gate to ALLOW: the §3
+        # "Bypass" column, now correctly excluding the destructive rung as well as
+        # the terminal BLOCK (§3 bypass note; §7 "posture removes the pause").
         if posture is Posture.BYPASS:
             return PolicyDecision.ALLOW, self._Reason.ALLOW
 
         # --- MANUAL posture below ---
 
-        # 3.3 — Untrusted READ never earns silent auto-run on its own annotation
+        # 3.7 — Untrusted READ never earns silent auto-run on its own annotation
         # (§7: "annotations never grant auto-run"), so it is NOT driven by
         # ``mode_for_kind(READ)`` toward AUTO. It is ALLOW-visible by default
         # (the visible card is an Observe concern — render ≠ approve), and GATEs
         # when the deployment knob is on OR the workspace tightened read to
-        # ask/require (the stricter of the two; BLOCK already denied at 3.1).
+        # ask/require (the stricter of the two; BLOCK already denied at 3.2).
         if action is Action.READ and descriptor.trust is Trust.UNTRUSTED:
             if self._untrusted_read_gate or mode in {
                 ToolUsePolicyMode.ASK,
@@ -297,9 +391,10 @@ class PdpPolicyService:
                 return PolicyDecision.GATE, self._Reason.APPROVAL_READ
             return PolicyDecision.ALLOW, self._Reason.ALLOW
 
-        # 3.4 — Per-connector override downgrades ONLY a WRITE-axis ASK to AUTO
+        # 3.8 — Per-connector override downgrades ONLY a WRITE-axis ASK to AUTO
         # (never DESTRUCTIVE, never REQUIRE, never BLOCK) — the exact conjunction
-        # ``EffectiveActionPolicyResolver.resolve`` enforces.
+        # ``EffectiveActionPolicyResolver.resolve`` enforces, and the precedent
+        # 3.4/3.5 follow for the rule layer.
         if (
             axis is ToolUsePolicyKind.WRITE
             and mode is ToolUsePolicyMode.ASK
@@ -308,8 +403,9 @@ class PdpPolicyService:
         ):
             mode = ToolUsePolicyMode.AUTO
 
-        # 3.5 — Base mode → decision (trusted READ, WRITE, DESTRUCTIVE under
-        # MANUAL): AUTO allows; ASK/REQUIRE gate with the per-axis reason.
+        # 3.9 — Base mode → decision (trusted READ and WRITE under MANUAL): AUTO
+        # allows; ASK/REQUIRE gate with the per-axis reason. DESTRUCTIVE can no
+        # longer reach here — 3.4 returns for it in every posture.
         if mode is ToolUsePolicyMode.AUTO:
             return PolicyDecision.ALLOW, self._Reason.ALLOW
         return PolicyDecision.GATE, self._APPROVAL_REASON_BY_AXIS[axis]

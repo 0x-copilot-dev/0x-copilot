@@ -228,5 +228,13 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     # distinguish "expired" from "recipient_membership_revoked" without
     # parsing free-text fields.
     reason: str | None = None
+    # ``once`` / ``always`` — how far the approval reaches. Carried verbatim
+    # from ``ApprovalDecisionRequest.decision_scope`` (which already validated it
+    # is approve-only) and threaded into the LangGraph resume value, where the
+    # policy lane that raised the gate turns ``always`` into a run-scoped rule.
+    # Typed as a plain string here, not the Literal: this is the durable queue
+    # contract, and a command written by an older API must still deserialize.
+    # ``DecisionScope.from_wire`` fails closed to ``once`` at the reading end.
+    decision_scope: str | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -172,6 +172,8 @@ class RuntimeApprovalHandler:
         APPROVAL_ID = "approval_id"
         ANSWER = "answer"
         DECISION = "decision"
+        # Read back by ``ToolAccessGate._interpret_resume`` (``_ResumeKey``).
+        DECISION_SCOPE = "decision_scope"
         DECISIONS = "decisions"
         TYPE = "type"
         STATUS = "status"
@@ -1330,10 +1332,16 @@ class RuntimeApprovalHandler:
                 cls._Fields.DECISION: decision,
             }
         if approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION:
+            # The write gate borrows this shape (``ToolAccessGate`` emits
+            # ``approval_kind == "ask_a_question"``), so the once/always scope
+            # rides here. A genuine question ignores the key — it reads
+            # ``answer`` — and ``GateResume`` drops it on a rejection, so adding
+            # it cannot change what any existing resume means.
             return {
                 cls._Fields.APPROVAL_ID: command.approval_id,
                 cls._Fields.DECISION: decision,
                 cls._Fields.ANSWER: command.answer,
+                cls._Fields.DECISION_SCOPE: command.decision_scope,
             }
         # MCP tool path. With ``outcome`` populated (the production path) we
         # project the actual per-item decisions in interrupt order so a mixed

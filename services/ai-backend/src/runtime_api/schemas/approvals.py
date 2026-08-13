@@ -88,6 +88,15 @@ class ApprovalDecisionRequest(RuntimeContract):
     # additionally rejects it for a non-mcp_auth approval kind and when the v2
     # flag is off.
     write_policy: Literal["ask_first", "allow_always"] | None = None
+    # How far THIS approval reaches. ``once`` (the default when absent, and what
+    # approve has always meant) resolves this call only; ``always`` additionally
+    # writes a run-scoped ALLOW rule over the subjects the card already named, so
+    # the rest of the run stops re-asking the same question. Distinct from
+    # ``write_policy`` above, which is a DURABLE per-connector override authored
+    # on an ``mcp_auth`` connect gate — different lane, different lifetime,
+    # different card. Allowed only with an approve decision: a decline that could
+    # write an allow rule is the one thing this field must not be able to say.
+    decision_scope: Literal["once", "always"] | None = None
 
     @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
@@ -162,6 +171,22 @@ class ApprovalDecisionRequest(RuntimeContract):
         ):
             raise ValueError(
                 "write_policy is only allowed when decision == 'approved'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_decision_scope(self) -> "ApprovalDecisionRequest":
+        # Same fail-closed axis as ``write_policy``: a scope widens what an
+        # approval covers, so it may only ride an APPROVE. ``approve_with_edits``
+        # is excluded too — the edited call is not the call the card described,
+        # so a rule derived from the card's subjects would grant something the
+        # user never saw.
+        if (
+            self.decision_scope is not None
+            and self.decision is not ApprovalDecision.APPROVED
+        ):
+            raise ValueError(
+                "decision_scope is only allowed when decision == 'approved'."
             )
         return self
 
