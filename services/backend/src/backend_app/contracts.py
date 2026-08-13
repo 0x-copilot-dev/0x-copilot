@@ -834,6 +834,12 @@ class InternalSkillCard(BackendContract):
     version: int
     allowed_tools: tuple[str, ...] = ()
     enabled: bool = True
+    # The Skill's own frontmatter metadata, already stored on the record and
+    # already carried by ``InternalSkillBundle``. The card carries it too so the
+    # runtime can decide whether a Skill is worth prompt tokens *before* loading
+    # its body — that decision is the whole point of a compact card, and it
+    # cannot be made from a field the card omits.
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class InternalSkillListResponse(BackendContract):

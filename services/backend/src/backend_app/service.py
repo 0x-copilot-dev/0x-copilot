@@ -2647,6 +2647,7 @@ class SkillRegistryService:
                     version=record.version,
                     allowed_tools=record.allowed_tools,
                     enabled=record.enabled,
+                    metadata=record.metadata,
                 )
                 for record in self.store.list_skills(
                     org_id=org_id,

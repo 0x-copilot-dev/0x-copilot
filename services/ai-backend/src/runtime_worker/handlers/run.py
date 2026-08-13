@@ -88,6 +88,7 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
+from agent_runtime.capabilities.skills.usage import SkillUsageLedger
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
@@ -606,6 +607,11 @@ class RuntimeRunHandler:
         # classifier the ledger emitter consults.
         mcp_annotations_token: object | None = None
         mcp_annotations_registry: dict[tuple[str, str], McpToolAnnotations] = {}
+        # Progressive-disclosure sidecar: which Skills this run's prompt index
+        # offered, and which the model actually loaded. Bound before the harness
+        # is built (the factory writes the offer during prompt assembly) and
+        # drained in the ``finally`` so every exit path reports exactly once.
+        skill_usage_token: object | None = None
         # Per-run ``/workspace/`` backend. Held across the try so the finally can
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
@@ -713,6 +719,9 @@ class RuntimeRunHandler:
                 dependencies=dependencies,
             )
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
+            skill_usage_token = SkillUsageLedger.bind_for_run(
+                SkillUsageLedger(run_id=run.run_id)
+            )
             harness_or_coro = self.agent_factory(
                 context=hydrated_context,
                 dependencies=dependencies,
@@ -992,6 +1001,8 @@ class RuntimeRunHandler:
                 McpDisplayRegistryContext.unbind(mcp_display_token)
             if mcp_annotations_token is not None:
                 McpToolAnnotationsRegistry.unbind(mcp_annotations_token)
+            if skill_usage_token is not None:
+                SkillUsageLedger.unbind(skill_usage_token)
             self._file_store_wiring().discard_tool_result_projections(run_id=run.run_id)
             await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 
