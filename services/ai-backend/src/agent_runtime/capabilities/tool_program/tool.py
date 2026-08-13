@@ -9,22 +9,11 @@ exact toolset and nothing wider.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from langchain_core.tools import StructuredTool
 
-from agent_runtime.capabilities.interpreter.contracts import (
-    ExternalFunctionCall,
-    ExternalFunctionSpec,
-)
-from agent_runtime.capabilities.interpreter.policy_invoker import (
-    AuthorizedToolResolver,
-    ExternalCallBudgetGuard,
-    HitlPolicyToolInvoker,
-    LangChainToolDispatcher,
-)
-from agent_runtime.capabilities.interpreter.ports import PolicyInvocationContext
 from agent_runtime.capabilities.operations.builtin_adapter import (
     BuiltinOperationAdapter,
 )
@@ -34,10 +23,8 @@ from agent_runtime.capabilities.tool_program.contracts import (
     ToolProgramLimits,
     ToolProgramResult,
 )
-from agent_runtime.capabilities.tool_program.executor import (
-    ProgramIdentity,
-    ToolProgramExecutor,
-)
+from agent_runtime.capabilities.tool_program.dispatch import MiddlewareStepDispatcher
+from agent_runtime.capabilities.tool_program.executor import ToolProgramExecutor
 
 TOOL_NAME = "run_tool_program"
 TOOL_DESCRIPTION = (
@@ -51,17 +38,13 @@ TOOL_DESCRIPTION = (
     "program stops and tells you to make that call directly."
 )
 
-#: Supplies the current run identity from trusted context. The model never
-#: influences it.
-ProgramIdentityProvider = Callable[[], ProgramIdentity]
-
 
 @runtime_checkable
 class ToolProgramToolFactoryPort(Protocol):
     """Construction seam for the program tool, called with the run's toolset.
 
-    ``execution/factory`` owns the toolset but must not own policy composition;
-    the worker owns policy composition but cannot see the toolset until the
+    ``execution/factory`` owns the toolset but must not own limit resolution;
+    the worker owns limit resolution but cannot see the toolset until the
     factory has built it. This port is that handshake, and it is why the program
     can never be bound to a wider surface than the run already exposes.
     """
@@ -69,46 +52,17 @@ class ToolProgramToolFactoryPort(Protocol):
     def build_tool(self, *, tools_by_name: Mapping[str, object]) -> object | None: ...
 
 
-class ProgramApprovalGate:
-    """States the program's approval posture: it adds none of its own.
-
-    Each step dispatches to the run's already-composed tool object, whose own
-    pipeline owns the ALLOW / DENY / GATE decision for that call. Layering a
-    second blanket approval on top would double-prompt every read. A tool that
-    *does* need a human raises the runtime's approval interrupt from inside its
-    own pipeline, and :class:`ToolProgramExecutor` stops the program there — see
-    that module's header for why declining beats parking.
-    """
-
-    async def request_approval(
-        self,
-        *,
-        spec: ExternalFunctionSpec,
-        call: ExternalFunctionCall,
-        context: PolicyInvocationContext,
-    ) -> bool:
-        del spec, call, context
-        return True
-
-
 class ToolProgramToolFactory:
     """Builds ``run_tool_program`` over the run's authorized toolset.
 
-    Composes the **shared** :class:`HitlPolicyToolInvoker` rather than a private
-    dispatch path, so a batched step is charged against the same per-run tool
-    budget and dispatched through the same seam a direct call uses.
+    It composes no policy of its own. The executor it builds reaches tools only
+    through :class:`MiddlewareStepDispatcher`, which routes each step back
+    through the graph's own tool seam — so a batched step is admitted, budgeted
+    and result-capped by exactly the code a direct call is.
     """
 
-    def __init__(
-        self,
-        *,
-        identity_provider: ProgramIdentityProvider,
-        limits: ToolProgramLimits,
-        budget: ExternalCallBudgetGuard,
-    ) -> None:
-        self._identity_provider = identity_provider
+    def __init__(self, *, limits: ToolProgramLimits) -> None:
         self._limits = limits
-        self._budget = budget
 
     def build_tool(self, *, tools_by_name: Mapping[str, object]) -> object | None:
         """Return the program tool, or ``None`` when there is nothing to batch."""
@@ -123,17 +77,11 @@ class ToolProgramToolFactory:
         if not callable_tools:
             return None
         executor = ToolProgramExecutor(
-            invoker=HitlPolicyToolInvoker(
-                budget=self._budget,
-                approval=ProgramApprovalGate(),
-                dispatcher=LangChainToolDispatcher(callable_tools),
-            ),
-            resolver=AuthorizedToolResolver(callable_tools),
+            dispatcher=MiddlewareStepDispatcher(tools_by_name=callable_tools),
+            authorized_tool_names=frozenset(callable_tools),
             limits=self._limits,
         )
-        return RunToolProgramTool.build(
-            executor=executor, identity_provider=self._identity_provider
-        )
+        return RunToolProgramTool.build(executor=executor)
 
 
 class RunToolProgramTool:
@@ -143,12 +91,7 @@ class RunToolProgramTool:
     SAFE_SUMMARY = "Tool program completed."
 
     @classmethod
-    def build(
-        cls,
-        *,
-        executor: ToolProgramExecutor,
-        identity_provider: ProgramIdentityProvider,
-    ) -> StructuredTool:
+    def build(cls, *, executor: ToolProgramExecutor) -> StructuredTool:
         async def _run_tool_program(
             steps: tuple[dict, ...] = (), result: object = None
         ) -> str:
@@ -157,7 +100,7 @@ class RunToolProgramTool:
             )
 
             async def _legacy() -> str:
-                outcome = await executor.run(program, identity=identity_provider())
+                outcome = await executor.run(program)
                 return json.dumps(outcome.model_dump(mode="json"))
 
             invocation = await cls.OPERATION.execute(
@@ -186,8 +129,6 @@ class RunToolProgramTool:
 __all__ = (
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
-    "ProgramApprovalGate",
-    "ProgramIdentityProvider",
     "RunToolProgramTool",
     "ToolProgramToolFactory",
     "ToolProgramToolFactoryPort",

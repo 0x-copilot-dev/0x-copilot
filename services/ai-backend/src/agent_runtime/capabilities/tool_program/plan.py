@@ -6,18 +6,20 @@ concurrency layering. A plan that reaches :class:`ToolProgramExecutor` has
 already been proven schedulable, so the executor only has to deal with runtime
 outcomes.
 
-Authorization is not a check this module performs by inspecting names — it is
-delegated to the injected ``ExternalFunctionResolver``, which in production
-resolves only against the run's already scope-filtered model-visible toolset. An
-unknown or unauthorized name simply fails to resolve.
+Authorization is not a check this module performs by inspecting names — it is a
+membership test against ``authorized_tool_names``, which in production is
+exactly the run's already scope-filtered model-visible toolset. An unknown or
+unauthorized name simply is not in it. Compiling against the names is a
+convenience for the model (a bad plan is refused before any step runs, naming
+the offending step); it is **not** the enforcement point. Every step is
+independently refused at dispatch if it is not callable, so a plan that somehow
+compiled could still not reach an unauthorized tool.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 
-from agent_runtime.capabilities.interpreter.contracts import ExternalFunctionSpec
-from agent_runtime.capabilities.interpreter.service import ExternalFunctionResolver
 from agent_runtime.capabilities.tool_program.contracts import (
     RunToolProgramInput,
     StepRef,
@@ -125,7 +127,7 @@ class ReferenceWalker:
 
 
 class ToolProgramPlan:
-    """A validated plan: authorized steps, resolved specs, and execution layers.
+    """A validated plan: authorized steps and their execution layers.
 
     ``layers`` is the schedule. Every step inside one layer is independent of
     every other step in it, so a layer is exactly the unit that may run
@@ -136,12 +138,10 @@ class ToolProgramPlan:
         self,
         *,
         steps: Mapping[str, ToolProgramStep],
-        specs: Mapping[str, ExternalFunctionSpec],
         layers: tuple[tuple[str, ...], ...],
         projection: JsonValue,
     ) -> None:
         self.steps = dict(steps)
-        self.specs = dict(specs)
         self.layers = layers
         self.projection = projection
 
@@ -150,17 +150,16 @@ class ToolProgramPlan:
         cls,
         program: RunToolProgramInput,
         *,
-        resolver: ExternalFunctionResolver,
+        authorized_tool_names: Collection[str],
         limits: ToolProgramLimits,
     ) -> "ToolProgramPlan":
         """Validate and schedule ``program``, or raise :class:`ToolProgramError`."""
 
         steps = cls._indexed(program.steps, limits=limits)
-        specs = cls._authorize(steps, resolver=resolver)
+        cls._authorize(steps, authorized_tool_names=authorized_tool_names)
         edges = cls._edges(steps, projection=program.result)
         return cls(
             steps=steps,
-            specs=specs,
             layers=cls._layered(steps, edges=edges),
             projection=program.result,
         )
@@ -192,19 +191,15 @@ class ToolProgramPlan:
 
     @staticmethod
     def _authorize(
-        steps: Mapping[str, ToolProgramStep], *, resolver: ExternalFunctionResolver
-    ) -> dict[str, ExternalFunctionSpec]:
-        specs: dict[str, ExternalFunctionSpec] = {}
+        steps: Mapping[str, ToolProgramStep], *, authorized_tool_names: Collection[str]
+    ) -> None:
         for step_id, step in steps.items():
-            spec = resolver.resolve(step.tool)
-            if spec is None:
+            if step.tool not in authorized_tool_names:
                 raise ToolProgramError(
                     ToolProgramErrorCode.UNKNOWN_TOOL,
                     f"step '{step_id}' names a tool this run cannot call",
                     step_id=step_id,
                 )
-            specs[step_id] = spec
-        return specs
 
     @staticmethod
     def _edges(
