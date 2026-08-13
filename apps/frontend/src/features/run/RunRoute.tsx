@@ -39,6 +39,7 @@ import {
   RunDestination,
   buildRunCreateBody,
   useTransport,
+  type ContextPillView,
   type RunEmptyComposerCtx,
   type RunStartRequest,
 } from "@0x-copilot/chat-surface";
@@ -355,6 +356,9 @@ export function RunRoute({
       // WC-P3 — cockpit-owned run state + cancel; RunComposer swaps send↔Stop.
       readonly running: boolean;
       readonly onCancel: () => void;
+      // The context meter, built ONCE by the cockpit from the two `/context`
+      // reads so both hosts draw the same number for the same conversation.
+      readonly context?: ContextPillView | null;
     }) => (
       <RunComposer
         ctx={ctx}

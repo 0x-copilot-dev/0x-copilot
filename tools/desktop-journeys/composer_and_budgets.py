@@ -877,6 +877,153 @@ def cb7_settings_tool_limit_governs_the_runtime(s: DriverSession) -> None:
     tb_run_prompt_and_check(s, LIMIT)
 
 
+# --------------------------------------------------------------------------
+# CB-8 — the composer's context meter.
+#
+# READ-ONLY, and last: it sends nothing and changes nothing, so it consumes
+# whatever run the phases above left bound rather than paying for another.
+#
+# The class of failure it exists to catch is specific. The meter is fed by two
+# READ endpoints, and the unit tests behind it run on fixtures — so every one of
+# them passes whether or not the packaged stack ever writes an occupancy row.
+# `context_occupancy` is in the event vocabulary but has NO emitter (it is
+# absent from `runtime_worker/streaming_executor.py` where `usage_recorded` is
+# emitted), which is exactly how a meter ships correct, tested, green and
+# permanently blank. This phase asks the running app the same question the
+# composer asks, then checks the pixel agrees with the answer.
+# --------------------------------------------------------------------------
+
+CONTEXT_PILL = "[data-testid=context-pill]"
+CONTEXT_POPOVER = "[data-testid=context-breakdown]"
+
+
+def cb8_context_meter_reflects_the_ledger(s: DriverSession) -> None:
+    """The meter renders what the occupancy ledger actually recorded."""
+
+    # CB-7 ended in Settings. Shared boot: a stale route makes every selector
+    # below miss, and the failure reads as "the meter is gone".
+    s.open_destination("Run")
+    assert s.wait_for("[data-testid=tc-chat]", 30), (
+        "the cockpit never re-opened a bound run"
+    )
+
+    conversation_id = s.evaluate(
+        "(() => (location.hash.match(/conversations?\\/([^/?#]+)/) || [])[1] || null)()"
+    )
+    assert conversation_id, (
+        "could not read a conversation id off the route; the phase cannot ask "
+        "the server what it should be seeing"
+    )
+
+    # What the server says. This is the premise — without it the pill is
+    # CORRECT to render nothing, and asserting its presence would be the bug.
+    occupancy = s.transport(
+        "GET", f"/v1/agent/conversations/{conversation_id}/context/occupancy"
+    )
+    snapshot = (occupancy or {}).get("snapshot")
+    if not snapshot:
+        raise AssertionError(
+            "the occupancy ledger recorded NOTHING for a conversation that has "
+            "just run tools. The composer meter is fed by this endpoint, so it "
+            "will be blank in the packaged app no matter how green the unit "
+            f"tests are. Response was {occupancy!r}"
+        )
+
+    segments = snapshot.get("segments") or []
+    assert segments, (
+        "a snapshot exists but decomposes into no segments — the meter would "
+        "draw an empty bar under a real token count"
+    )
+    assert snapshot.get("graph_scope") == "root", (
+        "the conversation endpoint must answer with the ROOT window; a "
+        f"subagent's window has a different denominator. Got {snapshot!r}"
+    )
+
+    # The pill itself.
+    assert s.wait_for(CONTEXT_PILL, 20), (
+        "the occupancy ledger has a root snapshot but the composer renders no "
+        "context meter — the read reached the server and not the pixel"
+    )
+    s.shot("cb8-context-pill")
+
+    pill_text = (
+        s.evaluate(
+            f"(() => (document.querySelector('{CONTEXT_PILL}')||{{}}).textContent || '')()"
+        )
+        or ""
+    ).strip()
+
+    window_tokens = snapshot.get("context_window_tokens")
+    if window_tokens:
+        # `headroom_pct` is the server's, rendered verbatim, and the unit is
+        # part of the reading: a bare percent next to a filling gauge does not
+        # say which direction it runs.
+        assert "free" in pill_text, (
+            f"the meter must name its unit; rendered {pill_text!r}"
+        )
+        assert "%" in pill_text, (
+            f"a known window must show the server's headroom percent; got {pill_text!r}"
+        )
+    else:
+        # Model absent from pricing: absolute tokens, and NO invented percent.
+        assert "%" not in pill_text, (
+            "the window size is unknown, so any percent here is against a "
+            f"denominator that does not exist; rendered {pill_text!r}"
+        )
+
+    # The breakdown — the part that makes a number actionable.
+    s.click(CONTEXT_PILL)
+    assert s.wait_for(CONTEXT_POPOVER, 10), "the meter did not open its breakdown"
+    s.shot("cb8-context-breakdown")
+
+    body = (
+        s.evaluate(
+            f"(() => (document.querySelector('{CONTEXT_POPOVER}')||{{}}).textContent || '')()"
+        )
+        or ""
+    ).strip()
+
+    # Grouped by LIFECYCLE, not by class. Every real request has resident bytes
+    # (the system prompt at minimum), so this group is always expected.
+    assert "Resident" in body, (
+        "the breakdown is not grouped by lifecycle — 'resident' is the group "
+        "that names bytes recurring on EVERY call, which is the whole finding. "
+        f"Rendered: {body!r}"
+    )
+    assert "every call" in body, (
+        f"the resident group lost its multiplier note; rendered {body!r}"
+    )
+
+    rows = (
+        s.evaluate(
+            """
+        (() => [...document.querySelectorAll('[data-testid^=context-row-]')]
+          .map(r => r.textContent.trim()))()
+        """
+        )
+        or []
+    )
+    assert rows, "the breakdown opened with no segment rows at all"
+    assert any(ch.isdigit() for ch in " ".join(rows)), (
+        f"no segment row carried a token figure; rows were {rows!r}"
+    )
+
+    # `undeclared_tokens` is EXPECTED 0 — anything above it is a first-party
+    # contract defect, not drift. Surfacing it here means the journey reports
+    # our own bug rather than passing over it.
+    undeclared = snapshot.get("undeclared_tokens") or 0
+    assert undeclared == 0, (
+        f"the ledger measured {undeclared} undeclared tokens — bytes matching "
+        "no declaration. That is a first-party contract defect in the occupancy "
+        "declarations, not a UI problem"
+    )
+
+    log(
+        f"context meter: {pill_text!r} over {len(segments)} segments, "
+        f"{len(rows)} rows drawn"
+    )
+
+
 def main() -> int:
     plan = JourneyPlan("composer-and-budgets")
     plan.boot(
@@ -918,6 +1065,11 @@ def main() -> int:
                 "CB-7",
                 "the Settings tool-call limit persists and governs the runtime",
                 cb7_settings_tool_limit_governs_the_runtime,
+            ),
+            (
+                "CB-8",
+                "the composer's context meter reflects the occupancy ledger",
+                cb8_context_meter_reflects_the_ledger,
             ),
         ],
     )
