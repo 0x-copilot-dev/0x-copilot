@@ -41,6 +41,7 @@ from pydantic import ConfigDict
 
 from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from agent_runtime.capabilities.mcp.middleware.compose import ToolSchemaIdentity
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.mcp.middleware.observe_tool import McpCallBindingScope
 from agent_runtime.capabilities.operations.contracts import (
     OperationPresentationOutcome,
@@ -102,7 +103,9 @@ class McpPresentedTool(DelegatingTool):
     inner: BaseTool
     #: Connector slug from the descriptor URN — the presenter's ``capability``.
     connector: str
-    #: The registered tool name — the presenter's ``op``.
+    #: The connector-register tool name — the presenter's ``op``. Deliberately
+    #: not ``name`` (the model-surface, ``mcp__``-namespaced one this tool also
+    #: carries): an ``op`` names something at the connector.
     tool_name: str
     #: Presenting a write here would double-emit against the approval path.
     presentable: bool
@@ -268,13 +271,19 @@ class ConnectorWriteOpCatalogue:
     def from_pairs(
         cls, pairs: Iterable[tuple[BaseTool, CapabilityDescriptor]]
     ) -> Mapping[str, tuple[WriteOpCandidate, ...]]:
-        """Group every WRITE tool's descriptor under its connector namespace."""
+        """Group every WRITE tool's descriptor under its connector namespace.
+
+        Names are captured in the CONNECTOR register, not the model-surface one.
+        A candidate here is an op the write-back lane will later dispatch at the
+        connector, and it is already grouped under that connector — so carrying
+        ``mcp__linear__`` on it would be both redundant and, at dispatch, wrong.
+        """
 
         grouped: dict[str, list[WriteOpCandidate]] = {}
         for tool, descriptor in pairs:
             if descriptor.action is not Action.WRITE:
                 continue
-            name = (tool.name or "").strip()
+            name = McpToolName.strip(tool.name or "")
             if not name:
                 continue
             grouped.setdefault(
@@ -328,7 +337,10 @@ class McpPresentMiddleware:
             **ToolSchemaIdentity.fields_of(tool),
             inner=tool,
             connector=parsed.namespace,
-            tool_name=tool.name,
+            # Connector register, matching ``ConnectorWriteOpCatalogue`` — the
+            # surface's read ``op`` and its captured write ops must be in one
+            # register or the write-back mapper compares two vocabularies.
+            tool_name=McpToolName.strip(tool.name),
             presentable=descriptor.action is Action.READ,
             write_ops=self.write_ops.get(parsed.namespace, ()),
             presenter=self.presenter,

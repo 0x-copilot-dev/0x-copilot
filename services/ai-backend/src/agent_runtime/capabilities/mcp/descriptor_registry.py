@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
 _MCP_DISPLAY_REGISTRY_CTX: ContextVar[dict[str, ToolDisplayTemplate] | None] = (
@@ -47,9 +48,22 @@ class McpDisplayRegistryContext:
 
     @classmethod
     def get(cls, tool_name: str) -> ToolDisplayTemplate | None:
-        """Return the template for ``tool_name`` if any; else ``None``."""
+        """Return the template for ``tool_name`` if any; else ``None``.
+
+        Accepts either register. Templates are written under the connector's own
+        bare tool name (the descriptor build site has nothing else), while the
+        stream event that asks for one carries the model-surface
+        ``mcp__{server}__{tool}``. Falling back to the stripped name is what
+        keeps a namespaced call rendering its synthesised card instead of
+        dropping to the minimal envelope — the exact-key probe stays first so a
+        connector that really did name a tool ``mcp__…`` still wins.
+        """
 
         registry = _MCP_DISPLAY_REGISTRY_CTX.get(None)
         if registry is None:
             return None
-        return registry.get(tool_name)
+        template = registry.get(tool_name)
+        if template is not None:
+            return template
+        bare = McpToolName.strip(tool_name)
+        return registry.get(bare) if bare != tool_name else None

@@ -45,6 +45,7 @@ from agent_runtime.capabilities.mcp.policy_allowlist import (
     CardConnectorAllowlist,
     McpConnectorPrincipal,
 )
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.policy.contracts import (
     Action,
     CapabilityDescriptor,
@@ -91,8 +92,18 @@ class McpCapabilityDescriptorSource:
         tool: str,
         context: AgentRuntimeContext,
     ) -> CapabilityDescriptor:
-        """Return the descriptor the PDP polices for this MCP tool call."""
+        """Return the descriptor the PDP polices for this MCP tool call.
 
+        ``tool`` is normalised to the connector register first, so a caller
+        holding the model-surface name (``mcp__linear__search`` — the POLICY
+        stage re-evaluates from its wrapper's own ``name``) derives the same
+        descriptor as the loader that held the bare one. Without it the catalog
+        and annotation lookups below miss and every read fails closed to
+        ``WRITE``, which turns a namespaced surface into an approval prompt per
+        call.
+        """
+
+        tool = McpToolName.strip(tool)
         return CapabilityDescriptor(
             urn=CapabilityUrn.for_mcp(server, tool),
             action=cls.action_for(server=server, tool=tool),
@@ -123,8 +134,12 @@ class McpCapabilityDescriptorSource:
         action class the PDP will police. Reading it from anywhere else — the
         descriptor's own ``readOnlyHint``, say — would let the browsable index
         advertise READ for a call the gateway gates as a write.
+
+        Accepts either register: both stores are keyed on the connector's own
+        bare tool name, so a model-surface name is stripped on the way in.
         """
 
+        tool = McpToolName.strip(tool)
         catalog_kind = ACTION_CATALOG.lookup(server, tool)
         if catalog_kind is not None:
             return cls._ACTION_BY_CATALOG_KIND[catalog_kind]
@@ -139,9 +154,13 @@ class McpCapabilityDescriptorSource:
 
     @classmethod
     def _trust(cls, *, server: str, tool: str, card: McpServerCard) -> Trust:
-        """TRUSTED iff catalog membership OR an OAuth-authenticated card."""
+        """TRUSTED iff catalog membership OR an OAuth-authenticated card.
 
-        if ACTION_CATALOG.lookup(server, tool) is not None:
+        Same register normalisation as :meth:`action_for` — a namespaced name
+        would miss the catalog and demote a curated tool to UNTRUSTED.
+        """
+
+        if ACTION_CATALOG.lookup(server, McpToolName.strip(tool)) is not None:
             return Trust.TRUSTED
         if card.auth_state is McpAuthState.AUTHENTICATED:
             return Trust.TRUSTED

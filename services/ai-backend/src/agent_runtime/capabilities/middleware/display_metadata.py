@@ -10,6 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolCallId
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 
 # Wire keys (alias form) for optional agent-supplied display overrides.
@@ -144,8 +145,16 @@ class DisplayMetadataMiddleware:
 
         ``synthetic=True`` is always set so agent-supplied ``_display_*`` args
         may override the synthesised values at invocation time.
+
+        ``tool_name`` is normalised to the connector register first. The title
+        is composed as *verb + connector + remainder*, so a model-surface
+        ``mcp__linear__list_issues`` arriving here would match no verb prefix,
+        fall through to the noun-phrase branch, and read "Linear: Mcp Linear
+        List Issues" — the connector named twice around a token no user has
+        seen.
         """
 
+        tool_name = McpToolName.strip(tool_name)
         verb_form, primary_keys = cls._verb_form_for(tool_name)
         primary_placeholder = cls._pick_primary_placeholder(
             input_schema, primary_keys, tool_name

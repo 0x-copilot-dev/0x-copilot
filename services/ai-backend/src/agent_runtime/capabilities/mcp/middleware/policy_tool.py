@@ -89,6 +89,7 @@ from agent_runtime.capabilities.mcp.cards import (
 )
 from agent_runtime.capabilities.mcp.constants import Messages
 from agent_runtime.capabilities.mcp.descriptor_source import McpDispatchPolicy
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.mcp.middleware.compose import (
     ToolResultShape,
     ToolSchemaIdentity,
@@ -398,7 +399,11 @@ class PolicyGatedMcpTool(DelegatingTool):
             )
         resume = await self.gate.park_for_approval(
             card=card,
-            tool_name=self.name,
+            # The CONNECTOR register: this value becomes ``gate.op`` and the
+            # approval card's own sentence ("Allow Linear to run …?"), which
+            # names the connector separately — so the namespace would read back
+            # to the user as "Allow Linear to run mcp__linear__create_issue?".
+            tool_name=McpToolName.strip(self.name),
             arguments=arguments,
             op_class=decision.descriptor.action.value,
             approval_id=self._approval_id(tool_call_id),

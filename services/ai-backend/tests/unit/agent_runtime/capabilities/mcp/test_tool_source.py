@@ -51,6 +51,7 @@ from agent_runtime.capabilities.mcp.constants import Messages
 from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.mcp.tool_source import (
     AuthorizedCardLister,
     McpToolCatalog,
@@ -310,11 +311,24 @@ class McpToolSourceFixtureMixin:
             credentials=credentials,
         )
 
+    def registered(self, tool_name: str, server: str | None = None) -> str:
+        """The model-surface name ``tool_name`` registers under on ``server``."""
+
+        return McpToolName.compose(server=server or self.SERVER, tool=tool_name)
+
     def action_for(self, catalog: McpToolCatalog, tool_name: str) -> Action:
+        """The action derived for a tool, addressed by its BARE name.
+
+        Tests name the tool the way the connector advertises it; registration
+        namespaces it. Composing here keeps every caller written in the register
+        a test author is actually thinking in.
+        """
+
+        registered = self.registered(tool_name)
         return next(
             descriptor.action
             for tool, descriptor in catalog.pairs
-            if tool.name == tool_name
+            if tool.name == registered
         )
 
 
@@ -342,7 +356,10 @@ class TestLoadProducesPairs(McpToolSourceFixtureMixin, BoundAnnotationsRegistryM
             }
         )
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["list_issues", "create_issue"]
+        assert [tool.name for tool, _ in pairs] == [
+            "mcp__linear__list_issues",
+            "mcp__linear__create_issue",
+        ]
         assert all(isinstance(d, CapabilityDescriptor) for _, d in pairs)
 
     async def test_descriptor_identity_comes_from_the_p1b_derivation(self) -> None:
@@ -529,9 +546,12 @@ class TestPublishedMaps(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMixin
         )
         await harness.source.load()
         catalog = harness.source.catalog
-        assert dict(catalog.tool_to_server) == {"create_issue": "linear"}
+        # Keyed on the MODEL-surface name, because that is what ``tool_name``
+        # carries on the stream events the resolver is queried from.
+        assert dict(catalog.tool_to_server) == {"mcp__linear__create_issue": "linear"}
         resolver = catalog.connector_resolver()
-        assert resolver.server_for("create_issue") == "linear"
+        assert resolver.server_for("mcp__linear__create_issue") == "linear"
+        assert resolver.server_for("create_issue") is None
         assert resolver.server_for("write_todos") is None
 
     async def test_published_maps_are_read_only_snapshots(self) -> None:
@@ -635,7 +655,7 @@ class TestFailureIsolation(McpToolSourceFixtureMixin, BoundAnnotationsRegistryMi
             errors_by_server={"github": McpConnectionError("socket died")},
         )
         pairs = await harness.source.load()
-        assert [tool.name for tool, _ in pairs] == ["list_issues"]
+        assert [tool.name for tool, _ in pairs] == ["mcp__linear__list_issues"]
         (failure,) = harness.source.catalog.failures
         assert failure.code is McpLoadErrorCode.CONNECTION_FAILED
         assert failure.safe_message == Messages.Loader.CONNECTION_FAILED
