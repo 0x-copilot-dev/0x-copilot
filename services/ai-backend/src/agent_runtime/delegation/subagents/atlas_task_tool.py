@@ -71,6 +71,11 @@ from agent_runtime.delegation.subagents.operation_identity import (
     SUPERVISOR_TASK_CALL_ID_KEY,
     SubagentOperationIdentityFactory,
 )
+from agent_runtime.delegation.subagents.recursion import (
+    SUBAGENT_DELEGATION_DEPTH_KEY,
+    DelegationDepthPolicy,
+    SubagentRecursionPolicy,
+)
 from agent_runtime.surfaces_v2.ledger_models import Producer
 
 
@@ -83,8 +88,14 @@ def build_atlas_task_tool(
 ) -> StructuredTool:
     """Mirrors `deepagents._build_task_tool` but injects supervisor_task_call_id.
 
-    Signature matches the upstream so the monkey-patch is drop-in.
+    Signature matches the upstream so the monkey-patch is drop-in — the pinned
+    parameter contract is asserted by ``test_atlas_task_tool_signature``, so the
+    delegation-depth ceiling is snapshotted from the hyperparameter document
+    here rather than accepted as an argument. This runs once per agent build,
+    i.e. once per run, which is the snapshot point the PDP/PEP rule asks for.
     """
+
+    depth_policy = DelegationDepthPolicy.snapshot()
 
     def _compile_spec(
         spec: Any,
@@ -111,11 +122,16 @@ def build_atlas_task_tool(
                 "description": spec["description"],
                 "runnable": runnable,
             }
+        # Delta from upstream: a child never carries `task` unless its own spec
+        # grants it (`SubagentRecursionPolicy`). Deep Agents has already
+        # substituted the parent's tool list for any spec that declared none, so
+        # this is the seam where "inherit everything" would otherwise hand a
+        # delegate the ability to delegate.
         return {
             "name": spec["name"],
             "description": spec["description"],
             "runnable": create_sub_agent(
-                cast("SubAgent", spec),
+                cast("SubAgent", SubagentRecursionPolicy.narrow_spec(spec)),
                 state_schema=state_schema,
                 response_format=response_format,
             ),
@@ -215,11 +231,22 @@ def build_atlas_task_tool(
 
         Upstream passes only `{"configurable": {"ls_agent_type": "subagent"}}`
         — parent callbacks/tags/configurable/metadata propagate ambiently via
-        langgraph's per-key `ensure_config` merge. Our two additions:
+        langgraph's per-key `ensure_config` merge. Our additions:
         - `configurable.supervisor_task_call_id` (defensive — second channel)
         - `metadata.supervisor_task_call_id` (primary — what the worker reads)
+        - `delegation_depth` on both, so the child knows how deep it is running
+          without any process-local state to get wrong under concurrency.
         """
-        return build_subagent_invocation_config(runtime.tool_call_id)
+        return build_subagent_invocation_config(
+            runtime.tool_call_id,
+            child_depth=depth_policy.child_depth(runtime.config),
+        )
+
+    def _depth_refusal(runtime: ToolRuntime) -> str | None:
+        """Return the model-visible refusal when this call is too deep."""
+
+        refusal = depth_policy.refusal(runtime.config)
+        return None if refusal is None else refusal.safe_message
 
     def _gateway_enforced() -> bool:
         context = OperationContext.active()
@@ -255,6 +282,12 @@ def build_atlas_task_tool(
         subagent_type: str,
         runtime: ToolRuntime,
     ) -> str | Command:
+        # Depth is refused before the gateway, before subagent resolution, and
+        # before any state is prepared: a call this deep is not work to review,
+        # it is work that must not start.
+        refused = _depth_refusal(runtime)
+        if refused is not None:
+            return refused
         if _gateway_enforced():
             # A model run uses StructuredTool's coroutine.  A synchronous host
             # may still use the same authoritative path when it owns no running
@@ -296,6 +329,9 @@ def build_atlas_task_tool(
         subagent_type: str,
         runtime: ToolRuntime,
     ) -> str | Command:
+        refused = _depth_refusal(runtime)
+        if refused is not None:
+            return refused
         if subagent_type not in subagent_graphs:
             allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
             return (
@@ -373,12 +409,20 @@ def build_atlas_task_tool(
 
 def build_subagent_invocation_config(
     supervisor_task_call_id: str | None,
+    *,
+    child_depth: int = 1,
 ) -> RunnableConfig:
     """Build config metadata that pins a child graph to its parent operation.
 
     The helper is deliberately separate from the upstream task-tool mirror so
     tests can verify the correlation contract without depending on LangChain's
     private ``ToolRuntime`` construction.
+
+    ``child_depth`` is how many delegation hops below the supervisor the child
+    runs at — ``1`` for a supervisor's own delegate. It is stamped on both
+    channels because it is the *only* thing the child can read to know it must
+    not delegate further: see
+    :class:`agent_runtime.delegation.subagents.recursion.DelegationDepthPolicy`.
     """
 
     link = (
@@ -390,10 +434,12 @@ def build_subagent_invocation_config(
     )
     correlation_metadata: dict[str, object] = {
         SUPERVISOR_TASK_CALL_ID_KEY: supervisor_task_call_id,
+        SUBAGENT_DELEGATION_DEPTH_KEY: max(int(child_depth), 1),
     }
     correlation_configurable: dict[str, object] = {
         "ls_agent_type": "subagent",
         SUPERVISOR_TASK_CALL_ID_KEY: supervisor_task_call_id,
+        SUBAGENT_DELEGATION_DEPTH_KEY: max(int(child_depth), 1),
     }
     if link is not None:
         # These are deterministic functions of trusted run identity and

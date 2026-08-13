@@ -15,6 +15,7 @@ import json
 
 from pydantic import Field, PositiveInt, ValidationInfo, field_validator
 
+from agent_runtime.delegation.subagents.constants import Defaults, Limits
 from agent_runtime.delegation.subagents.contracts import (
     SubagentDefinition,
     SubagentOutputContract,
@@ -285,9 +286,18 @@ class DelegationParentState(RuntimeContract):
 
 
 class DelegationAdmissionPolicy(RuntimeContract):
-    """Local limits for a single parent operation."""
+    """Local limits for a single parent operation.
 
-    max_depth: PositiveInt = Field(default=1, le=8)
+    ``max_depth`` is the one field of this contract that the live ``task``
+    tool enforces today: :class:`DelegationDepthPolicy` builds one of these
+    per run and admits against it. The remaining fields belong to the batch
+    planner below, which is still unwired.
+    """
+
+    max_depth: PositiveInt = Field(
+        default=Defaults.MAX_DELEGATION_DEPTH,
+        le=Limits.DELEGATION_DEPTH_MAX,
+    )
     max_children: PositiveInt = Field(default=3, le=_MAX_DIRECT_CHILDREN)
     max_packet_bytes: PositiveInt = Field(default=32_768, le=65_536)
 

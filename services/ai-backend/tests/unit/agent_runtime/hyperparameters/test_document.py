@@ -75,7 +75,14 @@ class CheckedInDocumentMixin:
             "worker_poll_interval_seconds": 1.0,
             "worker_lock_seconds": 60,
         },
-        "subagents": {"timeout_seconds": 120, "concurrency_limit": 2},
+        # ``max_delegation_depth`` joined the plan's two subagent values when
+        # the ``task`` tool gained a depth ceiling. Unlike its neighbours it is
+        # LIVE: DelegationDepthPolicy.snapshot reads it at agent-build time.
+        "subagents": {
+            "timeout_seconds": 120,
+            "concurrency_limit": 2,
+            "max_delegation_depth": 1,
+        },
         "context": {
             "max_input_tokens": 128000,
             "recent_context_ratio": 0.25,
