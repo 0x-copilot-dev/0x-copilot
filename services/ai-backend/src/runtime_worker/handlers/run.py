@@ -1899,6 +1899,7 @@ class RuntimeRunHandler:
             sandbox_tool_factory=self._sandbox_worker_bundle(command.runtime_context),
             rollout_admission=self._e2_rollout_admission,
             rollout_facts=rollout_facts,
+            hyperparameters=self.settings.hyperparameters,
         )
         code_mode_tool = capability_tools.code_mode_tool()
         if code_mode_tool is not None:
@@ -1906,6 +1907,11 @@ class RuntimeRunHandler:
         sandbox_execute_tool = capability_tools.sandbox_execute_tool()
         if sandbox_execute_tool is not None:
             update["sandbox_execute_tool"] = sandbox_execute_tool
+        # A factory rather than a tool: `execution.factory` builds the tool once
+        # it has composed the toolset a program is allowed to schedule.
+        tool_program_factory = capability_tools.tool_program_factory()
+        if tool_program_factory is not None:
+            update["tool_program_factory"] = tool_program_factory
         # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
         # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
         # tool surface is byte-identical with the flag off.
