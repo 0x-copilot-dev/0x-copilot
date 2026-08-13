@@ -15,13 +15,28 @@ those paths keep emitting the full inline output exactly as before.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 from agent_runtime.api.constants import Keys
+from agent_runtime.context.memory.compaction import CompactionNotice
 from agent_runtime.context.memory.contracts import TokenBudgetPolicy
 from agent_runtime.context.memory.summarization import (
     OffloadWriter,
 )
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import JsonObject
+
+
+class OffloadOutcome(NamedTuple):
+    """The rewritten payload plus the compaction it performed, if any.
+
+    ``notice`` is ``None`` for the overwhelmingly common inline result. It is
+    populated only when content was actually kept out of model context, which
+    is the only case the transcript should draw a divider for.
+    """
+
+    payload: JsonObject
+    notice: CompactionNotice | None
 
 
 class ToolResultOffloader:
@@ -76,13 +91,42 @@ class ToolResultOffloader:
         The returned mapping keeps ``tool_name`` / ``call_id`` / ``status`` /
         ``visibility`` intact and, on offload, replaces ``output`` with a bounded
         preview while adding an ``output_ref`` pointer.
+
+        Thin wrapper over :meth:`apply_with_notice` for callers that only need
+        the rewritten payload.
+        """
+
+        return self.apply_with_notice(
+            payload,
+            trace_id=trace_id,
+            projection_key=projection_key,
+            projection_content=projection_content,
+        ).payload
+
+    def apply_with_notice(
+        self,
+        payload: JsonObject,
+        *,
+        trace_id: str,
+        projection_key: str | None = None,
+        projection_content: object | None = None,
+    ) -> OffloadOutcome:
+        """Rewrite ``payload`` and report the compaction it performed.
+
+        The admission decision has always been made here; until now only its
+        payload rewrite escaped and the
+        :class:`~agent_runtime.context.memory.contracts.ContextCompressionEvent`
+        describing it was discarded. Returning both lets the worker's stream
+        pass emit one ``compression_note`` beside the ``TOOL_RESULT`` event it
+        belongs to, instead of the user seeing a preview with no explanation of
+        where the rest went.
         """
 
         if Keys.Field.OUTPUT not in payload:
-            return payload
+            return OffloadOutcome(payload, None)
         output = payload[Keys.Field.OUTPUT]
         if output == "":
-            return payload
+            return OffloadOutcome(payload, None)
 
         admitted = (
             self._admission_adapter.consume_projection(
@@ -100,14 +144,24 @@ class ToolResultOffloader:
                 output,
                 trace_id=trace_id,
             )
+        notice = CompactionNotice.from_admission(
+            admitted,
+            tool_name=self._text(payload.get(Keys.Field.TOOL_NAME)),
+        )
         if admitted.output_ref is None:
-            return payload
+            return OffloadOutcome(payload, notice)
 
         rewritten = dict(payload)
         rewritten[Keys.Field.OUTPUT] = admitted.event_content
         rewritten[Keys.Field.PREVIEW] = admitted.preview or ""
         rewritten[Keys.Field.OUTPUT_REF] = admitted.output_ref
-        return rewritten
+        return OffloadOutcome(rewritten, notice)
+
+    @staticmethod
+    def _text(value: object) -> str | None:
+        """Return a non-empty stripped string, or ``None``."""
+
+        return value.strip() or None if isinstance(value, str) else None
 
 
-__all__ = ("ToolResultOffloader",)
+__all__ = ("OffloadOutcome", "ToolResultOffloader")
