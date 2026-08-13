@@ -57,6 +57,7 @@ from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.observability.usage_recorder import PostgresUsageRecorder
 from agent_runtime.pricing import ModelPricingCatalog
+from agent_runtime.execution.run_steering import RunSteeringContext
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
@@ -74,6 +75,7 @@ from runtime_api.schemas import (
     RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
+    RuntimeSteerCommand,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
@@ -81,6 +83,7 @@ from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
+from runtime_worker.handlers.steer import RuntimeSteerHandler
 from runtime_worker.run_cancellation import LiveRunRegistry
 from runtime_worker.e2_rollout_admission import (
     E2RolloutEffectCommitHandler,
@@ -193,6 +196,7 @@ class RuntimeWorker:
         retry_delay_seconds: float = 1,
         run_handler: RuntimeRunHandler | None = None,
         cancel_handler: RuntimeCancelHandler | None = None,
+        steer_handler: RuntimeSteerHandler | None = None,
         approval_handler: RuntimeApprovalHandler | None = None,
         artifact_event_handler: RuntimeArtifactEventHandler | None = None,
         stage_commit_handler: RuntimeStageCommitHandler | None = None,
@@ -472,6 +476,10 @@ class RuntimeWorker:
             model_invocation_store=self.model_invocation_store,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
+            live_runs=self.live_runs,
+        )
+        self.steer_handler = steer_handler or RuntimeSteerHandler(
+            persistence=self.persistence,
             live_runs=self.live_runs,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
@@ -894,17 +902,27 @@ class RuntimeWorker:
             return
         await self._handle_claim_with_limit(claim)
 
+    #: Command families that control a run already in flight rather than doing
+    #: work of their own, and therefore skip the execution semaphore. The
+    #: semaphore bounds *work*; queueing these behind the very runs they act on
+    #: reintroduces, under saturation, exactly the wedge the concurrent loop
+    #: above was written to remove. Cancel removes work outright; a steer's
+    #: whole value is arriving while the run is still going, so a steer that
+    #: waits for a free execution slot is a steer that arrives after the turn it
+    #: was meant to redirect. Both are cheap and non-blocking — the claim
+    #: headroom above the semaphore is what pays for them.
+    _RUN_CONTROL_COMMAND_TYPES: Final[frozenset[str]] = frozenset(
+        {
+            PersistenceValues.EventType.RUN_CANCEL_REQUESTED,
+            PersistenceValues.EventType.RUN_STEER_REQUESTED,
+        }
+    )
+
     @classmethod
     def _bypasses_execution_limit(cls, claim: RuntimeWorkerClaim) -> bool:
-        """Return whether this claim may skip the execution semaphore.
+        """Return whether this claim may skip the execution semaphore."""
 
-        Only cancellation does. The semaphore bounds *work*, and a cancel
-        command is the thing that removes work — making it queue behind the very
-        runs it exists to stop reintroduces, under saturation, exactly the wedge
-        the concurrent loop above was written to remove.
-        """
-
-        return claim.command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED
+        return claim.command_type in cls._RUN_CONTROL_COMMAND_TYPES
 
     async def _abandon_inflight(self, inflight: set[asyncio.Task[None]]) -> None:
         """Cancel and reap outstanding claim tasks when the loop exits.
@@ -930,6 +948,15 @@ class RuntimeWorker:
             self.live_runs.register(run_id=claim.run_id, task=asyncio.current_task())
             if claim.command_type in self._RUN_EXECUTION_COMMAND_TYPES
             else None
+        )
+        # The other half of the same registration: the steer claim reaches this
+        # run's mailbox through the registry above, and the graph reaches it
+        # through this binding. Bound here rather than deeper because a
+        # ``ContextVar`` set in this task is inherited by every task LangGraph
+        # creates below it, so nothing between here and the model step has to
+        # thread a run id through the graph to find its own mailbox.
+        steering_token = RunSteeringContext.bind_for_run(
+            None if live_run is None else live_run.steering
         )
         try:
             prepared = self._prepare_dispatch(claim)
@@ -981,6 +1008,7 @@ class RuntimeWorker:
             return
         finally:
             self.live_runs.release(live_run)
+            RunSteeringContext.unbind(steering_token)
         await self.queue.mark_complete(
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
         )
@@ -991,6 +1019,7 @@ class RuntimeWorker:
     _DISPATCH_SPAN_NAMES: dict[str, str] = {
         PersistenceValues.EventType.RUN_REQUESTED: "runtime_worker.run",
         PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
+        PersistenceValues.EventType.RUN_STEER_REQUESTED: "runtime_worker.steer",
         PersistenceValues.EventType.APPROVAL_RESOLVED: "runtime_worker.approval_resolved",
         PersistenceValues.EventType.STAGE_COMMIT_REQUESTED: "runtime_worker.stage_commit",
         PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED: "runtime_worker.effect_commit",
@@ -1019,6 +1048,9 @@ class RuntimeWorker:
         if command_type == PersistenceValues.EventType.RUN_REQUESTED:
             command = self._runtime_run_command(claim)
             callback = partial(self.run_handler.handle, command)
+        elif command_type == PersistenceValues.EventType.RUN_STEER_REQUESTED:
+            command = self._runtime_steer_command(claim)
+            callback = partial(self.steer_handler.handle, command)
         elif command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED:
             command = self._runtime_cancel_command(claim)
             callback = partial(self.cancel_handler.handle, command)
@@ -1137,6 +1169,17 @@ class RuntimeWorker:
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Cancel command payload is unavailable.",
+            retryable=False,
+        )
+
+    def _runtime_steer_command(self, claim: RuntimeWorkerClaim) -> RuntimeSteerCommand:
+        """Deserialise the claim payload into a ``RuntimeSteerCommand``."""
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeSteerCommand.model_validate(payload)
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            "Steer command payload is unavailable.",
             retryable=False,
         )
 

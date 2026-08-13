@@ -20,11 +20,12 @@ arrives at 40% of a 30-second tool call simply sits here until the turn ends.
 
 *The mailbox is per run and process-local, and a miss is not an error.*  In a
 multi-worker deployment the steer claim may land on a process that is not
-executing the run.  The registry (``runtime_worker.run_steering``) answers with a
-miss, the handler records that the message was not delivered, and nothing
-pretends otherwise — the same honesty rule ``RunCancellationOutcome`` is built
-around.  The user's steer is still a durable transcript fact either way; only its
-*delivery* is best-effort.
+executing the run.  ``LiveRunRegistry.steering_for`` — the same registration
+cancellation already joins through — answers with a miss, the handler reports
+that the message was not delivered, and nothing pretends otherwise, the same
+honesty rule ``RunCancellationOutcome`` is built around.  The user's steer is
+still a durable transcript fact either way; only its *delivery* is best-effort,
+which is exactly why ``SteerRunResponse`` carries no ``delivered`` field.
 """
 
 from __future__ import annotations
