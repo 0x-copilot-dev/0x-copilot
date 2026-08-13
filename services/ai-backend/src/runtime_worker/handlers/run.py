@@ -142,6 +142,12 @@ from agent_runtime.execution.factory import (
 )
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
+from agent_runtime.hooks import (
+    HookDispatch,
+    HookPhase,
+    RunLifecycleInput,
+    RuntimeHookContext,
+)
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
 from agent_runtime.observability.attribution import Purpose
@@ -611,6 +617,22 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         run_control_token: object | None = None
+        # Typed lifecycle hooks. Bound BEFORE graph construction so the
+        # ``policy.decide.after`` observation inside the run-start tool-use gate
+        # is reached, and unbound in the same ``finally`` as every other
+        # run-scoped binding. The registry is snapshotted here, so a
+        # registration that lands mid-run cannot change what this run does.
+        hook_token = RuntimeHookContext.bind_for_run()
+        hook_run_status = AgentRunStatus.COMPLETED.value
+        HookDispatch.observe(
+            HookPhase.RUN_START,
+            RunLifecycleInput(
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                phase=HookPhase.RUN_START,
+            ),
+        )
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -761,6 +783,7 @@ class RuntimeRunHandler:
                         status=AgentRunStatus.WAITING_FOR_APPROVAL,
                     )
                 )
+                hook_run_status = AgentRunStatus.WAITING_FOR_APPROVAL.value
                 return
             final_text = self._extract_final_text(result)
             if final_text is not None:
@@ -829,6 +852,7 @@ class RuntimeRunHandler:
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
+            hook_run_status = AgentRunStatus.TIMED_OUT.value
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.TIMED_OUT,
@@ -879,6 +903,7 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             return
         except asyncio.CancelledError:
+            hook_run_status = AgentRunStatus.CANCELLED.value
             # Cancellation is a BaseException, so ``except Exception`` below
             # never saw it and in-flight tool calls were left open on this
             # path — the ledger's third terminal case, and the one a worker
@@ -902,6 +927,7 @@ class RuntimeRunHandler:
             ).close_open_subagents_as_cancelled(run=run)
             raise
         except Exception as exc:
+            hook_run_status = AgentRunStatus.FAILED.value
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.FAILED,
@@ -962,6 +988,22 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            # Emitted while the hook session is still bound, so a ``run.end``
+            # handler's own failure lands on this run's ledger rather than
+            # nowhere. Isolated like every other hook: it cannot change the
+            # terminal status the handler is about to persist.
+            HookDispatch.observe(
+                HookPhase.RUN_END,
+                RunLifecycleInput(
+                    run_id=run.run_id,
+                    conversation_id=run.conversation_id,
+                    org_id=run.org_id,
+                    phase=HookPhase.RUN_END,
+                    status=hook_run_status,
+                ),
+            )
+            self._emit_hook_ledger_summary(run)
+            RuntimeHookContext.unbind(hook_token)
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
@@ -1029,6 +1071,34 @@ class RuntimeRunHandler:
             ),
         )
         await self._observe_e2_shadow_projections(completed)
+
+    @staticmethod
+    def _emit_hook_ledger_summary(run: RunRecord) -> None:
+        """Publish this run's hook activity — the ledger's only consumer.
+
+        Without this the per-invocation records the dispatcher writes would be
+        a structure nothing reads, which is exactly the shape of a mechanism
+        that ships unwired. Emitted at WARNING when any invocation failed or
+        broke its contract, INFO otherwise, and skipped entirely when no hook
+        ran — the default, so an unhooked deployment logs nothing new.
+
+        Counts and closed-enum names only: no hook-authored string reaches the
+        operator's logs, and a handler that raises contributes its exception
+        CLASS (already recorded by the dispatcher), never its message.
+        """
+
+        session = RuntimeHookContext.current()
+        if session is None:
+            return
+        summary = session.ledger.summary()
+        if summary is None:
+            return
+        logging.getLogger(__name__).log(
+            logging.WARNING if summary.failed else logging.INFO,
+            "runtime_hooks.run_summary run_id=%s %s",
+            run.run_id,
+            summary.as_log_fields(),
+        )
 
     async def _emit_receipt_then_terminate(
         self, *, run: RunRecord, **terminate_kwargs: object
