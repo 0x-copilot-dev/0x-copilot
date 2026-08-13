@@ -71,6 +71,11 @@ class RuntimeErrorCode(StrEnum):
     DEPENDENCY_ERROR = "dependency_error"
     RUNTIME_FACTORY_ERROR = "runtime_factory_error"
     RUN_WORKER_LOST = "run_worker_lost"
+    #: The graph used its whole super-step allowance without reaching an end
+    #: state — LangGraph's ``GraphRecursionError``, translated here so the run
+    #: fails with a reason the user can act on instead of an opaque library
+    #: exception paraphrased by the model.
+    RECURSION_LIMIT_EXCEEDED = "recursion_limit_exceeded"
 
 
 class RuntimeRunStatus(StrEnum):
@@ -378,6 +383,16 @@ class AgentRuntimeContext(RuntimeContract):
     parent_trace_id: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
+    # LangGraph super-steps this run's graph may take, carried on the context
+    # for the same reason ``max_parallel_tasks`` is: ``runtime_config`` builds
+    # the ``RunnableConfig`` from the context alone, and the worker re-hydrates
+    # the persisted context on a re-claim — so a limit resolved at run-create
+    # survives the queue round trip instead of being re-derived from whatever
+    # settings the claiming process happens to hold. Default and ceiling mirror
+    # ``ExecutionHyperparameters.recursion_limit`` (which carries the derivation);
+    # a context built without a composition root — tests, the ``langgraph.json``
+    # export — still gets a number this repo chose rather than the library's.
+    recursion_limit: PositiveInt = Field(default=500, le=2_000)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
     # Per-run web-search toggle (composer Tools popover). Default True preserves

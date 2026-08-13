@@ -74,6 +74,14 @@ class CheckedInDocumentMixin:
             "delta_coalesce_max_chunks": 64,
             "worker_poll_interval_seconds": 1.0,
             "worker_lock_seconds": 60,
+            # New knobs, so AC4 ("byte-identical to today's") does not apply:
+            # neither had a value anywhere before. ``recursion_limit`` replaces
+            # the library's implicit default (10007 on the pinned langgraph);
+            # ``run_deadline_seconds`` is the run-level wall clock that did not
+            # exist at all. Both are pinned here for the same reason every other
+            # row is — so a change to either is a deliberate edit to this file.
+            "recursion_limit": 500,
+            "run_deadline_seconds": 1800.0,
         },
         "subagents": {"timeout_seconds": 120, "concurrency_limit": 2},
         "context": {
