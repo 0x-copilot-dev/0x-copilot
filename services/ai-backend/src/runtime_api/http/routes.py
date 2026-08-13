@@ -1200,6 +1200,16 @@ class RuntimeApiRouter:
         from runtime_api.http.drafts import register_draft_routes
 
         register_draft_routes(router)
+        # Undo for the agent's writes to the user's real disk. Registered
+        # UNCONDITIONALLY, not behind a flag: the handler 503s when the
+        # capability is absent (no file store ⇒ nothing was captured), and a
+        # flag here would be a second, quieter way for the one feature whose
+        # job is "you can always get your file back" to not exist.
+        from runtime_api.http.host_write_undo import (
+            register_host_write_undo_routes,
+        )
+
+        register_host_write_undo_routes(router)
         # PRD-D1 (Generative Surfaces v2) — single-artifact staged-write routes.
         # Registered ONLY when SURFACES_V2 is on; flag off ⇒ the three
         # ``/v1/agent/stages/*`` routes do not exist (404), the cleanest

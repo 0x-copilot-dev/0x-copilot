@@ -1893,6 +1893,20 @@ class RuntimeRunHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
+        # Capture the pre-image of every host write this run admits, so the user
+        # can undo one tool call. Desktop only — `None` keeps no undo history,
+        # exactly as before. It MUST also be set on the approval-resume path
+        # (`ApprovalHandler._dependencies_for_resume`): a run that pauses for a
+        # write approval and resumes without a journal would perform the ONE
+        # write the user was most careful about with no way back — bug R1's
+        # shape, aimed at the riskiest possible target.
+        host_write_journal = self._file_store_wiring().host_write_journal(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+        )
+        if host_write_journal is not None:
+            update["host_write_journal"] = host_write_journal
         drafts_backend = self._drafts_backend(
             org_id=command.org_id,
             conversation_id=command.conversation_id,

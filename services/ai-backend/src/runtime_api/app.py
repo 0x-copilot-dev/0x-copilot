@@ -367,6 +367,11 @@ class RuntimeApiAppFactory:
         # still dark while SURFACES_V2 is explicitly disabled.
         app.state.source_open_service = cls.default_source_open_service(app)
         app.state.draft_service = cls.default_draft_service(app)
+        # Undo for the agent's writes to the user's real disk. The routes are
+        # mounted unconditionally and read THIS attribute; without the
+        # assignment the capture side would fill a ledger nobody could ever
+        # read back, which is the exact failure this codebase keeps shipping.
+        app.state.host_write_undo_service = cls.default_host_write_undo_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
         # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
@@ -884,6 +889,40 @@ class RuntimeApiAppFactory:
             return response.status_code, body
 
         return fetch
+
+    @classmethod
+    def default_host_write_undo_service(cls, app):
+        """Compose the agent-write undo service, or ``None`` where it cannot be.
+
+        Needs two things: the run table (to prove the caller owns the run before
+        a single path is listed) and the journal store the worker captured into.
+        The second exists only on a backend with an object store to hold the
+        pre-image bytes, so an in-memory boot returns ``None`` and the routes
+        answer 503 — "this deployment captured nothing", which is true, rather
+        than 404 "no such run", which would not be.
+        """
+
+        from agent_runtime.api.host_write_undo_service import HostWriteUndoService
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:  # pragma: no cover — only hit when boot has no ports
+            return None
+        journal_store = getattr(ports, "host_write_journal_store", None)
+        if journal_store is None:
+            return None
+        service = HostWriteUndoService(
+            persistence=ports.persistence, journal_store=journal_store
+        )
+        # Boot is the retention sweep, matching the file store's own open-time
+        # purge. Deliberately NOT gated on RUNTIME_FILE_STORE_RETENTION_DAYS:
+        # that knob defaults to 0 (off), and a captured pre-image kept forever
+        # is the user's own file content accumulating in a directory they never
+        # asked us to fill. The journal's window is its own 7 days.
+        try:
+            service.prune()
+        except Exception:  # noqa: BLE001 - retention must never block boot
+            _STRUCTURED_LOGGER.warning("host_write_undo.prune_failed")
+        return service
 
     @classmethod
     def default_draft_service(cls, app):
