@@ -46,7 +46,8 @@
   },
   "subagents": {
     "timeout_seconds": 120,
-    "concurrency_limit": 2
+    "concurrency_limit": 2,
+    "max_delegation_depth": 1
   },
   "context": {
     "max_input_tokens": 128000,

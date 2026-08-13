@@ -59,6 +59,7 @@ class Values:
     class ErrorCode:
         CANCELLED = "cancelled"
         CONCURRENCY_LIMIT_EXCEEDED = "concurrency_limit_exceeded"
+        DEPTH_LIMIT_EXCEEDED = "depth_limit_exceeded"
         MALFORMED_RESULT = "malformed_result"
         PERMISSION_DENIED = "permission_denied"
         OVERSIZED_RESULT = "oversized_result"
@@ -100,6 +101,12 @@ class Defaults:
     OUTPUT_FORMAT = Values.OutputFormat.TEXT
     SUBAGENT_TIMEOUT_SECONDS = 120
     SUBAGENT_CONCURRENCY_LIMIT = 2
+    #: How many delegation hops below the supervisor a run may reach. ``1`` is
+    #: "the supervisor may delegate; a delegate may not delegate again" — the
+    #: same default opencode ships. Raising it multiplies token spend against
+    #: the user's own BYOK key, so the ceiling is deliberately low and the
+    #: default deliberately the smallest useful value.
+    MAX_DELEGATION_DEPTH = 1
 
 
 class Limits:
@@ -117,6 +124,11 @@ class Limits:
     TASK_TEXT_MAX_LENGTH = 4_000
     TIMEOUT_MAX_SECONDS = 3_600
     CONCURRENCY_LIMIT_MAX = 100
+    #: Hard ceiling on ``max_delegation_depth`` wherever it is configured —
+    #: the admission policy's ``max_depth``, the hyperparameter document's
+    #: ``subagents.max_delegation_depth``, and the live runtime snapshot all
+    #: take it from here so "the depth limit" cannot become three limits.
+    DELEGATION_DEPTH_MAX = 8
 
 
 class Patterns:
@@ -145,6 +157,29 @@ class Messages:
             "Requested subagent name is registered more than once."
         )
         REQUESTED_SUBAGENT_UNKNOWN = "Requested subagent is not available."
+
+    class Delegation:
+        """Model-visible refusals raised on the live ``task`` tool path.
+
+        There is deliberately no "nested delegation unavailable" string here.
+        Rule 2 removes ``task`` from a child's tool surface outright, so a
+        delegate never sees the tool to call it — a refusal message for that
+        case would have no emitter and would be dead the day it was written.
+        """
+
+        @classmethod
+        def depth_limit_exceeded(cls, *, max_depth: int) -> str:
+            """Say what was refused, why, and what to do instead.
+
+            The model reads this string as the tool result, so it names the
+            limit and the recovery rather than only reporting a failure.
+            """
+
+            return (
+                f"Delegation refused: this run already delegates {max_depth} "
+                "level(s) deep, which is the configured maximum. Complete the "
+                "work with your own tools instead of delegating again."
+            )
 
     class Lifecycle:
         CANCELLED_TASK = "The subagent task has been cancelled."

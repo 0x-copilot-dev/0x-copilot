@@ -8,6 +8,7 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.delegation.subagents.authority import (
     SubagentAuthorityPolicy,
     SubagentCapabilityGrant,
+    SubagentPolicyGrant,
 )
 from agent_runtime.delegation.subagents.contracts import (
     RuntimeContextReference,
@@ -85,6 +86,32 @@ class SubagentHandoffPolicy:
         return normalized_requested.intersection(configured_slugs)
 
     @classmethod
+    def parent_policy_ceiling(cls, context: AgentRuntimeContext) -> SubagentPolicyGrant:
+        """Return the delegating parent's own resolved approval posture.
+
+        The import is function-local, for the same reason
+        ``DelegationDepthPolicy.snapshot`` defers its one:
+        ``tool_use_enforcement`` reaches ``capabilities.mcp.constants``, and
+        ``capabilities.mcp`` reaches back here through ``coordination`` — so a
+        module-level import closes that cycle and breaks *every* import of
+        ``agent_runtime`` depending only on which module is entered first.
+        Deferring it to call time leaves both packages fully loaded.
+
+        Resolving rather than re-parsing matters: ``ToolUsePolicyResolver`` is
+        the single place that knows how the backend's aggregate is shaped and
+        how it fails open. A second parser here would be a second answer to
+        "what is this run's posture", and the two would drift.
+        """
+
+        from agent_runtime.capabilities.tools.tool_use_enforcement import (  # noqa: PLC0415
+            ToolUsePolicyResolver,
+        )
+
+        return SubagentPolicyGrant.from_policy_snapshot(
+            ToolUsePolicyResolver.resolve(context)
+        )
+
+    @classmethod
     def narrow_authority(
         cls,
         *,
@@ -94,12 +121,29 @@ class SubagentHandoffPolicy:
         requested_skills: Sequence[str],
         parent_grant: SubagentCapabilityGrant | None,
     ) -> SubagentCapabilityGrant:
-        """Return the only authority that may cross the delegation boundary."""
+        """Return the only authority that may cross the delegation boundary.
+
+        The parent's sealed filesystem-bypass decision is applied here, not at
+        the call sites: every handoff — first dispatch and follow-up update
+        alike — must be clamped by the same rule, and a rule applied by each
+        caller is a rule one caller forgets.
+
+        When no verified parent grant is supplied the ceiling is synthesised,
+        and its approval posture comes from the run's own resolved tool-use
+        policy — never from a fresh default, which would silently widen a
+        parent stricter than the deployment default. This is the live half of
+        the permission floor documented in ``authority``.
+        """
 
         parent = parent_grant or SubagentAuthorityPolicy.inherited_parent_grant(
             context_scopes=context.permission_scopes,
             definition_tools=definition.tools,
             definition_skills=definition.skills,
+            parent_policy=cls.parent_policy_ceiling(context),
+        )
+        parent = SubagentAuthorityPolicy.delegable_parent_grant(
+            parent,
+            bypass_active=context.filesystem_bypass.skips_approval_pause,
         )
         return SubagentAuthorityPolicy.narrow(
             parent=parent,

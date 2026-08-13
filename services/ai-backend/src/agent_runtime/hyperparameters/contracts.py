@@ -431,6 +431,15 @@ class SubagentHyperparameters(HyperparameterSection):
     concurrency_limit: int = Field(
         default=2, ge=1, le=SubagentLimits.CONCURRENCY_LIMIT_MAX
     )
+    #: Delegation hops below the supervisor. Unlike the two above — which the
+    #: package cannot read back, see ``delegation.subagents.constants.Defaults``
+    #: — this one IS live: ``DelegationDepthPolicy.snapshot`` loads the document
+    #: at agent-build time through a function-local import, so the value here
+    #: (and its ``COPILOT_HP__SUBAGENTS__MAX_DELEGATION_DEPTH`` override) is
+    #: what the ``task`` tool admits against.
+    max_delegation_depth: int = Field(
+        default=1, ge=1, le=SubagentLimits.DELEGATION_DEPTH_MAX
+    )
 
 
 class ContextHyperparameters(HyperparameterSection):
