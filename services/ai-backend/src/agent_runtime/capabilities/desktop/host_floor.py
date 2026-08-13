@@ -421,14 +421,22 @@ class HostFilesystemFloor:
 
     # --- deletion -----------------------------------------------------------
     #
-    # `delete` was NOT guarded here, and that was a hole rather than an
-    # omission by design. deepagents classifies its `delete` tool as the
-    # ``write`` operation (`_DEFAULT_FS_TOOL_OPS`), so the rule set governs it —
-    # but the rule set is exactly what cannot see a dotted segment, which is the
-    # entire reason this class exists. `__getattr__` therefore delegated
-    # `delete("/Users/ada/.ssh/id_rsa")` straight to the real filesystem. The
-    # same two verdicts the writes get now apply, and the pre-image is captured
-    # so a removal is undoable rather than terminal.
+    # `delete` was not guarded here, and `__getattr__` delegated it straight to
+    # the real filesystem. Today that is DEFENCE IN DEPTH rather than an open
+    # hole, and the distinction is worth stating precisely because the obvious
+    # reading is wrong: deepagents classifies its `delete` tool as the ``write``
+    # operation (`_DEFAULT_FS_TOOL_OPS`), and while the ALLOW rule for a granted
+    # root genuinely cannot see a dotted segment, the catch-all DENY ``/**``
+    # matches one fine — so the model's `delete` tool is refused before any
+    # backend is reached, for an ordinary path and a hidden one alike. Measured,
+    # not assumed; `test_write_journal.py` pins it both ways.
+    #
+    # It is still guarded here for two reasons. The rule set is upstream code we
+    # do not own, and a future deepagents that drops or narrows that catch-all
+    # would silently hand `delete` a real filesystem — this class is the only
+    # thing that decides on a dotted path, so it should decide on this op too.
+    # And capture has to live wherever a removal can land, or a delete that does
+    # become reachable is the one mutation with no pre-image.
 
     def delete(self, file_path: str) -> DeleteResult:
         """Delete ``file_path`` unless the floor refuses it."""
