@@ -263,6 +263,22 @@ export { TcSurfaceFrame, type TcSurfaceFrameProps } from "./TcSurfaceFrame";
 export { TcStatusStrip, type TcStatusStripProps } from "./TcStatusStrip";
 // === end PRD-B2 ===
 
+// === Context-compaction divider (`compression_note`) ===
+// A rule with a sentence in it, not a card — see the file header for why the
+// distinction is the design. Mounted by `TcChat` through `compactionNotices`.
+export {
+  TcCompactionDivider,
+  type TcCompactionDividerProps,
+} from "./TcCompactionDivider";
+// === end context-compaction divider ===
+
+// === Mid-run steer note (`run_steered`) ===
+// An inline in-thread line carrying the user's own words — not a card and not a
+// chat bubble; see the file header for why the runtime asked for that shape.
+// Mounted by `TcChat` through `steerNotes`.
+export { TcSteerNote, type TcSteerNoteProps } from "./TcSteerNote";
+// === end mid-run steer note ===
+
 // === Phase 2-C swimlanes ===
 export {
   TcSwimlanes,

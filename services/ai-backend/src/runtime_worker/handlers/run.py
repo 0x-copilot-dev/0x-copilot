@@ -88,6 +88,8 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
+from agent_runtime.capabilities.skills.tool_gate import SkillToolGate
+from agent_runtime.capabilities.skills.usage import SkillUsageLedger
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
@@ -141,7 +143,18 @@ from agent_runtime.execution.factory import (
     acreate_agent_runtime,
 )
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
+from agent_runtime.execution.run_deadline import RunDeadline
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
+from agent_runtime.hooks import (
+    HookDispatch,
+    HookPhase,
+    RunLifecycleInput,
+    RuntimeHookContext,
+)
+from agent_runtime.hooks.builtin import (
+    ToolCallObservationContext,
+    install_builtin_hooks,
+)
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
 from agent_runtime.observability.attribution import Purpose
@@ -410,6 +423,14 @@ class RuntimeRunHandler:
                 persistence=self.persistence,
             )
         )
+        # The runtime's own hook registrations. Installed from the handler
+        # rather than from an entrypoint because this constructor is the single
+        # object every run-executing path builds — the worker process, the API's
+        # in-process worker, and any harness that drives a run — so one call
+        # here replaces three that would each have to be remembered. Idempotent
+        # and process-level: the registration table is read once per run by
+        # ``RuntimeHookContext.bind_for_run`` below.
+        install_builtin_hooks()
 
     async def handle(self, command: RuntimeRunCommand) -> None:
         """Run the agent and persist lifecycle events."""
@@ -606,11 +627,53 @@ class RuntimeRunHandler:
         # classifier the ledger emitter consults.
         mcp_annotations_token: object | None = None
         mcp_annotations_registry: dict[tuple[str, str], McpToolAnnotations] = {}
+        # Progressive-disclosure sidecar: which Skills this run's prompt index
+        # offered, and which the model actually loaded. Bound before the harness
+        # is built (the factory writes the offer during prompt assembly) and
+        # drained in the ``finally`` so every exit path reports exactly once.
+        skill_usage_token: object | None = None
+        # The enforcement half of the same event: a loaded Skill's declared
+        # ``allowed_tools`` becomes this run's tool-surface ceiling. Bound and
+        # drained beside the usage ledger because one ``load_skill`` feeds both,
+        # and a run holding one without the other would report a Skill as used
+        # while enforcing nothing it declared.
+        skill_tool_gate_token: object | None = None
         # Per-run ``/workspace/`` backend. Held across the try so the finally can
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         run_control_token: object | None = None
+        # The run's wall clock. Built BEFORE the try so the ``except
+        # TimeoutError`` handler below can ask it whether it was the scope that
+        # fired — the per-call ``ModelConfig.timeout_seconds`` raises the same
+        # exception, and the two need different termination reasons.
+        run_deadline = self._run_deadline_for(run)
+        # Typed lifecycle hooks. Bound BEFORE graph construction so the
+        # ``policy.decide.after`` observation inside the run-start tool-use gate
+        # is reached, and unbound in the same ``finally`` as every other
+        # run-scoped binding. The registry is snapshotted here, so a
+        # registration that lands mid-run cannot change what this run does.
+        # Validated BEFORE anything is bound. ``RunLifecycleInput`` constrains
+        # the run's identifiers, and the ``finally`` below emits ``run.end``
+        # ahead of six unbinds — so a blank identifier raising down there would
+        # leak every one of them. Building the model once here means the
+        # ``finally`` only ever calls ``model_copy``, which does not re-validate
+        # and therefore cannot raise.
+        hook_lifecycle = RunLifecycleInput(
+            run_id=run.run_id,
+            conversation_id=run.conversation_id,
+            org_id=run.org_id,
+            phase=HookPhase.RUN_START,
+        )
+        hook_token = RuntimeHookContext.bind_for_run()
+        # The tally the builtin tool observer writes into. Bound beside the hook
+        # session and for the same lifetime: registration alone records nothing,
+        # so this binding is what turns the seam's tool phases into a fact about
+        # THIS run. Bound BEFORE graph construction for the same reason the hook
+        # session is — a tool call can be dispatched the moment the graph runs.
+        tool_observation_token = ToolCallObservationContext.bind_for_run()
+        hook_run_status = AgentRunStatus.COMPLETED.value
+        HookDispatch.observe(HookPhase.RUN_START, hook_lifecycle)
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -713,6 +776,12 @@ class RuntimeRunHandler:
                 dependencies=dependencies,
             )
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
+            skill_usage_token = SkillUsageLedger.bind_for_run(
+                SkillUsageLedger(run_id=run.run_id)
+            )
+            skill_tool_gate_token = SkillToolGate.bind_for_run(
+                SkillToolGate(run_id=run.run_id)
+            )
             harness_or_coro = self.agent_factory(
                 context=hydrated_context,
                 dependencies=dependencies,
@@ -728,31 +797,35 @@ class RuntimeRunHandler:
                 tool_observation_index=tool_observation_index,
             )
             await self._append_model_call_started(run, metrics, messages)
-            if command.runtime_context.model_profile.supports_streaming and (
-                self._runtime_streamer_explicit
-                or callable(getattr(harness.agent, "astream", None))
-            ):
-                result = await self._stream_runtime(
-                    command,
-                    run,
-                    harness,
-                    messages,
-                    metrics,
-                )
-            else:
-                result = await asyncio.wait_for(
-                    self.runtime_invoker(
+            # Outer scope = the whole agent loop; the per-call timeouts inside
+            # stay exactly as they were. Nesting is the point: whichever fires
+            # first cancels the body, and ``run_deadline.expired`` says which.
+            async with run_deadline.scope():
+                if command.runtime_context.model_profile.supports_streaming and (
+                    self._runtime_streamer_explicit
+                    or callable(getattr(harness.agent, "astream", None))
+                ):
+                    result = await self._stream_runtime(
+                        command,
+                        run,
                         harness,
                         messages,
-                    ),
-                    timeout=command.runtime_context.model_profile.timeout_seconds,
-                )
-                metrics.record_usage_from(result)
-                if await self.stream_event_mapper.append_native_interrupt_events(
-                    run=run,
-                    value=result,
-                ):
-                    result = {self._Fields.ACTION_REQUIRED: True}
+                        metrics,
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        self.runtime_invoker(
+                            harness,
+                            messages,
+                        ),
+                        timeout=command.runtime_context.model_profile.timeout_seconds,
+                    )
+                    metrics.record_usage_from(result)
+                    if await self.stream_event_mapper.append_native_interrupt_events(
+                        run=run,
+                        value=result,
+                    ):
+                        result = {self._Fields.ACTION_REQUIRED: True}
             await self._process_model_artifact_content(result, run=run)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
@@ -761,6 +834,7 @@ class RuntimeRunHandler:
                         status=AgentRunStatus.WAITING_FOR_APPROVAL,
                     )
                 )
+                hook_run_status = AgentRunStatus.WAITING_FOR_APPROVAL.value
                 return
             final_text = self._extract_final_text(result)
             if final_text is not None:
@@ -829,6 +903,19 @@ class RuntimeRunHandler:
                     metadata=AssistantRunMetrics.metadata(metrics_payload),
                 )
         except TimeoutError:
+            # Same exception, two causes. ``run_deadline.expired`` is the only
+            # thing that can tell them apart, and the distinction is what the
+            # user sees: "one call was slow" versus "this run ran too long".
+            deadline_exceeded = run_deadline.expired
+            timeout_reason = (
+                TerminationReason.RUN_DEADLINE_EXCEEDED
+                if deadline_exceeded
+                else TerminationReason.RUN_TIMEOUT
+            )
+            timeout_summary = (
+                "Run exceeded its time limit" if deadline_exceeded else "Run timed out"
+            )
+            hook_run_status = AgentRunStatus.TIMED_OUT.value
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.TIMED_OUT,
@@ -852,8 +939,8 @@ class RuntimeRunHandler:
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
-                reason=TerminationReason.RUN_TIMEOUT,
-                summary="Run timed out",
+                reason=timeout_reason,
+                summary=timeout_summary,
             )
             await self.audit_emitter.emit_run_failed(
                 failed,
@@ -879,6 +966,7 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             return
         except asyncio.CancelledError:
+            hook_run_status = AgentRunStatus.CANCELLED.value
             # Cancellation is a BaseException, so ``except Exception`` below
             # never saw it and in-flight tool calls were left open on this
             # path — the ledger's third terminal case, and the one a worker
@@ -902,10 +990,23 @@ class RuntimeRunHandler:
             ).close_open_subagents_as_cancelled(run=run)
             raise
         except Exception as exc:
+            hook_run_status = AgentRunStatus.FAILED.value
+            # Build the run's typed envelope BEFORE reconciling, not after. The
+            # tool calls settled just below were settled BY this failure, and
+            # their ledger rows are the only place a later reader — an auditor,
+            # a benchmark scorer — can learn that. Closing them first and
+            # naming the cause afterwards is what produced rows accusing a tool
+            # of throwing when the graph had overrun its step ceiling.
+            error = RuntimeErrorEnvelope.from_exception(
+                exc,
+                correlation_id=command.trace_id,
+                default_message="We couldn't complete this run. Please try again.",
+            )
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.FAILED,
-                error_code=ToolErrorCode.TOOL_EXCEPTION,
+                error_code=ToolErrorCode.TOOL_RUN_FAILED,
+                run_error_code=error.code.value,
             )
             failed = await with_optimistic_retry(
                 lambda: self.persistence.update_run_status(
@@ -915,11 +1016,6 @@ class RuntimeRunHandler:
             # Map typed fatal errors to semantic termination reasons so the FE and
             # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
-            error = RuntimeErrorEnvelope.from_exception(
-                exc,
-                correlation_id=command.trace_id,
-                default_message="We couldn't complete this run. Please try again.",
-            )
             # Subagents need settling on THIS path too. A child's terminal frame
             # comes from the `task` tool's result message, so a run that ends
             # mid-delegation emits none and the cockpit keeps a spinning card
@@ -962,6 +1058,23 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            # Emitted while the hook session is still bound, so a ``run.end``
+            # handler's own failure lands on this run's ledger rather than
+            # nowhere. Isolated like every other hook: it cannot change the
+            # terminal status the handler is about to persist.
+            HookDispatch.observe(
+                HookPhase.RUN_END,
+                hook_lifecycle.model_copy(
+                    update={
+                        "phase": HookPhase.RUN_END,
+                        "status": hook_run_status,
+                    }
+                ),
+            )
+            self._emit_hook_ledger_summary(run)
+            self._emit_tool_observation_summary(run)
+            ToolCallObservationContext.unbind(tool_observation_token)
+            RuntimeHookContext.unbind(hook_token)
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
@@ -992,6 +1105,10 @@ class RuntimeRunHandler:
                 McpDisplayRegistryContext.unbind(mcp_display_token)
             if mcp_annotations_token is not None:
                 McpToolAnnotationsRegistry.unbind(mcp_annotations_token)
+            if skill_usage_token is not None:
+                SkillUsageLedger.unbind(skill_usage_token)
+            if skill_tool_gate_token is not None:
+                SkillToolGate.unbind(skill_tool_gate_token)
             self._file_store_wiring().discard_tool_result_projections(run_id=run.run_id)
             await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 
@@ -1029,6 +1146,64 @@ class RuntimeRunHandler:
             ),
         )
         await self._observe_e2_shadow_projections(completed)
+
+    @staticmethod
+    def _emit_hook_ledger_summary(run: RunRecord) -> None:
+        """Publish this run's hook activity — the ledger's only consumer.
+
+        Without this the per-invocation records the dispatcher writes would be
+        a structure nothing reads, which is exactly the shape of a mechanism
+        that ships unwired. Emitted at WARNING when any invocation failed or
+        broke its contract, INFO otherwise, and skipped entirely when no hook
+        ran — the default, so an unhooked deployment logs nothing new.
+
+        Counts and closed-enum names only: no hook-authored string reaches the
+        operator's logs, and a handler that raises contributes its exception
+        CLASS (already recorded by the dispatcher), never its message.
+        """
+
+        session = RuntimeHookContext.current()
+        if session is None:
+            return
+        summary = session.ledger.summary()
+        if summary is None:
+            return
+        logging.getLogger(__name__).log(
+            logging.WARNING if summary.failed else logging.INFO,
+            "runtime_hooks.run_summary run_id=%s %s",
+            run.run_id,
+            summary.as_log_fields(),
+        )
+
+    @staticmethod
+    def _emit_tool_observation_summary(run: RunRecord) -> None:
+        """Publish this run's per-tool wall time and result footprint.
+
+        The consumer half of the builtin registered in ``__init__``: without a
+        reader the two handlers would be writing into a structure nothing looks
+        at, which is the exact defect the hook seam was accused of.
+
+        Emitted at WARNING when a call failed or never settled — a tool that
+        raised through the seam is the case an operator wants surfaced — and
+        skipped entirely when the run called no tool, so a direct-answer turn
+        logs nothing new. Tool NAMES and counts only; no arguments, no result
+        text, nothing a tool authored.
+        """
+
+        ledger = ToolCallObservationContext.current()
+        if ledger is None:
+            return
+        summary = ledger.summary()
+        if summary is None:
+            return
+        logging.getLogger(__name__).log(
+            logging.WARNING
+            if (summary.failures or summary.unsettled)
+            else logging.INFO,
+            "runtime_hooks.tool_summary run_id=%s %s",
+            run.run_id,
+            summary.as_log_fields(),
+        )
 
     async def _emit_receipt_then_terminate(
         self, *, run: RunRecord, **terminate_kwargs: object
@@ -1871,6 +2046,20 @@ class RuntimeRunHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
+        # Capture the pre-image of every host write this run admits, so the user
+        # can undo one tool call. Desktop only — `None` keeps no undo history,
+        # exactly as before. It MUST also be set on the approval-resume path
+        # (`ApprovalHandler._dependencies_for_resume`): a run that pauses for a
+        # write approval and resumes without a journal would perform the ONE
+        # write the user was most careful about with no way back — bug R1's
+        # shape, aimed at the riskiest possible target.
+        host_write_journal = self._file_store_wiring().host_write_journal(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+        )
+        if host_write_journal is not None:
+            update["host_write_journal"] = host_write_journal
         drafts_backend = self._drafts_backend(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
@@ -1899,6 +2088,7 @@ class RuntimeRunHandler:
             sandbox_tool_factory=self._sandbox_worker_bundle(command.runtime_context),
             rollout_admission=self._e2_rollout_admission,
             rollout_facts=rollout_facts,
+            hyperparameters=self.settings.hyperparameters,
         )
         code_mode_tool = capability_tools.code_mode_tool()
         if code_mode_tool is not None:
@@ -1906,6 +2096,11 @@ class RuntimeRunHandler:
         sandbox_execute_tool = capability_tools.sandbox_execute_tool()
         if sandbox_execute_tool is not None:
             update["sandbox_execute_tool"] = sandbox_execute_tool
+        # A factory rather than a tool: `execution.factory` builds the tool once
+        # it has composed the toolset a program is allowed to schedule.
+        tool_program_factory = capability_tools.tool_program_factory()
+        if tool_program_factory is not None:
+            update["tool_program_factory"] = tool_program_factory
         # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
         # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
         # tool surface is byte-identical with the flag off.
@@ -2063,8 +2258,26 @@ class RuntimeRunHandler:
             run=run,
         )
 
+    def _artifact_family_model_visible(self, *, lane_enabled: bool) -> bool:
+        """Compose the capability gate with the tool-block exposure knob.
+
+        ``lane_enabled`` answers "is this capability composed for this run";
+        the document answers "is it worth 3,326 resident tokens". Both must
+        hold for the model to see the family, and neither can withhold it
+        silently — an unset knob is ``always`` and a malformed one fails at
+        boot. Nothing here touches the lane itself: with the knob ``off`` the
+        repository, the ledger, the approval resume path and the inline
+        artifact-content-part publisher all behave exactly as before.
+        """
+
+        return self.settings.hyperparameters.tool_surface.admits_artifact_family(
+            lane_enabled=lane_enabled
+        )
+
     def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
@@ -2075,7 +2288,9 @@ class RuntimeRunHandler:
         # artifacts may also change them. Splitting the gates would leave a run
         # able to mint artifacts but not correct them, which is how duplicates
         # accumulate.
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return ReviseArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),
@@ -2111,9 +2326,18 @@ class RuntimeRunHandler:
         ``RuntimeStageLedger``), the durable queue (for an allow-always
         auto-apply), and the C1 policy resolver. The stager never touches an MCP
         client — only the shared effect-dispatch path dispatches.
+
+        It shares the artifact family's exposure knob because it shares their
+        cost profile (1,223 resident tokens of schema for a bulk-write proposal
+        builder most runs never reach for). Withholding it removes only the
+        model-visible proposal builder: already-staged row-set effects still
+        execute through ``runtime_worker.builtin_effect_executor``, which
+        resolves them by effect kind and never by tool availability.
         """
 
-        if not self.settings.execution.surfaces_v2 or run is None:
+        if not self._artifact_family_model_visible(
+            lane_enabled=bool(self.settings.execution.surfaces_v2 and run is not None)
+        ):
             return None
         from agent_runtime.api.stage_commit_queue import (  # noqa: PLC0415
             RuntimeStageCommitQueue,
@@ -2530,6 +2754,21 @@ class RuntimeRunHandler:
             message for message in records if message.message_id in selected_ids
         )
 
+    def _run_deadline_for(self, run: RunRecord) -> RunDeadline:
+        """Build this run's wall-clock budget from settings.
+
+        Anchored at ``started_at`` (``created_at`` before the worker marked the
+        run running) rather than at "now", so a re-claim after a lease expiry
+        inherits the time already spent instead of handing the run a fresh full
+        budget on every claim — which is how a wedged run would live forever
+        while a deadline appeared to be configured.
+        """
+
+        return RunDeadline(
+            seconds=self.settings.execution.run_deadline_seconds,
+            anchor=run.started_at or run.created_at,
+        )
+
     async def _stream_runtime(
         self,
         command: RuntimeRunCommand,
@@ -2538,7 +2777,12 @@ class RuntimeRunHandler:
         messages: Sequence[object],
         metrics: AssistantRunMetrics,
     ) -> object:
-        """Stream the LangGraph run under a timeout and return the composed final result."""
+        """Stream the LangGraph run under the per-call timeout and return the composed final result.
+
+        The RUN-level wall clock is a separate, outer scope owned by the caller
+        (``_run_deadline_for``); this one is ``ModelConfig.timeout_seconds``,
+        which bounds this invocation only.
+        """
         async with asyncio.timeout(
             command.runtime_context.model_profile.timeout_seconds
         ):
@@ -2579,12 +2823,33 @@ class RuntimeRunHandler:
             or bool(result.get(cls._Fields.INTERRUPTS))
         )
 
+    @staticmethod
+    def _reconciled_error_message(
+        *, error_code: ToolErrorCode, run_error_code: str | None
+    ) -> str:
+        """Compose the model- and audit-facing message for a reconciled call.
+
+        The tool-scoped sentence says what happened to the STEP; the run's own
+        typed code, appended, says why. Without the second half a reconciled
+        row answers "did this step finish?" and refuses the only question worth
+        asking of a failed run — which is how a step-limit overrun was read off
+        the ledger as a tool crash. The run code is already a safe public
+        string (it comes off :class:`RuntimeErrorEnvelope`), so appending it
+        leaks nothing a client cannot already see on ``run_failed``.
+        """
+
+        _, summary = _ErrorMessage.for_code(error_code.value)
+        if not run_error_code:
+            return summary
+        return f"{summary} Run error: {run_error_code}."
+
     async def _reconcile_inflight_tool_calls(
         self,
         run: RunRecord,
         *,
         outcome: ToolOutcome,
         error_code: ToolErrorCode,
+        run_error_code: str | None = None,
     ) -> None:
         """Settle every in-flight tool call before the run terminates.
 
@@ -2595,6 +2860,10 @@ class RuntimeRunHandler:
         event for each, in started-order, BEFORE emitting `run_failed`
         so SSE consumers see lifecycle terminate top-down.
 
+        ``run_error_code`` is the run's own typed failure code. Pass it
+        wherever one exists: these calls did not fail on their own account and
+        the row should say so.
+
         Failures inside this loop are logged but never raised — the caller
         is already on a failure path and reconciliation is best-effort. A
         partial reconciliation is still strictly better than none.
@@ -2604,7 +2873,9 @@ class RuntimeRunHandler:
         unsettled = ledger.unsettled()
         if not unsettled:
             return
-        _, error_summary = _ErrorMessage.for_code(error_code.value)
+        error_summary = self._reconciled_error_message(
+            error_code=error_code, run_error_code=run_error_code
+        )
         for entry in unsettled:
             try:
                 payload: dict[str, object] = {

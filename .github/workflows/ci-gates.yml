@@ -64,8 +64,10 @@ jobs:
         with:
           python-version: "3.13"
 
+      # pyyaml: test_desktop_journey_ci.py parses .github/workflows/ci-desktop.yml
+      # to check the per-PR desktop-journey job against the journey it pins.
       - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+        run: python -m pip install --upgrade pip pytest pyyaml
 
       # Each gate is tested before it is trusted: a gate whose own tests fail is
       # not evidence about the repository, it is a broken instrument. Every gate
@@ -84,8 +86,11 @@ jobs:
             tools/test_check_llm_provider_imports.py \
             tools/test_check_migration_manifest.py \
             tools/test_check_reader_methods.py \
+            tools/test_check_dark_wiring.py \
             tools/test_apply_branch_protection.py \
-            tools/test_cli_release.py
+            tools/test_cli_release.py \
+            tools/test_desktop_journey_ci.py \
+            tools/test_harness_bench_heavy_tasks.py
 
       - name: Dark capabilities
         run: python tools/check_dark_capabilities.py
@@ -100,6 +105,17 @@ jobs:
       # this fails on the 14th, and on any baseline line that has gone stale.
       - name: Route reachability
         run: python tools/check_route_reachability.py
+
+      # The sub-module sibling of the two gates above. Those catch a whole
+      # module nobody imports and a whole capability no test turns on; this one
+      # catches the same defect one level down, where the population actually
+      # lives -- a symbol only a test reaches, a capability only one store
+      # backend can serve, a validated field spent on an f-string in a prompt.
+      # 306 such symbols already exist and are recorded with a reason each in
+      # tools/dark_wiring_baseline.txt; this fails on the 307th, and on any
+      # baseline line that has gone stale.
+      - name: Dark wiring
+        run: python tools/check_dark_wiring.py
 
       - name: CSS selector shadowing
         run: python tools/check_css_selector_shadowing.py

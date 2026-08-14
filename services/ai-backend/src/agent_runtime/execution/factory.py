@@ -53,6 +53,8 @@ from agent_runtime.capabilities.mcp.catalog import (
     McpCatalogStore,
 )
 from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
+from agent_runtime.capabilities.tools.catalog import ToolGuidanceCatalog
+from agent_runtime.capabilities.tools.catalog_backend import ToolCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
@@ -79,8 +81,19 @@ from agent_runtime.capabilities.middleware import (
     RuntimeControlMiddleware,
     wrap_tools_with_display,
 )
-from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
+from agent_runtime.capabilities.skills.middleware import (
+    ListSkillsInput,
+    ListSkillsTool,
+    LoadSkillInput,
+    LoadSkillTool,
+)
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
+from agent_runtime.capabilities.skills.usage import SkillUsageLedger
+from agent_runtime.capabilities.skills.visibility import (
+    SkillIndexPlan,
+    SkillIndexPlanner,
+    SkillVisibilityContext,
+)
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
     AskAQuestionInput,
     AskAQuestionTool,
@@ -311,6 +324,12 @@ async def _assemble_harness(
         granted_host_roots=granted_host_roots,
         agent_scratch=agent_scratch,
         memory_routes=_file_memory_routes(memory_backend),
+        # The run's undo journal. Threaded exactly like the roots and the
+        # scratch — resolved ONCE by the worker and carried, never re-derived —
+        # because a journal built from a different set of facts than the floor
+        # is a journal that can record a write the floor refused, or miss one it
+        # admitted.
+        host_write_journal=runtime_dependencies.host_write_journal,
     )
     # The MCP filesystem catalog. One store, written by ``load_mcp_server`` and
     # read by the ``/mcp/`` route — the two are composed together for this run,
@@ -331,6 +350,25 @@ async def _assemble_harness(
     # called anything. Seeding after the mount, not before, because the mount is
     # the single source of truth for whether a catalog exists this run.
     _seed_mcp_catalog(mcp_catalog, mcp_servers)
+    # The first-party tool catalog. Same shape as ``/mcp/`` and for the same
+    # measured reason — 9,159 of a 22,304-token cold prompt is tool schemas —
+    # but built from the tools' OWN descriptions rather than from a connector's
+    # descriptors, so the file and the resident summary cannot drift apart.
+    # Mounted after ``/mcp/`` so that route composes exactly as it did before.
+    # ``tool_guidance`` is rebound to what actually MOUNTED: a run whose route
+    # declined keeps every full description resident rather than handing the
+    # model a pointer to a file that does not exist.
+    deep_backend, tool_guidance = _with_tool_guidance_route(
+        deep_backend,
+        catalog=ToolGuidanceCatalog.of_tools(
+            (
+                runtime_dependencies.stage_rowset_write_tool,
+                runtime_dependencies.publish_artifact_tool,
+                runtime_dependencies.revise_artifact_tool,
+            )
+        ),
+        memory_backend=memory_backend,
+    )
 
     # P2-8 — the per-tool MCP flip. Awaited here (not inside
     # ``_model_visible_tools``, which is sync and stays sync) because the source
@@ -351,12 +389,14 @@ async def _assemble_harness(
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
+            tool_program_factory=runtime_dependencies.tool_program_factory,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             revise_artifact_tool=runtime_dependencies.revise_artifact_tool,
             runtime_context=runtime_context,
             mcp_per_tool=mcp_per_tool,
             mcp_catalog=mcp_catalog,
+            tool_guidance=tool_guidance,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
         # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
@@ -385,11 +425,21 @@ async def _assemble_harness(
         model_tools = enforced_tools.tools
         control_binding = RunControlContext.current()
         task_policy_binding = RunControlContext.task_policy()
+        # Taken here, after policy enforcement, because the visibility
+        # predicate reads the tool surface the model will ACTUALLY see: a
+        # Skill declaring ``fallback_for_tools: <x>`` must stay offered when
+        # policy removed ``<x>`` from this run.
+        skill_index_plan = _skill_index_plan(
+            skill_cards=skill_cards,
+            model_tools=model_tools,
+            mcp_servers=mcp_servers,
+        )
         prompt_assembly_plan = _prompt_assembly_plan(
             instructions=instructions,
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
+            skill_index_plan=skill_index_plan,
             tool_schema_revision=_model_tool_schema_revision(model_tools),
             workspace_active=bool(
                 workspace_backend is not None
@@ -750,6 +800,19 @@ def _with_mcp_per_tool_interrupts(
     return {**registration.interrupt_on, **interrupt_on}
 
 
+def _skill_search_available(skill_registry: object | None) -> bool:
+    """Return ``True`` when this run can register the ``list_skills`` search.
+
+    One definition, two readers — the registration in ``_model_visible_tools``
+    and the reserved-name set — so the name can never be reserved on a run that
+    does not register the tool, or registered on a run that does not reserve it.
+    """
+
+    return skill_registry is not None and callable(
+        getattr(skill_registry, "list_available_skills", None)
+    )
+
+
 def _reserved_tool_names(
     tools: Sequence[object],
     *,
@@ -769,6 +832,7 @@ def _reserved_tool_names(
         include_auth_mcp=_auth_session_creator(mcp_registry) is not None,
         include_skill_loader=skill_registry is not None
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
+        include_skill_search=_skill_search_available(skill_registry),
         include_mcp_discovery=True,
     )
 
@@ -934,6 +998,82 @@ def _with_mcp_catalog_route(
     )
 
 
+class _ToolCatalogLog:
+    """Structured events for the ``/tools/`` route, in one place.
+
+    Separate strings from ``_McpCatalogLog`` on purpose: a live report that
+    "``read_file`` says the guidance file does not exist" has to be diagnosable
+    from the log alone, and a shared line would not say which catalog declined.
+    """
+
+    MOUNTED = "tool_catalog.mounted path=%s composite=%s documents=%d"
+    DECLINED = "tool_catalog.not_mounted reason=%s"
+
+
+def _with_tool_guidance_route(
+    deep_backend: object | None,
+    *,
+    catalog: ToolGuidanceCatalog | None,
+    memory_backend: object,
+) -> tuple[object | None, ToolGuidanceCatalog | None]:
+    """Mount the read-only first-party tool guidance at ``/tools/``.
+
+    Returns ``(backend, mounted_catalog)``. The second element is the catalog
+    ONLY when the route actually mounted, and it is the single input that
+    decides whether a description is stubbed — because a stub whose
+    ``/tools/<tool>.md`` does not exist is strictly worse than the full text it
+    replaced. That is the same rule ``_with_mcp_catalog_route`` documents, and
+    it is repeated here rather than assumed: the two catalogs mount
+    independently, so a run can legitimately have one and not the other.
+
+    Composed AFTER the MCP route so that route's three branches see exactly the
+    backend they saw before this existed; nothing about ``/mcp/`` changes.
+    """
+
+    if catalog is None:
+        return deep_backend, None
+    from deepagents.backends.composite import CompositeBackend  # noqa: PLC0415
+
+    backend = ToolCatalogBackend(catalog)
+    documents = len(catalog.documents)
+    if isinstance(deep_backend, CompositeBackend):
+        _LOGGER.info(
+            _ToolCatalogLog.MOUNTED, ToolCatalogBackend.PATH_PREFIX, True, documents
+        )
+        return (
+            CompositeBackend(
+                default=deep_backend.default,
+                routes={
+                    **deep_backend.routes,
+                    ToolCatalogBackend.PATH_PREFIX: backend,
+                },
+                artifacts_root=deep_backend.artifacts_root,
+            ),
+            catalog,
+        )
+    if deep_backend is not None or isinstance(memory_backend, DeepAgentsBackend):
+        # Same refusal as the MCP route: wrapping a passthrough
+        # ``DeepAgentsBackend`` drops the ``memory_paths`` attribute deepagents
+        # reads off it, and a working memory surface is not worth trading for a
+        # browsable one. That run keeps every full description resident.
+        _LOGGER.warning(
+            _ToolCatalogLog.DECLINED, _McpCatalogDecline.PASSTHROUGH_MEMORY_BACKEND
+        )
+        return deep_backend, None
+    from deepagents.backends.state import StateBackend  # noqa: PLC0415
+
+    _LOGGER.info(
+        _ToolCatalogLog.MOUNTED, ToolCatalogBackend.PATH_PREFIX, False, documents
+    )
+    return (
+        CompositeBackend(
+            default=StateBackend(),
+            routes={ToolCatalogBackend.PATH_PREFIX: backend},
+        ),
+        catalog,
+    )
+
+
 def _model_visible_tools(
     *,
     tools: Sequence[object],
@@ -943,12 +1083,14 @@ def _model_visible_tools(
     mcp_discovery_cache: object | None,
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
+    tool_program_factory: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
     revise_artifact_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
     mcp_per_tool: McpPerToolRegistration | None = None,
     mcp_catalog: McpCatalogPublisher | None = None,
+    tool_guidance: ToolGuidanceCatalog | None = None,
 ) -> tuple[object, ...]:
     # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
     # the owner of that tool's schema text. The declarations are what the
@@ -1056,6 +1198,24 @@ def _model_visible_tools(
                 owner=ModelToolOwner.SKILLS,
             )
         )
+    # The second half of progressive disclosure. The prompt index is bounded,
+    # so a large library leaves Skills named nowhere in the system prompt;
+    # without a search the bound would silently delete capability rather than
+    # defer it. Gated on the listing method the search actually calls, not on
+    # the loader's, so a registry that only loads registers only the loader.
+    if _skill_search_available(skill_registry):
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                _structured_tool(
+                    ListSkillsTool(
+                        registry=skill_registry,  # type: ignore[arg-type]
+                        runtime_context=runtime_context,
+                    ),
+                    ListSkillsInput,
+                ),
+                owner=ModelToolOwner.SKILLS,
+            )
+        )
     if prior_tool_result_loader is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
@@ -1136,20 +1296,30 @@ def _model_visible_tools(
     if stage_rowset_write_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput),
+                _structured_tool(
+                    stage_rowset_write_tool,
+                    StageRowsetWriteInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.DATAFLOW,
             )
         )
-    # The three tools below are the design document's headline number:
-    # ``publish_artifact`` alone is ~650 estimated tokens of description, and
-    # with ``revise_artifact`` and ``stage_rowset_write`` the trio is ~1,337
-    # tokens of RESIDENT rent charged on every model call of every run. Naming
-    # their owner here is what lets the occupancy report say that out loud
-    # instead of folding them into an anonymous tool-block total.
+    # The three tools below are the design document's headline number, and the
+    # live measurement made it larger: on the assembled surface the trio costs
+    # 3,360 estimated tokens of RESIDENT rent on every model call of every run,
+    # of which 1,712 is prose. Naming their owner here is what let the occupancy
+    # report say that out loud instead of folding them into an anonymous
+    # tool-block total — and ``guidance`` is what acts on it, moving the prose to
+    # ``/tools/<name>.md`` while the argument schema stays where the model needs
+    # it. ``None`` when the route did not mount ⇒ every description stays full.
     if publish_artifact_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(publish_artifact_tool, PublishArtifactInput),
+                _structured_tool(
+                    publish_artifact_tool,
+                    PublishArtifactInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.BACKENDS,
             )
         )
@@ -1159,11 +1329,63 @@ def _model_visible_tools(
     if revise_artifact_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(revise_artifact_tool, ReviseArtifactInput),
+                _structured_tool(
+                    revise_artifact_tool,
+                    ReviseArtifactInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.BACKENDS,
             )
         )
+    # ``run_tool_program`` is appended LAST, and that ordering is load-bearing
+    # rather than cosmetic: the factory below is handed the tools composed above
+    # it, and that is precisely the set a program may schedule. Moving this call
+    # earlier would silently narrow what a batch can reach; there is no ordering
+    # at which it could widen it, because the mapping is built from this list.
+    #
+    # On a default deployment ``tool_program_factory`` arrives ``None`` and no
+    # schema is appended: ``tool_program.enabled`` is false in
+    # ``hyperparameters.json``, so ``CapabilityToolWiring.tool_program_factory``
+    # withholds the factory rather than letting a 600-token schema nobody calls
+    # become resident on every model call. The gate is deliberately *there* and
+    # not here — refusing at call time would already have paid the schema.
+    program_tool = _tool_program_tool(
+        tool_program_factory,
+        model_tools=model_tools,
+    )
+    if program_tool is not None:
+        model_tools.append(
+            ModelToolDeclaration.declared(
+                wrap_model_tool_for_shadow(program_tool, capability="builtin"),
+                owner=ModelToolOwner.TOOL_PROGRAM,
+            )
+        )
     return tuple(model_tools)
+
+
+def _tool_program_tool(
+    factory: object | None,
+    *,
+    model_tools: Sequence[object],
+) -> object | None:
+    """Build ``run_tool_program`` over the tools composed for this run.
+
+    Returns ``None`` when no factory was injected (every non-desktop run), when
+    no composed tool carries a usable name, or when the factory itself declines.
+    A tool without a name cannot be planned against and is simply not offered;
+    it is never guessed at.
+    """
+
+    if factory is None:
+        return None
+    tools_by_name = {
+        name: tool
+        for tool in model_tools
+        if (name := str(getattr(tool, "name", "")).strip())
+    }
+    if not tools_by_name:
+        return None
+    return factory.build_tool(tools_by_name=tools_by_name)  # type: ignore[attr-defined]
 
 
 def _prompt_assembly_plan(
@@ -1172,6 +1394,7 @@ def _prompt_assembly_plan(
     runtime_context: AgentRuntimeContext,
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
+    skill_index_plan: SkillIndexPlan | None = None,
     tool_schema_revision: str,
     workspace_active: bool,
     workspace_writable: bool,
@@ -1199,7 +1422,11 @@ def _prompt_assembly_plan(
         )
     )
     skill_block = _standalone_prompt_block(
-        _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
+        _instructions_with_skill_cards(
+            instructions="",
+            skill_cards=skill_cards,
+            plan=skill_index_plan,
+        )
     )
     suggested_block = _standalone_prompt_block(
         _instructions_with_suggested_connectors(
@@ -1540,6 +1767,7 @@ def _local_tool_names(
     include_mcp_tools: bool,
     include_auth_mcp: bool,
     include_skill_loader: bool,
+    include_skill_search: bool = False,
     include_mcp_discovery: bool = False,
 ) -> frozenset[str]:
     """Return trusted names already exposed to the model for collision checks."""
@@ -1555,7 +1783,9 @@ def _local_tool_names(
     if include_auth_mcp:
         names.add(McpValues.ToolName.AUTH_MCP)
     if include_skill_loader:
-        names.add("load_skill")
+        names.add(LoadSkillTool.name)
+    if include_skill_search:
+        names.add(ListSkillsTool.name)
     names.add(Values.Tool.ASK_A_QUESTION)
     names.add(Values.Tool.LIST_CONNECTED_SERVERS)
     if include_mcp_discovery:
@@ -1563,10 +1793,32 @@ def _local_tool_names(
     return frozenset(names)
 
 
-def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
-    """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema."""
+def _structured_tool(
+    tool_adapter: object,
+    args_schema: type[object],
+    *,
+    guidance: ToolGuidanceCatalog | None = None,
+) -> StructuredTool:
+    """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema.
+
+    ``guidance`` is the MOUNTED ``/tools/`` catalog, or ``None``. When it has
+    published a file for this adapter, two things change and nothing else:
+
+    * the model-visible ``description`` becomes the short resident summary, and
+      the full prose is read on demand from ``/tools/<name>.md``; and
+    * a REFUSED result gains the path back to that file, so the rules a JSON
+      schema cannot express (``publish_artifact``'s exactly-one-of-content,
+      ``revise_artifact``'s compare-and-append, the row/diff accuracy check)
+      are one ``read_file`` away instead of an identical retry away.
+
+    ``args_schema`` is untouched, deliberately: it is the machine contract, so a
+    model that never opens the file still composes a well-formed call. See
+    :mod:`agent_runtime.capabilities.tools.catalog` for why the split lands there.
+    """
 
     name = str(getattr(tool_adapter, "name"))
+    resident = None if guidance is None else guidance.resident_description(tool_adapter)
+    deferred = guidance if resident is not None else None
 
     async def invoke_adapter(**kwargs: Any) -> object:
         async def _invoke_legacy() -> object:
@@ -1575,18 +1827,26 @@ def _structured_tool(tool_adapter: object, args_schema: type[object]) -> Structu
         # The provider dispatch inside ``CallMcpTool`` owns the MCP probe; an
         # umbrella-level probe here would double-count the same invocation.
         if name in {McpValues.ToolName.CALL_MCP_TOOL, "publish_artifact"}:
-            return await _invoke_legacy()
-        return await OperationShadowProbe.invoke_legacy(
-            capability="builtin",
-            op=name,
-            arguments=kwargs,
-            legacy=_invoke_legacy,
-        )
+            result = await _invoke_legacy()
+        else:
+            result = await OperationShadowProbe.invoke_legacy(
+                capability="builtin",
+                op=name,
+                arguments=kwargs,
+                legacy=_invoke_legacy,
+            )
+        if deferred is None:
+            return result
+        return deferred.annotated_failure(name, result)
 
     return StructuredTool.from_function(
         coroutine=invoke_adapter,
         name=name,
-        description=str(getattr(tool_adapter, "description")),
+        description=(
+            resident
+            if resident is not None
+            else str(getattr(tool_adapter, "description"))
+        ),
         args_schema=args_schema,
     )
 
@@ -1767,28 +2027,98 @@ def _instructions_with_suggested_connectors(
     )
 
 
+def _skill_index_plan(
+    *,
+    skill_cards: Sequence[object],
+    model_tools: Sequence[object],
+    mcp_servers: Sequence[object],
+) -> SkillIndexPlan:
+    """Decide, once per harness build, which Skills the prompt index will carry.
+
+    This is the only place in the runtime that holds BOTH halves of the
+    decision: the Skill cards (resolved in the ``acreate_agent_runtime``
+    gather) and the run's actually-resolved capability surface (model tools
+    after policy enforcement, and the authorized MCP cards). The registry
+    cannot make it — it is one branch of the same gather, so at the moment it
+    lists cards the tool surface does not exist yet.
+
+    The resulting plan is recorded on the run's :class:`SkillUsageLedger`
+    here rather than at render time, so the set the sidecar reports as
+    "offered" is by construction the same object the prompt was rendered
+    from — not a second computation that can drift from it.
+    """
+
+    plan = SkillIndexPlanner.plan(
+        cards=skill_cards,
+        render=_skill_card_line,
+        visibility=SkillVisibilityContext.of(
+            tools=model_tools,
+            connectors=mcp_servers,
+        ),
+    )
+    SkillUsageLedger.record_offer(
+        surfaced=plan.surfaced,
+        deferred=plan.deferred,
+        hidden=plan.hidden,
+    )
+    return plan
+
+
+def _skill_card_line(skill: object, summary: str) -> str:
+    """Render one Skill's compact index row.
+
+    The row text stays here, where it has always lived, rather than moving into
+    the skills package with the bound that selects it.
+
+    ``allowed_tools`` used to be the reason: it was parsed, typed and validated
+    by the manifest and then spent on the f-string below and nowhere else — a
+    live entry in ``tools/dark_wiring_baseline.txt``. It is now enforced at the
+    tool surface by
+    :class:`~agent_runtime.capabilities.skills.tool_gate.SkillToolGate`, so the
+    row below is what it always read as: the model being told, in advance, what
+    loading this Skill will cost it. Keep the two in step — a row that names a
+    tool the gate will refuse is worse than no row at all.
+
+    ``summary`` arrives already clipped to the index's per-row budget; the
+    planner owns how much fits, this owns how it reads.
+    """
+
+    name = getattr(skill, "name", str(skill))
+    virtual_path = getattr(skill, "virtual_path", "")
+    display_name = getattr(skill, "display_name", None) or name
+    allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
+    allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
+    return f"- {name} ({display_name}, path={virtual_path}{allowed}): {summary}"
+
+
 def _instructions_with_skill_cards(
-    *, instructions: str, skill_cards: Sequence[object]
+    *,
+    instructions: str,
+    skill_cards: Sequence[object],
+    plan: SkillIndexPlan | None = None,
 ) -> str:
-    """Append the skill card block to the base instructions when skills are available."""
+    """Append the bounded Skill index to the base instructions.
+
+    ``plan`` is the decision taken by :func:`_skill_index_plan` for this run.
+    Callers that have no resolved capability surface (the legacy prompt-order
+    test, and any direct caller) pass none; the planner then runs against an
+    unresolved visibility context, which filters nothing and applies only the
+    bound — the pre-existing behaviour for any library small enough to fit.
+    """
     if not skill_cards:
         return instructions
-    card_lines = []
-    for skill in skill_cards:
-        name = getattr(skill, "name", str(skill))
-        description = getattr(skill, "description", "")
-        virtual_path = getattr(skill, "virtual_path", "")
-        display_name = getattr(skill, "display_name", None) or name
-        allowed_tools = tuple(getattr(skill, "allowed_tools", ()) or ())
-        allowed = f", allowed_tools={','.join(allowed_tools)}" if allowed_tools else ""
-        card_lines.append(
-            f"- {name} ({display_name}, path={virtual_path}{allowed}): {description}"
-        )
+    index = (
+        plan
+        if plan is not None
+        else SkillIndexPlanner.plan(cards=skill_cards, render=_skill_card_line)
+    )
+    if not index.rows:
+        return instructions
     return "\n\n".join(
         (
             instructions,
             SKILL_CARDS_INSTRUCTIONS,
-            "\n".join(card_lines),
+            "\n".join(index.rows),
         )
     )
 
@@ -2177,6 +2507,7 @@ def _composed_deep_backend(
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
     memory_routes: Mapping[str, object] | None = None,
+    host_write_journal: object | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
@@ -2249,6 +2580,7 @@ def _composed_deep_backend(
             workspace_backend,
             granted_host_roots=granted_host_roots,
             agent_scratch=agent_scratch,
+            host_write_journal=host_write_journal,
         ),
         routes=routes,
     )
@@ -2259,6 +2591,7 @@ def _host_default_backend(
     *,
     granted_host_roots: tuple[object, ...] | None = None,
     agent_scratch: object | None = None,
+    host_write_journal: object | None = None,
 ) -> object:
     """The backend for every path no route claims — including host paths.
 
@@ -2360,6 +2693,14 @@ def _host_default_backend(
         # 2 dead in the packaged app, silently, while a checkout outside a
         # dotted directory worked fine and hid it.
         assets=builtin_asset_roots(),
+        # Undo. The floor is the only object that sees every admitted host
+        # write AND knows which grant admitted it, so it is the only place a
+        # pre-image can be captured with the authority that let the write
+        # happen. Capture bolted on anywhere else would either miss the paths
+        # only this class decides (every dotted segment) or record writes that
+        # never landed. ``None`` off the desktop file store: no object store, no
+        # bytes to keep, and the floor then behaves exactly as before.
+        journal=host_write_journal,  # type: ignore[arg-type]
     )
 
 

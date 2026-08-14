@@ -12,8 +12,10 @@ from agent_runtime.context.memory import (
     ContextPayloadManager,
     TokenBudgetPolicy,
 )
+from agent_runtime.context.memory.token_budget import TokenBudgetEvaluator
 from agent_runtime.context.tool_result_admission import (
     ToolResultAdmissionAdapter,
+    ToolResultCap,
 )
 
 
@@ -125,3 +127,89 @@ def test_context_payload_preview_is_character_bounded_for_minified_output() -> N
 
     assert managed.strategy is ContextCompressionStrategy.OFFLOAD
     assert managed.preview == "x" * ContextPayloadManager.PREVIEW_CHAR_LIMIT
+
+
+def test_cap_decides_oversize_on_exactly_the_offload_lanes_threshold() -> None:
+    """One threshold, read off the adapter — not a second competing number.
+
+    A store-less backend must call a result oversized at the same size the
+    desktop does, or the two lanes diverge and "it was fine on my machine"
+    becomes a supported outcome.
+    """
+
+    default = ToolResultAdmissionAdapter(lambda _content: "/large_tool_results/x")
+
+    assert ToolResultCap.OVERSIZED_ABOVE_CHARS == (
+        default.inline_token_budget * TokenBudgetEvaluator.CHARS_PER_TOKEN_ESTIMATE
+    )
+    at_the_line = "x" * ToolResultCap.OVERSIZED_ABOVE_CHARS
+    assert (
+        default.admit(at_the_line, trace_id="trace-1").strategy
+        is ContextCompressionStrategy.INLINE
+    )
+    assert ToolResultCap.apply(at_the_line) is at_the_line
+
+
+def test_cap_returns_a_fitting_result_as_the_very_same_object() -> None:
+    """Not "equal" — the same object, so declared return types survive."""
+
+    structured = {"rows": [1, 2, 3]}
+
+    assert ToolResultCap.apply(structured) is structured
+    assert ToolResultCap.apply("") == ""
+
+
+def test_cap_bounds_an_oversized_result_and_states_what_it_dropped() -> None:
+    unique_tail = "UNIQUE_TAIL_MUST_NOT_REACH_MODEL"
+    raw = ("oversized tool output\n" * 5_000) + unique_tail
+
+    capped = ToolResultCap.apply(raw)
+
+    assert isinstance(capped, str)
+    assert len(capped) <= ToolResultCap.MODEL_CONTENT_LIMIT_CHARS
+    assert unique_tail not in capped
+    assert capped.startswith("oversized tool output\n")
+    # Legible in the message itself: what happened, how much went, what next.
+    assert ToolResultCap.Messages.MARKER in capped
+    assert f"of {len(raw):,} characters" in capped
+    assert ToolResultCap.Messages.NOT_RETAINED in capped
+    assert ToolResultCap.Messages.RECOVERY in capped
+
+
+def test_cap_does_not_promise_a_read_back_it_cannot_honour() -> None:
+    """The honest difference from the offload lane, asserted rather than hoped.
+
+    The offloaded stub tells the model to read a reference. Repeating that
+    wording on a backend that stored nothing would cost a turn spent fetching
+    something that does not exist.
+    """
+
+    capped = ToolResultCap.apply("y" * 200_000)
+
+    assert isinstance(capped, str)
+    assert ToolResultAdmissionAdapter._OFFLOAD_HEADER not in capped
+    assert "/large_tool_results/" not in capped
+    assert "cannot be read back" in capped
+
+
+def test_cap_still_previews_a_blob_that_has_no_line_breaks() -> None:
+    """The empty-preview failure a line-first bound would have reintroduced."""
+
+    capped = ToolResultCap.apply("z" * 200_000)
+
+    assert isinstance(capped, str)
+    preview = capped.split(ToolResultCap.Messages.MARKER)[0].strip()
+    assert len(preview) > ToolResultCap.MODEL_CONTENT_LIMIT_CHARS // 4
+    assert set(preview) == {"z"}
+
+
+def test_cap_notice_can_never_crowd_out_the_preview_entirely() -> None:
+    """The notice is a fixed template; pin its share of the ceiling."""
+
+    widest = ToolResultCap._notice(
+        kept=10**18,
+        dropped=10**18,
+        total=10**18,
+    )
+
+    assert len(widest) < ToolResultCap.MODEL_CONTENT_LIMIT_CHARS // 2

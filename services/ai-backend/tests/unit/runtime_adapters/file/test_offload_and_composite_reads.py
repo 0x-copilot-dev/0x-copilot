@@ -89,7 +89,7 @@ class TestToolResultOffloader:
             Keys.Field.STATUS: "completed",
             Keys.Field.OUTPUT: "small result",
         }
-        result = offloader.apply(payload, trace_id="trace-1")
+        result = offloader.apply_with_notice(payload, trace_id="trace-1").payload
         assert result == payload
         assert Keys.Field.OUTPUT_REF not in result
 
@@ -103,7 +103,7 @@ class TestToolResultOffloader:
             Keys.Field.OUTPUT: content,
         }
 
-        result = offloader.apply(payload, trace_id="trace-1")
+        result = offloader.apply_with_notice(payload, trace_id="trace-1").payload
 
         ref = result[Keys.Field.OUTPUT_REF]
         assert ref.startswith("/large_tool_results/")
@@ -130,7 +130,7 @@ class TestToolResultOffloader:
             Keys.Field.STATUS: "completed",
             Keys.Field.OUTPUT: _large_output(),
         }
-        offloaded = offloader.apply(payload, trace_id="trace-1")
+        offloaded = offloader.apply_with_notice(payload, trace_id="trace-1").payload
 
         fields = RuntimeEventPresentationProjector.presentation_fields(
             event_type=RuntimeApiEventType.TOOL_RESULT,
@@ -153,7 +153,7 @@ class TestToolResultOffloader:
             Keys.Field.STATUS: "completed",
             Keys.Field.OUTPUT: big_list,
         }
-        result = offloader.apply(payload, trace_id="trace-1")
+        result = offloader.apply_with_notice(payload, trace_id="trace-1").payload
         ref = result[Keys.Field.OUTPUT_REF]
         sha = ref.removeprefix("/large_tool_results/")
         assert json.loads(store.get(sha).decode("utf-8")) == big_list

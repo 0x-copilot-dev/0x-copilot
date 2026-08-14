@@ -160,6 +160,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RuntimeSteerCommand,
     RuntimeStageCommitCommand,
     RunHistoryEntry,
     RunRecord,
@@ -427,6 +428,7 @@ class FileRuntimeApiStore(MaterializedViewStoreBase):
         # ---- queue (outbox) ---------------------------------------------
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
+        self.steer_commands: list[RuntimeSteerCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
         self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
         self.effect_commit_commands: list[RuntimeEffectCommitCommand] = []
@@ -4037,6 +4039,17 @@ class FileRuntimeApiStore(MaterializedViewStoreBase):
         await self._register_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.RUN_CANCEL_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_steer(self, command: RuntimeSteerCommand) -> None:
+        self.steer_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_STEER_REQUESTED,
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,

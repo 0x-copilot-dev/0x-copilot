@@ -17,6 +17,14 @@ from agent_runtime.capabilities.skills.sources import (
     SkillSourceScope,
 )
 
+# ``usage`` and ``visibility`` are deliberately NOT re-exported here.
+# ``execution/contracts.py`` imports ``skills.sources``, so this package's
+# ``__init__`` runs while ``execution.contracts`` is still initialising; both
+# modules depend on ``RuntimeContract`` and re-exporting them would close that
+# cycle at import time. Import them by module path
+# (``agent_runtime.capabilities.skills.visibility``), the same way ``virtual``
+# and ``middleware`` are already imported.
+
 __all__ = [
     "ConfiguredSkill",
     "MAX_SKILL_DESCRIPTION_LENGTH",

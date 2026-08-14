@@ -11,6 +11,13 @@ is byte-identical to today:
   calculation / transformation only, with a resolver that authorizes no external
   tool, until the direct-path tool-policy engine lands. The snapshot + result
   stores are the desktop file object store.
+* **Batched tool programs** (``run_tool_program``) — a *factory*, not a built
+  tool, because the surface it may schedule is the run's own model-visible
+  toolset and that is composed later, by ``execution.factory``. Gated and
+  bounded by the ``tool_program`` hyperparameter section; no document, no
+  capability, and **off by default** (``tool_program.enabled``) because its
+  schema is 600 measured tokens resident on every model call and nothing has
+  ever called it.
 * **Remote sandbox execute** (``run_in_sandbox``) — gated by an injected,
   file-first worker bundle plus ``single_user_desktop``. The handler supplies
   that bundle only when C1 retained snapshots, A2 artifacts, D3 file records,
@@ -112,6 +119,10 @@ class CapabilityToolWiring:
     backend) whose content-addressed object store backs Monty's snapshot/result
     stores; ``env`` defaults to ``os.environ`` and is injectable for tests.
 
+    ``hyperparameters`` is the run's resolved hyperparameter document; it is the
+    only source of the tool-program bounds, and its absence turns that
+    capability off rather than defaulting it.
+
     ``external_tools_by_name`` is the run's already scope-filtered, model-visible
     toolset keyed by tool name. When supplied (non-empty), Monty code mode is
     wired in **Option B** — interpreted code can make real external calls under
@@ -130,12 +141,17 @@ class CapabilityToolWiring:
         sandbox_tool_factory: SandboxToolFactoryPort | None = None,
         rollout_admission: E2RolloutAdmission | None = None,
         rollout_facts: PersistedRunCohortFactsProvider | None = None,
+        hyperparameters: object | None = None,
     ) -> None:
         self._runtime_context = runtime_context
         self._file_store = file_store
         self._env = env
         self._external_tools_by_name = dict(external_tools_by_name or {})
         self._sandbox_tool_factory = sandbox_tool_factory
+        # The run's already-resolved hyperparameter document (operator overrides
+        # applied). Read only for the tool-program bounds; absent means that
+        # capability is not offered rather than offered unbounded.
+        self._hyperparameters = hyperparameters
         # The worker supplies both values for every production run. Missing
         # admission facts fail closed for the only E2 capability this builder
         # exposes (the remote sandbox); there is no direct activation path.
@@ -230,6 +246,64 @@ class CapabilityToolWiring:
 
         ctx = self._runtime_context
         return RunIdentity(run_id=ctx.run_id, org_id=ctx.org_id, user_id=ctx.user_id)
+
+    # -- Batched tool programs ---------------------------------------------
+
+    def tool_program_factory(self) -> object | None:
+        """Return the ``run_tool_program`` factory, or ``None`` when withheld.
+
+        Unlike the two tools above this returns a *factory*: a program's
+        authorized surface is the run's own model-visible toolset, which does
+        not exist until ``execution.factory`` has composed it, so the tool is
+        built at that handshake instead of here. What is resolved here is the
+        one thing the graph factory has no business owning — the gate and the
+        bounds, taken from the run's already-loaded, operator-overridable
+        hyperparameter document.
+
+        Two ``None`` paths, and they are different facts:
+
+        * **No document** — a program without an enforced step, concurrency,
+          wall-clock and payload ceiling is exactly the unbounded fan-out this
+          capability exists to bound, so it fails closed to no capability rather
+          than open to a default.
+        * **``tool_program.enabled`` is false** (the shipped default) — the
+          capability is bounded and working, and deliberately not offered. This
+          is the *only* place that decision can be taken cheaply: the cost of
+          the tool is its 600-token schema resident on every model call, which
+          is paid at registration, so a tool registered here and refusing later
+          would save nothing. Returning ``None`` means ``execution.factory``
+          never builds it and never appends its schema.
+
+        Both return the same thing for the same reason — the run composes no
+        program tool — and both are byte-identical to a run that never had the
+        capability.
+        """
+
+        from agent_runtime.capabilities.tool_program import (  # noqa: PLC0415
+            ToolProgramLimits,
+            ToolProgramToolFactory,
+        )
+
+        section = getattr(self._hyperparameters, "tool_program", None)
+        if section is None:
+            logger.debug("tool_program.hyperparameters_absent")
+            return None
+        if not section.enabled:
+            logger.debug("tool_program.disabled")
+            return None
+        return ToolProgramToolFactory(
+            limits=ToolProgramLimits(
+                max_steps=section.max_steps,
+                max_concurrency=section.max_concurrency,
+                # The document states a program's wall clock in seconds because
+                # every other timeout in it does; the executor measures in
+                # milliseconds. Converting once, here, keeps the unit mismatch
+                # out of both the document and the executor.
+                wall_clock_ms=int(section.wall_clock_seconds * 1000),
+                max_total_output_bytes=section.max_total_output_bytes,
+                max_result_bytes=section.max_result_bytes,
+            )
+        )
 
     # -- Remote sandbox execute -------------------------------------------
 

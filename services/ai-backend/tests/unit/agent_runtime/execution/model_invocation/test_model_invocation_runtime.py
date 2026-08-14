@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
@@ -455,11 +456,14 @@ async def _invoke(
     handler,
     *,
     control: RunControlBinding | None = None,
+    middleware: ModelInvocationMiddleware | None = None,
 ):
     token = RunControlContext.bind_for_run(control or _control())
     try:
         RunControlContext.install_model_invocation_runtime(binding)
-        return await ModelInvocationMiddleware().awrap_model_call(request, handler)
+        return await (middleware or ModelInvocationMiddleware()).awrap_model_call(
+            request, handler
+        )
     finally:
         RunControlContext.unbind(token)
 
@@ -486,6 +490,16 @@ async def _invoke_with_f2(
 
 
 async def test_feature_off_and_sync_legacy_paths_preserve_exact_request() -> None:
+    # The async F10-off path now owns the per-model-call retry policy, and
+    # deciding whether a failure may be re-dispatched requires knowing whether
+    # visible text already reached the user. That answer only exists if a
+    # lifecycle observer is attached, so the handler receives a request whose
+    # model carries one extra callback.
+    #
+    # The invariant this test protects is unchanged in substance and is now
+    # asserted more precisely than object identity could: every semantic field
+    # of the request is untouched, and the model differs by the observer alone.
+    # The sync legacy path takes no retry policy and is still byte-identical.
     middleware = ModelInvocationMiddleware()
     request = _request()
     seen: list[ModelRequest[Any]] = []
@@ -500,7 +514,15 @@ async def test_feature_off_and_sync_legacy_paths_preserve_exact_request() -> Non
 
     assert await middleware.awrap_model_call(request, async_handler)
     assert middleware.wrap_model_call(request, sync_handler)
-    assert seen == [request, request]
+
+    dispatched, legacy = seen
+    assert legacy is request
+    assert dispatched is not request
+    for field in ("messages", "system_message", "tools", "state", "model_settings"):
+        assert getattr(dispatched, field) == getattr(request, field)
+    added = list(dispatched.model.callbacks or ())
+    assert len(added) == len(list(request.model.callbacks or ())) + 1
+    assert isinstance(added[-1], BaseCallbackHandler)
 
 
 async def test_success_journals_complete_lineage_and_plain_digest_projection() -> None:

@@ -12,9 +12,17 @@ Keeping the gate + builders here means the paths cannot drift again.
 Everything is **gated on the duck-typed file store**: the event store is the
 file adapter only when it exposes both an ``object_store`` and a ``layout``. On
 the web / postgres / in-memory images this returns ``None`` everywhere, so the
-offloader stays ``None`` (inline behavior, byte-identical) and no read routes are
-added. The file adapter (and its object-store / sqlite deps) is imported lazily
-so it never loads on those images.
+offloader stays ``None`` and no read routes are added. The file adapter (and its
+object-store / sqlite deps) is imported lazily so it never loads on those images.
+
+``None`` here means "cannot *offload*", not "need not bound". It used to mean
+both: an absent adapter left
+:meth:`~agent_runtime.capabilities.tool_budget_guard.ToolBudgetGuard.admit_tool_result`
+returning the raw result, so a multi-megabyte MCP read entered model context
+whole on every image except the desktop. Those backends now fall back to
+:class:`~agent_runtime.context.tool_result_admission.ToolResultCap`, which
+applies the same threshold without a store. Nothing in this gate changed --
+offloading still requires an object store to offload *to*.
 """
 
 from __future__ import annotations
@@ -125,6 +133,40 @@ class FileStoreWorkerWiring:
         from runtime_adapters.file import FileLargeToolResultBackend  # noqa: PLC0415
 
         return FileLargeToolResultBackend(store.object_store)
+
+    def host_write_journal(
+        self, *, org_id: str, conversation_id: str, run_id: str
+    ) -> object | None:
+        """Return this run's agent-write undo journal, or ``None`` elsewhere.
+
+        Gated on the same duck-typed file store as everything else here, and for
+        a stronger reason than convention: the journal's whole job is to hold
+        the pre-image BYTES, and the object store that can hold them exists only
+        on this backend. A journal without one would record that a file changed
+        and be unable to put it back — a list of regrets rather than an undo.
+
+        Bound to the run here so the floor only ever hands it a path: the floor
+        is composed once per harness and has no run identity of its own, and
+        threading the identity through the backend composition instead would put
+        it on every non-desktop image for nothing.
+        """
+
+        store = self.file_store()
+        if store is None:
+            return None
+        from agent_runtime.capabilities.desktop.write_journal import (  # noqa: PLC0415
+            HostWriteJournal,
+        )
+        from runtime_adapters.file import (  # noqa: PLC0415
+            FileHostWriteJournalStore,
+        )
+
+        return HostWriteJournal(
+            FileHostWriteJournalStore(store.layout, store.object_store),
+            org_id=org_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+        )
 
 
 __all__ = ("FileStoreWorkerWiring",)

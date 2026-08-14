@@ -102,6 +102,20 @@ export interface ConnectorTrust {
  */
 export const WORKSPACE_GRANT_PAYLOAD_KEY = "workspace_grant";
 
+/**
+ * The payload block naming the folder a DURABLE grant would attach.
+ *
+ * Deliberately a second key rather than a reuse of the one above, because the
+ * two blocks answer different questions about the same card. `workspace_grant`
+ * means "this interrupt IS a folder ask" and REPLACES the Approve/Decline card;
+ * `grant_scope` rides an ordinary ask that can be approved once, and names what
+ * the optional "always" arm would hand over. Collapsing them would turn every
+ * ask that merely OFFERS a durable option into a grant card with no way to say
+ * "just this once" — see `runtime_api/schemas/events.py`, which projects the two
+ * under the same validation and for exactly this reason keeps them apart.
+ */
+export const GRANT_SCOPE_PAYLOAD_KEY = "grant_scope";
+
 const LAYOUTS: readonly ApprovalLayout[] = ["params", "rows", "preview"];
 const GRANT_MODES: readonly WorkspaceGrantMode[] = [
   "read_only",
@@ -202,10 +216,46 @@ export function accessLabel(trust: ConnectorTrust): string | null {
 export function parseWorkspaceGrantRequest(
   payload: unknown,
 ): WorkspaceGrantRequest | null {
+  return parseGrantBlock(payload, WORKSPACE_GRANT_PAYLOAD_KEY);
+}
+
+/**
+ * Parse the folder an `allow_always` option would attach, or null when the
+ * payload named none.
+ *
+ * Null is a REFUSAL TO OFFER, not a degradation: the producer withholds this
+ * block whenever the string on the card and the string a grant would attach
+ * could differ (`_FilesystemApproval._grant_scope` refuses a pathless bulk call,
+ * a non-host path, a volume root, and a path long enough that the card TRUNCATES
+ * it — "consent to an ellipsis is not consent"). A client that invented a scope
+ * here, or fell back to the ask's own `path`, would re-open every one of those
+ * holes. So there is deliberately no fallback: no block, no durable option, and
+ * the ask keeps its once-only Approve.
+ */
+export function parseGrantScope(
+  payload: unknown,
+): WorkspaceGrantRequest | null {
+  return parseGrantBlock(payload, GRANT_SCOPE_PAYLOAD_KEY);
+}
+
+/**
+ * The shared reader behind both parsers above — one block shape, two keys.
+ *
+ * Shared rather than copied because the two blocks are projected by the SAME
+ * server-side validator (`_workspace_grant_payload`, applied to each key in
+ * turn), so a client-side divergence in how they are read could only ever be a
+ * bug. The mode rule in particular has to be identical: an unknown mode yields a
+ * request whose `mode` is null, which is what makes the consuming surface
+ * withhold its grant control rather than print an access it cannot back.
+ */
+function parseGrantBlock(
+  payload: unknown,
+  key: string,
+): WorkspaceGrantRequest | null {
   if (!isRecord(payload)) {
     return null;
   }
-  const block = payload[WORKSPACE_GRANT_PAYLOAD_KEY];
+  const block = payload[key];
   if (!isRecord(block)) {
     return null;
   }

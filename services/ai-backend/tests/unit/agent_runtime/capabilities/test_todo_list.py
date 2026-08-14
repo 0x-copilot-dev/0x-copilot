@@ -1,4 +1,8 @@
-"""The rollover rule and the untrusted-input boundary of ``TodoListProjector``."""
+"""The rollover rule and the untrusted-input boundary of ``TodoListProjector``.
+
+:class:`TestTheFourthWriteThatWasBlamed` is a standing acquittal rather than a
+guard against a bug that ever existed here — see its own docstring.
+"""
 
 from __future__ import annotations
 
@@ -220,3 +224,87 @@ class TestTodoListUntrustedInput(_WriteMixin):
         assert cleared is not None
         assert cleared.todos == ()
         assert cleared.generation == 1
+
+
+class TestTheFourthWriteThatWasBlamed(_WriteMixin):
+    """The four writes a live benchmark reported as a ``write_todos`` crash.
+
+    Benchmark run ``2d30ca71ad2b4d8da58ee88deb9d4036`` failed a checklist task
+    and its ledger closed the fourth ``write_todos`` call with
+    ``safe_error_code=tool_exception``; the published finding read that as the
+    tool throwing on its fourth call. Replayed here verbatim — the four
+    argument lists are the ones the model actually sent, recovered from that
+    run's ``tool_invocations.jsonl`` and its ``tool_call_delta`` buffers — the
+    sequence projects four clean snapshots and raises nothing.
+
+    That matters because the rollover rule is the only stateful thing in this
+    class, so "the Nth call behaves differently from the first" is exactly the
+    shape of bug it could have had. It did not: no list was ever completed, so
+    nothing rolled over. The real cause was run-level (see
+    ``tests/unit/runtime_worker/test_inflight_tool_call_run_failure.py``), and
+    this class exists so a future reader does not re-suspect the projector.
+    """
+
+    #: The plan, in the order the model wrote it.
+    STEPS = (
+        "List three European capitals",
+        "Identify the country of each capital",
+        "Name one river in each country",
+        "Produce final table of all three rows",
+    )
+
+    #: One row of statuses per call: plan, then one step at a time.
+    SEQUENCE = (
+        ("pending", "pending", "pending", "pending"),
+        ("completed", "in_progress", "pending", "pending"),
+        ("completed", "completed", "in_progress", "pending"),
+        ("completed", "completed", "completed", "in_progress"),
+    )
+
+    def _replay(
+        self, projector: TodoListProjector, statuses: tuple[str, ...]
+    ) -> object:
+        """Project one call of the recorded sequence."""
+        return self.write(projector, *zip(self.STEPS, statuses, strict=True))
+
+    def test_all_four_recorded_writes_project_cleanly(self) -> None:
+        projector = TodoListProjector()
+
+        snapshots = [self._replay(projector, statuses) for statuses in self.SEQUENCE]
+
+        assert all(snapshot is not None for snapshot in snapshots)
+        assert [snapshot.generation for snapshot in snapshots] == [1, 1, 1, 1]
+        assert {snapshot.list_id for snapshot in snapshots} == {"run_1:todos:1"}
+
+    def test_the_fourth_write_carries_the_progress_it_reported(self) -> None:
+        # The row-level detail is the point of the panel, and the fourth call
+        # is the one that supposedly failed. It resolves to three done and one
+        # underway — a list still in progress, which is why it did not roll.
+        projector = TodoListProjector()
+        for statuses in self.SEQUENCE:
+            fourth = self._replay(projector, statuses)
+
+        assert fourth is not None
+        assert [todo.status for todo in fourth.todos] == [
+            AgentTodoStatus.COMPLETED,
+            AgentTodoStatus.COMPLETED,
+            AgentTodoStatus.COMPLETED,
+            AgentTodoStatus.IN_PROGRESS,
+        ]
+        assert fourth.is_complete is False
+
+    def test_a_fourth_write_onto_a_finished_list_opens_the_next_one(self) -> None:
+        # The transition the crash was first attributed to, driven at the same
+        # four-call depth. It is a rollover, not a fault: generation two, a new
+        # list id, and the previous list left intact behind it.
+        projector = TodoListProjector()
+        for statuses in self.SEQUENCE[:2]:
+            self._replay(projector, statuses)
+        finished = self._replay(projector, ("completed",) * 4)
+        rolled = self.write(projector, ("Draft the follow-up note", "in_progress"))
+
+        assert finished is not None and finished.is_complete
+        assert finished.generation == 1
+        assert rolled is not None
+        assert rolled.generation == 2
+        assert rolled.list_id == "run_1:todos:2"

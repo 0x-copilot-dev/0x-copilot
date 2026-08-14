@@ -49,6 +49,12 @@ class CheckedInDocumentMixin:
             "index_summary_max_bytes": 96,
             "index_summary_min_bytes": 24,
         },
+        # ``always`` is today's behaviour, so landing the knob changes nothing.
+        # The saving is realised by an operator writing ``off`` here — a
+        # reviewable one-line diff, which is the whole point of the document.
+        "tool_surface": {
+            "artifact_family": "always",
+        },
         "reads": {
             "default_line_limit": 2000,
             "offloaded_result_line_limit": 20000,
@@ -57,6 +63,18 @@ class CheckedInDocumentMixin:
             "max_attempts": 3,
             "initial_backoff_seconds": 0.5,
             "max_backoff_seconds": 4.0,
+        },
+        # Per-model-call pacing, owned by ``ModelCallRetryPolicy``. Unlike the
+        # rest of this document these are NOT "today's runtime values": there
+        # was no per-call policy before, only whatever the provider SDK did
+        # underneath. AC4 does not apply to a knob that had no prior value.
+        "model_retry": {
+            "max_attempts": 3,
+            "initial_backoff_seconds": 2.0,
+            "backoff_factor": 2.0,
+            "jitter_factor": 0.25,
+            "max_backoff_seconds": 30.0,
+            "provider_hint_max_seconds": 30.0,
         },
         "execution": {
             "max_retries": 2,
@@ -74,8 +92,23 @@ class CheckedInDocumentMixin:
             "delta_coalesce_max_chunks": 64,
             "worker_poll_interval_seconds": 1.0,
             "worker_lock_seconds": 60,
+            # New knobs, so AC4 ("byte-identical to today's") does not apply:
+            # neither had a value anywhere before. ``recursion_limit`` replaces
+            # the library's implicit default (10007 on the pinned langgraph);
+            # ``run_deadline_seconds`` is the run-level wall clock that did not
+            # exist at all. Both are pinned here for the same reason every other
+            # row is — so a change to either is a deliberate edit to this file.
+            "recursion_limit": 500,
+            "run_deadline_seconds": 1800.0,
         },
-        "subagents": {"timeout_seconds": 120, "concurrency_limit": 2},
+        # ``max_delegation_depth`` joined the plan's two subagent values when
+        # the ``task`` tool gained a depth ceiling. Unlike its neighbours it is
+        # LIVE: DelegationDepthPolicy.snapshot reads it at agent-build time.
+        "subagents": {
+            "timeout_seconds": 120,
+            "concurrency_limit": 2,
+            "max_delegation_depth": 1,
+        },
         "context": {
             "max_input_tokens": 128000,
             "recent_context_ratio": 0.25,
@@ -93,6 +126,25 @@ class CheckedInDocumentMixin:
             "window_chars": 1_200,
             "lead_chars": 900,
             "min_window_chars": 200,
+        },
+        # One ``run_tool_program`` plan's ceilings. ``max_concurrency`` bounds
+        # fan-out *inside* one program only — the run's tool budget still
+        # charges every step, so a wide program spends its allowance faster
+        # rather than escaping it.
+        #
+        # ``enabled`` is false in the shipped document and that is a measured
+        # choice, not a placeholder: the tool's schema is 600 of the 9,759
+        # tokens of tool block resident on every model call
+        # (``tools/harness-bench/FINDINGS.md`` §3) and nothing in the measured
+        # set ever invoked it. Flipping this row is the review moment for
+        # accepting that rent back.
+        "tool_program": {
+            "enabled": False,
+            "max_steps": 16,
+            "max_concurrency": 4,
+            "wall_clock_seconds": 120.0,
+            "max_total_output_bytes": 262_144,
+            "max_result_bytes": 65_536,
         },
     }
 

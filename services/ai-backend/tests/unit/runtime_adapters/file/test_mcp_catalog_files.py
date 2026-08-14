@@ -142,16 +142,12 @@ class TestFilesAreRealOnDisk(FileCatalogMixin):
         self.load_into(store, tools=(self.make_catalog_tool(self.Values.SEARCH_TOOL),))
 
         backend = McpCatalogBackend(store)
-        result = backend.read(
-            McpCatalogPaths.tool_file(
-                self.CatalogValues.SERVER, self.Values.SEARCH_TOOL
-            )
-        )
+        result = backend.read(self.tool_file_path(self.Values.SEARCH_TOOL))
 
         on_disk = (
             self.server_dir(tmp_path)
             / Keys.Dir.TOOLS
-            / f"{self.Values.SEARCH_TOOL}{Keys.Ext.JSON}"
+            / f"{self.invoke_name(self.Values.SEARCH_TOOL)}{Keys.Ext.JSON}"
         ).read_text(encoding="utf-8")
         assert result.error is None
         assert result.file_data is not None
@@ -170,12 +166,7 @@ class TestCatalogOutlivesTheHarness(FileCatalogMixin):
         second = self.store(tmp_path)
 
         assert second.loaded_server_names() == (self.CatalogValues.SERVER,)
-        assert (
-            McpCatalogPaths.tool_file(
-                self.CatalogValues.SERVER, self.Values.SEARCH_TOOL
-            )
-            in second.snapshot()
-        )
+        assert self.tool_file_path(self.Values.SEARCH_TOOL) in second.snapshot()
 
     def test_a_later_seed_pass_never_un_loads_a_server(self, tmp_path: Path) -> None:
         first = self.seeded(tmp_path)
@@ -241,9 +232,7 @@ class TestEveryCompositionReadsTheSameBytes(FileCatalogMixin):
             supervisor_store, tools=(self.make_catalog_tool(self.Values.SEARCH_TOOL),)
         )
 
-        path = McpCatalogPaths.tool_file(
-            self.CatalogValues.SERVER, self.Values.SEARCH_TOOL
-        )
+        path = self.tool_file_path(self.Values.SEARCH_TOOL)
         supervisor_read = supervisor.read(path)
         subagent_read = subagent.read(path)
         assert subagent_read.error is None
@@ -411,7 +400,7 @@ class TestComposedRuntimeWritesRealFiles(CatalogWiringMixin, FileCatalogMixin):
             tmp_path
             / self.TestValues.Names.DRIVE_MCP
             / Keys.Dir.TOOLS
-            / f"{self.TestValues.Names.DRIVE_SEARCH}{Keys.Ext.JSON}"
+            / f"{self.invoke_name(self.TestValues.Names.DRIVE_SEARCH, server=self.TestValues.Names.DRIVE_MCP)}{Keys.Ext.JSON}"
         )
         assert tool_file.is_file()
         # And the NEXT harness — turn 2, or the approval-resume harness — reads

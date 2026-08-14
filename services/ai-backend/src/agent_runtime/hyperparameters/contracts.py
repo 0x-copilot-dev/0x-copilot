@@ -50,6 +50,34 @@ class DeferLoadingPolicy(StrEnum):
     ALL = "all"
 
 
+class ArtifactToolFamilyExposure(StrEnum):
+    """Whether the artifact / row-set tool family occupies the tool block.
+
+    The family is ``publish_artifact``, ``revise_artifact`` and
+    ``stage_rowset_write``. Measured against a real run's
+    ``context_occupancy.jsonl`` the three cost **3,326 estimated tokens** of
+    schema text (1,381 / 722 / 1,223) on *every* model call, out of a ~23k
+    input. That text is RESIDENT: it is re-sent whether or not the run ever
+    publishes anything, and on a cold start it is paid at full price rather
+    than at the cache-read rate — which is where 71% of measured spend sits.
+
+    Two states, not three, and the missing third is deliberate. Progressive
+    disclosure (a compact stub the model expands on demand, the shape
+    ``agent_runtime.capabilities.mcp.catalog`` already proves for descriptor
+    blobs) is the better long-term answer and is named as the follow-on rather
+    than reserved as an inert enum member here.
+    """
+
+    #: Today's behaviour: the family loads whenever its lane is composed.
+    ALWAYS = "always"
+    #: The family is withheld from the model surface. It does NOT disable the
+    #: artifact lane: the repository, the ledger, the approval resume path and
+    #: ``ArtifactContentPartPublisher`` (which publishes artifact content parts
+    #: the model emits inline) are all untouched — only the three tool schemas
+    #: stop being advertised.
+    OFF = "off"
+
+
 #: The tokenizer-free ratio `SearchContentBudget` converts with. Mirrored
 #: rather than imported to keep this module free of capability imports.
 _CHARS_PER_TOKEN: Final[int] = 4
@@ -106,6 +134,30 @@ class HyperparameterBounds:
     #: is no longer summarising the web, it is pasting it.
     SEARCH_CONTENT_TOKENS_MAX: Final[int] = 8_000
     SEARCH_PASSAGE_CHARS_MAX: Final[int] = 20_000
+    #: LangGraph super-steps per graph invocation. At the measured cost of this
+    #: repo's Deep Agents graph (see ``ExecutionHyperparameters.recursion_limit``)
+    #: this ceiling is roughly 500 model/tool rounds in a single turn — past the
+    #: point where "the model is working" and "the model is looping" stop being
+    #: distinguishable from the outside. Not ``TIMEOUT_SECONDS_MAX``-shaped,
+    #: because a super-step is a unit of work, not of time: the wall clock is
+    #: bounded separately by ``RUN_DEADLINE_SECONDS_MAX``.
+    RECURSION_LIMIT_MAX: Final[int] = 2_000
+    #: The run-level wall clock, deliberately larger than
+    #: ``TIMEOUT_SECONDS_MAX`` (600s): that bound caps a SINGLE invocation, and
+    #: a run legitimately makes many. Four hours is far past any interactive
+    #: session and exists only so a mis-typed value cannot mean "never".
+    RUN_DEADLINE_SECONDS_MAX: Final[float] = 14_400.0
+    #: One ``run_tool_program`` plan's step count. A program is a batch of the
+    #: run's own tools, so the ceiling mirrors ``PARALLELISM_MAX`` rather than
+    #: inventing a second order of magnitude: past this it is a workflow engine,
+    #: which is not what a single tool result can honestly report on.
+    TOOL_PROGRAM_STEPS_MAX: Final[int] = 100
+    #: Bytes a program may accumulate across every step's output, and bytes of
+    #: the projection it hands back. Both sit under
+    #: ``RESULT_PREVIEW_BYTES_MAX`` because a program that pulls more than a
+    #: persisted tool result's own preview ceiling into one process has stopped
+    #: being a way of keeping payloads OUT of context.
+    TOOL_PROGRAM_BYTES_MAX: Final[int] = 1_048_576
 
 
 class _FrozenContract(BaseModel):
@@ -194,6 +246,50 @@ class McpCatalogHyperparameters(HyperparameterSection):
         return self
 
 
+class ToolSurfaceHyperparameters(HyperparameterSection):
+    """Which optional tool families are allowed to occupy the tool block.
+
+    Every other section here bounds what a tool may *spend at call time*. This
+    one bounds what the tool block costs *before the model has done anything*,
+    which is a different budget with a different economics: schema text is
+    resident, so a tool nobody calls is still charged on every model call of
+    every run.
+
+    A tunable rather than a deployment switch on ``RuntimeSettings`` because it
+    is a context-engineering judgement about the agent's own behaviour — the
+    same category as ``mcp_loading.defer_loading_policy``, which is the
+    neighbouring knob over the same block — and because it should be a
+    reviewable diff rather than an invisible environment change.
+    """
+
+    artifact_family: ArtifactToolFamilyExposure = ArtifactToolFamilyExposure.ALWAYS
+
+    def admits_artifact_family(self, *, lane_enabled: bool) -> bool:
+        """Return whether the artifact / row-set family may be model-visible.
+
+        Both halves must hold, and they are different questions:
+        ``lane_enabled`` is the caller's existing "is this capability composed
+        for this run at all" gate (``ARTIFACT_EFFECTS_V2`` + a repository +
+        rollout admission for publish/revise; ``SURFACES_V2`` for the row-set
+        stager), while this section decides whether a composed capability is
+        worth its resident schema text.
+
+        Fails toward INCLUDING by construction: the only value that withholds
+        the family is ``OFF`` written explicitly into the document (or a
+        ``COPILOT_HP__TOOL_SURFACE__ARTIFACT_FAMILY`` override). A misspelled
+        value is rejected at boot by ``extra="forbid"`` plus enum validation and
+        stops the process with a pointer, so there is no third path where the
+        tools quietly vanish. And because the value is resolved once at the
+        composition root onto a frozen document that both the run handler and
+        the approval-resume handler read, a run cannot lose the family
+        mid-task: the answer is identical either side of an approval.
+        """
+
+        return lane_enabled and self.artifact_family is not (
+            ArtifactToolFamilyExposure.OFF
+        )
+
+
 class ReadHyperparameters(HyperparameterSection):
     """Line budgets applied when the runtime serves a read.
 
@@ -262,6 +358,60 @@ class RetryHyperparameters(HyperparameterSection):
         return self
 
 
+class ModelRetryHyperparameters(HyperparameterSection):
+    """Pacing for re-dispatching ONE model call, owned by us not the SDK.
+
+    Distinct from :class:`RetryHyperparameters` above, which paces a *tool*
+    call, and from ``execution.max_retries``, which paces a whole *run claim*.
+    Three scopes, three sections: a 429 twenty tool calls into a turn should
+    cost a few seconds of backoff on the model call, not a re-run of the turn.
+
+    ``max_attempts`` governs only the deployment default path. When the F10
+    model-invocation journal is installed, ``ModelInvocationBudget`` remains the
+    attempt authority and this section contributes pacing alone — one ceiling,
+    not two disagreeing ones.
+    """
+
+    #: Total attempts for one model call, counting the first. ``3`` matches
+    #: ``ModelInvocationBudget.max_attempts``' own ``le=3`` ceiling so the
+    #: default path can never out-retry the journaled path.
+    max_attempts: int = Field(default=3, ge=1, le=3)
+    initial_backoff_seconds: float = Field(
+        default=2.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Multiplier per attempt. ``1.0`` is a legal (constant-delay) schedule.
+    backoff_factor: float = Field(default=2.0, ge=1.0, le=10.0)
+    #: Fraction of the base delay added as upper jitter, spreading concurrent
+    #: callers instead of synchronising them onto the same peak.
+    jitter_factor: float = Field(default=0.25, ge=0.0, le=1.0)
+    #: Ceiling when the provider sent no ``retry-after``.
+    max_backoff_seconds: float = Field(
+        default=30.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Ceiling applied to a provider-stated wait. Bounded for a concrete
+    #: reason: ``execution.worker_lock_seconds`` is 60, so honouring a literal
+    #: ``retry-after: 3600`` would let a second worker claim a run this one is
+    #: still executing.
+    provider_hint_max_seconds: float = Field(
+        default=30.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+
+    @model_validator(mode="after")
+    def _initial_backoff_is_reachable(self) -> Self:
+        """Refuse an initial backoff the ceiling would clamp away on attempt 1.
+
+        Same failure mode as :class:`RetryHyperparameters`: a configured value
+        that appears to apply and never does.
+        """
+
+        if self.initial_backoff_seconds > self.max_backoff_seconds:
+            raise ValueError(
+                "initial_backoff_seconds cannot exceed max_backoff_seconds; the "
+                "backoff schedule would clamp it away on the first attempt"
+            )
+        return self
+
+
 class ExecutionHyperparameters(HyperparameterSection):
     """Run-level parallelism, budgets, and worker cadence.
 
@@ -304,6 +454,55 @@ class ExecutionHyperparameters(HyperparameterSection):
     delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1_024)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60.0)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3_600)
+    # LangGraph super-steps allowed per graph invocation, passed through
+    # ``runtime_config`` into the ``RunnableConfig``.
+    #
+    # Measured, not guessed. Driving the REAL Deep Agents graph (a scripted chat
+    # model emitting N tool rounds) and bisecting the smallest limit that still
+    # completes gives a linear fit, on langgraph 1.2.9 / deepagents 0.7.1:
+    #
+    #     minimal graph (no middleware, no subagents):  3 + 2 * tool_rounds
+    #     with RuntimeControlMiddleware + a subagent:   6 + 4 * tool_rounds
+    #
+    # Measured at 0/1/2/3/5/8 rounds, exact at every point. The shape that
+    # matters is the SLOPE: a model->tool->model round costs a small constant
+    # number of super-steps, so the limit converts to a round count by simple
+    # division. The intercept and slope both grow with the middleware stack, so
+    # treat 4/round as the working figure and expect it to drift upward as
+    # middleware is added — which is the argument for a generous backstop rather
+    # than a tight one.
+    #
+    # Two library defaults are in play and neither is ours. ``langchain_core``
+    # still defines ``DEFAULT_RECURSION_LIMIT = 25``, which by the fit above is
+    # about five tool rounds — below the per-tool-name ``tool_call_budget`` of
+    # 10, so a perfectly healthy run would die on a step limit instead of on the
+    # legible budget message. But that is not the number this graph actually
+    # gets: ``langgraph._internal._config`` supplies its own
+    # ``DEFAULT_RECURSION_LIMIT`` of 10007 — some 2500 tool rounds, i.e. no
+    # meaningful bound at all, and on a BYOK key 2500 completions of a loop the
+    # user is paying for. Checked against the installed library rather than the
+    # docs, because the two constants disagree and only one is reachable here.
+    #
+    # 500 is ~125 tool rounds at 4/round: an order of magnitude clear of every
+    # in-loop budget a healthy run can legitimately spend (``tool_call_budget``
+    # is 10 per tool name, 20 at ``deep``), and a bounded worst case of ~125
+    # completions instead of ~2500. It is a backstop, not a working budget — the
+    # budgets the model is *told* about are what should end a healthy run. It is
+    # deliberately NOT a cost cap in time; that is ``run_deadline_seconds``,
+    # which binds a slow loop where this one binds a fast one.
+    recursion_limit: int = Field(
+        default=500, ge=1, le=HyperparameterBounds.RECURSION_LIMIT_MAX
+    )
+    # Wall-clock ceiling for one worker execution of a run, distinct from
+    # ``default_timeout_seconds`` / ``ModelConfig.timeout_seconds``: those bound
+    # a single invocation (and are depth-scaled per subagent), this bounds the
+    # whole agent loop. 1800s = 10x the 180s invocation default, so a healthy
+    # multi-step run with subagents never approaches it, while a run wedged
+    # somewhere the super-step counter cannot see — a tool that never returns,
+    # a provider stream that stalls without erroring — still terminates.
+    run_deadline_seconds: float = Field(
+        default=1800.0, gt=0, le=HyperparameterBounds.RUN_DEADLINE_SECONDS_MAX
+    )
 
 
 class SubagentHyperparameters(HyperparameterSection):
@@ -314,6 +513,15 @@ class SubagentHyperparameters(HyperparameterSection):
     )
     concurrency_limit: int = Field(
         default=2, ge=1, le=SubagentLimits.CONCURRENCY_LIMIT_MAX
+    )
+    #: Delegation hops below the supervisor. Unlike the two above — which the
+    #: package cannot read back, see ``delegation.subagents.constants.Defaults``
+    #: — this one IS live: ``DelegationDepthPolicy.snapshot`` loads the document
+    #: at agent-build time through a function-local import, so the value here
+    #: (and its ``COPILOT_HP__SUBAGENTS__MAX_DELEGATION_DEPTH`` override) is
+    #: what the ``task`` tool admits against.
+    max_delegation_depth: int = Field(
+        default=1, ge=1, le=SubagentLimits.DELEGATION_DEPTH_MAX
     )
 
 
@@ -459,6 +667,87 @@ class CitationHyperparameters(HyperparameterSection):
     )
 
 
+class ToolProgramHyperparameters(HyperparameterSection):
+    """Whether ``run_tool_program`` is offered at all, and the bounds if it is.
+
+    The model authors the plan; it authors none of these. Every one is a
+    *ceiling* the executor enforces itself rather than a number the plan may
+    assert, which is why they live in the reviewable document instead of in the
+    tool's input schema.
+
+    ``max_concurrency`` bounds the fan-out *inside* one program only. It is not
+    a second run-level parallelism knob: the run's tool budget still charges
+    every step, so a wide program spends its allowance faster rather than
+    escaping it.
+    """
+
+    #: Whether the model is offered ``run_tool_program`` at all.
+    #:
+    #: **Default OFF, and measured rather than cautious.** Scored from
+    #: ``context_occupancy.jsonl`` on the packaged app against a real model
+    #: (``tools/harness-bench/FINDINGS.md`` §3), this tool's schema is **600 of
+    #: the 9,759 tokens of tool block** carried on every model call of every
+    #: run, and across the measured set nothing ever called it. The same
+    #: measurement says 97% of a warm run's input is a cache read while a cold
+    #: start pays list price — and cold starts were 71% of total measured cost —
+    #: so a resident schema nobody invokes is a cold-start tax and nothing else.
+    #:
+    #: Registering the tool and having it *refuse* would save nothing: what is
+    #: billed is the schema, not the invocation. So this gate is read **before
+    #: the tool is constructed**, by
+    #: :meth:`runtime_worker.capability_tool_wiring.CapabilityToolWiring.tool_program_factory`,
+    #: which returns no factory at all — and ``execution.factory`` therefore
+    #: composes no program tool and appends no schema.
+    #:
+    #: Off is not a verdict on the capability, which is fully implemented and
+    #: tested underneath. Flip this to ``true`` here, or set
+    #: ``COPILOT_HP__TOOL_PROGRAM__ENABLED=true``, and the executor, its bounds
+    #: and its step policy are exactly what they were.
+    enabled: bool = False
+    max_steps: int = Field(
+        default=16, ge=1, le=HyperparameterBounds.TOOL_PROGRAM_STEPS_MAX
+    )
+    max_concurrency: int = Field(
+        default=4, ge=1, le=HyperparameterBounds.PARALLELISM_MAX
+    )
+    #: Wall clock for the whole program, sharing the single-call timeout
+    #: envelope every other timeout in this document sits under.
+    wall_clock_seconds: float = Field(
+        default=120.0, gt=0, le=HyperparameterBounds.TIMEOUT_SECONDS_MAX
+    )
+    #: Sum of every step's serialized output, held in this process.
+    max_total_output_bytes: int = Field(
+        default=262_144, ge=1_024, le=HyperparameterBounds.TOOL_PROGRAM_BYTES_MAX
+    )
+    #: Ceiling on the serialized projection actually returned to the model.
+    max_result_bytes: int = Field(
+        default=65_536, ge=256, le=HyperparameterBounds.TOOL_PROGRAM_BYTES_MAX
+    )
+
+    @model_validator(mode="after")
+    def _result_must_fit_the_program(self) -> "ToolProgramHyperparameters":
+        """A projection ceiling above the whole program's is not a ceiling.
+
+        The projection is built out of the step outputs, so a
+        ``max_result_bytes`` above ``max_total_output_bytes`` can never bind —
+        it would read as a configured limit while the only one in force is the
+        other number.
+        """
+
+        if self.max_result_bytes > self.max_total_output_bytes:
+            raise ValueError(
+                "tool_program.max_result_bytes exceeds "
+                "tool_program.max_total_output_bytes; the projection cannot be "
+                "larger than everything it is built from"
+            )
+        if self.max_concurrency > self.max_steps:
+            raise ValueError(
+                "tool_program.max_concurrency exceeds tool_program.max_steps; "
+                "no program could ever reach that width"
+            )
+        return self
+
+
 class Hyperparameters(_FrozenContract):
     """The whole document: every agent-behaviour tunable, loaded once.
 
@@ -474,8 +763,14 @@ class Hyperparameters(_FrozenContract):
     mcp_catalog: McpCatalogHyperparameters = Field(
         default_factory=McpCatalogHyperparameters
     )
+    tool_surface: ToolSurfaceHyperparameters = Field(
+        default_factory=ToolSurfaceHyperparameters
+    )
     reads: ReadHyperparameters = Field(default_factory=ReadHyperparameters)
     retry: RetryHyperparameters = Field(default_factory=RetryHyperparameters)
+    model_retry: ModelRetryHyperparameters = Field(
+        default_factory=ModelRetryHyperparameters
+    )
     execution: ExecutionHyperparameters = Field(
         default_factory=ExecutionHyperparameters
     )
@@ -489,6 +784,9 @@ class Hyperparameters(_FrozenContract):
     )
     citations: CitationHyperparameters = Field(default_factory=CitationHyperparameters)
     search: SearchHyperparameters = Field(default_factory=SearchHyperparameters)
+    tool_program: ToolProgramHyperparameters = Field(
+        default_factory=ToolProgramHyperparameters
+    )
 
 
 class HyperparameterOverride(_FrozenContract):

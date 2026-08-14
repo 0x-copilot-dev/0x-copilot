@@ -732,6 +732,7 @@ export type RuntimeApiEventType =
   | "run_cancelled"
   | "run_completed"
   | "run_failed"
+  | "run_steered"
   | "progress"
   | "reasoning_summary"
   | "reasoning_summary_delta"
@@ -824,6 +825,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "run_cancelled",
   "run_completed",
   "run_failed",
+  "run_steered",
   "progress",
   "reasoning_summary",
   "reasoning_summary_delta",
@@ -2574,6 +2576,108 @@ export interface CancelRunResponse {
   latest_sequence_no: number;
 }
 
+/**
+ * The longest steer the server accepts (`SteeringMessage.MAX_TEXT_LENGTH`).
+ * Mirrored so a client can refuse locally instead of spending a round trip on
+ * a 422 — the server still validates; this is not the enforcement point.
+ */
+export const STEER_TEXT_MAX_LENGTH = 4000;
+
+/**
+ * `POST /v1/agent/runs/{run_id}/steer` — one user interjection into a run that
+ * is already executing. `requested_by_user_id` is overwritten from the verified
+ * session by the route, exactly as cancel does, so naming someone else here
+ * cannot put words into their run.
+ */
+export interface SteerRunRequest {
+  text: string;
+  requested_by_user_id: string;
+}
+
+/**
+ * Where the accepted steer landed in the run's ledger. `sequence_no` is the
+ * steer note's OWN position, so a client already streaming can reconcile its
+ * optimistic echo against the durable `run_steered` event without a refetch.
+ *
+ * There is deliberately no `delivered`: acceptance is durable here, delivery is
+ * only knowable later, and reporting it would be a guess dressed as a receipt.
+ */
+export interface SteerRunResponse {
+  run_id: string;
+  status: AgentRunStatus;
+  steer_id: string;
+  sequence_no: number;
+  accepted_at: string;
+}
+
+/** What the agent's operation did to a path the write journal must undo. */
+export type HostWriteKind = "created" | "modified" | "deleted";
+
+/**
+ * Per-path outcome of one revert attempt. `not_revertible` means the change was
+ * captured but its pre-image was never stored (too large / unreadable);
+ * `refused` means the path left the root that admitted the original write, or
+ * became a symlink — refused rather than followed.
+ */
+export type HostWriteRevertStatus =
+  | "restored"
+  | "removed"
+  | "not_revertible"
+  | "refused"
+  | "failed";
+
+/**
+ * One undoable change this run made to the user's real disk —
+ * `GET /v1/agent/runs/{run_id}/host-writes`.
+ *
+ * `tool_call_id` is the granularity that matters: a turn that did five things
+ * and one bad thing should cost the user the one thing. `null` means the write
+ * happened outside a bound tool call and is reachable only through a whole-run
+ * revert. The storage digest and the authorizing root are internal facts and are
+ * deliberately absent from this projection.
+ */
+export interface HostWriteEntry {
+  entry_id: string;
+  tool_call_id?: string | null;
+  sequence: number;
+  path: string;
+  kind: HostWriteKind;
+  prior_size: number;
+  revertible: boolean;
+  captured_at: string;
+}
+
+/** Every undoable change for one run, oldest first. */
+export interface HostWriteUndoListing {
+  run_id: string;
+  entries: readonly HostWriteEntry[];
+}
+
+/** What one revert actually did to one path. */
+export interface HostWriteRevertOutcome {
+  path: string;
+  kind: HostWriteKind;
+  status: HostWriteRevertStatus | string;
+  detail?: string | null;
+}
+
+/**
+ * `POST /v1/agent/runs/{run_id}/host-writes/revert` — one row per affected
+ * path. Omitting `tool_call_id` from the request undoes everything the run
+ * wrote; supplying it rewinds exactly one tool call and leaves later writes
+ * standing. A revert is audited server-side, so the report is a receipt, not a
+ * status code.
+ */
+export interface HostWriteRevertRequest {
+  tool_call_id?: string | null;
+}
+
+export interface HostWriteRevertReport {
+  run_id: string;
+  tool_call_id?: string | null;
+  outcomes: readonly HostWriteRevertOutcome[];
+}
+
 export interface RuntimeEventEnvelope {
   event_protocol_version?: number;
   event_id: string;
@@ -2680,6 +2784,24 @@ export interface ApprovalDecisionRequest {
   // then persists it as the per-connector override (PRD-C1) before recording
   // the decision. The facade passes it through unchanged.
   write_policy?: "ask_first" | "allow_always" | null;
+  // How far THIS approval reaches — the `allow_always` half of the request
+  // payload's `grant_options`. Absent (and `"once"`) resolves this call only,
+  // which is what approve has always meant; `"always"` additionally writes a
+  // RUN-SCOPED allow rule over the subjects the card already named, so the rest
+  // of the run stops re-asking the same question. Permitted only when
+  // `decision === "approved"` (the request validator 422s otherwise) — a
+  // decline that could write an allow rule is the one thing this field must not
+  // be able to say — and `approve_with_edits` is excluded too, because the
+  // edited call is not the call the card described.
+  //
+  // Distinct from `write_policy` above, which is a DURABLE per-connector
+  // override authored on an `mcp_auth` connect gate: different lane, different
+  // lifetime, different card. And distinct from the FILESYSTEM lane's
+  // `allow_always` (`runtime_worker/stream_events.py:227-234`), which attaches a
+  // folder and is settled by the host's workspace-grant flow — that one never
+  // rides this field, and the ai-backend resume builder forwards
+  // `decision_scope` on the `ask_a_question` lane alone.
+  decision_scope?: "once" | "always" | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -3772,6 +3894,24 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
+/** One user interjection addressed to a run that is already executing. */
+export interface RuntimeSteeringMessage {
+  steer_id: string;
+  text: string;
+  requested_by_user_id: UserId;
+  created_at: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The user's mid-run interjection, as the transcript records it. Carries the
+ * same message the queued steer command carries, not a transcript-only copy.
+ */
+export interface RuntimeSteerNotePayload {
+  steer: RuntimeSteeringMessage;
+  [key: string]: unknown;
+}
+
 export interface RuntimeEventPayloadByType
   extends
     ArtifactRuntimeEventPayloadMap,
@@ -3782,6 +3922,7 @@ export interface RuntimeEventPayloadByType
   run_cancelled: RuntimeLifecyclePayload;
   run_completed: RuntimeLifecyclePayload;
   run_failed: RuntimeLifecyclePayload;
+  run_steered: RuntimeSteerNotePayload;
   progress: RuntimeTextPayload;
   reasoning_summary: ReasoningSummaryPayload;
   reasoning_summary_delta: ReasoningSummaryDeltaPayload;
@@ -3967,7 +4108,23 @@ export interface TodoListSnapshot {
 export interface CompressionNotePayload {
   before_tokens: number;
   after_tokens: number;
+  /**
+   * `before_tokens - after_tokens`, derived by the PRODUCER
+   * (`RuntimeEventProducer.append_compression_note`) rather than accepted from
+   * a caller, so the saving a client prints can never disagree with the two
+   * counts it prints beside it. Declared optional only for envelopes written
+   * before it was emitted; the transcript divider falls back to the difference.
+   */
+  tokens_saved?: number;
   strategy: string;
+  /** Mirrors `Values.CompactionTrigger` (`token_threshold`, …). */
+  trigger?: string;
+  /**
+   * The tool whose result was compacted, when the call was identified. The
+   * server's `display_title` already names it — this is the machine-readable
+   * half of the same fact.
+   */
+  tool_name?: string;
   summary?: string | null;
   payload_refs?: Record<string, unknown>;
 }
@@ -6527,3 +6684,20 @@ export { ACTIVITY_RUN_STATUSES } from "./activity";
 // site: ./skills.ts.
 export type { SkillSummary } from "./skills";
 // === end Phase 4 Skills ===
+
+// Declared agents (agent-as-configuration). The read/declare/undeclare surface
+// under `/v1/agent/subagents`, which is how an agent gets its own tools, skills
+// and scopes without hand-editing `subagent_defs/*.json`. Single declaration
+// site: ./subagentDefinitions.ts.
+export type {
+  DeclaredSubagentListResponse,
+  SubagentDefinition,
+  SubagentFilesystemPermission,
+  SubagentPolicyGrant,
+  SubagentPolicyMode,
+  SubagentTransport,
+} from "./subagentDefinitions";
+export {
+  isDeclaredSubagentListResponse,
+  isSubagentDefinition,
+} from "./subagentDefinitions";

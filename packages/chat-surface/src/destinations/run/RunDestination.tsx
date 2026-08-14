@@ -64,6 +64,9 @@ import type { QuestionAnswer } from "../../approvals";
 import {
   isRowSetEffectReview,
   isSourceOpenResultV2,
+  // The server's own bound on one steer, mirrored so an over-long interjection
+  // costs a keystroke rather than a 422 round trip. Not the enforcement point.
+  STEER_TEXT_MAX_LENGTH,
   type AgentRunStatus,
   type ArtifactKind,
   type CitationSourceRef,
@@ -98,6 +101,20 @@ import {
 import { CitationsProvider } from "../../citations/CitationsContext";
 import type { MarkdownTextProps } from "../../messages/MarkdownText";
 import { projectCitations } from "./projectCitations";
+// The context-compaction boundary. Another pure selector over the SAME
+// `session.events` (FR-3.3) — the runtime emits `compression_note` beside the
+// `tool_result` it bounded out of model context, and until now nothing drew it,
+// so "the agent forgot something it had already read" was observable only as a
+// consequence.
+import {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./compactionProjection";
+// The mid-run steer, the other half of the same seam: this shell owns the POST
+// that sends one, and this selector reads back the `run_steered` note the
+// coordinator appends for it — off the SAME `session.events`, no second
+// subscription (FR-3.3).
+import { projectSteerNotes, type SteerNoteEntry } from "./steerProjection";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
@@ -257,6 +274,7 @@ import {
   useRunStudioRailCollapsed,
   type RunMode,
 } from "./useRunMode";
+import { useHostWrites } from "./useHostWrites";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -267,6 +285,10 @@ const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
 /** Stable identity so the flag-off / scrubbed path never churns the transcript. */
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
+/** Same reason: the scrubbed path must not churn the transcript. */
+const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
+/** Same reason again. */
+const EMPTY_STEER_NOTES: readonly SteerNoteEntry[] = [];
 const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
@@ -1733,6 +1755,91 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     scrubbedSeq !== null ? (scrubIndex.get(scrubbedSeq)?.atMs ?? null) : null;
   const isScrubbed = scrubbedSeq !== null;
 
+  // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
+  // cancellable and no cancel is in flight (server `cancelling` state OR our
+  // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
+  // run so a stale flag from a prior run can never suppress Stop on a new one.
+  //
+  // Declared HERE, above `handleStartRun`, because it is also the steerability
+  // predicate that dispatch reads (see below) — and it is exactly the right one:
+  // the server refuses a steer outside `ACTIVE_RUN_STATUSES`, and this set is
+  // that set minus `cancelling`, which the coordinator singles out as pointless
+  // to steer for the same reason a finished run is.
+  const boundRunId = session.runId;
+  const running =
+    boundRunId !== null &&
+    session.runStatus !== null &&
+    CANCELLABLE_RUN_STATUSES.has(session.runStatus) &&
+    cancellingRunId !== boundRunId;
+
+  // Send one interjection into the run that is already executing.
+  //
+  // THERE IS NO OPTIMISTIC ECHO HERE, and that is the point of the endpoint's
+  // shape. The coordinator appends the `run_steered` note INSIDE the run's
+  // causal prefix before it enqueues the command, so a client already streaming
+  // receives the durable record within a beat — and `projectSteerNotes` draws
+  // that record. Echoing locally as well would put the user's sentence in the
+  // transcript twice, once as a guess and once as the truth.
+  //
+  // Failures are NOT swallowed. A steer that 409s (the run ended between the
+  // keystroke and the POST) has to say so: silently dropping it is the exact
+  // defect this replaces, one layer down.
+  const steerRun = useCallback(
+    (runId: string, text: string, hasAttachments: boolean): Promise<void> => {
+      if (text === "") {
+        // An attachment-only submit. `/steer` carries text and nothing else, so
+        // there is no shape in which this file reaches the run — say so rather
+        // than posting an empty steer (the server rejects it) or dropping the
+        // attachment on the floor and reporting success.
+        setStartError({
+          message: hasAttachments
+            ? "A running agent can be steered with a message, but not with an attachment. Wait for this run to finish, or stop it first."
+            : "Nothing to steer with — type a message.",
+        });
+        return Promise.reject(new Error("steer requires text"));
+      }
+      if (text.length > STEER_TEXT_MAX_LENGTH) {
+        // Mirrored from the server's own bound so an over-long steer costs a
+        // keystroke rather than a round trip. The server still validates — this
+        // is not the enforcement point.
+        setStartError({
+          message: `That steer is too long — ${text.length} characters, and the limit is ${STEER_TEXT_MAX_LENGTH}.`,
+        });
+        return Promise.reject(new Error("steer too long"));
+      }
+      setStartError(null);
+      return transport
+        .request<unknown>({
+          method: "POST",
+          path: `/v1/agent/runs/${runId}/steer`,
+          // `requested_by_user_id` is deliberately absent: the facade overwrites
+          // it from the verified session precisely so a body-supplied identity
+          // cannot put words into someone else's run. Sending one would be a
+          // field the server throws away.
+          body: { text },
+        })
+        .then(() => {
+          /* The `run_steered` frame on the open stream is the record. */
+        })
+        .catch((err: unknown) => {
+          const parsed = parseTransportError(err);
+          setStartError({
+            message:
+              parsed.safeMessage ??
+              "Couldn't steer this run — it may have already finished.",
+            code: parsed.code,
+            correlationId: parsed.correlationId,
+            raw: parsed.raw !== "" ? parsed.raw : undefined,
+          });
+          // Re-thrown for the same reason the start path re-throws: the in-chat
+          // composer's `onSubmitError` channel is where the user actually sees
+          // this, and it only fires on a rejection.
+          throw err;
+        });
+    },
+    [transport],
+  );
+
   // PR-3.11 (FR-3.25): start a run from the empty-state goal composer. The host
   // `onStartRun` wins (it owns identity/model); otherwise the shell POSTs a run
   // through the Transport port — identity is derived from the verified session,
@@ -1751,6 +1858,27 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // empty submit (no goal AND no attachments) is a no-op.
       if (goal === "" && !hasAttachments) {
         return Promise.resolve();
+      }
+      // A LIVE RUN IS STEERED, NOT RESTARTED.
+      //
+      // What this replaces: `Composer.send` refused outright while `running`, so
+      // a user who typed a correction mid-run and pressed ⏎ got NOTHING — no
+      // send, no error, no queued turn. The runtime has accepted a durable,
+      // queued steer the whole time (claimable even when every execution slot is
+      // busy, injected at the next model step, never mid-tool), and no client
+      // ever called it.
+      //
+      // It is deliberately not "start a second run": two runs in one
+      // conversation are two agents working the same thread, and the thing the
+      // user actually said — "no, use the other file" — is a correction to the
+      // run in front of them, not a new goal.
+      //
+      // Placed AFTER the empty check and BEFORE the readiness gate: a steer
+      // needs no model selection (the run already resolved one), so refusing it
+      // for `!modelReady` would block a correction to a run that is demonstrably
+      // running.
+      if (running && boundRunId !== null) {
+        return steerRun(boundRunId, goal, hasAttachments);
       }
       // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
       // with a configuration error. The composer stays LIVE with no model
@@ -1840,7 +1968,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           setIsStartingRun(false);
         });
     },
-    [conversationId, isStartingRun, modelReady, onStartRun, transport, bindRun],
+    [
+      conversationId,
+      isStartingRun,
+      modelReady,
+      onStartRun,
+      transport,
+      bindRun,
+      running,
+      boundRunId,
+      steerRun,
+    ],
   );
 
   // The plain fallback composer (`RunEmptyState`) sends a bare goal string; wrap
@@ -2096,6 +2234,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     events: session.events,
   });
 
+  // The Changes tab: what this run wrote to the user's REAL disk, read from the
+  // host-write journal, plus the undo for one tool call's worth of it. Sources
+  // answers "what did it read"; this answers "what did it change", which until
+  // now nothing in either host asked — the two routes were backend-complete and
+  // reachable by no caller.
+  const hostWriteJournal = useHostWrites({
+    runId: session.runId,
+    runStatus: session.runStatus,
+  });
+
   // PR-3.10: the approval queue is projected off the SAME `session.events`
   // (FR-3.3 — no second subscription/projector). `localDecisions` overlays the
   // user's optimistic Approve/Reject so the in-chat card flips to its receipt
@@ -2135,6 +2283,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvalId: string,
       decision: RunApprovalDecision,
       edits?: SurfaceEdits,
+      // How far this approval reaches. Absent is `once`, which is what approve
+      // has always meant and what the server defaults to — the field is sent
+      // ONLY when the user pressed the control that widens it, because the
+      // request validator rejects a scope on anything but a plain approve and
+      // an unconditional `decision_scope` would start saying something the
+      // reviewer never said on every decline.
+      scope?: "once" | "always",
     ): void => {
       // ONE DECISION PER APPROVAL, ENFORCED BEFORE THE POST.
       //
@@ -2171,10 +2326,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // The wire decision carries the reviewer's edits when present; the server
       // (ai-backend 09b) re-derives final = proposal ⊕ edits and never trusts a
       // client-sent merged artifact. Plain approve/reject is unchanged.
+      //
+      // `decision_scope` rides only a PLAIN approve. `approve_with_edits` is
+      // excluded server-side for a reason the client must not paper over: the
+      // edited call is not the call the card described, so a rule derived from
+      // the card's subjects would grant something the reviewer never saw.
       const body =
         edits !== undefined
           ? { decision: "approve_with_edits", edits }
-          : { decision };
+          : scope !== undefined && decision === "approved"
+            ? { decision, decision_scope: scope }
+            : { decision };
       void transport
         .request<unknown>({
           method: "POST",
@@ -2190,6 +2352,23 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   const handleApprove = useCallback(
     (approvalId: string): void => resolveApproval(approvalId, "approved"),
+    [resolveApproval],
+  );
+  // The `allow_always` half of `grant_options`: approve THIS call and write a
+  // run-scoped allow rule over the subjects it already carried, so the rest of
+  // the run stops re-asking the same question. It goes through the same
+  // `resolveApproval` — same one-decision-per-approval guard, same optimistic
+  // overlay, same POST — because it IS an approve; only its reach differs, and
+  // a second code path for that is a second chance to double-dispatch a write.
+  //
+  // The card only offers this where the wire honours it (`allowsRunScopedGrant`
+  // — the write-gate lane, whose `ask_a_question` resume shape is the only one
+  // that forwards `decision_scope`). The filesystem lane's `allow_always` means
+  // ATTACH A FOLDER, which this POST does not carry and `WorkspaceGrantCard`
+  // already owns.
+  const handleApproveAlways = useCallback(
+    (approvalId: string): void =>
+      resolveApproval(approvalId, "approved", undefined, "always"),
     [resolveApproval],
   );
   const handleReject = useCallback(
@@ -2298,17 +2477,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [transport, session.runId],
   );
-
-  // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
-  // cancellable and no cancel is in flight (server `cancelling` state OR our
-  // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
-  // run so a stale flag from a prior run can never suppress Stop on a new one.
-  const boundRunId = session.runId;
-  const running =
-    boundRunId !== null &&
-    session.runStatus !== null &&
-    CANCELLABLE_RUN_STATUSES.has(session.runStatus) &&
-    cancellingRunId !== boundRunId;
 
   // Cancel the bound run — cockpit-owned, no dedicated port (AD-4). Optimistically
   // flips `running` false via `cancellingRunId` (Stop hides at once), then POSTs
@@ -3962,6 +4130,30 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     accentByArtifactId,
   ]);
 
+  // The compaction boundaries, on the same rules as the artifacts above: one
+  // pure selector over `session.events`, and empty while scrubbed because a
+  // compaction that happened after the scrub point had not happened yet.
+  //
+  // Deliberately NOT gated on `surfacesV2`. Compaction is ordinary runtime
+  // behaviour that every run is subject to, flag or no flag — gating the only
+  // account of it on a Generative-Surfaces flag would leave the majority of runs
+  // silently forgetting things, which is the exact defect this renders.
+  const compactionNotices = useMemo(() => {
+    if (isScrubbed) return EMPTY_COMPACTION_NOTICES;
+    return projectCompactionNotices(session.events);
+  }, [isScrubbed, session.events]);
+
+  // The user's own mid-run interjections, on exactly the same rules as the
+  // compaction boundaries above: one pure selector over `session.events`
+  // (FR-3.3), empty while scrubbed because a steer sent after the scrub point
+  // had not been sent yet, and ungated by `surfacesV2` — steering is ordinary
+  // runtime behaviour, and the record of having steered is the user's, not a
+  // Generative-Surfaces feature.
+  const steerNotes = useMemo(() => {
+    if (isScrubbed) return EMPTY_STEER_NOTES;
+    return projectSteerNotes(session.events);
+  }, [isScrubbed, session.events]);
+
   // "Review →" on a parked write. The payload lives on the Studio canvas
   // (`run-v2-gate-region` → `TcWriteGateCard`), which is the only surface
   // holding the real `ledgerId` this decision will be recorded under — so
@@ -4077,6 +4269,35 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           onOpenSource: handleOpenSourceV2,
           openingSourceId,
           openMessage: sourceOpenMessage,
+        }
+      : undefined;
+
+  // The Changes tab's inputs — and its RENDER CONDITION, because presence is
+  // what draws the tab (see `RunWorkspaceRail.hostWrites`).
+  //
+  // Three states deliberately produce `undefined`, so the rail is byte-identical
+  // to the four-tab v3 rail in each:
+  //   - `unavailable` — the deployment captures no agent writes at all. Every
+  //     non-desktop image answers 503 by design, and a permanently-empty
+  //     "Changes" tab on the web build would be exactly the dead chrome the
+  //     Sources tab used to be.
+  //   - nothing written — the run touched no files. The honest answer is no tab,
+  //     not a tab that says "nothing".
+  //   - and neither of those, but also no error — i.e. the read is still in
+  //     flight. The tab appears when there is something to show.
+  // An `error` alone DOES draw the tab: failing to read the journal is a thing
+  // the user needs told, and silence there is indistinguishable from "this run
+  // changed nothing".
+  const railHostWrites =
+    !hostWriteJournal.unavailable &&
+    (hostWriteJournal.groups.length > 0 || hostWriteJournal.error !== null)
+      ? {
+          groups: hostWriteJournal.groups,
+          error: hostWriteJournal.error,
+          states: hostWriteJournal.states,
+          reports: hostWriteJournal.reports,
+          failures: hostWriteJournal.failures,
+          onUndo: hostWriteJournal.revert,
         }
       : undefined;
 
@@ -4219,6 +4440,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `ArtifactSurface` Studio mounts, and "Open in Studio" stays as a
         // choice rather than the only way to look.
         inlineArtifacts={inlineArtifacts}
+        // The compaction boundary, at the seq the runtime bounded a tool result
+        // out of model context. A quiet rule, not a card — the transcript now
+        // says WHY the agent stopped holding something it had already read.
+        compactionNotices={compactionNotices}
+        // The mid-run steers, at the beat each was accepted. Without this the
+        // steer still lands — the agent visibly changes course a moment later —
+        // but the transcript reads as the agent spontaneously changing its mind.
+        steerNotes={steerNotes}
+        // Announces the send path the composer actually takes right now. It IS
+        // the affordance: while a run is live the send control is a Stop button,
+        // so nothing else on screen would say that ⏎ does anything.
+        steering={running}
         artifactTransport={transport}
         {...(artifactDownloadPort === undefined
           ? {}
@@ -4266,6 +4499,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // PR-3.10: the in-chat ask card — the SAME card in Studio and Focus.
         approvals={chatApprovals}
         onApprove={handleApprove}
+        // The `allow_always` half of the server's `grant_options`. The card
+        // decides whether to draw the control (only where `decision_scope`
+        // reaches a consumer); the host only has to be willing to post it.
+        onApproveAlways={handleApproveAlways}
         onReject={handleReject}
         onAnswer={handleAnswer}
         // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
@@ -4320,6 +4557,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       onApprove={handleApprove}
       onReject={handleReject}
       scrubbed={isScrubbed}
+      // The Changes tab: what this run wrote to disk + the per-tool-call undo.
+      // Undefined ⇒ no tab (see `railHostWrites`).
+      hostWrites={railHostWrites}
       // Surfaces v2 (E1/E2): canonical safe Sources provenance, the cross-run
       // queue + fleet, and the header chip's "jump to Approvals" signal. All
       // undefined when the flag is off ⇒ the rail is byte-identical.

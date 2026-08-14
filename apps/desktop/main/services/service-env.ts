@@ -14,6 +14,15 @@ import type { SupervisedServiceName } from "./runtime-paths";
 // never the raw desktop process env). PATH/HOME/etc. are baseline process
 // plumbing; the Google OAuth vars are the contract's named passthroughs;
 // the provider keys are dev conveniences that BYOK supersedes in-product.
+/**
+ * Env families forwarded by PREFIX rather than by exact name.
+ *
+ * Deliberately narrow: a prefix widens what crosses into a supervised service,
+ * so it is justified only where the set of names is generated rather than
+ * enumerable. Today that is exactly one family — the hyperparameter overrides.
+ */
+export const ENV_PASSTHROUGH_PREFIXES: readonly string[] = ["COPILOT_HP__"];
+
 export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   // Baseline process plumbing.
   "PATH",
@@ -358,6 +367,24 @@ export function buildServiceEnv(
   const env: Record<string, string> = {};
   for (const key of ENV_PASSTHROUGH_ALLOWLIST) {
     const value = inputs.processEnv[key];
+    if (value !== undefined && value !== "") {
+      env[key] = value;
+    }
+  }
+  // Hyperparameter overrides are a PREFIX FAMILY, not a fixed set of names:
+  // `COPILOT_HP__EXECUTION__RECURSION_LIMIT` and its siblings are derived from
+  // the hyperparameter document, so an exact-name allowlist can never stay
+  // complete as that document grows. `agent_runtime/settings.py:311` calls this
+  // form "the only surface" for setting them — and nothing forwarded it, so a
+  // supervised service ALWAYS took the built-in default and no operator could
+  // change one. The unit suite could not see it: every hyperparameter test
+  // constructs settings directly and never crosses this boundary. Caught by the
+  // RL-2 live journey phase, which could not provoke the step ceiling it
+  // asserts precisely because the ceiling was unsettable in the packaged app.
+  for (const [key, value] of Object.entries(inputs.processEnv)) {
+    if (!ENV_PASSTHROUGH_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      continue;
+    }
     if (value !== undefined && value !== "") {
       env[key] = value;
     }

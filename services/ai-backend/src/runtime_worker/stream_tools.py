@@ -339,15 +339,37 @@ class StreamMessageProcessor:
             # No-op (offloader is None) on every other backend, and the ``task``
             # tool result — routed below to a SUBAGENT_COMPLETED lifecycle event
             # rather than a TOOL_RESULT — is left untouched.
+            compaction_notice = None
             if (
                 self._tool_result_offloader is not None
                 and payload[Keys.Field.TOOL_NAME] != Values.Tool.TASK
             ):
-                payload = self._tool_result_offloader.apply(
-                    payload,
-                    trace_id=run.trace_id or run.run_id,
-                    projection_key=run.run_id,
-                    projection_content=StreamMessageParser.raw_content(message),
+                payload, compaction_notice = (
+                    self._tool_result_offloader.apply_with_notice(
+                        payload,
+                        trace_id=run.trace_id or run.run_id,
+                        projection_key=run.run_id,
+                        projection_content=StreamMessageParser.raw_content(message),
+                    )
+                )
+            # Emitted BEFORE the TOOL_RESULT it explains, and inside this same
+            # pre-terminal async pass, for two reasons. Ordering: the divider
+            # reads as "content was compacted, here is the bounded result",
+            # which is the order the run actually did it in. Sealing: the run's
+            # terminal event seals the causal prefix [1..N] and
+            # ``append_api_event`` fails closed after that, so a note deferred
+            # to a fire-and-forget task could arrive post-seal and raise
+            # LedgerSealViolation. Awaiting it here keeps it provably inside
+            # the prefix, which is also what makes it survive replay.
+            if compaction_notice is not None:
+                await self.event_producer.append_compression_note(
+                    run=run,
+                    before_tokens=compaction_notice.before_tokens,
+                    after_tokens=compaction_notice.after_tokens,
+                    strategy=compaction_notice.strategy,
+                    trigger=compaction_notice.trigger,
+                    tool_name=compaction_notice.tool_name,
+                    metadata=metadata,
                 )
             if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)

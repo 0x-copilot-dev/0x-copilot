@@ -93,6 +93,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RuntimeSteerCommand,
     RuntimeStageCommitCommand,
     RunHistoryEntry,
     RunRecord,
@@ -180,6 +181,7 @@ class InMemoryRuntimeApiStore(MaterializedViewStoreBase):
         self._events_by_id: dict[str, RuntimeEventEnvelope] = {}
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
+        self.steer_commands: list[RuntimeSteerCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
         self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
         self.effect_commit_commands: list[RuntimeEffectCommitCommand] = []
@@ -2970,6 +2972,19 @@ class InMemoryRuntimeApiStore(MaterializedViewStoreBase):
         self._register_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.RUN_CANCEL_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_steer(self, command: RuntimeSteerCommand) -> None:
+        """Enqueue a mid-run steering command for deterministic worker tests."""
+
+        self.steer_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_STEER_REQUESTED,
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,

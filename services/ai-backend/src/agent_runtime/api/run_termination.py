@@ -64,7 +64,13 @@ class TerminationReason(StrEnum):
     CANCELLED = "cancelled"
     APPROVAL_TIMEOUT = "approval_timeout"
     BUDGET_EXCEEDED = "budget_exceeded"
+    #: A single invocation exceeded ``ModelConfig.timeout_seconds``.
     RUN_TIMEOUT = "run_timeout"
+    #: The run exceeded its wall-clock budget
+    #: (``RuntimeExecutionSettings.run_deadline_seconds``). Distinct from
+    #: ``RUN_TIMEOUT`` on purpose: one says "this call was slow", the other says
+    #: "the whole loop ran too long", and they point at different fixes.
+    RUN_DEADLINE_EXCEEDED = "run_deadline_exceeded"
 
 
 # Maps the lifecycle kind to the synthesized terminal event type used

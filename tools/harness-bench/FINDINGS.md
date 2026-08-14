@@ -1,0 +1,252 @@
+# harness-bench — what the measurements actually say
+
+Every number here came from the packaged app running against a real model, scored
+from the file-native run store (`run_usage.jsonl`, `tool_invocations.jsonl`,
+`context_occupancy.jsonl`, and the session's `events.jsonl`) — the same records
+the product bills from.
+
+> **Revision note.** An earlier version of this file declared finding 1
+> FALSIFIED on the strength of a single arm and a metric that could not see the
+> failure it was measuring. It was wrong, and the correction is below rather
+> than quietly edited away, because the mistake is more instructive than the
+> result.
+
+## 1. The step ceiling was binding real work. Raising it is a measured win.
+
+`recursion_limit` was raised from LangGraph's inherited **25** super-steps to an
+explicit 500. Same stage, same tasks, same model, same order; the only variable
+is `COPILOT_HP__EXECUTION__RECURSION_LIMIT`.
+
+| task           | limit=25             | limit=500               |
+| -------------- | -------------------- | ----------------------- |
+| t1-trivial     | completed            | completed               |
+| t2-three-steps | completed            | completed               |
+| t3-todo-driven | **failed** — ceiling | **completed**, 5 rounds |
+| t4-long-chain  | completed            | completed               |
+
+```
+limit=25 : 3/4 completed, 95,655 total tokens
+limit=500: 4/4 completed, 95,746 total tokens   (+0.1%)
+```
+
+**+25 points of completion rate for +0.1% tokens.** t3's terminal event at
+limit=25 reads `"code": "recursion_limit_exceeded"` — the run was stopped by the
+ceiling, not by anything it was doing wrong. This is, so far, the only measured
+outcome win in the harness program.
+
+### How the first pass got this exactly backwards
+
+The first scorer inferred "did the ceiling bind?" from the count of **completed**
+tool invocations. It reported 3 rounds against a ceiling of 25 and I concluded
+the ceiling was never approached — then declined to run the second arm on the
+reasoning that a ceiling never reached cannot behave differently when raised.
+Both steps were wrong, and the second compounded the first.
+
+A run that trips the ceiling with a tool call still in flight **never completes
+that call**, so the failing round is invisible to a completed-rounds count. The
+metric was structurally blind to the event it existed to detect. The run's own
+`run_failed` event had said `recursion_limit_exceeded` the whole time.
+
+The rule the scorer now encodes: **read the terminal code; never infer it.**
+
+## 2. The `write_todos` "crash" was a mis-stamped innocent
+
+The earlier version of this file reported that `write_todos` threw
+`tool_exception` on its 4th call. It did not throw at all. The 4th call was in
+flight when the graph hit its step ceiling; the blanket `except Exception`
+handler reconciled every open call with `ToolErrorCode.TOOL_EXCEPTION`, stamping
+a tool that never ran. The tell is in the ledger: the three good rows carry a
+`result_summary`, the accused row carries `{}`.
+
+The real defect was therefore in the error taxonomy, not the todo tool — a
+single blanket code applied to every unhandled-exception run failure, which made
+an infrastructure failure read as a tool bug. That is now
+`ToolErrorCode.TOOL_RUN_FAILED`, with copy that declines to blame the tool and
+names the run's own error instead.
+
+**Both of this file's original headline findings were wrong in the same
+direction: they blamed the thing in front of the evidence rather than reading
+the evidence.**
+
+## 3. The cost structure — the user's prompt is 15 tokens, the tool schemas are 9,759
+
+Per-run context occupancy:
+
+```
+declared = 14,627      UNDECLARED = 8,312
+
+    9,759  tools        ← 67% of declared
+    4,853  system       (entirely undeclared)
+       15  messages     ← the actual user prompt
+
+top tool schemas
+    1,381  publish_artifact
+    1,223  stage_rowset_write
+      722  revise_artifact
+      667  ask_a_question
+      600  run_tool_program     ← added by this program; nothing has ever called it
+```
+
+## 4. …but 97% of it is cache reads, so tokens ≠ cost
+
+Applying the standard cache multipliers (fresh 1.0x, cache read 0.1x, cache
+write 1.25x):
+
+| run      | in     | cached | out | full-price-equivalent |
+| -------- | ------ | ------ | --- | --------------------- |
+| 1 (cold) | 23,181 | 0      | 5   | **23,181**            |
+| 2        | 23,253 | 23,094 | 99  | 2,468                 |
+| 3        | 24,221 | 23,337 | 176 | 3,218                 |
+| 4        | 24,615 | 23,714 | 105 | 3,272                 |
+
+```
+raw tokens billed-as-listed : 95,655
+full-price-equivalent       : 32,525   (34% of raw)
+```
+
+**The cold run alone is 71% of the total cost of all four.** The fixed ~23k
+prompt is nearly free when warm and full price on every cold start.
+
+**The decision this forces:** prompt-trimming pays off strictly in proportion to
+cold-start frequency. For a continuously-used session it is close to worthless;
+for a bursty desktop user — open the app, ask one thing, close it — nearly every
+run is a cold start and the 23k is paid in full each time. Anything that shrinks
+the _cold_ prompt is the lever; anything that only helps warm runs is not.
+
+Unmeasured and worth measuring next: what fraction of real runs hit a cold cache.
+
+## Method notes — two instrument failures, both worth not repeating
+
+1. The first scorer counted `usage.recorded` events off the events API and
+   returned **0 tokens for every task**. A broken instrument reporting zero is
+   indistinguishable from a genuinely cheap run. Scoring now reads the run store
+   directly, and `rescore.py` is offline, so fixing a measurement never costs
+   another paid run.
+2. The first scorer's round count was a **lower bound that could not observe the
+   failure mode under test** (finding 1). A proxy metric must be checked against
+   the thing it proxies before any conclusion rests on it — especially a
+   negative conclusion, which is the kind that stops further investigation.
+
+`tool_rounds` still counts COMPLETED tool invocations and is still a lower bound
+on super-step spend. It is retained as a rough cost signal only; the ceiling
+question is now answered by `terminal_code`.
+
+## 5. The four short prompts cannot reach most of the remaining claims
+
+`recursion_ceiling_ab.py`'s tasks peak at **3 completed tool rounds** (4 distinct
+invocations, one of which never ran — see below). That is enough to trip a
+ceiling of 25 and nothing else. Rescoring both arms with the extended scorer says
+how far short they fall:
+
+```
+peak COMPLETED tool rounds in any task: 3      (4 invocations)
+peak ESTIMATED super-steps in any task: 22     (fit: 6 + 4/round, ceiling 25)
+peak tool result entering context:      122 tokens   (the cap is 8,192)
+delegated rounds, in any task:          0
+peak parallel tool calls, in any task:  1
+MCP tool names with an mcp__ prefix:    0
+```
+
+The super-step estimate is the useful one: `t3-todo-driven` sat at **22 of its
+25**, and the next round's four steps would have taken it past — which is what
+the ceiling did. That is a metric agreeing with a known ground truth, not a
+prediction, and it is the reason the fit is worth carrying.
+
+So **delegation, parallel execution, the tool-result cap and MCP namespacing are
+all still unmeasured** — not because they failed, but because nothing in the set
+touches them. `heavy_tasks_ab.py` is the task set built to reach them: seven
+tasks, five of which need no folder grant and no connector, each declaring what
+it needs from the machine, what it plans to spend per tool _name_, and a regex
+its final answer must match. `--plan` prints all of that for free.
+
+Two design constraints came out of reading the runtime rather than guessing:
+
+- `execution.tool_call_budget` is **10 calls of one tool name per run**. A task
+  planning more measures the budget cutting the chain off, which looks identical
+  from outside to a ceiling stop. Every task declares `planned_calls` and a gate
+  test fails on any plan that reaches the budget.
+- A grant-free task must address `/memories/`, not a host-absolute path
+  (refused without a grant), and must never ask for `grep`/`glob` there —
+  `FileMemoryBackend` answers both with an **empty result, not an error**, which
+  is the same green-tick-over-nothing shape as the original `ls ~/Downloads`
+  defect.
+
+### The scorer re-derived finding 2 without being told it
+
+`reconciled_rounds` counts invocations that reached a terminal row carrying an
+**empty `result_summary`** — closed by the blanket handler rather than by
+running. Pointed at the arm-25 store it names `write_todos` in `t3-todo-driven`
+unprompted, which is exactly the mis-stamped innocent of §2. `orphaned_rounds`
+does **not** see that case, and that is worth stating plainly: the reconciler
+leaves no open row behind, so "count the calls that never closed" finds zero.
+Two metrics, two different blind spots, and neither is a substitute for the
+other. Every column in `rescore.py` now carries its blind spot in the header.
+
+### The heavy set has NOT been run yet, and that is a statement about this box
+
+It is structurally validated — `--plan`, 19 offline gate tests, and a mutation
+check confirming each design test fails on the defect it names and only that one
+— but no arm has been driven against a model. The reason is worth recording
+because it will be the next person's reason too:
+
+```
+apps/desktop/resources/runtime/darwin-arm64/services/ai-backend/src   Aug 10 19:50
+newest commit touching services/ai-backend/src                       Aug 14 13:17
+```
+
+**The only staged runtime on this machine is four days behind the tree.** Per
+[the journeys README §1b](../desktop-journeys/README.md) it would run old backend
+code and report its verdict with total confidence — and specifically it predates
+the `TOOL_RUN_FAILED` fix that finding 2 above produced, so it would measure the
+error taxonomy this file has already corrected.
+
+Re-stage first, then validate for the price of one task, then pay for the arms:
+
+```bash
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
+npm run build --workspace @0x-copilot/desktop
+
+BENCH_ARM=500 HEAVY_TASKS=h1-corpus python tools/harness-bench/heavy_tasks_ab.py
+BENCH_ARM=25  python tools/harness-bench/heavy_tasks_ab.py     # own process
+BENCH_ARM=500 python tools/harness-bench/heavy_tasks_ab.py     # own process
+python tools/harness-bench/rescore.py heavy-arm-25 heavy-arm-500
+```
+
+Each arm runs in its OWN process: the arms share nothing, and the ceiling is read
+once per service start.
+
+What the heavy tasks should be expected to cost, so a surprise is legible: about
+**45-60 model calls per arm**, ~1.2M listed input tokens, ~10k output, ~150k
+full-price-equivalent, 5-8 minutes — a bit under $1 an arm at Sonnet-class list
+prices, and about 15x the recursion set. A number far from that is itself the
+finding: far below means the model batched work the prompts asked it to serialise
+(read `peak_parallel`), far above means something is looping (read `budget_notes`
+and `terminal_code` before concluding anything about the ceiling).
+
+## 6. The cold-prompt trajectory, measured at each step
+
+Same four tasks, same model, same stage discipline (re-staged from the tree
+under test before every run). Cold prompt is run 1's input, which is the one
+paid at full price.
+
+| build                                   | cold prompt | tools segment | 4-task total | completion |
+| --------------------------------------- | ----------- | ------------- | ------------ | ---------- |
+| baseline (harness program as merged)    | 23,181      | 9,759         | 95,655       | 3/4 @ 25   |
+| + `run_tool_program` gated, attribution | 22,304      | 9,159         | 91,098       | 4/4        |
+| + first-party tool disclosure           | **20,547**  | **7,910**     | **83,662**   | 4/4        |
+
+**Cumulative: −2,634 cold tokens (−11.4%), −11,993 total (−12.5%), completion
+3/4 → 4/4.**
+
+The disclosure step was predicted at −1,326 and measured **−1,757** — it beat its
+own estimate, because deferring prose also shrank text the estimate attributed
+elsewhere. Predictions here are worth recording precisely so they can be scored;
+this one was conservative.
+
+What remains resident and what it costs: `write_todos` 997 (third-party,
+LangChain middleware), `stage_rowset_write` 900, `publish_artifact` 805,
+`ask_a_question` 667 (deliberately resident — it is reached while a human
+waits), `grep` 539 (deepagents). The named next lever is **lossless JSON-schema
+slimming**: pydantic emits a `"title"` for every field, ~15–20% of every args
+schema with zero semantic loss, applying to third-party tools too and requiring
+no model behaviour change at all.

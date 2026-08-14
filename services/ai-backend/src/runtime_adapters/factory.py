@@ -30,6 +30,7 @@ from agent_runtime.artifacts.ports import (
     ArtifactGarbageCollectorPort,
     ArtifactMetadataStorePort,
 )
+from agent_runtime.capabilities.desktop.write_journal import HostWriteJournalPort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.harness_quality.ports import (
@@ -148,6 +149,9 @@ def build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
     )
     layout = file_store.layout
     from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
+    from runtime_adapters.file.host_write_journal_store import (
+        FileHostWriteJournalStore,
+    )
 
     evaluation_repository = FileEvaluationRepository(
         layout,
@@ -229,6 +233,13 @@ def build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         artifact_quarantine_reaper=bundle.quarantine_reaper if bundle else None,
         artifact_lifecycle_jobs=bundle.lifecycle_jobs if bundle else None,
         artifact_event_publication=queue if bundle else None,
+        # Same ``layout`` and same ``object_store`` the worker's capture side
+        # opens, so the API reads the very ledger the graph loop wrote. Built
+        # unconditionally on this backend: undo is not a feature flag, and a
+        # store with no records simply lists nothing.
+        host_write_journal_store=FileHostWriteJournalStore(
+            layout, file_store.object_store
+        ),
     )
 
 
@@ -291,6 +302,14 @@ class RuntimePorts:
     artifact_quarantine_reaper: ArtifactQuarantineReaper | None = None
     artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
     artifact_event_publication: RuntimeQueuePort | None = None
+    # The READ + REVERT side of the agent-write undo journal. The worker builds
+    # its own per-run capture journal over the same two primitives (see
+    # ``FileStoreWorkerWiring.host_write_journal``); this is the API process's
+    # handle on the same ledger, and the reason the ``/host-writes`` routes can
+    # answer at all. ``None`` on every backend without an object store — the
+    # routes then 503, which is the honest answer when nothing was ever
+    # captured.
+    host_write_journal_store: HostWriteJournalPort | None = None
 
     def __post_init__(self) -> None:
         """Fail during composition instead of serving an enabled 503."""

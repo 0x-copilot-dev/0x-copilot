@@ -25,7 +25,6 @@
 # Format: one dotted module path per line, sorted.
 agent_runtime.capabilities.mcp.credentials.backend
 agent_runtime.capabilities.workspace.patch_plan
-agent_runtime.delegation.subagents.coordination
 agent_runtime.harness_quality.golden_traces
 agent_runtime.harness_quality.operational_corpus
 agent_runtime.observability.context_origin_conformance

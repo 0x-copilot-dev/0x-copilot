@@ -13,6 +13,7 @@ from agent_runtime.execution.contracts import (
     JsonObject,
     RuntimeContract,
 )
+from agent_runtime.execution.run_steering import SteeringMessage
 from agent_runtime.surfaces_v2.ledger_models import (
     LedgerEventType,
     WorkLedgerVocabulary,
@@ -52,6 +53,35 @@ class RuntimeCancelCommand(RuntimeContract):
     reason: str | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeSteerCommand(RuntimeContract):
+    """Durable command delivering one user steer into a run already in flight.
+
+    Deliberately the same shape as :class:`RuntimeCancelCommand`: both are
+    out-of-band control over a run whose executing task nothing in the request
+    path can reach. The worker claims it above the execution semaphore for the
+    same reason a cancel is claimed there — the moment steering matters most is
+    the moment every execution slot is busy.
+
+    Carrying the message body is what makes this NOT a cancel: the handler has
+    nothing to look up, so a steer can be delivered by any process that happens
+    to be executing the run, with no second read to disagree with.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    run_id: str
+    org_id: str
+    requested_by_user_id: str
+    steer: SteeringMessage
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _steer_author_matches_requester(self) -> "RuntimeSteerCommand":
+        if self.steer.requested_by_user_id != self.requested_by_user_id:
+            raise ValueError("steer author must match the command requester")
+        return self
 
 
 class RuntimeStageCommitCommand(RuntimeContract):
@@ -228,5 +258,13 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     # distinguish "expired" from "recipient_membership_revoked" without
     # parsing free-text fields.
     reason: str | None = None
+    # ``once`` / ``always`` — how far the approval reaches. Carried verbatim
+    # from ``ApprovalDecisionRequest.decision_scope`` (which already validated it
+    # is approve-only) and threaded into the LangGraph resume value, where the
+    # policy lane that raised the gate turns ``always`` into a run-scoped rule.
+    # Typed as a plain string here, not the Literal: this is the durable queue
+    # contract, and a command written by an older API must still deserialize.
+    # ``DecisionScope.from_wire`` fails closed to ``once`` at the reading end.
+    decision_scope: str | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

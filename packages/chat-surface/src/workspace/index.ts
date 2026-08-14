@@ -30,6 +30,9 @@ export { SourcesV2Tab, type SourcesV2TabProps } from "./SourcesV2Tab";
 export { AgentsTab, type AgentsTabProps } from "./AgentsTab";
 export { DraftTab, type DraftTabProps } from "./DraftTab";
 export { ApprovalsTab, type ApprovalsTabProps } from "./ApprovalsTab";
+// The Changes tab body — what this run wrote to the user's real disk, and the
+// per-tool-call undo. The counterpart to Sources, which is what it read.
+export { HostWritesTab, type HostWritesTabProps } from "./HostWritesTab";
 export { SkillsTab, type SkillsTabProps } from "./SkillsTab";
 // Surfaces v2 (PRD-E2) — cross-run pending queue + fleet list.
 export { PendingCardList, type PendingCardListProps } from "./PendingCardList";

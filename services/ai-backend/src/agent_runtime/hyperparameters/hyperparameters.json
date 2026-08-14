@@ -13,6 +13,9 @@
     "index_summary_max_bytes": 96,
     "index_summary_min_bytes": 24
   },
+  "tool_surface": {
+    "artifact_family": "always"
+  },
   "reads": {
     "default_line_limit": 2000,
     "offloaded_result_line_limit": 20000
@@ -21,6 +24,14 @@
     "max_attempts": 3,
     "initial_backoff_seconds": 0.5,
     "max_backoff_seconds": 4.0
+  },
+  "model_retry": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 2.0,
+    "backoff_factor": 2.0,
+    "jitter_factor": 0.25,
+    "max_backoff_seconds": 30.0,
+    "provider_hint_max_seconds": 30.0
   },
   "execution": {
     "max_retries": 2,
@@ -32,11 +43,14 @@
     "delta_coalesce_window_ms": 0,
     "delta_coalesce_max_chunks": 64,
     "worker_poll_interval_seconds": 1.0,
-    "worker_lock_seconds": 60
+    "worker_lock_seconds": 60,
+    "recursion_limit": 500,
+    "run_deadline_seconds": 1800.0
   },
   "subagents": {
     "timeout_seconds": 120,
-    "concurrency_limit": 2
+    "concurrency_limit": 2,
+    "max_delegation_depth": 1
   },
   "context": {
     "max_input_tokens": 128000,
@@ -62,5 +76,13 @@
     "window_chars": 1200,
     "lead_chars": 900,
     "min_window_chars": 200
+  },
+  "tool_program": {
+    "enabled": false,
+    "max_steps": 16,
+    "max_concurrency": 4,
+    "wall_clock_seconds": 120.0,
+    "max_total_output_bytes": 262144,
+    "max_result_bytes": 65536
   }
 }

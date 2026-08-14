@@ -64,6 +64,7 @@ from agent_runtime.capabilities.mcp.per_tool_registration import (
     McpPerToolRegistration,
 )
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.policy.contracts import (
     Action,
     CapabilityDescriptor,
@@ -98,8 +99,16 @@ from tests.unit.fakes import (
 
 _SERVER = "linear"
 _SERVER_ID = "srv_linear"
+#: The CONNECTOR register — what the fake server advertises, and therefore what
+#: the capability URN, the action catalog and the error envelope are keyed on.
 _READ_TOOL = "get_issues"
 _WRITE_TOOL = "create_issue"
+#: The MODEL-SURFACE register — what the tool is actually registered as, so two
+#: connectors exposing one name can coexist. This is the name the composed tool
+#: list carries, the name LangGraph matches an interrupt declaration against,
+#: and the key the published ``tool_name -> server_slug`` resolver answers to.
+_READ_REGISTERED = McpToolName.compose(server=_SERVER, tool=_READ_TOOL)
+_WRITE_REGISTERED = McpToolName.compose(server=_SERVER, tool=_WRITE_TOOL)
 
 
 class StubMcpTool(BaseTool):
@@ -458,7 +467,7 @@ class TestTheFlipDeclines(PerToolFixtureMixin):
 class TestPerToolRegistration(PerToolFixtureMixin):
     async def test_one_wrapped_tool_per_discovered_mcp_tool(self) -> None:
         registration = await self.build([self.read_tool(), self.write_tool()])
-        assert self.names(registration) == (_READ_TOOL, _WRITE_TOOL)
+        assert self.names(registration) == (_READ_REGISTERED, _WRITE_REGISTERED)
         assert registration is not None
         # The umbrella name is gone: the payload-decoding gateway has no place
         # in a surface where every tool IS its own capability.
@@ -467,8 +476,8 @@ class TestPerToolRegistration(PerToolFixtureMixin):
     async def test_the_connector_resolver_maps_every_registered_name(self) -> None:
         registration = await self.build([self.read_tool(), self.write_tool()])
         assert registration is not None
-        assert registration.resolver.server_for(_READ_TOOL) == _SERVER
-        assert registration.resolver.server_for(_WRITE_TOOL) == _SERVER
+        assert registration.resolver.server_for(_READ_REGISTERED) == _SERVER
+        assert registration.resolver.server_for(_WRITE_REGISTERED) == _SERVER
         # A native step is not an MCP call and must not acquire connector
         # identity from a name that merely looks connector-shaped.
         assert registration.resolver.server_for("notion_search") is None
@@ -482,7 +491,7 @@ class TestPerToolRegistration(PerToolFixtureMixin):
     async def test_the_wrapped_tool_keeps_the_raw_tool_surface(self) -> None:
         inner = self.read_tool()
         registration = await self.build([inner])
-        wrapped = self.tool_named(registration, _READ_TOOL)
+        wrapped = self.tool_named(registration, _READ_REGISTERED)
         assert wrapped.description == inner.description
         assert wrapped.args_schema is inner.args_schema
         assert wrapped.response_format == inner.response_format
@@ -490,18 +499,30 @@ class TestPerToolRegistration(PerToolFixtureMixin):
 
 
 class TestReservedNames(PerToolFixtureMixin):
-    async def test_a_connector_cannot_take_a_factory_tool_name(self) -> None:
+    """Shadowing a native tool went from "dropped, typed" to "cannot arise".
+
+    The namespace is what changed it. A connector advertising ``ask_a_question``
+    or ``write_todos`` now registers as ``mcp__linear__…``, occupies no native
+    name, and stays usable — the user keeps a tool they used to lose to a name
+    they never chose. The guard is not gone, only made precise: it still fires
+    for the one collision the prefix cannot separate.
+    """
+
+    async def test_a_factory_tool_name_is_no_longer_reachable_to_shadow(self) -> None:
         registration = await self.build(
             [self.read_tool(name="ask_a_question"), self.write_tool()],
             reserved_names=frozenset({"ask_a_question"}),
         )
-        assert self.names(registration) == (_WRITE_TOOL,)
         assert registration is not None
-        assert [failure.code for failure in registration.failures] == [
-            McpLoadErrorCode.LOCAL_TOOL_COLLISION
-        ]
+        assert self.names(registration) == (
+            McpToolName.compose(server=_SERVER, tool="ask_a_question"),
+            _WRITE_REGISTERED,
+        )
+        assert registration.failures == ()
 
-    async def test_a_connector_cannot_take_a_framework_builtin_name(self) -> None:
+    async def test_a_framework_builtin_name_is_no_longer_reachable_to_shadow(
+        self,
+    ) -> None:
         # ``write_todos`` is registered by LangChain's middleware, not by the
         # factory, so it is absent from the factory's own name set — which is
         # exactly why the registrar adds the framework's names itself.
@@ -510,16 +531,44 @@ class TestReservedNames(PerToolFixtureMixin):
             [self.read_tool(name="write_todos"), self.write_tool()],
             reserved_names=frozenset(),
         )
-        assert self.names(registration) == (_WRITE_TOOL,)
+        assert self.names(registration) == (
+            McpToolName.compose(server=_SERVER, tool="write_todos"),
+            _WRITE_REGISTERED,
+        )
+
+    async def test_a_namespaced_reserved_name_is_still_refused(self) -> None:
+        # What survives: a native tool that itself carries the ``mcp__`` shape
+        # is the one case the prefix cannot separate, so the typed failure — and
+        # the drop — stay exactly as they were.
+        registration = await self.build(
+            [self.read_tool(name="write_todos"), self.write_tool()],
+            reserved_names=frozenset(
+                {_READ_REGISTERED.replace(_READ_TOOL, "write_todos")}
+            ),
+        )
+        assert registration is not None
+        assert self.names(registration) == (_WRITE_REGISTERED,)
+        assert [failure.code for failure in registration.failures] == [
+            McpLoadErrorCode.LOCAL_TOOL_COLLISION
+        ]
 
     async def test_a_shadowed_name_never_enters_the_connector_map(self) -> None:
-        # The provenance half: had it registered, the stream seam would stamp
-        # MCP provenance onto the builtin's own events.
+        # The provenance half, and the reason the namespace is a fix and not a
+        # rename: ``write_todos`` — the BUILTIN's own name — must resolve to no
+        # connector, or the stream seam stamps MCP provenance and access_mode
+        # onto the builtin's events. The connector's tool is still registered,
+        # under its own namespaced name.
         registration = await self.build(
             [self.read_tool(name="write_todos"), self.write_tool()]
         )
         assert registration is not None
         assert registration.resolver.server_for("write_todos") is None
+        assert (
+            registration.resolver.server_for(
+                McpToolName.compose(server=_SERVER, tool="write_todos")
+            )
+            == _SERVER
+        )
 
 
 class TestComposedGateBehaviour(PerToolFixtureMixin):
@@ -532,7 +581,7 @@ class TestComposedGateBehaviour(PerToolFixtureMixin):
         registration = await self.build(
             [inner], context=context, gate=self.gate(interrupt, context)
         )
-        result = await self.tool_named(registration, _READ_TOOL)._arun(team="ENG")
+        result = await self.tool_named(registration, _READ_REGISTERED)._arun(team="ENG")
         assert self.content(result) == "issues"
         assert inner.calls == [{"team": "ENG"}]
         assert interrupt.calls == 0
@@ -544,7 +593,9 @@ class TestComposedGateBehaviour(PerToolFixtureMixin):
         registration = await self.build(
             [inner], context=context, gate=self.gate(interrupt, context)
         )
-        result = await self.tool_named(registration, _WRITE_TOOL)._arun(title="Ship it")
+        result = await self.tool_named(registration, _WRITE_REGISTERED)._arun(
+            title="Ship it"
+        )
         assert interrupt.calls == 1
         assert interrupt.payloads[0]["server_name"] == _SERVER
         assert self.content(result) == "issues"
@@ -557,7 +608,9 @@ class TestComposedGateBehaviour(PerToolFixtureMixin):
         registration = await self.build(
             [inner], context=context, gate=self.gate(interrupt, context)
         )
-        result = await self.tool_named(registration, _WRITE_TOOL)._arun(title="Nope")
+        result = await self.tool_named(registration, _WRITE_REGISTERED)._arun(
+            title="Nope"
+        )
         assert inner.calls == []
         assert self.content(result)["error"]["code"] == (
             McpLoadErrorCode.PERMISSION_DENIED
@@ -566,7 +619,9 @@ class TestComposedGateBehaviour(PerToolFixtureMixin):
     async def test_a_write_fails_closed_without_an_approval_channel(self) -> None:
         inner = self.write_tool()
         registration = await self.build([inner], gate=None)
-        result = await self.tool_named(registration, _WRITE_TOOL)._arun(title="Nope")
+        result = await self.tool_named(registration, _WRITE_REGISTERED)._arun(
+            title="Nope"
+        )
         assert inner.calls == []
         assert self.content(result)["error"]["code"] == (
             McpLoadErrorCode.PERMISSION_DENIED
@@ -587,7 +642,7 @@ class TestConnectorFailureBecomesAResult(PerToolFixtureMixin):
         )
         registration = await self.build([inner])
         payload = self.content(
-            await self.tool_named(registration, _READ_TOOL)._arun(team="ENG")
+            await self.tool_named(registration, _READ_REGISTERED)._arun(team="ENG")
         )
         assert payload["code"] == McpLoadErrorCode.MCP_PROTOCOL_ERROR
         assert payload["retryable"] is False
@@ -604,7 +659,9 @@ class TestConnectorFailureBecomesAResult(PerToolFixtureMixin):
             [inner], context=context, gate=self.gate(interrupt, context)
         )
         payload = self.content(
-            await self.tool_named(registration, _WRITE_TOOL)._arun(title="Ship it")
+            await self.tool_named(registration, _WRITE_REGISTERED)._arun(
+                title="Ship it"
+            )
         )
         assert payload["replay_safe"] is False
         # One attempt only: a write that may already have landed is never sent
@@ -617,7 +674,7 @@ class TestConnectorFailureBecomesAResult(PerToolFixtureMixin):
         inner = self.read_tool(raises=ValueError("a defect, not a connector"))
         registration = await self.build([inner])
         with pytest.raises(ValueError):
-            await self.tool_named(registration, _READ_TOOL)._arun(team="ENG")
+            await self.tool_named(registration, _READ_REGISTERED)._arun(team="ENG")
 
     async def test_the_rendered_result_matches_the_declared_return_shape(
         self,
@@ -627,7 +684,7 @@ class TestConnectorFailureBecomesAResult(PerToolFixtureMixin):
         # reporting on.
         inner = self.read_tool(raises=McpConnectionError("down"))
         registration = await self.build([inner])
-        result = await self.tool_named(registration, _READ_TOOL)._arun(team="ENG")
+        result = await self.tool_named(registration, _READ_REGISTERED)._arun(team="ENG")
         assert isinstance(result, tuple) and result[1] is None
 
     async def test_the_rendered_payload_is_the_errors_own_safe_message(self) -> None:
@@ -637,7 +694,7 @@ class TestConnectorFailureBecomesAResult(PerToolFixtureMixin):
         inner = self.read_tool(raises=McpConnectionError("internal detail"))
         registration = await self.build([inner])
         payload = self.content(
-            await self.tool_named(registration, _READ_TOOL)._arun(team="ENG")
+            await self.tool_named(registration, _READ_REGISTERED)._arun(team="ENG")
         )
         envelope = McpToolErrorEnvelope(**payload)
         assert str(McpToolCallError(envelope)) == payload["safe_message"]
@@ -695,8 +752,8 @@ class TestDescriptorDrivenInterrupts(PerToolFixtureMixin):
         )
         assert registration is not None
         declared = dict(registration.interrupt_on)
-        assert set(declared) == {_WRITE_TOOL}
-        assert declared[_WRITE_TOOL] == {
+        assert set(declared) == {_WRITE_REGISTERED}
+        assert declared[_WRITE_REGISTERED] == {
             "allowed_decisions": ["approve", "edit", "reject"]
         }
         assert McpValues.ToolName.CALL_MCP_TOOL not in declared
@@ -761,8 +818,8 @@ class TestComposedFactorySurface(PerToolFixtureMixin):
         assert names == (
             "web_search",
             "load_mcp_server",
-            _READ_TOOL,
-            _WRITE_TOOL,
+            _READ_REGISTERED,
+            _WRITE_REGISTERED,
             "auth_mcp",
             "ask_a_question",
             "list_connected_servers",
@@ -788,9 +845,9 @@ class TestComposedFactorySurface(PerToolFixtureMixin):
         # per-tool connector tool has to arrive owned exactly like the umbrella
         # tool it replaced — otherwise the flip silently untracks the whole MCP
         # tool block's resident context cost.
-        assert origins[_READ_TOOL] is not None
-        assert origins[_READ_TOOL].owner == ModelToolOwner.MCP.value
-        assert origins[_READ_TOOL].owner == origins["load_mcp_server"].owner
+        assert origins[_READ_REGISTERED] is not None
+        assert origins[_READ_REGISTERED].owner == ModelToolOwner.MCP.value
+        assert origins[_READ_REGISTERED].owner == origins["load_mcp_server"].owner
 
 
 class TestFactoryWiring(PerToolFixtureMixin):
@@ -857,7 +914,7 @@ class TestFactoryWiring(PerToolFixtureMixin):
         assert len(sink.published) == 1
         run_id, resolver = sink.published[0]
         assert run_id == context.run_id
-        assert resolver.server_for(_READ_TOOL) == _SERVER  # type: ignore[attr-defined]
+        assert resolver.server_for(_READ_REGISTERED) == _SERVER  # type: ignore[attr-defined]
 
     async def test_nothing_is_published_when_the_flip_declines(
         self, monkeypatch: pytest.MonkeyPatch

@@ -1,10 +1,19 @@
-"""The in-process join between a run's executing task and its cancel command.
+"""The in-process join between a run's executing task and commands aimed at it.
 
-Cancellation here is out of band: the API enqueues a command and a worker claims
+Control here is out of band: the API enqueues a command and a worker claims
 it as a claim of its own, so the coroutine that *learns* a run was cancelled is
 never the coroutine *executing* it.  Something has to join those two facts.
 :class:`LiveBatchAdmissionRegistry` already does it for F6 batch work; this does
 it for the run itself, and it is the only thing that can stop a subagent.
+
+Cancel was the first such command and named the module; **steering is the
+second**, and it reuses this registry rather than standing up a sibling.  The
+two need the *same* lifetime — published for exactly as long as this process is
+inside the run's claim — and two registries that must agree on a lifetime is a
+correctness hazard, not merely duplication.  So a registration carries both the
+task a cancel stops and the mailbox a steer waits in
+(:class:`~agent_runtime.execution.run_steering.RunSteeringInbox`); the file name
+is now narrower than its contents, which is the smaller of the two costs.
 
 Subagents are in-process.  The ``task`` tool awaits the child graph inside the
 supervisor's own tool call (``delegation/subagents/atlas_task_tool.py``), so
@@ -43,6 +52,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Final
 
+from agent_runtime.execution.run_steering import RunSteeringInbox
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,10 +67,17 @@ class LiveRunHandle:
     only after the registry has already released the entry.  A shared marker
     would have to outlive the registration to be readable, and anything that
     outlives a registration can be read for the wrong run.
+
+    ``steering`` is on the handle for the mirror-image reason: a mailbox that
+    outlived the registration would accept a steer for a run this process is no
+    longer executing, and that steer would then be delivered to nobody while
+    looking delivered.  Bound to the registration, an unreachable run is a
+    *miss* — which the steer handler already knows how to report honestly.
     """
 
     run_id: str
     task: asyncio.Task[object]
+    steering: RunSteeringInbox
     cancel_requested: bool = False
 
 
@@ -119,9 +137,21 @@ class LiveRunRegistry:
         key = (run_id or "").strip()
         if not key or task is None or len(self._handles) >= self.MAX_TRACKED_RUNS:
             return None
-        handle = LiveRunHandle(run_id=key, task=task)
+        handle = LiveRunHandle(run_id=key, task=task, steering=RunSteeringInbox())
         self._handles[key] = handle
         return handle
+
+    def steering_for(self, run_id: str) -> RunSteeringInbox | None:
+        """Return the mailbox for a run this process is executing, if it is.
+
+        The steer half of the same join ``cancel`` makes below, and it answers
+        with the same honesty: ``None`` when the steer claim landed on a process
+        that is not executing this run, which is the ordinary multi-worker case
+        rather than a fault.
+        """
+
+        handle = self._handles.get((run_id or "").strip())
+        return None if handle is None else handle.steering
 
     def release(self, handle: LiveRunHandle | None) -> None:
         """Withdraw one registration.  Idempotent, and safe on ``None``."""

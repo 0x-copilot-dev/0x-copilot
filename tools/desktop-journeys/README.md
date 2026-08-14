@@ -53,7 +53,7 @@ prints; the exit code is only its aggregate.
 
 | Journey                     | What it covers                                                              |
 | --------------------------- | --------------------------------------------------------------------------- |
-| `first_run.py`              | sign-in, BYOK, model preselect, where the first message lands               |
+| `first_run.py`              | the keyless gate (FR-0, what CI runs), BYOK, preselect, first message       |
 | `transcript_rendering.py`   | rich cards, Focus, thinking, interleaving, timeline, citations              |
 | `composer_and_budgets.py`   | the Tools pill, todo checklist, tool-call limits, run health, context meter |
 | `shell_and_projects.py`     | the fixed window frame, and filing a chat into a project                    |
@@ -229,6 +229,113 @@ caller that legitimately wants to tolerate a skip can match on the code or the
 /opt/homebrew/bin/python3.13 tools/desktop-journeys/artifacts_and_surfaces.py; code=$?
 [ "$code" -eq 0 ] || [ "$code" -eq 3 ] || exit "$code"
 ```
+
+### Running ONE phase — `JOURNEY_PHASES`
+
+```bash
+JOURNEY_PHASES=FR-0 /opt/homebrew/bin/python3.13 tools/desktop-journeys/first_run.py
+JOURNEY_PHASES="TR-1,TR-2" ... # comma or space separated, case-insensitive
+```
+
+Runs exactly the named phases and **drops** the rest — dropped, not recorded as
+skipped, because a skipped phase is deliberately non-zero and a pinned run would
+otherwise be red for every phase you did not ask for. A boot whose group has no
+selected phase is **not booted at all**, so pinning does not pay for initdb +
+migrations + three uvicorns to run nothing.
+
+A pinned id that matches no declared phase exits **`1`**. That is deliberate: the
+alternative is a caller (a CI job, a bisect script) that runs zero phases and
+reports success, which is the exact failure this harness exists to catch.
+
+Use it for a bisect, a bug reproduction, or a single claim. Do **not** use it to
+"just run the last phase" — phases consume each other's state on purpose, so a
+later phase run alone is a different test than the same phase run in order.
+
+### CI runs one phase of `first_run.py` on every PR
+
+`.github/workflows/ci-desktop.yml`, job **`desktop-journey-first-run`**
+(macos-14). Until it existed, `grep -rln 'desktop-journeys' .github/workflows/`
+returned **zero files**: this harness caught regressions nothing else caught, and
+nothing ran it on a PR.
+
+What the job does, and why each part is the way it is:
+
+| Step                      | Why                                                                                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stage.mjs --adhoc-sign`  | Fresh stage from the PR's own tree. §1b — the stage is a **snapshot**; only the CPython/PostgreSQL **downloads** are cached, never the staged tree.              |
+| `npm run build` (desktop) | The driver launches `apps/desktop/out/**`, not the TypeScript sources.                                                                                           |
+| `JOURNEY_PHASES=FR-0`     | **One phase.** Phases share one boot and consume each other's state, so a whole-file per-PR run would fail in a LATER phase with a symptom-shaped message.       |
+| FR-0 specifically         | The only phase needing no provider key and driving no model — PR CI must not require a secret or a live third-party call.                                        |
+| `CTL_PORT=8791`           | 8790 is the default and collides with a leftover driver. The runner is ephemeral and `concurrency:` cancels same-ref runs; the distinct port is belt-and-braces. |
+
+**The fake model is deliberately NOT set.** `RUNTIME_FAKE_MODEL=1` is what
+`desktop-supervised-boot-drill.yml` uses, and it cannot reach the supervised
+ai-backend from here: `buildServiceEnv` starts from `{}` and copies only
+`ENV_PASSTHROUGH_ALLOWLIST` (`apps/desktop/main/services/service-env.ts`), which
+does not contain it — the fail-closed guarantee stated in
+`agent_runtime/execution/fake_model.py`. Setting it in the job would be a no-op
+that reads like coverage. The hermetic run→stream tail therefore stays in the
+boot drill, which boots the same topology as a staging process and can set it.
+
+#### The boot screen is not the app — `BOOT_TIMEOUT_S` covers both
+
+The driver's control server answers as soon as the **first window** exists, and
+the first window is the boot screen (`BootProgress.tsx`, `data-testid=boot-gate`).
+The supervised services behind it are still starting. Measured on a warm
+M-series laptop against an already-staged runtime:
+
+| Moment                                    | Elapsed |
+| ----------------------------------------- | ------- |
+| driver control server answers (window up) | ~9s     |
+| `boot-gate` clears → sign-in gate         | ~110s   |
+
+`sign_in_local` therefore calls `DriverSession.wait_for_app_ready()` first, which
+spends the **`BOOT_TIMEOUT_S`** budget (default 260s) rather than `wait_for`'s 60s
+default. Without it a journey asserts against the boot screen and reports
+`sign-in gate never appeared` — a box timeout wearing a product failure's
+clothes. If you see that message now, the boot screen HAD already cleared and the
+sign-in surface really is the problem.
+
+Two deliberate behaviours: a fatal boot error (`boot-fatal`) fails immediately
+with the app's own message instead of burning the budget, and a timeout names the
+stage it was stuck on ("still Starting the local database"). Raise
+`BOOT_TIMEOUT_S` on a slow box; it can only convert a timeout into a real verdict.
+
+**When it goes red:**
+
+1. Read the **phase table** and the JSON summary at the end of the log, not the
+   exit code alone. `outcome` is one of `passed` / `failed` / `blocked` / `skipped`.
+2. `skipped` (exit `3`) is almost always the box, not the product: the stage step
+   failed or produced an incomplete runtime (`preflight_staged_runtime` names the
+   missing paths).
+3. `failed` with `unmatched_phases` in the JSON means someone renamed `FR-0`
+   without updating `ci-desktop.yml`. `tools/test_desktop_journey_ci.py` normally
+   catches that in `repo-gates` first — if it did not, that test needs the fix too.
+4. `still booting after 420s` is the runner, not the product — see the boot table
+   above. Check the uploaded service logs for the one that never became healthy.
+5. Otherwise download the **`desktop-journey-first-run-evidence`** artifact
+   (uploaded on failure): screenshots per phase, `driver.log` for the Electron
+   main process, and the supervised services' own logs.
+6. Reproduce locally with the exact command the job runs:
+   ```bash
+   node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
+   npm run build --workspace @0x-copilot/desktop
+   JOURNEY_PHASES=FR-0 COPILOT_HOME="$PWD/apps/desktop/resources" \
+     python3 tools/desktop-journeys/first_run.py
+   ```
+   From a worktree with no `node_modules` and no desktop build, point `APP_DIR`
+   at a checkout that has both — the journey code is still yours, only the app
+   under test is borrowed:
+   ```bash
+   APP_DIR=/path/to/main/apps/desktop COPILOT_HOME=/path/to/main/apps/desktop/resources \
+   JOURNEY_PHASES=FR-0 /opt/homebrew/bin/python3.13 tools/desktop-journeys/first_run.py
+   ```
+
+It is **not** a required status check. A new e2e gate needs a few runs of
+observed stability first, and requiring it would also mean making it
+unconditional (see the `ci-gates.yml` header on why a required check must never
+be path-filtered) — this job is path-filtered and macOS-billed, so that is a
+separate, deliberate decision.
 
 ### Verifying the globally installed npm payload
 

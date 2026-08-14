@@ -34,7 +34,10 @@ from agent_runtime.control_plane.context import (
 )
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
-from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
+from agent_runtime.context.tool_result_admission import (
+    ToolResultAdmissionAdapter,
+    ToolResultCap,
+)
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.call_identity import RuntimeCallContext
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
@@ -327,15 +330,24 @@ class ToolBudgetGuard:
     def admit_tool_result(self, result: object, *, call_id: str) -> object:
         """Bound one successful result before LangChain creates a ToolMessage.
 
-        The adapter is optional so existing runtime configurations preserve
-        their exact return types and bytes.  Once configured, its failure is
-        intentionally allowed to propagate: returning the raw result after an
-        offload failure would violate the model-admission boundary.
+        The adapter is optional because *offloading* is: it needs an object
+        store to move the bytes into, and only the desktop file backend has
+        one. Its absence used to mean the result was admitted raw, so the same
+        5 MB MCP read that the desktop reduced to a 4 KiB stub entered model
+        context whole on web, postgres and in-memory. The bound is not optional
+        — :class:`ToolResultCap` applies the adapter's own threshold and
+        ceiling without a store, keeping a head of the result and telling the
+        model in the message how much went missing and what to do about it.
+
+        Once the adapter *is* configured, its failure is intentionally allowed
+        to propagate rather than falling back to the cap: an offload failure on
+        a backend that promised read-back is a broken promise, and answering it
+        by silently discarding bytes would hide that.
         """
 
         adapter = self._tool_result_admission
         if adapter is None:
-            return result
+            return ToolResultCap.apply(result)
         return adapter.admit(
             result,
             trace_id=call_id,

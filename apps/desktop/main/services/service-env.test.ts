@@ -170,6 +170,33 @@ describe("buildServiceEnv(backend)", () => {
     expect(env.OTEL_SDK_DISABLED).toBe("true");
   });
 
+  it("forwards a COPILOT_HP__ hyperparameter override to the service", () => {
+    // The step ceiling was configurable in settings.py and unreachable in the
+    // packaged app: the allowlist is exact-name and this family is generated.
+    // A live journey phase could not provoke the ceiling for exactly this
+    // reason, while every unit test built settings directly and never crossed
+    // this boundary.
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({ COPILOT_HP__EXECUTION__RECURSION_LIMIT: "40" }),
+    );
+    expect(env.COPILOT_HP__EXECUTION__RECURSION_LIMIT).toBe("40");
+  });
+
+  it("forwards only the COPILOT_HP__ family, not arbitrary host env", () => {
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({
+        COPILOT_HP__EXECUTION__RUN_DEADLINE_SECONDS: "900",
+        AWS_SECRET_ACCESS_KEY: "must-not-cross",
+        COPILOT_NOT_HP: "must-not-cross",
+      }),
+    );
+    expect(env.COPILOT_HP__EXECUTION__RUN_DEADLINE_SECONDS).toBe("900");
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.COPILOT_NOT_HP).toBeUndefined();
+  });
+
   it("passes GOOGLE_OAUTH_CLIENT_ID through when set", () => {
     const env = buildServiceEnv(
       "backend",

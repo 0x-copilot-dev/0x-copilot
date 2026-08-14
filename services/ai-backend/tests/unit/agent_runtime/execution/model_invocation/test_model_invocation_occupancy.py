@@ -946,7 +946,19 @@ class TestTheSeamIsUnchanged(OccupancyMiddlewareMixin):
         recorder = ExplodingRecorder()
         await self.middleware(recorder).awrap_model_call(request, capturing)
 
-        assert seen == [request]
+        # Every field except ``model`` is handed through untouched, and the
+        # recorder never fires. ``model`` is compared apart because a DIFFERENT,
+        # always-on feature binds ``_ProviderLifecycleCallback`` to it for the
+        # model-call retry policy — that binding is not this middleware
+        # measuring anything, and asserting whole-request equality would make
+        # this test fail for a feature it does not describe.
+        assert len(seen) == 1
+        handed = seen[0]
+        assert handed.messages == request.messages
+        assert handed.system_message == request.system_message
+        assert handed.tools == request.tools
+        assert handed.tool_choice == request.tool_choice
+        assert handed.state == request.state
         assert recorder.calls == []
 
     def test_the_default_recorder_is_shared_across_middleware_instances(self) -> None:

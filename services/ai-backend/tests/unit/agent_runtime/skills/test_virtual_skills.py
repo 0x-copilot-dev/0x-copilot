@@ -64,6 +64,33 @@ def test_load_skill_tool_returns_markdown_from_virtual_registry() -> None:
     assert provider.load_calls == 1
 
 
+def test_a_card_parsed_from_the_backend_payload_keeps_its_metadata() -> None:
+    """The runtime side of the conditional-visibility wire.
+
+    Cards arrive as JSON from ``/internal/v1/skills/cards`` and are validated,
+    not constructed field by field — so an undeclared ``metadata`` field would
+    be dropped here silently and every conditional Skill would quietly become
+    unconditional. The declaration is what the visibility predicate reads, and
+    this is the only place its survival across the wire is asserted.
+    """
+
+    card = VirtualSkillCard.model_validate(
+        {
+            "skill_id": "skill_123",
+            "name": "linear_triage",
+            "display_name": "Linear Triage",
+            "description": "Triage a Linear backlog.",
+            "virtual_path": "/skills/org/org_123/user/user_123/linear_triage/SKILL.md",
+            "scope": "user",
+            "source_type": "user",
+            "version": 1,
+            "metadata": {"requires_connectors": "linear"},
+        }
+    )
+
+    assert card.metadata == {"requires_connectors": "linear"}
+
+
 def test_backend_skill_service_auth_includes_trusted_scope_headers(
     monkeypatch,
     runtime_context_admin: AgentRuntimeContext,

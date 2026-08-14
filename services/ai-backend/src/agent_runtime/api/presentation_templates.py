@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping
 from string import Formatter
 
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from runtime_api.schemas import RuntimeApiEventType
 
@@ -106,6 +107,14 @@ class _ErrorMessage:
         "Step interrupted",
         "0xCopilot lost track of this step and stopped it.",
     )
+    # Says what happened to the STEP and then declines to blame the tool. The
+    # old copy for this case was TOOL_EXCEPTION's — "the tool reported an error
+    # and didn't return a result" — which is an assertion about the tool, and a
+    # false one: the tool reported nothing because the run ended underneath it.
+    TOOL_RUN_FAILED = (
+        "Step interrupted",
+        "The run stopped before this step finished; the tool itself reported no error.",
+    )
     TOOL_CANCELLED = (
         "Step cancelled",
         "This step was cancelled before it could finish.",
@@ -152,11 +161,15 @@ class _ErrorRetryability:
     #: and TOOL_CANCELLED was the user's own decision — re-running is a new
     #: instruction, not a retry. The two refusal codes are the same story at
     #: the tool gate: the cap holds for the rest of the run, and a duplicate
-    #: dispatch needs a revised plan rather than another attempt.
+    #: dispatch needs a revised plan rather than another attempt. TOOL_RUN_FAILED
+    #: sits here rather than beside its TOOL_RUN_* siblings because retrying the
+    #: STEP is meaningless: whether anything can change is a property of the
+    #: run's failure, which the ``run_failed`` event reports under its own code.
     _NOT_RETRYABLE = frozenset(
         {
             "PERMISSION_DENIED",
             "TOOL_CANCELLED",
+            "TOOL_RUN_FAILED",
             "WORKSPACE_UNAVAILABLE",
             "WORKSPACE_NO_GRANTS",
             "WORKSPACE_PERMISSION_DENIED",
@@ -184,7 +197,10 @@ class _Identifier:
     def humanize(cls, value: object) -> str | None:
         if not isinstance(value, str):
             return None
-        text = value.strip()
+        # Model-surface MCP names (``mcp__linear__list_issues``) drop to their
+        # connector-register tail first; the connector is displayed on its own
+        # field, so keeping it here would say it twice. No-op for native names.
+        text = McpToolName.strip(value)
         if not text:
             return None
         lowered = text.lower()

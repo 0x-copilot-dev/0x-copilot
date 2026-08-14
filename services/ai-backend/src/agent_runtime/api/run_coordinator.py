@@ -1,6 +1,6 @@
 """Run lifecycle coordinator — API-side source of truth for run-state transitions.
 
-Owns ``create_run`` and ``cancel_run``. The runtime worker uses persistence ports
+Owns ``create_run``, ``cancel_run`` and ``steer_run``. The runtime worker uses persistence ports
 directly and never depends on this coordinator, keeping the worker path free of
 API-layer concerns.
 """
@@ -45,10 +45,12 @@ from agent_runtime.execution.filesystem_bypass import (
     filesystem_bypass_offered,
 )
 from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
+from agent_runtime.execution.run_steering import SteeringMessage
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    ACTIVE_RUN_STATUSES,
     AgentRunStatus,
     CancelRunRequest,
     CancelRunResponse,
@@ -59,7 +61,11 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeCancelCommand,
     RuntimeRunCommand,
+    RuntimeSteerCommand,
     RunRecord,
+    SteerNotePayload,
+    SteerRunRequest,
+    SteerRunResponse,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -363,6 +369,100 @@ class RunCoordinator:
             status=run.status,
             cancel_requested_at=datetime.now(timezone.utc),
             latest_sequence_no=run.latest_sequence_no,
+        )
+
+    async def steer_run(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        request: SteerRunRequest,
+    ) -> SteerRunResponse:
+        """Record a user's mid-run interjection and enqueue it for delivery.
+
+        Unlike :meth:`cancel_run` this is **not** idempotent-on-terminal. A
+        cancel against a finished run is a no-op that already got what it asked
+        for; a steer against a finished run is a message that will never be
+        read, and answering ``200`` would tell the user their words landed when
+        the run they were aimed at was already over. It raises instead.
+
+        Ordering here is the causal-prefix seal, applied rather than restated
+        (:mod:`agent_runtime.api.ledger_seal`). The transcript event is appended
+        *before* the queue command, under the non-terminal check above it, so
+        the steer lands inside ``[1..N]`` and a live client sees it on the open
+        stream. Appended after the enqueue it would race the worker's terminal
+        event and could become a durable row no stream ever delivers.
+
+        Nothing here touches run status. A steer is context, not a state
+        transition: the run stays ``running`` and its own path stays in charge
+        of when it ends.
+        """
+
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        if request.requested_by_user_id != user_id:
+            raise RuntimeApiError(
+                RuntimeErrorCode.PERMISSION_DENIED,
+                "Steering requester does not match run user.",
+                http_status=status.HTTP_403_FORBIDDEN,
+                retryable=False,
+                correlation_id=run.trace_id,
+            )
+        if run.status not in ACTIVE_RUN_STATUSES:
+            # ``ACTIVE_RUN_STATUSES`` rather than ``TERMINAL_RUN_STATUSES``
+            # because they are not complements: ``CANCELLING`` is in neither
+            # set's opposite, and steering a run on its way out is pointless in
+            # exactly the way steering a finished one is.
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.RUN_NOT_STEERABLE,
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+                correlation_id=run.trace_id,
+            )
+        steer = SteeringMessage(
+            text=request.text,
+            requested_by_user_id=request.requested_by_user_id,
+        )
+        note = await self._event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.RUN_STEERED,
+            payload=SteerNotePayload(steer=steer).model_dump(mode="json"),
+            summary=Messages.Event.RUN_STEERED,
+        )
+        await self._queue.enqueue_steer(
+            RuntimeSteerCommand(
+                run_id=run.run_id,
+                org_id=run.org_id,
+                requested_by_user_id=request.requested_by_user_id,
+                steer=steer,
+                trace_propagation=QueueTracePropagator.inject(),
+            )
+        )
+        await self._persistence.write_audit_log(
+            event_type="run_steer_requested",
+            record={
+                "org_id": run.org_id,
+                "user_id": run.user_id,
+                "resource_type": "run",
+                "resource_id": run.run_id,
+                "run_id": run.run_id,
+                "trace_id": run.trace_id,
+                "outcome": "success",
+                # The steer TEXT is deliberately absent. It is user content, it
+                # is already durable in the run's own ledger, and the audit
+                # stream is exported to customer SIEM — this row records that a
+                # steer happened and which one, not what the user typed.
+                "metadata": {"steer_id": steer.steer_id},
+            },
+        )
+        return SteerRunResponse(
+            run_id=run.run_id,
+            status=run.status,
+            steer_id=steer.steer_id,
+            sequence_no=note.sequence_no,
+            accepted_at=steer.created_at,
         )
 
     # ------------------------------------------------------------------
@@ -688,6 +788,7 @@ class RunCoordinator:
             suggested_connectors=suggested_connectors,
             model_profile=model_config,
             max_parallel_tasks=self._settings.execution.max_parallel_tasks,
+            recursion_limit=self._settings.execution.recursion_limit,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
             # Coalesce the tri-state per-turn flag: an unset flag (no per-turn

@@ -2,9 +2,9 @@
 """first-run — sign-in, BYOK, model preselect, and where the first message lands.
 
 One boot, keyed with ONE provider, walked in the order a new user meets it. The
-phases are ordered because the state is cumulative: FR-2 spends the virgin FTUE,
-FR-5 binds a run, and FR-6 needs a bound run to prove New-chat leaves it. They
-cannot be reordered, only removed.
+phases are ordered because the state is cumulative: FR-0 spends the KEYLESS
+gate, FR-2 spends the virgin FTUE, FR-5 binds a run, and FR-6 needs a bound run
+to prove New-chat leaves it. They cannot be reordered, only removed.
 
 The whole group is deliberately keyed with **Anthropic only**. That is not an
 arbitrary provider choice — it is the fixture. An Anthropic-only profile is what
@@ -16,6 +16,12 @@ pretend.
 
     python3 tools/desktop-journeys/first_run.py
     python3 tools/desktop-journeys/first_run.py openai   # FR-3/4/5 skip
+    JOURNEY_PHASES=FR-0 python3 tools/desktop-journeys/first_run.py   # what CI runs
+
+FR-0 is the only phase that needs no provider key and drives no model, which is
+what makes it the one a per-PR CI job can run hermetically — see
+`.github/workflows/ci-desktop.yml` (job `desktop-journey-first-run`) and the CI
+section of README.md. Every other phase needs a real key.
 
 Folds in: provider-key-byok/byok_first_run, chat-nav-model/{model_preselect,
 ftue_first_message, new_chat}.
@@ -31,8 +37,11 @@ import sys
 import time
 
 from _lib import (
+    SECRET_ENVIRONMENT_NAMES,
     DriverSession,
     JourneyPlan,
+    Phase,
+    PhaseSkipped,
     load_env_key,
     load_env_value,
     require,
@@ -124,26 +133,93 @@ def _anthropic_only(reason: str) -> None:
     require(PROVIDER == "anthropic", f"{reason} (provider pinned to {PROVIDER!r})")
 
 
-# ── setup: the gate every phase below depends on ─────────────────────────────
-def sign_in_and_key(s: DriverSession) -> None:
-    key = load_env_key(PROVIDER)  # value never printed
-    print(f"[first-run] provider={PROVIDER} key_len={len(key)} (value withheld)")
+#: What an earlier phase established, for the later ones that consume it.
+#: README rule 2: a dependent phase declares what it needs, so a missing
+#: predecessor SKIPS instead of failing with a confusing error.
+STATE: dict[str, object] = {}
+
+
+def _needs_key() -> None:
+    require(STATE.get("keyed"), "FR-1 did not add a BYOK key")
+
+
+# ── setup: sign in, and stop at the keyless gate ─────────────────────────────
+def sign_in(s: DriverSession) -> None:
+    """Sign in locally and land on the BYOK gate. Deliberately KEYLESS.
+
+    The key used to be added here, which had two costs. It made every phase in
+    the file unreachable without one — ``load_env_key`` raises ``SystemExit``,
+    ``JourneyPlan`` records that as a setup FAILURE, and the whole group goes
+    red on a machine that simply has no ``.env``, which is a statement about the
+    box wearing a product failure's clothes. And it meant nothing in the file
+    ever asserted the keyless state a new user actually meets — the only state
+    reachable with no secrets at all. Adding the key is FR-1's job now.
+    """
+
     s.sign_in_local()
     s.shot("sign-in-gate")
-    s.ftue_add_key(PROVIDER, key)  # asserts first-run-composer appears
+    assert s.wait_for("[data-testid=first-run-add-key]"), "FTUE key card never appeared"
 
 
 # ── phases ───────────────────────────────────────────────────────────────────
-def fr1_state_b_composer(s: DriverSession) -> None:
-    """The key connect reveals the State-B composer."""
+def fr0_keyless_run_stops_at_the_gate(s: DriverSession) -> None:
+    """A fresh install with NO key: the BYOK gate, and a catalog admitting nothing works.
 
+    The only phase here that needs no provider key and drives no model, so it is
+    the one a per-PR CI job can run against the real supervised stack without a
+    secret or a live third-party call. It still exercises the whole expensive
+    part: embedded Postgres initdb + migrations, all three Python services under
+    the production posture, the real local sign-in, the renderer shell, and an
+    authenticated facade round trip made THROUGH the app.
+
+    It is also the half that makes FR-2 falsifiable. "Adding a key made the
+    provider configured" asserts nothing unless something first proved the
+    provider was NOT configured.
+    """
+
+    assert s.present("[data-testid=first-run-add-key]"), "FTUE key card not present"
+    assert not s.present("[data-testid=first-run-composer]"), (
+        "the State-B composer is showing before any key was added"
+    )
+    catalog = s.transport("GET", "/v1/agent/models")
+    models = catalog.get("models", [])
+    assert models, "the keyless catalog is empty — the picker would have no rows"
+    configured = sorted({str(m.get("provider")) for m in models if m.get("configured")})
+    assert not configured, (
+        "a provider reports configured=true on a keyless first run: "
+        f"{configured}. `configured` means one thing — a usable credential from "
+        "the deployment env or a stored BYOK key — and this boot has neither. "
+        "(The supervisor forwards OPENAI/ANTHROPIC/GOOGLE_API_KEY from the "
+        "launching shell; main() clears them so this stays falsifiable.)"
+    )
+    STATE["keyless_models"] = len(models)
+    s.shot("keyless-gate")
+    print(f"  {len(models)} models offered, none configured; still at the key gate")
+
+
+def fr1_key_connect_reveals_the_composer(s: DriverSession) -> None:
+    """Adding a BYOK key reveals the State-B composer.
+
+    The key is loaded HERE rather than in setup so a machine without one skips
+    the keyed half instead of failing the file — ``PhaseSkipped`` is precisely
+    "a LOCAL prerequisite is absent (no BYOK key in .env)".
+    """
+
+    try:
+        key = load_env_key(PROVIDER)  # value never printed
+    except SystemExit as exc:
+        raise PhaseSkipped(f"no {PROVIDER} BYOK key on this machine: {exc}") from exc
+    print(f"[first-run] provider={PROVIDER} key_len={len(key)} (value withheld)")
+    s.ftue_add_key(PROVIDER, key)  # asserts first-run-composer appears
     assert s.present("[data-testid=first-run-composer]"), "State-B composer not present"
+    STATE["keyed"] = True
     s.shot("byok-composer")
 
 
 def fr2_catalog_marks_provider_configured(s: DriverSession) -> None:
     """The catalog, read THROUGH the app, marks the keyed provider configured."""
 
+    _needs_key()
     catalog = s.transport("GET", "/v1/agent/models")
     assert catalog.get("default_model_id") == DEFAULT_MODEL_ID, (
         f"default_model_id={catalog.get('default_model_id')!r} != {DEFAULT_MODEL_ID!r}"
@@ -182,6 +258,7 @@ def fr2_catalog_marks_provider_configured(s: DriverSession) -> None:
 def fr3_unkeyed_provider_stays_unconfigured(s: DriverSession) -> None:
     """OpenAI models are present but configured=false — the half that makes FR-4 real."""
 
+    _needs_key()
     _anthropic_only("needs an Anthropic-only profile")
     models = s.transport("GET", "/v1/agent/models").get("models", [])
     assert models, "empty model catalog"
@@ -204,6 +281,7 @@ def fr4_ftue_pill_preselects_the_keyed_provider(s: DriverSession) -> None:
     (`desktopModelCatalog.ts` PROVIDER_PRIORITY).
     """
 
+    _needs_key()
     pill = (s.model_pill() or "").strip()
     print(f"  FTUE model pill = {pill!r}")
     assert pill, "FTUE composer has no model pill text"
@@ -233,6 +311,7 @@ def fr5_first_message_lands_on_its_run(s: DriverSession) -> None:
     `#/convo/{conversationId}` BEFORE revealing the shell.
     """
 
+    _needs_key()
     s.send_first_run_message("write a haiku about the sea")
     s.shot("ftue-sent")
 
@@ -268,6 +347,7 @@ def fr6_new_chat_opens_a_fresh_cockpit(s: DriverSession) -> None:
     without one there is nothing for New-chat to fail to leave.
     """
 
+    _needs_key()
     assert s.on_run(), "expected a bound run from FR-5 before testing New chat"
     s.open_destination("Chats")
     assert s.wait_for("[data-testid=chats-new-chat]"), (
@@ -296,40 +376,62 @@ def fr6_new_chat_opens_a_fresh_cockpit(s: DriverSession) -> None:
     )
 
 
+#: Module-level so a caller can READ the declared phase ids without booting an
+#: app. `tools/test_desktop_journey_ci.py` uses it to prove the phase pinned by
+#: `.github/workflows/ci-desktop.yml` still exists here — renaming FR-0 without
+#: touching the workflow would otherwise leave a green CI gate proving nothing.
+PHASES: tuple[Phase, ...] = (
+    (
+        "FR-0",
+        "the keyless first run stops at the BYOK gate",
+        fr0_keyless_run_stops_at_the_gate,
+    ),
+    (
+        "FR-1",
+        "key connect reveals the State-B composer",
+        fr1_key_connect_reveals_the_composer,
+    ),
+    (
+        "FR-2",
+        "the catalog marks the keyed provider configured",
+        fr2_catalog_marks_provider_configured,
+    ),
+    (
+        "FR-3",
+        "an unkeyed provider stays configured=false",
+        fr3_unkeyed_provider_stays_unconfigured,
+    ),
+    (
+        "FR-4",
+        "the FTUE pill preselects a usable model, not the keyless default",
+        fr4_ftue_pill_preselects_the_keyed_provider,
+    ),
+    (
+        "FR-5",
+        "the first message lands on its run, not standby",
+        fr5_first_message_lands_on_its_run,
+    ),
+    (
+        "FR-6",
+        "New chat opens a fresh cockpit, not the bound run",
+        fr6_new_chat_opens_a_fresh_cockpit,
+    ),
+)
+
+
 def main() -> int:
     plan = JourneyPlan("first-run")
     plan.boot(
         f"source · fresh · {PROVIDER}-only",
         lambda: DriverSession(name=f"first-run-{PROVIDER}"),
-        setup=sign_in_and_key,
-        phases=[
-            ("FR-1", "key connect reveals the State-B composer", fr1_state_b_composer),
-            (
-                "FR-2",
-                "the catalog marks the keyed provider configured",
-                fr2_catalog_marks_provider_configured,
-            ),
-            (
-                "FR-3",
-                "an unkeyed provider stays configured=false",
-                fr3_unkeyed_provider_stays_unconfigured,
-            ),
-            (
-                "FR-4",
-                "the FTUE pill preselects a usable model, not the keyless default",
-                fr4_ftue_pill_preselects_the_keyed_provider,
-            ),
-            (
-                "FR-5",
-                "the first message lands on its run, not standby",
-                fr5_first_message_lands_on_its_run,
-            ),
-            (
-                "FR-6",
-                "New chat opens a fresh cockpit, not the bound run",
-                fr6_new_chat_opens_a_fresh_cockpit,
-            ),
-        ],
+        setup=sign_in,
+        phases=PHASES,
+        # A keyless first run has to actually BE keyless. The desktop supervisor
+        # forwards these from the launching shell (ENV_PASSTHROUGH_ALLOWLIST in
+        # apps/desktop/main/services/service-env.ts), so a developer who happens
+        # to export OPENAI_API_KEY would silently delete FR-0's and FR-3's
+        # central assertion and never know.
+        clear_env=SECRET_ENVIRONMENT_NAMES,
     )
     return plan.finish()
 

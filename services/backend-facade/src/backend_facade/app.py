@@ -834,6 +834,54 @@ def create_app(
             identity=identity,
         )
 
+    # Agent-as-configuration — declare an agent with its own tools, skills and
+    # scopes. Per-route and explicit, like every other entry in this table: the
+    # facade is the only thing an app may call, so a route absent here is a
+    # route the product cannot reach however completely it is implemented
+    # upstream — which is exactly the state ``subagent_defs/*.json`` was in.
+    @app.get("/v1/agent/subagents")
+    async def list_declared_subagents(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/subagents",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.put("/v1/agent/subagents/{name}")
+    async def declare_subagent(
+        request: Request,
+        name: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "PUT",
+            f"/v1/agent/subagents/{name}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.delete("/v1/agent/subagents/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    async def undeclare_subagent(request: Request, name: str) -> Response:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        await forward_json(
+            app,
+            "DELETE",
+            f"/v1/agent/subagents/{name}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            expect_json=False,
+            identity=identity,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     # PR 4.3 — read-only effective retention TTL (Privacy & data panel).
     # Open to any tenant member; the ai-backend route shares the same
     # ``runtime:use`` gate.
@@ -1503,6 +1551,64 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/host-writes")
+    async def list_run_host_writes(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        """List what one run changed on the user's real disk.
+
+        A sub-path of ``/v1/agent/runs/{run_id}`` (registered above the run_id
+        matcher, like ``events``/``surfaces``), so the literal ``host-writes``
+        tail is not swallowed.
+
+        Passthrough: the facade owns no undo logic, only the boundary. The
+        forwarded identity is the verified one — ai-backend reads ``org_id``
+        from the service headers and never from the caller — so a client that
+        names another tenant's run gets that tenant's 404, not its journal.
+        Upstream ``503`` (no capture store on this deployment) rides the
+        standard ``forward_json`` error passthrough.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/host-writes",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/runs/{run_id}/host-writes/revert")
+    async def revert_run_host_writes(
+        request: Request,
+        run_id: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Put the run's writes back, optionally narrowed to one tool call.
+
+        A bare POST reverts everything this run wrote; ``{"tool_call_id": ...}``
+        rewinds exactly one call. The body is optional for that reason, the same
+        shape ``pin_conversation`` uses for its bare-POST default.
+
+        The facade adds no identity to the body: the only writable targets are
+        the ones ai-backend's floor already admitted and recorded, so this
+        forward carries no path, digest or root that could point the revert at
+        something the run never touched.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/runs/{run_id}/host-writes/revert",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload or {},
+            identity=identity,
+        )
+
     # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
     # — it carries slashes, so both routes use the ``:path`` converter (Starlette
     # captures the whole tail before the literal ``/regenerate`` suffix). The
@@ -1827,6 +1933,35 @@ def create_app(
             app,
             "POST",
             f"/v1/agent/runs/{run_id}/cancel",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json={**payload, "requested_by_user_id": identity.user_id},
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/runs/{run_id}/steer")
+    async def steer_run(
+        request: Request,
+        run_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        """Send a user message into a run that is already executing.
+
+        Sibling of ``cancel_run`` and forwarded identically, including the one
+        detail that matters: ``requested_by_user_id`` is **overwritten** from
+        the verified session rather than trusted from the body. Honouring a
+        caller-supplied id here would let one user put words into another
+        user's run, so the body's own value never reaches ai-backend.
+
+        Passthrough otherwise — the ``409`` for a run no longer in flight is
+        ai-backend's call, and rides the standard error passthrough.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/runs/{run_id}/steer",
             target="ai_backend",
             params=identity.scoped_params(),
             json={**payload, "requested_by_user_id": identity.user_id},

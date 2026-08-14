@@ -143,6 +143,9 @@ class Keys:
         # Undo within the 60 s reversibility window.
         APPROVAL_UNDO = "approval_undo"
         CANCEL_RUN = "cancel_run"
+        # Mid-run steering. A sibling of ``cancel_run``, not of ``create_run``:
+        # it addresses a run already in flight rather than starting one.
+        STEER_RUN = "steer_run"
         CREATE_CONVERSATION = "create_conversation"
         CREATE_RUN = "create_run"
         DELETE_USER_HISTORY = "delete_user_history"
@@ -244,6 +247,12 @@ class Keys:
         RESTORE_CONVERSATION = "restore_conversation"
         # PRD-H.4 — pin/unpin a conversation (first-class ``pinned`` column).
         PIN_CONVERSATION = "pin_conversation"
+        # Agent-as-configuration: the read/declare/undeclare entry point for
+        # ``subagent_defs/*.json``, which the file store could always read and
+        # write and which nothing could reach.
+        LIST_DECLARED_SUBAGENTS = "list_declared_subagents"
+        DECLARE_SUBAGENT = "declare_subagent"
+        UNDECLARE_SUBAGENT = "undeclare_subagent"
         # Workspace data lifecycle endpoints (export queue + audited delete-all).
         REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
         DELETE_WORKSPACE_DATA = "delete_workspace_data"
@@ -399,6 +408,13 @@ class Messages:
         INVALID_CONNECTOR_SCOPES = "Connector scope payload is invalid."
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
+        # Steering redirects a turn that is still being taken. Refusing the
+        # request is the honest answer once there is no next model step to
+        # deliver it to; the copy says what to do instead rather than naming an
+        # internal status the caller cannot act on.
+        RUN_NOT_STEERABLE = (
+            "This run is no longer in flight; send your message as a new turn."
+        )
         # E1 D4/D5 — source facts are provenance records, not capabilities.
         # These intentionally reveal neither whether a source existed nor why
         # its owning authority declined to reopen it.
@@ -492,6 +508,7 @@ class Messages:
         REASONING = "Thinking"
         RUN_CANCELLING = "Run cancellation was requested."
         RUN_QUEUED = "Run was queued for runtime execution."
+        RUN_STEERED = "You steered this run."
         SUBAGENT = "Subagent update"
         TOOL_CALL = "Calling tool"
         TOOL_RESULT = "Tool result"
@@ -547,6 +564,35 @@ class Messages:
             return f"Cited tool call #{ordinal}"
 
         CITATION_MADE = "Cited a tool call"
+
+        @classmethod
+        def compaction_title(cls, *, tokens_saved: int, tool_name: str | None) -> str:
+            """Return the display title for a context-compaction divider.
+
+            Computed here, server-side, once -- the client must never derive a
+            timeline label from an event-name prefix. The tool name is included
+            when the call was identified because "Compacted 8.6k tokens of
+            read_file output" tells the reader which result the model no longer
+            has in full, which is the entire point of drawing the boundary.
+            """
+
+            amount = cls._compact_token_count(tokens_saved)
+            if tool_name:
+                return f"Compacted {amount} tokens of {tool_name} output"
+            return f"Compacted {amount} tokens of tool output"
+
+        @staticmethod
+        def _compact_token_count(tokens: int) -> str:
+            """Render a token count the way a reader scans it, not exactly."""
+
+            if tokens < 1_000:
+                return str(tokens)
+            thousands = tokens / 1_000
+            if thousands < 10:
+                return f"{thousands:.1f}k".replace(".0k", "k")
+            return f"{round(thousands)}k"
+
+        COMPRESSION_NOTE = "Compacted tool output"
 
     class Validation:
         """Field-level validation error message factories for Pydantic validators."""

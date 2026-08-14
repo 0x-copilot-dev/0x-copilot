@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 import logging
+import random
 from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
@@ -65,6 +66,11 @@ from agent_runtime.execution.model_invocation.policy import (
 )
 from agent_runtime.execution.model_invocation.release_controls import (
     ModelReliabilityReleaseDecision,
+)
+from agent_runtime.execution.model_invocation.retry_schedule import (
+    ModelCallRetryPolicy,
+    ModelRetryDecision,
+    provider_retry_hint,
 )
 from agent_runtime.execution.providers.model_failure_adapters import (
     ProviderFailureAdapterRegistry,
@@ -239,9 +245,13 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
     def __init__(
         self,
         *,
-        provider: str,
+        provider: str | None,
         adapters: ProviderFailureAdapterRegistry,
     ) -> None:
+        #: ``None`` means "no verified route named the provider" — the default
+        #: deployment path, where the only provider hint available is the
+        #: LangChain model's ``_llm_type`` and that is the library's name, not
+        #: ours. Classification then goes by SDK exception identity instead.
         self._provider = provider
         self._adapters = adapters
         self._reducer = ProviderLifecycleReducer()
@@ -286,7 +296,11 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
         with self._lock:
             if self._state.terminal_state is not None:
                 return
-            observation = self._adapters.observe(self._provider, error, self._state)
+            observation = (
+                self._adapters.observe(self._provider, error, self._state)
+                if self._provider is not None
+                else self._adapters.observe_unattributed(error, self._state)
+            )
             if (
                 observation.signal is ModelFailureSignal.CONNECTIVITY
                 and not self._state.stream_started
@@ -441,18 +455,28 @@ class ModelInvocationMiddleware(AgentMiddleware):
         self,
         *,
         occupancy_recorder: "ContextOccupancyRecorder | None" = None,
+        retry_policy: ModelCallRetryPolicy | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+        random_source: Callable[[], float] | None = None,
     ) -> None:
-        """Bind the occupancy recorder; every argument must stay optional.
+        """Bind the occupancy recorder and retry policy; all arguments optional.
 
         The graph funnel constructs this middleware as ``ModelInvocationMiddleware()``
         for the root and passes the *class itself* as a universal child-graph
         factory, and the AST topology gate pins both spellings. A required
         constructor argument would therefore break child-graph construction, not
         merely this call site.
+
+        ``sleep`` and ``random_source`` exist so a test can drive the retry
+        schedule on a fake clock. Production never passes them: a unit test that
+        actually waited out a 2-second backoff would be a unit test nobody runs.
         """
 
         super().__init__()
         self._occupancy = occupancy_recorder or self._shared_occupancy_recorder()
+        self._retry_policy = retry_policy or ModelCallRetryPolicy()
+        self._sleep = sleep or asyncio.sleep
+        self._random = random_source or random.random
 
     @classmethod
     def _shared_occupancy_recorder(cls) -> "ContextOccupancyRecorder | None":
@@ -562,7 +586,18 @@ class ModelInvocationMiddleware(AgentMiddleware):
         # never influence dispatch.
         occupancy_plan = self._occupancy_assembly_plan()
 
+        # Backoff owed to the *next* attempt, spent at the top of the loop
+        # rather than at the failure site. The failure site sits inside a
+        # ``except BaseException as persistence_error`` whose handler rewrites
+        # anything raised under it into ``raise error from persistence_error``,
+        # so awaiting there would report a run cancelled during a backoff as the
+        # provider's rate-limit error instead of as a cancellation.
+        pending_retry_backoff = 0.0
+
         while True:
+            if pending_retry_backoff > 0:
+                await self._sleep(pending_retry_backoff)
+                pending_retry_backoff = 0.0
             cache_retry = pending_cache_retry
             pending_cache_retry = None
             if cache_retry is not None:
@@ -810,6 +845,21 @@ class ModelInvocationMiddleware(AgentMiddleware):
                             binding, invocation, prior, admission, failure, duration_ms
                         )
                         raise error
+                    # Admission decided *whether*; the policy decides *how long*.
+                    # Without this wait the loop re-dispatched instantly, so a
+                    # 429 was answered by an identical request microseconds
+                    # later — the retry that is guaranteed to be rate-limited
+                    # again. Computed after the DENY branch so a call that is
+                    # not going to be retried never accrues a backoff, and
+                    # *spent* at the top of the loop (see above) so the wait is
+                    # not inside this handler's exception rewrite.
+                    # ``_can_retry`` above already proved the class is one this
+                    # policy admits, so only the pacing is taken from it.
+                    pending_retry_backoff = self._retry_pacing_seconds(
+                        attempt=len(prior),
+                        error=error,
+                        now=binding.now(),
+                    )
                     last_error = error
                     continue
                 except BaseException as persistence_error:
@@ -1524,27 +1574,58 @@ class ModelInvocationMiddleware(AgentMiddleware):
             else GraphScope.ROOT
         )
 
-    @staticmethod
-    def _occupancy_assembly_plan() -> PromptAssemblyPlan | None:
-        """Return the F2 plan for this call, when one was assembled.
+    @classmethod
+    def _occupancy_assembly_plan(cls) -> PromptAssemblyPlan | None:
+        """Return the plan that decomposes this call's system block (§3.2).
 
-        The plan is what lets the system block be attributed per fragment rather
-        than as one anonymous blob (§3.2), and it is reachable here because
-        ``RuntimeToolControlMiddleware`` binds its F2 handoff around the handler
-        this middleware runs inside. The read is strictly non-mutating: it
-        touches ``result.plan`` and nothing else, and in particular never calls
-        ``consume_rejection``, so the handoff's one-shot cache-fallback permit is
-        untouched and F2's retry semantics are exactly what they were.
+        Two sources, in strict preference order, because the system prompt is
+        assembled **twice** on two different rollout postures and only the first
+        of them used to be readable here:
 
-        ``None`` whenever F2 is off, assembly was skipped, or the handoff is not
-        bound — all of which mean the same thing to the measurement: the system
-        block will be attributed by the third-party adapter and otherwise
-        recorded as undeclared.
+        1. The **per-call** F2 plan, published on the handoff
+           ``RuntimeToolControlMiddleware`` binds around the handler this
+           middleware runs inside. It describes the exact request being sent,
+           including the per-turn fragments a re-assembly adds, so it wins
+           whenever it exists. The read is strictly non-mutating: it touches
+           ``result.plan`` and nothing else, and in particular never calls
+           ``consume_rejection``, so the handoff's one-shot cache-fallback
+           permit is untouched and F2's retry semantics are exactly what they
+           were.
+        2. The **build-time** plan the factory assembled to produce the graph's
+           ``system_prompt``. ``PromptRuntimeBinding.prepare`` returns
+           ``plan=None`` whenever F2's mode is ``OFF``, which is the shipped
+           default, so on an ordinary deployment source 1 is always empty. The
+           bytes it would have described are still there — they are the prompt
+           the graph was built with — and the typed decomposition of them is
+           still there too, held by the binding's fragment provider. This is the
+           whole reason the ledger reported one anonymous 4,853-token
+           ``UNDECLARED`` span covering 58% of a real run's measured input: not
+           a contributor that failed to declare itself, but a declaration that
+           had landed and was never wired to the seam that reads declarations.
+
+        Preferring the per-call plan matters on the paths where the two differ.
+        Under ``ENFORCE`` the request carries the re-assembled prompt, and the
+        build-time plan would describe a prefix of it at best; taking source 1
+        first keeps the measurement matched to the request rather than to the
+        graph.
+
+        Falling back cannot misattribute. ``SystemBlockAttributor`` verifies
+        every located fragment against its ``content_digest`` before labelling a
+        byte range, so a plan that no longer describes the system message —
+        a subagent with its own prompt, a decorated or re-rendered block —
+        attributes nothing and the bytes stay exactly as unexplained as they
+        were. The failure mode of a stale fallback is "no better than before",
+        never "confidently wrong".
+
+        ``None`` when neither source can answer, which means to the measurement
+        what it always meant: the system block is attributed by the third-party
+        adapter and otherwise recorded as unexplained.
         """
 
         try:
             handoff = PromptCacheFallbackContext.current()
-            return None if handoff is None else handoff.result.plan
+            plan = None if handoff is None else handoff.result.plan
+            return plan if plan is not None else cls._build_time_assembly_plan()
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
             _OCCUPANCY_LOGGER.debug(
                 "Could not read the F2 assembly plan for occupancy measurement; "
@@ -1552,6 +1633,28 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 exc_info=True,
             )
             return None
+
+    @staticmethod
+    def _build_time_assembly_plan() -> PromptAssemblyPlan | None:
+        """Return the run-scoped plan the graph's system prompt was rendered from.
+
+        Read off the prompt runtime binding rather than off a slot of its own.
+        The binding is installed once per harness build, is inherited by every
+        local child task through the same ContextVar, and already owns the
+        fragment provider that holds the plan — so there is exactly one
+        run-lifetime object to bind, unbind and reason about instead of two that
+        could disagree about which build a measurement belongs to.
+
+        Note what is *not* gated on here: F2's mode. The binding exists whenever
+        run control is bound, and its ``mode`` decides whether the prompt is
+        re-assembled per call, not whether one was assembled at build time. A
+        mode check here would re-introduce the exact coupling that made the
+        ledger inert — an observability read inheriting a feature's rollout
+        posture for no reason of its own.
+        """
+
+        binding = RunControlContext.prompt_runtime()
+        return None if binding is None else binding.build_time_plan()
 
     def _capture_occupancy(
         self,
@@ -1639,14 +1742,23 @@ class ModelInvocationMiddleware(AgentMiddleware):
         ``free_tokens`` with it. Segment attribution — the reason the ledger
         exists — is unaffected.
 
-        The handler is called exactly once whatever happens above it. Capture
-        sits in its own guard so a measurement failure cannot become a failed
-        model call (§6.4).
+        The handler is called at least once whatever happens above it, and more
+        than once only when :class:`ModelCallRetryPolicy` admits a re-dispatch —
+        never because measurement failed. Capture sits in its own guard so a
+        measurement failure cannot become a failed model call (§6.4).
+
+        This is also where the runtime's per-model-call retry policy applies,
+        and the placement is the whole point. Retrying *here* costs one provider
+        round trip; the alternative that exists today is the run-claim retry at
+        ``runtime_worker/loop.py``, which restarts the turn and re-pays for every
+        tool call that already succeeded. The provider hiccup that motivates a
+        retry — a 429, a 503, a socket closed before the first token — is exactly
+        the failure that does not need the turn thrown away.
         """
 
         pending = self._plan_occupancy_only(request)
 
-        response = await handler(request)
+        response = await self._dispatch_with_retry(request, handler)
 
         # Every argument below is a plain local resolved inside the guarded
         # planner above. That is deliberate rather than stylistic: computing an
@@ -1665,6 +1777,165 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 model_call_id=pending.model_call_id,
             )
         return response
+
+    async def _dispatch_with_retry(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        """Dispatch one model call under the runtime-owned retry policy.
+
+        Classification is not re-implemented here. A ``_ProviderLifecycleCallback``
+        is attached to the request's model exactly as the F10 path attaches one,
+        so the failure reaches :class:`ProviderFailureClassifier` as
+        adapter-attested facts — the SDK exception class and its numeric status —
+        rather than as a string this method pattern-matched.
+
+        Each attempt is dispatched through ``handler`` unchanged, so the model
+        client's own ``timeout`` still bounds **one attempt**. The backoff is
+        spent between attempts and is deliberately outside that bound: a policy
+        where the timeout covered the whole sequence would shrink the last
+        attempt's budget to whatever the earlier waits left over.
+
+        The last provider exception is re-raised untouched when retries are
+        exhausted, so the runtime's existing typed-error taxonomy decides what
+        the user sees. This method never invents an error of its own.
+        """
+
+        attempt = 0
+        while True:
+            attempt += 1
+            observer = _ProviderLifecycleCallback(
+                # No verified route here, so the provider is deliberately not
+                # named: ``_request_provider`` yields LangChain's ``_llm_type``
+                # ("openai-chat"), which matches no adapter key and would
+                # classify every provider failure as UNKNOWN — i.e. never
+                # retry. The exception's own SDK identity is authoritative.
+                provider=None,
+                adapters=ProviderFailureAdapterRegistry.defaults(),
+            )
+            observer.dispatch_started()
+            attempt_request = request.override(
+                model=self._attach_callback(request.model, observer)
+            )
+            try:
+                return await handler(attempt_request)
+            except BaseException as error:
+                observer.observe_error(error)
+                state = observer.state
+                failure = ProviderFailureClassifier().classify(
+                    state.failure_observation()
+                )
+                decision = self._retry_decision(
+                    failure=failure,
+                    lifecycle=state,
+                    attempt=attempt,
+                    error=error,
+                )
+                self._log_retry(
+                    request=request,
+                    failure=failure,
+                    attempt=attempt,
+                    decision=decision,
+                )
+                if not decision.should_retry:
+                    raise
+                await self._sleep(decision.delay_seconds)
+
+    def _retry_pacing_seconds(
+        self,
+        *,
+        attempt: int,
+        error: BaseException,
+        now: datetime,
+    ) -> float:
+        """Backoff for an F10 retry that admission has already authorized.
+
+        Only the *pacing* half of the policy is used on this path.
+        ``ModelInvocationBudget`` remains the attempt authority when the journal
+        is installed, so consulting ``max_attempts`` here would put a second
+        ceiling on a decision that already has one — and the two would drift.
+        """
+
+        try:
+            return self._retry_policy.delay_seconds(
+                attempt=max(attempt, 1),
+                hint=provider_retry_hint(error, now=now),
+                random_value=self._random(),
+            )
+        except Exception:  # noqa: BLE001 — pacing never fails a model call
+            _OCCUPANCY_LOGGER.warning(
+                "Model-call retry pacing failed; retrying without backoff.",
+                exc_info=True,
+            )
+            return 0.0
+
+    def _retry_decision(
+        self,
+        *,
+        failure: ModelFailureClass,
+        lifecycle: ProviderAttemptLifecycle,
+        attempt: int,
+        error: BaseException,
+    ) -> ModelRetryDecision:
+        """Ask the policy, converting any policy failure into "do not retry".
+
+        Guarded for the same reason occupancy is: this runs on the model-call
+        path, and a malformed provider header must not be able to turn a
+        recoverable 429 into an ``AttributeError`` that fails the run outright.
+        """
+
+        try:
+            return self._retry_policy.decide(
+                failure=failure,
+                lifecycle=lifecycle,
+                attempt=attempt,
+                error=error,
+                now=datetime.now(timezone.utc),
+                random_value=self._random(),
+            )
+        except Exception:  # noqa: BLE001 — pacing never fails a model call
+            _OCCUPANCY_LOGGER.warning(
+                "Model-call retry policy failed to decide; not retrying.",
+                exc_info=True,
+            )
+            return ModelRetryDecision(should_retry=False)
+
+    def _log_retry(
+        self,
+        *,
+        request: ModelRequest[Any],
+        failure: ModelFailureClass,
+        attempt: int,
+        decision: ModelRetryDecision,
+    ) -> None:
+        """Emit the ``model_call_retry`` structured event.
+
+        Same shape and channel as ``RetryingTool``'s ``tool_retry`` — a logger
+        name plus a ``metadata`` mapping of low-cardinality, body-free facts. No
+        provider message, no prompt, no response: the failure *class* is the
+        thing worth alerting on, and it is already provider-neutral.
+
+        Emitted on the give-up path too, not only before a wait. A retry budget
+        that is being exhausted every turn is the signal that matters most, and
+        it is invisible if only successful retries are logged.
+        """
+
+        _OCCUPANCY_LOGGER.info(
+            "model_call_retry",
+            extra={
+                "metadata": {
+                    "provider": self._request_provider(request),
+                    "model_family": self._request_model_family(request),
+                    "attempt": attempt,
+                    "max_attempts": self._retry_policy.max_attempts,
+                    "failure_class": failure.value,
+                    "will_retry": decision.should_retry,
+                    "delay_seconds": round(decision.delay_seconds, 3),
+                    "provider_directed": decision.provider_directed,
+                }
+            },
+        )
 
     def _plan_occupancy_only(
         self, request: ModelRequest[Any]

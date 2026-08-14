@@ -201,6 +201,7 @@ class ToolUsePolicyEnforcer:
             decision = ToolUsePolicyGate.decide_for_side_effects(
                 snapshot=snapshot,
                 side_effects=side_effects,
+                tool_name=tool_name,
             )
             if decision.action is ToolGateAction.REQUIRE_APPROVAL:
                 interrupt_on[tool_name] = {

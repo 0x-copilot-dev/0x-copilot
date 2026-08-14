@@ -53,6 +53,20 @@ class Values:
         OFFLOAD = "offload"
         SUMMARIZE = "summarize"
 
+    class CompactionTrigger:
+        """Why the runtime compacted content out of model context.
+
+        Exactly one member, deliberately. It is DERIVED from what is observable
+        at the admission seam and is not guessed: every compaction this runtime
+        performs is ``ToolResultAdmissionAdapter`` finding a serialized tool
+        result over the inline token budget. Adding a second value means finding
+        a second observable trigger, not inventing a second guess -- an earlier
+        draft carried a ``TOOL_REQUEST`` member justified by a
+        ``compact_conversation`` tool that does not exist in this codebase.
+        """
+
+        TOKEN_THRESHOLD = "token_threshold"
+
     class FallbackTrigger:
         CONTEXT_OVERFLOW = "context_overflow"
         SUMMARIZATION_FAILURE = "summarization_failure"

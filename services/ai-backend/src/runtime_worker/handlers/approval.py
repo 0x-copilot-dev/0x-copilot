@@ -172,6 +172,8 @@ class RuntimeApprovalHandler:
         APPROVAL_ID = "approval_id"
         ANSWER = "answer"
         DECISION = "decision"
+        # Read back by ``ToolAccessGate._interpret_resume`` (``_ResumeKey``).
+        DECISION_SCOPE = "decision_scope"
         DECISIONS = "decisions"
         TYPE = "type"
         STATUS = "status"
@@ -970,6 +972,16 @@ class RuntimeApprovalHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
+        # The resume half of the undo journal. Omitting it here would leave the
+        # single write a human explicitly approved as the one write in the whole
+        # system with no pre-image — see the note on the run path.
+        host_write_journal = self._file_store_wiring.host_write_journal(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+        )
+        if host_write_journal is not None:
+            update["host_write_journal"] = host_write_journal
         drafts_backend = self._drafts_backend(run)
         if drafts_backend is not None:
             update["drafts_backend"] = drafts_backend
@@ -1066,8 +1078,25 @@ class RuntimeApprovalHandler:
             run_status=run.status,
         )
 
+    def _artifact_family_model_visible(self, *, lane_enabled: bool) -> bool:
+        """Read the SAME exposure decision the run handler read.
+
+        This is the mid-task guarantee. The knob lives on the frozen document
+        resolved once at the composition root, so a run that started with the
+        artifact family keeps it when it resumes past an approval, and a run
+        that started without it does not suddenly gain three tool schemas
+        (which would invalidate the prompt-cache prefix for the whole
+        remainder of the run — 97% of input tokens are cache reads).
+        """
+
+        return self.settings.hyperparameters.tool_surface.admits_artifact_family(
+            lane_enabled=lane_enabled
+        )
+
     def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
@@ -1075,7 +1104,9 @@ class RuntimeApprovalHandler:
 
     def _revise_artifact_tool(self, run: RunRecord) -> ReviseArtifactTool | None:
         # Same gate as publication — see the run handler for why they are paired.
-        if not self._artifact_publication_enabled(run):
+        if not self._artifact_family_model_visible(
+            lane_enabled=self._artifact_publication_enabled(run)
+        ):
             return None
         return ReviseArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS),
@@ -1330,11 +1361,26 @@ class RuntimeApprovalHandler:
                 cls._Fields.DECISION: decision,
             }
         if approval_kind == ApiValues.ApprovalKind.ASK_A_QUESTION:
-            return {
+            # The write gate borrows this shape (``ToolAccessGate`` emits
+            # ``approval_kind == "ask_a_question"``), so the once/always scope
+            # rides here. A genuine question ignores the key — it reads
+            # ``answer``.
+            #
+            # Added ONLY when the client actually named a scope. This payload is
+            # the LangGraph resume value and is persisted in the checkpoint, so an
+            # unconditional ``decision_scope: None`` would rewrite the stored
+            # shape of every ask-a-question resume ever taken to say something the
+            # caller never said. ``_interpret_resume`` reads it with ``.get``, so
+            # an absent key and a ``None`` key are the same answer to the only
+            # reader — which makes the conditional free.
+            payload: dict[str, object] = {
                 cls._Fields.APPROVAL_ID: command.approval_id,
                 cls._Fields.DECISION: decision,
                 cls._Fields.ANSWER: command.answer,
             }
+            if command.decision_scope is not None:
+                payload[cls._Fields.DECISION_SCOPE] = command.decision_scope
+            return payload
         # MCP tool path. With ``outcome`` populated (the production path) we
         # project the actual per-item decisions in interrupt order so a mixed
         # approve/reject N=5 batch sends LangGraph the literal mix and not 5

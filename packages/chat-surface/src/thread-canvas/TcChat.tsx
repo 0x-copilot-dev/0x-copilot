@@ -64,6 +64,10 @@ import {
 // is the SSOT kind union carried through the `RunApproval → TcChatApproval`
 // boundary so the card can branch a `mcp_auth` gate off the `/decision` path.
 import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
+// The SSOT for the parked-write id prefix. A VALUE import, and safe: the
+// projection imports only `approvals/` + `workspace/`, so the edge does not run
+// back into `thread-canvas/`.
+import { WRITE_GATE_APPROVAL_PREFIX } from "../destinations/run/approvalProjection";
 import type { ApprovalsQueueItem } from "../workspace";
 // Workstream D — the main-agent tool-call cards, projected off the SINGLE run
 // stream (`projectToolCalls(session.events)`) and interleaved into the
@@ -81,6 +85,18 @@ import {
 } from "./groupActivity";
 import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
+// The context-compaction boundary. Projected upstream off the same
+// `session.events` (`projectCompactionNotices`) and interleaved here by seq like
+// every other family — but drawn as a rule rather than a card, because it is a
+// statement ABOUT the transcript and there is nothing on it to act on.
+import type { CompactionNoticeEntry } from "../destinations/run/compactionProjection";
+import { TcCompactionDivider } from "./TcCompactionDivider";
+// The user's mid-run interjection. Same arrangement as the compaction sibling
+// above — a pure selector upstream (`projectSteerNotes`), interleaved here by
+// seq — and drawn as an in-thread line rather than a card, because the runtime
+// classifies `run_steered` as a `note` for exactly that reason.
+import type { SteerNoteEntry } from "../destinations/run/steerProjection";
+import { TcSteerNote } from "./TcSteerNote";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
 import { TcWriteGateRow } from "./TcWriteGateRow";
@@ -152,6 +168,23 @@ export interface TcChatApproval {
    * would put every ordinary approval behind an extra click on no evidence.
    */
   readonly irreversible?: boolean;
+  /**
+   * True when an `always` on this card is the RUN-SCOPED policy rule the
+   * `/decision` POST actually carries — the server offered `allow_always` AND
+   * this is the write-gate lane, whose `ask_a_question` resume shape is the only
+   * one that forwards `decision_scope`.
+   *
+   * Decided by the approval projection (`allowsRunScopedGrant`), which is the
+   * one place that reads the wire, and deliberately NOT re-derivable here: the
+   * filesystem lane spells its own, entirely different `always` with the same
+   * word (attach a folder — durable, wider than the path on the card, settled by
+   * `WorkspaceGrantPort`), so a card that offered "always" off `grant_options`
+   * alone would post a field that lane's resume builder drops on the floor.
+   *
+   * Optional, absent means NO — the fail-closed default, because this flag only
+   * ever widens what one click covers.
+   */
+  readonly allowsRunScopedGrant?: boolean;
   /** Inset key/value frame. */
   readonly params: readonly ActivityParam[];
   /**
@@ -224,7 +257,11 @@ function isMcpAuthApproval(approval: TcChatApproval): boolean {
 // Its wire shape is `ask_a_question` — the gate deliberately reuses that resume
 // plumbing — so without this it falls into the generic question branch and a
 // yes/no about a real side effect renders as a free-text box.
-const WRITE_GATE_APPROVAL_PREFIX = "mcp_write:";
+//
+// IMPORTED, not restated: the approval projection reads the same prefix to
+// decide whether an `always` on this card is a scope the `/decision` POST
+// carries. Two copies of the one property that says which lane an approval is on
+// is how the card and the wire come to disagree about it.
 
 function isWriteGateApproval(approval: TcChatApproval): boolean {
   return approval.approvalId.startsWith(WRITE_GATE_APPROVAL_PREFIX);
@@ -471,6 +508,19 @@ export interface TcChatProps {
   readonly approvals?: readonly TcChatApproval[];
   /** Resolve the approval (host owns the POST); fires on Approve / `⌘↵`. */
   readonly onApprove?: (approvalId: string) => void;
+  /**
+   * Approve, AND stop asking for this call for the rest of the run — the
+   * `decision_scope: "always"` half of the server's `grant_options`.
+   *
+   * A separate callback rather than a flag on `onApprove`, because it is a
+   * different decision with a different reach and the host has to be able to
+   * post a different body for it. Reachable ONLY from the expanded body of a
+   * card whose projection set `allowsRunScopedGrant` — see `renderAskCard`.
+   * Omitted ⇒ the control is not rendered at all, never rendered inert: a scope
+   * button that silently does nothing is the exact defect this whole binding
+   * exists to close.
+   */
+  readonly onApproveAlways?: (approvalId: string) => void;
   /** Reject the approval (host owns the POST); fires on Reject / `⌘⌫`. */
   readonly onReject?: (approvalId: string) => void;
   /**
@@ -606,11 +656,37 @@ export interface TcChatProps {
   readonly artifactDownloadPort?: ArtifactDownloadPort;
   /** Hands the reader the full Studio workspace for one artifact. */
   readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
+  /**
+   * Context-compaction boundaries, interleaved at the seq the runtime bounded a
+   * tool result out of model context. Host-owned (the cockpit holds the
+   * projection); omitted ⇒ the transcript is byte-identical to before this
+   * existed, which is what makes the prop safe to land unmounted.
+   */
+  readonly compactionNotices?: readonly CompactionNoticeEntry[];
+  /**
+   * Accepted mid-run steers, interleaved at the seq the coordinator appended
+   * the note — which is the beat the user intervened at, not the beat the model
+   * acted on it. Host-owned (the cockpit holds the projection); omitted ⇒ the
+   * transcript is byte-identical to before this existed.
+   */
+  readonly steerNotes?: readonly SteerNoteEntry[];
+  /**
+   * The bound run is live, so a submit from the composer is a STEER rather than
+   * a new run. Host-owned for the same reason `awaitingFirstOutput` is: only
+   * the cockpit knows the run's status. It changes the placeholder and nothing
+   * else — the composer's own send path is the cockpit's `dispatch`, which
+   * decides what a submit means.
+   */
+  readonly steering?: boolean;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
 /** Stable identity, so an unwired host never re-runs the merge on every render. */
 const EMPTY_INLINE_ARTIFACTS: readonly InlineArtifactEntry[] = [];
+/** Same reason as the artifact default above. */
+const EMPTY_COMPACTION_NOTICES: readonly CompactionNoticeEntry[] = [];
+/** Same reason again. */
+const EMPTY_STEER_NOTES: readonly SteerNoteEntry[] = [];
 const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
   string,
   readonly SubagentActivityRecord[]
@@ -657,6 +733,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     toolCallCitations = EMPTY_TOOL_CALL_CITATIONS,
     approvals = EMPTY_APPROVALS,
     onApprove,
+    onApproveAlways,
     onReject,
     onAnswer,
     mcpAuthPort,
@@ -681,6 +758,9 @@ export function TcChat(props: TcChatProps): ReactElement {
     artifactTransport,
     artifactDownloadPort,
     onOpenArtifactInStudio,
+    compactionNotices,
+    steerNotes,
+    steering = false,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -768,9 +848,17 @@ export function TcChat(props: TcChatProps): ReactElement {
       : null;
   // One placeholder source for both the base composer and an injected host
   // composer, so the off-live copy stays identical across the seam.
+  //
+  // The steering line is the ONLY announcement that typing mid-run does
+  // something. While a run is live the send control is a Stop button, so the
+  // gesture is ⏎ and nothing on screen would otherwise say so — and a user who
+  // believes the box is dead does not type into it at all. It names the key
+  // because the button that would normally carry the affordance is occupied.
   const composerPlaceholder = ghost
     ? "Snap to now to send a message"
-    : "Send a message…";
+    : steering
+      ? "Steer this run — ⏎ to send"
+      : "Send a message…";
 
   const filteredMessages = filterByScrub(state, scrub.scrubbedTo);
   // PR-3.8 — fleet cards follow the same scrub cursor as messages so a
@@ -805,6 +893,7 @@ export function TcChat(props: TcChatProps): ReactElement {
 
   const approvalHandlers: ApprovalHandlers = {
     onApprove,
+    onApproveAlways,
     onReject,
     onAnswer,
     mcpAuthPort,
@@ -844,6 +933,8 @@ export function TcChat(props: TcChatProps): ReactElement {
         activeRunId={activeRunId}
         awaitingFirstOutput={awaitingFirstOutput}
         {...(inlineArtifacts === undefined ? {} : { inlineArtifacts })}
+        {...(compactionNotices === undefined ? {} : { compactionNotices })}
+        {...(steerNotes === undefined ? {} : { steerNotes })}
         {...(artifactTransport === undefined ? {} : { artifactTransport })}
         {...(artifactDownloadPort === undefined
           ? {}
@@ -1014,6 +1105,8 @@ function renderApprovalItem(
 /** Everything `renderApprovalItem` needs, bundled so the interleave pass can carry it. */
 interface ApprovalHandlers {
   readonly onApprove?: (approvalId: string) => void;
+  /** Approve + a run-scoped allow rule. See `TcChatProps.onApproveAlways`. */
+  readonly onApproveAlways?: (approvalId: string) => void;
   readonly onReject?: (approvalId: string) => void;
   readonly onAnswer?: (approvalId: string, answer: QuestionAnswer) => void;
   readonly mcpAuthPort?: McpAuthPort;
@@ -1233,6 +1326,26 @@ function renderAskCard(
   // Captured so the presence check below narrows it — `handlers.x` is a
   // property read, and TS will not narrow one across a closure boundary.
   const notifyReview = handlers.onReviewWriteGate;
+  // THE SCOPE CONTROL IS RENDERED ONLY WHEN ALL THREE HOLD.
+  //
+  // 1. the projection decided this card's `always` is the run-scoped rule the
+  //    `/decision` POST carries (`allowsRunScopedGrant` — the write-gate lane,
+  //    and the server advertised `allow_always`);
+  // 2. a host is listening, so the button cannot be a control that posts into
+  //    the void;
+  // 3. the write is REVERSIBLE. The server already withholds `allow_always` for
+  //    a destructive op, so this is belt-and-braces — but the card is where the
+  //    "no advance yes to an irreversible act" property is drawn, and a safety
+  //    property that lives in exactly one place is one deploy away from not
+  //    existing. An advance yes to a class of deletes is the thing the PDP's
+  //    destructive rung exists to prevent.
+  const alwaysHandler = handlers.onApproveAlways;
+  const scopeApprove =
+    approval.allowsRunScopedGrant === true &&
+    alwaysHandler !== undefined &&
+    !isIrreversible(approval)
+      ? () => alwaysHandler(approval.approvalId)
+      : undefined;
   return (
     <div
       key={`approval-${approval.approvalId}`}
@@ -1274,8 +1387,21 @@ function renderAskCard(
         // until the payload has rendered. The safety property is enforced by
         // the SHAPE of the name, not only by the branch that renders it.
         bodyApproveTestId={`tc-chat-approval-body-approve-${approval.approvalId}`}
+        // Approval-scoped like every other decision on this card, and chosen so
+        // it matches NEITHER `[data-testid^=tc-chat-approval-approve-]` nor
+        // `tc-chat-approval-reject-`: the six live journeys that press Approve or
+        // Decline by those names must never land on the control that widens the
+        // decision to the whole run.
+        alwaysApproveTestId={`tc-chat-approval-always-${approval.approvalId}`}
         onApprove={() => handlers.onApprove?.(approval.approvalId)}
         onDecline={() => handlers.onReject?.(approval.approvalId)}
+        // Omitted — not passed as a no-op — when the lane, the host or the
+        // reversibility check says no. `TcWriteGateRow` renders the control only
+        // when it has a handler, so "nobody is listening" cannot hide behind a
+        // button that looks live.
+        {...(scopeApprove === undefined
+          ? {}
+          : { onApproveAlways: scopeApprove })}
         // Omitted when no host is listening, rather than passed as a function
         // that calls nothing. The card treats it as a notification either way,
         // so the disclosure works regardless — but wrapping "nobody is
@@ -1399,6 +1525,10 @@ interface MessageListBodyProps {
   readonly artifactTransport?: Transport;
   readonly artifactDownloadPort?: ArtifactDownloadPort;
   readonly onOpenArtifactInStudio?: (subjectKey: string) => void;
+  /** Compaction boundaries, interleaved on the same seq order as every card. */
+  readonly compactionNotices?: readonly CompactionNoticeEntry[];
+  /** Accepted mid-run steers, on the same seq order as every card. */
+  readonly steerNotes?: readonly SteerNoteEntry[];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
@@ -1423,6 +1553,8 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     artifactTransport,
     artifactDownloadPort,
     onOpenArtifactInStudio,
+    compactionNotices = EMPTY_COMPACTION_NOTICES,
+    steerNotes = EMPTY_STEER_NOTES,
   } = props;
   // The message-load notice never SUPPRESSES the live cards any more. It used
   // to be an early return, which was harmless while approvals lived in a strip
@@ -1444,12 +1576,18 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   // early-return past the live cards, and inline that hid a parked run's only
   // way out. An answer that is entirely an artifact — "here is the CSV" with no
   // prose — would otherwise render "No messages yet." over a real result.
+  // Steers count here too, for a sharper version of the same reason: they are
+  // the USER'S OWN WORDS, and a run steered before it had produced anything
+  // visible would otherwise draw "No messages yet." over a sentence the person
+  // reading it had just typed. (Compaction notices deliberately do NOT count —
+  // a boundary with nothing on either side of it is not a transcript.)
   const nothingToShow =
     messages.length === 0 &&
     fleets.length === 0 &&
     toolCalls.length === 0 &&
     approvals.length === 0 &&
     inlineArtifacts.length === 0 &&
+    steerNotes.length === 0 &&
     terminalBeat === undefined;
   if (notice !== null && nothingToShow) {
     return notice;
@@ -1471,6 +1609,8 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     approvals,
     activeRunId ?? null,
     inlineArtifacts,
+    compactionNotices,
+    steerNotes,
   );
 
   const renderItem = (item: StreamItem): ReactNode => {
@@ -1529,6 +1669,42 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           data-approval-pending={item.approval.resolved ? "false" : "true"}
         >
           {content}
+        </li>
+      );
+    }
+    if (item.kind === "compaction") {
+      // A boundary, so it gets the transcript's row wrapper and nothing else —
+      // no `approvalItemStyle` frame margins, because the divider IS the
+      // separation those margins exist to create.
+      return (
+        <li
+          key={`compaction-item-${item.notice.eventId}`}
+          data-testid={`tc-chat-compaction-item-${item.notice.eventId}`}
+        >
+          <TcCompactionDivider
+            label={item.notice.label}
+            beforeTokens={item.notice.beforeTokens}
+            afterTokens={item.notice.afterTokens}
+            testId={`tc-chat-compaction-${item.notice.eventId}`}
+          />
+        </li>
+      );
+    }
+    if (item.kind === "steer") {
+      // A note, not a card, and not a chat bubble: the transcript's own row
+      // wrapper and nothing else, exactly as the compaction boundary above
+      // takes it. `approvalItemStyle`'s frame margins would make this read as
+      // an object sitting on the thread rather than an aside to it.
+      return (
+        <li
+          key={`steer-item-${item.note.eventId}`}
+          data-testid={`tc-chat-steer-item-${item.note.eventId}`}
+        >
+          <TcSteerNote
+            label={item.note.label}
+            text={item.note.text}
+            testId={`tc-chat-steer-${item.note.eventId}`}
+          />
         </li>
       );
     }
@@ -1831,7 +2007,9 @@ type StreamItem =
     }
   | ActivityItem
   | { readonly kind: "approval"; readonly approval: TcChatApproval }
-  | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry };
+  | { readonly kind: "artifact"; readonly artifact: InlineArtifactEntry }
+  | { readonly kind: "compaction"; readonly notice: CompactionNoticeEntry }
+  | { readonly kind: "steer"; readonly note: SteerNoteEntry };
 
 /** An item anchored to a `sequence_no`, for the interleave pass. */
 interface AnchoredItem {
@@ -1888,6 +2066,8 @@ function mergeStream(
   approvals: readonly TcChatApproval[],
   activeRunId: string | null,
   artifacts: readonly InlineArtifactEntry[] = [],
+  compactions: readonly CompactionNoticeEntry[] = [],
+  steers: readonly SteerNoteEntry[] = [],
 ): readonly StreamItem[] {
   const runId = activeRunId ?? inferActiveRunId(messages);
   const anchored: AnchoredItem[] = [];
@@ -1991,6 +2171,30 @@ function mergeStream(
       item: { kind: "artifact", artifact },
     });
   }
+  // Compaction dividers last, so a note sharing a seq with the tool result it
+  // describes draws BELOW that card. The order is the sentence: here is what the
+  // tool returned, and here is the line where the model stopped holding all of
+  // it. Reversed, the divider would announce a narrowing of something the reader
+  // has not been shown yet. Same stable-sort convention as the three families
+  // above.
+  for (const notice of compactions) {
+    anchored.push({
+      seq: cardSeq(notice.seq),
+      item: { kind: "compaction", notice },
+    });
+  }
+  // Steers last of all, on the same stable-sort convention and for a sharper
+  // version of the compaction reason: the user interjected in REACTION to
+  // something, so a steer sharing a seq with a card draws below that card. Its
+  // own `sequence_no` is what puts it at the right beat — the coordinator
+  // appends the note before it enqueues the command, so this is where the user
+  // intervened, not where the model eventually acted on it.
+  for (const note of steers) {
+    anchored.push({
+      seq: cardSeq(note.seq),
+      item: { kind: "steer", note },
+    });
+  }
 
   // A settled run with no message in this transcript (a turn still loading, or
   // one whose message failed to fetch) would otherwise have its cards silently
@@ -2021,10 +2225,21 @@ function mergeStream(
  * at the text, and that tool stays a peer, because it happened after the
  * thought ended.
  *
- * Two kinds are deliberately NOT absorbable:
+ * Three kinds are deliberately NOT absorbable:
  * - **approvals**, for the reason the group predicate already documents — an
  *   approval buried inside a collapsed row hides a parked run's only way out;
- * - **artifacts**, which are the run's output, not its working.
+ * - **artifacts**, which are the run's output, not its working;
+ * - **compaction dividers**, which are a statement about the transcript rather
+ *   than work the thought did. One landing mid-thought therefore ENDS the
+ *   absorbed run and the tools after it stay peers. That is the honest reading:
+ *   the model's view narrowed at that line, so what came after is not the same
+ *   stretch of thinking as what came before;
+ * - **steer notes**, which are not the agent's work at all. Folding the user's
+ *   own words into a collapsed "Thought for 6s" row would hide the record that
+ *   they intervened behind a disclosure about the agent's thinking — and, like
+ *   the divider, a steer landing mid-thought ends the absorbed run, because the
+ *   thinking after an interjection is not the same stretch as the thinking
+ *   before it.
  *
  * Operates on the ACTIVE run's sorted items only. Cards flushed from settled
  * runs are already in `out` by the time this runs, and they must stay peers:

@@ -26,6 +26,7 @@ from agent_runtime.api.presentation_templates import (
 from agent_runtime.api.constants import Values
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.middleware.display_metadata import (
     agent_display_from_payload,
 )
@@ -335,7 +336,11 @@ class PresentationGenerator:
 
     @classmethod
     def _humanize_identifier(cls, value: str) -> str:
-        text = value.strip()
+        # A model-surface MCP name carries its connector; the envelope names the
+        # connector separately, so keeping it here would print it twice
+        # ("Linear · Mcp Linear List Issues"). Strip to the connector register
+        # first — a no-op for every native tool name.
+        text = McpToolName.strip(value)
         lowered = text.lower()
         if lowered.startswith("mcp_"):
             text = text[4:]

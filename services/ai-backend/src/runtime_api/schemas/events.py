@@ -29,6 +29,7 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
 from agent_runtime.execution.model_invocation.journal import ModelInvocationRecord
+from agent_runtime.execution.run_steering import SteeringMessage
 from agent_runtime.prompts.observation import (
     PromptAssembledRecord,
     PromptCacheObservedRecord,
@@ -418,6 +419,18 @@ class ContextOccupancyPayload(RuntimeContract):
     snapshot: ContextOccupancySnapshotPayload
 
 
+class SteerNotePayload(RuntimeContract):
+    """The user's mid-run interjection, as the transcript records it.
+
+    Carries the SAME :class:`SteeringMessage` the queued command carries, not a
+    transcript-only copy of it. The record a reader replays and the message the
+    model was handed are therefore one object with one set of bounds — there is
+    no second shape that could disagree about what the user actually said.
+    """
+
+    steer: SteeringMessage
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -678,6 +691,8 @@ class RuntimeEventPresentationProjector:
             return cls._model_invocation_payload(payload)
         if event_type is RuntimeApiEventType.CONTEXT_OCCUPANCY:
             return cls._context_occupancy_payload(payload)
+        if event_type is RuntimeApiEventType.RUN_STEERED:
+            return cls._run_steered_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -863,7 +878,18 @@ class RuntimeEventPresentationProjector:
             # the canvas gate card + posture chip read these, not the legacy
             # approval event, when the v2 flag is on.
             return RuntimeActivityKind.EVENT
-        if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
+        if event_type in {
+            RuntimeApiEventType.COMPRESSION_NOTE,
+            # A mid-run steer shares the note bucket, and the choice is load
+            # bearing rather than convenient. MESSAGE is the assistant's own
+            # prose — routing a user interjection there would render the user's
+            # words as something the agent said. EVENT is a state merge with no
+            # place on the timeline, which is the one thing this event must have:
+            # the record has to show *when* the user intervened, in line, between
+            # the beats it changed. NOTE is exactly that shape — an inline
+            # in-thread line, not a card.
+            RuntimeApiEventType.RUN_STEERED,
+        }:
             # PR A1 — context-compression note. Renders as an inline
             # dim line ("Atlas summarised 3 older messages…") rather
             # than a card; FE consumes via `<NoteCard>`.
@@ -1006,8 +1032,19 @@ class RuntimeEventPresentationProjector:
         # ``payload.tool_name`` verbatim. Imported lazily (see module docstring
         # at top) to avoid a circular import during ``agent_runtime`` init.
         from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+        from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 
+        # Then drop the per-tool namespace. Under per-tool registration the
+        # model surface is ``mcp__linear__list_issues``, so that is what
+        # ``payload.tool_name`` carries on every stream event — and this title
+        # is what the frontend renders on the row, which names its connector on
+        # its own field. Left alone the row reads "Calling
+        # mcp__linear__list_issues". A no-op for every native tool name, and the
+        # two normalisations compose: the dispatcher unwrap answers the legacy
+        # gateway, this answers per-tool, and neither event shape is both.
         tool_name = McpDispatcherUnwrap.effective_tool_name(payload)
+        if tool_name is not None:
+            tool_name = McpToolName.strip(tool_name)
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             if tool_name is None:
                 return Messages.Event.TOOL_CALL
@@ -1066,6 +1103,26 @@ class RuntimeEventPresentationProjector:
                 if isinstance(ordinal, int) and ordinal > 0:
                     return Messages.Event.citation_made_title(ordinal)
             return Messages.Event.CITATION_MADE
+        if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
+            # The transcript divider's label. Derived from the typed counts the
+            # producer already validated, so the line the user reads and the
+            # numbers beside it cannot disagree, and so no client has to infer
+            # a label from the event name.
+            tokens_saved = payload.get("tokens_saved")
+            if not isinstance(tokens_saved, int) or isinstance(tokens_saved, bool):
+                before = payload.get("before_tokens")
+                after = payload.get("after_tokens")
+                tokens_saved = (
+                    before - after
+                    if isinstance(before, int) and isinstance(after, int)
+                    else None
+                )
+            if not isinstance(tokens_saved, int) or tokens_saved <= 0:
+                return Messages.Event.COMPRESSION_NOTE
+            return Messages.Event.compaction_title(
+                tokens_saved=tokens_saved,
+                tool_name=cls._text(payload.get(Keys.Field.TOOL_NAME)),
+            )
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             # Generative-UI (PRD-01). The user-facing message class lives in
             # ``agent_runtime.api.constants`` (out of this PR's scope); the
@@ -2370,6 +2427,26 @@ class RuntimeEventPresentationProjector:
         return validated.model_dump(mode="json")
 
     @classmethod
+    def _run_steered_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one user steer and refuse to record a contentless note.
+
+        Validate-and-re-dump for the same reason as the occupancy sibling above:
+        :class:`SteeringMessage` is already ``extra='forbid'`` with bounded
+        fields, so a second hand-written allow-list here would be a copy that
+        drifts.
+
+        Unlike its observability siblings this one does NOT swallow the failure
+        into ``{}``. A journal row that loses its payload costs a metric; a steer
+        note that loses its payload is an inline "you steered Atlas" line with
+        nothing in it — the user's own words dropped from their own transcript
+        while the request reported success. The sole producer validates before
+        it appends, so raising here can only mean a producer bug, and the append
+        fails at that producer instead of writing a ghost row.
+        """
+
+        return SteerNotePayload.model_validate(payload).model_dump(mode="json")
+
+    @classmethod
     def _copy_payload_version(
         cls, payload: JsonObject, safe_payload: JsonObject
     ) -> None:
@@ -2598,6 +2675,19 @@ class RuntimeEventPresentationProjector:
             flag = payload.get(flag_key)
             if isinstance(flag, bool):
                 safe_payload[flag_key] = flag
+        # The SCOPES this card may be answered with (``allow_once`` /
+        # ``allow_always``). Same story as ``op_class`` / ``risk_level`` two
+        # blocks up, and the same lane: a parked write borrows the
+        # ``ask_a_question`` wire shape, so a key projected only on the sibling
+        # ``approval_requested`` path (:2448) never reaches the card that
+        # actually needs it. ``ToolAccessGate._grant_options`` is what decides a
+        # destructive op may not be answered ``always`` — dropped here, the card
+        # cannot tell the two apart and the decision is made nowhere.
+        grant_options = payload.get("grant_options")
+        if isinstance(grant_options, list | tuple):
+            safe_payload["grant_options"] = [
+                option for option in grant_options if isinstance(option, str)
+            ]
         display_title = cls._gate_display_title(payload)
         if display_title is not None:
             safe_payload[_LedgerKeys.Field.DISPLAY_TITLE] = display_title

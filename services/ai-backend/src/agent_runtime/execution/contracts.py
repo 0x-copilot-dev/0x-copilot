@@ -71,6 +71,11 @@ class RuntimeErrorCode(StrEnum):
     DEPENDENCY_ERROR = "dependency_error"
     RUNTIME_FACTORY_ERROR = "runtime_factory_error"
     RUN_WORKER_LOST = "run_worker_lost"
+    #: The graph used its whole super-step allowance without reaching an end
+    #: state — LangGraph's ``GraphRecursionError``, translated here so the run
+    #: fails with a reason the user can act on instead of an opaque library
+    #: exception paraphrased by the model.
+    RECURSION_LIMIT_EXCEEDED = "recursion_limit_exceeded"
 
 
 class RuntimeRunStatus(StrEnum):
@@ -378,6 +383,24 @@ class AgentRuntimeContext(RuntimeContract):
     parent_trace_id: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
+    # LangGraph super-steps this run's graph may take, carried on the context
+    # for the same reason ``max_parallel_tasks`` is: ``runtime_config`` builds
+    # the ``RunnableConfig`` from the context alone, and the worker re-hydrates
+    # the persisted context on a re-claim — so a limit resolved at run-create
+    # survives the queue round trip instead of being re-derived from whatever
+    # settings the claiming process happens to hold. Default and ceiling mirror
+    # ``ExecutionHyperparameters.recursion_limit`` (which carries the derivation);
+    # a context built without a composition root — tests, the ``langgraph.json``
+    # export — still gets a number this repo chose rather than the library's.
+    #
+    # Literals, not imports, and forced to be: ``hyperparameters.contracts``
+    # imports ``delegation.subagents.constants``, whose package import reaches
+    # this module right back, so binding the document's values here is a cycle
+    # that breaks every import of ``agent_runtime`` — the same one
+    # ``deep_agent_builder._DEFAULT_TOOL_CALL_BUDGET`` documents. Both copies are
+    # pinned against the document by
+    # tests/unit/architecture/test_named_default_ssot.py; change them together.
+    recursion_limit: PositiveInt = Field(default=500, le=2_000)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
     # Per-run web-search toggle (composer Tools popover). Default True preserves
@@ -674,6 +697,14 @@ class RuntimeDependencies(RuntimeContract):
     # every existing composition is unchanged; ``()`` means "resolved: nothing is
     # attached". ``None`` everywhere off the desktop path.
     granted_host_roots: tuple[object, ...] | None = None
+    # Optional per-run undo journal for agent writes to the user's real disk (a
+    # ``HostWriteJournal``). Built per run by the worker on the desktop file
+    # store only; the factory hands it to ``HostFilesystemFloor``, which
+    # captures the pre-image of every host write it ADMITS. ``None`` everywhere
+    # else — and ``None`` means the run simply keeps no undo history, which is
+    # the previous behaviour and the correct degradation on a store with no
+    # object store to hold the bytes.
+    host_write_journal: object | None = None
     # Optional gated ``run_code_mode`` tool (AC6 Monty code mode). Built per run
     # by the worker only when ``RUNTIME_ENABLE_MONTY`` + ``single_user_desktop``
     # hold and the file object store is present; the factory appends it to the
@@ -686,6 +717,13 @@ class RuntimeDependencies(RuntimeContract):
     # to the model-visible tool set and adds its prompt guidance. ``None``
     # everywhere else, so non-desktop / disabled runs are byte-identical.
     sandbox_execute_tool: object | None = None
+    # Optional ``run_tool_program`` factory. Unlike the tools above this is a
+    # *factory*, not a built tool, because a program's authorized surface is the
+    # run's own model-visible toolset — which does not exist until the factory
+    # has finished composing it. The worker resolves the bounds, the factory
+    # supplies the toolset, and the tool is built at that handshake. ``None``
+    # leaves the model surface byte-identical.
+    tool_program_factory: object | None = None
     # Optional gated ``stage_rowset_write`` tool (PRD-D3 bulk row-set staging).
     # Built per run by the worker only when ``SURFACES_V2`` is on; the factory
     # appends it to the model-visible tool set. ``None`` (and absent from the

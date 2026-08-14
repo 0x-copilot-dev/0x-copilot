@@ -1610,10 +1610,19 @@ export {
 // `surface-renderers` `SheetDiff` (`SheetRowApproval`); the `TcInlineDiff`
 // state machine (`idle → streaming → pending → accepted|rejected`) is exported
 // from the Phase 2-E block above.
+//
+// `RunApproval.grantOptions` / `allowsRunScopedGrant` are the once/always half
+// of the same wire (`payload.grant_options`). The list is carried verbatim and
+// the DECISION about it is made in the projection, because `allow_always` means
+// two different things on the two lanes that emit it — a run-scoped policy rule
+// on the write gate, and attaching a folder on the filesystem lane, whose resume
+// path does not carry `decision_scope` at all. `WRITE_GATE_APPROVAL_PREFIX` is
+// the SSOT for telling them apart.
 export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  WRITE_GATE_APPROVAL_PREFIX,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,
@@ -1661,6 +1670,38 @@ export {
 // the host supplies the nav-aware chip renderer + `onOrdinalSelect`.
 export { projectCitations, type CitationProjection } from "./destinations/run";
 // === end WC-P6a ===
+
+// === Context-compaction divider (`compression_note`) ===
+// The runtime has bounded oversized tool results out of model context for a long
+// time; the transcript never said so, and the user could only observe the
+// consequence — the agent not knowing something it had "already read".
+// `projectCompactionNotices` is a PURE selector over the same `session.events`
+// every other cockpit family reads (FR-3.3), and `TcCompactionDivider` draws the
+// boundary as a quiet rule rather than a card: there is nothing on it to decide,
+// expand or open. `RunDestination` performs the wiring (memo → `TcChat`'s
+// `compactionNotices` prop); both are exported for standalone hosts + tests.
+export {
+  projectCompactionNotices,
+  type CompactionNoticeEntry,
+} from "./destinations/run";
+export {
+  TcCompactionDivider,
+  type TcCompactionDividerProps,
+} from "./thread-canvas";
+// === end context-compaction divider ===
+
+// === Mid-run steer (`POST /v1/agent/runs/{id}/steer` + `run_steered`) ===
+// The composer used to be a dead box while a run was executing: `Composer.send`
+// refused on `running`, so a user who typed a correction and pressed ⏎ got
+// nothing at all. The runtime has accepted a durable, queued steer the whole
+// time. `RunDestination` now routes a submit against a live run to that
+// endpoint through the Transport port, and `projectSteerNotes` +`TcSteerNote`
+// draw the `run_steered` event the coordinator appends, so the transcript shows
+// that the user intervened and when. Both halves are exported for standalone
+// hosts + tests; `RunDestination` performs the wiring.
+export { projectSteerNotes, type SteerNoteEntry } from "./destinations/run";
+export { TcSteerNote, type TcSteerNoteProps } from "./thread-canvas";
+// === end mid-run steer ===
 
 // === Phase 3 (PR-3.11) run empty state ===
 // The empty/idle goal composer `RunDestination` mounts internally

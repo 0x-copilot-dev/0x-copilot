@@ -46,6 +46,7 @@ from runtime_adapters.file.export_import import (
     ExportManifest,
     ImportOutcome,
 )
+from runtime_adapters.file.host_write_journal_store import FileHostWriteJournalStore
 from runtime_adapters.file.large_tool_result_backend import FileLargeToolResultBackend
 from runtime_adapters.file.mcp_catalog_store import FileMcpCatalogStore
 from runtime_adapters.file.mcp_revision_cursor import (
@@ -73,6 +74,7 @@ __all__ = [
     "FileStoreRepairReason",
     "ObjectRef",
     "FileOffloadWriter",
+    "FileHostWriteJournalStore",
     "FileLargeToolResultBackend",
     "FileMcpCatalogStore",
     "DesktopFilesystemMcpRevisionCursorStore",

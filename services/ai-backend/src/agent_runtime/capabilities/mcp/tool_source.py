@@ -31,6 +31,14 @@ out of a model-supplied payload. Four steps, in this order:
    ``action`` / ``trust`` / ``connector_state`` logic of its own; a second
    derivation would be a second security policy.
 
+Every registered tool is named ``mcp__{server_slug}__{tool}``
+(:class:`~agent_runtime.capabilities.mcp.tool_naming.McpToolName`), which is what
+makes two connectors that both expose ``search`` two callable tools instead of
+one registration and one dropped connector. The bare name the server advertises
+stays the key for everything on the connector side — dispatch, the action
+catalog, the annotations registry — and :meth:`McpToolSource._describe` is where
+the two registers are kept apart.
+
 Two maps are published alongside the pairs (:class:`McpToolCatalog`):
 ``cards_by_urn`` (what P2-4's Policy stage needs to build a GATE interrupt
 payload for a fixed tool) and ``tool_to_server`` (the ``tool_name → server_slug``
@@ -107,6 +115,7 @@ from agent_runtime.capabilities.mcp.descriptor_source import (
     McpCapabilityDescriptorSource,
 )
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
+from agent_runtime.capabilities.mcp.tool_naming import McpToolName
 from agent_runtime.capabilities.policy.contracts import (
     CapabilityDescriptor,
     CredentialProvider,
@@ -449,7 +458,9 @@ class McpToolCatalog:
     #: fixed tool it wraps without re-resolving the server.
     cards_by_urn: Mapping[str, McpServerCard]
     #: ``tool_name -> server_slug`` — the resolver map that replaces
-    #: ``McpDispatcherUnwrap.effective_server_name`` in the per-tool world.
+    #: ``McpDispatcherUnwrap.effective_server_name`` in the per-tool world. Keyed
+    #: on the MODEL-surface name (``mcp__{server_slug}__{tool}``), which is what
+    #: ``payload.tool_name`` carries on every stream event.
     tool_to_server: Mapping[str, str]
     #: Per-server load failures, safe for model and API surfaces.
     failures: tuple[McpLoadError, ...]
@@ -545,6 +556,7 @@ class McpToolSource:
                 pair = self._describe(
                     tool=tool,
                     card=card,
+                    slug=slug,
                     taken=tool_to_server,
                     failures=failures,
                 )
@@ -633,10 +645,11 @@ class McpToolSource:
         *,
         tool: BaseTool,
         card: McpServerCard,
+        slug: str,
         taken: Mapping[str, str],
         failures: list[McpLoadError],
     ) -> ToolDescriptorPair | None:
-        """Ingest the tool's hints, then describe it via the P1b source.
+        """Namespace the tool's name, ingest its hints, then describe it (P1b).
 
         Returns ``None`` when the tool cannot be registered safely: a blank name
         names nothing, and a name already claimed by another connector would make
@@ -645,22 +658,43 @@ class McpToolSource:
         policy failure, not a cosmetic one. First registration wins; the
         collision is dropped with a typed failure.
 
-        The tool's own ``name`` is the single key throughout — the collision
-        check, the derivation, and the published map all use it verbatim, so no
-        two of them can ever disagree about what this tool is called.
+        **Two names, one register each, and neither may be used in the other's
+        place.** ``name`` is the model-surface name
+        (:class:`~agent_runtime.capabilities.mcp.tool_naming.McpToolName`) and is
+        the single key on that side throughout — the collision check, the
+        registered ``BaseTool.name``, and the published ``tool_to_server`` map
+        all read this one variable, so no two of them can disagree about what
+        the model calls this tool. ``raw_name`` is the connector-register name
+        and stays bare: the descriptor derivation looks the tool up in the action
+        catalog and the untrusted-annotations registry under it, and
+        ``langchain-mcp-adapters`` dispatches under it (the wire name is captured
+        in the tool's own closure, so renaming the ``BaseTool`` renames nothing
+        the server sees).
+
+        Because the model-surface name carries the connector, two servers that
+        both expose ``search`` now register two tools rather than one plus a
+        ``DUPLICATE_DESCRIPTOR_NAME`` failure — the collision check below fires
+        only for a genuine clash of *namespaced* names.
         """
 
-        name = tool.name or ""
-        if not name.strip():
+        raw_name = tool.name or ""
+        if not raw_name.strip():
             return None
+        name = McpToolName.compose(server=slug, tool=raw_name)
         if name in self._reserved_names:
-            # A connector's tool may not take a NATIVE tool's name. The adapters
-            # library defaults to no prefix, so an MCP server advertising
-            # ``write_todos`` / ``read_file`` / ``task`` would otherwise shadow a
-            # Deep Agents builtin in the composed tool list AND publish
+            # A connector's tool may not take a NATIVE tool's name — it would
+            # shadow a Deep Agents builtin in the composed tool list AND publish
             # ``tool_to_server[name]``, which makes the stream seam stamp MCP
             # provenance + access_mode onto that builtin's own events. Native
             # tools win; the connector's tool is dropped, typed and visible.
+            #
+            # The namespace makes the ordinary case unreachable rather than
+            # merely rare: a server advertising ``write_todos`` now registers as
+            # ``mcp__linear__write_todos`` and shadows nothing, so it loads
+            # instead of being dropped. What survives here is the case the
+            # namespace cannot rule out — a native tool that itself carries the
+            # ``mcp__`` shape — and that is exactly the collision worth a typed
+            # failure.
             failures.append(
                 McpSourceFailure.build(
                     McpLoadErrorCode.LOCAL_TOOL_COLLISION,
@@ -681,15 +715,19 @@ class McpToolSource:
             )
             return None
         # Order is load-bearing: ``describe`` reads the annotations registry, so
-        # the hints must be captured before the descriptor is derived.
+        # the hints must be captured before the descriptor is derived. Both are
+        # keyed on the CONNECTOR register — ``raw_name`` — because that is the
+        # key the action catalog and the annotations registry are written under;
+        # handing them the namespaced name would miss every entry and fail every
+        # tool closed to ``WRITE``.
         self._ingest_annotations(server=card.name, tool=tool)
         descriptor = McpCapabilityDescriptorSource.describe(
             card=card,
             server=card.name,
-            tool=name,
+            tool=raw_name,
             context=self._context,
         )
-        return (tool, descriptor)
+        return (tool.model_copy(update={"name": name}), descriptor)
 
     def _ingest_annotations(self, *, server: str, tool: BaseTool) -> None:
         """Capture one tool's untrusted tri-state hints into the run registry.

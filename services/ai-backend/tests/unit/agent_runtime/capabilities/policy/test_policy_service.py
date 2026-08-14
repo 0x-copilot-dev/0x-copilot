@@ -35,11 +35,18 @@ from agent_runtime.capabilities.policy.contracts import (
     Principal,
     Trust,
 )
+from agent_runtime.capabilities.policy.rules import (
+    PermissionRule,
+    PermissionRuleset,
+    RuleAction,
+)
 from agent_runtime.capabilities.policy.service import (
     ConnectorAllowlist,
     PdpPolicyService,
 )
-from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
+from agent_runtime.capabilities.tools.permissions import (
+    ToolUsePolicySnapshot,
+)
 
 
 class PolicyServiceFixtureMixin:
@@ -159,12 +166,16 @@ class PolicyServiceFixtureMixin:
         overrides: ConnectorWritePolicyOverrides | None = None,
         allowlist: "PolicyServiceFixtureMixin._FakeAllowlist | None" = None,
         untrusted_read_gate: bool = True,
+        rules: PermissionRuleset | None = None,
+        never: PermissionRuleset | None = None,
     ) -> PdpPolicyService:
         return PdpPolicyService(
             snapshot=self._snapshot() if snapshot is None else snapshot,
             overrides=self._overrides() if overrides is None else overrides,
             allowlist=self._FakeAllowlist() if allowlist is None else allowlist,
             untrusted_read_gate=untrusted_read_gate,
+            rules=rules,
+            never=never,
         )
 
     def _decide(
@@ -354,8 +365,26 @@ class TestApprovalMatrixDefaultSnapshot(PolicyServiceFixtureMixin):
             ),
             (Action.WRITE, Trust.TRUSTED, Posture.BYPASS, PolicyDecision.ALLOW, ""),
             (Action.WRITE, Trust.UNTRUSTED, Posture.BYPASS, PolicyDecision.ALLOW, ""),
-            # DESTRUCTIVE — trust-independent: GATE always under MANUAL, ALLOW under
-            # BYPASS (bypass surrenders even the destructive hard-gate).
+            # DESTRUCTIVE — trust-independent AND posture-independent: GATE in
+            # BOTH postures.
+            #
+            # CHANGED (was ALLOW under BYPASS, "bypass surrenders even the
+            # destructive hard-gate"). That cell was the bug this row now pins:
+            # the BYPASS branch returned ALLOW *above* the action check, so the
+            # one rung that exists to stop an irreversible act was never
+            # evaluated in the posture where it mattered. The only thing above it
+            # was an admin-authored workspace BLOCK, which nobody authors on a
+            # single-user desktop — the product — so in practice Bypass deleted
+            # without asking.
+            #
+            # GATE (not DENY) is the same asymmetry the filesystem lane already
+            # ships: `desktop/host_filesystem.py:46-48` — "bypass removes the
+            # PAUSE, never widens the SET". The user keeps the ability to say
+            # yes; what they lose is having said yes in advance, via a pill, to a
+            # whole class of destructive acts. A deployment that genuinely wants
+            # destructive auto-run still has one — it authors
+            # `destructive=auto` on the axis, which is asserted separately by
+            # `TestDestructiveRungUnderBypass`.
             (
                 Action.DESTRUCTIVE,
                 Trust.TRUSTED,
@@ -374,15 +403,15 @@ class TestApprovalMatrixDefaultSnapshot(PolicyServiceFixtureMixin):
                 Action.DESTRUCTIVE,
                 Trust.TRUSTED,
                 Posture.BYPASS,
-                PolicyDecision.ALLOW,
-                "",
+                PolicyDecision.GATE,
+                "approval_required.destructive",
             ),
             (
                 Action.DESTRUCTIVE,
                 Trust.UNTRUSTED,
                 Posture.BYPASS,
-                PolicyDecision.ALLOW,
-                "",
+                PolicyDecision.GATE,
+                "approval_required.destructive",
             ),
         ],
     )
@@ -736,9 +765,344 @@ class TestSafeReasonStrings(PolicyServiceFixtureMixin):
             assert leaked not in reason
 
 
+class TestDestructiveRungUnderBypass(PolicyServiceFixtureMixin):
+    """The rung that survives BYPASS, and the one authored statement that lifts it.
+
+    Pins the asymmetry the filesystem lane already ships
+    (``desktop/host_filesystem.py:46-48``, "bypass removes the PAUSE, never
+    widens the SET"): a posture pill may stop the runtime pausing on ordinary
+    writes, and may not buy a standing yes to irreversible ones.
+    """
+
+    @pytest.mark.parametrize("trust", list(Trust))
+    def test_destructive_gates_under_bypass(self, trust: Trust) -> None:
+        service = self._service()
+        descriptor = self._descriptor(action=Action.DESTRUCTIVE, trust=trust)
+        decision, reason = self._decide(
+            service, descriptor=descriptor, posture=Posture.BYPASS
+        )
+        assert decision is PolicyDecision.GATE
+        assert reason == "approval_required.destructive"
+
+    def test_destructive_gate_is_not_a_refusal(self) -> None:
+        # GATE, never DENY: the user keeps the ability to say yes on a card that
+        # names the act. Losing that would make Bypass strictly worse than
+        # Manual for destructive ops, which is not the asymmetry being ported.
+        service = self._service()
+        descriptor = self._descriptor(action=Action.DESTRUCTIVE)
+        decision, _ = self._decide(
+            service, descriptor=descriptor, posture=Posture.BYPASS
+        )
+        assert decision is not PolicyDecision.DENY
+
+    def test_connector_write_override_does_not_lift_the_destructive_rung(self) -> None:
+        # ``allow_always`` is a WRITE-axis downgrade. It must not reach
+        # DESTRUCTIVE in either posture.
+        service = self._service(
+            overrides=self._overrides({self._CONNECTOR: "allow_always"})
+        )
+        descriptor = self._descriptor(action=Action.DESTRUCTIVE)
+        for posture in Posture:
+            decision, reason = self._decide(
+                service, descriptor=descriptor, posture=posture
+            )
+            assert decision is PolicyDecision.GATE
+            assert reason == "approval_required.destructive"
+
+    def test_a_rule_allow_does_not_lift_the_destructive_rung(self) -> None:
+        # An authored ``allow`` may tighten a destructive op, never loosen one —
+        # the same conjunction the per-connector override already obeys.
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(
+                    PermissionRule(
+                        permission="*", pattern="*", action=RuleAction.ALLOW
+                    ),
+                )
+            )
+        )
+        descriptor = self._descriptor(action=Action.DESTRUCTIVE)
+        for posture in Posture:
+            decision, reason = self._decide(
+                service, descriptor=descriptor, posture=posture
+            )
+            assert decision is PolicyDecision.GATE
+            assert reason == "approval_required.destructive"
+
+    @pytest.mark.parametrize("posture", list(Posture))
+    def test_authoring_the_axis_to_auto_is_the_one_lift(self, posture: Posture) -> None:
+        # "Posture ≠ policy": ``destructive=auto`` is a statement about
+        # destructive ops written where policy is written, so it still decides.
+        # This is what keeps the change strictly additive for anyone who authored
+        # the axis.
+        service = self._service(snapshot=self._snapshot(destructive="auto"))
+        descriptor = self._descriptor(action=Action.DESTRUCTIVE)
+        decision, reason = self._decide(service, descriptor=descriptor, posture=posture)
+        assert decision is PolicyDecision.ALLOW
+        assert reason == ""
+
+    def test_bypass_still_lifts_the_write_gate(self) -> None:
+        # The change is scoped to the destructive rung: BYPASS keeps meaning
+        # "writes auto" for WRITE, which is the whole point of the pill.
+        service = self._service()
+        for trust in Trust:
+            decision, reason = self._decide(
+                service,
+                descriptor=self._descriptor(action=Action.WRITE, trust=trust),
+                posture=Posture.BYPASS,
+            )
+            assert decision is PolicyDecision.ALLOW
+            assert reason == ""
+
+
+class TestRuleLayerPlacement(PolicyServiceFixtureMixin):
+    """Where ``(permission × pattern)`` rules sit in the ladder, and what that buys.
+
+    Reading downward the ladder is: never-list › workspace BLOCK › rule
+    tightenings › DESTRUCTIVE › rule ALLOW › BYPASS › the axis. Each test below
+    pins one adjacency; the destructive adjacencies live in
+    :class:`TestDestructiveRungUnderBypass`.
+    """
+
+    def _rule(
+        self,
+        action: RuleAction,
+        *,
+        permission: str = "*",
+        pattern: str = "*",
+    ) -> PermissionRule:
+        return PermissionRule(permission=permission, pattern=pattern, action=action)
+
+    def test_empty_ruleset_is_todays_behaviour(self) -> None:
+        # The additivity claim, asserted rather than asserted-in-a-docstring:
+        # the default (no rules) must reproduce the no-rules service exactly.
+        with_default = self._service()
+        with_empty = self._service(rules=PermissionRuleset(), never=PermissionRuleset())
+        for action in Action:
+            for trust in Trust:
+                for posture in Posture:
+                    descriptor = self._descriptor(action=action, trust=trust)
+                    assert self._decide(
+                        with_default, descriptor=descriptor, posture=posture
+                    ) == self._decide(
+                        with_empty, descriptor=descriptor, posture=posture
+                    )
+
+    def test_rule_deny_survives_bypass(self) -> None:
+        # A tightening the user wrote down is not undone by a posture pill.
+        service = self._service(
+            rules=PermissionRuleset(rules=(self._rule(RuleAction.DENY),))
+        )
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            posture=Posture.BYPASS,
+        )
+        assert decision is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+    def test_rule_ask_survives_bypass(self) -> None:
+        service = self._service(
+            rules=PermissionRuleset(rules=(self._rule(RuleAction.ASK),))
+        )
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            posture=Posture.BYPASS,
+        )
+        assert decision is PolicyDecision.GATE
+        assert reason == "approval_required.write"
+
+    def test_rule_allow_lifts_a_write_ask_under_manual(self) -> None:
+        # The widening direction: this is what an `always` reply buys.
+        service = self._service(
+            rules=PermissionRuleset(rules=(self._rule(RuleAction.ALLOW),))
+        )
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            posture=Posture.MANUAL,
+        )
+        assert decision is PolicyDecision.ALLOW
+        assert reason == ""
+
+    def test_rule_allow_does_not_lift_a_workspace_block(self) -> None:
+        service = self._service(
+            snapshot=self._snapshot(write="block"),
+            rules=PermissionRuleset(rules=(self._rule(RuleAction.ALLOW),)),
+        )
+        decision, reason = self._decide(
+            service, descriptor=self._descriptor(action=Action.WRITE)
+        )
+        assert decision is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+    def test_last_match_wins(self) -> None:
+        # Ordering IS the semantic: config ⧺ session means a later rule overrides
+        # an earlier one, which is what makes layering plain concatenation.
+        tighten_then_widen = PermissionRuleset(
+            rules=(self._rule(RuleAction.DENY), self._rule(RuleAction.ALLOW))
+        )
+        widen_then_tighten = PermissionRuleset(
+            rules=(self._rule(RuleAction.ALLOW), self._rule(RuleAction.DENY))
+        )
+        descriptor = self._descriptor(action=Action.WRITE)
+        assert self._decide(
+            self._service(rules=tighten_then_widen), descriptor=descriptor
+        ) == (PolicyDecision.ALLOW, "")
+        assert self._decide(
+            self._service(rules=widen_then_tighten), descriptor=descriptor
+        ) == (PolicyDecision.DENY, "permission_denied")
+
+    def test_a_narrow_later_rule_overrides_a_broad_earlier_one(self) -> None:
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(
+                    self._rule(RuleAction.ALLOW, permission="mcp:linear:*"),
+                    self._rule(
+                        RuleAction.DENY, permission=self._urn(tool="delete_issue")
+                    ),
+                )
+            )
+        )
+        allowed, _ = self._decide(
+            service, descriptor=self._descriptor(action=Action.WRITE, tool="op")
+        )
+        denied, _ = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE, tool="delete_issue"),
+        )
+        assert allowed is PolicyDecision.ALLOW
+        assert denied is PolicyDecision.DENY
+
+    def test_an_argument_is_a_subject(self) -> None:
+        # The per-argument policy the axis alone cannot express: same tool, two
+        # arguments, two answers.
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(self._rule(RuleAction.DENY, pattern="*id_rsa*"),)
+            )
+        )
+        descriptor = self._descriptor(action=Action.WRITE)
+        benign, _ = self._decide(
+            service, descriptor=descriptor, args={"path": "/tmp/notes.txt"}
+        )
+        secret, reason = self._decide(
+            service, descriptor=descriptor, args={"path": "/home/s/.ssh/id_rsa"}
+        )
+        assert benign is PolicyDecision.GATE
+        assert secret is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+    def test_the_strictest_thing_said_about_any_subject_wins(self) -> None:
+        service = self._service(
+            rules=PermissionRuleset(
+                rules=(
+                    self._rule(RuleAction.ALLOW, pattern="mcp:linear:*"),
+                    self._rule(RuleAction.DENY, pattern="*id_rsa*"),
+                )
+            )
+        )
+        decision, _ = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            args={"path": "/home/s/.ssh/id_rsa"},
+        )
+        assert decision is PolicyDecision.DENY
+
+    def test_rule_reason_codes_stay_in_the_safe_set(self) -> None:
+        for rule_action in RuleAction:
+            service = self._service(
+                rules=PermissionRuleset(rules=(self._rule(rule_action),)),
+                never=PermissionRuleset(rules=(self._rule(RuleAction.DENY),)),
+            )
+            for action in Action:
+                for posture in Posture:
+                    _, reason = self._decide(
+                        service,
+                        descriptor=self._descriptor(action=action),
+                        posture=posture,
+                    )
+                    assert reason in self._SAFE_REASONS
+
+
+class TestNeverListIsAFloor(PolicyServiceFixtureMixin):
+    """The durable never-list: above every posture, rule and override."""
+
+    _NEVER = PermissionRuleset(
+        rules=(PermissionRule(pattern="*id_rsa*", action=RuleAction.DENY),)
+    )
+
+    @pytest.mark.parametrize("posture", list(Posture))
+    def test_never_list_survives_bypass(self, posture: Posture) -> None:
+        service = self._service(never=self._NEVER)
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            args={"path": "/home/s/.ssh/id_rsa"},
+            posture=posture,
+        )
+        assert decision is PolicyDecision.DENY
+        assert reason == "permission_denied"
+
+    def test_never_list_survives_an_allow_rule(self) -> None:
+        # A run-scoped `always` cannot climb over a durable never.
+        service = self._service(
+            never=self._NEVER,
+            rules=PermissionRuleset(
+                rules=(PermissionRule(pattern="*", action=RuleAction.ALLOW),)
+            ),
+        )
+        decision, _ = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            args={"path": "/home/s/.ssh/id_rsa"},
+            posture=Posture.BYPASS,
+        )
+        assert decision is PolicyDecision.DENY
+
+    def test_never_list_survives_the_connector_write_override(self) -> None:
+        service = self._service(
+            never=self._NEVER,
+            overrides=self._overrides({self._CONNECTOR: "allow_always"}),
+        )
+        decision, _ = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.WRITE),
+            args={"path": "/home/s/.ssh/id_rsa"},
+        )
+        assert decision is PolicyDecision.DENY
+
+    def test_never_list_survives_an_axis_authored_to_auto(self) -> None:
+        service = self._service(
+            never=self._NEVER,
+            snapshot=self._snapshot(read="auto", write="auto", destructive="auto"),
+        )
+        for action in Action:
+            decision, _ = self._decide(
+                service,
+                descriptor=self._descriptor(action=action),
+                args={"path": "/home/s/.ssh/id_rsa"},
+                posture=Posture.BYPASS,
+            )
+            assert decision is PolicyDecision.DENY
+
+    def test_never_list_does_not_touch_an_unmatched_call(self) -> None:
+        service = self._service(never=self._NEVER)
+        decision, reason = self._decide(
+            service,
+            descriptor=self._descriptor(action=Action.READ),
+            args={"path": "/tmp/notes.txt"},
+        )
+        assert decision is PolicyDecision.ALLOW
+        assert reason == ""
+
+
 class TestPurity(PolicyServiceFixtureMixin):
-    def test_args_do_not_change_the_decision(self) -> None:
-        # ``args`` is threaded but currently unconsulted.
+    def test_args_do_not_change_the_decision_without_rules(self) -> None:
+        # ``args`` is consulted only through the rule layer, so with the default
+        # empty ruleset it cannot move a decision. The per-argument behaviour it
+        # unlocks is asserted by ``TestRuleLayerPlacement``.
         service = self._service()
         descriptor = self._descriptor(action=Action.WRITE)
         without = self._decide(service, descriptor=descriptor, args={})

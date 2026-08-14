@@ -507,7 +507,19 @@ def build_chat_model(
     if FakeModelProvider.is_enabled():
         return FakeModelProvider.build(model_config)
 
-    kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
+    # ``max_retries=0`` hands the retry decision to ``ModelCallRetryPolicy``,
+    # which is the only place it can be observed or tuned. Every provider SDK
+    # ships a silent default (openai and anthropic 2, google-genai 6), so before
+    # this line a single model call could quietly become three HTTP requests:
+    # invisible in the logs, uncounted against any budget, and multiplying
+    # ``timeout`` — the value that is supposed to bound one attempt — by the
+    # SDK's own attempt count. Owning it here also stops the two schedules
+    # compounding, which is what "we retry twice" plus "the SDK retried twice"
+    # actually means: six requests for one call.
+    kwargs: dict[str, object] = {
+        "timeout": model_config.timeout_seconds,
+        "max_retries": 0,
+    }
     # Two independent reasons to omit `temperature`, and both must hold before
     # we send it. Reasoning-enabled models take their sampling from the
     # thinking config. Separately, the Claude 4.7+ generation removed the

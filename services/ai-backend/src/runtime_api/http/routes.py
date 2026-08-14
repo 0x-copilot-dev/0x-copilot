@@ -37,6 +37,8 @@ from runtime_api.schemas import (
     AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
+    SteerRunRequest,
+    SteerRunResponse,
     ConversationBucket,
     ConversationConnectorScopesResponse,
     ConversationCanvasResponse,
@@ -721,6 +723,36 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def steer_run(
+        cls,
+        request: Request,
+        run_id: str,
+        payload: SteerRunRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> SteerRunResponse:
+        """Send a user message into a run that is already executing.
+
+        The steer is recorded in the run's transcript immediately and queued for
+        delivery at the run's next model step — never mid-tool-call. ``409`` when
+        the run is no longer in flight; a steer that cannot be read is refused
+        rather than silently accepted.
+
+        ``requested_by_user_id`` is overwritten from the verified session for the
+        same reason ``cancel_run`` overwrites it: a body-supplied identity is
+        caller-controlled, and honouring it would let one user put words into
+        another user's run.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        payload = payload.model_copy(update={"requested_by_user_id": user_id})
+        return await cls.run_coordinator(request).steer_run(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            request=payload,
+        )
+
+    @classmethod
     async def list_approvals(
         cls,
         request: Request,
@@ -1155,6 +1187,13 @@ class RuntimeApiRouter:
             name=Keys.RouteName.CANCEL_RUN,
         )
         router.add_api_route(
+            "/runs/{run_id}/steer",
+            RuntimeApiRoutes.steer_run,
+            methods=["POST"],
+            response_model=SteerRunResponse,
+            name=Keys.RouteName.STEER_RUN,
+        )
+        router.add_api_route(
             "/approvals/{approval_id}/decision",
             RuntimeApiRoutes.approval_decision,
             methods=["POST"],
@@ -1200,6 +1239,16 @@ class RuntimeApiRouter:
         from runtime_api.http.drafts import register_draft_routes
 
         register_draft_routes(router)
+        # Undo for the agent's writes to the user's real disk. Registered
+        # UNCONDITIONALLY, not behind a flag: the handler 503s when the
+        # capability is absent (no file store ⇒ nothing was captured), and a
+        # flag here would be a second, quieter way for the one feature whose
+        # job is "you can always get your file back" to not exist.
+        from runtime_api.http.host_write_undo import (
+            register_host_write_undo_routes,
+        )
+
+        register_host_write_undo_routes(router)
         # PRD-D1 (Generative Surfaces v2) — single-artifact staged-write routes.
         # Registered ONLY when SURFACES_V2 is on; flag off ⇒ the three
         # ``/v1/agent/stages/*`` routes do not exist (404), the cleanest
@@ -1274,6 +1323,15 @@ class RuntimeApiRouter:
         )
 
         register_workspace_data_routes(router)
+        # Agent-as-configuration — read/declare/undeclare the agents this
+        # installation has configured. The entry point ``subagent_defs/*.json``
+        # never had: the file store could always read AND write one, and
+        # nothing in the product could reach either half.
+        from runtime_api.http.subagent_definition_routes import (
+            register_declared_subagent_routes,
+        )
+
+        register_declared_subagent_routes(router)
         # PR 6.1 — conversation sharing (create / list / update / revoke
         # + recipient view). Mounted before the fork routes below so the
         # ``/v1/agent/shares/{share_token}`` GET registers ahead of the
