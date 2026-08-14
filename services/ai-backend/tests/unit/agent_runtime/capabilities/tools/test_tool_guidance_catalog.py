@@ -9,8 +9,10 @@ smaller, which is the entire claim.
 Four things are pinned, because each is a way this could ship looking correct
 and be worthless:
 
-1. **The saving is real and measured.** The three deferred tools shed >1,400
-   estimated tokens of resident text on the composed surface.
+1. **The saving is real and measured.** The three deferred tools shed 1,327
+   estimated tokens of resident text on the composed surface — 1,712 tokens of
+   prose replaced by 385 of summary. Neutering the swap makes this test report
+   ``saved 0``, which is what the number is worth checking against.
 2. **A blind call still works.** Argument schemas are byte-identical to the
    undeferred surface, so a model that never reads ``/tools/`` still composes a
    well-formed call. This is the design's answer to "what if it never expands?"
@@ -417,6 +419,58 @@ class TestNoMountMeansNoStub(GuidedSurfaceMixin):
         assert mounted is not None
         assert isinstance(backend, CompositeBackend)
         assert set(backend.routes) == {ToolCatalogBackend.PATH_PREFIX}
+
+    def test_an_existing_mcp_route_survives_the_tools_mount(self) -> None:
+        from deepagents.backends.composite import CompositeBackend
+        from deepagents.backends.state import StateBackend
+
+        sentinel = StateBackend()
+        existing = CompositeBackend(default=StateBackend(), routes={"/mcp/": sentinel})
+
+        backend, _ = _with_tool_guidance_route(
+            existing,
+            catalog=self.catalog(self.adapters()),
+            memory_backend=object(),
+        )
+
+        assert isinstance(backend, CompositeBackend)
+        assert backend.routes["/mcp/"] is sentinel
+        assert set(backend.routes) == {"/mcp/", ToolCatalogBackend.PATH_PREFIX}
+
+
+class TestTheModelReachesItThroughTheCompositeMount(GuidedSurfaceMixin):
+    """The hop that matters: a ``read_file`` the model makes, not a direct call.
+
+    ``CompositeBackend`` strips ``/tools`` on the way in and re-prepends it on
+    the way out, so a backend that only understood its own public paths would
+    look correct in every direct-call test and answer the model NOT FOUND.
+    """
+
+    def composite(self) -> object:
+        from deepagents.backends.composite import CompositeBackend
+        from deepagents.backends.state import StateBackend
+
+        backend, _ = _with_tool_guidance_route(
+            CompositeBackend(default=StateBackend(), routes={}),
+            catalog=self.catalog(self.adapters()),
+            memory_backend=object(),
+        )
+        assert isinstance(backend, CompositeBackend)
+        return backend
+
+    def test_read_file_on_the_public_path_returns_the_guidance(self) -> None:
+        result = self.composite().read("/tools/publish_artifact.md")
+
+        content = (result.file_data or {})["content"]
+        assert "# publish_artifact" in content
+        assert "Choosing an accent" in content
+
+    def test_ls_of_the_public_directory_is_never_an_empty_success(self) -> None:
+        result = self.composite().ls("/tools")
+
+        paths = {entry["path"] for entry in (result.entries or [])}
+        assert result.error is None
+        assert "/tools/TOOLS.md" in paths
 
 
 class TestTheCatalogIsReadableAndReadOnly(GuidedSurfaceMixin):

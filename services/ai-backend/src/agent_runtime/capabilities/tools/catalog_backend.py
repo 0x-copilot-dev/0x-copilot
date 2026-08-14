@@ -235,7 +235,12 @@ class ToolCatalogBackend(BackendProtocol):
         return None
 
     def _ls(self, path: str) -> LsResult:
-        del path  # ``/tools`` is flat: every path under it lists the same set.
+        # ``/tools`` is flat, so every path under it lists the same set —
+        # including a path that names no directory. That is deliberate: the only
+        # reason a model asks for ``/tools/something/`` is that it is looking for
+        # a file, and showing it the four that exist answers the question it
+        # actually had. An error would be more literally correct and less useful.
+        del path
         files = self._files()
         if not files:
             return LsResult(error=Messages.EMPTY)
