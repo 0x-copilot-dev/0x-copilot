@@ -20,6 +20,7 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.tool_outcomes import ToolInvocationOutcome
+from agent_runtime.execution.tool_refusals import ToolRefusals
 from agent_runtime.observability.redactor import ToolArgumentRedactor
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.persistence.records import ToolInvocationRecord
@@ -952,17 +953,37 @@ class StreamMessageProcessor:
         # "error"). Re-establish the distinction before the status is published,
         # or a working policy decision propagates as a run-level failure.
         policy_code = WorkspacePolicyAnswers.code_for(output.get(Keys.Field.CONTENT))
+        # The same distinction, one layer up: a tool call the budget or task
+        # policy refused BEFORE invocation. LangChain's ``ToolMessage.status``
+        # is ``success``/``error`` with no third value for "declined", so the
+        # refusal arrives here stamped ``error`` too. It carries a typed marker
+        # for exactly this seam rather than making us match its prose.
+        # Reads ``message`` and not ``payload``: the flattening above keeps a
+        # fixed list of well-known attributes off an object-shaped message, and
+        # ``additional_kwargs`` is not on it. ``read`` accepts either shape, so
+        # the live ``ToolMessage`` and a replayed mapping both resolve here.
+        refusal = ToolRefusals.read(message)
+        declined = policy_code is not None or refusal is not None
         result: JsonObject = {
             Keys.Field.TOOL_NAME: tool_name,
             Keys.Field.CALL_ID: call_id,
-            Keys.Field.STATUS: (
-                Values.Status.UNAVAILABLE if policy_code is not None else status
-            ),
+            Keys.Field.STATUS: (Values.Status.UNAVAILABLE if declined else status),
             Keys.Field.OUTPUT: output or payload,
         }
         if policy_code is not None:
             result["error_code"] = str(policy_code)
             result["safe_message"] = str(output.get(Keys.Field.CONTENT)).strip()
+        elif refusal is not None:
+            result["error_code"] = refusal.code
+            # The refusal's own sentence, not the model-facing content: that
+            # one is "<error_class>: <message>\nHints: {...}", which is right
+            # for the model and unreadable on a card.
+            if refusal.safe_message:
+                result["safe_message"] = refusal.safe_message
+            # Repeating the call cannot change the outcome — the cap holds for
+            # the rest of the run. Stated explicitly so the client draws no
+            # remedy it cannot honour.
+            result["retryable"] = False
         elif structured_error is not None:
             error_code = StreamTextHelper.extract(error.get("code"))
             safe_message = StreamTextHelper.extract(error.get("safe_message"))

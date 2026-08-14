@@ -53,6 +53,7 @@ from agent_runtime.control_plane.context import (
 )
 from agent_runtime.execution.tool_errors import BudgetExceeded
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
+from agent_runtime.execution.tool_refusals import ToolRefusals
 from agent_runtime.execution.tool_error_policy import DefaultToolErrorPolicy
 from agent_runtime.execution.tool_surface import (
     DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES,
@@ -922,6 +923,24 @@ def _surface_rejection(
     *,
     request: ToolCallRequest,
 ) -> ToolMessage:
+    """Hand a policy refusal back to the model, marked as a refusal.
+
+    Two consumers read this message and they need different things:
+
+    * **The model** reads ``content`` and ``status``. ``status="error"`` is the
+      honest signal there — the call yielded no result, and LangChain has only
+      ``success`` / ``error`` to say that with. Calling it ``success`` would
+      tell the model it got data it never received.
+    * **The client** reads the ``tool_result`` event the stream publishes from
+      this message. There, ``error`` is a lie of a different kind: the cap
+      declined the call by design, so nothing failed, and a card that says
+      "Failed" teaches users that a working budget looks like a broken run.
+
+    The typed marker is what lets the stream classifier tell the two apart
+    without pattern-matching this message's prose from three modules away. See
+    :mod:`agent_runtime.execution.tool_refusals`.
+    """
+
     tool = request.tool
     content = (
         DefaultToolErrorPolicy().classify(rejection, tool=tool).to_llm_message_content()
@@ -933,6 +952,7 @@ def _surface_rejection(
         tool_call_id=str(request.tool_call["id"]),
         name=str(request.tool_call.get("name", "")) or None,
         status="error",
+        additional_kwargs=ToolRefusals.marker_for(rejection) or {},
     )
 
 
