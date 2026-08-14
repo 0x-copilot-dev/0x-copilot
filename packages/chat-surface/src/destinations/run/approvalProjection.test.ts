@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import {
+  GRANT_OPTION_ALLOW_ALWAYS,
+  GRANT_OPTION_ALLOW_ONCE,
   overlayApprovalDecisions,
   projectApprovals,
   toApprovalsQueue,
@@ -680,5 +682,124 @@ describe("projectApprovals — the irreversible axis (what the wire really says)
     expect(projectApprovals([first, resend]).approvals[0]?.irreversible).toBe(
       true,
     );
+  });
+});
+
+// The once/always split, as the PRODUCER draws it.
+//
+// `grant_options` has been on the wire since before this program and the only
+// reference in the whole app tree was a strip list, so the first thing worth
+// pinning is that reading it does not become a SECOND authority on who gets a
+// durable grant. Every payload below is one the backend really emits
+// (`runtime_worker/stream_events._FilesystemApproval`); the projection's job is
+// to carry its decision, never to improve on it.
+describe("projectApprovals — the durable grant option", () => {
+  function filesystemAsk(
+    payload: Record<string, unknown>,
+  ): RuntimeEventEnvelope {
+    return envelope({
+      event_type: "approval_requested",
+      payload: {
+        approval_id: "int-1:0",
+        approval_kind: "filesystem_access",
+        display_name: "reports",
+        tool_name: "ls",
+        path: "/Users/ada/Documents/reports",
+        ...payload,
+      },
+    });
+  }
+
+  const SCOPE = {
+    path: "/Users/ada/Documents/reports",
+    folder_name: "reports",
+    platform: "posix",
+    mode: "read_only",
+  };
+
+  it("offers the folder when the wire offered the option AND named its subject", () => {
+    const [approval] = projectApprovals([
+      filesystemAsk({
+        read_only: true,
+        risk_level: "low",
+        grant_options: [GRANT_OPTION_ALLOW_ONCE, GRANT_OPTION_ALLOW_ALWAYS],
+        grant_scope: SCOPE,
+      }),
+    ]).approvals;
+    expect(approval?.grantAlways?.path).toBe("/Users/ada/Documents/reports");
+    expect(approval?.grantAlways?.folderName).toBe("reports");
+    // The access the grant would carry, so the card can state it rather than
+    // hand over something it cannot name.
+    expect(approval?.grantAlways?.mode).toBe("read_only");
+  });
+
+  it("leaves a WRITE once-only, because the producer shipped it that way", () => {
+    // `stream_events.py:227-234` is explicit: an "always" on a WRITE folder
+    // means ATTACH A FOLDER, which a write inside an already-attached folder
+    // does not need — what the user wants after the third card is "stop pausing
+    // for this run", and that is the composer's bypass pill. So `_grant_scope`
+    // returns None for a non-read and the payload carries `["allow_once"]`.
+    //
+    // This pins that the CLIENT does not overturn it. A projection that keyed
+    // the arm off `read_only`, or fell back to the ask's own `path`, would
+    // offer a durable folder grant from a card that never mentioned one — and
+    // would pass every test that only ever fed it a read.
+    const [approval] = projectApprovals([
+      filesystemAsk({
+        tool_name: "write_file",
+        read_only: false,
+        risk_level: "high",
+        grant_options: [GRANT_OPTION_ALLOW_ONCE],
+      }),
+    ]).approvals;
+    expect(approval?.grantAlways).toBeNull();
+    // …and it is still an ordinary ask in every other respect.
+    expect(approval?.irreversible).toBe(true);
+  });
+
+  it("refuses the option when the wire advertised it but shipped no scope", () => {
+    // The producer's own words for this hole: "allow_always with nothing to
+    // scope it is exactly the silent widening this card must never allow".
+    // There is deliberately no fallback to `payload.path` — the scope is
+    // withheld precisely in the cases where the two strings could differ (a
+    // pathless bulk call, a volume root, a path the card truncates).
+    const [approval] = projectApprovals([
+      filesystemAsk({
+        read_only: true,
+        grant_options: [GRANT_OPTION_ALLOW_ONCE, GRANT_OPTION_ALLOW_ALWAYS],
+      }),
+    ]).approvals;
+    expect(approval?.grantAlways).toBeNull();
+  });
+
+  it("refuses the option when a scope arrived without the option", () => {
+    // The mirror hole. A scope block alone says which folder a durable grant
+    // WOULD attach; it does not say the producer decided to offer one.
+    const [approval] = projectApprovals([
+      filesystemAsk({ read_only: true, grant_scope: SCOPE }),
+    ]).approvals;
+    expect(approval?.grantAlways).toBeNull();
+  });
+
+  it("offers nothing on an ordinary approval, which is nearly all of them", () => {
+    expect(
+      projectApprovals([requested("appr-1")]).approvals[0]?.grantAlways,
+    ).toBeNull();
+  });
+
+  it("never retracts the option on replay, mid-decision", () => {
+    // Same rule `presentation` and `irreversible` follow, and it bites harder
+    // here: the user may be looking at the OS dialog when the resend lands.
+    // Sticky cannot widen anything — a non-null value only ever came from a
+    // scope the wire named.
+    const first = filesystemAsk({
+      read_only: true,
+      grant_options: [GRANT_OPTION_ALLOW_ONCE, GRANT_OPTION_ALLOW_ALWAYS],
+      grant_scope: SCOPE,
+    });
+    const resend = filesystemAsk({ read_only: true });
+    expect(
+      projectApprovals([first, resend]).approvals[0]?.grantAlways?.path,
+    ).toBe("/Users/ada/Documents/reports");
   });
 });
