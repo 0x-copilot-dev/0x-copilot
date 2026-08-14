@@ -58,6 +58,14 @@ def test_openapi_includes_core_product_paths() -> None:
         # D11 — facade is the only app-facing legal-hold control plane.
         "/v1/retention/legal-holds",
         "/v1/retention/legal-holds/{hold_id}/release",
+        # Agent-write undo — the run's disk journal and the revert that spends
+        # it. Registered above ``/v1/agent/runs/{run_id}`` so the literal
+        # ``host-writes`` tail is not shadowed.
+        "/v1/agent/runs/{run_id}/host-writes",
+        "/v1/agent/runs/{run_id}/host-writes/revert",
+        # Mid-run steering — the sibling of ``/cancel``; without this forward no
+        # app can reach a run that is already executing.
+        "/v1/agent/runs/{run_id}/steer",
     )
     for route in required:
         assert route in paths, f"missing route {route}"
