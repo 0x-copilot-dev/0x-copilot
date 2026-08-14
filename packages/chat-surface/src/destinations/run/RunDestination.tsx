@@ -274,6 +274,7 @@ import {
   useRunStudioRailCollapsed,
   type RunMode,
 } from "./useRunMode";
+import { useHostWrites } from "./useHostWrites";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -2212,6 +2213,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     runId: session.runId,
     runStatus: session.runStatus,
     events: session.events,
+  });
+
+  // The Changes tab: what this run wrote to the user's REAL disk, read from the
+  // host-write journal, plus the undo for one tool call's worth of it. Sources
+  // answers "what did it read"; this answers "what did it change", which until
+  // now nothing in either host asked — the two routes were backend-complete and
+  // reachable by no caller.
+  const hostWriteJournal = useHostWrites({
+    runId: session.runId,
+    runStatus: session.runStatus,
   });
 
   // PR-3.10: the approval queue is projected off the SAME `session.events`
@@ -4242,6 +4253,35 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         }
       : undefined;
 
+  // The Changes tab's inputs — and its RENDER CONDITION, because presence is
+  // what draws the tab (see `RunWorkspaceRail.hostWrites`).
+  //
+  // Three states deliberately produce `undefined`, so the rail is byte-identical
+  // to the four-tab v3 rail in each:
+  //   - `unavailable` — the deployment captures no agent writes at all. Every
+  //     non-desktop image answers 503 by design, and a permanently-empty
+  //     "Changes" tab on the web build would be exactly the dead chrome the
+  //     Sources tab used to be.
+  //   - nothing written — the run touched no files. The honest answer is no tab,
+  //     not a tab that says "nothing".
+  //   - and neither of those, but also no error — i.e. the read is still in
+  //     flight. The tab appears when there is something to show.
+  // An `error` alone DOES draw the tab: failing to read the journal is a thing
+  // the user needs told, and silence there is indistinguishable from "this run
+  // changed nothing".
+  const railHostWrites =
+    !hostWriteJournal.unavailable &&
+    (hostWriteJournal.groups.length > 0 || hostWriteJournal.error !== null)
+      ? {
+          groups: hostWriteJournal.groups,
+          error: hostWriteJournal.error,
+          states: hostWriteJournal.states,
+          reports: hostWriteJournal.reports,
+          failures: hostWriteJournal.failures,
+          onUndo: hostWriteJournal.revert,
+        }
+      : undefined;
+
   // The pending diff handed to the center pane — ONLY for the active surface,
   // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
   // diff resolves (optimistic or server), it drops out of `openSurfaceDiffs`, so
@@ -4496,6 +4536,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       onApprove={handleApprove}
       onReject={handleReject}
       scrubbed={isScrubbed}
+      // The Changes tab: what this run wrote to disk + the per-tool-call undo.
+      // Undefined ⇒ no tab (see `railHostWrites`).
+      hostWrites={railHostWrites}
       // Surfaces v2 (E1/E2): canonical safe Sources provenance, the cross-run
       // queue + fleet, and the header chip's "jump to Approvals" signal. All
       // undefined when the flag is off ⇒ the rail is byte-identical.
