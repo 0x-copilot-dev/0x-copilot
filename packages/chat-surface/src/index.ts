@@ -1610,10 +1610,19 @@ export {
 // `surface-renderers` `SheetDiff` (`SheetRowApproval`); the `TcInlineDiff`
 // state machine (`idle → streaming → pending → accepted|rejected`) is exported
 // from the Phase 2-E block above.
+//
+// `RunApproval.grantOptions` / `allowsRunScopedGrant` are the once/always half
+// of the same wire (`payload.grant_options`). The list is carried verbatim and
+// the DECISION about it is made in the projection, because `allow_always` means
+// two different things on the two lanes that emit it — a run-scoped policy rule
+// on the write gate, and attaching a folder on the filesystem lane, whose resume
+// path does not carry `decision_scope` at all. `WRITE_GATE_APPROVAL_PREFIX` is
+// the SSOT for telling them apart.
 export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  WRITE_GATE_APPROVAL_PREFIX,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,

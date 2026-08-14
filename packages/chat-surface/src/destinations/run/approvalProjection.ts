@@ -111,6 +111,43 @@ export interface RunApproval {
    * every test of it passed on fixtures.
    */
   readonly irreversible: boolean;
+  /**
+   * The scopes the SERVER says this card may be answered with — `payload
+   * .grant_options`, verbatim and unfiltered. `allow_once` is what a plain
+   * approve has always meant; `allow_always` is the second scope, and its
+   * MEANING IS LANE-SPECIFIC, which is why this is carried as the raw list
+   * rather than collapsed into a boolean here:
+   *
+   * * **the write gate** (`mcp_write:` ids, `ToolAccessGate._grant_options`) —
+   *   `always` writes a RUN-SCOPED allow rule over the subjects this call
+   *   already carried, and expires with the run. It is offered for every op
+   *   class except `destructive`, because the value of pausing on an
+   *   irreversible act is that it is decided each time.
+   * * **the filesystem lane** (`filesystem_access`,
+   *   `runtime_worker/stream_events.py:227-234`) — `always` ATTACHES A FOLDER:
+   *   a durable workspace grant, wider than the one path the card named. That
+   *   is a different act with a different lifetime, settled by
+   *   `WorkspaceGrantPort` and an OS dialog, and the `/decision` POST does not
+   *   carry it at all (`ApprovalResumeBuilder` drops `decision_scope` on every
+   *   lane but `ask_a_question`).
+   *
+   * So a consumer must decide WHICH `always` it is looking at before drawing a
+   * control for it. `allowsRunScopedGrant` below is that decision, made once.
+   */
+  readonly grantOptions: readonly string[];
+  /**
+   * True when an `always` on this card is the run-scoped policy rule the
+   * `/decision` POST actually carries — i.e. the write-gate lane, and the
+   * server offered `allow_always`.
+   *
+   * Derived here, at the one place that reads the wire, for the same reason
+   * `irreversible` is: the view used to decide `irreversible` by substring-
+   * matching an axis that could not produce the word, and the whole safety lane
+   * was unreachable in production while every fixture test passed. A control
+   * whose POST is dropped server-side is that defect exactly — it would look
+   * like a working "always" and quietly do nothing.
+   */
+  readonly allowsRunScopedGrant: boolean;
   /** Inset key/value frame projected from `payload.arguments` (primitives only). */
   readonly params: readonly ActivityParam[];
   /** Connector / target preview ("#launch-aurora"); null when absent. */
@@ -185,6 +222,23 @@ const MCP_AUTH_REQUIRED = "mcp_auth_required";
 const DEFAULT_REASON =
   "The agent paused here — it won't sign until you approve.";
 
+/**
+ * A parked WRITE's approval id prefix. `PolicyToolMiddleware` parks on a
+ * deterministic `mcp_write:<run>:<call>` (policy_tool.py), chosen so the id is
+ * stable across LangGraph's node replay.
+ *
+ * The SSOT for the prefix, imported by `TcChat` rather than restated there:
+ * this is the one property that says which lane an approval is on, and both the
+ * projection (which scope may be offered) and the renderer (which card to draw)
+ * have to agree about it exactly.
+ */
+export const WRITE_GATE_APPROVAL_PREFIX = "mcp_write:";
+
+/** The wire words. Mirrors `_Values.ALLOW_ONCE` / `ALLOW_ALWAYS` server-side. */
+const ALLOW_ALWAYS = "allow_always";
+
+const EMPTY_GRANTS: readonly string[] = [];
+
 interface MutableApproval {
   approvalId: string;
   title: string;
@@ -196,6 +250,7 @@ interface MutableApproval {
   connectorSlug: string | null;
   category: { vendor: string; access: string | null } | null;
   irreversible: boolean;
+  grantOptions: readonly string[];
   params: ActivityParam[];
   target: string | null;
   presentation: ApprovalPresentation | null;
@@ -352,6 +407,12 @@ function reduceRequested(
     // must never DOWNGRADE an approval we already know is irreversible, or a
     // replay would hand back the one-click Approve the first frame withheld.
     irreversible: buildIrreversible(event) || (existing?.irreversible ?? false),
+    // Same replay rule as `presentation` / `irreversible`: a redelivered frame
+    // that omits the list must not erase it. Sticky in the SAFE direction —
+    // toward what the first frame advertised — because losing the option only
+    // costs a re-ask, while inventing one widens a decision.
+    grantOptions:
+      buildGrantOptions(event) ?? existing?.grantOptions ?? EMPTY_GRANTS,
     // Filtered against the preview so the draft is not printed twice — once as
     // the card's preview frame and again as an untruncated `<dd>` in the params
     // grid. See `buildParams`.
@@ -430,6 +491,8 @@ function freeze(m: MutableApproval): RunApproval {
     connectorSlug: m.connectorSlug,
     category: m.category,
     irreversible: m.irreversible,
+    grantOptions: m.grantOptions,
+    allowsRunScopedGrant: allowsRunScopedGrant(m),
     params: m.params,
     target: m.target,
     presentation: m.presentation,
@@ -592,6 +655,62 @@ function buildIrreversible(event: RuntimeEventEnvelope): boolean {
   }
   const risk = stringField(payload.risk_level)?.toLowerCase() ?? null;
   return risk === "high" || risk === "critical";
+}
+
+/**
+ * The scopes the card may be answered with, read off `payload.grant_options`.
+ *
+ * Returns `null` — not `[]` — when the key is absent, so `reduceRequested` can
+ * tell "this frame said nothing about scope" from "this frame said: once only",
+ * and a redelivered frame cannot silently retract an option the first one
+ * advertised. Non-string entries are dropped exactly as the server's own
+ * projection drops them (`_approval_requested_payload`); a list that is not a
+ * list is refused outright rather than coerced.
+ */
+function buildGrantOptions(
+  event: RuntimeEventEnvelope,
+): readonly string[] | null {
+  const raw = event.payload.grant_options;
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  return raw.filter(
+    (option): option is string => typeof option === "string" && option !== "",
+  );
+}
+
+/**
+ * Whether an `always` on this card is the run-scoped rule the wire carries.
+ *
+ * TWO CONDITIONS, and each is load-bearing:
+ *
+ * 1. **The server offered it.** `ToolAccessGate._grant_options` withholds
+ *    `allow_always` for a `destructive` op, on the same reasoning that puts the
+ *    destructive rung above BYPASS in the PDP: the value of pausing on an
+ *    irreversible act is that it is decided *each time it is about to happen*.
+ * 2. **The lane's resume shape carries `decision_scope`.** Only
+ *    `approval_kind == "ask_a_question"` does — the shape the write gate
+ *    deliberately borrows — and `mcp_write:` is the id `PolicyToolMiddleware`
+ *    parks on. Every other lane's resume builder drops the field, so a control
+ *    posting `decision_scope: "always"` from, say, a `filesystem_access` card
+ *    would look like a working "always" and change nothing.
+ *
+ * The filesystem lane's `allow_always` is a DIFFERENT act wearing the same wire
+ * word: it attaches a folder — a durable workspace grant, wider than the path
+ * the card named — and is settled by `WorkspaceGrantPort` and an OS dialog, not
+ * by the `/decision` POST. `runtime_worker/stream_events.py:227-234` records
+ * that split and names the composer's bypass pill as the intended control for
+ * repeated writes. Nothing here overturns that: this predicate is how the
+ * client honours it.
+ */
+function allowsRunScopedGrant(approval: {
+  readonly approvalId: string;
+  readonly grantOptions: readonly string[];
+}): boolean {
+  return (
+    approval.approvalId.startsWith(WRITE_GATE_APPROVAL_PREFIX) &&
+    approval.grantOptions.includes(ALLOW_ALWAYS)
+  );
 }
 
 /**

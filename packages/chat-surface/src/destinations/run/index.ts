@@ -51,10 +51,15 @@ export {
 } from "./useRunMode";
 
 // === PR-3.10 — approval projection (in-chat card + rail queue) ===
+// `WRITE_GATE_APPROVAL_PREFIX` is the SSOT for the parked-write id shape. It is
+// hoisted because two consumers depend on agreeing about it exactly: the
+// projection (whether an `always` on this card is a scope the `/decision` POST
+// carries) and `TcChat` (which card to draw).
 export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  WRITE_GATE_APPROVAL_PREFIX,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,

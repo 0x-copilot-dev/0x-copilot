@@ -2127,6 +2127,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvalId: string,
       decision: RunApprovalDecision,
       edits?: SurfaceEdits,
+      // How far this approval reaches. Absent is `once`, which is what approve
+      // has always meant and what the server defaults to — the field is sent
+      // ONLY when the user pressed the control that widens it, because the
+      // request validator rejects a scope on anything but a plain approve and
+      // an unconditional `decision_scope` would start saying something the
+      // reviewer never said on every decline.
+      scope?: "once" | "always",
     ): void => {
       // ONE DECISION PER APPROVAL, ENFORCED BEFORE THE POST.
       //
@@ -2163,10 +2170,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // The wire decision carries the reviewer's edits when present; the server
       // (ai-backend 09b) re-derives final = proposal ⊕ edits and never trusts a
       // client-sent merged artifact. Plain approve/reject is unchanged.
+      //
+      // `decision_scope` rides only a PLAIN approve. `approve_with_edits` is
+      // excluded server-side for a reason the client must not paper over: the
+      // edited call is not the call the card described, so a rule derived from
+      // the card's subjects would grant something the reviewer never saw.
       const body =
         edits !== undefined
           ? { decision: "approve_with_edits", edits }
-          : { decision };
+          : scope !== undefined && decision === "approved"
+            ? { decision, decision_scope: scope }
+            : { decision };
       void transport
         .request<unknown>({
           method: "POST",
@@ -2182,6 +2196,23 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   const handleApprove = useCallback(
     (approvalId: string): void => resolveApproval(approvalId, "approved"),
+    [resolveApproval],
+  );
+  // The `allow_always` half of `grant_options`: approve THIS call and write a
+  // run-scoped allow rule over the subjects it already carried, so the rest of
+  // the run stops re-asking the same question. It goes through the same
+  // `resolveApproval` — same one-decision-per-approval guard, same optimistic
+  // overlay, same POST — because it IS an approve; only its reach differs, and
+  // a second code path for that is a second chance to double-dispatch a write.
+  //
+  // The card only offers this where the wire honours it (`allowsRunScopedGrant`
+  // — the write-gate lane, whose `ask_a_question` resume shape is the only one
+  // that forwards `decision_scope`). The filesystem lane's `allow_always` means
+  // ATTACH A FOLDER, which this POST does not carry and `WorkspaceGrantCard`
+  // already owns.
+  const handleApproveAlways = useCallback(
+    (approvalId: string): void =>
+      resolveApproval(approvalId, "approved", undefined, "always"),
     [resolveApproval],
   );
   const handleReject = useCallback(
@@ -4273,6 +4304,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // PR-3.10: the in-chat ask card — the SAME card in Studio and Focus.
         approvals={chatApprovals}
         onApprove={handleApprove}
+        // The `allow_always` half of the server's `grant_options`. The card
+        // decides whether to draw the control (only where `decision_scope`
+        // reaches a consumer); the host only has to be willing to post it.
+        onApproveAlways={handleApproveAlways}
         onReject={handleReject}
         onAnswer={handleAnswer}
         // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect

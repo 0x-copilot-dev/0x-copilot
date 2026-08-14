@@ -32,11 +32,20 @@
 // renders through the same card — but renaming it is a separate, mechanical
 // step that has to move the journey with it.
 //
-// The three DECISION controls are the exception: their testids come from props
-// (`approveTestId` / `declineTestId` / `bodyApproveTestId`), because the id a
-// decision is pressed for has to be unambiguous when two asks stack, and six
-// live desktop journeys select those controls by an approval-scoped name.
-// `renderAskCard` supplies them; the defaults here are for a standalone mount.
+// THE BODY ALSO CARRIES THE SCOPE. `grant_options` says which scopes the server
+// will accept for this card; `allow_once` is what a plain Approve has always
+// meant, and `allow_always` — when the caller says this lane's `always` is the
+// run-scoped rule the `/decision` POST carries — draws one extra ghost button
+// under the payload. It is in the body and not the header on the same rule the
+// irreversible lane follows: a decision that covers more than the call in front
+// of you is not a one-click decision.
+//
+// The four DECISION controls are the exception: their testids come from props
+// (`approveTestId` / `declineTestId` / `bodyApproveTestId` /
+// `alwaysApproveTestId`), because the id a decision is pressed for has to be
+// unambiguous when two asks stack, and six live desktop journeys select those
+// controls by an approval-scoped name. `renderAskCard` supplies them; the
+// defaults here are for a standalone mount.
 //
 // Kit-only styling; framework-agnostic (no window/document/fetch).
 
@@ -85,6 +94,28 @@ export interface TcWriteGateRowProps {
   readonly reason?: string | null;
   /** Approve — dispatches the parked write. */
   readonly onApprove: () => void;
+  /**
+   * Approve, AND stop asking for this call for the rest of the run — the
+   * `allow_always` half of the server's `grant_options`, carried on the wire as
+   * `decision_scope: "always"`.
+   *
+   * ABSENT MEANS THE CONTROL IS NOT DRAWN, and that is the contract rather than
+   * a convenience. `allow_always` means two different things on the two lanes
+   * that emit it: on the write gate it is a RUN-SCOPED allow rule over the
+   * subjects this call already carried, and on the filesystem lane it ATTACHES
+   * A FOLDER — durable, wider than the path the card named, and settled by an
+   * OS dialog rather than by this POST
+   * (`runtime_worker/stream_events.py:227-234`). This card can only honour the
+   * first, so the caller decides, and a card with nothing to offer offers
+   * nothing rather than a button that posts a field the server drops.
+   *
+   * It lives in the EXPANDED BODY, never the header. The card's rule for an
+   * irreversible write generalises: a decision that covers more than the call
+   * in front of you is not a one-click decision. Keeping it out of the header
+   * also keeps `.tc-write-gate__actions` — a `flex: none` block — from growing a
+   * third button and squeezing the title and the connector meta further.
+   */
+  readonly onApproveAlways?: () => void;
   /** Decline — the run continues, nothing is written. */
   readonly onDecline: () => void;
   /**
@@ -161,6 +192,16 @@ export interface TcWriteGateRowProps {
    * design withholds until the payload has been read.
    */
   readonly bodyApproveTestId?: string;
+  /**
+   * Testid for the run-scoped Approve. Scoped by `renderAskCard` to
+   * `tc-chat-approval-always-<approvalId>`, chosen to match NEITHER
+   * `[data-testid^=tc-chat-approval-approve-]` nor
+   * `tc-chat-approval-reject-<id>` — the six live desktop journeys that press
+   * Approve or Decline must not be able to land on the control that widens the
+   * decision to the whole run. Same reasoning, and the same shape-of-the-name
+   * enforcement, as `bodyApproveTestId`.
+   */
+  readonly alwaysApproveTestId?: string;
 }
 
 const EMPTY_PARAMS: readonly ActivityParam[] = [];
@@ -172,6 +213,11 @@ const DEFAULT_APPROVE = "Approve";
 // still paints; the prop exists so a future producer CAN name the verb, not as
 // a back door for reverting this copy.
 const DEFAULT_DECLINE = "Decline";
+// Names the REACH, not the verb. "Always allow" is what the wire word says and
+// is exactly the sentence that made this control dangerous to draw: on this lane
+// the rule expires with the run, and a user who reads "always" as "forever" has
+// consented to something wider than what happens.
+const ALWAYS_LABEL = "Approve, and don't ask again this run";
 
 export function TcWriteGateRow({
   title,
@@ -180,6 +226,7 @@ export function TcWriteGateRow({
   irreversible = false,
   reason = null,
   onApprove,
+  onApproveAlways,
   onDecline,
   onReview,
   busy = false,
@@ -189,6 +236,11 @@ export function TcWriteGateRow({
   approveTestId = "tc-write-gate-approve",
   declineTestId = "tc-write-gate-decline",
   bodyApproveTestId = "tc-write-gate-body-approve",
+  // Deliberately NOT `…-always-approve`: `review-surfaces.css` selects
+  // `[data-testid$="-approve"]` inside the body, and a suffix collision between
+  // the scope control and the approve controls is exactly the class of mix-up
+  // the `…-body-approve-<id>` naming rule exists to stop.
+  alwaysApproveTestId = "tc-write-gate-always",
 }: TcWriteGateRowProps): ReactElement {
   // Local, for the same reason `TcInlineArtifactCard` keeps its own: nothing
   // outside this card acts on whether it is open, and lifting it would
@@ -207,6 +259,21 @@ export function TcWriteGateRow({
   // approval over a card that shows every line item it is about to sign.
   const payloadSeen = open && hasWriteGateEvidence(params, presentation);
   const bodyApprove = irreversible && payloadSeen;
+  // The run-scoped Approve. Gated on `open` — expanding is the deliberate step
+  // that separates "yes to this call" from "yes to every call like it for the
+  // rest of the run" — and on `!irreversible`, which the server already
+  // guarantees by withholding `allow_always` for a destructive op. Both, because
+  // this is where the property is drawn and one enforcement point is one deploy
+  // from zero.
+  //
+  // NOT gated on `payloadSeen`, and that omission is deliberate. The write
+  // gate's wire shape (`ToolAccessGate._approval_payload`) carries no
+  // `arguments` and no `presentation` at all, so `hasWriteGateEvidence` is FALSE
+  // for precisely the cards that offer this scope. Gating on it would make the
+  // control unreachable in production while every fixture-built test of it
+  // passed — the dead-branch failure this card has already shipped once, when
+  // `isIrreversible` substring-matched an axis that could not produce the word.
+  const scopeApprove = onApproveAlways !== undefined && open && !irreversible;
   const risk = irreversible ? "high" : "normal";
   const descriptionId = useId();
   // DERIVED, not a canned reassurance. The old copy was a standing claim about
@@ -436,6 +503,33 @@ export function TcWriteGateRow({
             >
               {approveLabel}
             </button>
+          ) : null}
+          {scopeApprove ? (
+            // A GHOST, deliberately, beside a primary Approve that is one click
+            // away in the header. The wider decision must never be the louder
+            // one: a run-scoped rule is the convenient answer, and drawing it as
+            // the recommended answer is how people stop reading the cards.
+            //
+            // The sentence under it is the scope, in words, because "always" is
+            // the one thing on this card the wire word gets wrong — the rule
+            // this writes expires with the run.
+            <div className="tc-write-gate__scope">
+              <button
+                type="button"
+                className="ui-button ui-button--sm ui-button--ghost tc-write-gate__scope-btn"
+                data-testid={alwaysApproveTestId}
+                disabled={busy}
+                onClick={onApproveAlways}
+              >
+                {ALWAYS_LABEL}
+              </button>
+              <span
+                className="tc-write-gate__scope-note"
+                data-testid="tc-write-gate-body-scope-note"
+              >
+                Applies to this call only, and ends when the run does.
+              </span>
+            </div>
           ) : null}
         </div>
       ) : null}

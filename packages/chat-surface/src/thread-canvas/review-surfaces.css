@@ -1069,6 +1069,45 @@
   justify-self: start;
 }
 
+/* ── the run-scoped approve (`grant_options: allow_always`) ──────────────────
+ *
+ * Lives in the body, never the header, and is a GHOST beside a primary Approve
+ * that is one click away above it. The wider decision must never be the louder
+ * one: a run-scoped allow rule is the convenient answer, and drawing it as the
+ * recommended answer is how people stop reading the cards.
+ *
+ * `justify-self: start` for the same reason the approve buttons take it — the
+ * body is a grid, and a stretched button reads as the row's primary action.
+ */
+.tc-write-gate__scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  justify-self: start;
+  min-width: 0;
+}
+
+/* The verb is long on purpose ("Approve, and don't ask again this run") because
+   the reach is the thing being consented to. So it must be allowed to wrap
+   rather than set the body's min-content width — which, in a grid, is how the
+   header ends up stretched past a frame that is `overflow: hidden` and the
+   decision controls get clipped out of reach. */
+.tc-write-gate__scope-btn {
+  height: auto;
+  max-width: 100%;
+  text-align: left;
+  white-space: normal;
+}
+
+/* The sentence the wire word gets wrong. `allow_always` reads as "forever";
+   the rule this writes expires with the run, and the difference is the whole
+   consent. Quiet register, same as the provenance line. */
+.tc-write-gate__scope-note {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  letter-spacing: var(--tracking-caption);
+}
+
 /* ── the shaped evidence: the batch, and the draft ───────────────────────────
  *
  * Both live BELOW the header, for the same reason the params frame does: the
