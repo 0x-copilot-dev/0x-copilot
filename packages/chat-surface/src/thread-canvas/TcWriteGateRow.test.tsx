@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 import type { ApprovalPresentation } from "../approvals/presentation";
-import { TcWriteGateRow } from "./TcWriteGateRow";
+import { TcWriteGateRow, type WriteGateGrantAlways } from "./TcWriteGateRow";
 
 function row(overrides: Partial<Parameters<typeof TcWriteGateRow>[0]> = {}) {
   const props = {
@@ -1143,5 +1143,279 @@ describe("TcWriteGateRow — what a screen reader is told", () => {
     expect(screen.getByTestId("tc-write-gate")).not.toHaveAccessibleDescription(
       /cannot be undone/i,
     );
+  });
+});
+
+// ONCE vs ALWAYS — the durable arm.
+//
+// Two arms settle the same ask through different machinery: "once" is the
+// header's Approve and a `/decision` POST, "always" is an OS confirm that mints
+// a grant outliving the run. The properties worth pinning are the ones that stop
+// the second from being reachable as if it were the first — it must not appear
+// unasked, it must not be reachable from the collapsed card, it must NAME the
+// folder, and its testid must sit outside the prefix five live journeys press to
+// mean "Approve".
+describe("TcWriteGateRow — the durable grant arm", () => {
+  const SCOPE = {
+    path: "/Users/ada/Documents/reports",
+    folderName: "reports",
+    mode: "read_only" as const,
+    reason: "to summarise the quarter",
+  };
+
+  function grantArm(overrides: Partial<WriteGateGrantAlways> = {}) {
+    return {
+      request: SCOPE,
+      state: "pending" as const,
+      failureMessage: null,
+      onGrant: vi.fn(),
+      onCancel: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("draws nothing at all when the wire offered no durable option", () => {
+    // The default, and nearly every ask. An arm that appeared without the
+    // producer offering one would be a folder grant nobody was asked for.
+    row();
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-grant")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-grant-always")).toBeNull();
+  });
+
+  it("is unreachable from the collapsed card — the once arm is what one click buys", () => {
+    // The header stays the once arm alone. Expanding is what licenses the
+    // decision that outlives the run, the same shape as the irreversible lane's
+    // withheld Approve and for the same reason.
+    row({ grantAlways: grantArm() });
+    expect(screen.queryByTestId("tc-write-gate-grant-always")).toBeNull();
+    // …and the once arm is still right there, one click, unchanged.
+    expect(screen.getByTestId("tc-write-gate-approve")).toBeTruthy();
+  });
+
+  it("names the folder in full, next to the control that hands it over", () => {
+    // The producer withholds the whole option rather than offer it over a path
+    // its own card would truncate ("consent to an ellipsis is not consent"), so
+    // a control that did not print the path would undo that upstream care.
+    row({ grantAlways: grantArm() });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-grant-path").textContent).toBe(
+      "/Users/ada/Documents/reports",
+    );
+    const body = document.querySelector(".tc-write-gate__body");
+    expect(body?.contains(screen.getByTestId("tc-write-gate-grant"))).toBe(
+      true,
+    );
+  });
+
+  it("hands the host the SCOPE, and only on a real press", () => {
+    const props = row({ grantAlways: grantArm() });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(props.grantAlways.onGrant).not.toHaveBeenCalled();
+    screen.getByTestId("tc-write-gate-grant-always").click();
+    expect(props.grantAlways.onGrant).toHaveBeenCalledTimes(1);
+    // The durable arm never resolves through the once POST — that would resume
+    // the run without a grant, which is the defect the whole path exists to
+    // prevent (an ungranted read answered with an empty listing and a tick).
+    expect(props.onApprove).not.toHaveBeenCalled();
+  });
+
+  it("keeps its testid outside the prefix that means 'Approve'", () => {
+    // Five live desktop journeys press Approve by
+    // `[data-testid^=tc-chat-approval-approve-]`. This button does something
+    // strictly larger, so the SHAPE of its name — not only the branch that
+    // renders it — has to keep it out of their reach.
+    row({
+      grantAlways: grantArm(),
+      approveTestId: "tc-chat-approval-approve-a1",
+      grantAlwaysTestId: "tc-chat-approval-grant-always-a1",
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const pressedByJourneys = document.querySelectorAll(
+      "[data-testid^=tc-chat-approval-approve-]",
+    );
+    expect(pressedByJourneys).toHaveLength(1);
+    expect(pressedByJourneys[0]).toBe(
+      screen.getByTestId("tc-chat-approval-approve-a1"),
+    );
+  });
+
+  it("shows a dialog in flight as cancellable, not as a dead button", () => {
+    const props = row({ grantAlways: grantArm({ state: "granting" }) });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-grant-always")).toBeNull();
+    screen.getByTestId("tc-write-gate-grant-cancel").click();
+    expect(props.grantAlways.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the host's failure verbatim and leaves the ask answerable", () => {
+    // A failure rendered as "nothing happened" reads to the user as a decision
+    // they made. The message is the only thing that says whether to retry.
+    row({
+      grantAlways: grantArm({
+        state: "failed",
+        failureMessage: "The disk is no longer mounted.",
+      }),
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.getByTestId("tc-write-gate-grant-failure").textContent).toBe(
+      "The disk is no longer mounted.",
+    );
+    // The same control IS the retry — one verb, one name, one width.
+    expect(screen.getByTestId("tc-write-gate-grant-always")).toBeTruthy();
+    // …and the run is still declinable and approvable-once meanwhile.
+    expect(screen.getByTestId("tc-write-gate-decline")).toBeTruthy();
+    expect(screen.getByTestId("tc-write-gate-approve")).toBeTruthy();
+  });
+
+  it("stops offering a folder it has already handed over", () => {
+    row({ grantAlways: grantArm({ state: "granted" }) });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(screen.queryByTestId("tc-write-gate-grant-always")).toBeNull();
+    expect(screen.queryByTestId("tc-write-gate-grant-cancel")).toBeNull();
+    // The folder is still named — it is what a revoke would be about.
+    expect(screen.getByTestId("tc-write-gate-grant-path").textContent).toBe(
+      "/Users/ada/Documents/reports",
+    );
+  });
+
+  it("withholds the control when the ask named no access, and says why", () => {
+    // `grantAccessLabel` returns null rather than guess, so a scope with an
+    // unknown mode gets an explained refusal instead of a button handing over
+    // access nobody can name. Same rule the folder card follows.
+    row({
+      grantAlways: grantArm({ request: { ...SCOPE, mode: null } }),
+    });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    expect(
+      screen.getByTestId("tc-write-gate-grant-unknown-access"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("tc-write-gate-grant-always").hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("states the access it would grant, and the two mechanism promises", () => {
+    row({ grantAlways: grantArm() });
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+    const note = document.querySelector(".tc-write-gate__grant-note");
+    expect(note?.textContent).toBe(
+      "Read-only · this folder only · revoke anytime",
+    );
+  });
+});
+
+// The header layout rule, applied to the thing most likely to break it next.
+//
+// The frame is `overflow: hidden` and clips at its END, where the decision
+// controls are. That is why the durable arm is in the BODY: its subject is a
+// host folder name of arbitrary length, and an unbounded item in the header
+// makes Approve the thing that disappears in a narrow column. jsdom runs no
+// layout, so what is asserted is the CONTRACT that decides the outcome — read
+// through the real stylesheet, against the real card's DOM.
+describe("TcWriteGateRow — the durable arm cannot clip the decision", () => {
+  const here =
+    typeof import.meta.dirname === "string"
+      ? import.meta.dirname
+      : dirname(fileURLToPath(import.meta.url));
+
+  let sheet: HTMLStyleElement | null = null;
+
+  function renderWithRealCss(): void {
+    sheet = document.createElement("style");
+    sheet.textContent = readFileSync(
+      resolve(here, "review-surfaces.css"),
+      "utf-8",
+    );
+    document.head.appendChild(sheet);
+    render(
+      <TcWriteGateRow
+        title="Read the quarterly reports"
+        connector="linear"
+        access="READ"
+        grantAlways={{
+          // A real host path with no break opportunity in its longest segment —
+          // the shape that set the body's min-content width and stretched the
+          // header past the clip the last time this failed.
+          request: {
+            path: `/Volumes/Archive/${"x".repeat(138)}/reports`,
+            folderName: "reports",
+            mode: "read_only",
+            reason: null,
+          },
+          state: "pending",
+          failureMessage: null,
+          onGrant: vi.fn(),
+          onCancel: vi.fn(),
+        }}
+        onApprove={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-write-gate-review"));
+  }
+
+  afterEach(() => {
+    sheet?.remove();
+    sheet = null;
+  });
+
+  it("adds NOTHING to the header — the row is the same items with and without it", () => {
+    renderWithRealCss();
+    const header = document.querySelector(".tc-write-gate__hd");
+    expect(header).not.toBeNull();
+    expect(header?.contains(screen.getByTestId("tc-write-gate-grant"))).toBe(
+      false,
+    );
+    // The actions box is still exactly Decline + Approve + the disclosure.
+    const actions = document.querySelector(".tc-write-gate__actions");
+    expect(actions?.querySelectorAll("button")).toHaveLength(3);
+    expect(globalThis.getComputedStyle(actions as Element).flexShrink).toBe(
+      "0",
+    );
+  });
+
+  it("lets the unbreakable path wrap rather than set the card's width", () => {
+    renderWithRealCss();
+    // Inherited from the per-container body rule, which exists so a block added
+    // later gets the protection without having to remember it. Asserting it on
+    // the path node is what proves the new block actually inherited it.
+    expect(
+      globalThis.getComputedStyle(
+        screen.getByTestId("tc-write-gate-grant-path"),
+      ).overflowWrap,
+    ).toBe("anywhere");
+  });
+
+  it("keeps the durable control at its intrinsic width, never full-bleed", () => {
+    renderWithRealCss();
+    const actions = document.querySelector(".tc-write-gate__grant-actions");
+    expect(actions).not.toBeNull();
+    // A full-bleed durable action would outweigh the header's Approve by area
+    // alone — the recommended choice is never the one that outlives the run.
+    expect(globalThis.getComputedStyle(actions as Element).justifySelf).toBe(
+      "start",
+    );
+  });
+
+  it("owns its own class names — no host stylesheet re-declares them", () => {
+    // The desktop CSS-shadowing trap: a host sheet re-declaring a package-owned
+    // name wins the cascade, with every assertion above still green.
+    const root = join(here, "..", "..", "..", "..");
+    for (const hostSheet of [
+      join(root, "apps", "frontend", "src", "styles.css"),
+      join(root, "apps", "desktop", "renderer", "desktop.css"),
+    ]) {
+      let css = "";
+      try {
+        css = readFileSync(hostSheet, "utf8");
+      } catch {
+        continue; // sheet absent in this checkout — nothing to shadow
+      }
+      expect(
+        css.includes("tc-write-gate__grant"),
+        `${hostSheet} must not own the durable arm's class names`,
+      ).toBe(false);
+    }
   });
 });
