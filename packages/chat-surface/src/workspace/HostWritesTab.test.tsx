@@ -62,15 +62,22 @@ describe("HostWritesTab — an undo is never one click from rest", () => {
   // pressed every `[data-testid^=host-writes-undo-]` must reach the ARM and
   // nothing else, or "no blind undo" passes over a control one click away.
   it("keeps the posting control out of the arm's testid prefix", () => {
+    const armed = (): NodeListOf<Element> =>
+      document.querySelectorAll('[data-testid^="host-writes-undo-"]');
     render(<HostWritesTab groups={[group()]} onUndo={vi.fn()} />);
+
+    // At rest the prefix matches exactly the arm.
+    expect(armed()).toHaveLength(1);
+    expect(armed()[0]).toBe(screen.getByTestId("host-writes-undo-call_a"));
+
     fireEvent.click(screen.getByTestId("host-writes-undo-call_a"));
-    const armPrefixed = document.querySelectorAll(
-      '[data-testid^="host-writes-undo-"]',
-    );
-    expect(armPrefixed).toHaveLength(1);
-    expect(armPrefixed[0]).toBe(
-      screen.queryByTestId("host-writes-undo-call_a"),
-    );
+    // Armed, the posting control exists and the prefix reaches NOTHING — the
+    // arm has given way to it, and it is not named under the arm's prefix. A
+    // journey pressing every `host-writes-undo-*` therefore cannot post.
+    expect(
+      screen.getByTestId("host-writes-confirm-call_a"),
+    ).toBeInTheDocument();
+    expect(armed()).toHaveLength(0);
     expect(
       screen
         .getByTestId("host-writes-confirm-call_a")
