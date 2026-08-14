@@ -223,7 +223,7 @@ finding: far below means the model batched work the prompts asked it to serialis
 (read `peak_parallel`), far above means something is looping (read `budget_notes`
 and `terminal_code` before concluding anything about the ceiling).
 
-## 5. The cold-prompt trajectory, measured at each step
+## 6. The cold-prompt trajectory, measured at each step
 
 Same four tasks, same model, same stage discipline (re-staged from the tree
 under test before every run). Cold prompt is run 1's input, which is the one
