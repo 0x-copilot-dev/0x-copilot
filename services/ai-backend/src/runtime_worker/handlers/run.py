@@ -902,10 +902,22 @@ class RuntimeRunHandler:
             ).close_open_subagents_as_cancelled(run=run)
             raise
         except Exception as exc:
+            # Build the run's typed envelope BEFORE reconciling, not after. The
+            # tool calls settled just below were settled BY this failure, and
+            # their ledger rows are the only place a later reader — an auditor,
+            # a benchmark scorer — can learn that. Closing them first and
+            # naming the cause afterwards is what produced rows accusing a tool
+            # of throwing when the graph had overrun its step ceiling.
+            error = RuntimeErrorEnvelope.from_exception(
+                exc,
+                correlation_id=command.trace_id,
+                default_message="We couldn't complete this run. Please try again.",
+            )
             await self._reconcile_inflight_tool_calls(
                 run,
                 outcome=ToolOutcome.FAILED,
-                error_code=ToolErrorCode.TOOL_EXCEPTION,
+                error_code=ToolErrorCode.TOOL_RUN_FAILED,
+                run_error_code=error.code.value,
             )
             failed = await with_optimistic_retry(
                 lambda: self.persistence.update_run_status(
@@ -915,11 +927,6 @@ class RuntimeRunHandler:
             # Map typed fatal errors to semantic termination reasons so the FE and
             # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
-            error = RuntimeErrorEnvelope.from_exception(
-                exc,
-                correlation_id=command.trace_id,
-                default_message="We couldn't complete this run. Please try again.",
-            )
             # Subagents need settling on THIS path too. A child's terminal frame
             # comes from the `task` tool's result message, so a run that ends
             # mid-delegation emits none and the cockpit keeps a spinning card
@@ -2579,12 +2586,33 @@ class RuntimeRunHandler:
             or bool(result.get(cls._Fields.INTERRUPTS))
         )
 
+    @staticmethod
+    def _reconciled_error_message(
+        *, error_code: ToolErrorCode, run_error_code: str | None
+    ) -> str:
+        """Compose the model- and audit-facing message for a reconciled call.
+
+        The tool-scoped sentence says what happened to the STEP; the run's own
+        typed code, appended, says why. Without the second half a reconciled
+        row answers "did this step finish?" and refuses the only question worth
+        asking of a failed run — which is how a step-limit overrun was read off
+        the ledger as a tool crash. The run code is already a safe public
+        string (it comes off :class:`RuntimeErrorEnvelope`), so appending it
+        leaks nothing a client cannot already see on ``run_failed``.
+        """
+
+        _, summary = _ErrorMessage.for_code(error_code.value)
+        if not run_error_code:
+            return summary
+        return f"{summary} Run error: {run_error_code}."
+
     async def _reconcile_inflight_tool_calls(
         self,
         run: RunRecord,
         *,
         outcome: ToolOutcome,
         error_code: ToolErrorCode,
+        run_error_code: str | None = None,
     ) -> None:
         """Settle every in-flight tool call before the run terminates.
 
@@ -2595,6 +2623,10 @@ class RuntimeRunHandler:
         event for each, in started-order, BEFORE emitting `run_failed`
         so SSE consumers see lifecycle terminate top-down.
 
+        ``run_error_code`` is the run's own typed failure code. Pass it
+        wherever one exists: these calls did not fail on their own account and
+        the row should say so.
+
         Failures inside this loop are logged but never raised — the caller
         is already on a failure path and reconciliation is best-effort. A
         partial reconciliation is still strictly better than none.
@@ -2604,7 +2636,9 @@ class RuntimeRunHandler:
         unsettled = ledger.unsettled()
         if not unsettled:
             return
-        _, error_summary = _ErrorMessage.for_code(error_code.value)
+        error_summary = self._reconciled_error_message(
+            error_code=error_code, run_error_code=run_error_code
+        )
         for entry in unsettled:
             try:
                 payload: dict[str, object] = {
