@@ -12,6 +12,13 @@ Two tools, one progressive-disclosure ladder:
 :class:`SkillUsageLedger` recorded as offered for this run, so a Skill whose
 declared conditions were unmet stays unmentioned rather than becoming reachable
 through a second door.
+
+A successful ``load_skill`` is also the moment a Skill's ``allowed_tools``
+becomes binding: it arms
+:class:`~agent_runtime.capabilities.skills.tool_gate.SkillToolGate` for the run,
+which is what turns that manifest field from advice into a tool-surface
+ceiling. The load path is the only producer, so "loaded" and "enforced" cannot
+disagree.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from pydantic import Field, ValidationError
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.skills.constants import Keys, Limits
+from agent_runtime.capabilities.skills.tool_gate import SkillToolGate
 from agent_runtime.capabilities.skills.usage import SkillUsageLedger
 from agent_runtime.capabilities.skills.virtual import (
     VirtualSkillBundle,
@@ -83,7 +91,16 @@ class LoadSkillTool:
         # The run's ONLY "this Skill was actually used" signal. Recorded on the
         # success path only: a failed load is not a use, and counting it would
         # make a broken Skill look valuable.
-        SkillUsageLedger.record_use(bundle.name or parsed_input.skill_name)
+        loaded_name = bundle.name or parsed_input.skill_name
+        SkillUsageLedger.record_use(loaded_name)
+        # Same event, same success path, one arming: a Skill whose body is now
+        # in context is a Skill whose ``allowed_tools`` is now binding. Recording
+        # it anywhere else would let the two disagree about which Skills a run
+        # actually loaded.
+        SkillToolGate.record_skill_load(
+            skill_name=loaded_name,
+            allowed_tools=bundle.allowed_tools,
+        )
         return self._bundle_payload(bundle)
 
     async def __call__(

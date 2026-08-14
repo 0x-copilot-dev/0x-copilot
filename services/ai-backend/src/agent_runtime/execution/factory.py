@@ -1928,13 +1928,16 @@ def _skill_card_line(skill: object, summary: str) -> str:
     """Render one Skill's compact index row.
 
     The row text stays here, where it has always lived, rather than moving into
-    the skills package with the bound that selects it. ``allowed_tools`` is the
-    reason: it is parsed, typed and validated by the manifest and then spent on
-    the f-string below and nowhere else, which is a live entry in
-    ``tools/dark_wiring_baseline.txt`` that a separate change owns. Rendering
-    the row inside ``capabilities/skills`` would put that read in the field's
-    own package, where the prompt-only detector cannot see it — silently
-    retiring the finding without fixing the field.
+    the skills package with the bound that selects it.
+
+    ``allowed_tools`` used to be the reason: it was parsed, typed and validated
+    by the manifest and then spent on the f-string below and nowhere else — a
+    live entry in ``tools/dark_wiring_baseline.txt``. It is now enforced at the
+    tool surface by
+    :class:`~agent_runtime.capabilities.skills.tool_gate.SkillToolGate`, so the
+    row below is what it always read as: the model being told, in advance, what
+    loading this Skill will cost it. Keep the two in step — a row that names a
+    tool the gate will refuse is worse than no row at all.
 
     ``summary`` arrives already clipped to the index's per-row budget; the
     planner owns how much fits, this owns how it reads.

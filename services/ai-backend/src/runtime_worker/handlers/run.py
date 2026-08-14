@@ -88,6 +88,7 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
+from agent_runtime.capabilities.skills.tool_gate import SkillToolGate
 from agent_runtime.capabilities.skills.usage import SkillUsageLedger
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
@@ -619,6 +620,12 @@ class RuntimeRunHandler:
         # is built (the factory writes the offer during prompt assembly) and
         # drained in the ``finally`` so every exit path reports exactly once.
         skill_usage_token: object | None = None
+        # The enforcement half of the same event: a loaded Skill's declared
+        # ``allowed_tools`` becomes this run's tool-surface ceiling. Bound and
+        # drained beside the usage ledger because one ``load_skill`` feeds both,
+        # and a run holding one without the other would report a Skill as used
+        # while enforcing nothing it declared.
+        skill_tool_gate_token: object | None = None
         # Per-run ``/workspace/`` backend. Held across the try so the finally can
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
@@ -753,6 +760,9 @@ class RuntimeRunHandler:
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
             skill_usage_token = SkillUsageLedger.bind_for_run(
                 SkillUsageLedger(run_id=run.run_id)
+            )
+            skill_tool_gate_token = SkillToolGate.bind_for_run(
+                SkillToolGate(run_id=run.run_id)
             )
             harness_or_coro = self.agent_factory(
                 context=hydrated_context,
@@ -1070,6 +1080,8 @@ class RuntimeRunHandler:
                 McpToolAnnotationsRegistry.unbind(mcp_annotations_token)
             if skill_usage_token is not None:
                 SkillUsageLedger.unbind(skill_usage_token)
+            if skill_tool_gate_token is not None:
+                SkillToolGate.unbind(skill_tool_gate_token)
             self._file_store_wiring().discard_tool_result_projections(run_id=run.run_id)
             await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 

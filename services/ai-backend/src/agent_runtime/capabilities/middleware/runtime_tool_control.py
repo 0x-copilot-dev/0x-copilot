@@ -45,6 +45,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
     ToolBudgetWarn,
 )
+from agent_runtime.capabilities.skills.tool_gate import SkillToolGate
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
 from agent_runtime.context.tool_result_admission import ToolResultCap
 from agent_runtime.control_plane.context import (
@@ -563,6 +564,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
         lock to hold every call apart.
         """
 
+        refusal = self._skill_ceiling_refusal(request)
+        if refusal is not None:
+            return refusal
         verdict, request = self._apply_tool_call_hooks(request)
         if verdict.vetoed:
             return self._hook_veto_message(request, verdict)
@@ -610,6 +614,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
         a thing this seam has to reason about.
         """
 
+        refusal = self._skill_ceiling_refusal(request)
+        if refusal is not None:
+            return refusal
         verdict, request = self._apply_tool_call_hooks(request)
         if verdict.vetoed:
             return self._hook_veto_message(request, verdict)
@@ -630,6 +637,40 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 execute=execute,
             )
         return self._apply_tool_result_hooks(request, result)
+
+    @staticmethod
+    def _skill_ceiling_refusal(request: ToolCallRequest) -> ToolMessage | None:
+        """Refuse a call outside the ``allowed_tools`` of this run's loaded Skills.
+
+        ``None`` when the call clears the ceiling, which is every call in every
+        run that has not loaded a restricting Skill — see
+        :mod:`agent_runtime.capabilities.skills.tool_gate` for the rule and for
+        why an author addresses an MCP tool by its namespaced model-surface
+        name.
+
+        **First, ahead of the hook seam**, and deliberately: the ceiling is a
+        capability a Skill declared, so it must not be observable or
+        influenceable by an extension point that runs inside it. The cost is
+        that ``tool.execute.before`` never sees a call the ceiling refused —
+        the same trade the hook seam itself already makes against budget
+        admission, and stated here so a reader of the hook ledger knows why a
+        refused call leaves no ``modified`` record.
+
+        This is the one seam that sees framework-injected Deep Agents tools and
+        the tool calls made *inside* locally compiled subagents, which is why
+        the ceiling lives here and not on the caller's tool list: a ceiling
+        applied where the tool list is assembled would miss both.
+        """
+
+        decision = SkillToolGate.evaluate(str(request.tool_call.get("name", "")))
+        if decision.allowed:
+            return None
+        return ToolMessage(
+            content=decision.reason,
+            tool_call_id=str(request.tool_call.get("id", "")),
+            name=str(request.tool_call.get("name", "")) or None,
+            status="error",
+        )
 
     @classmethod
     def _apply_tool_call_hooks(
