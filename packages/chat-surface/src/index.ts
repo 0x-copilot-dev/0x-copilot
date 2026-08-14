@@ -1167,6 +1167,11 @@ export {
   type TcGateCardProps,
   TcWriteGateRow,
   type TcWriteGateRowProps,
+  // The ask card's durable "always allow this folder" arm. Hoisted because a
+  // host that projects approvals its own way still has to describe the arm to
+  // the card, and the shape carries the OS-dialog state the run stream cannot
+  // see. Absent ⇒ the ask stays once-only, which is what nearly every ask is.
+  type WriteGateGrantAlways,
   TcWriteGateCard,
   type TcWriteGateCardProps,
   type LedgerGate,
@@ -1614,6 +1619,9 @@ export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  // The producer's two `grant_options` words, so nobody re-types them.
+  GRANT_OPTION_ALLOW_ONCE,
+  GRANT_OPTION_ALLOW_ALWAYS,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,
@@ -2041,6 +2049,12 @@ export {
   parseWorkspaceGrantRequest,
   WORKSPACE_GRANT_PAYLOAD_KEY,
   type WorkspaceGrantRequest,
+  // `grant_scope` — the folder an `allow_always` OPTION would attach, as
+  // distinct from `workspace_grant` (the folder an ask IS about). Same block
+  // shape, same server-side validator, two different cards: one adds a durable
+  // arm to an ordinary ask, the other replaces the ask entirely.
+  parseGrantScope,
+  GRANT_SCOPE_PAYLOAD_KEY,
 } from "./approvals";
 export {
   useWorkspaceGrantCardStates,

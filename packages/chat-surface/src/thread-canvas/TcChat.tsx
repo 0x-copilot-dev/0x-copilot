@@ -83,7 +83,7 @@ import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { TcTodoList } from "./TcTodoList";
 import { ToolCallCard } from "./ToolCallCard";
-import { TcWriteGateRow } from "./TcWriteGateRow";
+import { TcWriteGateRow, type WriteGateGrantAlways } from "./TcWriteGateRow";
 import {
   TcInlineArtifactCard,
   type InlineArtifactEntry,
@@ -174,6 +174,19 @@ export interface TcChatApproval {
    * fixture or a host that projects no grants keeps its current shape.
    */
   readonly workspaceGrant?: WorkspaceGrantRequest | null;
+  /**
+   * The folder an "always allow" would attach (`payload.grant_scope`, and only
+   * when `payload.grant_options` offered `allow_always`). Non-null adds the
+   * durable arm to the ask card's body; null — nearly always — leaves the ask
+   * once-only and the card byte-identical.
+   *
+   * Distinct from `workspaceGrant` above, and the two must not be conflated: a
+   * `workspace_grant` block REPLACES the Approve/Decline card with a folder ask,
+   * while this rides an ordinary ask that can still be approved just this once.
+   * Collapsing them would delete the "once" arm from every ask that merely
+   * OFFERS a durable option.
+   */
+  readonly grantAlways?: WorkspaceGrantRequest | null;
   /** Resolved? Pending → the ask card; resolved → nothing at all. */
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
@@ -1233,6 +1246,7 @@ function renderAskCard(
   // Captured so the presence check below narrows it — `handlers.x` is a
   // property read, and TS will not narrow one across a closure boundary.
   const notifyReview = handlers.onReviewWriteGate;
+  const grantAlways = buildGrantAlwaysArm(approval, handlers);
   return (
     <div
       key={`approval-${approval.approvalId}`}
@@ -1274,6 +1288,13 @@ function renderAskCard(
         // until the payload has rendered. The safety property is enforced by
         // the SHAPE of the name, not only by the branch that renders it.
         bodyApproveTestId={`tc-chat-approval-body-approve-${approval.approvalId}`}
+        // The durable arm, on the asks that offer one. Approval-scoped like the
+        // other three decision names, and deliberately outside the
+        // `tc-chat-approval-approve-` prefix five journeys press: this button
+        // hands over a folder that outlives the run, which is strictly more than
+        // those journeys mean by "Approve".
+        grantAlwaysTestId={`tc-chat-approval-grant-always-${approval.approvalId}`}
+        {...(grantAlways === null ? {} : { grantAlways })}
         onApprove={() => handlers.onApprove?.(approval.approvalId)}
         onDecline={() => handlers.onReject?.(approval.approvalId)}
         // Omitted when no host is listening, rather than passed as a function
@@ -1286,6 +1307,53 @@ function renderAskCard(
       />
     </div>
   );
+}
+
+/**
+ * The ask card's durable arm, or null to leave the ask once-only.
+ *
+ * THREE THINGS MUST ALL BE TRUE, and each rules out a different way of offering
+ * a grant nobody agreed to:
+ *
+ *   1. the wire offered it AND named its folder — decided upstream in
+ *      `buildGrantAlways`, which requires `grant_options` to carry
+ *      `allow_always` and `grant_scope` to name the subject. Nothing here
+ *      re-derives that; a client that inferred the option from `read_only`
+ *      would hand out folders the producer deliberately refused to offer.
+ *   2. a host can actually take the decision — `onWorkspaceGrant` is passed only
+ *      when a `WorkspaceGrantPort` exists (web has none), so absent means the
+ *      arm is omitted rather than drawn as a button that opens no dialog.
+ *   3. the ask is still open. A settled approval renders nothing at all, so this
+ *      is structural rather than a guard — but it is why the arm never needs a
+ *      "you already chose" state.
+ *
+ * REUSES THE FOLDER-ASK MACHINERY WHOLESALE, and that is the point rather than a
+ * shortcut. `useWorkspaceGrantCardStates` already owns exactly this round trip:
+ * optimistic `granting`, `granted` → resume the run through the same
+ * `/decision` POST, `cancelled` → back to pending, `failed` → keep the run
+ * paused and SHOW the host's message. Its states are keyed by `approval_id`, and
+ * a folder ask and an ordinary ask can never share one, so the two consumers of
+ * that map are disjoint by construction. A second copy of that machine would
+ * have been a second place for "grant succeeded but the run never resumed" to
+ * live.
+ */
+function buildGrantAlwaysArm(
+  approval: TcChatApproval,
+  handlers: ApprovalHandlers,
+): WriteGateGrantAlways | null {
+  const request = approval.grantAlways ?? null;
+  const onGrant = handlers.onWorkspaceGrant;
+  if (request === null || onGrant === undefined) {
+    return null;
+  }
+  return {
+    request,
+    state: handlers.workspaceGrantStates?.[approval.approvalId] ?? "pending",
+    failureMessage:
+      handlers.workspaceGrantFailures?.[approval.approvalId] ?? null,
+    onGrant: () => onGrant(approval.approvalId, request),
+    onCancel: () => handlers.onWorkspaceGrantCancel?.(approval.approvalId),
+  };
 }
 
 /**

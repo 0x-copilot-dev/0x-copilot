@@ -55,6 +55,11 @@ export {
   projectApprovals,
   overlayApprovalDecisions,
   toApprovalsQueue,
+  // The two strings the producer puts in `grant_options`. Exported so a test —
+  // or a second host projection — asserts against the contract rather than
+  // re-typing the literal the backend owns.
+  GRANT_OPTION_ALLOW_ONCE,
+  GRANT_OPTION_ALLOW_ALWAYS,
   type RunApproval,
   type RunApprovalDecision,
   type RunApprovalKind,
