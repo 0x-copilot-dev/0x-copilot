@@ -27,6 +27,7 @@ import type {
   SubagentSnapshotMap,
 } from "../../workspace";
 import type { SubagentActivityRecord } from "../../subagents";
+import type { HostWriteGroup } from "./hostWrites";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 
 // ============================================================
@@ -1207,5 +1208,154 @@ describe("RunWorkspaceRail — Studio rail fold", () => {
       />,
     );
     expect(onStudioCollapsedChange).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================
+// The conditional Changes tab — what the run wrote to the real disk
+// ============================================================
+
+function hostWriteGroup(over: Partial<HostWriteGroup> = {}): HostWriteGroup {
+  return {
+    key: "call_a",
+    toolCallId: "call_a",
+    entries: [
+      {
+        entry_id: "e1",
+        tool_call_id: "call_a",
+        sequence: 1,
+        path: "/Users/x/notes.md",
+        kind: "modified",
+        prior_size: 4,
+        revertible: true,
+        captured_at: "2026-01-01T00:00:00Z",
+      },
+    ],
+    pathCount: 1,
+    undoable: true,
+    firstSequence: 1,
+    ...over,
+  };
+}
+
+function hostWrites(groups: readonly HostWriteGroup[]) {
+  return {
+    groups,
+    error: null,
+    states: {},
+    reports: {},
+    failures: {},
+    onUndo: vi.fn(),
+  };
+}
+
+describe("RunWorkspaceRail — Changes tab", () => {
+  // The prop's presence IS the render condition. Absent, the rail must be the
+  // four-tab v3 rail it has always been — the frozen order test above asserts
+  // the same thing from the other side.
+  it("adds nothing at all when the host reports nothing", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    expect(tabLabels()).toEqual(["Chat", "Agents", "Approvals", "Sources"]);
+    expect(screen.queryByTestId("run-rail-panel-changes")).toBeNull();
+  });
+
+  it("takes the END of the tabset so the frozen four never shift", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        hostWrites={hostWrites([hostWriteGroup()])}
+      />,
+    );
+    expect(tabLabels()).toEqual([
+      "Chat",
+      "Agents",
+      "Approvals",
+      "Sources",
+      "Changes",
+    ]);
+  });
+
+  it("badges the count of FILES, in the quiet tone rather than the accent one", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        hostWrites={hostWrites([
+          hostWriteGroup({ pathCount: 2 }),
+          hostWriteGroup({ key: "call_b", toolCallId: "call_b", pathCount: 1 }),
+        ])}
+      />,
+    );
+    const badge = screen.getByTestId("run-rail-changes-badge");
+    expect(badge).toHaveTextContent("3");
+    // Accent means "waiting on you". A file that has already been written is a
+    // statement of fact, and must not summon the reader.
+    expect(badge).not.toHaveAttribute("data-tone", "accent");
+  });
+
+  it("mounts the body in its own panel", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        hostWrites={hostWrites([hostWriteGroup()])}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Changes/ }));
+    const panel = screen.getByTestId("run-rail-panel-changes");
+    expect(panel).toHaveAttribute("role", "tabpanel");
+    expect(
+      within(panel).getByTestId("host-writes-group-call_a"),
+    ).toBeInTheDocument();
+  });
+
+  // A run rebind can take the tab away under the reader. Leaving the panel up
+  // with no tab above it is the state the scrubbed-Approvals rule already
+  // forbids; this takes the same escape.
+  it("falls back to Chat when a rebind leaves the run with nothing on disk", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        hostWrites={hostWrites([hostWriteGroup()])}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Changes/ }));
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "changes",
+    );
+    rerender(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "chat",
+    );
+    expect(screen.queryByTestId("run-rail-panel-changes")).toBeNull();
+  });
+
+  it("reaches the folded Studio strip and the Focus run-details panel too", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        studioCollapsed
+        hostWrites={hostWrites([hostWriteGroup()])}
+      />,
+    );
+    expect(screen.getByTestId("run-rail-strip-changes")).toBeInTheDocument();
+    rerender(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        hostWrites={hostWrites([hostWriteGroup()])}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Changes/ }));
+    expect(
+      within(screen.getByTestId("tc-focus-panel-changes")).getByTestId(
+        "host-writes-group-call_a",
+      ),
+    ).toBeInTheDocument();
   });
 });

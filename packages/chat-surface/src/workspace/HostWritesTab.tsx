@@ -277,12 +277,17 @@ function Notice({
   testId: string;
   children: ReactNode;
 }): ReactElement {
+  // The class names are kept for web parity with the sibling tab bodies, but
+  // the geometry is inline: `atlas-*` rules are declared only in the WEB app's
+  // stylesheet, so a notice styled by them alone renders as bare markup in the
+  // Electron host — the exact trap `ApprovalsTab` documents.
   return (
     <div
       className="atlas-workspace-tab atlas-workspace-tab--empty"
       data-testid={testId}
+      style={noticeStyle}
     >
-      <p>{children}</p>
+      <p style={noticeTextStyle}>{children}</p>
     </div>
   );
 }
@@ -320,6 +325,16 @@ function plural(count: number, noun: string): string {
 // names for the reason that tab documents: `atlas-*` rules live in the WEB app's
 // stylesheet and never load in the Electron host, so a rail body styled by them
 // renders as unstyled markup on desktop.
+const noticeStyle: CSSProperties = {
+  padding: "14px 12px",
+};
+
+const noticeTextStyle: CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontSize: "var(--font-size-xs)",
+  margin: 0,
+};
+
 const cardStyle: CSSProperties = {
   background: "var(--color-surface)",
   border: "1px solid var(--color-border)",
