@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 from pydantic import NonNegativeInt, PositiveInt
 
+from agent_runtime.observability.context_installed_tools import InstalledToolOrigins
 from agent_runtime.observability.context_message_classifier import (
     ClassifiedMessagePart,
     ContextMessageClassifier,
@@ -740,6 +741,7 @@ class ContextOccupancyRecorder:
         counter: ContextTokenCounter | None = None,
         third_party: ThirdPartyPromptIndex | None = None,
         builder: SnapshotBuilder | None = None,
+        installed_tools: InstalledToolOrigins | None = None,
     ) -> None:
         self._counter = counter or ContextTokenCounter()
         self._third_party = third_party or ThirdPartyPromptIndex(
@@ -747,6 +749,10 @@ class ContextOccupancyRecorder:
         )
         self._builder = builder or SnapshotBuilder()
         self._system = SystemBlockAttributor(third_party=self._third_party)
+        # The tool-block analogue of ``third_party``: declarations for the tools
+        # a middleware installs, which never pass the factory's append list and
+        # so could never have been stamped at a composition site.
+        self._installed_tools = installed_tools or InstalledToolOrigins()
 
     # --- public seam ---------------------------------------------------------
 
@@ -1184,12 +1190,22 @@ class ContextOccupancyRecorder:
         prompt-cache identity cannot drift apart. Its counting is injected here
         so the numbers come from the real tokenizer chain rather than from the
         char/4 stand-in it defaults to.
+
+        The installed-tool inventory is injected the same way, and for the same
+        reason the third-party prompt index is: a tool a middleware installs has
+        no composition site at which it could declare itself, so without a
+        declaration made on its behalf it measures as ``UNDECLARED`` forever
+        while the conformance gate that is supposed to catch that stays green.
         """
 
         if not materialized.tools:
             return ()
         bridge = _ToolSchemaCounterBridge(counter=self._counter, model=model)
-        footprints = ToolSchemaLedger.measure(materialized.tools, counter=bridge)
+        footprints = ToolSchemaLedger.measure(
+            materialized.tools,
+            counter=bridge,
+            origin_fallback=self._installed_tools.origin_for,
+        )
         sources = bridge.sources_for(footprints)
         return tuple(
             self._segment_for_footprint(footprint, source=source)

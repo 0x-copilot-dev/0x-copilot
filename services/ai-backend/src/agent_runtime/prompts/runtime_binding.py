@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import SystemMessage
 from pydantic import Field
@@ -74,6 +74,30 @@ class PromptFragmentProviderPort(Protocol):
     def assembly_context(self, call: PromptRuntimeCall) -> PromptAssemblyContext: ...
 
     def fragments(self, call: PromptRuntimeCall) -> Sequence[PromptFragment]: ...
+
+
+@runtime_checkable
+class BuildTimeSystemPromptPort(Protocol):
+    """A fragment provider that can name the prompt the graph was built with.
+
+    Deliberately separate from :class:`PromptFragmentProviderPort` rather than a
+    method added to it. That port is the *per-call* assembly contract and every
+    implementation must satisfy all of it; this one is an optional read that
+    only a provider holding a build-time plan can answer, and widening the
+    required port would force every future provider to invent an answer it does
+    not have.
+
+    The read exists because the two halves of prompt assembly have different
+    rollout postures. ``PromptAssembler`` runs unconditionally at graph
+    construction — its ``rendered_prompt`` *is* the ``system_prompt`` handed to
+    ``create_deep_agent`` — while re-assembling per call is gated on F2, which
+    ships ``OFF``. So on a default deployment the typed decomposition of the
+    system block exists and is simply unreachable from the model-call seam. This
+    is the accessor that makes it reachable, and it is a read of an object the
+    binding already holds: nothing is assembled, rendered, or cached here.
+    """
+
+    def build_time_plan(self) -> PromptAssemblyPlan | None: ...
 
 
 class PromptAssemblyObserverPort(Protocol):
@@ -140,6 +164,39 @@ class PromptRuntimeBinding:
     cache_rejection_adapters: ProviderCacheRejectionAdapterRegistry = field(
         default_factory=ProviderCacheRejectionAdapterRegistry
     )
+
+    def build_time_plan(self) -> PromptAssemblyPlan | None:
+        """Return the plan the graph was built with, when the provider holds one.
+
+        ``prepare`` returns ``plan=None`` whenever ``mode`` is ``OFF`` — the
+        shipped default — because there is no *per-call* assembly to report. The
+        graph was still built from a plan: the factory assembles one
+        unconditionally and passes its ``rendered_prompt`` to the builder as the
+        ``system_prompt``. Those two facts together are why the Context
+        Occupancy Ledger reported the whole system block as one anonymous span
+        on every default deployment: the decomposition existed at build time and
+        had no accessor at measurement time.
+
+        This is that accessor, and it is *only* an accessor. It assembles
+        nothing, so it adds no work to the model-call path, and it takes no
+        position on whether the plan matches the prompt actually sent — the
+        occupancy attributor verifies every fragment by ``content_digest``
+        before it labels a byte range, so a plan that no longer describes the
+        request attributes nothing rather than attributing wrongly.
+
+        Total by construction. A provider that cannot answer, or answers with
+        something that is not a plan, yields ``None`` — which is exactly the
+        state the caller already handles.
+        """
+
+        provider = self.fragment_provider
+        if not isinstance(provider, BuildTimeSystemPromptPort):
+            return None
+        try:
+            plan = provider.build_time_plan()
+        except Exception:  # noqa: BLE001 — an unreadable plan is simply absent
+            return None
+        return plan if isinstance(plan, PromptAssemblyPlan) else None
 
     def prepare(
         self,
@@ -374,6 +431,19 @@ class FactoryPromptFragmentProvider:
         }:
             raise ValueError("runtime prompt scope must match the verified legacy plan")
 
+    def build_time_plan(self) -> PromptAssemblyPlan:
+        """Return the factory's plan — the graph's own ``system_prompt`` bytes.
+
+        The same object the factory rendered into ``create_deep_agent``'s
+        ``system_prompt``, so a reader of this plan is reading the prompt the
+        graph was actually built with rather than a reconstruction of it.
+        Returned as-is because ``PromptAssemblyPlan`` is frozen and its
+        ``rendered_prompt`` is excluded from every ordinary dump, so handing the
+        reference out neither risks mutation nor leaks bodies into diagnostics.
+        """
+
+        return self._legacy_plan
+
     def assembly_context(self, call: PromptRuntimeCall) -> PromptAssemblyContext:
         """Rebind route/tool revisions while preserving verified run authority."""
 
@@ -599,6 +669,7 @@ def _cache_reason_override(
 
 
 __all__ = (
+    "BuildTimeSystemPromptPort",
     "FactoryPromptFragmentProvider",
     "PromptAssemblyObserverPort",
     "PromptCacheRecordStatus",
