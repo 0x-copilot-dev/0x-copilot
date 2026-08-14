@@ -13,6 +13,9 @@ because no task in the harness is big enough to touch them.
     python tools/harness-bench/heavy_tasks_ab.py --compare
     python tools/harness-bench/heavy_tasks_ab.py --plan     # free, no app, no model
 
+    # validate the plumbing for the price of ONE task before paying for an arm:
+    BENCH_ARM=500 HEAVY_TASKS=h1-corpus python tools/harness-bench/heavy_tasks_ab.py
+
 Same one-variable design as the recursion file: both arms run the same stage,
 the same tasks, the same model, in the same order, in their OWN process, and
 differ only in ``COPILOT_HP__EXECUTION__RECURSION_LIMIT``. Score afterwards with
@@ -328,6 +331,42 @@ def log(line: str) -> None:
     print(f"  {line}", flush=True)
 
 
+#: Env var pinning WHICH tasks this arm runs (comma/space separated).
+TASK_SELECTOR_ENV = "HEAVY_TASKS"
+
+
+def selected_tasks() -> tuple[HeavyTask, ...]:
+    """The tasks ``HEAVY_TASKS`` pins, or all of them.
+
+    Exists so validating the harness costs ONE task instead of a whole arm::
+
+        BENCH_ARM=500 HEAVY_TASKS=h1-corpus python .../heavy_tasks_ab.py
+
+    Same fail-loud contract as ``JOURNEY_PHASES``: an id matching no declared
+    task RAISES rather than running nothing. A caller that pins a renamed task
+    and gets a clean empty run has proven nothing while reporting success —
+    which is the precise pathology this whole harness exists to not have.
+
+    The tasks consume each other's state on purpose (H2 reads what H1 wrote), so
+    pinning a later one ALONE is a different measurement from the same task run
+    in order. Use it to validate the plumbing or to bisect, never to "just
+    re-run the expensive one".
+    """
+
+    raw = os.environ.get(TASK_SELECTOR_ENV, "").strip()
+    if not raw:
+        return TASKS
+    wanted = {token.strip().lower() for token in raw.replace(",", " ").split() if token}
+    kept = tuple(task for task in TASKS if task.task_id.lower() in wanted)
+    unmatched = sorted(wanted - {task.task_id.lower() for task in kept})
+    if unmatched:
+        raise SystemExit(
+            f"{TASK_SELECTOR_ENV} named {', '.join(unmatched)}, which this set "
+            f"does not declare. Known ids: {', '.join(t.task_id for t in TASKS)}"
+        )
+    return kept
+
+
 # ── the H6 fixture ───────────────────────────────────────────────────────────
 #: 2,600 data rows: comfortably over ``reads.default_line_limit`` (2000), so a
 #: single read cannot see the file and the model has to page. Generated from a
@@ -517,7 +556,7 @@ class Arm:
         return row
 
     def collect(self) -> None:
-        for task in TASKS:
+        for task in selected_tasks():
             self.results.append(self.run_task(task))
             # Written after EVERY task, not once at the end. An arm is minutes
             # of paid model time; a crash in task six must not throw away the

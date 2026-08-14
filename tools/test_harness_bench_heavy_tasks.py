@@ -229,6 +229,51 @@ def test_a_task_needing_a_prerequisite_never_silently_becomes_a_pass(heavy):
     assert arm.prerequisite(grant_task) is None
 
 
+def test_the_fixture_substitution_survives_both_prompt_and_expectation(heavy):
+    """The one code path that only executes in a PAID run, exercised offline.
+
+    `h6-bigread` is the only task carrying `{ledger}` / `{emea}` placeholders,
+    and they are substituted mid-arm — after the boot, after the key, after the
+    grant, after money has been spent. A `KeyError` or a stray brace there fails
+    at the worst possible moment, so it is checked here for free.
+    """
+
+    task = next(t for t in heavy.TASKS if t.fixture_keys)
+    fixtures = {"ledger": "/tmp/heavy-bench-x/ledger.csv", "emea": "62078"}
+    prompt = task.prompt.format(**fixtures)
+    assert "{" not in prompt, "an unsubstituted placeholder survived into the prompt"
+    assert fixtures["ledger"] in prompt
+    pattern = re.compile(task.expect.pattern.format(**fixtures), task.expect.flags)
+    assert pattern.search("EMEA=62078")
+    assert not pattern.search("EMEA=1")
+
+    # And the tasks that declare NO fixture keys must never be run through
+    # `.format` — a future regex quantifier like `\\d{2}` would raise there.
+    for other in heavy.TASKS:
+        if not other.fixture_keys:
+            assert "{" not in other.prompt or "}" not in other.prompt, (
+                f"{other.task_id} carries braces but declares no fixture keys"
+            )
+
+
+def test_pinning_an_unknown_task_id_fails_loudly(heavy, monkeypatch):
+    """A pinned id that matches nothing must raise, not run zero tasks.
+
+    Same contract as `JOURNEY_PHASES`: a caller pinning a renamed task and
+    getting a clean empty run has proven nothing while reporting success.
+    """
+
+    monkeypatch.setenv(heavy.TASK_SELECTOR_ENV, "h1-corpus")
+    assert [t.task_id for t in heavy.selected_tasks()] == ["h1-corpus"]
+    monkeypatch.setenv(heavy.TASK_SELECTOR_ENV, "h1-corpus, h3-transform")
+    assert [t.task_id for t in heavy.selected_tasks()] == ["h1-corpus", "h3-transform"]
+    monkeypatch.setenv(heavy.TASK_SELECTOR_ENV, "h9-does-not-exist")
+    with pytest.raises(SystemExit, match="h9-does-not-exist"):
+        heavy.selected_tasks()
+    monkeypatch.delenv(heavy.TASK_SELECTOR_ENV)
+    assert heavy.selected_tasks() == heavy.TASKS
+
+
 # ── 2. the scorer sees what it says it sees ─────────────────────────────────
 def _row(**kwargs) -> dict:
     row = {
