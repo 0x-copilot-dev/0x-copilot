@@ -73,3 +73,6 @@
 # (packages/service-contracts/.../e1_authorization.py) which special-cases it;
 # that is a policy rule naming the path, not a caller.
 /v1/usage/org/agent/{agent_id} :: per-agent usage rollup (P8-A4); the specified facade forward was never built
+/v1/agent/runs/{run_id}/host-writes :: agent-write revert, backend half only; waits on the facade forward + the chat-surface revert affordance (harness item 8, UI half)
+/v1/agent/runs/{run_id}/host-writes/revert :: as above; the route the revert affordance POSTs to
+/v1/agent/runs/{run_id}/steer :: mid-run steering, backend half only; waits on the facade forward + the composer binding that steers instead of erroring during an active run (harness item 9, UI half)
