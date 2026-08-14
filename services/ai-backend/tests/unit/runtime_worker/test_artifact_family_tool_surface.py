@@ -34,6 +34,7 @@ Two directions matter and both are covered:
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 
 import pytest
@@ -93,12 +94,20 @@ class ArtifactSurfaceMixin:
 
         ``None`` means "say nothing at all", which is the case that has to fail
         toward including.
+
+        ``env_file=os.devnull`` is not decoration. ``RuntimeSettings.load``
+        merges ``services/ai-backend/.env`` into the same mapping the
+        ``COPILOT_HP__`` overrides are resolved against, so without this pin the
+        result depends on whether the developer running the suite happens to
+        have a ``.env`` — green in a worktree that has none, and answering to
+        somebody's local file in the checkout that does. Same pin, same reason,
+        as ``test_shaping_credential_wiring``.
         """
 
         environ = dict(self.LANE_ON_ENV)
         if exposure is not None:
             environ["COPILOT_HP__TOOL_SURFACE__ARTIFACT_FAMILY"] = exposure
-        return RuntimeSettings.load(environ=environ)
+        return RuntimeSettings.load(environ=environ, env_file=os.devnull)
 
     def runtime_context(self) -> AgentRuntimeContext:
         return AgentRuntimeContext(
