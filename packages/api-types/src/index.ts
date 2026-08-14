@@ -2576,6 +2576,108 @@ export interface CancelRunResponse {
   latest_sequence_no: number;
 }
 
+/**
+ * The longest steer the server accepts (`SteeringMessage.MAX_TEXT_LENGTH`).
+ * Mirrored so a client can refuse locally instead of spending a round trip on
+ * a 422 — the server still validates; this is not the enforcement point.
+ */
+export const STEER_TEXT_MAX_LENGTH = 4000;
+
+/**
+ * `POST /v1/agent/runs/{run_id}/steer` — one user interjection into a run that
+ * is already executing. `requested_by_user_id` is overwritten from the verified
+ * session by the route, exactly as cancel does, so naming someone else here
+ * cannot put words into their run.
+ */
+export interface SteerRunRequest {
+  text: string;
+  requested_by_user_id: string;
+}
+
+/**
+ * Where the accepted steer landed in the run's ledger. `sequence_no` is the
+ * steer note's OWN position, so a client already streaming can reconcile its
+ * optimistic echo against the durable `run_steered` event without a refetch.
+ *
+ * There is deliberately no `delivered`: acceptance is durable here, delivery is
+ * only knowable later, and reporting it would be a guess dressed as a receipt.
+ */
+export interface SteerRunResponse {
+  run_id: string;
+  status: AgentRunStatus;
+  steer_id: string;
+  sequence_no: number;
+  accepted_at: string;
+}
+
+/** What the agent's operation did to a path the write journal must undo. */
+export type HostWriteKind = "created" | "modified" | "deleted";
+
+/**
+ * Per-path outcome of one revert attempt. `not_revertible` means the change was
+ * captured but its pre-image was never stored (too large / unreadable);
+ * `refused` means the path left the root that admitted the original write, or
+ * became a symlink — refused rather than followed.
+ */
+export type HostWriteRevertStatus =
+  | "restored"
+  | "removed"
+  | "not_revertible"
+  | "refused"
+  | "failed";
+
+/**
+ * One undoable change this run made to the user's real disk —
+ * `GET /v1/agent/runs/{run_id}/host-writes`.
+ *
+ * `tool_call_id` is the granularity that matters: a turn that did five things
+ * and one bad thing should cost the user the one thing. `null` means the write
+ * happened outside a bound tool call and is reachable only through a whole-run
+ * revert. The storage digest and the authorizing root are internal facts and are
+ * deliberately absent from this projection.
+ */
+export interface HostWriteEntry {
+  entry_id: string;
+  tool_call_id?: string | null;
+  sequence: number;
+  path: string;
+  kind: HostWriteKind;
+  prior_size: number;
+  revertible: boolean;
+  captured_at: string;
+}
+
+/** Every undoable change for one run, oldest first. */
+export interface HostWriteUndoListing {
+  run_id: string;
+  entries: readonly HostWriteEntry[];
+}
+
+/** What one revert actually did to one path. */
+export interface HostWriteRevertOutcome {
+  path: string;
+  kind: HostWriteKind;
+  status: HostWriteRevertStatus | string;
+  detail?: string | null;
+}
+
+/**
+ * `POST /v1/agent/runs/{run_id}/host-writes/revert` — one row per affected
+ * path. Omitting `tool_call_id` from the request undoes everything the run
+ * wrote; supplying it rewinds exactly one tool call and leaves later writes
+ * standing. A revert is audited server-side, so the report is a receipt, not a
+ * status code.
+ */
+export interface HostWriteRevertRequest {
+  tool_call_id?: string | null;
+}
+
+export interface HostWriteRevertReport {
+  run_id: string;
+  tool_call_id?: string | null;
+  outcomes: readonly HostWriteRevertOutcome[];
+}
+
 export interface RuntimeEventEnvelope {
   event_protocol_version?: number;
   event_id: string;
