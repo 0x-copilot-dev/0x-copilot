@@ -37,7 +37,7 @@ import asyncio
 import dataclasses
 import json
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Final, cast
 
 from langchain.agents.structured_output import ResponseFormat
 from langchain.tools import ToolRuntime
@@ -72,6 +72,19 @@ from agent_runtime.delegation.subagents.operation_identity import (
     SubagentOperationIdentityFactory,
 )
 from agent_runtime.surfaces_v2.ledger_models import Producer
+
+
+TASK_TOOL_NAME: Final[str] = "task"
+"""The model-facing name of the delegation tool this module builds.
+
+Named rather than repeated because ``task`` is installed onto the model surface
+by ``deepagents``' subagent middleware — this module replaces the library's
+builder — so it never passes the factory's append list and cannot be declared
+at a composition site. Its context-occupancy declaration therefore resolves this
+constant by name (see
+:mod:`agent_runtime.observability.context_installed_tools`), and a rename that
+did not update both ends would otherwise orphan the declaration silently.
+"""
 
 
 def build_atlas_task_tool(
@@ -362,7 +375,7 @@ def build_atlas_task_tool(
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     return StructuredTool.from_function(
-        name="task",
+        name=TASK_TOOL_NAME,
         func=task,
         coroutine=atask,
         description=description,

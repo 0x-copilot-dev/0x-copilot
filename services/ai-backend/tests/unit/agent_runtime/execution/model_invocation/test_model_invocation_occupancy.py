@@ -72,6 +72,7 @@ from agent_runtime.observability.context_occupancy import (
     ContextSegment,
     SnapshotBuilder,
 )
+from agent_runtime.observability.context_installed_tools import InstalledToolOrigins
 from agent_runtime.observability.context_occupancy_recorder import (
     ContextOccupancyRecorder,
     ThirdPartyPromptIndex,
@@ -324,8 +325,19 @@ class OccupancyMiddlewareMixin:
         lifecycle=ContextLifecycle.RESIDENT,
     )
 
-    def recorder(self) -> ContextOccupancyRecorder:
-        """A recorder with a private cache and no third-party sweep."""
+    def recorder(
+        self,
+        *,
+        installed_tools: InstalledToolOrigins | None = None,
+    ) -> ContextOccupancyRecorder:
+        """A recorder with a private cache and no third-party sweep.
+
+        ``installed_tools`` defaults to the disabled inventory so the default
+        fixture asserts against declarations this repository makes rather than
+        against whichever ``deepagents`` / ``langchain`` version is installed. A
+        test that is specifically about library-installed tools passes the real
+        one.
+        """
 
         return ContextOccupancyRecorder(
             counter=ContextTokenCounter(
@@ -334,6 +346,7 @@ class OccupancyMiddlewareMixin:
                 cache=DigestTokenCache(max_entries=64),
             ),
             third_party=ThirdPartyPromptIndex.disabled(),
+            installed_tools=installed_tools or InstalledToolOrigins.disabled(),
         )
 
     def middleware(self, recorder: object | None = None) -> ModelInvocationMiddleware:
@@ -667,6 +680,32 @@ class TestOccupancyCapture(OccupancyMiddlewareMixin):
 
         labels = {segment["label"] for segment in sink.records[0].segments}
         assert "agent_runtime.prompts:00_base_runtime" in labels
+
+    async def test_a_library_installed_tool_reports_the_library_that_owns_it(
+        self,
+    ) -> None:
+        # ``write_todos`` is installed by langchain's ``TodoListMiddleware``. It
+        # never passes ``factory._model_visible_tools``, so no stamp could ever
+        # have been applied to it and the AST gate that is meant to catch a
+        # missing declaration cannot see it either — 997 estimated tokens of
+        # anonymous tool block on a real run.
+        journal, authority, sink = Journal(), AuthorityAdapter(), OccupancySink()
+        middleware = self.middleware(
+            self.recorder(installed_tools=InstalledToolOrigins())
+        )
+
+        await self.invoke(
+            binding=self.binding(journal=journal, authority=authority, sink=sink),
+            request=self.request(tools=[self.tool(name="write_todos", declared=False)]),
+            middleware=middleware,
+        )
+
+        tool_labels = {
+            segment["label"]
+            for segment in sink.records[0].segments
+            if segment["segment_class"] == ContextSegmentClass.TOOLS.value
+        }
+        assert tool_labels == {"langchain.agents.middleware.todo:write_todos"}
 
     async def test_the_build_time_plan_attributes_the_system_block_when_f2_is_off(
         self,

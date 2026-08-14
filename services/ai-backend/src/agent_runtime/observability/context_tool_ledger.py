@@ -60,6 +60,23 @@ from agent_runtime.surfaces_v2.canonical_json import (
 _LOGGER = logging.getLogger(__name__)
 
 
+ToolSchemaOriginFallback = Callable[[str], "ContextOrigin | None"]
+"""Resolves a declaration for a tool that carries no stamp of its own.
+
+Consulted by name, and only after :func:`context_origin_of` has come back empty.
+It exists because a stamp can only be applied where a tool is *composed*, and
+the middleware-installed tools (audit: the deepagents filesystem set, langchain's
+``write_todos``, our monkey-patched ``task``) are never composed on the surface
+the factory owns — so there is no site at which they could ever have declared
+themselves, and no amount of gate coverage would have caught them.
+
+A plain callable rather than a protocol for the same reason as
+:data:`ToolSchemaTokenCounter`: the ledger needs exactly ``name -> origin | None``
+and every candidate — the pinned inventory, a test double — satisfies that
+without inheriting anything.
+"""
+
+
 ToolSchemaTokenCounter = Callable[[str], int]
 """Counts the tokens of one tool's canonical schema text.
 
@@ -225,6 +242,7 @@ class ToolSchemaLedger:
         model_tools: Sequence[object],
         *,
         counter: ToolSchemaTokenCounter | None = None,
+        origin_fallback: ToolSchemaOriginFallback | None = None,
     ) -> tuple[ToolSchemaFootprint, ...]:
         """Return one footprint per tool, in composition order.
 
@@ -233,13 +251,22 @@ class ToolSchemaLedger:
         gated Wave-1 block sitting last is information about *why* those tools
         are the ones to defer.
 
+        ``origin_fallback`` is consulted **only** for a tool carrying no stamp,
+        so a declaration made at a composition site always wins: the code that
+        composed a tool knows more about it than an inventory keyed by name
+        does, and letting the inventory override would let a stale row silently
+        relabel a first-party contributor.
+
         Never raises. A tool that cannot be serialized, a counter that throws,
         and a declaration that fails validation all degrade to a recorded row —
         occupancy measurement is best-effort and must never fail a run (§6.4).
         """
 
         count = counter or HeuristicToolSchemaTokenCounter.count
-        return tuple(cls._footprint(tool, counter=count) for tool in model_tools)
+        return tuple(
+            cls._footprint(tool, counter=count, origin_fallback=origin_fallback)
+            for tool in model_tools
+        )
 
     @classmethod
     def _footprint(
@@ -247,11 +274,14 @@ class ToolSchemaLedger:
         tool: object,
         *,
         counter: ToolSchemaTokenCounter,
+        origin_fallback: ToolSchemaOriginFallback | None = None,
     ) -> ToolSchemaFootprint:
         """Measure one tool, degrading to a zero footprint on any failure."""
 
-        origin = cls._origin_of(tool)
         tool_name = cls._tool_name(tool)
+        origin = cls._origin_of(tool) or cls._fallback_origin(
+            tool_name, origin_fallback=origin_fallback
+        )
         try:
             entry = cls.schema_entry(tool)
             byte_count = len(canonical_json_bytes(entry))
@@ -279,6 +309,36 @@ class ToolSchemaLedger:
             estimated_tokens=estimated_tokens,
             declared=origin is not None,
         )
+
+    @classmethod
+    def _fallback_origin(
+        cls,
+        tool_name: str,
+        *,
+        origin_fallback: ToolSchemaOriginFallback | None,
+    ) -> ContextOrigin | None:
+        """Resolve a stampless tool's declaration by name, or ``None``.
+
+        Treated as untrusted for the same reason the injected counter is: it is
+        the one part of this path written elsewhere. A raised exception or a
+        value that is not a :class:`ContextOrigin` yields ``None``, which lands
+        the tool in ``undeclared_tokens`` exactly as it did before — the
+        fallback can only ever improve attribution, never corrupt it.
+        """
+
+        if origin_fallback is None or not tool_name:
+            return None
+        try:
+            resolved = origin_fallback(tool_name)
+        except Exception:  # noqa: BLE001 — an unresolvable declaration is absent
+            _LOGGER.debug(
+                "Installed-tool origin lookup failed for %r; "
+                "measuring it as UNDECLARED.",
+                tool_name,
+                exc_info=True,
+            )
+            return None
+        return resolved if isinstance(resolved, ContextOrigin) else None
 
     @classmethod
     def _origin_of(cls, tool: object) -> ContextOrigin | None:
@@ -335,5 +395,6 @@ __all__ = (
     "HeuristicToolSchemaTokenCounter",
     "ToolSchemaFootprint",
     "ToolSchemaLedger",
+    "ToolSchemaOriginFallback",
     "ToolSchemaTokenCounter",
 )
