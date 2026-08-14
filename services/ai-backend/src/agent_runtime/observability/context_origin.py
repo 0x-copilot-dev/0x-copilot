@@ -198,7 +198,7 @@ class ContextOriginBinding:
     ATTRIBUTE: Final[str] = "__context_origin__"
 
     # The wrapper attribute names this codebase actually uses to hold an inner
-    # tool (``ToolBudgetGuardedTool.inner``, the policy and citation wrappers).
+    # tool (``ToolErrorPolicyTool.inner``, the retry and citation wrappers).
     # Bounded and explicit rather than a generic attribute crawl: an unbounded
     # search over arbitrary objects is how an observability read turns into a
     # surprise property access on a live tool.

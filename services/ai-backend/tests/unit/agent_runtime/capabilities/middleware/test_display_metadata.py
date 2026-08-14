@@ -762,15 +762,14 @@ def test_wrap_tool_with_display_extends_structured_tool_schema() -> None:
     assert received == [{"query": "Q1 launch"}]
 
 
-def test_wrap_tool_with_display_preserves_runnable_config_through_budget_wrapper() -> (
-    None
-):
+def test_wrap_tool_with_display_preserves_runnable_config() -> None:
     """A config-aware artifact tool must keep its injected run context.
 
-    This is the production topology: display metadata is applied while the
-    deep-agent graph is built and the complete model-visible surface is then
-    wrapped by the budget guard.  ``StructuredTool`` only injects ``config``
-    when the outer callable retains a typed ``RunnableConfig`` parameter.
+    This is the production topology: display metadata is applied to the
+    complete model-visible surface while the deep-agent graph is built
+    (``factory`` calls ``wrap_tools_with_display``).  ``StructuredTool`` only
+    injects ``config`` when the outer callable retains a typed
+    ``RunnableConfig`` parameter.
     """
 
     import asyncio
@@ -783,7 +782,6 @@ def test_wrap_tool_with_display_preserves_runnable_config_through_budget_wrapper
         DISPLAY_TITLE_KEY,
         wrap_tool_with_display,
     )
-    from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 
     class ArtifactArgs(BaseModel):
         path: str
@@ -800,7 +798,7 @@ def test_wrap_tool_with_display_preserves_runnable_config_through_budget_wrapper
         description="Publish a staged local artifact.",
         args_schema=ArtifactArgs,
     )
-    wrapped = guard_model_tools([wrap_tool_with_display(tool)])[0]
+    wrapped = wrap_tool_with_display(tool)
     config: RunnableConfig = {"configurable": {"run_id": "run-g2"}}
 
     result = asyncio.run(

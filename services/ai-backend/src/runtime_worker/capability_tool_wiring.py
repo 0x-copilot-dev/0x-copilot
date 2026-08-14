@@ -66,8 +66,8 @@ class _ContextBudgetGuard:
     Reuses the *same* per-run :class:`~agent_runtime.capabilities.tool_budget_guard.
     ToolBudgetGuard` an ordinary tool call is charged against, so a bridged call
     is not a budget-free back door. Admits when no guard is bound (parity with
-    ``ToolBudgetGuardedTool``'s ``guard is None`` path — non-desktop / eval runs
-    install no guard) and denies on a hard :class:`ToolBudgetReject`.
+    ``RuntimeControlMiddleware``'s ``guard is None`` path — non-desktop / eval
+    runs install no guard) and denies on a hard :class:`ToolBudgetReject`.
     """
 
     async def charge(self, *, tool_name, arguments, context) -> bool:  # noqa: ANN001

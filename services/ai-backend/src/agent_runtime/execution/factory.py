@@ -79,7 +79,6 @@ from agent_runtime.capabilities.middleware import (
     RuntimeControlMiddleware,
     wrap_tools_with_display,
 )
-from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -338,15 +337,14 @@ async def _assemble_harness(
     # opens one discovery session per authorized connector. Returns ``None``
     # whenever the flip declines — flag off, no credential plane, nothing loaded
     # — and the legacy ``call_mcp_tool`` branch below then runs untouched.
-    canonical_tools = tuple(_canonical_graph_tool(tool) for tool in tools)
     mcp_per_tool = await _mcp_per_tool_registration(
         runtime_context=runtime_context,
         runtime_dependencies=runtime_dependencies,
-        tools=canonical_tools,
+        tools=tools,
     )
     try:
         model_tools = _model_visible_tools(
-            tools=canonical_tools,
+            tools=tools,
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -1166,14 +1164,6 @@ def _model_visible_tools(
             )
         )
     return tuple(model_tools)
-
-
-def _canonical_graph_tool(tool: object) -> object:
-    """Remove the legacy budget adapter at the canonical graph boundary."""
-
-    while isinstance(tool, ToolBudgetGuardedTool):
-        tool = tool.inner
-    return tool
 
 
 def _prompt_assembly_plan(

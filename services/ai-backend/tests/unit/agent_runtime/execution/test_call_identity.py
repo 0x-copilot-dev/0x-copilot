@@ -11,7 +11,6 @@ from typing import Any, cast
 import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
@@ -19,11 +18,7 @@ from agent_runtime.capabilities.middleware.runtime_tool_control import (
     RuntimeControlMiddleware,
     RuntimeModelTurnReducer,
 )
-from agent_runtime.capabilities.tool_budget_guard import (
-    ToolBudgetGuard,
-    ToolBudgetGuardedTool,
-)
-from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetAdmit
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationRequestFactory,
@@ -173,49 +168,6 @@ class _RuntimeEventJournalTrap:
 
     async def emit(self, **_kwargs: object) -> None:
         self.calls.append("emit")
-
-
-class _CountingGuard:
-    """Minimal guard spy for the legacy-wrapper/canonical-seam composition."""
-
-    def __init__(self) -> None:
-        self.policy_admissions = 0
-        self.budget_admissions = 0
-        self.started = 0
-        self.settled = 0
-        self.policy_outcomes = 0
-        self.result_admissions: list[object] = []
-
-    def admit_task_policy(self, **_kwargs: object) -> object:
-        self.policy_admissions += 1
-        return object()
-
-    def check_admit(self, **_kwargs: object) -> ToolBudgetAdmit:
-        self.budget_admissions += 1
-        return ToolBudgetAdmit()
-
-    def record_started(self, **_kwargs: object) -> str:
-        self.started += 1
-        return "canonical-budget-call"
-
-    def admit_and_charge(self, **kwargs: object) -> tuple[object, str]:
-        """Mirror the real guard's one atomic check-then-charge entry point."""
-
-        return (self.check_admit(**kwargs), self.record_started(**kwargs))
-
-    def record_settled(self, **_kwargs: object) -> None:
-        self.settled += 1
-
-    def record_task_policy_outcome(self, **_kwargs: object) -> None:
-        self.policy_outcomes += 1
-
-    def admit_model_visible_result(
-        self,
-        result: object,
-        **_kwargs: object,
-    ) -> str:
-        self.result_admissions.append(result)
-        return f"admitted:{result}"
 
 
 def test_identity_binds_only_run_snapshot_scope_turn_and_provider_call_id() -> None:
@@ -779,55 +731,6 @@ async def test_feature_off_without_guard_preserves_output_and_emits_no_events(
     assert len(lifecycle_records) == 1
     assert runtime.calls == []
     assert ToolBudgetGuard.active() is None
-
-
-async def test_legacy_guarded_tool_and_canonical_middleware_admit_once() -> None:
-    middleware = RuntimeControlMiddleware()
-    guard = _CountingGuard()
-    inner_calls = 0
-
-    async def observed_tool(private: str) -> str:
-        nonlocal inner_calls
-        inner_calls += 1
-        return f"inner:{private}"
-
-    inner = StructuredTool.from_function(
-        name="observed_tool",
-        description="Return the exact observed value.",
-        coroutine=observed_tool,
-    )
-    guarded = ToolBudgetGuardedTool(
-        name=inner.name,
-        description=inner.description,
-        args_schema=inner.args_schema,
-        inner=inner,
-    )
-    request = _tool_request()
-
-    async def handler(inner_request: ToolCallRequest) -> ToolMessage:
-        arguments = inner_request.tool_call["args"]
-        assert isinstance(arguments, dict)
-        result = await guarded.ainvoke(arguments)
-        return ToolMessage(
-            content=str(result),
-            tool_call_id=str(inner_request.tool_call["id"]),
-        )
-
-    guard_token = ToolBudgetGuard.bind_for_run(cast(ToolBudgetGuard, guard))
-    try:
-        with _bound_run(_binding()):
-            result = await middleware.awrap_tool_call(request, handler)
-    finally:
-        ToolBudgetGuard.unbind(guard_token)
-
-    assert result.content == "admitted:inner:must-not-enter-lifecycle"
-    assert inner_calls == 1
-    assert guard.policy_admissions == 1
-    assert guard.budget_admissions == 1
-    assert guard.started == 1
-    assert guard.settled == 1
-    assert guard.policy_outcomes == 1
-    assert guard.result_admissions == ["inner:must-not-enter-lifecycle"]
 
 
 async def test_middleware_terminal_replay_is_idempotent_for_same_attempt() -> None:
