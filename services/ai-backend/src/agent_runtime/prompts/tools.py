@@ -1,6 +1,39 @@
-"""Model-visible tool descriptions used by runtime capabilities."""
+"""Model-visible tool descriptions used by runtime capabilities.
+
+Some of these are **progressively disclosed**: the full text below is published
+to ``/tools/<name>.md`` and the model surface carries the much shorter
+``*_RESIDENT_SUMMARY`` beside it. Both halves live in this one module on
+purpose — a summary that drifts from the text it stands in for is the failure
+mode, and the only defence is that the next author edits them in the same file.
+See :mod:`agent_runtime.capabilities.tools.catalog` for the split's rules.
+"""
 
 from __future__ import annotations
+
+from typing import Final
+
+
+#: Appended to every deferred tool's resident summary. One sentence, three jobs:
+#: name the exact call that expands the tool, state that the ARGUMENT SCHEMA is
+#: already complete (so a model that never expands still makes a well-formed
+#: call), and name the one situation that should send it to the file. It is
+#: formatted per tool rather than stated once in ``/tools/TOOLS.md`` because the
+#: pointer has to be in front of the model at the moment it is choosing THIS
+#: tool; an index it has to already know about is the silent-failure shape.
+#:
+#: It is also the one piece of text that is paid THREE times, once per deferred
+#: tool, so it is written to be short: at 48 estimated tokens the first draft
+#: spent a third of the whole resident budget restating itself.
+_GUIDANCE_POINTER: Final[str] = (
+    '\n\nFull rules: read_file("/tools/{tool}.md"). The schema below is '
+    "complete — a direct call is valid; read the file if one is refused."
+)
+
+
+def _with_guidance_pointer(summary: str, *, tool: str) -> str:
+    """Return ``summary`` with the ``/tools/<tool>.md`` pointer appended."""
+
+    return f"{summary}{_GUIDANCE_POINTER.format(tool=tool)}"
 
 
 ASK_A_QUESTION_TOOL_DESCRIPTION = (
@@ -54,6 +87,20 @@ STAGE_ROWSET_WRITE_TOOL_DESCRIPTION = (
     "NEVER applied unless the user explicitly overrides it.\n\n"
     "Returns `{stage_id, surface_id, rows_staged, rows_pre_held, status}`. The "
     "run continues — the user decides on the surface; do not wait or re-ask."
+)
+
+
+#: Resident half of ``stage_rowset_write``. Keeps what decides WHETHER to reach
+#: for this tool — bulk vs single write, and that staging never executes — and
+#: defers the row shape and the diff-accuracy rule, which only matter once the
+#: tool has been chosen and are exactly what the argument schema already names.
+STAGE_ROWSET_WRITE_RESIDENT_SUMMARY: Final[str] = _with_guidance_pointer(
+    "Stage a BULK write as a reviewable table: N per-row changes the user "
+    "decides on individually, then applies with one action. Use for "
+    "multi-record updates (e.g. re-prioritize 8 issues, update 12 contacts). "
+    "Nothing is written until the user approves — staging never executes, and "
+    "the run continues without waiting.",
+    tool="stage_rowset_write",
 )
 
 
@@ -116,6 +163,22 @@ PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
 )
 
 
+#: Resident half of ``publish_artifact``. The publish-vs-revise disambiguation
+#: stays resident and is the one deliberate overlap with the deferred text: it
+#: decides WHICH tool to call, so a model that never opens the file must still
+#: have it. The accent vocabulary, the kind/media-type table and the
+#: destination-reporting rule are all post-choice usage and move to the file.
+PUBLISH_ARTIFACT_RESIDENT_SUMMARY: Final[str] = _with_guidance_pointer(
+    "Create ONE NEW durable code, document, dataset, or file artifact in the "
+    "app's artifact library. Use only when the user explicitly asks to create, "
+    "save, or produce a durable artifact; ordinary prose and fenced code stay "
+    "chat text. To CHANGE an artifact that already exists, use "
+    "`revise_artifact` — publishing again makes a SECOND unrelated artifact "
+    "and a second canvas tab.",
+    tool="publish_artifact",
+)
+
+
 REVISE_ARTIFACT_TOOL_DESCRIPTION = (
     "Replace the content of an artifact that ALREADY EXISTS, creating its next "
     "immutable revision. Use this whenever the user asks to change, add to, "
@@ -145,6 +208,21 @@ REVISE_ARTIFACT_TOOL_DESCRIPTION = (
     "Kind, title, and media type cannot be changed by revising; they belong to "
     "the artifact itself.\n\n"
     f"{_ARTIFACT_DESTINATION_RULE}"
+)
+
+
+#: Resident half of ``revise_artifact``. "Send the COMPLETE new content" stays
+#: resident because it is the one rule whose violation silently truncates a
+#: user's artifact and the argument schema cannot express it. The
+#: compare-and-append conflict protocol defers: it only matters after a
+#: ``failed`` result, and that result carries the pointer back to the file.
+REVISE_ARTIFACT_RESIDENT_SUMMARY: Final[str] = _with_guidance_pointer(
+    "Replace the content of an artifact that ALREADY EXISTS, creating its next "
+    "immutable revision — one artifact with a version history and one canvas "
+    "tab, instead of scattering near-duplicates. Use this whenever the user "
+    "asks to change, add to, correct, or update an artifact already produced. "
+    "Send the COMPLETE new content, never a patch or a fragment.",
+    tool="revise_artifact",
 )
 
 

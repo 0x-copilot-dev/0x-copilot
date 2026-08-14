@@ -53,6 +53,8 @@ from agent_runtime.capabilities.mcp.catalog import (
     McpCatalogStore,
 )
 from agent_runtime.capabilities.mcp.catalog_backend import McpCatalogBackend
+from agent_runtime.capabilities.tools.catalog import ToolGuidanceCatalog
+from agent_runtime.capabilities.tools.catalog_backend import ToolCatalogBackend
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpInput, AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
@@ -349,6 +351,25 @@ async def _assemble_harness(
     # called anything. Seeding after the mount, not before, because the mount is
     # the single source of truth for whether a catalog exists this run.
     _seed_mcp_catalog(mcp_catalog, mcp_servers)
+    # The first-party tool catalog. Same shape as ``/mcp/`` and for the same
+    # measured reason — 9,159 of a 22,304-token cold prompt is tool schemas —
+    # but built from the tools' OWN descriptions rather than from a connector's
+    # descriptors, so the file and the resident summary cannot drift apart.
+    # Mounted after ``/mcp/`` so that route composes exactly as it did before.
+    # ``tool_guidance`` is rebound to what actually MOUNTED: a run whose route
+    # declined keeps every full description resident rather than handing the
+    # model a pointer to a file that does not exist.
+    deep_backend, tool_guidance = _with_tool_guidance_route(
+        deep_backend,
+        catalog=ToolGuidanceCatalog.of_tools(
+            (
+                runtime_dependencies.stage_rowset_write_tool,
+                runtime_dependencies.publish_artifact_tool,
+                runtime_dependencies.revise_artifact_tool,
+            )
+        ),
+        memory_backend=memory_backend,
+    )
 
     # P2-8 — the per-tool MCP flip. Awaited here (not inside
     # ``_model_visible_tools``, which is sync and stays sync) because the source
@@ -377,6 +398,7 @@ async def _assemble_harness(
             runtime_context=runtime_context,
             mcp_per_tool=mcp_per_tool,
             mcp_catalog=mcp_catalog,
+            tool_guidance=tool_guidance,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
         # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
@@ -978,6 +1000,82 @@ def _with_mcp_catalog_route(
     )
 
 
+class _ToolCatalogLog:
+    """Structured events for the ``/tools/`` route, in one place.
+
+    Separate strings from ``_McpCatalogLog`` on purpose: a live report that
+    "``read_file`` says the guidance file does not exist" has to be diagnosable
+    from the log alone, and a shared line would not say which catalog declined.
+    """
+
+    MOUNTED = "tool_catalog.mounted path=%s composite=%s documents=%d"
+    DECLINED = "tool_catalog.not_mounted reason=%s"
+
+
+def _with_tool_guidance_route(
+    deep_backend: object | None,
+    *,
+    catalog: ToolGuidanceCatalog | None,
+    memory_backend: object,
+) -> tuple[object | None, ToolGuidanceCatalog | None]:
+    """Mount the read-only first-party tool guidance at ``/tools/``.
+
+    Returns ``(backend, mounted_catalog)``. The second element is the catalog
+    ONLY when the route actually mounted, and it is the single input that
+    decides whether a description is stubbed — because a stub whose
+    ``/tools/<tool>.md`` does not exist is strictly worse than the full text it
+    replaced. That is the same rule ``_with_mcp_catalog_route`` documents, and
+    it is repeated here rather than assumed: the two catalogs mount
+    independently, so a run can legitimately have one and not the other.
+
+    Composed AFTER the MCP route so that route's three branches see exactly the
+    backend they saw before this existed; nothing about ``/mcp/`` changes.
+    """
+
+    if catalog is None:
+        return deep_backend, None
+    from deepagents.backends.composite import CompositeBackend  # noqa: PLC0415
+
+    backend = ToolCatalogBackend(catalog)
+    documents = len(catalog.documents)
+    if isinstance(deep_backend, CompositeBackend):
+        _LOGGER.info(
+            _ToolCatalogLog.MOUNTED, ToolCatalogBackend.PATH_PREFIX, True, documents
+        )
+        return (
+            CompositeBackend(
+                default=deep_backend.default,
+                routes={
+                    **deep_backend.routes,
+                    ToolCatalogBackend.PATH_PREFIX: backend,
+                },
+                artifacts_root=deep_backend.artifacts_root,
+            ),
+            catalog,
+        )
+    if deep_backend is not None or isinstance(memory_backend, DeepAgentsBackend):
+        # Same refusal as the MCP route: wrapping a passthrough
+        # ``DeepAgentsBackend`` drops the ``memory_paths`` attribute deepagents
+        # reads off it, and a working memory surface is not worth trading for a
+        # browsable one. That run keeps every full description resident.
+        _LOGGER.warning(
+            _ToolCatalogLog.DECLINED, _McpCatalogDecline.PASSTHROUGH_MEMORY_BACKEND
+        )
+        return deep_backend, None
+    from deepagents.backends.state import StateBackend  # noqa: PLC0415
+
+    _LOGGER.info(
+        _ToolCatalogLog.MOUNTED, ToolCatalogBackend.PATH_PREFIX, False, documents
+    )
+    return (
+        CompositeBackend(
+            default=StateBackend(),
+            routes={ToolCatalogBackend.PATH_PREFIX: backend},
+        ),
+        catalog,
+    )
+
+
 def _model_visible_tools(
     *,
     tools: Sequence[object],
@@ -994,6 +1092,7 @@ def _model_visible_tools(
     runtime_context: AgentRuntimeContext,
     mcp_per_tool: McpPerToolRegistration | None = None,
     mcp_catalog: McpCatalogPublisher | None = None,
+    tool_guidance: ToolGuidanceCatalog | None = None,
 ) -> tuple[object, ...]:
     # Every append below carries a ``ModelToolDeclaration.declared(...)`` naming
     # the owner of that tool's schema text. The declarations are what the
@@ -1199,20 +1298,30 @@ def _model_visible_tools(
     if stage_rowset_write_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput),
+                _structured_tool(
+                    stage_rowset_write_tool,
+                    StageRowsetWriteInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.DATAFLOW,
             )
         )
-    # The three tools below are the design document's headline number:
-    # ``publish_artifact`` alone is ~650 estimated tokens of description, and
-    # with ``revise_artifact`` and ``stage_rowset_write`` the trio is ~1,337
-    # tokens of RESIDENT rent charged on every model call of every run. Naming
-    # their owner here is what lets the occupancy report say that out loud
-    # instead of folding them into an anonymous tool-block total.
+    # The three tools below are the design document's headline number, and the
+    # live measurement made it larger: on the assembled surface the trio costs
+    # 3,360 estimated tokens of RESIDENT rent on every model call of every run,
+    # of which 1,712 is prose. Naming their owner here is what let the occupancy
+    # report say that out loud instead of folding them into an anonymous
+    # tool-block total — and ``guidance`` is what acts on it, moving the prose to
+    # ``/tools/<name>.md`` while the argument schema stays where the model needs
+    # it. ``None`` when the route did not mount ⇒ every description stays full.
     if publish_artifact_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(publish_artifact_tool, PublishArtifactInput),
+                _structured_tool(
+                    publish_artifact_tool,
+                    PublishArtifactInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.BACKENDS,
             )
         )
@@ -1222,7 +1331,11 @@ def _model_visible_tools(
     if revise_artifact_tool is not None:
         model_tools.append(
             ModelToolDeclaration.declared(
-                _structured_tool(revise_artifact_tool, ReviseArtifactInput),
+                _structured_tool(
+                    revise_artifact_tool,
+                    ReviseArtifactInput,
+                    guidance=tool_guidance,
+                ),
                 owner=ModelToolOwner.BACKENDS,
             )
         )
@@ -1690,10 +1803,32 @@ def _local_tool_names(
     return frozenset(names)
 
 
-def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
-    """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema."""
+def _structured_tool(
+    tool_adapter: object,
+    args_schema: type[object],
+    *,
+    guidance: ToolGuidanceCatalog | None = None,
+) -> StructuredTool:
+    """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema.
+
+    ``guidance`` is the MOUNTED ``/tools/`` catalog, or ``None``. When it has
+    published a file for this adapter, two things change and nothing else:
+
+    * the model-visible ``description`` becomes the short resident summary, and
+      the full prose is read on demand from ``/tools/<name>.md``; and
+    * a REFUSED result gains the path back to that file, so the rules a JSON
+      schema cannot express (``publish_artifact``'s exactly-one-of-content,
+      ``revise_artifact``'s compare-and-append, the row/diff accuracy check)
+      are one ``read_file`` away instead of an identical retry away.
+
+    ``args_schema`` is untouched, deliberately: it is the machine contract, so a
+    model that never opens the file still composes a well-formed call. See
+    :mod:`agent_runtime.capabilities.tools.catalog` for why the split lands there.
+    """
 
     name = str(getattr(tool_adapter, "name"))
+    resident = None if guidance is None else guidance.resident_description(tool_adapter)
+    deferred = guidance if resident is not None else None
 
     async def invoke_adapter(**kwargs: Any) -> object:
         async def _invoke_legacy() -> object:
@@ -1702,18 +1837,26 @@ def _structured_tool(tool_adapter: object, args_schema: type[object]) -> Structu
         # The provider dispatch inside ``CallMcpTool`` owns the MCP probe; an
         # umbrella-level probe here would double-count the same invocation.
         if name in {McpValues.ToolName.CALL_MCP_TOOL, "publish_artifact"}:
-            return await _invoke_legacy()
-        return await OperationShadowProbe.invoke_legacy(
-            capability="builtin",
-            op=name,
-            arguments=kwargs,
-            legacy=_invoke_legacy,
-        )
+            result = await _invoke_legacy()
+        else:
+            result = await OperationShadowProbe.invoke_legacy(
+                capability="builtin",
+                op=name,
+                arguments=kwargs,
+                legacy=_invoke_legacy,
+            )
+        if deferred is None:
+            return result
+        return deferred.annotated_failure(name, result)
 
     return StructuredTool.from_function(
         coroutine=invoke_adapter,
         name=name,
-        description=str(getattr(tool_adapter, "description")),
+        description=(
+            resident
+            if resident is not None
+            else str(getattr(tool_adapter, "description"))
+        ),
         args_schema=args_schema,
     )
 
