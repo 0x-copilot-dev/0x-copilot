@@ -323,6 +323,27 @@ export interface ComposerProps {
   readonly dictationPort?: DictationPort;
   readonly onCancel?: () => void;
   readonly running?: boolean;
+  /**
+   * A submit while `running` is MEANINGFUL to the host, so {@link send} stops
+   * refusing it.
+   *
+   * Default `false`, which is the behaviour every mount had before this
+   * existed: with a run in flight the composer accepted keystrokes and then
+   * discarded them — ⏎ hit a `running` guard and did nothing at all, with no
+   * error and no queued turn.
+   *
+   * The Run cockpit opts in because its `onSubmit` is a real second thing:
+   * `RunDestination.handleStartRun` routes a submit against a live run to
+   * `POST /v1/agent/runs/{id}/steer` — a durable queued command delivered at the
+   * run's next model step — instead of starting a second run. A host that has
+   * no such path must leave this off rather than let ⏎ fire a duplicate start.
+   *
+   * It opens the KEYBOARD path only. `canSend` and the built-in action row are
+   * untouched, so the Stop button still occupies the send slot for the whole
+   * time a run is live: steering must not cost the user the one control that
+   * ends the run.
+   */
+  readonly submitWhileRunning?: boolean;
   readonly disabled?: boolean;
   readonly placeholder?: string;
   readonly initialModel?: string;
@@ -461,6 +482,7 @@ function ComposerInner(
     dictationPort,
     onCancel,
     running = false,
+    submitWhileRunning = false,
     disabled = false,
     placeholder = "Send a message…",
     initialModel = DEFAULT_MODEL,
@@ -763,7 +785,12 @@ function ComposerInner(
     const hasContent = isEdit
       ? trimmed.length > 0
       : trimmed.length > 0 || attachments.length > 0;
-    if (!hasContent || disabled || running) {
+    // `running` blocks a submit unless the host declared one meaningful. It is
+    // only ever reached with content in the box (the `hasContent` term above
+    // already caught the empty case), so what this guard rejected was always a
+    // sentence someone had typed — dropped with no error and no queued turn.
+    // See `submitWhileRunning` for what the Run cockpit does with it instead.
+    if (!hasContent || disabled || (running && !submitWhileRunning)) {
       return;
     }
     cancelDictation();
@@ -849,6 +876,7 @@ function ComposerInner(
     onSubmit,
     onSubmitError,
     running,
+    submitWhileRunning,
     text,
   ]);
 

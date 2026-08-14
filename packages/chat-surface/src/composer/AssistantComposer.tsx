@@ -243,6 +243,11 @@ export interface AssistantComposerProps {
   /**
    * Whether a run is in flight. When true the Send button is
    * replaced with a Stop button that fires `onCancel`.
+   *
+   * ⏎ still submits — see the `submitWhileRunning` note at the `<Composer>`
+   * mount below. This is the v3 composer both hosts' Run cockpits mount, and
+   * mid-run its `onSubmit` reaches the cockpit's dispatch, which steers the live
+   * run rather than starting a second one.
    */
   running?: boolean;
   /** Submission. The host wraps `text` + `attachments` into an
@@ -507,6 +512,17 @@ export const AssistantComposer = forwardRef<
       className="aui-composer"
       disabled={disabled}
       running={running}
+      // ⏎ KEEPS WORKING WHILE A RUN IS LIVE, and the send slot keeps its Stop
+      // button (this opens the keyboard path only — see the prop's own doc).
+      //
+      // Set unconditionally rather than threaded through another prop, because
+      // this composer's `onSubmit` is host-supplied and both hosts route it to
+      // the SAME place: the Run cockpit's `dispatch`
+      // (`RunDestination.handleStartRun`), which steers a live run instead of
+      // starting a second one. A per-host opt-in would be a flag two apps have
+      // to remember to set, and the surface both of them mount is here — that is
+      // how a shared feature ends up landed on one host and dark on the other.
+      submitWhileRunning
       attachmentAdapter={attachmentAdapter}
       dictationPort={dictationPort}
       placeholder={placeholder}
