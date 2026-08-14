@@ -50,6 +50,34 @@ class DeferLoadingPolicy(StrEnum):
     ALL = "all"
 
 
+class ArtifactToolFamilyExposure(StrEnum):
+    """Whether the artifact / row-set tool family occupies the tool block.
+
+    The family is ``publish_artifact``, ``revise_artifact`` and
+    ``stage_rowset_write``. Measured against a real run's
+    ``context_occupancy.jsonl`` the three cost **3,326 estimated tokens** of
+    schema text (1,381 / 722 / 1,223) on *every* model call, out of a ~23k
+    input. That text is RESIDENT: it is re-sent whether or not the run ever
+    publishes anything, and on a cold start it is paid at full price rather
+    than at the cache-read rate — which is where 71% of measured spend sits.
+
+    Two states, not three, and the missing third is deliberate. Progressive
+    disclosure (a compact stub the model expands on demand, the shape
+    ``agent_runtime.capabilities.mcp.catalog`` already proves for descriptor
+    blobs) is the better long-term answer and is named as the follow-on rather
+    than reserved as an inert enum member here.
+    """
+
+    #: Today's behaviour: the family loads whenever its lane is composed.
+    ALWAYS = "always"
+    #: The family is withheld from the model surface. It does NOT disable the
+    #: artifact lane: the repository, the ledger, the approval resume path and
+    #: ``ArtifactContentPartPublisher`` (which publishes artifact content parts
+    #: the model emits inline) are all untouched — only the three tool schemas
+    #: stop being advertised.
+    OFF = "off"
+
+
 #: The tokenizer-free ratio `SearchContentBudget` converts with. Mirrored
 #: rather than imported to keep this module free of capability imports.
 _CHARS_PER_TOKEN: Final[int] = 4
@@ -192,6 +220,50 @@ class McpCatalogHyperparameters(HyperparameterSection):
                 "the minimum gate would never be satisfiable"
             )
         return self
+
+
+class ToolSurfaceHyperparameters(HyperparameterSection):
+    """Which optional tool families are allowed to occupy the tool block.
+
+    Every other section here bounds what a tool may *spend at call time*. This
+    one bounds what the tool block costs *before the model has done anything*,
+    which is a different budget with a different economics: schema text is
+    resident, so a tool nobody calls is still charged on every model call of
+    every run.
+
+    A tunable rather than a deployment switch on ``RuntimeSettings`` because it
+    is a context-engineering judgement about the agent's own behaviour — the
+    same category as ``mcp_loading.defer_loading_policy``, which is the
+    neighbouring knob over the same block — and because it should be a
+    reviewable diff rather than an invisible environment change.
+    """
+
+    artifact_family: ArtifactToolFamilyExposure = ArtifactToolFamilyExposure.ALWAYS
+
+    def admits_artifact_family(self, *, lane_enabled: bool) -> bool:
+        """Return whether the artifact / row-set family may be model-visible.
+
+        Both halves must hold, and they are different questions:
+        ``lane_enabled`` is the caller's existing "is this capability composed
+        for this run at all" gate (``ARTIFACT_EFFECTS_V2`` + a repository +
+        rollout admission for publish/revise; ``SURFACES_V2`` for the row-set
+        stager), while this section decides whether a composed capability is
+        worth its resident schema text.
+
+        Fails toward INCLUDING by construction: the only value that withholds
+        the family is ``OFF`` written explicitly into the document (or a
+        ``COPILOT_HP__TOOL_SURFACE__ARTIFACT_FAMILY`` override). A misspelled
+        value is rejected at boot by ``extra="forbid"`` plus enum validation and
+        stops the process with a pointer, so there is no third path where the
+        tools quietly vanish. And because the value is resolved once at the
+        composition root onto a frozen document that both the run handler and
+        the approval-resume handler read, a run cannot lose the family
+        mid-task: the answer is identical either side of an approval.
+        """
+
+        return lane_enabled and self.artifact_family is not (
+            ArtifactToolFamilyExposure.OFF
+        )
 
 
 class ReadHyperparameters(HyperparameterSection):
@@ -473,6 +545,9 @@ class Hyperparameters(_FrozenContract):
     )
     mcp_catalog: McpCatalogHyperparameters = Field(
         default_factory=McpCatalogHyperparameters
+    )
+    tool_surface: ToolSurfaceHyperparameters = Field(
+        default_factory=ToolSurfaceHyperparameters
     )
     reads: ReadHyperparameters = Field(default_factory=ReadHyperparameters)
     retry: RetryHyperparameters = Field(default_factory=RetryHyperparameters)

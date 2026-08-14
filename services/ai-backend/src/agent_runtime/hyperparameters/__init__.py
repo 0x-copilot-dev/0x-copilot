@@ -7,6 +7,7 @@ tuning change a reviewable diff instead of an invisible deployment change.
 """
 
 from agent_runtime.hyperparameters.contracts import (
+    ArtifactToolFamilyExposure,
     CitationHyperparameters,
     ContextHyperparameters,
     DeferLoadingPolicy,
@@ -22,6 +23,7 @@ from agent_runtime.hyperparameters.contracts import (
     ReadHyperparameters,
     RetryHyperparameters,
     SubagentHyperparameters,
+    ToolSurfaceHyperparameters,
 )
 from agent_runtime.hyperparameters.loader import (
     HyperparameterError,
@@ -30,6 +32,7 @@ from agent_runtime.hyperparameters.loader import (
 
 
 __all__ = [
+    "ArtifactToolFamilyExposure",
     "CitationHyperparameters",
     "ContextHyperparameters",
     "DeferLoadingPolicy",
@@ -47,4 +50,5 @@ __all__ = [
     "ReadHyperparameters",
     "RetryHyperparameters",
     "SubagentHyperparameters",
+    "ToolSurfaceHyperparameters",
 ]
