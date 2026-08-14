@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import Mapping
 from typing import Annotated, Any, ClassVar, Callable, get_type_hints
 
@@ -11,6 +12,9 @@ from langchain_core.tools import InjectedToolCallId
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+
+
+_LOGGER = logging.getLogger(__name__)
 
 # Wire keys (alias form) for optional agent-supplied display overrides.
 # The model emits these in tool_call args; the presentation layer reads them
@@ -603,6 +607,17 @@ def wrap_tool_with_display(tool: object) -> object:
     Idempotent: a tool already bearing the ``__display_wrapped__`` schema marker
     is returned unchanged. Falls back to returning the original tool for unrecognised
     shapes — the safety contract is "never break a working tool to add display copy."
+
+    The wrapped tool inherits the inner's Context Occupancy declaration. The
+    ``StructuredTool`` branch keeps it for free (the stamp lives in the instance
+    ``__dict__``, which ``model_copy`` carries), but the delegation branch
+    *rebuilds* the tool with ``from_function`` and holds the inner in a closure,
+    so the new object had neither the stamp nor an attribute chain leading back
+    to it. That silently un-declared every non-``StructuredTool`` on the model
+    surface — ``web_search``, which arrives wrapped in ``RetryingTool`` — and
+    the occupancy report blamed a composition site that had declared it
+    correctly. Carrying it here rather than re-declaring downstream keeps the
+    rule that a declaration is made once, by the code that composed the text.
     """
 
     args_schema = getattr(tool, "args_schema", None)
@@ -615,10 +630,44 @@ def wrap_tool_with_display(tool: object) -> object:
         return tool
 
     if isinstance(tool, StructuredTool):
-        return _wrap_structured_tool(tool, StructuredTool)
+        return _with_carried_context_origin(
+            tool, _wrap_structured_tool(tool, StructuredTool)
+        )
     if isinstance(tool, BaseTool):
-        return _wrap_base_tool_via_delegation(tool, StructuredTool)
+        return _with_carried_context_origin(
+            tool, _wrap_base_tool_via_delegation(tool, StructuredTool)
+        )
     return tool
+
+
+def _with_carried_context_origin(source: object, wrapped: object) -> object:
+    """Preserve ``source``'s occupancy declaration on the tool that replaces it.
+
+    Deferred import for the same reason ``ModelToolDeclaration`` defers its own:
+    ``capabilities.middleware`` is imported eagerly from the execution lane, and
+    a module-scope edge into the observability lane would make importing either
+    package order-dependent.
+
+    Fail-open, because declaring an origin is observability and this function is
+    on the graph-build path: a binding that cannot be read or written costs a
+    label in a report, never a working tool (§6.4).
+    """
+
+    if wrapped is source:
+        return wrapped
+    try:
+        from agent_runtime.observability.context_origin import (  # noqa: PLC0415
+            carry_context_origin,
+        )
+
+        return carry_context_origin(source, wrapped)
+    except Exception:  # noqa: BLE001 — a label is never worth breaking a tool
+        _LOGGER.debug(
+            "Could not carry a context origin onto a display-wrapped tool; "
+            "it will measure as UNDECLARED.",
+            exc_info=True,
+        )
+        return wrapped
 
 
 def wrap_tools_with_display(tools: Any) -> list[object]:

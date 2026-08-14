@@ -70,6 +70,23 @@ inheriting anything.
 """
 
 
+ToolOriginResolver = Callable[[object], ContextOrigin | None]
+"""Declares a tool that carries no stamp, or returns ``None`` to leave it alone.
+
+The second and last way a tool can acquire a declaration, and it exists because
+the stamp can only be applied where a tool is *composed by us*. Library
+middleware installs its own tools inside ``create_deep_agent``, so there is no
+append site to stamp and no lexical site for the PRD-02 gate to sweep; §4.3's
+"one module declares on the library's behalf" is the sanctioned answer, and this
+is the seam it plugs into.
+
+A plain callable for the same reason the counter is one — the ledger needs
+``tool -> declaration | None`` and nothing else — and injected rather than
+imported so this module keeps no edge to the third-party adapter and a test can
+resolve without depending on whichever ``deepagents`` version is installed.
+"""
+
+
 class HeuristicToolSchemaTokenCounter:
     """The char/4 stand-in PRD-04 replaces with the real tokenizer chain.
 
@@ -225,6 +242,7 @@ class ToolSchemaLedger:
         model_tools: Sequence[object],
         *,
         counter: ToolSchemaTokenCounter | None = None,
+        fallback_origin: ToolOriginResolver | None = None,
     ) -> tuple[ToolSchemaFootprint, ...]:
         """Return one footprint per tool, in composition order.
 
@@ -233,13 +251,23 @@ class ToolSchemaLedger:
         gated Wave-1 block sitting last is information about *why* those tools
         are the ones to defer.
 
-        Never raises. A tool that cannot be serialized, a counter that throws,
-        and a declaration that fails validation all degrade to a recorded row —
-        occupancy measurement is best-effort and must never fail a run (§6.4).
+        ``fallback_origin`` is consulted only for a tool that carries no stamp,
+        so a declaration made at composition always wins over one inferred here
+        — the composing code knows what it built, and this resolver is reading
+        a dependency's internals. Omitting it restores the pre-PRD-06 behaviour
+        exactly: an unstamped tool measures as ``UNDECLARED``.
+
+        Never raises. A tool that cannot be serialized, a counter that throws, a
+        resolver that throws, and a declaration that fails validation all
+        degrade to a recorded row — occupancy measurement is best-effort and
+        must never fail a run (§6.4).
         """
 
         count = counter or HeuristicToolSchemaTokenCounter.count
-        return tuple(cls._footprint(tool, counter=count) for tool in model_tools)
+        return tuple(
+            cls._footprint(tool, counter=count, fallback_origin=fallback_origin)
+            for tool in model_tools
+        )
 
     @classmethod
     def _footprint(
@@ -247,10 +275,13 @@ class ToolSchemaLedger:
         tool: object,
         *,
         counter: ToolSchemaTokenCounter,
+        fallback_origin: ToolOriginResolver | None = None,
     ) -> ToolSchemaFootprint:
         """Measure one tool, degrading to a zero footprint on any failure."""
 
         origin = cls._origin_of(tool)
+        if origin is None and fallback_origin is not None:
+            origin = cls._resolved_origin(tool, fallback_origin=fallback_origin)
         tool_name = cls._tool_name(tool)
         try:
             entry = cls.schema_entry(tool)
@@ -295,6 +326,35 @@ class ToolSchemaLedger:
             return None
 
     @classmethod
+    def _resolved_origin(
+        cls,
+        tool: object,
+        *,
+        fallback_origin: ToolOriginResolver,
+    ) -> ContextOrigin | None:
+        """Ask the injected resolver to declare an unstamped tool.
+
+        The resolver is the one collaborator here written outside this module,
+        so it is the one treated as untrusted: a raise, or anything back that is
+        not a :class:`ContextOrigin`, is the same answer as "nothing to say" and
+        leaves the tool ``UNDECLARED``. Trusting the return type would let a
+        malformed resolver put a non-contract object into ``label`` and
+        ``lifecycle`` and fail the row's validation instead — on the model-call
+        path, which §6.4 forbids.
+        """
+
+        try:
+            resolved = fallback_origin(tool)
+        except Exception:  # noqa: BLE001 — a failed resolution is no resolution
+            _LOGGER.debug(
+                "Fallback context-origin resolution failed for a composed tool; "
+                "measuring it as UNDECLARED.",
+                exc_info=True,
+            )
+            return None
+        return resolved if isinstance(resolved, ContextOrigin) else None
+
+    @classmethod
     def _count(cls, text: str, *, counter: ToolSchemaTokenCounter) -> int:
         """Count ``text`` through ``counter``, falling back to the heuristic.
 
@@ -333,6 +393,7 @@ class ToolSchemaLedger:
 
 __all__ = (
     "HeuristicToolSchemaTokenCounter",
+    "ToolOriginResolver",
     "ToolSchemaFootprint",
     "ToolSchemaLedger",
     "ToolSchemaTokenCounter",

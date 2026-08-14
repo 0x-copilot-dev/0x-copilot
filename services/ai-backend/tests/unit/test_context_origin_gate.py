@@ -103,13 +103,36 @@ def test_declared_context_origin_inventory_is_reviewed() -> None:
         "agent_runtime.conversation:assistant_tool_calls",
         "agent_runtime.conversation:tool_result",
         "agent_runtime.conversation:user",
+        # Declared at its authoring site because it has no other one. ``task`` is
+        # handed to the subagent middleware and installed by ``create_deep_agent``,
+        # so it never passes ``_model_visible_tools`` and the site sweep below
+        # cannot see it. It also *looks* like the library's own ``task`` — same
+        # name, same slot — which is why leaving it undeclared billed ~390
+        # resident tokens of our text to ``deepagents``.
+        "agent_runtime.delegation.subagents.atlas_task_tool:task",
         "agent_runtime.execution.factory:10_application_context_boundary",
+        # The whole system block when no F2 plan was assembled — the desktop's
+        # permanent state. Coarser than per-fragment attribution and honest about
+        # it (the segment's detail is ``system[unassembled]``), but far better
+        # than the alternative it replaced: reporting the entire system prompt as
+        # a contract defect on every model call.
+        "agent_runtime.execution.factory:system_prompt",
         "agent_runtime.execution.model_invocation:response_format",
         "agent_runtime.execution:state_file",
         "agent_runtime.prompts.runtime:00_base_runtime",
         "agent_runtime.prompts:assembly_joiner",
         "deepagents.middleware:tools",
     )
+    # Not in the pin, and knowingly so: ``runtime_worker.dependencies:web_search``
+    # spells its ``name`` as ``Values.WEB_SEARCH_TOOL_NAME`` rather than as a
+    # literal, and the sweep drops any declaration whose owner or name it cannot
+    # read statically. Making it literal would duplicate the constant that names
+    # the tool two lines above it. It is gated behaviourally instead, against the
+    # real composed surface, in
+    # ``tests/unit/agent_runtime/observability/test_context_tool_declaration_coverage.py``
+    # (``test_web_search_is_owned_by_the_module_that_writes_its_description``),
+    # which is the stronger of the two checks: it asserts the label the ledger
+    # actually produces rather than the one the source appears to request.
 
 
 def test_inventory_covers_every_model_tool_composed_by_the_factory() -> None:

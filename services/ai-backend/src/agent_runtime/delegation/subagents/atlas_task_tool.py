@@ -46,6 +46,13 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
+from agent_runtime.observability.context_origin import (
+    ContextLifecycle,
+    ContextOrigin,
+    ContextSegmentClass,
+    declare_context_origin,
+)
+
 # Re-import the pieces we mirror so we stay 1:1 with the upstream behavior
 # except for the metadata injection.
 from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
@@ -361,13 +368,36 @@ def build_atlas_task_tool(
             return str(result)
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
-    return StructuredTool.from_function(
-        name="task",
-        func=task,
-        coroutine=atask,
-        description=description,
-        infer_schema=False,
-        args_schema=TaskToolSchema,
+    # Declared here because this is where the text is authored, and there is
+    # nowhere else it could be. ``task`` does not travel through
+    # ``factory._model_visible_tools`` — it is handed to the subagent middleware
+    # and installed by ``create_deep_agent`` — so no append site stamps it and
+    # the PRD-02 AST gate, which sweeps that one function, cannot see it either.
+    # It reached the provider undeclared on every model call of every run that
+    # can delegate, and it is easy to mistake for the library's own ``task``:
+    # the tool it replaces has the same name and the same slot, so an occupancy
+    # reader who assumed third-party would go looking in ``deepagents`` for a
+    # description this repository writes.
+    return declare_context_origin(
+        StructuredTool.from_function(
+            name="task",
+            func=task,
+            coroutine=atask,
+            description=description,
+            infer_schema=False,
+            args_schema=TaskToolSchema,
+        ),
+        ContextOrigin(
+            # A literal rather than ``__name__`` so the PRD-02 inventory gate can
+            # read it statically. That gate is the only review this declaration
+            # ever gets — it sits outside ``_model_visible_tools``, which is the
+            # one place the sweep looks — and an owner it cannot resolve is an
+            # entry that never appears in the pin for anyone to review.
+            owner="agent_runtime.delegation.subagents.atlas_task_tool",
+            name="task",
+            segment_class=ContextSegmentClass.TOOLS,
+            lifecycle=ContextLifecycle.RESIDENT,
+        ),
     )
 
 
