@@ -425,8 +425,15 @@ class Arm:
         self.limit = limit
         self.results: list[dict] = []
         self.conversation_id: str | None = None
-        #: Substitutions available to a task's prompt, plus what each unlocks.
+        #: Substitutions available to a task's prompt, filled by ``setup``.
         self.fixtures: dict[str, str] = {}
+        #: Prerequisites ``setup`` POSITIVELY confirmed. Fail-closed on purpose:
+        #: a prerequisite is present only when something checked and said so.
+        #: Deriving it from the absence of a ``blocked`` entry instead means a
+        #: setup that never ran — an exception, an early return, a reordering —
+        #: silently promotes every gated task to runnable, and H7 then measures
+        #: MCP namespacing on a profile with no connectors and reports it.
+        self.available: set[Needs] = set()
         #: Why a prerequisite is absent, keyed by ``Needs``. Recorded rather
         #: than raised: an absent grant must cost H6 and nothing else.
         self.blocked: dict[Needs, str] = {}
@@ -436,9 +443,10 @@ class Arm:
 
         if task.needs is Needs.NOTHING:
             return None
-        reason = self.blocked.get(task.needs)
-        if reason:
-            return reason
+        if task.needs not in self.available:
+            return self.blocked.get(
+                task.needs, f"{task.needs} was never confirmed present"
+            )
         missing = [key for key in task.fixture_keys if key not in self.fixtures]
         if missing:
             return f"fixture keys absent: {', '.join(missing)}"
@@ -559,6 +567,7 @@ def sign_in_key_and_grant(arm: Arm) -> None:
     log(f"  folder grant {grant_id[:8]}… over {fixture_root}")
     arm.fixtures["ledger"] = str(ledger)
     arm.fixtures["emea"] = str(ledger_emea_total())
+    arm.available.add(Needs.HOST_GRANT)
 
 
 #: ``McpAuthState.AUTHENTICATED`` / ``AUTH_SKIPPED`` — the two states in which a
@@ -621,6 +630,7 @@ def run_arm(limit: str) -> int:
                 "connect (tools/desktop-journeys/README.md)."
             )
         else:
+            arm.available.add(Needs.CONNECTED_MCP)
             log(f"  connected MCP servers: {', '.join(servers)}")
 
     plan.boot(
